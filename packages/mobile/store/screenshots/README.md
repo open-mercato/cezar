@@ -31,6 +31,6 @@ a throwaway `HOME` and `CEZ_HOME`, seed a demo shop project and a manager, and s
 | `03-manager` | The Manager answering "what needs me" |
 | `04-connect` | The connect screen |
 | `05-pair-code` (Android) / `05-sign-in` (iOS) | Typing a pairing code / signing in to a direct server |
-| `06-servers` | The server list with notifications and the app lock |
+| `06-servers` | The Devices list with notifications and the app lock |
 
 The Android `06-servers` shows the default relay address, `rome.cezar.run`; retake it if that changes.

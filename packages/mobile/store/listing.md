@@ -65,12 +65,12 @@ OR CONNECT DIRECTLY
 Running cezar on a server with HTTPS? Add its address and sign in. Your password is kept in the phone's secure storage and is never shown to the web page.
 
 STAY IN THE LOOP
-Turn on notifications for a server and the phone tells you when cezar needs you. A notification says only that cezar needs you; it never contains your code or messages.
+Turn on notifications for a device and the phone tells you when cezar needs you. A notification says only that cezar needs you; it never contains your code or messages.
 
 YOUR PHONE, YOUR RULES
-- Several servers in one app, each with its own login
+- Several devices in one app, each with its own login
 - Optional app lock with your fingerprint, face or screen lock
-- Remove a server and its keys and saved password are deleted from the phone
+- Remove a device and its keys and saved password are deleted from the phone
 - No analytics, no ads and no tracking in the app
 
 WHAT YOU NEED

@@ -5,7 +5,7 @@ import { backTarget, screenFor } from './screens.js';
 const app = document.getElementById('app');
 let servers = [];
 let context = {};
-// The server the cockpit's Servers link came from: the list's Back returns there.
+// The server the cockpit's Devices link came from: the list's Back returns there.
 let cameFrom = null;
 // What Back does on the screen drawn now: the arrow, Android's Back and iOS's edge swipe all call it.
 let back = null;
@@ -37,7 +37,7 @@ async function run(method, options, nextContext) {
   try {
     show(await call(method, options));
   } catch (error) {
-    draw(notice(String(error?.message ?? error)), button('Servers', () => drawList()));
+    draw(notice(String(error?.message ?? error)), button('Devices', () => drawList()));
   }
 }
 
@@ -68,8 +68,8 @@ function drawList() {
     ),
   );
   const target = servers.find((server) => server.id === cameFrom);
-  const title = element('h1', { textContent: 'Servers' });
-  draw(target ? element('div', { className: 'title' }, backArrow(target), title) : title, element('ul', {}, ...rows), button('Add server', () => drawAdd({}), 'primary'));
+  const title = element('h1', { textContent: 'Devices' });
+  draw(target ? element('div', { className: 'title' }, backArrow(target), title) : title, element('ul', {}, ...rows), button('Add a device', () => drawAdd({}), 'primary'));
   if (target) back = () => run('open', { id: target.id }, { serverId: target.id });
 }
 
@@ -87,7 +87,7 @@ function drawForget(server) {
       'div',
       { className: 'actions' },
       button('Cancel', () => drawList()),
-      button('Forget server', () => run('forget', { id: server.id }, {}), 'primary'),
+      button('Forget this device', () => run('forget', { id: server.id }, {}), 'primary'),
     ),
   );
   back = drawList;
@@ -134,7 +134,7 @@ function drawError({ serverId, message }) {
   draw(
     element('h1', { textContent: 'Connection problem' }),
     notice(message),
-    element('div', { className: 'actions' }, button('Servers', () => drawList()), button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')),
+    element('div', { className: 'actions' }, button('Devices', () => drawList()), button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')),
   );
   back = drawList;
 }

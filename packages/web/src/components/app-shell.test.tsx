@@ -1,7 +1,7 @@
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { AppShell, routeOwnsScrollArrival, useShellManagerMode, type AppShellProps } from './app-shell'
 import { NAV_ITEMS, visibleNavItems } from './nav-items'
@@ -867,6 +867,33 @@ describe('AppShell', () => {
       const header = document.querySelector('[data-slot="project-header"]') as HTMLElement
       expect(within(header).getByText('solo')).toBeTruthy()
       expect(within(header).queryByRole('button')).toBeNull()
+    })
+
+    it('keeps Devices in the CezarBot rail, at its foot above Show sidebar, in both modes', () => {
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (ios)' })
+      localStorage.setItem('cez-sidebar-folded', '1')
+      const rail = () => document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      onTestFinished(() => {
+        vi.unstubAllGlobals()
+      })
+      for (const entry of ['/git', '/manager/m-2']) {
+        renderShell(entry, { managersAvailable: true })
+        const devices = within(rail()).getByRole('link', { name: 'Devices' })
+        expect(devices.getAttribute('href')).toBe('cezar://servers')
+        expect(devices.className).toContain('mt-auto')
+        const unfold = within(rail()).getByRole('button', { name: 'Show sidebar' })
+        expect(devices.compareDocumentPosition(unfold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+        expect(unfold.className).not.toContain('mt-auto')
+        cleanup()
+      }
+    })
+
+    it('shows no Devices in a browser rail', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git')
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(within(rail).queryByRole('link', { name: 'Devices' })).toBeNull()
+      expect(within(rail).getByRole('button', { name: 'Show sidebar' }).className).toContain('mt-auto')
     })
 
     it('loads folded without stealing focus', () => {

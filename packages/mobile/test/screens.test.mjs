@@ -16,7 +16,7 @@ test('a rejected password returns to the sign-in form with the saved username', 
   assert.deepEqual(screen, { name: 'credentials', url: saved.url, username: 'me', notice: 'Password rejected.' });
 });
 
-test('a saved server that cannot be reached offers Retry and Servers', () => {
+test('a saved server that cannot be reached offers Retry and Devices', () => {
   const screen = screenFor({ screen: 'connection-error', serverId: 'a', status: 0, servers: [saved] });
   assert.equal(screen.name, 'error');
   assert.equal(screen.serverId, 'a');
@@ -44,7 +44,7 @@ test('open and login leave the page waiting for the server view', () => {
   assert.equal(screenFor({ screen: 'login', servers: [] }).name, 'busy');
 });
 
-test('the Servers link offers Back to the server it came from', () => {
+test('the Devices link offers Back to the server it came from', () => {
   const servers = [saved, { id: 'b', url: 'https://b.example.com' }];
   assert.equal(backTarget({ screen: 'list', serverId: 'b' }, servers).id, 'b');
 });

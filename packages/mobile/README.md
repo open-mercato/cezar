@@ -110,6 +110,6 @@ wrong names and types there, but not iOS-only APIs, `Info.plist` or entitlements
 a stub (`test/swift/stubs/Capacitor.swift`) copied from its 8.6 sources. Neither touches the real keychain.
 
 The app needs iOS 17: each server gets its own `WKWebsiteDataStore(forIdentifier:)`, which is how
-Forget server ends a cached Basic answer (see `Shell/WebsiteData.swift`).
+Forget this device ends a cached Basic answer (see `Shell/WebsiteData.swift`).
 
 An emulator does not prove keychain, suspension or keyboard behaviour. Those need a real phone.

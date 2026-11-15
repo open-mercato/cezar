@@ -1,12 +1,12 @@
 import {
   CheckIcon,
   ChevronDownIcon,
+  LaptopIcon,
   LayersIcon,
   LayoutDashboardIcon,
   MenuIcon,
   PanelLeftOpenIcon,
   PlusIcon,
-  ServerIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
@@ -29,6 +29,7 @@ import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { SidebarStatusLine, type SidebarHealth } from '@/components/sidebar-status-line'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -803,7 +804,13 @@ function SidebarIconRail({
           </nav>
         </>
       )}
-      {props.phonesRail ? <div className="mt-auto flex shrink-0 flex-col items-center">{props.phonesRail}</div> : null}
+      {isCezarShell() || props.phonesRail ? (
+        // The rail's foot: Devices (app only) and Phones sit together above the expand button.
+        <div className="mt-auto flex shrink-0 flex-col items-center gap-1">
+          {isCezarShell() ? <RailDevicesLink /> : null}
+          {props.phonesRail}
+        </div>
+      ) : null}
       <Button
         type="button"
         variant="ghost"
@@ -815,8 +822,7 @@ function SidebarIconRail({
         title={expandTitle}
         autoFocus={autoFocus}
         onClick={onExpand}
-        // With a phones slot, its wrapper takes the push to the foot; the button sits under it.
-        className={cn('shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground', props.phonesRail ? 'mt-1' : 'mt-auto')}
+        className={cn('shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground', isCezarShell() || props.phonesRail ? 'mt-1' : 'mt-auto')}
       >
         <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
       </Button>
@@ -1044,10 +1050,10 @@ function SidebarContent({
         </>
       )}
 
-      {/* The shell's own page, in either mode: only the app can show its server list. */}
+      {/* The shell's own page, in either mode: only the app can show its device list. */}
       {isCezarShell() ? (
         <div className="px-2.5 pb-1">
-          <ServersLink onNavigate={onNavigate} />
+          <DevicesLink onNavigate={onNavigate} />
         </div>
       ) : null}
       <SidebarStatusLine
@@ -1170,13 +1176,29 @@ function AllTasksLink({ active, onNavigate }: { active: boolean; onNavigate?: ()
   )
 }
 
-/** The shell handles `cezar://`: a page can only ask for its server list by navigating there. */
-function ServersLink({ onNavigate }: { onNavigate?: () => void }) {
+/** The shell handles `cezar://`: a page can only ask for its device list by navigating there. */
+function DevicesLink({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <a href="cezar://servers" data-slot="servers-link" onClick={onNavigate} className={NAV_ROW_CLASS}>
-      <ServerIcon className="size-4 shrink-0" aria-hidden="true" />
-      Servers
+      <LaptopIcon className="size-4 shrink-0" aria-hidden="true" />
+      Devices
     </a>
+  )
+}
+
+/** `DevicesLink` folded: the rail's foot, above the expand button, where the row sits above the footer. */
+function RailDevicesLink() {
+  return (
+    <IconTooltip label="Devices" side="right">
+      <a
+        href="cezar://servers"
+        data-slot="rail-servers-link"
+        aria-label="Devices"
+        className="mt-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <LaptopIcon className="size-4" aria-hidden="true" />
+      </a>
+    </IconTooltip>
   )
 }
 

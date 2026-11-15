@@ -181,7 +181,7 @@ const IOS_SCENES = [
   {
     name: '06-servers',
     answers: { launch: { servers: [HOSTED] } },
-    ready: heading('Servers'),
+    ready: heading('Devices'),
   },
 ];
 
@@ -205,7 +205,7 @@ const ANDROID_SCENES = [
   {
     name: '06-servers',
     answers: { launch: { servers: [PAIRED], pairing: true, relayDefault: RELAY, lock: { enabled: true, available: true } } },
-    ready: heading('Servers'),
+    ready: heading('Devices'),
   },
 ];
 

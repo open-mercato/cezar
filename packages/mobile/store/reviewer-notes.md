@@ -62,7 +62,7 @@ Optional: pairing the way users do, without a password
    page. The demo allows 5 codes per hour; if the page says so, use the steps above.
 
 Camera: used only to scan the pairing QR code, decoded on the device, never stored or sent.
-Notifications: optional, off until turned on per server; they say only "Cezar needs you".
+Notifications: optional, off until turned on per device; they say only "Cezar needs you".
 The text in the Manager is written by the user's own coding agents about the user's own code.
 ```
 <!-- /reviewer-notes -->
