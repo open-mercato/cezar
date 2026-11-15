@@ -2,7 +2,7 @@
 
 > Slug: `automations-from-prompt` · Status: implemented · Gated by the existing `CEZ_AUTOMATIONS=1`
 > (→ `capabilities.automations`) plus the cockpit transport (`CEZ_API_URL`), exactly like dispatch.
-> Extends: `2026-07-25-github-automations.md` (the feature), `2026-09-10-dispatch.md` (the mechanism).
+> Extends: `2026-07-25-github-automations.md` (the feature), `implemented/2026-09-10-dispatch.md` (the mechanism).
 
 ## TLDR
 

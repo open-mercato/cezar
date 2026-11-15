@@ -2,7 +2,7 @@
 
 Goal: on an idle-closed run, the Graph tab draws the node of the step that closed it in the orange "closed · idle" tone, with that label, instead of a red failure, matching the run header and the step rail.
 Issue: open-mercato/cezar#2024
-Source doc: .ai/specs/2026-11-04-idle-closed-attention-state.md (the idle-closed state, #1934/#1935; colour and label from its A2).
+Source doc: .ai/specs/implemented/2026-11-04-idle-closed-attention-state.md (the idle-closed state, #1934/#1935; colour and label from its A2).
 Depends on: #2026 (#2022), which adds `idleClosedStepId` in `lib/attention.ts`. This branch is stacked on #2026's head and must be rebased onto `main` once #2026 merges.
 
 ## Scope

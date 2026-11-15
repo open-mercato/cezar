@@ -4,8 +4,8 @@
 > Gate: **pending owner ratification** (§ Resolved assumptions, Q2) — proposed `CEZ_PREVIEW_APPS=0`
 > off switch; hosted framing additionally needs `CEZ_PREVIEW_PORTS`.
 > Extends: `2026-10-09-design-mode.md` (the Preview and its different-origin rule),
-> `2026-09-10-dispatch.md` and `2026-09-13-automations-from-prompt.md` (the agent CLI transport),
-> `2026-10-07-task-workspace.md` §5.2/§7 (the Preview column).
+> `implemented/2026-09-10-dispatch.md` and `2026-09-13-automations-from-prompt.md` (the agent CLI transport),
+> `implemented/2026-10-07-task-workspace.md` §5.2/§7 (the Preview column).
 > Prior art: brutus's preview gateway, `origin/brutus:.ai/specs/2026-10-10-preview-gateway.md`
 > and `packages/cezar/src/server/preview/gateway.ts` there (not ported to `main`).
 

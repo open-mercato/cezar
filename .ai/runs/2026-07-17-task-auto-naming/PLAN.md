@@ -1,6 +1,6 @@
 # Execution plan — task auto-naming (spec 2026-07-17-task-auto-naming)
 
-Source spec: `.ai/specs/2026-07-17-task-auto-naming.md`
+Source spec: `.ai/specs/implemented/2026-07-17-task-auto-naming.md`
 Tracker issue: #432 (naming quality) + owner direction on PR #479
 Branch: `feat/task-auto-naming-spec`
 Base: `main`

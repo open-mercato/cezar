@@ -1,6 +1,6 @@
 # Execution plan — Codex reasoning-effort selection
 
-Source spec: `.ai/specs/2026-08-08-codex-reasoning-effort-selection.md`
+Source spec: `.ai/specs/implemented/2026-08-08-codex-reasoning-effort-selection.md`
 
 ## Tasks
 

@@ -1,10 +1,10 @@
 # Worktree Retention & Management (#483) — implementation run
 
-Implements the spec at `.ai/specs/2026-07-18-worktree-retention.md` (shipped as
+Implements the spec at `.ai/specs/implemented/2026-07-18-worktree-retention.md` (shipped as
 the docs PR #486, now extended into the implementation). Driven by
 `om-auto-continue-pr-loop` on PR #486 (branch `cez/208500a8`).
 
-Source spec: `.ai/specs/2026-07-18-worktree-retention.md`
+Source spec: `.ai/specs/implemented/2026-07-18-worktree-retention.md`
 Tracking PR: #486
 
 ## Tasks

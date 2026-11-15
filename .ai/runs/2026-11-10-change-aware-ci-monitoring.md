@@ -1,6 +1,6 @@
 # Change-aware CI monitoring wakes (#2040)
 
-Source doc: `.ai/specs/2026-07-24-monitoring-session-auto-wake.md` (extended by this run)
+Source doc: `.ai/specs/implemented/2026-07-24-monitoring-session-auto-wake.md` (extended by this run)
 
 ## Goal
 
