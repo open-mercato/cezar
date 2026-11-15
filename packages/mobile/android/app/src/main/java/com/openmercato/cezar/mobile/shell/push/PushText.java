@@ -7,7 +7,7 @@ import java.util.Map;
  * and the computer's name comes from the saved server `s` names. Nothing here leaves the phone.
  */
 public final class PushText {
-    /** The count in a data-only message; the relay's notification block carries it as notification_count today. */
+    /** The count in the relay's data-only message, a decimal string (RELAY_PROTOCOL.md § 7). */
     public static final String DATA_COUNT = "count";
     private static final int MAX = 99;
 

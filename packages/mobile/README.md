@@ -98,7 +98,7 @@ inside the encrypted session (`PUT /api/v1/workspace/phone/push`). cezar sends a
 phone with no session, so the two stages never both fire for one signal.
 
 Both show the same fixed notification, `Cezar` / `Cezar needs you`, on one channel, tagged per
-server so a second one replaces the first. The relay's carries only `s` (the cezarId) as data; the
+server so a second one replaces the first. The relay's carries only `s` (the cezarId) and the count; the
 local one may also carry the manager its signal named, as a local-only extra. A tap opens that
 server through the normal launch, so the app lock still applies, then loads `/manager/<id>`: the id
 from the local notification, or else from cezar, asked inside the session. Nothing is ever approved

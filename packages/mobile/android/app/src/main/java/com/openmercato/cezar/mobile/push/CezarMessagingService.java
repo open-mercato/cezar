@@ -11,8 +11,8 @@ import com.openmercato.cezar.mobile.shell.push.PushTap;
 import com.openmercato.cezar.mobile.shell.push.PushText;
 
 /**
- * Firebase adapter. A data-only message always lands here and is named on the phone; today's relay
- * sends a notification block, which the system shows itself in the background (switcher spec, "Push").
+ * Firebase adapter. The relay sends a high-priority data-only message (RELAY_PROTOCOL.md § 7), so every
+ * push lands here, even in the background, and is named on the phone (switcher spec, "Push").
  */
 public final class CezarMessagingService extends FirebaseMessagingService {
     /** Runs on FCM's worker thread. The token itself is never kept or logged here. */
