@@ -2481,10 +2481,11 @@ function rememberStatus(key: string, status: ReferenceStatus): void {
 const rememberedConflicts = new Set<string>(restoreRememberedConflicts())
 
 /** References whose real kind differs from the asked one (an issue ref naming a PR), so the chip
- *  keeps the PR's treatment between answers. In memory only: one round trip relearns it. */
-const rememberedKinds = new Map<string, 'PR' | 'Issue'>()
+ *  keeps the PR's treatment between answers — and across a reload, beside the status it explains. */
+const rememberedKinds = new Map<string, 'PR' | 'Issue'>(restoreRememberedKinds())
 
 function rememberKind(key: string, kind: 'PR' | 'Issue' | undefined): void {
+  if (rememberedKinds.get(key) === kind) return
   if (kind) rememberedKinds.set(key, kind)
   else rememberedKinds.delete(key)
   while (rememberedKinds.size > REMEMBERED_MAX) {
@@ -2492,6 +2493,7 @@ function rememberKind(key: string, kind: 'PR' | 'Issue' | undefined): void {
     if (oldest === undefined) break
     rememberedKinds.delete(oldest)
   }
+  scheduleRememberedSave()
 }
 
 function rememberConflict(key: string, conflicting: boolean): void {
@@ -2532,6 +2534,8 @@ const REMEMBERED_STORAGE_KEY = 'cez.reference-statuses.v1'
  *  make an older one discard every status it found there. A key it has never heard of it simply
  *  never reads. */
 const REMEMBERED_CONFLICTS_STORAGE_KEY = 'cez.reference-conflicts.v1'
+/** The real-kind overrides, under their own key for the same reason. */
+const REMEMBERED_KINDS_STORAGE_KEY = 'cez.reference-kinds.v1'
 
 /** Exported for tests: it runs once at module load, which is not a moment a test can observe. */
 export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
@@ -2556,6 +2560,21 @@ export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
 
 /** Exported for tests, like its sibling. A key list, and anything else in the slot is ignored —
  *  the file is best-effort in every direction. */
+export function restoreRememberedKinds(): [string, 'PR' | 'Issue'][] {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(REMEMBERED_KINDS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (entry): entry is [string, 'PR' | 'Issue'] =>
+        Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && (entry[1] === 'PR' || entry[1] === 'Issue'),
+    )
+  } catch {
+    return []
+  }
+}
+
 export function restoreRememberedConflicts(): string[] {
   try {
     const raw = globalThis.sessionStorage?.getItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
@@ -2583,6 +2602,7 @@ function scheduleRememberedSave(): void {
         REMEMBERED_CONFLICTS_STORAGE_KEY,
         JSON.stringify([...rememberedConflicts]),
       )
+      globalThis.sessionStorage?.setItem(REMEMBERED_KINDS_STORAGE_KEY, JSON.stringify([...rememberedKinds]))
     } catch {
       // Quota, private mode, storage disabled — the in-memory map still works.
     }
@@ -2645,6 +2665,7 @@ export function __clearRememberedStatusesForTests(): void {
   try {
     globalThis.sessionStorage?.removeItem(REMEMBERED_STORAGE_KEY)
     globalThis.sessionStorage?.removeItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
+    globalThis.sessionStorage?.removeItem(REMEMBERED_KINDS_STORAGE_KEY)
   } catch {
     // Nothing to clear.
   }
@@ -2778,7 +2799,7 @@ export function useReferenceStatuses(
               ...(kind ? { kind } : {}),
             })
           } else {
-            map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}) })
+            map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}), ...kindOf })
           }
         } else if (data) {
           map.set(key, {

@@ -231,7 +231,24 @@ describe('prOwnerRun', () => {
     const archived = row('archived', { prNumber: 12, archived: true, createdAt: '2026-08-16T00:00:00.000Z' })
     expect(prOwnerRun([archived, mentions], 'acme', 12)?.id).toBe('mentions')
     const newer = row('newer', { prNumber: 12, createdAt: '2026-08-20T00:00:00.000Z' })
-    expect(prOwnerRun([created, newer], 'acme', 12)?.id).toBe('newer')
+    expect(prOwnerRun([newer, row('older', { prNumber: 12 })], 'acme', 12)?.id).toBe('newer')
+  })
+
+  it('sends a review task declaring the PR behind the task that created it', () => {
+    const created = row('created', { pullRequestUrl: 'https://github.com/o/r/pull/12' })
+    const reviewer = row('reviewer', { prNumber: 12, markerRefs: { pr: 12 }, createdAt: '2026-08-20T00:00:00.000Z' })
+    expect(prOwnerRun([reviewer, created], 'acme', 12)?.id).toBe('created')
+    const createdRef = row('created-ref', { prRefs: [{ number: 12, origin: 'created', at: '2026-08-14T12:00:00.000Z' }] })
+    expect(prOwnerRun([reviewer, createdRef], 'acme', 12)?.id).toBe('created-ref')
+    // With no creator in the index, the declaring task still owns it over one that only shows it.
+    const shows = row('shows', { prNumber: 12, createdAt: '2026-08-25T00:00:00.000Z' })
+    expect(prOwnerRun([shows, reviewer], 'acme', 12)?.id).toBe('reviewer')
+  })
+
+  it('lets no transcript-scraped number from another repository own the PR (#854)', () => {
+    const foreign = row('foreign', { prNumber: 12, referencedPrCandidates: ['https://github.com/else/where/pull/12'] })
+    expect(prOwnerRun([foreign], 'acme', 12, 'https://github.com/o/r')).toBeUndefined()
+    expect(prOwnerRun([foreign], 'acme', 12)?.id).toBe('foreign')
   })
 })
 
