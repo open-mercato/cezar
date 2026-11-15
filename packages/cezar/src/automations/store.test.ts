@@ -1,10 +1,12 @@
-import { chmodSync, mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import lockfile from 'proper-lockfile';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from './store.ts';
 
 const dirs: string[] = [];
@@ -287,6 +289,59 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     for (const childProcess of children) childProcess.stdin.write('go\n');
     const results = await Promise.all(states.map((state) => state.resultPromise));
     expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  // The CI flake above, made deterministic: a second contender runs its whole acquisition between
+  // the first one's stale `stat` and its `rmdir`, proper-lockfile's unguarded reclaim window.
+  it('never lets a stale-guard reclaimer delete a guard another contender just took', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
+    const store = AutomationStore.open(dir, { processAlive: () => false });
+    let contender: ReturnType<AutomationStore['acquireLease']> | 'not run' = 'not run';
+    let interleaved = false;
+    const original = lockfile.lockSync.bind(lockfile);
+    const spy = vi.spyOn(lockfile, 'lockSync').mockImplementation((file, options) => {
+      if (interleaved) return original(file, options);
+      const statSync = ((path: fs.PathLike, ...rest: unknown[]) => {
+        const stat = (fs.statSync as (...args: unknown[]) => fs.Stats)(path, ...rest);
+        if (path === guard && !interleaved) {
+          interleaved = true;
+          contender = store.acquireLease();
+        }
+        return stat;
+      }) as typeof fs.statSync;
+      return original(file, { ...options, fs: { ...fs, statSync } });
+    });
+    try {
+      const first = store.acquireLease();
+      expect(contender).not.toBe('not run');
+      const holders = [first, contender].filter((lease): lease is NonNullable<typeof first> => typeof lease === 'object');
+      expect(holders).toHaveLength(1);
+      expect(existsSync(guard)).toBe(true);
+      holders[0]?.release();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports busy while another process is mid-reclaim, and recovers a reclaim left by a dead one', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
+    mkdirSync(`${guard}.reclaim`);
+    const store = AutomationStore.open(dir);
+    expect(store.acquireLease()).toBeUndefined();
+    expect(fs.statSync(guard).mtimeMs).toBe(old.getTime());
+    utimesSync(`${guard}.reclaim`, old, old);
+    const lease = store.acquireLease();
+    expect(lease).toBeDefined();
+    expect(existsSync(`${guard}.reclaim`)).toBe(false);
+    lease?.release();
   });
 
   it('recovers a guard abandoned by a dead process', async () => {
