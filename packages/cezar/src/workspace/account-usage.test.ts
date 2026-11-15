@@ -65,7 +65,7 @@ describe('pickAccountUsageWindows', () => {
 describe('usageEntryForProfile', () => {
   it('picks the newest snapshot per account path and ignores stale identities', () => {
     const path = join(home, 'personal');
-    const profile = resolveStoredProfile({ id: 'personal', provider: 'claude', label: 'PRV', configDir: path });
+    const profile = resolveStoredProfile({ id: 'personal', provider: 'claude', label: 'PRV', configDir: path, addedAt: '' });
     const snapshots: UsageWindowsSnapshot[] = [
       {
         provider: 'claude',
