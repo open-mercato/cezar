@@ -17,13 +17,35 @@ public final class HealthAnswer {
     public final String version;
     /** `capabilities.managers`; null when the server does not send it. */
     public final Boolean managers;
+    /** Counts only, sent to an authenticated reader (switcher spec); null is unknown, never zero. */
+    public final Attention attention;
+
+    /** `attention` from health: what needs the user, and failed tasks still flagged. */
+    public static final class Attention {
+        public final int waiting;
+        public final int failed;
+
+        public Attention(int waiting, int failed) {
+            this.waiting = waiting;
+            this.failed = failed;
+        }
+
+        public int need() {
+            return waiting + failed;
+        }
+    }
 
     HealthAnswer(Kind kind, int status, String realm, String version, Boolean managers) {
+        this(kind, status, realm, version, managers, null);
+    }
+
+    HealthAnswer(Kind kind, int status, String realm, String version, Boolean managers, Attention attention) {
         this.kind = kind;
         this.status = status;
         this.realm = realm;
         this.version = version;
         this.managers = managers;
+        this.attention = attention;
     }
 
     public static HealthAnswer of(Kind kind, int status) {
