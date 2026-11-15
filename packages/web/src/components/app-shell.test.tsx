@@ -886,6 +886,22 @@ describe('AppShell', () => {
       expect(unfold.className).not.toContain('mt-auto')
     })
 
+    it('names the computer on the CezarBot Devices row and the rail tooltip target', () => {
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (android)' })
+      onTestFinished(() => {
+        vi.unstubAllGlobals()
+      })
+      renderShell('/git', { computerName: "Patryk's MacBook Pro" })
+      const row = within(sidebar()).getByRole('link', { name: "Devices: Patryk's MacBook Pro" })
+      expect(row.getAttribute('href')).toBe('cezar://servers')
+      expect(row.textContent).toBe("Patryk's MacBook Pro")
+      cleanup()
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git', { computerName: "Patryk's MacBook Pro" })
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(within(rail).getByRole('link', { name: "Devices: Patryk's MacBook Pro" })).toBeTruthy()
+    })
+
     it('shows no Devices in a browser rail', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       renderShell('/git')

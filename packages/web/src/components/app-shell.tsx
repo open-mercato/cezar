@@ -1,6 +1,7 @@
 import {
   CheckIcon,
   ChevronDownIcon,
+  ChevronsUpDownIcon,
   LaptopIcon,
   LayersIcon,
   LayoutDashboardIcon,
@@ -147,6 +148,8 @@ export type AppShellProps = {
   footerBanner?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
+  /** This computer's name (`workspace/config`), shown on CezarBot's Devices row. */
+  computerName?: string
   /** Managers gating (spec 2026-10-31-managers): the Projects | Manager switch exists only when
    *  health says so. Defaults off, unlike the nav gates: it is new chrome, not a nav item. */
   managersAvailable?: boolean
@@ -280,6 +283,7 @@ export const AppShell = React.memo(function AppShell({
   footerBanner,
   brandName = 'cezar',
   brandLogoUrl = null,
+  computerName,
   managersAvailable = false,
   managerAttention = null,
   managerTo = '/manager',
@@ -404,6 +408,7 @@ export const AppShell = React.memo(function AppShell({
     singleProject,
     brandName,
     brandLogoUrl,
+    computerName,
     managersAvailable,
     managerMode,
     managerAttention,
@@ -594,6 +599,7 @@ type NavProps = {
   phonesRail?: ReactNode
   brandName: string
   brandLogoUrl: string | null
+  computerName?: string
   singleProject: boolean
   managersAvailable: boolean
   managerMode: boolean
@@ -807,7 +813,7 @@ function SidebarIconRail({
       {isCezarShell() || props.phonesRail ? (
         // The rail's foot: Devices (app only) and Phones sit together above the expand button.
         <div className="mt-auto flex shrink-0 flex-col items-center gap-1">
-          {isCezarShell() ? <RailDevicesLink /> : null}
+          {isCezarShell() ? <RailDevicesLink name={props.computerName} /> : null}
           {props.phonesRail}
         </div>
       ) : null}
@@ -954,6 +960,7 @@ function SidebarContent({
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
     newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
     offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
+    computerName,
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
   const workspace = items.filter((item) => item.group === 'workspace')
@@ -1053,7 +1060,7 @@ function SidebarContent({
       {/* The shell's own page, in either mode: only the app can show its device list. */}
       {isCezarShell() ? (
         <div className="px-2.5 pb-1">
-          <DevicesLink onNavigate={onNavigate} />
+          <DevicesLink name={computerName} onNavigate={onNavigate} />
         </div>
       ) : null}
       <SidebarStatusLine
@@ -1176,24 +1183,34 @@ function AllTasksLink({ active, onNavigate }: { active: boolean; onNavigate?: ()
   )
 }
 
-/** The shell handles `cezar://`: a page can only ask for its device list by navigating there. */
-function DevicesLink({ onNavigate }: { onNavigate?: () => void }) {
+/**
+ * The shell handles `cezar://`: a page can only ask for its device list by navigating there, and
+ * CezarBot answers with its native switcher. The row names the computer this cockpit runs on.
+ */
+function DevicesLink({ name, onNavigate }: { name?: string; onNavigate?: () => void }) {
   return (
-    <a href="cezar://servers" data-slot="servers-link" onClick={onNavigate} className={NAV_ROW_CLASS}>
+    <a
+      href="cezar://servers"
+      data-slot="servers-link"
+      aria-label={name ? `Devices: ${name}` : 'Devices'}
+      onClick={onNavigate}
+      className={NAV_ROW_CLASS}
+    >
       <LaptopIcon className="size-4 shrink-0" aria-hidden="true" />
-      Devices
+      <span className="min-w-0 flex-1 truncate" data-slot="device-name">{name ?? 'Devices'}</span>
+      <ChevronsUpDownIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
     </a>
   )
 }
 
 /** `DevicesLink` folded: the rail's foot, above the expand button, where the row sits above the footer. */
-function RailDevicesLink() {
+function RailDevicesLink({ name }: { name?: string }) {
   return (
-    <IconTooltip label="Devices" side="right">
+    <IconTooltip label={name ? `Devices · ${name}` : 'Devices'} side="right">
       <a
         href="cezar://servers"
         data-slot="rail-servers-link"
-        aria-label="Devices"
+        aria-label={name ? `Devices: ${name}` : 'Devices'}
         className="mt-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         <LaptopIcon className="size-4" aria-hidden="true" />

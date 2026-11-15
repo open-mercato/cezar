@@ -3797,6 +3797,7 @@ export function createApp(deps: ServerDeps) {
       name: config.branding.name ?? 'cezar',
       logoUrl: logoAssetUrl(),
     },
+    computerName: phonePairing.computerName(),
     browseRoot: config.browseRoot,
     projectsDir: config.projectsDir,
     skillsAutoUpdate: config.skillsAutoUpdate ?? null,
