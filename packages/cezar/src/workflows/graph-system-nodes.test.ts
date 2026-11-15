@@ -209,6 +209,39 @@ describe('graph system nodes', () => {
     expect(readFileSync(join(repoRoot, 'resumed.txt'), 'utf8')).toBe('first-output / Approve\n');
   }, 40_000);
 
+  it('a restart mid-agent resumes the walk, so the later check still runs (#2001)', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'work', type: 'agent', prompt: '{{task}} mock:done' },
+        { id: 'verify', type: 'check', command: 'echo verified > verify.txt' },
+      ],
+      edges: [
+        { from: 'start', to: 'work' },
+        { from: 'work.done', to: 'verify' },
+      ],
+    };
+    const { id } = store.createRun({ title: 't', workflow: 'graph', task: 'x', steps: graphToSteps(graph).map((st) => ({ id: st.id, name: st.name ?? st.id, kind: st.command ? 'check' : 'agent' })) });
+    store.updateRun(id, {
+      workflowDef: def(graph),
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      currentStepId: 'work',
+      graphState: { loops: {}, taken: [], cursor: 'work', outputs: {} },
+    });
+    store.updateStep(id, 'work', { status: 'running', sessionId: 'sess-1', backend: 'claude' });
+
+    manager.dispose();
+    store.flush();
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+
+    const final = await until(id, terminal);
+    expect(final.status).not.toBe('failed');
+    expect(final.steps.find((st) => st.id === 'verify')?.status).toBe('done');
+  }, 40_000);
+
   it('ask-user feeds the answer into later nodes', async () => {
     const graph: WorkflowGraph = {
       nodes: [
