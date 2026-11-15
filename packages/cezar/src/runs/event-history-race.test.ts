@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const control = vi.hoisted(() => ({
-  path: '', replacement: '', replaceOnOpen: 0, opens: 0, closes: 0, failStat: false,
+  path: '', replacement: '', replaceOnOpen: 0, deleteOnOpen: 0, opens: 0, closes: 0, failStat: false,
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs/promises')>();
@@ -14,6 +14,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (args[0] !== control.path) return fs.open(...args);
       control.opens++;
       if (control.opens === control.replaceOnOpen) await fs.rename(control.replacement, control.path);
+      if (control.opens === control.deleteOnOpen) await fs.rm(control.path);
       const handle = await fs.open(...args);
       const originalStat = handle.stat.bind(handle);
       const originalClose = handle.close.bind(handle);
@@ -32,7 +33,7 @@ import { readRunHistoryPage } from './event-history.ts';
 let dir = '';
 afterEach(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
-  Object.assign(control, { path: '', replacement: '', replaceOnOpen: 0, opens: 0, closes: 0, failStat: false });
+  Object.assign(control, { path: '', replacement: '', replaceOnOpen: 0, deleteOnOpen: 0, opens: 0, closes: 0, failStat: false });
 });
 
 async function setup() {
@@ -53,6 +54,13 @@ describe('event history file identity', () => {
       if (openIndex === 1) expect(page.asOfSeq).toBe(99);
       expect(page.events).toEqual([replacement]);
       expect(control.closes).toBe(control.opens);
+    });
+
+    it(`returns an empty page when the path disappears at ${reader} open`, async () => {
+      await setup();
+      control.deleteOnOpen = openIndex;
+      expect((await readRunHistoryPage(control.path)).events).toEqual([]);
+      expect(control.closes).toBe(openIndex - 1);
     });
   }
 
