@@ -8,7 +8,7 @@ enum KeychainReset {
 
     static func afterReinstall(defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: marker) else { return }
-        for service in ["com.openmercato.cezar.mobile.server", KeychainDeviceKeyStore.service] {
+        for service in ["com.openmercato.cezar.mobile.server", KeychainDeviceKeyStore.service, KeychainDeviceBookStorage.service] {
             SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service] as CFDictionary)
             SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                            kSecUseDataProtectionKeychain as String: true] as CFDictionary)

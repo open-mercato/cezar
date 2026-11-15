@@ -1,8 +1,8 @@
 import Foundation
 import UserNotifications
 
-/// The notification the app posts itself for a Stage 1 signal (spec R5), with the relay's own words
-/// and grouping, and the permission behind both kinds.
+/// The notification the app posts itself for a Stage 1 signal (spec R5), naming the computer as the
+/// Notification Service Extension names a relay push, and the permission behind both kinds.
 final class PushNotifier {
     /// Android's channel id; a category here, so both kinds group alike.
     static let category = "attention"
@@ -12,14 +12,16 @@ final class PushNotifier {
 
     private let center: UNUserNotificationCenter
     private let servers: () -> [ServerRecord]
+    private let book: DeviceBookStore
     private let lock = NSLock()
     /// The last answer of `getNotificationSettings`; nil until the first.
     private var cachedAllowed: Bool?
 
     /// `servers`: the saved list, so a forgotten server's signal posts nothing.
-    init(center: UNUserNotificationCenter = .current(), servers: @escaping () -> [ServerRecord]) {
+    init(center: UNUserNotificationCenter = .current(), servers: @escaping () -> [ServerRecord], book: DeviceBookStore) {
         self.center = center
         self.servers = servers
+        self.book = book
     }
 
     /// The system prompt, at most once per install; later calls answer from the setting. `done` runs on the main queue.
@@ -59,25 +61,41 @@ final class PushNotifier {
     }
 
     /// One per cezar, replacing the last, like the relay's collapse key. `managerId` rides `userInfo` only.
-    func post(cezarId: String, count: Int = 0, managerId: String? = nil) {
-        guard PushTap.serverFor(cezarId, servers()) != nil, allowed() else { return }
+    /// Titled with the computer's name on this phone; the badge is the sum over every computer.
+    func post(cezarId: String, count: Int? = nil, managerId: String? = nil) {
+        let servers = servers()
+        guard PushTap.serverFor(cezarId, servers) != nil, allowed() else { return }
+        let named = book.update { book -> (title: String, body: String, badge: Int)? in
+            book.sync(servers)
+            return PushNaming.named(cezarId: cezarId, badge: count, book: &book)
+        }
         let content = UNMutableNotificationContent()
-        content.title = Self.title
-        content.body = Self.body
+        content.title = named?.title ?? Self.title
+        content.body = named?.body ?? Self.body
         content.sound = .default
         content.categoryIdentifier = Self.category
         content.threadIdentifier = cezarId
         content.userInfo = PushPayload.local(cezarId: cezarId, managerId: managerId)
-        if count > 0 { content.badge = NSNumber(value: min(count, 99)) }
+        if let badge = named?.badge { content.badge = NSNumber(value: badge) }
         center.add(UNNotificationRequest(identifier: cezarId, content: content, trigger: nil)) { error in
             // The permission went away between the check and the post.
             if error != nil { PushLog.info("push notification: not posted") }
         }
     }
 
-    /// The relay's badge stays on the icon until the app clears it.
-    func clearBadge() {
-        center.setBadgeCount(0) { _ in }
+    /// The sum of last-known per-computer counts (switcher spec "Push"). Without the extension a relay
+    /// push leaves its own computer's count on the icon until the app opens and sets this.
+    func showBadge(_ count: Int) {
+        center.setBadgeCount(max(0, count)) { _ in }
+    }
+
+    /// The saved list's names, then the sum, as the app comes to the front.
+    func refreshBadge() {
+        let servers = servers()
+        showBadge(book.update { book -> Int in
+            book.sync(servers)
+            return book.badge
+        })
     }
 
     private func store(_ value: Bool) {

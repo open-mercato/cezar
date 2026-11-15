@@ -14,7 +14,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Before any server view exists, so no store is still in use (spec M2 item 9).
         Task { @MainActor in await WebsiteData.removeOwed() }
         // Before returning, so a tap that cold-launched the app is delivered (APNs and Stage 1 alike).
-        let receiver = PushReceiver(servers: { ShellServices.connector.list() }, enabled: { ShellServices.push.enabled($0) }) {
+        let receiver = PushReceiver(servers: { ShellServices.connector.list() }, enabled: { ShellServices.push.enabled($0) },
+                                    repost: { ShellServices.notifier.post(cezarId: $0, count: $1) }) {
             DispatchQueue.main.async { Self.shell()?.reopenForTap() }
         }
         self.receiver = receiver
@@ -37,7 +38,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         ShellServices.notifier.refresh()
-        ShellServices.notifier.clearBadge()
+        DispatchQueue.global(qos: .utility).async { ShellServices.notifier.refreshBadge() }
     }
 
     func application(_ application: UIApplication,

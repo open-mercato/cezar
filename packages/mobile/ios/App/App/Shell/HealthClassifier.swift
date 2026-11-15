@@ -24,6 +24,15 @@ struct HealthAnswer {
     var version: String?
     /// `capabilities.managers`; nil when the server does not send it.
     var managers: Bool?
+    /// Counts only, to an authenticated reader (switcher spec "Counts field"); nil reads as unknown.
+    var attention: Attention?
+
+    struct Attention: Equatable, Codable {
+        let waiting: Int
+        let failed: Int
+
+        var need: Int { waiting + failed }
+    }
 
     static func of(_ kind: Kind, _ status: Int) -> HealthAnswer { HealthAnswer(kind: kind, status: status) }
 
@@ -60,7 +69,8 @@ enum HealthClassifier {
                   let capabilities = json["capabilities"] as? [String: Any] else {
                 return HealthAnswer(kind: .notCezar, status: status)
             }
-            return HealthAnswer(kind: .cezar, status: status, version: version, managers: capabilities["managers"] as? Bool)
+            return HealthAnswer(kind: .cezar, status: status, version: version, managers: capabilities["managers"] as? Bool,
+                                attention: attention(json["attention"]))
         }
         // server.ts answers `{ error: 'unexpected Host header' }` on a local-mode cockpit.
         if status == 403, let error = json?["error"] as? String, error.lowercased().contains("host header") {
@@ -71,6 +81,20 @@ enum HealthClassifier {
             return HealthAnswer(kind: .loginPage, status: status)
         }
         return HealthAnswer(kind: .notCezar, status: status)
+    }
+
+    /// Both counts non-negative integers, or nothing: a half or odd field is unknown, never zero.
+    static func attention(_ value: Any?) -> HealthAnswer.Attention? {
+        guard let object = value as? [String: Any], let waiting = count(object["waiting"]), let failed = count(object["failed"]) else { return nil }
+        return HealthAnswer.Attention(waiting: waiting, failed: failed)
+    }
+
+    private static func count(_ value: Any?) -> Int? {
+        // JSONSerialization gives NSNumber for booleans too.
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let double = number.doubleValue
+        guard double >= 0, double <= 1_000_000, double.rounded() == double else { return nil }
+        return Int(double)
     }
 
     private static func isBasic(_ challenge: String) -> Bool {

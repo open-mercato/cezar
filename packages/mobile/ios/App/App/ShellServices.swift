@@ -51,7 +51,10 @@ enum ShellServices {
                                           probe: HealthProbe(http: PlatformHttpGet(), userAgent: userAgent),
                                           relay: relay, push: PushPort())
 
-    static let notifier = PushNotifier(servers: { connector.list() })
+    /// Names, counts and last-seen times, shared with the Notification Service Extension.
+    static let devices = DeviceBookStore(storage: KeychainDeviceBookStorage())
+
+    static let notifier = PushNotifier(servers: { connector.list() }, book: devices)
 
     /// The relay account calls (RELAY_PROTOCOL.md § 18), signed by the server's device key.
     static let accounts = AccountClient(relay: URLSessionPushRelay(), clock: nowMs)

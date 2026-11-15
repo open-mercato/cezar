@@ -1,8 +1,9 @@
 import UIKit
 
-/// The native device switcher over a server page: one row per saved server, its status dot, a tick on the
-/// current one, then Add a device and Manage devices. Server pages learn nothing of it: it opens from
-/// `cezar://servers` and the banner's Devices button, both native.
+/// The native device switcher over a server page: one plain row per saved computer (its avatar, name and
+/// status in words, a tick on the current one or "N need you"), then Add a device and Manage devices
+/// (switcher spec "Native list"). Server pages learn nothing of it: it opens from `cezar://servers` and the
+/// banner's Devices button, both native.
 final class DeviceSheetController: UITableViewController {
     enum Choice {
         /// Open this outcome in place of the page on screen.
@@ -14,6 +15,7 @@ final class DeviceSheetController: UITableViewController {
     private let connector: ShellConnector
     private let currentId: String
     private let currentPath: String?
+    private let book: DeviceBookStore
     private let onChoice: (Choice) -> Void
     private var servers: [ServerRecord] = []
     private var rows: [DeviceSwitch.Row] = []
@@ -23,10 +25,12 @@ final class DeviceSheetController: UITableViewController {
 
     private enum Section: Int, CaseIterable { case devices, actions }
 
-    init(connector: ShellConnector, currentId: String, currentPath: String?, onChoice: @escaping (Choice) -> Void) {
+    init(connector: ShellConnector, currentId: String, currentPath: String?, book: DeviceBookStore = ShellServices.devices,
+         onChoice: @escaping (Choice) -> Void) {
         self.connector = connector
         self.currentId = currentId
         self.currentPath = currentPath
+        self.book = book
         self.onChoice = onChoice
         super.init(style: .insetGrouped)
         title = "Devices"
@@ -61,16 +65,21 @@ final class DeviceSheetController: UITableViewController {
         })
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
         servers = connector.list()
+        let currentId = self.currentId
+        book.update { book in
+            book.sync(servers)
+            book.noted(currentId, online: true, waiting: nil, failed: nil, at: relayNowMs())
+        }
         let relay = ShellServices.relay
-        let probes = DeviceProbes(relay: DeviceProbes.relayProbe(relay),
+        let probes = DeviceProbes(relay: DeviceProbes.relayProbe(relay, userAgent: ShellServices.userAgent),
                                   direct: DeviceProbes.directProbe(connector) { server in
                                       guard let url = server.url else { return nil }
                                       return await WebsiteData.cookieHeader(serverId: server.id, url: url)
                                   },
                                   release: { server in relay.releaseWarm(server.id) },
-                                  onChange: { [weak self] id, _ in DispatchQueue.main.async { self?.refresh(id) } })
+                                  onChange: { [weak self] id, reading in DispatchQueue.main.async { self?.refresh(id, reading) } })
         self.probes = probes
-        rows = DeviceSwitch.rows(servers, currentId: currentId, statuses: [:])
+        rows = makeRows([:])
         probes.start(servers, currentId: currentId)
     }
 
@@ -82,12 +91,20 @@ final class DeviceSheetController: UITableViewController {
         }
     }
 
-    private func refresh(_ id: String) {
-        guard let probes else { return }
-        rows = DeviceSwitch.rows(servers, currentId: currentId, statuses: probes.snapshot())
-        if let index = rows.firstIndex(where: { $0.id == id }) {
-            tableView.reconfigureRows(at: [IndexPath(row: index, section: Section.devices.rawValue)])
+    private func makeRows(_ readings: [String: DeviceSwitch.Reading]) -> [DeviceSwitch.Row] {
+        DeviceSwitch.rows(servers, currentId: currentId, readings: readings, book: book.load(), now: relayNowMs())
+    }
+
+    /// Keeps what the computer said for next time (its counts, when it was last online), then redraws.
+    private func refresh(_ id: String, _ reading: DeviceSwitch.Reading) {
+        guard let probes, !chosen else { return }
+        let counts = reading.attention
+        book.update { book in
+            book.noted(id, online: reading.status == .online, waiting: counts?.waiting, failed: counts?.failed, at: relayNowMs())
         }
+        if counts != nil { ShellServices.notifier.showBadge(book.load().badge) }
+        rows = makeRows(probes.snapshot())
+        tableView.reloadSections(IndexSet(integer: Section.devices.rawValue), with: .none)
     }
 
     // MARK: - Table
@@ -101,10 +118,16 @@ final class DeviceSheetController: UITableViewController {
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         if indexPath.section == Section.actions.rawValue {
+            let add = indexPath.row == 0
             var content = UIListContentConfiguration.cell()
-            content.text = indexPath.row == 0 ? "Add a device" : "Manage devices"
-            content.image = UIImage(systemName: indexPath.row == 0 ? "plus" : "list.bullet")
-            content.textProperties.color = tintColorForActions
+            content.text = add ? "Add a device" : "Manage devices"
+            content.image = UIImage(systemName: add ? "plus" : "gearshape")
+            content.imageProperties.tintColor = add ? tintColorForActions : .secondaryLabel
+            #if !targetEnvironment(macCatalyst)
+            // Under the avatars, so the action words line up with the names.
+            content.imageProperties.reservedLayoutWidth = Self.avatarSize
+            #endif
+            content.textProperties.color = add ? tintColorForActions : .label
             cell.contentConfiguration = content
             cell.accessoryView = nil
             cell.accessoryType = .none
@@ -114,9 +137,14 @@ final class DeviceSheetController: UITableViewController {
         }
         let row = rows[indexPath.row]
         var content = UIListContentConfiguration.subtitleCell()
+        content.image = Self.avatar(row)
+        content.imageProperties.maximumSize = CGSize(width: Self.avatarSize, height: Self.avatarSize)
+        #if !targetEnvironment(macCatalyst)
+        content.imageProperties.reservedLayoutWidth = Self.avatarSize
+        #endif
         content.text = row.label
-        content.secondaryText = row.detail
-        content.secondaryTextProperties.color = .secondaryLabel
+        content.secondaryText = row.words
+        content.secondaryTextProperties.color = Self.color(row.status)
         cell.contentConfiguration = content
         cell.accessoryView = accessory(row)
         cell.isAccessibilityElement = true
@@ -127,38 +155,56 @@ final class DeviceSheetController: UITableViewController {
 
     private var tintColorForActions: UIColor { view.tintColor ?? .systemBlue }
 
-    /// The dot, or a spinner while this row opens, then the tick on the current one.
-    private func accessory(_ row: DeviceSwitch.Row) -> UIView {
-        let stack = UIStackView()
-        stack.axis = .horizontal
-        stack.alignment = .center
-        stack.spacing = 10
+    private static let avatarSize: CGFloat = 40
+
+    /// A circle in the name's own colour, white initials, or a laptop when the name has none.
+    private static func avatar(_ row: DeviceSwitch.Row) -> UIImage {
+        let size = CGSize(width: avatarSize, height: avatarSize)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor(hex: row.color).setFill()
+            UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
+            if row.initials.isEmpty {
+                let glyph = UIImage(systemName: "laptopcomputer", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))?
+                    .withTintColor(.white, renderingMode: .alwaysOriginal)
+                if let glyph {
+                    glyph.draw(at: CGPoint(x: (size.width - glyph.size.width) / 2, y: (size.height - glyph.size.height) / 2))
+                }
+                return
+            }
+            let text = NSAttributedString(string: row.initials, attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .bold), .foregroundColor: UIColor.white,
+            ])
+            let bounds = text.size()
+            text.draw(at: CGPoint(x: (size.width - bounds.width) / 2, y: (size.height - bounds.height) / 2))
+        }
+    }
+
+    /// A spinner while this row opens, the tick on the current one, else "N need you" in amber.
+    private func accessory(_ row: DeviceSwitch.Row) -> UIView? {
         if switching == row.id {
             let spinner = UIActivityIndicatorView(style: .medium)
             spinner.startAnimating()
-            stack.addArrangedSubview(spinner)
-        } else {
-            let dot = UIView()
-            dot.backgroundColor = Self.color(row.status)
-            dot.layer.cornerRadius = 5
-            dot.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([dot.widthAnchor.constraint(equalToConstant: 10), dot.heightAnchor.constraint(equalToConstant: 10)])
-            stack.addArrangedSubview(dot)
+            return spinner
         }
-        let tick = UIImageView(image: UIImage(systemName: "checkmark"))
-        tick.tintColor = tintColorForActions
-        tick.alpha = row.current ? 1 : 0
-        stack.addArrangedSubview(tick)
-        stack.frame = CGRect(x: 0, y: 0, width: 46, height: 24)
-        return stack
+        if row.current {
+            let tick = UIImageView(image: UIImage(systemName: "checkmark", withConfiguration: UIImage.SymbolConfiguration(weight: .semibold)))
+            tick.tintColor = tintColorForActions
+            return tick
+        }
+        guard let needWords = row.needWords else { return nil }
+        let label = UILabel()
+        label.text = needWords
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.textColor = .systemOrange
+        label.sizeToFit()
+        return label
     }
 
     private static func color(_ status: DeviceSwitch.Status) -> UIColor {
         switch status {
-        case .connected: return .systemGreen
-        case .checking, .offline: return .systemGray
-        case .attention: return .systemOrange
-        case .blocked: return .systemRed
+        case .online, .checking: return .secondaryLabel
+        case .offline: return .systemGray
+        case .other: return .systemOrange
         }
     }
 
@@ -204,5 +250,14 @@ final class DeviceSheetController: UITableViewController {
         chosen = true
         probes?.stop(keep: keep)
         onChoice(choice)
+    }
+}
+
+private extension UIColor {
+    /// `#rrggbb`, as DeviceIdentity's palette.
+    convenience init(hex: String) {
+        let value = UInt32(hex.dropFirst(), radix: 16) ?? 0
+        self.init(red: CGFloat((value >> 16) & 0xff) / 255, green: CGFloat((value >> 8) & 0xff) / 255,
+                  blue: CGFloat(value & 0xff) / 255, alpha: 1)
     }
 }
