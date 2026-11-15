@@ -442,6 +442,8 @@ export const sendManagerMessageInputSchema = z
     images: attachmentListSchema.optional(),
     // Sent from one question card: closes that card alone (absent, from the composer: every open card).
     askId: z.string().min(1).max(200).optional(),
+    // A resend of a send that already landed answers the first result (relay incident 2026-11-15).
+    idempotencyKey: z.string().uuid().optional(),
   })
   .refine((input) => input.text !== '' || (input.images?.length ?? 0) > 0, {
     message: 'write a message or attach a file',

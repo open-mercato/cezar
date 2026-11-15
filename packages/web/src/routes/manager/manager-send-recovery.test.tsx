@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { MANAGER_SEND_INTERRUPTED, MANAGER_SEND_TIMEOUT_MS, sendManagerMessage } from '@/api/managers'
+import { MANAGER_SEND_INTERRUPTED, MANAGER_SEND_TIMEOUT_MS, resetManagerSendKeys, sendManagerMessage } from '@/api/managers'
 import { createQueryClient } from '@/api/query-client'
 import { Composer } from '@/components/composer/composer'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
@@ -30,6 +30,7 @@ function stubFetch(hung: Set<number>) {
 }
 
 beforeEach(() => {
+  resetManagerSendKeys()
   vi.useFakeTimers()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 })
@@ -66,6 +67,54 @@ describe('sendManagerMessage over a dropped tunnel', () => {
     await sent
     const init = fetchMock.mock.calls.find(([url]) => String(url).includes('/messages'))?.[1]
     expect(init?.signal?.aborted).toBe(true)
+  })
+})
+
+describe('resending a message the server may already have', () => {
+  const sentKeys = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls
+      .filter(([url, init]) => String(url).includes('/messages') && (init as RequestInit | undefined)?.method === 'POST')
+      .map(([, init]) => (JSON.parse(String((init as RequestInit).body)) as { idempotencyKey?: string }).idempotencyKey)
+
+  it('carries the same key when the interrupted text is sent again', async () => {
+    const fetchMock = stubFetch(new Set([1]))
+    const first = sendManagerMessage('g', 'are you there?').catch(() => undefined)
+    await act(async () => { await vi.advanceTimersByTimeAsync(MANAGER_SEND_TIMEOUT_MS) })
+    await first
+    await sendManagerMessage('g', 'are you there?')
+    const [a, b] = sentKeys(fetchMock)
+    expect(a).toMatch(/^[0-9a-f-]{36}$/)
+    expect(b).toBe(a)
+  })
+
+  it('gives a message sent after one that landed a key of its own', async () => {
+    const fetchMock = stubFetch(new Set())
+    await sendManagerMessage('g', 'ok')
+    await sendManagerMessage('g', 'ok')
+    const [a, b] = sentKeys(fetchMock)
+    expect(b).not.toBe(a)
+  })
+
+  it('gives different text, or another manager, a key of its own', async () => {
+    const fetchMock = stubFetch(new Set([1, 2, 3]))
+    const sends = [sendManagerMessage('g', 'one'), sendManagerMessage('g', 'two'), sendManagerMessage('h', 'one')].map((s) => s.catch(() => undefined))
+    await act(async () => { await vi.advanceTimersByTimeAsync(MANAGER_SEND_TIMEOUT_MS) })
+    await Promise.all(sends)
+    expect(new Set(sentKeys(fetchMock)).size).toBe(3)
+  })
+
+  it('sends without the key to a server that does not know it', async () => {
+    const bodies: Record<string, unknown>[] = []
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      bodies.push(body)
+      if ('idempotencyKey' in body) {
+        return Promise.resolve(new Response(JSON.stringify({ error: "Unrecognized key: \"idempotencyKey\"" }), { status: 400, headers: { 'content-type': 'application/json' } }))
+      }
+      return Promise.resolve(json({ ok: true, attachments: 0 }))
+    }))
+    await expect(sendManagerMessage('g', 'hi')).resolves.toMatchObject({ ok: true })
+    expect(bodies.map((body) => 'idempotencyKey' in body)).toEqual([true, false])
   })
 })
 

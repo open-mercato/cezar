@@ -1067,6 +1067,7 @@ const messageSchema = z
 // Run ids are unique across projects, so one workspace-wide receipt book serves every mount.
 const messageReceipts = new MessageReceipts<MessageResponse>();
 const continueReceipts = new MessageReceipts<ContinueResponse>();
+const managerSendReceipts = new MessageReceipts<{ ok: true; attachments: number }>();
 
 // PATCH semantics are load-bearing here: an omitted field keeps its current value.
 // In particular, the cockpit edits text without re-uploading existing attachments.
@@ -8840,13 +8841,21 @@ export function createApp(deps: ServerDeps) {
       const { id } = c.req.valid('param');
       return managerStore.get(id) ? c.json(managerEngine.messages(id, c.req.valid('query'))) : c.json(MANAGER_NOT_FOUND, 404);
     })
-    .post('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), jsonZodValidator(sendManagerMessageInputSchema), (c) => {
-      const { text, images, askId } = c.req.valid('json');
-      const attachments = readAttachments(images ?? []);
-      if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-      return managerEngine.send(c.req.valid('param').id, text, attachments, askId)
-        ? c.json({ ok: true as const, attachments: attachments.length })
-        : c.json(MANAGER_NOT_FOUND, 404);
+    .post('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), jsonZodValidator(sendManagerMessageInputSchema), async (c) => {
+      const { text, images, askId, idempotencyKey } = c.req.valid('json');
+      const { id } = c.req.valid('param');
+      // Claimed before the uploads are read: a landed send consumed them, so its resend would 400.
+      const receipt = idempotencyKey ? await managerSendReceipts.claim(`${id}:${idempotencyKey}`) : undefined;
+      if (receipt && 'prior' in receipt) return c.json(receipt.prior);
+      let answered: { ok: true; attachments: number } | undefined;
+      try {
+        const attachments = readAttachments(images ?? []);
+        if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
+        if (!managerEngine.send(id, text, attachments, askId)) return c.json(MANAGER_NOT_FOUND, 404);
+        return c.json((answered = { ok: true as const, attachments: attachments.length }));
+      } finally {
+        if (receipt) receipt.settle(answered);
+      }
     })
     .get('/workspace/managers/:id/attachments/:file', paramZodValidator(managerAttachmentParamSchema), (c) => {
       const { id, file } = c.req.valid('param');
