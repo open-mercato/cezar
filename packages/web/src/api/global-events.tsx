@@ -4,6 +4,8 @@ import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerChat
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
+import { connectionStatus } from './connection-status'
+import { reconnectTopics } from './ws'
 import {
   runArtifactsEventSchema,
   trackerChangedEventSchema,
@@ -69,8 +71,9 @@ import type {
 // stream is workspace-level and never scoped).
 const SSE_URL = `${apiPath('/workspace/events')}?slim=1`
 
-/** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
+/** `EventSource.OPEN`/`CLOSED`. Spelled as literals so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */
+const OPEN = 1
 const CLOSED = 2
 
 /** How long to wait before rebuilding a stream the browser gave up on. Long enough that a server
@@ -78,6 +81,10 @@ const CLOSED = 2
  *  reader notices. Only reached in the permanent-failure case: an ordinary drop is EventSource's
  *  own retry, which we neither can nor should replace. */
 const REOPEN_DELAY_MS = 3_000
+
+/** A visible return whose stream heard nothing for this long (one missed 15 s ping) reopens at
+ *  once: an iOS WebView resumed from the background keeps a dead socket reporting OPEN. */
+export const RETURN_SILENCE_MS = 20_000
 
 /** Everything the stream is allowed to say. An unknown name never reaches `parseGlobalEvent`,
  *  because SSE only delivers named events to a matching listener in the first place. */
@@ -772,6 +779,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         clearTimeout(reopenReconcileTimer)
         reopenReconcileTimer = undefined
         if (everOpened || reconcileOnOpen) reconcileNow()
+        connectionStatus.opened()
         dashboardLive.connected(true)
         everOpened = true
         reconcileOnOpen = false
@@ -935,6 +943,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // boots). Nothing would ever reopen it, so the cockpit would sit there looking live and
         // showing yesterday's state.
         dashboardLive.connected(false)
+        connectionStatus.failedAttempt()
         if (current.readyState === CLOSED) reopenLater()
       })
     }
@@ -976,6 +985,16 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       if (document.visibilityState === 'hidden') hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
     }
 
+    // Skip whatever backoff is running (ours or the browser's own EventSource retry) and reopen
+    // now; the `open` reconciles, or the timer in `reconcileOnReopen` does if the stream stays down.
+    const reconnectNow = (): void => {
+      if (disposed) return
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      reconcileOnReopen()
+      connect()
+    }
+
     const onVisibilityChange = (): void => {
       if (document.visibilityState === 'hidden') {
         armHiddenTimer()
@@ -985,17 +1004,26 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       hiddenTimer = undefined
       // The phone-in-a-pocket case: mobile browsers freeze background tabs, so the stream may have
       // been dead for an hour with no error handler ever running. Whatever is on screen right now
-      // is what the reader is about to trust, so ask the server before they read it.
-      if (!source || source.readyState === CLOSED) {
-        // Don't make them wait out a backoff that started while they were away.
-        clearTimeout(reopenTimer)
-        reopenTimer = undefined
-        reconcileOnReopen()
-        connect()
+      // is what the reader is about to trust, so ask the server before they read it. A stream
+      // silent past a ping is not trusted to recover on its own schedule.
+      if (!source || source.readyState === CLOSED || Date.now() - lastFrameAt > RETURN_SILENCE_MS) {
+        reconnectNow()
         return
       }
       reconcileNow()
     }
+
+    // The network came back (a Wi-Fi handover, airplane mode off): don't wait out a backoff.
+    const onOnline = (): void => {
+      if (source?.readyState === OPEN && dashboardLive.isConnected()) return
+      reconnectNow()
+    }
+
+    const unregisterReconnect = connectionStatus.setReconnect(() => {
+      reconnectNow()
+      reconnectTopics()
+      void queryClient.invalidateQueries({ queryKey: queryKeys.health })
+    })
 
     const onPageHide = (): void => {
       // Full navigation away. React never unmounts for those — the document goes to the
@@ -1025,12 +1053,14 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     livenessTimer = setInterval(() => {
       if (disposed || document.visibilityState !== 'visible') return
       if (Date.now() - lastFrameAt <= STALE_MS) return
+      connectionStatus.failedAttempt()
       clearTimeout(reopenTimer)
       reopenTimer = undefined
       connect()
     }, LIVENESS_CHECK_MS)
 
     document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', onOnline)
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
     connect()
@@ -1052,6 +1082,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       pendingTodos.clear()
       pendingProviderRows = []
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('online', onOnline)
+      unregisterReconnect()
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)
       // Explicit: an EventSource keeps its socket (and its retry loop) alive on its own, so a

@@ -87,10 +87,36 @@ export async function getOldestPendingAction(id: string): Promise<ManagerMessage
   }
 }
 
+/** How long a send may stay unanswered. The route answers at once; a request still open after this
+ *  went into a dropped tunnel, and nothing else would ever settle it (relay incident 2026-11-15). */
+export const MANAGER_SEND_TIMEOUT_MS = 30_000
+const MANAGER_SEND_WITH_FILES_TIMEOUT_MS = 90_000
+export const MANAGER_SEND_INTERRUPTED =
+  "Couldn't reach cezar, so this message may not have been sent. It's back in the box: send it again once you're reconnected."
+
+/** Settles when `send` does, or rejects after `ms` or when the device goes offline — even if the
+ *  transport ignores the abort, so the composer's Sending… can never outlive the connection. */
+function bounded<T>(send: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController()
+  let fail: (error: Error) => void = () => undefined
+  const interrupted = new Promise<never>((_, reject) => { fail = reject })
+  const abort = () => {
+    fail(new Error(MANAGER_SEND_INTERRUPTED))
+    controller.abort()
+  }
+  const timer = setTimeout(abort, ms)
+  window.addEventListener('offline', abort)
+  return Promise.race([send(controller.signal), interrupted]).finally(() => {
+    clearTimeout(timer)
+    window.removeEventListener('offline', abort)
+  })
+}
+
 export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
   const base = { text, ...(images?.length ? { images } : {}) }
-  const post = async (json: typeof base & { askId?: string }) =>
-    unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
+  const timeout = images?.length ? MANAGER_SEND_WITH_FILES_TIMEOUT_MS : MANAGER_SEND_TIMEOUT_MS
+  const post = (json: typeof base & { askId?: string }) => bounded(async (signal) =>
+    unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }, { init: { signal } }), managerPath(id, '/messages')), timeout)
   const sent = await post({ ...base, ...(askId ? { askId } : {}) }).catch((failure: unknown) => {
     // A server older than this page (#2179) rejects `askId`: answer as the composer does there,
     // which closes every open card instead of losing the answer.
