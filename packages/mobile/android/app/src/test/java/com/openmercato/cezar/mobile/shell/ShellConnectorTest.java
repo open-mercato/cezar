@@ -214,4 +214,25 @@ public class ShellConnectorTest {
         assertTrue(servers.list().isEmpty());
         assertEquals(ShellConnector.LIST, connector.launch(null).screen);
     }
+
+    @Test
+    public void aSwitchToADirectServerOpensTheFullUrlWithoutAProbe() {
+        script(CEZAR);
+        String id = connector.add("https://cezar.example.com", null, null, "Box").serverId;
+        int probes = sent.size();
+        ShellConnector.Outcome outcome = connector.switchTo(id, "/manager");
+        assertEquals(ShellConnector.OPEN, outcome.screen);
+        assertEquals("https://cezar.example.com/manager", outcome.url);
+        assertEquals(probes, sent.size());
+    }
+
+    @Test
+    public void theSwitcherProbesADirectServerWithItsSavedPassword() {
+        ShellConnector.Outcome added = addGated();
+        script(CEZAR);
+        assertEquals(HealthAnswer.Kind.CEZAR, connector.health(added.serverId, null).kind);
+        assertTrue(sent.get(sent.size() - 1).get("Authorization").startsWith("Basic "));
+        script();
+        assertEquals(HealthAnswer.Kind.UNREACHABLE, connector.health(added.serverId, null).kind);
+    }
 }

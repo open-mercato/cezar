@@ -30,6 +30,8 @@ public final class ShellConnector {
     public static final String OPEN = "open";
     public static final String LOGIN = "login";
     public static final String LIST = "list";
+    /** The connect page's pairing start: the switcher's Add a device. */
+    public static final String ADD = "add";
     public static final String ASK_CREDENTIALS = "ask-credentials";
     public static final String PASSWORD_REJECTED = "password-rejected";
     public static final String LOCAL_MODE = "local-mode";
@@ -176,6 +178,25 @@ public final class ShellConnector {
             default:
                 return Outcome.screen(CONNECTION_ERROR, server.id, health.status);
         }
+    }
+
+    /**
+     * The device switcher: straight to `path` on another saved server, no probe and no connect page.
+     * The server view reports any failure itself, as on a quick start. Null for a server that is gone.
+     */
+    public Outcome switchTo(String id, String path) {
+        ServerRecord server = servers.get(id);
+        if (server == null) return null;
+        servers.markUsed(id);
+        String url = server.relay != null ? path : server.origin().url(path);
+        return new Outcome(OPEN, id, url, null, 0);
+    }
+
+    /** A direct server's health, for the switcher's dot. Null for a relay server or one that is gone. */
+    public HealthAnswer health(String id, String cookies) {
+        ServerRecord server = servers.get(id);
+        if (server == null || server.relay != null) return null;
+        return probe.probe(server.origin(), server.username, credentials.get(id), cookies);
     }
 
     /**

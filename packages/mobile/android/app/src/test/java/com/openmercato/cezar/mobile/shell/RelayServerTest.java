@@ -221,4 +221,22 @@ public class RelayServerTest {
         String manifest = new String(Files.readAllBytes(new File("src/debug/AndroidManifest.xml").toPath()), StandardCharsets.UTF_8);
         assertTrue(manifest, manifest.contains("android:permission=\"android.permission.DUMP\""));
     }
+
+    /** The device switcher opens the other server straight at a path; the proxy resolves it. */
+    @Test
+    public void aSwitchToARelayServerOpensItsPathAndMarksItUsed() {
+        String id = save("Laptop", fields);
+        servers.markUsed("other");
+        ShellConnector.Outcome outcome = connector.switchTo(id, "/tasks");
+        assertEquals(ShellConnector.OPEN, outcome.screen);
+        assertEquals("/tasks", outcome.url);
+        assertEquals(id, servers.lastUsedId());
+        assertTrue("no probe: the view reports the link itself", calls.isEmpty());
+        assertNull(connector.health(id, null));
+    }
+
+    @Test
+    public void aSwitchToAServerThatIsGoneIsNull() {
+        assertNull(connector.switchTo("missing", "/tasks"));
+    }
 }

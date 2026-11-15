@@ -7,6 +7,10 @@ import com.openmercato.cezar.mobile.shell.ServerRecord;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /** The single relay connection and single listener a process may hold: only the server on screen has one (spec). */
 public final class RelayConnections implements ShellConnector.RelayPort {
@@ -26,6 +30,18 @@ public final class RelayConnections implements ShellConnector.RelayPort {
     private RelayLink link;
     private LoopbackProxy proxy;
     private final String stamp;
+    /** The device switcher's links for servers not on screen, by server id; the one switched to is adopted by link(). */
+    private final Map<String, Warm> warm = new HashMap<>();
+
+    private static final class Warm {
+        final RelayLink link;
+        final String deviceId;
+
+        Warm(RelayLink link, String deviceId) {
+            this.link = link;
+            this.deviceId = deviceId;
+        }
+    }
 
     public RelayConnections(SocketTransport transport, DeviceKeyStore keys, String userAgent) {
         this(transport, keys, userAgent, null);
@@ -54,15 +70,85 @@ public final class RelayConnections implements ShellConnector.RelayPort {
     public synchronized RelayLink link(ServerRecord server) {
         // Pairing the same cezar again keeps the row but changes the device, so the old link holds dead keys.
         if (link != null && server.id.equals(serverId) && server.relay.deviceId.equals(deviceId)) return link;
+        Warm warmed = warm.remove(server.id);
+        if (warmed != null && !warmed.deviceId.equals(server.relay.deviceId)) {
+            warmed.link.dispose();
+            warmed = null;
+        }
         release();
+        RelayLink next = warmed != null ? warmed.link : newLink(server);
+        if (next == null) return null;
+        link = next;
+        serverId = server.id;
+        deviceId = server.relay.deviceId;
+        return link;
+    }
+
+    private RelayLink newLink(ServerRecord server) {
         DeviceKeys deviceKeys = keys.get(server.id);
         if (deviceKeys == null) return null;
         RelayFields relay = server.relay;
         byte[] pinned = Bytes.fromBase64url(relay.cezarKey, 32);
-        link = new RelayLink(transport, new RelayLink.Target(socketOrigin(relay.origin), relay.cezarId, relay.deviceId, pinned, deviceKeys), System::currentTimeMillis);
-        serverId = server.id;
-        deviceId = relay.deviceId;
-        return link;
+        return new RelayLink(transport, new RelayLink.Target(socketOrigin(relay.origin), relay.cezarId, relay.deviceId, pinned, deviceKeys), System::currentTimeMillis);
+    }
+
+    /**
+     * The device switcher: a started link for a server that is not on screen, beside the one that is,
+     * which it never touches. The server on screen gets its own link back, as is. Null with no keys.
+     */
+    public synchronized RelayLink warm(ServerRecord server) {
+        if (link != null && server.id.equals(serverId) && server.relay.deviceId.equals(deviceId)) return link;
+        Warm held = warm.get(server.id);
+        if (held != null && held.deviceId.equals(server.relay.deviceId)) return held.link;
+        if (held != null) held.link.dispose();
+        RelayLink fresh = newLink(server);
+        if (fresh == null) {
+            warm.remove(server.id);
+            return null;
+        }
+        warm.put(server.id, new Warm(fresh, server.relay.deviceId));
+        fresh.start();
+        return fresh;
+    }
+
+    /** Whether the switcher holds a warm link for this server. */
+    public synchronized boolean warming(String id) {
+        return warm.containsKey(id);
+    }
+
+    /**
+     * The switcher closed: every warm link but `keep`'s stops. `keep` (null for none) is the server
+     * switched to; its view adopts the link, and an unclaimed one stops after PREWARM_MS.
+     */
+    public void cool(String keep) {
+        List<RelayLink> stop = new ArrayList<>();
+        RelayLink kept = null;
+        synchronized (this) {
+            for (Map.Entry<String, Warm> entry : warm.entrySet()) {
+                entry.getValue().link.setListener(null);
+                if (entry.getKey().equals(keep)) kept = entry.getValue().link;
+                else stop.add(entry.getValue().link);
+            }
+            warm.keySet().retainAll(kept == null ? java.util.Collections.<String>emptySet() : java.util.Collections.singleton(keep));
+        }
+        for (RelayLink each : stop) each.dispose();
+        if (kept == null) return;
+        RelayLink claimed = kept;
+        Thread unused = new Thread(() -> {
+            try {
+                Thread.sleep(PREWARM_MS);
+            } catch (InterruptedException e) {
+                return;
+            }
+            synchronized (this) {
+                Warm left = warm.get(keep);
+                if (left == null || left.link != claimed) return;
+                warm.remove(keep);
+            }
+            claimed.dispose();
+        }, "cezar-warm-stop");
+        unused.setDaemon(true);
+        unused.start();
     }
 
     private static String socketOrigin(String origin) {

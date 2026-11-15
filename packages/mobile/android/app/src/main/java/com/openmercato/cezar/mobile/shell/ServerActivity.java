@@ -79,6 +79,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     /** The first relay pairing: ask once, with the session up, whether to turn notifications on (spec R5). */
     public static final String EXTRA_ASK_PUSH = "askPush";
     private static final String STATE_URL = "lastUrl";
+    /** Debug builds only (DebugPairActivity): open the device switcher once the page starts. */
+    static final String EXTRA_DEBUG_SWITCHER = "debugSwitcher";
 
     /** One that is finishing, as under a cleared task, no longer counts as open. Read from the plugin's thread too. */
     private static final java.util.Set<ServerActivity> open = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
@@ -142,6 +144,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     /** The socket closes 30 s after stop, so a Stage 1 signal in that window still shows (spec R5 as built). */
     private GraceClose grace;
     private SignalStream signals;
+    /** The native device switcher, while it is up. */
+    private DeviceSwitcherSheet switcher;
 
     /** A reloaded connect page must not stack a second server view on a live one. */
     public static boolean isOpen() {
@@ -317,6 +321,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
                 }
             }
             if (status.kind == RelayStatus.Kind.READY) ensureSignals();
+            if (switcher != null && switcher.showing()) switcher.current(currentStatus());
             // In the grace window only the stream matters: the screen catches up when it starts again.
             if (!started) return;
             String refused = refusedScreen(status.kind);
@@ -485,7 +490,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         bannerView.addView(bannerRetry);
         bannerServers = new Button(this);
         bannerServers.setText("Devices");
-        bannerServers.setOnClickListener(view -> leave(ShellConnector.LIST));
+        bannerServers.setOnClickListener(view -> openSwitcher());
         bannerView.addView(bannerServers);
         frame.addView(bannerView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
     }
@@ -505,6 +510,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private void startUnlocked() {
         if (!started || isDestroyed() || leaving) return;
         if (!begun) begin();
+        if (com.openmercato.cezar.mobile.BuildConfig.DEBUG && getIntent().getBooleanExtra(EXTRA_DEBUG_SWITCHER, false)) {
+            getIntent().removeExtra(EXTRA_DEBUG_SWITCHER);
+            main.postDelayed(this::openSwitcher, 1500);
+        }
         if (link == null) return;
         ForegroundServers.SHARED.started(serverId);
         grace.started();
@@ -517,6 +526,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     protected void onStop() {
         super.onStop();
         started = false;
+        // Off screen, no link stays warm for a switch nobody can tap.
+        if (switcher != null && !leaving) switcher.dismiss();
         if (link == null) return;
         ForegroundServers.SHARED.stopped(serverId);
         main.removeCallbacks(bannerTick);
@@ -666,10 +677,67 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         });
     }
 
+    /** The device switcher (contract § 1): over this page, which learns nothing of the list. */
+    private void openSwitcher() {
+        if (leaving || isFinishing() || (switcher != null && switcher.showing())) return;
+        switcher = new DeviceSwitcherSheet(this, new DeviceSwitcherSheet.Host() {
+            @Override
+            public void switchTo(ServerRecord server) {
+                switchServer(server);
+            }
+
+            @Override
+            public void leaveTo(String screen) {
+                if (ShellConnector.ADD.equals(screen)) leave(screen, null);
+                else leave(screen);
+            }
+        }, connector, ShellServices.relay(this), serverId, currentStatus());
+        switcher.show();
+    }
+
+    /** This page's own dot: the relay link's state, or a direct page that has drawn. */
+    private DeviceSwitch.Status currentStatus() {
+        if (link != null) return DeviceSwitch.of(link.status().kind);
+        if (cover == null) return DeviceSwitch.Status.CONNECTED;
+        return cover.showingProblem() ? DeviceSwitch.Status.OFFLINE : DeviceSwitch.Status.CHECKING;
+    }
+
+    /**
+     * Straight into the other server at the same kind of page, behind its own cover: the warmed link
+     * and cached bundle paint it, and any failure routes to the connect page as on a quick start.
+     */
+    private void switchServer(ServerRecord target) {
+        String path = DeviceSwitch.landingPath(webView != null ? webView.getUrl() : mainFrameUrl);
+        background.execute(() -> {
+            ShellConnector.Outcome outcome = connector.switchTo(target.id, path);
+            main.post(() -> {
+                if (isDestroyed() || leaving) return;
+                if (outcome == null) {
+                    if (switcher != null) switcher.dismiss();
+                    leave(ShellConnector.LIST);
+                    return;
+                }
+                leaving = true;
+                Intent intent = new Intent(this, ServerActivity.class);
+                intent.putExtra(EXTRA_URL, outcome.url);
+                intent.putExtra(EXTRA_SERVER_ID, outcome.serverId);
+                startActivity(intent);
+                overridePendingTransition(0, 0);
+                finish();
+                overridePendingTransition(0, 0);
+            });
+        });
+    }
+
     private void leave(String screen) {
+        leave(screen, serverId);
+    }
+
+    private void leave(String screen, String routeServerId) {
         if (leaving) return;
         leaving = true;
-        ShellRoute.set(screen, serverId);
+        if (switcher != null) switcher.dismiss();
+        ShellRoute.set(screen, routeServerId);
         Intent intent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         startActivity(intent);
@@ -733,6 +801,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             open.remove(this);
         }
         main.removeCallbacks(startTick);
+        if (switcher != null) switcher.dismiss();
         if (grace != null) grace.cancel();
         if (signals != null) signals.stop();
         background.shutdown();
@@ -753,7 +822,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             String url = request.getUrl().toString();
             switch (NavigationPolicy.decide(origin, url, view.getUrl(), request.isForMainFrame(), request.isRedirect())) {
                 case SERVERS:
-                    leave(ShellConnector.LIST);
+                    openSwitcher();
                     return true;
                 case EXTERNAL:
                     openExternally(url);

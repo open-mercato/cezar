@@ -1,10 +1,12 @@
 package com.openmercato.cezar.mobile.shell.relay;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 import com.openmercato.cezar.mobile.shell.CredentialStore;
 import com.openmercato.cezar.mobile.shell.HealthAnswer;
@@ -114,5 +116,53 @@ public class RelayConnectionsTest {
         link.stop();
         link.retryNow();
         link.goodbye();
+    }
+
+    /** The device switcher probes the other servers while the one on screen keeps its link. */
+    @Test
+    public void warmingAnotherServerLeavesTheCurrentLinkAlone() throws Exception {
+        ServerRecord current = paired("a", DeviceKeys.generate());
+        LoopbackProxy proxy = connections.openProxy(current);
+        RelayLink mine = connections.link(current);
+        RelayLink other = connections.warm(paired("b", DeviceKeys.generate()));
+        assertNotNull(other);
+        assertNotSame(mine, other);
+        assertSame(mine, connections.link(current));
+        assertTrue(connections.holds(proxy));
+        assertSame("the current server is never warmed twice", mine, connections.warm(current));
+        connections.cool(null);
+        assertSame(mine, connections.link(current));
+        assertTrue(connections.holds(proxy));
+        connections.release();
+    }
+
+    /** A switch reuses the warmed tunnel instead of dialling again. */
+    @Test
+    public void theServerSwitchedToAdoptsItsWarmLink() throws Exception {
+        connections.openProxy(paired("a", DeviceKeys.generate()));
+        ServerRecord target = paired("b", DeviceKeys.generate());
+        RelayLink warm = connections.warm(target);
+        connections.cool("b");
+        assertTrue(connections.warming("b"));
+        connections.openProxy(target);
+        assertSame(warm, connections.link(target));
+        assertFalse(connections.warming("b"));
+        connections.release();
+    }
+
+    @Test
+    public void closingTheSwitcherStopsEveryWarmLink() {
+        connections.warm(paired("b", DeviceKeys.generate()));
+        connections.warm(paired("c", DeviceKeys.generate()));
+        connections.cool(null);
+        assertFalse(connections.warming("b"));
+        assertFalse(connections.warming("c"));
+    }
+
+    @Test
+    public void aWarmLinkWithOldKeysIsNotAdopted() {
+        RelayLink stale = connections.warm(paired("b", DeviceKeys.generate()));
+        assertNotSame(stale, connections.link(paired("b", DeviceKeys.generate())));
+        connections.release();
     }
 }
