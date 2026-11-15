@@ -120,7 +120,7 @@ final class DeviceSheetController: UITableViewController {
         cell.contentConfiguration = content
         cell.accessoryView = accessory(row)
         cell.isAccessibilityElement = true
-        cell.accessibilityLabel = row.accessibilityLabel + (switching == row.id ? ", opening" : "")
+        cell.accessibilityLabel = switching == row.id ? row.switchingLabel : row.accessibilityLabel
         cell.accessibilityTraits = row.current ? [.button, .selected] : .button
         return cell
     }

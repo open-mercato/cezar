@@ -28,6 +28,9 @@ enum DeviceSwitch {
         var accessibilityLabel: String {
             "\(label), \(status.words)" + (current ? ", current" : "")
         }
+
+        /// While this row opens, the spinner stands for its status.
+        var switchingLabel: String { "\(label), switching" }
     }
 
     /// A relay link's status. Connecting stays checking: the sheet's bound turns it offline.

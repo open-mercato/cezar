@@ -86,6 +86,7 @@ expect(rows[1].current && !rows[0].current && rows[1].status == .connected, "the
 expect(rows[2].status == .checking, "not reported yet is checking")
 expect(rows[0].accessibilityLabel == "Patryk's MacBook Pro, offline", "reads label and status")
 expect(rows[1].accessibilityLabel == "Studio, connected, current", "reads current")
+expect(rows[0].switchingLabel == "Patryk's MacBook Pro, switching", "reads switching while it opens")
 expect(DeviceSwitch.rows([here], currentId: "h", statuses: ["h": .blocked])[0].status == .connected, "the page on screen is connected")
 expect(DeviceSwitch.Status.attention.words == "needs attention" && DeviceSwitch.Status.blocked.words == "blocked", "words")
 
