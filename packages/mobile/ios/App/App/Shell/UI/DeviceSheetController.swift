@@ -123,10 +123,8 @@ final class DeviceSheetController: UITableViewController {
             content.text = add ? "Add a device" : "Manage devices"
             content.image = UIImage(systemName: add ? "plus" : "gearshape")
             content.imageProperties.tintColor = add ? tintColorForActions : .secondaryLabel
-            #if !targetEnvironment(macCatalyst)
             // Under the avatars, so the action words line up with the names.
-            content.imageProperties.reservedLayoutWidth = Self.avatarSize
-            #endif
+            content.imageProperties.reservedLayoutSize = CGSize(width: Self.avatarSize, height: 0)
             content.textProperties.color = add ? tintColorForActions : .label
             cell.contentConfiguration = content
             cell.accessoryView = nil
@@ -139,9 +137,7 @@ final class DeviceSheetController: UITableViewController {
         var content = UIListContentConfiguration.subtitleCell()
         content.image = Self.avatar(row)
         content.imageProperties.maximumSize = CGSize(width: Self.avatarSize, height: Self.avatarSize)
-        #if !targetEnvironment(macCatalyst)
-        content.imageProperties.reservedLayoutWidth = Self.avatarSize
-        #endif
+        content.imageProperties.reservedLayoutSize = CGSize(width: Self.avatarSize, height: Self.avatarSize)
         content.text = row.label
         content.secondaryText = row.words
         content.secondaryTextProperties.color = Self.color(row.status)
