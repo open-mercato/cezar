@@ -871,7 +871,10 @@ function accountHeldFor(
   holds: AccountHolds,
   fallbackRunner: RunnerId,
   accounts?: AccountResolution,
+  workflow?: WorkflowDef,
 ): boolean {
+  // A workflow with no agent step spends no account budget, so a closed window cannot concern it (#2094).
+  if (workflow && !workflow.steps.some((s) => stepKind(s) === 'agent')) return false;
   const key = runAccountKey(run, fallbackRunner, accounts);
   if (holds.deadline.has(key)) return true;
   return holds.inFlight.has(key) && !resumeInFlight(run);
@@ -2334,7 +2337,7 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
-          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
           return capacity();
@@ -4162,7 +4165,7 @@ export class RunManager {
     // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
     // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
     if (this.forceStarted.has(runId)) return false;
-    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts())) return false;
+    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts(), workflow)) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.pendingJobs.set(runId, { workflow, input });
@@ -4557,7 +4560,7 @@ export class RunManager {
     if (run && (holds.deadline.size > 0 || holds.inFlight.size > 0)) {
       const { defaultRunner } = await loadConfig(this.repoRoot);
       await this.refreshAccounts();
-      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts())) return 'held';
+      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(runId)?.workflow)) return 'held';
     }
     // The config read above awaited — the run may have started or been cancelled meanwhile.
     if (!this.queue.includes(runId)) return 'not-queued';
