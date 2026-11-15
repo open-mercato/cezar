@@ -1,10 +1,11 @@
+import type { NativeConnectionStatus } from '@open-mercato/cezar-api-client'
 import type { QueryKey } from '@tanstack/react-query'
 import { CheckCircle2Icon, CloudOffIcon, LaptopIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { dashboardLive } from '@/api/dashboard-live'
 import { cachedAt, cachedVersion, subscribeCached } from '@/api/query-persist'
-import { connectionStatus, useReconnectAttempt } from '@/api/connection-status'
+import { connectionStatus, useNativeConnectionStatus, useReconnectAttempt } from '@/api/connection-status'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { isCezarShell } from '@/lib/phone-app'
@@ -131,10 +132,30 @@ const SWITCH_COMPUTER_URL = 'cezar://servers'
 
 type BannerPhase = 'hidden' | 'down' | 'back' | 'fading'
 
+const OUT_OF_DATE = 'What you see may be out of date.'
+
+/** What the banner says: the CezarBot shell's reason when it gave one, else what this page knows. */
+function bannerCopy(online: boolean, native: NativeConnectionStatus | undefined): { title: string; hint: string } {
+  switch (native?.reason) {
+    case 'peer-offline':
+      return { title: `${native.computerName ?? 'Your computer'} is asleep or offline`, hint: `Wake it or check that cezar is running. ${OUT_OF_DATE}` }
+    case 'relay-unreachable':
+      return { title: "Can't reach the relay — reconnecting…", hint: OUT_OF_DATE }
+    case 'account-blocked':
+      return { title: "Your account can't connect through the relay", hint: `Check your account in CezarBot. ${OUT_OF_DATE}` }
+    case 'network-offline':
+      return { title: "You're offline — reconnecting when the network is back.", hint: OUT_OF_DATE }
+    default:
+      return { title: online ? "Can't reach cezar — reconnecting…" : "You're offline — reconnecting when the network is back.", hint: OUT_OF_DATE }
+  }
+}
+
 /** The live stream has been down a while: say so, what is being done, and what the reader can do. */
 export function ConnectionBanner() {
   const connected = useSyncExternalStore(dashboardLive.subscribeConnected, dashboardLive.isConnected, () => true)
-  const attempt = useReconnectAttempt()
+  const ownAttempt = useReconnectAttempt()
+  const native = useNativeConnectionStatus()
+  const attempt = native?.attempt ?? ownAttempt
   const online = useOnline()
   const visible = useVisible()
   const [everConnected, setEverConnected] = useState(connected)
@@ -180,6 +201,7 @@ export function ConnectionBanner() {
       </div>
     )
   }
+  const copy = bannerCopy(online, native)
   const retry = () => {
     if (retrying) return
     setRetrying(true)
@@ -190,7 +212,8 @@ export function ConnectionBanner() {
       role="status"
       aria-live="polite"
       data-slot="connection-banner"
-      data-state={online ? 'reconnecting' : 'offline'}
+      data-state={online && native?.reason !== 'network-offline' ? 'reconnecting' : 'offline'}
+      data-reason={native?.reason}
       className={cn('flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 border-b border-warning/40 bg-warning/15 py-1.5 text-sm text-foreground', inset)}
     >
       <span className="relative flex size-4 shrink-0 items-center justify-center">
@@ -199,10 +222,10 @@ export function ConnectionBanner() {
       </span>
       <span className="min-w-0 flex-1">
         <span data-slot="connection-banner-title" className="font-medium">
-          {online ? "Can't reach cezar — reconnecting…" : "You're offline — reconnecting when the network is back."}
+          {copy.title}
           {attempt > 0 ? <span data-slot="connection-banner-attempt" className="tabular-nums"> (attempt {attempt})</span> : null}
         </span>
-        <span className="text-muted-foreground"> What you see may be out of date.</span>
+        <span data-slot="connection-banner-hint" className="text-muted-foreground"> {copy.hint}</span>
       </span>
       <span className="flex shrink-0 items-center gap-2">
         {long && isCezarShell() ? (
