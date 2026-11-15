@@ -3,6 +3,7 @@ import { useMemo, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router'
 
 import { managerKeys, orderManagers, useManagers } from '@/api/managers'
+import { useShellTasksTab } from '@/components/app-shell'
 import { CacheStatusChip } from '@/components/cache-status'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
@@ -61,7 +62,9 @@ function ManagerListScreen({ managers, isFetching, isError }: { managers: readon
 export function ManagerIndexRoute() {
   const enabled = useHealth().data?.capabilities.managers === true
   const managers = useManagers(enabled)
-  const desktop = useDesktopViewport()
+  // The phone navigation (a tablet in CezarBot) has no sidebar list: the list screen is it.
+  const phoneNav = useShellTasksTab()?.everyWidth === true
+  const desktop = useDesktopViewport() && !phoneNav
   const [params] = useSearchParams()
   const location = useLocation()
   const ordered = useMemo(() => orderManagers(managers.data?.managers ?? []), [managers.data])

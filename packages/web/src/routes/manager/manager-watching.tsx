@@ -7,7 +7,9 @@ import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { deriveAttention } from '@/lib/attention'
+import { cn } from '@/lib/utils'
 import { shortAge } from '@/lib/format'
 import {
   everyLabel,
@@ -41,17 +43,29 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   )
 }
 
+// The sheet is read with a thumb: 44 px rows and body-size text (WCAG 2.5.8).
+const ROW_TOUCH = 'group-data-[touch]/watching:min-h-11 group-data-[touch]/watching:text-sm'
+
 function Row({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={`flex min-h-8 items-center gap-2 border-b border-border px-2.5 py-1.5 text-xs last:border-b-0 ${className ?? ''}`}>{children}</div>
+  return <div className={cn('flex min-h-8 items-center gap-2 border-b border-border px-2.5 py-1.5 text-xs last:border-b-0', ROW_TOUCH, className)}>{children}</div>
 }
 
 function Pair({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border px-2.5 py-1.5 text-xs last:border-b-0">
+    <div className={cn('flex items-baseline justify-between gap-3 border-b border-border px-2.5 py-1.5 text-xs last:border-b-0', ROW_TOUCH)}>
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="min-w-0 truncate text-right">{children}</dd>
     </div>
   )
+}
+
+type WatchingProps = {
+  manager: ManagerSummary
+  messages: readonly ManagerMessage[]
+  /** No older page is left: a quiet check can then be told from one not loaded yet. */
+  loadedAll: boolean
+  onPatch: (patch: ManagerPatch) => void
+  onAddJob: () => void
 }
 
 /**
@@ -59,22 +73,70 @@ function Pair({ label, children }: { label: string; children: ReactNode }) {
  * when the data behind it exists: the summary has no spend per day, no attention counts, and a
  * run record carries no manager origin, so cost and "Tasks it started" come from what is here.
  */
-export function WatchingPanel({
+export function WatchingPanel({ id, ...props }: WatchingProps & { id: string }) {
+  return (
+    <aside
+      id={id}
+      data-slot="manager-watching"
+      aria-label="Watching"
+      className="group/watching flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
+    >
+      <WatchingSections {...props} />
+    </aside>
+  )
+}
+
+/**
+ * Below `lg` the column has no room: the same sections in a bottom sheet, tasks first, opened
+ * from the chat's header or the chip row above the composer. The caller ties `open` to history
+ * so the back gesture and Android's Back close it.
+ */
+export function WatchingSheet({
+  open,
+  onOpenChange,
+  everyWidth = false,
+  ...props
+}: WatchingProps & { open: boolean; onOpenChange: (open: boolean) => void; everyWidth?: boolean }) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="bottom"
+        data-slot="manager-watching-sheet"
+        // `dvh`: the URL bar and the keyboard must not push the sheet's top off screen.
+        // CezarBot has no column at `lg`: the sheet is its way to the tasks on a landscape iPad.
+        className={cn('max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none', !everyWidth && 'lg:hidden')}
+        // The sheet itself takes focus: a ring on its first control reads as a selection on touch.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          const sheet = event.currentTarget as HTMLElement | null
+          sheet?.focus({ preventScroll: true })
+        }}
+      >
+        <SheetHeader className="px-4 pt-4 pb-2">
+          <SheetTitle>{props.manager.name}</SheetTitle>
+          <SheetDescription className="sr-only">The tasks this manager started and what it watches.</SheetDescription>
+        </SheetHeader>
+        <div data-touch="" className="group/watching flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
+          <WatchingSections {...props} tasksFirst />
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+/** How many tasks the replies carded — the phone's way in names them by count. */
+export function startedTaskCount(messages: readonly ManagerMessage[]): number {
+  return Math.min(cardedTasks(messages).length, STARTED_LIMIT)
+}
+
+function WatchingSections({
   manager,
   messages,
   loadedAll,
   onPatch,
   onAddJob,
-  id,
-}: {
-  manager: ManagerSummary
-  messages: readonly ManagerMessage[]
-  /** No older page is left: a quiet check can then be told from one not loaded yet. */
-  loadedAll: boolean
-  onPatch: (patch: ManagerPatch) => void
-  onAddJob: () => void
-  id: string
-}) {
+  tasksFirst = false,
+}: WatchingProps & { tasksFirst?: boolean }) {
   const now = useNow(30_000)
   const registry = useProjects().data?.projects
   const runsIndex = useRunsIndex().data
@@ -115,13 +177,42 @@ export function WatchingPanel({
   const result = lastCheckResult(messages, manager.lastCheckAt, loadedAll)
   const next = manager.cronMinutes > 0 ? nextCheckLabel(manager.nextCheckAt, new Date(now)) : ''
   const origin: ManagerOrigin = { id: manager.id, name: manager.name }
+  const tasks = started.length > 0 ? (
+    <Section title="Tasks it started">
+      <ReferenceStatusProvider requests={prRequests}>
+        {startedRows.map(({ projectId, runId, run, title, prs: [pr] }) => {
+          const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
+          return (
+            // The PR chips are links of their own, so they sit beside the task's link, not in it.
+            <div key={`${projectId}/${runId}`} data-slot="manager-watching-task-row" className="border-b border-border last:border-b-0">
+              <Link
+                to={taskPath(projectId, runId)}
+                state={{ manager: origin }}
+                data-slot="manager-watching-task"
+                className={cn('flex min-h-8 items-center gap-2 px-2.5 py-1.5 text-xs no-underline outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset', ROW_TOUCH)}
+              >
+                <StatusDot tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} />
+                {/* A long title wraps to two lines on a phone instead of losing its end. */}
+                <span className="min-w-0 flex-1 truncate group-data-[touch]/watching:line-clamp-2 group-data-[touch]/watching:whitespace-normal group-data-[touch]/watching:break-words">
+                  {title}
+                </span>
+                {run ? <span className="shrink-0 text-muted-foreground">{shortAge(run.lastActivityAt, now)}</span> : null}
+              </Link>
+              {run && pr ? (
+                // 25 px = the row padding + dot + gap, so the chip lines up under the title.
+                <div data-slot="manager-watching-task-prs" className="flex pr-2.5 pb-1.5 pl-[25px]">
+                  <TaskReferenceChip run={run} projectId={projectId} reference={pr} />
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </ReferenceStatusProvider>
+    </Section>
+  ) : null
   return (
-    <aside
-      id={id}
-      data-slot="manager-watching"
-      aria-label="Watching"
-      className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
-    >
+    <>
+      {tasksFirst ? tasks : null}
       <Section
         title="Watching"
         action={(
@@ -131,7 +222,7 @@ export function WatchingPanel({
             projectAccess={manager.projectAccess}
             onAccess={onPatch}
             onChange={(projects) => onPatch({ projects })}
-            trigger={<Button variant="ghost" size="xs" aria-label="Edit connected projects" data-slot="manager-watching-edit">Edit</Button>}
+            trigger={<Button variant="ghost" size="xs" aria-label="Edit connected projects" data-slot="manager-watching-edit" className="group-data-[touch]/watching:h-11 group-data-[touch]/watching:px-3">Edit</Button>}
           />
         )}
       >
@@ -166,7 +257,7 @@ export function WatchingPanel({
       <Section
         title="Jobs"
         action={(
-          <Button variant="ghost" size="icon-xs" aria-label="Add job" data-slot="manager-watching-add-job" onClick={onAddJob}>
+          <Button variant="ghost" size="icon-xs" aria-label="Add job" data-slot="manager-watching-add-job" className="group-data-[touch]/watching:size-11" onClick={onAddJob}>
             <PlusIcon aria-hidden="true" />
           </Button>
         )}
@@ -182,36 +273,7 @@ export function WatchingPanel({
         ))}
       </Section>
 
-      {started.length > 0 ? (
-        <Section title="Tasks it started">
-          <ReferenceStatusProvider requests={prRequests}>
-            {startedRows.map(({ projectId, runId, run, title, prs: [pr] }) => {
-              const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
-              return (
-                // The PR chips are links of their own, so they sit beside the task's link, not in it.
-                <div key={`${projectId}/${runId}`} data-slot="manager-watching-task-row" className="border-b border-border last:border-b-0">
-                  <Link
-                    to={taskPath(projectId, runId)}
-                    state={{ manager: origin }}
-                    data-slot="manager-watching-task"
-                    className="flex min-h-8 items-center gap-2 px-2.5 py-1.5 text-xs no-underline outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
-                  >
-                    <StatusDot tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} />
-                    <span className="min-w-0 flex-1 truncate">{title}</span>
-                    {run ? <span className="shrink-0 text-muted-foreground">{shortAge(run.lastActivityAt, now)}</span> : null}
-                  </Link>
-                  {run && pr ? (
-                    // 25 px = the row padding + dot + gap, so the chip lines up under the title.
-                    <div data-slot="manager-watching-task-prs" className="flex pr-2.5 pb-1.5 pl-[25px]">
-                      <TaskReferenceChip run={run} projectId={projectId} reference={pr} />
-                    </div>
-                  ) : null}
-                </div>
-              )
-            })}
-          </ReferenceStatusProvider>
-        </Section>
-      ) : null}
-    </aside>
+      {tasksFirst ? null : tasks}
+    </>
   )
 }

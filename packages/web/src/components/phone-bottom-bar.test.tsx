@@ -1,21 +1,22 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import * as React from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { LAST_LOCATION_STORAGE_KEY } from '@/lib/last-location'
 
-import { AppShell, type AppShellProps } from './app-shell'
+import { AppShell, useShellTasksTab, type AppShellProps } from './app-shell'
 import { ThemeProvider } from './theme-provider'
 
-function device({ standalone = true, userAgent = 'Mozilla/5.0' } = {}) {
+function device({ standalone = true, userAgent = 'Mozilla/5.0', width = 390, height = 844 } = {}) {
   vi.stubGlobal('matchMedia', (query: string) => ({
     matches: query === '(pointer: coarse)' || (query === '(display-mode: standalone)' && standalone),
     addEventListener: () => {},
     removeEventListener: () => {},
   }))
-  vi.stubGlobal('screen', { width: 390, height: 844 })
+  vi.stubGlobal('screen', { width, height })
   vi.stubGlobal('navigator', { ...navigator, userAgent })
 }
 
@@ -32,7 +33,7 @@ function renderShell(entry: string, props: Partial<AppShellProps> = {}) {
       <ThemeProvider>
         <MemoryRouter initialEntries={[entry]}>
           <AppShell managersAvailable {...props}>
-            <input aria-label="field" />
+            {props.children ?? <input aria-label="field" />}
           </AppShell>
         </MemoryRouter>
       </ThemeProvider>
@@ -204,5 +205,67 @@ describe('PhoneBottomBar', () => {
     cleanup()
     renderShell('/p/boot/', { managerAttention: 'unread' })
     expect(bar()!.querySelector('[data-slot="bottom-bar-attention"] span')?.className).toContain('bg-violet')
+  })
+
+  describe('on an iPad in CezarBot', () => {
+    const IPAD = { standalone: false, userAgent: 'x CezarMobile/0.1 (ios)', width: 834, height: 1194 }
+    const sidebar = () => document.querySelector('[data-slot="sidebar"], [data-slot="sidebar-rail"]')
+    const column = () => document.querySelector<HTMLElement>('[data-slot="main-column"]')!
+
+    it('is the navigation at every width: no sidebar, and More opens the drawer', () => {
+      device(IPAD)
+      renderShell('/manager/m-1', { managerSidebar: <p>manager rows</p> })
+      expect(bar()).not.toBeNull()
+      expect(bar()!.className).not.toContain('md:hidden')
+      expect(sidebar()).toBeNull()
+      expect(document.querySelector('[data-slot="app-shell"]')!.hasAttribute('data-phone-nav')).toBe(true)
+      fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
+      const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
+      expect(drawer.className).not.toContain('md:hidden')
+      expect(within(drawer).getByText('manager rows')).toBeTruthy()
+    })
+
+    it('pads the status bar above the column, where no phone header does', () => {
+      device(IPAD)
+      renderShell('/manager/m-1')
+      expect(column().className).toContain('md:pt-[env(safe-area-inset-top)]')
+    })
+
+    it('keeps the menu in a thread, where the bar steps aside', () => {
+      device(IPAD)
+      renderShell('/p/boot/tasks/run-1')
+      expect(bar()).toBeNull()
+      const top = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')!
+      expect(top.className).not.toContain('md:hidden')
+      expect(column().className).not.toContain('md:pt-[env(safe-area-inset-top)]')
+    })
+
+    it("a manager chat's Tasks opens its own tasks, with the count", () => {
+      device(IPAD)
+      const open = vi.fn()
+      function Chat() {
+        const publish = useShellTasksTab()
+        React.useEffect(() => {
+          publish?.publish({ count: 4, expanded: false, open })
+          return () => publish?.publish(null)
+        }, [publish])
+        return null
+      }
+      renderShell('/manager/m-1', { children: <Chat /> })
+      const tasks = within(bar()!).getByRole('button', { name: 'Tasks, 4 started by this manager' })
+      expect(tasks.textContent).toContain('4')
+      expect(within(bar()!).queryByRole('link', { name: 'Tasks' })).toBeNull()
+      fireEvent.click(tasks)
+      expect(open).toHaveBeenCalledOnce()
+    })
+  })
+
+  it('a desktop browser keeps the sidebar and no bar', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
+    vi.stubGlobal('screen', { width: 1280, height: 800 })
+    renderShell('/manager/m-1')
+    expect(bar()).toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"], [data-slot="sidebar-rail"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="app-shell"]')!.hasAttribute('data-phone-nav')).toBe(false)
   })
 })
