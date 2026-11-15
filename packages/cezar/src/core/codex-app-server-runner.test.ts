@@ -95,7 +95,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
   describe('a 143 exit while cezar itself is being signalled', () => {
     afterEach(() => resetOwnSignalsForTests());
 
-    async function killedFromOutside(): Promise<{ outcome: Promise<string>; events: AgentEvent[] }> {
+    async function killedFromOutside(onReady?: () => void): Promise<{ outcome: Promise<string>; events: AgentEvent[] }> {
       const events: AgentEvent[] = [];
       let sawText: () => void = () => {};
       const firstText = new Promise<void>((resolve) => { sawText = resolve; });
@@ -107,14 +107,15 @@ describe('a teardown cezar initiated (codex app-server)', () => {
         },
       );
       await firstText;
+      onReady?.();
       process.kill(session.pid!, 'SIGTERM');
       return { outcome: session.result.then(() => 'resolved', (err: Error) => err.message), events };
     }
 
     it('settles as an interruption once the hold ends, not a crash', async () => {
       resetOwnSignalsForTests(500);
-      recordOwnSignal('SIGTERM');
-      const { outcome, events } = await killedFromOutside();
+      // A signal recorded before construction predates the session's own start timestamp.
+      const { outcome, events } = await killedFromOutside(() => recordOwnSignal('SIGTERM'));
       expect(await outcome).toBe('interrupted — cezar received SIGTERM and the codex app-server stopped with it (code 143)');
       expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
     }, 15_000);
