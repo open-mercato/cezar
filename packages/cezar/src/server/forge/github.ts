@@ -3439,6 +3439,25 @@ function protectionAbsent(err: unknown): boolean {
   return /HTTP 404/.test(text) && PROTECTION_ABSENT.test(text);
 }
 
+/** GitHub's 403 when the repository's plan has no branch protection at all — a private repo on
+ *  GitHub Free (#2173). Matched on the body's exact message; any other 403 stays unreadable. */
+const PLAN_GATED_MESSAGE = 'Upgrade to GitHub Pro or make this repository public to enable this feature.';
+const PLAN_GATED = Symbol('plan-gated');
+const NOT_CONFIGURED = Symbol('not-configured');
+
+function planGated(err: unknown): boolean {
+  const stdout = (err as { stdout?: unknown } | null)?.stdout;
+  if (typeof stdout !== 'string') return false;
+  try {
+    const body = z.object({ message: z.string(), status: z.union([z.string(), z.number()]).nullish() }).parse(JSON.parse(stdout));
+    // Older GitHub Enterprise bodies carry no `status`; `gh` still names the code on stderr.
+    const forbidden = body.status != null ? String(body.status) === '403' : /\(HTTP 403\)/.test(ghStderr(err) ?? '');
+    return forbidden && body.message === PLAN_GATED_MESSAGE;
+  } catch {
+    return false;
+  }
+}
+
 const rulesetRulesSchema = z.array(
   z.object({ type: z.string(), parameters: z.record(z.string(), z.unknown()).nullish() }).passthrough(),
 );
@@ -3446,7 +3465,8 @@ const rulesetRulesSchema = z.array(
 /**
  * The base branch's required checks and reviews, merged from classic branch protection and
  * repository rulesets — classic protection alone misses every ruleset-based requirement. Any read
- * that fails for a reason other than "not configured" leaves the whole answer unreadable.
+ * that fails for a reason other than "not configured" leaves the whole answer unreadable — except
+ * a plan-gated 403 on a branch GitHub itself reports unprotected (#2173).
  */
 async function fetchMergeRequirements(
   repoRoot: string,
@@ -3455,38 +3475,43 @@ async function fetchMergeRequirements(
 ): Promise<MergeRequirements> {
   const repo = `repos/${repoRef.owner}/${repoRef.repo}`;
   const branch = encodeURIComponent(base);
-  const classic = <T>(path: string, parse: (output: string) => T, absent: T): Promise<T | null> =>
+  const classic = <T>(path: string, parse: (output: string) => T) =>
     gh(repoRoot, ['api', `${repo}/branches/${branch}/protection/${path}`])
       .then(parse)
-      .catch((err: unknown) => (protectionAbsent(err) ? absent : null));
-  const [classicChecks, classicReviews, rules] = await Promise.all([
-    classic(
-      'required_status_checks',
-      (output) => {
-        const body = z
-          .object({ contexts: z.array(z.string()).nullish(), checks: z.array(z.object({ context: z.string() })).nullish() })
-          .parse(JSON.parse(output));
-        return [...(body.contexts ?? []), ...(body.checks ?? []).map((check) => check.context)];
-      },
-      [] as string[],
-    ),
-    classic(
-      'required_pull_request_reviews',
-      (output) => {
-        const body = z
-          .object({ required_approving_review_count: z.number().nullish(), require_code_owner_reviews: z.boolean().nullish() })
-          .parse(JSON.parse(output));
-        return (body.required_approving_review_count ?? 0) > 0 || body.require_code_owner_reviews === true;
-      },
-      false,
-    ),
+      .catch((err: unknown) => (protectionAbsent(err) ? NOT_CONFIGURED : planGated(err) ? PLAN_GATED : null));
+  const [checksRead, reviewsRead, rulesRead] = await Promise.all([
+    classic('required_status_checks', (output) => {
+      const body = z
+        .object({ contexts: z.array(z.string()).nullish(), checks: z.array(z.object({ context: z.string() })).nullish() })
+        .parse(JSON.parse(output));
+      return [...(body.contexts ?? []), ...(body.checks ?? []).map((check) => check.context)];
+    }),
+    classic('required_pull_request_reviews', (output) => {
+      const body = z
+        .object({ required_approving_review_count: z.number().nullish(), require_code_owner_reviews: z.boolean().nullish() })
+        .parse(JSON.parse(output));
+      return (body.required_approving_review_count ?? 0) > 0 || body.require_code_owner_reviews === true;
+    }),
     gh(repoRoot, ['api', `${repo}/rules/branches/${branch}?per_page=100`])
       .then((output) => rulesetRulesSchema.parse(JSON.parse(output)))
-      .catch(() => null),
+      .catch((err: unknown) => (planGated(err) ? PLAN_GATED : null)),
   ]);
-  if (classicChecks === null || classicReviews === null || rules === null) {
+  if (checksRead === null || reviewsRead === null || rulesRead === null) {
     return { readable: false, requiredChecks: [] };
   }
+  if (checksRead === PLAN_GATED || reviewsRead === PLAN_GATED || rulesRead === PLAN_GATED) {
+    // The plan hides the rules, so only the branch's own `protected` flag (which covers classic
+    // protection and rulesets) can say there are none — and nothing we did read may disagree.
+    const quiet =
+      (checksRead === PLAN_GATED || checksRead === NOT_CONFIGURED) &&
+      (reviewsRead === PLAN_GATED || reviewsRead === NOT_CONFIGURED) &&
+      (rulesRead === PLAN_GATED || rulesRead.length === 0);
+    if (!quiet || !(await branchUnprotected(repoRoot, repo, base))) return { readable: false, requiredChecks: [] };
+    return { readable: true, requiredChecks: [], reviewsRequired: false };
+  }
+  const classicChecks = checksRead === NOT_CONFIGURED ? [] : checksRead;
+  const classicReviews = reviewsRead === NOT_CONFIGURED ? false : reviewsRead;
+  const rules = rulesRead;
   const requiredChecks = new Set(classicChecks);
   let reviewsRequired = classicReviews;
   for (const rule of rules) {
@@ -3504,6 +3529,17 @@ async function fetchMergeRequirements(
     }
   }
   return { readable: true, requiredChecks: [...requiredChecks].sort(), reviewsRequired };
+}
+
+/** True only when GitHub's answer for exactly `base` parses and says `protected: false`. */
+async function branchUnprotected(repoRoot: string, repo: string, base: string): Promise<boolean> {
+  try {
+    const output = await gh(repoRoot, ['api', `${repo}/branches/${encodeURIComponent(base)}`]);
+    const body = z.object({ name: z.string(), protected: z.boolean() }).parse(JSON.parse(output));
+    return body.name === base && body.protected === false;
+  } catch {
+    return false;
+  }
 }
 
 /** Test hook — the merge-state cache would otherwise leak state across cases in one process. */
