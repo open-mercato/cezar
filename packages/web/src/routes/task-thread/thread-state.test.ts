@@ -819,6 +819,15 @@ describe('threadFooter', () => {
     expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
   })
 
+  it('a cancelled run says who stopped it and why (spec 2026-10-31-managers)', () => {
+    expect(threadFooter('cancelled', undefined, false, false, undefined, { reason: 'review only', by: 'Coding Manager' })).toEqual({
+      state: 'closed',
+      tone: 'dim',
+      label: 'Cancelled by Coding Manager — review only',
+    })
+    expect(threadFooter('cancelled', undefined, false, false, undefined, {})).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
+  })
+
   it('an idle-closed run reads as closed, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
     const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
     expect(threadFooter('failed', IDLE, false, true)).toEqual({
