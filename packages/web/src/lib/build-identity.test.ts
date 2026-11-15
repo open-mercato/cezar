@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setApiBaseUrl } from '@open-mercato/cezar-api-client'
+
 import { buildSkew, noteServerBuild, resetBuildIdentityForTest, subscribeBuildSkew } from '@/lib/build-identity'
 
 const shell = (id: string | null) =>
@@ -17,6 +19,7 @@ async function settled(): Promise<void> {
 
 describe('build skew between the cockpit and its server', () => {
   afterEach(() => {
+    setApiBaseUrl('')
     resetBuildIdentityForTest(null)
     vi.unstubAllGlobals()
   })
@@ -73,5 +76,24 @@ describe('build skew between the cockpit and its server', () => {
     noteServerBuild('new')
     await settled()
     expect(buildSkew()).toBe('page')
+  })
+  it('stays silent when the bundle is served apart from its service (cez-api-base)', async () => {
+    const fetchMock = stubDisk('page-build')
+    setApiBaseUrl('https://cezar.example.com')
+    resetBuildIdentityForTest('page-build')
+    noteServerBuild('server-build')
+    await settled()
+    expect(buildSkew()).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads the shell under a same-origin path prefix', async () => {
+    const fetchMock = stubDisk('new')
+    setApiBaseUrl('/cezar')
+    resetBuildIdentityForTest('new')
+    noteServerBuild('old')
+    await settled()
+    expect(buildSkew()).toBe('server')
+    expect(fetchMock).toHaveBeenCalledWith('/cezar/', expect.objectContaining({ cache: 'no-store' }))
   })
 })
