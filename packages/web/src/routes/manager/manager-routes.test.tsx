@@ -553,6 +553,25 @@ describe('/manager/:id', () => {
       expect(document.querySelector('[data-slot="sheet-overlay"]')).toBeNull()
     })
 
+    it('in CezarBot on an iPad, the bottom bar Tasks is the one way in, landscape included', async () => {
+      // Landscape: `lg` matches, yet there is no column and the sheet still opens.
+      vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(min-width: 64rem)' || query === '(min-width: 768px)', addEventListener() {}, removeEventListener() {} }))
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (ios)' })
+      renderAt('/manager/global', seedTasks(), { shell: true })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      const bar = screen.getByRole('navigation', { name: 'App' })
+      const tab = await within(bar).findByRole('button', { name: 'Tasks, 2 started by this manager' })
+      expect(screen.queryByRole('button', { name: /^Tasks and watching/ })).toBeNull()
+      expect(screen.queryByRole('button', { name: /^Tasks · / })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Watching panel' })).toBeNull()
+      expect(document.querySelector('[data-slot="manager-watching"]')).toBeNull()
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      fireEvent.click(tab)
+      const open = await waitFor(() => sheet()!)
+      expect(open.className).not.toContain('lg:hidden')
+      expect(url()).toBe('/manager/global?watching=1')
+    })
+
     it('offers no tasks chip before a reply cards one', async () => {
       seedChat()
       renderAt('/manager/global')

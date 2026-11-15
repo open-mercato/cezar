@@ -20,7 +20,7 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
-import { useShellManagerMode } from '@/components/app-shell'
+import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
 import { CacheStatusChip } from '@/components/cache-status'
 import { CenteredState } from '@/components/centered-state'
@@ -501,9 +501,19 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
   const watchingId = `manager-watching-${id}`
   const [sheetParam, setSheetOpen] = useWatchingSheet()
-  const wide = useMediaQuery(WIDE_QUERY)
+  // The bottom bar's Tasks is the one way in: no column, and the sheet at every width (a tablet).
+  const tasksTab = useShellTasksTab()
+  // CezarBot's bar is there at every width; a phone PWA's only below `md`.
+  const barEverywhere = tasksTab?.everyWidth === true
+  const wide = useMediaQuery(WIDE_QUERY) && !barEverywhere
   const sheetOpen = sheetParam && !wide
   const startedCount = useMemo(() => startedTaskCount(chat.messages), [chat.messages])
+  const openSheet = useRef(setSheetOpen)
+  openSheet.current = setSheetOpen
+  useEffect(() => {
+    tasksTab?.publish({ count: startedCount, expanded: sheetOpen, open: () => openSheet.current(true) })
+  }, [tasksTab, startedCount, sheetOpen])
+  useEffect(() => () => tasksTab?.publish(null), [tasksTab])
 
   const onPatch = useCallback((patch: ManagerPatch) => {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
@@ -582,7 +592,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now
         </Button>
-        <Button
+        {barEverywhere ? null : <Button
           variant="ghost"
           size="icon-sm"
           className="max-lg:hidden"
@@ -593,11 +603,11 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           onClick={() => setWatchingOpen(!watchingOpen)}
         >
           <PanelRightIcon aria-hidden="true" />
-        </Button>
-        <Button
+        </Button>}
+        {barEverywhere ? null : <Button
           variant="ghost"
           size="icon"
-          className="relative shrink-0 max-md:size-11 lg:hidden"
+          className={cn('relative shrink-0 max-md:size-11 lg:hidden', tasksTab && 'max-md:hidden')}
           aria-label={startedCount > 0 ? `Tasks and watching, ${startedCount} tasks` : 'Tasks and watching'}
           aria-haspopup="dialog"
           aria-expanded={sheetOpen}
@@ -610,7 +620,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
               {startedCount}
             </span>
           ) : null}
-        </Button>
+        </Button>}
         <ManagerSettings ref={settings} manager={manager} onPatch={onPatch} />
       </header>
 
@@ -719,10 +729,10 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           ) : null}
         </div>
         {/* The user's own prompts (gear → Prompt buttons), plus the phone's Tasks chip; neither, no row and no room kept. */}
-        {(quickPrompts.length > 0 || startedCount > 0) && draft.trim() === '' && !asking ? (
+        {(quickPrompts.length > 0 || (startedCount > 0 && !tasksTab)) && draft.trim() === '' && !asking ? (
           // Scrolls sideways rather than wrapping: a narrow phone keeps one row above the composer.
           <div data-slot="manager-chips" className={cn('flex gap-1.5 overflow-x-auto pt-1 pb-2.5 [scrollbar-width:none]', quickPrompts.length === 0 && 'md:hidden')}>
-            {startedCount > 0 ? (
+            {startedCount > 0 && !tasksTab ? (
               // The thumb's way to the tasks: the header button sits out of reach (design: one thumb).
               <Button
                 type="button"
@@ -788,7 +798,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         )}
       </div>
     </div>
-    {watchingOpen ? (
+    {watchingOpen && !barEverywhere ? (
       <WatchingPanel
         id={watchingId}
         manager={manager}
@@ -800,6 +810,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     ) : null}
     <WatchingSheet
       open={sheetOpen}
+      everyWidth={barEverywhere}
       onOpenChange={setSheetOpen}
       manager={manager}
       messages={chat.messages}

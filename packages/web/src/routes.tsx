@@ -14,7 +14,7 @@ import { useHealth, useProjects, useProviderStatus, useWorkspaceUiState } from '
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
-import { isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
+import { isCezarShell, isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
 import { noteManagerEntry } from './lib/manager-telemetry'
 import { Navigate as ScopedNavigate, pathnameProjectId, stripProjectPrefix } from './lib/project-router'
 import { ScreenLoading } from './components/loading-state'
@@ -359,7 +359,7 @@ function FlatPathRoute() {
   const location = useLocation()
   const freshBareRoot =
     location.pathname === '/' && location.search === '' && location.hash === '' && isFirstLocation(location.key)
-  return freshBareRoot && isPhone() ? <PhoneFreshLoad /> : <LegacyPathRedirect />
+  return freshBareRoot && (isPhone() || isCezarShell()) ? <PhoneFreshLoad /> : <LegacyPathRedirect />
 }
 
 /** Outside `Routes` so it runs on a deep-link boot too, which never reaches `FlatPathRoute`. */

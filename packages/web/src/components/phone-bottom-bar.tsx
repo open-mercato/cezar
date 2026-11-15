@@ -1,6 +1,8 @@
 import { BotIcon, CircleDotIcon, EllipsisIcon, ListChecksIcon, PlusIcon } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
 
+import type { ManagerTasksTab } from '@/components/app-shell'
+
 import { useHealth, useProjects } from '@/api/queries'
 import { activeNavPath } from '@/components/nav-items'
 import { useKeyboardOpen } from '@/lib/keyboard-inset'
@@ -19,9 +21,9 @@ const CURRENT = 'font-semibold text-foreground'
  * Now, Tasks, New task, Manager and More for a phone PWA (spec 2026-10-31-managers, Phones; the
  * redesign's one-sidebar items). The bar mounts only with managers on and the PWA opens on
  * Manager, so Manager is a tab; Git stays one tap away in More. `md:hidden`: a phone wide enough
- * in landscape has the real sidebar instead. Mounted only there, which is what lets it read the
+ * in landscape has the real sidebar instead; CezarBot has none at any width. Mounted only there, which is what lets it read the
  * query cache from the QueryClient-free shell. Project items point into the last project's
- * index, so they never restore the page inside it.
+ * index, so they never restore the page inside it. In a manager chat, Tasks is that manager's.
  */
 export function PhoneBottomBar({
   menuOpen,
@@ -29,6 +31,8 @@ export function PhoneBottomBar({
   manager = false,
   attention = null,
   managerTo = '/manager',
+  managerTasks = null,
+  everyWidth = false,
 }: {
   menuOpen: boolean
   onMore: () => void
@@ -37,6 +41,10 @@ export function PhoneBottomBar({
   attention?: ManagerAttention | null
   /** Where Manager leads from a project; inside Manager it goes back to the list, like a tab bar. */
   managerTo?: string
+  /** In a manager chat: Tasks opens the tasks it started, not the project's. */
+  managerTasks?: ManagerTasksTab | null
+  /** CezarBot: the navigation on a tablet too. */
+  everyWidth?: boolean
 }) {
   const keyboardOpen = useKeyboardOpen()
   const health = useHealth()
@@ -54,9 +62,30 @@ export function PhoneBottomBar({
     </Link>
   )
   return (
-    <nav aria-label="App" data-slot="phone-bottom-bar" className="flex border-t border-border bg-background md:hidden">
+    <nav aria-label="App" data-slot="phone-bottom-bar" className={cn('flex border-t border-border bg-background', !everyWidth && 'md:hidden')}>
       {item('', 'Now', CircleDotIcon, '/')}
-      {item('tasks', 'Tasks', ListChecksIcon, '/tasks')}
+      {managerTasks ? (
+        <button
+          type="button"
+          aria-label={managerTasks.count > 0 ? `Tasks, ${managerTasks.count} started by this manager` : 'Tasks started by this manager'}
+          aria-haspopup="dialog"
+          aria-expanded={managerTasks.expanded}
+          data-slot="bottom-bar-manager-tasks"
+          onClick={managerTasks.open}
+          className={ITEM}
+        >
+          <ListChecksIcon className="size-5" aria-hidden="true" />
+          Tasks
+          {managerTasks.count > 0 ? (
+            <span
+              aria-hidden="true"
+              className="absolute top-1.5 left-[calc(50%+6px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground tabular-nums"
+            >
+              {managerTasks.count}
+            </span>
+          ) : null}
+        </button>
+      ) : item('tasks', 'Tasks', ListChecksIcon, '/tasks')}
       <Link to={`${index}new`} aria-label="New task" data-slot="bottom-bar-new-task" className={cn(ITEM, 'text-foreground')}>
         <span className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground">
           <PlusIcon className="size-5" aria-hidden="true" />

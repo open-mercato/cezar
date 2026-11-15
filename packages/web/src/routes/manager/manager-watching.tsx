@@ -94,15 +94,17 @@ export function WatchingPanel({ id, ...props }: WatchingProps & { id: string }) 
 export function WatchingSheet({
   open,
   onOpenChange,
+  everyWidth = false,
   ...props
-}: WatchingProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
+}: WatchingProps & { open: boolean; onOpenChange: (open: boolean) => void; everyWidth?: boolean }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="bottom"
         data-slot="manager-watching-sheet"
         // `dvh`: the URL bar and the keyboard must not push the sheet's top off screen.
-        className="max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none lg:hidden"
+        // CezarBot has no column at `lg`: the sheet is its way to the tasks on a landscape iPad.
+        className={cn('max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none', !everyWidth && 'lg:hidden')}
         // The sheet itself takes focus: a ring on its first control reads as a selection on touch.
         onOpenAutoFocus={(event) => {
           event.preventDefault()
