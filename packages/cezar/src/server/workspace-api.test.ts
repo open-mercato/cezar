@@ -253,6 +253,35 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(existsSync(join(home, 'branding-logo.png'))).toBe(false);
   });
 
+  // ---- GET /api/v1/workspace/account-usage ------------------------------------
+
+  it('GET account-usage answers an empty list when the store has no snapshots yet', async () => {
+    const { accountUsageResponseSchema } = await import('@open-mercato/cezar-contract');
+    const res = await apiRequest(app, '/api/v1/workspace/account-usage');
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    expect(accountUsageResponseSchema.safeParse(body).success).toBe(true);
+    expect(accountUsageResponseSchema.parse(body).accounts).toEqual([]);
+  });
+
+  it('GET account-usage answers { accounts: [] } in hosted mode (CEZ_REMOTE=1)', async () => {
+    const savedRemote = process.env.CEZ_REMOTE;
+    const savedAllow = process.env.CEZ_REMOTE_AGENT_ACCOUNTS;
+    try {
+      process.env.CEZ_REMOTE = '1';
+      delete process.env.CEZ_REMOTE_AGENT_ACCOUNTS;
+      const res = await apiRequest(app, '/api/v1/workspace/account-usage');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ accounts: [] });
+    } finally {
+      if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
+      else process.env.CEZ_REMOTE = savedRemote;
+      if (savedAllow === undefined) delete process.env.CEZ_REMOTE_AGENT_ACCOUNTS;
+      else process.env.CEZ_REMOTE_AGENT_ACCOUNTS = savedAllow;
+    }
+  });
+
   // ---- GET /api/v1/workspace/host-usage ---------------------------------------
 
   it('GET host-usage answers a contract-valid sample from read-only OS facts', async () => {

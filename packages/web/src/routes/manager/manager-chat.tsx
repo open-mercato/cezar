@@ -20,6 +20,7 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
+import { AccountUsageWidget } from '@/components/account-usage-widget'
 import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
 import { CacheStatusChip } from '@/components/cache-status'
@@ -588,6 +589,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
         </div>
+        <AccountUsageWidget runner={manager.runner} agentProfile={manager.agentProfile} className="max-md:hidden" />
         <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" onClick={checkNow}>
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now
