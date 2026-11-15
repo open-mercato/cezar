@@ -4,7 +4,7 @@
 
 ## TLDR
 
-Monitoring wakes the same live agent every 5 minutes by default after it emits `CEZ:MONITORING`. Each wake creates a model turn, never overlaps another turn, and counts toward the 40-wakeup cap per monitoring epoch. A childless monitor that keeps re-parking hands off as `waiting` after 40 × 5 = 200 minutes; an unanswered hand-off settles `failed` after the default 15-minute idle timeout (215 minutes total). Setting `monitoringWakeIntervalMinutes` to `null` explicitly selects park mode with no automatic model turns: the hand-off bound is four times the configured idle timeout (60 minutes at the default 15, also the fallback when idle timeout is disabled). A dispatched child still in flight postpones the hand-off.
+Monitoring wakes the same live agent every 5 minutes by default after it emits `CEZ:MONITORING`. Each wake creates a model turn — except a tick the PR watch (#2040, below) finds unchanged, which skips the turn — never overlaps another turn, and counts toward the 40-wakeup cap per monitoring epoch. A childless monitor that keeps re-parking hands off as `waiting` after 40 × 5 = 200 minutes; an unanswered hand-off settles `failed` after the default 15-minute idle timeout (215 minutes total). Setting `monitoringWakeIntervalMinutes` to `null` explicitly selects park mode with no automatic model turns: the hand-off bound is four times the configured idle timeout (60 minutes at the default 15, also the fallback when idle timeout is disabled). A dispatched child still in flight postpones the hand-off.
 
 ## Resolved assumptions (autonomous defaults)
 
@@ -85,7 +85,7 @@ or an opened PR) therefore watches that PR instead of waking blind:
 | W3 | Does a quiet tick count? | Yes, toward the same 40, with its own note. | The cap's load-bearing job is the park's wall-clock bound (200 min at 5); counting keeps it exact. |
 | W4 | Unreadable forge? | `gh` absent, logged out, offline, `CEZ_DRY_RUN=1`, bad JSON: the tick wakes as before. | Degrades to today; never a silent park. |
 | W5 | Waits the fingerprint cannot see? | After `MONITORING_PR_QUIET_CHECKS` (5) quiet ticks in a row the next tick wakes anyway. | A PR run may be monitoring a local process; it still gets a turn every ~30 min. |
-| W6 | Default? | On; `CEZ_MONITORING_PR_WATCH=0` restores a turn per tick. | Pending owner ratification in AGENTS.md: one `gh pr view` per tick replaces the agent's own `gh pr checks`. |
+| W6 | Default? | On; `CEZ_MONITORING_PR_WATCH=0` restores a turn per tick. | Recorded in AGENTS.md as an owner-approved exception (2026-11-10): one `gh pr view` per tick replaces the agent's own `gh pr checks`. |
 
 Mechanism: arming the wake timer for a park starts the watch and probes the baseline fingerprint.
 At a due tick (after the supervision skip, which keeps precedence) the timer probes again: equal

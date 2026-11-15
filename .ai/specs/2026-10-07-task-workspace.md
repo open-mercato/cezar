@@ -21,7 +21,8 @@
 > - **Main's run header.** The layout strip fills the header's tab row (`RunHeader` `tabs` slot);
 >   there is no separate overview header mode. Notes keeps its own page, linked from the strip.
 >   Tab order (2026-11-12, design "Proposal 3"): three groups with a hairline between — Chat |
->   Changes, Commits, Files, Preview | Graph, Notes, Assets, Terminal (`strip.ts`). Every tab is
+>   Changes, Commits, Files | Graph, Notes, Preview, Assets, Terminal (`FIXED_VIEW_ORDER` in
+>   `layout-state.ts`, groups in `strip.ts`; Preview belongs to the run group). Every tab is
 >   still a drag source and ⌥-click target; the Changes tab counts the files the run changed. On a
 >   phone the row scrolls under a fade instead of folding into `…`. The
 >   Terminal tab opens the shells as a view of their own, like Preview; a drag or ⌥-click puts
@@ -35,12 +36,15 @@
 >   every project. Opening one gives the task its own copy under that name.
 >   **Built-in `Review` (2026-11-12):** cezar ships one saved layout, Chat beside Changes
 >   (`BUILT_IN_LAYOUTS`, code rather than stored state). It is offered in every task's Layout menu
->   like a saved one; a task the host has never stored layouts for opens on it from 1200px up and
->   on Chat alone below (`firstVisitState`) — nothing is written until the user changes something.
+>   like a saved one; a task the host has never stored layouts for opens on Chat alone at every viewport
+>   (`firstVisitState`; owner review 2026-11-12: Changes is never opened for the user) — Review
+>   waits in the menu, and nothing is written until the user changes something.
 >   A user layout saved under the same name stands in for it (deleting that brings it back); its ×
 >   hides it on this browser (`localStorage` `cez:hidden-layouts`), never deletes it.
 >   `/tasks/:id/commits/:sha` stays a standalone page; inside a column, Commits picks in place.
 > - **`CEZ_TERMINAL`** unset follows `localHandoff` (on locally, off hosted) — main has no sign-in.
+>   The same gate also covers the project terminal (#1526), a shell opened in the project's root
+>   rather than a task worktree (`/terminal` routes in `server.ts`).
 >   New shells do not receive brutus's per-task slot environment (`taskSlotEnv`).
 
 ## 3. Product principles and constraints

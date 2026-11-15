@@ -133,7 +133,7 @@ The user authorized a simulation of the agreed scope with assumptions marked. Th
 - `packages/cezar/src/git-worktree.ts`: creation/removal and startup orphan cleanup.
 - `packages/cezar/src/config.ts`: optional project config and defaults.
 - `packages/cezar/src/server/server.ts`: configuration writes, archive, deletion and worktree operations.
-- `packages/web/src/routes/settings/settings-shell.tsx`, `settings-field.tsx`, `worktrees-section.tsx`, `worktrees-panel.tsx`: section navigation, labelled fields, explicit Save and destructive confirmation dialogs.
+- `packages/web/src/routes/settings/settings-shell.tsx`, `settings-field.tsx` (removed in #2107), `worktrees-section.tsx`, `worktrees-panel.tsx`: section navigation, labelled fields, explicit Save and destructive confirmation dialogs.
 - `packages/web/src/routes/task-thread/run-header.tsx`, `task-thread.tsx`: task header, status, Session tab and execution transcript.
 
 Tracker check during brainstorming: matching open PR searches for lifecycle/hooks/docker cleanup returned no hits; issues are disabled on the configured origin. No panel report was supplied. A fresh-context challenger found no routing blocker; its cautions are captured above.

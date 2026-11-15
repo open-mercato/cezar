@@ -1,6 +1,6 @@
 # Task auto-naming — short, LLM-generated titles with PR/issue extraction
 
-Status: proposed · Date: 2026-07-17 · Issues: #432 (naming quality), owner direction 2026-07-17 · Relates: PR #442 (kept — becomes this spec's heuristic fallback), spec 008 (the planner, the one-shot template this reuses)
+Status: implemented (Step 2's runner/model choice superseded by #2012/#2045, see the note there) · Date: 2026-07-17 · Issues: #432 (naming quality), owner direction 2026-07-17 · Relates: PR #442 (kept — becomes this spec's heuristic fallback), spec 008 (the planner, the one-shot template this reuses)
 
 ## Problem
 
@@ -65,6 +65,12 @@ New `src/runs/auto-name.ts`, mirroring `src/planner.ts` (spec 008) exactly:
 - `createRunner(config.defaultRunner).run({...})`, `allowedTools: []`, ~20 s timeout; new
   config key **`namerModel`** (default a cheap alias, e.g. `haiku`; passed only on the claude
   backend — the `plannerModel` precedent).
+  **Superseded (#2012, #2045):** the namer runs on the task's own runner (`config.defaultRunner`
+  only when none is given), with a cheap model per runner from `resolveNamerModel`
+  (`runs/namer-model.ts`): explicit `namerModels[runner]`, then Claude's `namerModel`, then a
+  cheap model from discovery, then a static default. A runner with no cheap model known is
+  never called — the heuristic title stays — except for one creation call that names a branch
+  under explicit `branchNaming`.
 - User prompt carries a `[cez-namer]` marker (dry-run mockability, like `[cez-planner]`),
   the skill name + description, the first ~500 chars of the task, and the step-0 numbers as
   *advisory* context.
@@ -97,8 +103,8 @@ progresses** — but through the namer, never through raw turn text.
   renaming long multi-topic sessions, and the user could no longer find their tasks. The
   same applies to `CEZ:TITLE`: the first declared title sticks.
 - **The switch (settings-based, env default, default ON):** new `config.json` key
-  **`liveTitleUpdates: boolean`**, surfaced in Settings → Agents next to `plannerModel`/
-  `namerModel`. When the key is absent, the default comes from the env:
+  **`liveTitleUpdates: boolean`**, surfaced in Settings → Tasks (originally specified for Settings → Agents next to
+  `plannerModel`/`namerModel`). When the key is absent, the default comes from the env:
   **`CEZ_TITLE_UPDATES`** (`'0'` → off, anything else/unset → **ON**). Config wins over env;
   env wins over the built-in ON. Default-ON is an explicit owner decision recorded here — it
   deviates from the "cost widens ⇒ opt-in" house rule; the cost is bounded below.

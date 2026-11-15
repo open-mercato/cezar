@@ -4,6 +4,19 @@
 `2026-07-20-multi-project-workspace.md` for the *presentation*; the URL scheme and the store
 split that spec introduced are kept on purpose (see "Why the URLs stay").
 
+> **As built after #2107 (2026-11-12, design doc "Proposal 8: fewer pages, one project at a
+> time").** The URL families, the chromeless frame and `← Back` below still hold. The rail does
+> not: it has three groups — **You** (Appearance, Keyboard, Notifications) and **Workspace**
+> (Agents, Behaviour, Data & privacy, Projects; "Stored in ~/.cezar"), the global sections — then
+> **Project**, a switcher naming ONE project (a picker, like the app sidebar's) followed by that
+> project's pages. There is no tree of every registered project (`settings-shell.tsx`,
+> `registry.tsx`). The footer gear is gone: Settings is a row in the sidebar's Workspace group
+> (`nav-items.ts`, → the project's `/settings`), and `/settings/global` is still reachable from
+> the rail, ⌘K and deep links. The version is its own chip in the footer, not a ⋯-menu entry
+> (`sidebar-status-line.tsx`). On a phone, project pages lead the pill row with `‹ Workspace`.
+> The project home `/p/<id>/` is now the Now view; the task table moved to `/p/<id>/tasks`.
+> Where the sections below disagree with this note, the note is current.
+
 **Owner decisions (2026-10-13):** the app sidebar is hidden while in settings, which makes
 settings the cockpit's first full-screen surface, with its own nav and its own way back. That
 nav is the app sidebar's own frame, not a copy of it: `components/sidebar-frame.tsx`
@@ -21,7 +34,7 @@ no breadcrumb and no scope badge: the page header reads `project / view` on proj
    project's own settings sub-nav (Agents, Agent config, Worktrees, Bookmarklets, Prompt
    templates).
 2. The **Settings** row under a project in the sidebar still opens that project's settings.
-3. The footer gear still opens global settings.
+3. The footer gear still opens global settings. *(Removed by #2107: Settings is a sidebar row.)*
 4. The app sidebar is not shown inside settings.
 
 ## Today (what the split looks like in code)
@@ -172,7 +185,7 @@ the shared `SidebarFrame`, resizable, at the same width as the app sidebar.
   is never listed.
 - On a project page the nav ends with that project's folder path.
 - Footer: the app sidebar's `SidebarStatusLine` (`data-slot="sidebar-footer"`) without its health
-  dot — the ⌘K launcher, then the ⋯ menu with the version, the star ask and the theme choice.
+  dot — the ⌘K launcher, the version chip, then the ⋯ menu with the star ask and the theme choice.
   It is pinned under the nav, which scrolls on its own.
 
 **Page header** (`data-slot="settings-header"`, desktop only): the title, `project / view` on
@@ -190,7 +203,8 @@ project section pages, then the section's one-liner. The project index reads `pr
 
 **Mobile (`<md`)**: a top bar (`data-slot="settings-mobile-bar"`) with the hamburger that opens
 the drawer, and the page title. Section pages add a pill row of the current area's sections;
-project pages lead it with `‹ General settings` (→ `/settings/global`) and a `General` pill.
+project pages lead it with `‹ Workspace` (→ `/settings/global`; `‹ General settings` before #2107)
+and a `General` pill.
 Back lives in the drawer.
 
 ### Leaving settings — where `← Back` goes
@@ -204,7 +218,7 @@ wrong: it would walk back through settings pages. Instead:
   every location that is NOT a settings pathname. So the store always holds the last
   non-settings page the user was on, across any number of settings pages.
 - `← Back` navigates to `get()` when set. Fallback (cold load straight into settings): the
-  tasks pane of the project in scope — `/p/<id>/` for project pages, `/p/<boot>/` for global
+  project home in scope — `/p/<id>/` (the Now view since #2107) for project pages, `/p/<boot>/` for global
   ones (`useProjects().data?.bootProject`, else the `/` legacy redirect resolves it).
 - `Escape` triggers the same, when focus is not inside an input, textarea, select,
   `contenteditable` or an open Radix layer (dialogs own Escape). Registered by the settings
@@ -239,7 +253,7 @@ wrong: it would walk back through settings pages. Instead:
 | --- | --- | --- |
 | Sidebar → project group → Settings | `/p/<id>/settings` | none (lands in the full-screen frame with that project expanded) |
 | Sidebar flat nav → Settings (single project) | `/p/<boot>/settings` | none |
-| Footer gear | `/settings/global` | none |
+| Footer gear | `/settings/global` | none *(the gear was removed by #2107; the rail's You/Workspace groups and ⌘K reach global settings)* |
 | ⌘K "Settings" view | `/settings` (scoped) | add a second view row **Global settings** → `/settings/global` (plain react-router navigate for this one row; the others stay scoped) |
 | Projects registry table row | — | add a per-row **Settings** link → `/p/<id>/settings` (explicit scope), absent for `missing` |
 | Every existing deep link | unchanged | — |
@@ -317,7 +331,7 @@ E2E (`npm run test:e2e`):
   settings mobile bar (`settings-mobile-bar` carries the safe-area inset).
 - `smoke.e2e.ts:131-167` (footer rows) runs on the home page — unaffected. `smoke.e2e.ts:220`
   (`/settings/skills` → Skills item active) — unaffected, Skills is not a settings page.
-- `project-groups.e2e.ts:302-312` (single-project: no registry pane) — still holds.
+- `project-groups.e2e.ts:302-312` (single-project: no registry pane) — still holds. *(The file was removed in #2107.)*
 - `settings-bookmarklets.e2e.ts`, `tools-menu.e2e.ts:101-118` (Tools → Settings → Agents lands
   on `/p/<boot>/settings/agents`) — unchanged.
 - New flow: home → footer gear → `/settings/global` → click second project's Agents in the

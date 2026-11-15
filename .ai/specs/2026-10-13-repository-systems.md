@@ -77,7 +77,7 @@ before implementation starts.
 |---|---|
 | `workspace` | Taken. It means the whole per-user installation: `~/.cezar/`, `/api/v1/workspace/*`, BC §9 and `resources.maxParallel`. |
 | `project` | Taken. It means one registered repo (`/p/:projectId`). |
-| `group` | Taken twice: the sidebar's per-project block (`components/project-groups.tsx`) and "group by" on `/tasks`. #1303 also uses "project groups" loosely. |
+| `group` | Taken twice: the sidebar's per-project block (`components/project-groups.tsx`, removed in #2107) and "group by" on `/tasks`. #1303 also uses "project groups" loosely. |
 | `space` | Too vague. It suggests a container that *owns* tasks, and a System does not. No prior art. |
 | repo set (#1084) | Describes membership only, and relationships are the point here. Kept as the description of what a System *contains*. |
 | stack | Clashes with stacked PRs (Graphite and similar) and docker-compose stacks. |

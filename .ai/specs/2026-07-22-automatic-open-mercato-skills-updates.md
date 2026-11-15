@@ -79,7 +79,7 @@ snapshot(repoRoot: string): SkillsUpdateState
 
 Implementation constraints:
 
-- Execute the absolute `npx` adjacent to `process.execPath` when present, falling back to a PATH probe; use `execFile`/`spawn` with argument arrays, `shell: false`, a timeout, an output cap, and no environment logging.
+- Execute the absolute `npx` adjacent to `process.execPath` when present, falling back to a PATH probe. On Windows Node refuses to spawn `npx.cmd` without a shell (CVE-2024-27980), so cezar runs npm's `npx-cli.js` through `process.execPath` instead — global npm prefix first, then beside `node.exe` (#1958, `resolveWindowsNpxCli`); use `execFile`/`spawn` with argument arrays, `shell: false`, a timeout, an output cap, and no environment logging.
 - Resolve the installed `skills` CLI through `npx --yes skills ...`. `--yes` suppresses package-install prompts; missing `npx`, npm cache failure, offline resolution, unsupported CLI output, and non-zero exit all become `unavailable`/`error` state.
 - Inspect project `skills-lock.json` and global `~/.agents/.skill-lock.json` tolerantly. Unknown versions/shapes produce a scope-specific unavailable reason and no mutation. Normalize only the documented GitHub shorthand/URL spellings; never accept lookalike hosts.
 - Use the current upstream machine-readable listing where it can prove source/scope; lock metadata remains the ownership authority. Do not treat cezar's own `Skill.source` enum as installation provenance.

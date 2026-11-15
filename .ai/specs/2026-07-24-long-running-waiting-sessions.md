@@ -134,7 +134,7 @@ No migration is required. Existing installations load `2`; deleting `~/.cezar/co
 
 ## UI/UX
 
-Add one `SettingsField` after “Max parallel tasks” in Global Settings → Resources:
+Add one `SettingsField` (`settings-field.tsx`, removed in #2107) after “Max parallel tasks” in Global Settings → Resources:
 
 - title: **Extra monitoring sessions**;
 - a 0–16 select, matching the existing max-parallel control;

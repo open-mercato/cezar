@@ -13,8 +13,8 @@ However, when composing tasks or attaching context briefs, users and integration
 To remain architecturally grounded and honest:
 - **In-Scope (First-Turn Ingestion Seam):** Sanitization covers text composed by Cezar and handed to a runner on turn 1: task descriptions, continuation context, attached prompt briefs, and system-prompt augmentations (`--append-system-prompt` or prepended prompt blocks).
 - **Auxiliary Call Coverage (Turn 1 & Mid-Run):** Crucially covers auxiliary LLM calls for run naming:
-  1. Turn-1 auto-naming: `workflows/run.ts:1301` and `runs/auto-name.ts:94–100,163–165`.
-  2. Mid-run re-naming: `workflows/run.ts:5020` (`void this.autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText })`).
+  1. Creation-time auto-naming: `RunManager.autoNameRun(run.id, skillHint, input.task)` in `workflows/run.ts`, which calls `generateRunName` in `runs/auto-name.ts`.
+  2. The one title refresh after the first turn (`titleSettled`, spec `2026-07-17-task-auto-naming`): `autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText })` in `workflows/run.ts`. Since #2045 both calls run on the task's own runner with its cheap namer model (`runs/namer-model.ts`), not on the default runner.
   - If sensitive tokens or PII are detected in the payload, auto-naming unconditionally falls back to a deterministic slug (`task-<id8>`) without dispatching to external APIs.
 - **Out-of-Scope (Sub-process Tool Calls):** This hook does **not** act as an egress proxy or inspect subsequent vendor CLI tool executions (e.g. if an agent runs `cat .env` on turn 2+ inside the spawned vendor process). Those require vendor-specific execution hooks or an external network egress proxy.
 
@@ -23,7 +23,7 @@ To remain architecturally grounded and honest:
 ### 1. Deterministic Architecture Invariant (Zero LLM Delegation)
 Sanitization and detection are **100% deterministic (code, AST, and regex rule-based)**.
 - **Why No LLM Classifier:** Classifying PII via an LLM classifier is non-deterministic, untestable against formal truth tables, susceptible to prompt injection, and incurs unacceptable latency and cost on every prompt dispatch.
-- **Canonical Pattern Source:** The gate reuses the exact credential patterns (`TOKEN_PATTERNS` / exported `detectSecrets()`) from `packages/cezar/src/core/secret-redaction.ts` so inbound scrubbing and outbound rejection cannot drift apart.
+- **Canonical Pattern Source:** The gate would reuse the exact credential patterns (`TOKEN_PATTERNS`) from `packages/cezar/src/core/secret-redaction.ts`, through a `detectSecrets()` export this ADR would add (today the module exports only `redactSecrets`, `redactDeep` and `collectSecretValues`), so inbound scrubbing and outbound rejection cannot drift apart.
 - **No Entropy Heuristics:** Entropic detectors (`detectHighEntropyBlobs`) are explicitly excluded to avoid massive false-positive rejections on lockfile integrity hashes, base64 fixtures, and minified bundle artifacts in developer repositories.
 - **Adversarial Normalization:** Inbound text is normalized via Unicode NFKC before evaluation to eliminate lookalike homoglyphs and unescape known URL-encoded tokens.
 

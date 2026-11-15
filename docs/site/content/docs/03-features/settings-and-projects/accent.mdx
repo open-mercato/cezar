@@ -1,25 +1,18 @@
 ---
-title: "Change the button color"
-description: "Choose the accent color used for primary actions."
+title: "Button color"
+description: "The accent color used for primary actions is fixed to violet."
 related:
   links:
-    - architecture/cli-and-configuration
+    - features/settings-and-projects/appearance
 sources:
   - label: "Implementation"
-    path: packages/web/src/routes/settings/appearance.tsx
-    line: 243
-    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+    path: packages/web/src/lib/appearance.ts
+    line: 10
 ---
-Set the color in the appearance settings.
+Cezar uses one accent color, violet, for buttons and other primary actions. It cannot be changed.
 
-## Where to find it
+## What changed
 
-Settings → Appearance → Accent
+Earlier versions offered an accent picker under Settings → Appearance → Accent. The November 2026 redesign removed it. A previously saved accent choice is kept in your settings file but has no effect.
 
-## How to use it
-
-1. Open Appearance.
-2. Choose an accent color.
-3. Check how the buttons look.
-
-> **Good to know**: This changes the color of interface elements. Task statuses stay unchanged.
+> **Good to know**: Task statuses have their own colors, independent of the accent.
