@@ -1,4 +1,4 @@
-import type { Phone, PhonePairing, PhonePairingFailure, RelayStatus, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
+import type { Phone, PhonePairing, PhonePairingFailure, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { PencilIcon, SmartphoneIcon, Trash2Icon } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -22,23 +22,7 @@ import { toast } from '@/components/ui/toaster'
 import { QrSvg } from '@/components/qr-svg'
 import { GetTheApp } from './get-the-app'
 import { AccountStep, ComputerNameField, RelayAccountPanel } from './relay-account'
-
-const RELAY_STATUS: Record<RelayStatus, string> = {
-  off: 'not connected, because no phone is paired',
-  connecting: 'connecting',
-  connected: 'connected',
-  unreachable: 'unreachable. Retrying',
-  replaced: 'another cezar on this computer holds the connection',
-  'rate-limited': 'too many connections. Retrying soon',
-  quota: 'too much traffic today. Retrying later',
-  disabled: 'switched off by its operator. Retrying later',
-  'update-required': 'update cezar to keep using it',
-  locked: 'the keychain is locked',
-  error: 'stopped',
-  'email-unconfirmed': 'not connecting your phones until you confirm your email',
-  'account-required': 'not connecting your phones until you enter your email above',
-  suspended: 'suspended by Open Mercato, so your phones cannot connect',
-}
+import { RelayStatusPanel } from './relay-status-panel'
 
 const FAILURES: Record<PhonePairingFailure, string> = {
   'device-limit': 'This relay cannot take another phone. Remove one first.',
@@ -199,7 +183,6 @@ export function PhonesSection() {
   const failed = mine?.status === 'failed' ? FAILURES[mine.failure ?? 'phone-left'] : null
   const denied = mine?.status === 'denied' ? 'You denied that phone. Nothing was added.' : null
   const expired = credentials !== null && !showing && (mine === null || mine.status === 'expired' || mine.status === 'waiting')
-  const relay = list.data?.relay
   const phones = list.data?.phones ?? []
   // § 18: no code before an email and accepted terms, unless this relay has no accounts at all.
   const accountReady = account.data?.problem === 'unsupported'
@@ -211,6 +194,7 @@ export function PhonesSection() {
 
   return (
     <div className="space-y-6">
+      {list.data ? <RelayStatusPanel data={list.data} accountState={account.data?.status?.state} /> : null}
       <section aria-labelledby="connect-phone" className="space-y-3">
         <h2 id="connect-phone" className="text-sm font-medium">Connect a phone</h2>
         <ol className="space-y-5">
@@ -289,12 +273,6 @@ export function PhonesSection() {
           </p>
         ) : null}
       </section>
-
-      {relay ? (
-        <p className="text-sm text-muted-foreground">
-          Relay: {RELAY_STATUS[relay.status]}{relay.detail ? ` (${relay.detail})` : ''}
-        </p>
-      ) : null}
 
       {pairing?.status === 'confirm' ? (
         <ApprovalDialog pairing={pairing} deciding={decide.isPending} onDecide={(approve) => decide.mutate({ id: pairing.id, approve })} />

@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   resendRelayAccountLink: vi.fn(),
   deleteRelayAccount: vi.fn(),
   setComputerName: vi.fn(),
+  setRelayKeepAwake: vi.fn(),
 }))
 let emit: ((name: string) => void) | undefined
 
@@ -46,7 +47,7 @@ vi.mock('@/api/phones', async (original) => {
 })
 
 const base: PhonesResponse = {
-  relayOrigin: 'https://relay.example.test', relay: { status: 'off' }, phones: [], pairing: null,
+  relayOrigin: 'https://relay.example.test', relay: { status: 'off' }, phones: [], pairing: null, keepAwake: { enabled: true, active: false },
   account: { attached: true, computerName: 'Studio Mac', email: 'me@example.test', termsVersion: RELAY_TERMS.version },
 }
 const NOW_S = Math.floor(Date.now() / 1000)
@@ -319,6 +320,57 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
     const state = await screen.findByTestId('relay-account-state')
     expect(state.textContent).toContain('Your phones keep working with the old email until')
     expect(state.textContent).toContain('or until you confirm the new one.')
+  })
+
+  it('the top says what the relay socket did, enough to diagnose a second computer', async () => {
+    const at = '2026-11-15T14:20:00.000Z'
+    api.getPhones.mockResolvedValue({
+      ...base,
+      relay: {
+        status: 'unreachable', attempt: 4, nextRetryAt: '2026-11-15T14:21:00.000Z',
+        lastDown: { at, reason: 'no-pong' }, lastBlock: { at, reason: 'email-unconfirmed' },
+      },
+      keepAwake: { enabled: true, active: true },
+      phones: [{ deviceId: 'd'.repeat(22), label: 'iPad', platform: 'ios', addedAt: '', connected: false }],
+    })
+    api.getRelayAccount.mockResolvedValue({ ...confirmed, status: pendingStatus })
+    show()
+    const panel = await screen.findByRole('region', { name: /Relay: unreachable/ })
+    const text = panel.textContent ?? ''
+    expect(text).toContain('relay.example.test')
+    expect(text).toContain(`${new Date(at).toLocaleString()} · no-pong`)
+    expect(text).toContain('attempt 4, next try at')
+    expect(text).toContain('attached (me@example.test)')
+    await waitFor(() => expect(panel.textContent).toContain('waiting for you to confirm your email'))
+    expect(text).toContain('email-unconfirmed (code 4451)')
+    expect(within(panel).getByTestId('keep-awake-state').textContent).toMatch(/^On: idle sleep is held off/)
+    expect(within(panel).getByText(/battery/)).toBeTruthy()
+    expect(panel.compareDocumentPosition(screen.getByRole('region', { name: 'Connect a phone' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('connected shows since when; keep-awake toggles off through the route', async () => {
+    api.getPhones.mockResolvedValue({ ...base, relay: { status: 'connected', connectedAt: '2026-11-15T14:00:00.000Z' } })
+    api.setRelayKeepAwake.mockResolvedValue({ enabled: false, active: false })
+    show()
+    const panel = await screen.findByRole('region', { name: 'Relay: connected' })
+    expect(panel.textContent).toContain(new Date('2026-11-15T14:00:00.000Z').toLocaleString())
+    const toggle = within(panel).getByRole('switch', { name: 'Keep this computer awake for your phone' })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(api.setRelayKeepAwake).toHaveBeenCalledWith(false))
+  })
+
+  it('keep-awake is hidden off macOS and disabled when switched off by env', async () => {
+    api.getPhones.mockResolvedValue({ ...base, keepAwake: { enabled: true, active: false, unavailable: 'not-macos' } })
+    show()
+    await screen.findByRole('region', { name: /Relay:/ })
+    expect(screen.queryByRole('switch', { name: 'Keep this computer awake for your phone' })).toBeNull()
+    cleanup()
+    api.getPhones.mockResolvedValue({ ...base, keepAwake: { enabled: true, active: false, unavailable: 'switched-off' } })
+    show()
+    const toggle = (await screen.findByRole('switch', { name: 'Keep this computer awake for your phone' })) as HTMLButtonElement
+    expect(toggle.disabled).toBe(true)
+    expect(screen.getByTestId('keep-awake-state').textContent).toContain('CEZ_RELAY_KEEP_AWAKE=0')
   })
 
   it('renames the computer, saving only a changed name', async () => {

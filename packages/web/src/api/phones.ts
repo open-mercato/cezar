@@ -1,4 +1,4 @@
-import type { PhonePairingCodeResponse, PhonesResponse, RelayAccountResendResponse, RelayAccountResponse, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
+import type { PhonePairingCodeResponse, PhonesResponse, RelayAccountResendResponse, RelayAccountResponse, RelayKeepAwake, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
@@ -87,11 +87,19 @@ export function useRelayAccount(enabled = true) {
   })
 }
 
-/** Polls nothing: `phone-pairing` on the one workspace stream says when to read again. */
-export function usePhones() {
+/**
+ * Polls nothing: `phone-pairing` on the one workspace stream says when to read again, and the relay
+ * service emits it on every socket transition, so the sidebar dot follows the relay live.
+ */
+export function usePhones(enabled = true) {
   const queryClient = useQueryClient()
-  useEffect(() => onWorkspaceEvent((name) => {
+  useEffect(() => (enabled ? onWorkspaceEvent((name) => {
     if (name === 'phone-pairing') void queryClient.invalidateQueries({ queryKey: phoneKeys.list })
-  }), [queryClient])
-  return useQuery({ queryKey: phoneKeys.list, queryFn: ({ signal }) => getPhones({ signal }) })
+  }) : undefined), [queryClient, enabled])
+  return useQuery({ queryKey: phoneKeys.list, queryFn: ({ signal }) => getPhones({ signal }), enabled })
+}
+
+/** Keep this computer awake for your phone, Settings > Connect a phone. */
+export async function setRelayKeepAwake(enabled: boolean): Promise<RelayKeepAwake> {
+  return unwrap(await phones()['keep-awake'].$put({ json: { enabled } }), `${PATH}/keep-awake`)
 }
