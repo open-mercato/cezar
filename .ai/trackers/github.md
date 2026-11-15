@@ -523,11 +523,13 @@ gh api "repos/${OWNER_REPO}/git/refs/heads/${EVIDENCE_BRANCH}" >/dev/null 2>&1 |
 BODY_IMAGES=""
 for img in <image-paths>; do
   path="{slug}/$(basename "$img")"
-  base64 < "$img" | tr -d '\n' > /tmp/ev-content.b64            # portable across GNU/BSD; no newlines
+  b64=$(mktemp)                                                 # per-image path: concurrent runs must not share it
+  base64 < "$img" | tr -d '\n' > "$b64"                        # portable across GNU/BSD; no newlines
   existing=$(gh api "repos/${OWNER_REPO}/contents/${path}?ref=${EVIDENCE_BRANCH}" --jq .sha 2>/dev/null || true)
-  jq -n --rawfile c /tmp/ev-content.b64 --arg m "qa evidence {slug}" --arg b "$EVIDENCE_BRANCH" --arg s "$existing" \
+  jq -n --rawfile c "$b64" --arg m "qa evidence {slug}" --arg b "$EVIDENCE_BRANCH" --arg s "$existing" \
      'if $s == "" then {message:$m,branch:$b,content:$c} else {message:$m,branch:$b,content:$c,sha:$s} end' \
      | gh api -X PUT "repos/${OWNER_REPO}/contents/${path}" --input - >/dev/null
+  rm -f "$b64"
   url="https://raw.githubusercontent.com/${OWNER_REPO}/${EVIDENCE_BRANCH}/${path}"
   BODY_IMAGES="${BODY_IMAGES}\n![$(basename "$img")](${url})"
 done
