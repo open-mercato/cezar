@@ -2372,6 +2372,14 @@ mod tests {
         assert!(INIT_SCRIPT.contains("microphone: true"));
     }
 
+    #[test]
+    fn app_nap_never_throttles_the_server_it_supervises() {
+        // A locked screen napped the app and paired phones lost the relay (2026-11-15).
+        let info = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist")).unwrap();
+        let key = info.find("<key>NSAppSleepDisabled</key>").expect("NSAppSleepDisabled is set");
+        assert!(info[key..].trim_start_matches("<key>NSAppSleepDisabled</key>").trim_start().starts_with("<true/>"));
+    }
+
     /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
     /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
     /// onto the brand row (shell 0.1.1).
