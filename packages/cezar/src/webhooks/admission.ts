@@ -207,6 +207,8 @@ export class AdmissionRepository {
     try {
       const failed = prepared.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failed) throw failed.reason;
+      // Ownership can move during the awaited prepares; re-check before publishing, as `commit` does.
+      this.deps.assertOwner?.();
       nexts.forEach((next, index) => {
         ready[index]!.publish();
         this.charge(this.records.get(next.id)!, -1); this.records.set(next.id, next); this.charge(next, 1);

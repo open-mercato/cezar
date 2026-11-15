@@ -13,6 +13,20 @@ const receiver = (id = '00000000-0000-4000-8000-000000000001', fence = 1) => pri
 async function repo(limits = {}) { const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-admission-')); dirs.push(dir); return { dir, repository: await module.AdmissionRepository.open(dir, { now: () => now, limits }) }; }
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('atomic webhook admission and retained capacity', () => {
+  it('publishes nothing from a batch when ownership is lost while it is being prepared', async () => {
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-admission-')); dirs.push(dir);
+    let owner = true;
+    const repository = await module.AdmissionRepository.open(dir, { now: () => now, assertOwner: () => { if (!owner) throw new Error('Webhook ownership lost'); } });
+    const ids = [];
+    for (const sequence of [2, 3, 4]) ids.push((await repository.admit(source(sequence), [receiver()]))!.id);
+    const disk = () => readdirSync(join(dir, 'events')).sort().map(name => [name, readFileSync(join(dir, 'events', name), 'utf8')]);
+    const before = disk(), memory = JSON.stringify(repository.all());
+    const prepare = storage.prepareWrite;
+    vi.spyOn(storage, 'prepareWrite').mockImplementation(async (...args) => { const write = await prepare(...args); owner = false; return write; });
+    await expect(repository.updateMany(ids.map(id => ({ id, mutate: record => { record.deliveries[0]!.status = 'cancelled'; } })))).rejects.toThrow('ownership lost');
+    expect(disk()).toEqual(before);
+    expect(JSON.stringify(repository.all())).toBe(memory);
+  });
   it('updates many admissions under one directory barrier, all or nothing on capacity', async () => {
     const { dir, repository } = await repo({ retainedBytes: 40000 });
     const ids = [];
