@@ -1,7 +1,7 @@
 import { RefreshCwIcon } from 'lucide-react'
 import { useSyncExternalStore } from 'react'
 
-import { useScheduleSelfUpdate, useSelfUpdate } from '@/api/queries'
+import { useHealth, useScheduleSelfUpdate, useSelfUpdate } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { buildSkew, subscribeBuildSkew } from '@/lib/build-identity'
 
@@ -42,10 +42,14 @@ function ReloadPage() {
 function RestartServer() {
   const status = useSelfUpdate()
   const schedule = useScheduleSelfUpdate()
+  const capabilities = useHealth().data?.capabilities
   const data = status.data
   // The self-update service's own restart: re-applying the active install restarts into what is
-  // on disk, and `whenIdle` holds it until no task is running or queued.
-  const active = data?.canSelfUpdate ? data.installed.find((v) => v.active) : undefined
+  // on disk, and `whenIdle` holds it until no task is running or queued. Local only — a hosted
+  // cockpit refuses any apply that is not forward (`forwardOnlyRefusal`), re-applying included,
+  // and the service has no plain restart, so an unconfirmed local gets no button that would fail.
+  const local = capabilities?.localHandoff === true
+  const active = local && data?.canSelfUpdate ? data.installed.find((v) => v.active) : undefined
   const pending = schedule.isPending || !!data?.scheduled || data?.job?.status === 'restarting'
   const busy = (data?.activeRuns ?? 0) > 0
   return (
@@ -58,7 +62,13 @@ function RestartServer() {
           ) : null
         ) : (
           <span className="text-muted-foreground">
-            {inDesktopApp() ? ' Quit and reopen the app.' : <> Stop <code>cezar</code> and start it again.</>}
+            {capabilities?.localHandoff === false ? (
+              <> Run <code>cezar server-deploy</code> on the host to reload the service.</>
+            ) : inDesktopApp() ? (
+              ' Quit and reopen the app.'
+            ) : (
+              <> Stop <code>cezar</code> and start it again.</>
+            )}
           </span>
         )}
         {schedule.error ? <span className="text-destructive"> {schedule.error.message}</span> : null}

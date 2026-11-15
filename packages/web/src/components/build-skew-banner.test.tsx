@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { SelfUpdateStatus } from '@open-mercato/cezar-api-client'
-import { workspaceQueryKeys } from '@/api/queries'
+import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { BuildSkewBanner } from '@/components/build-skew-banner'
 import { noteServerBuild, resetBuildIdentityForTest } from '@/lib/build-identity'
 
@@ -39,9 +39,10 @@ async function skew(disk: string, page: string, server: string) {
   await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
 }
 
-function renderBanner(state?: SelfUpdateStatus) {
+function renderBanner(state?: SelfUpdateStatus, { localHandoff = true } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   if (state) client.setQueryData(workspaceQueryKeys.selfUpdate, state)
+  client.setQueryData(queryKeys.health, { capabilities: { localHandoff } })
   getSelfUpdate.mockResolvedValue(state ?? { ...status, canSelfUpdate: false, installed: [] })
   return render(
     <QueryClientProvider client={client}>
@@ -78,6 +79,14 @@ describe('BuildSkewBanner', () => {
     await skew('new', 'new', 'old')
     expect(screen.getByRole('status').textContent).toContain('Stop cezar and start it again')
     expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('offers no restart a hosted cockpit would refuse, and names the host command', async () => {
+    renderBanner(status, { localHandoff: false })
+    await skew('new', 'new', 'old')
+    expect(screen.getByRole('status').textContent).toContain('Run cezar server-deploy on the host')
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(scheduleSelfUpdate).not.toHaveBeenCalled()
   })
 
   it('suggests a reload when this page is the old one', async () => {
