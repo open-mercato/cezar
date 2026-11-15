@@ -1511,11 +1511,6 @@ export async function fetchPrChecks(
 const checksCache = new Map<string, { at: number; glyph: ChecksGlyph }>();
 const CHECKS_CACHE_MAX = 500;
 
-/** Test hook — the per-PR checks cache would otherwise leak state across cases in one process. */
-export function __clearChecksCacheForTests(): void {
-  checksCache.clear();
-}
-
 /**
  * Lazy checks glyphs for the given PR numbers (route-facing). Resolves the repo handle once,
  * serves fresh cache entries, queries only the misses, and degrades to `{ available: false,

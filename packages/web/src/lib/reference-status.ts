@@ -141,9 +141,3 @@ export function referenceStatusPresentation(
 ): ReferenceStatusPresentation | undefined {
   return status !== undefined && isReferenceStatus(status) ? REFERENCE_STATUS[status] : undefined
 }
-
-/** The tooltip's full sentence: `Merged — this landed on its base branch`. */
-export function referenceStatusText(status: ReferenceStatus): string {
-  const { label, hint } = REFERENCE_STATUS[status]
-  return `${label} — ${hint}`
-}

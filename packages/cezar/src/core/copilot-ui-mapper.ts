@@ -30,10 +30,6 @@ import type { ToolStatus } from './ui-events.ts';
  */
 export const COPILOT_META_KEY = 'github.com/copilot';
 
-/** What a user needs in order to run Copilot CLI. */
-export const COPILOT_AUTH_HINT =
-  'GitHub Copilot CLI needs a Copilot-entitled login — run `copilot login`, or export COPILOT_GITHUB_TOKEN (GH_TOKEN and GITHUB_TOKEN are also read, in that order).';
-
 /** The run-time line for a rejected credential. "authentication failed" is what
  *  `isRuntimeProviderAuthFailure` keys on, so the server raises `provider-auth-required`. */
 export const COPILOT_AUTH_FAILURE_MESSAGE =

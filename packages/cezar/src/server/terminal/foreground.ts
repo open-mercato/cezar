@@ -131,12 +131,6 @@ export function processSnapshot(now = Date.now()): Promise<ProcessRow[] | null> 
   return inFlight;
 }
 
-/** Test seam: forget the cached snapshot. */
-export function resetProcessSnapshot(): void {
-  snapshot = undefined;
-  inFlight = undefined;
-}
-
 function readProcessTable(): Promise<ProcessRow[] | null> {
   return new Promise((resolve) => {
     // Windows has no `ps`, and a hardened container can hide the table; both land on `null`,

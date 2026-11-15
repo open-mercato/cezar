@@ -93,8 +93,6 @@ import {
   applySelfUpdate,
   scheduleSelfUpdate,
   cancelScheduledSelfUpdate,
-  checkSkillsUpdate,
-  applySkillsUpdate,
   getWorktrees,
   editQueuedMessage,
   markRunSeen,
@@ -1925,21 +1923,6 @@ export function useSkillsUpdate(projectId: string, enabled = true) {
       return query.state.dataUpdateCount < SKILLS_UPDATE_IDLE_READ_LIMIT ? 60_000 : false
     },
   })
-}
-
-export function useCheckSkillsUpdate(projectId: string) {
-  const queryClient = useQueryClient()
-  const key = workspaceQueryKeys.skillsUpdate(projectId)
-  return useMutation({
-    mutationFn: () => checkSkillsUpdate(projectId),
-    onSuccess: (state) => queryClient.setQueryData(key, state),
-  })
-}
-
-export function useApplySkillsUpdate(projectId: string) {
-  const queryClient = useQueryClient()
-  const key = workspaceQueryKeys.skillsUpdate(projectId)
-  return useMutation({ mutationFn: () => applySkillsUpdate(projectId), onSuccess: (state) => queryClient.setQueryData(key, state) })
 }
 
 /** cezar's own update state (self-update PoC). Polls fast while an install job runs so the

@@ -169,7 +169,6 @@ export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphNodeType = GraphNode['type'];
 export type GraphEdge = z.infer<typeof graphEdgeSchema>;
 export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;
-export type WorkflowGraphFile = z.infer<typeof workflowGraphFileSchema>;
 
 /** Output ports per node type; the first is the default a bare `from: <node>` means. */
 export const NODE_PORTS: Record<GraphNodeType, readonly string[]> = {

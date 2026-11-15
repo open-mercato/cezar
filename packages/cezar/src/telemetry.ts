@@ -74,10 +74,6 @@ export function telemetryEnabled(): boolean {
   return consent === 'granted' && telemetryBlockedBy() === null;
 }
 
-export function telemetryConsent(): TelemetryConsent {
-  return consent;
-}
-
 function consentOf(config: { telemetry?: { consent: 'granted' | 'denied'; policyVersion: number } }): TelemetryConsent {
   const answer = config.telemetry;
   if (!answer) return 'unknown';
