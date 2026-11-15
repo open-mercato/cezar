@@ -1,8 +1,10 @@
 import { ClockIcon, PlusIcon } from 'lucide-react'
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
-import { useProjects, useRunsIndex } from '@/api/queries'
+import { rememberReferenceStatuses, useProjects, useRunsIndex } from '@/api/queries'
+import { TaskReferenceChip } from '@/components/reference-conflict-action'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { deriveAttention } from '@/lib/attention'
@@ -15,6 +17,7 @@ import {
   cardedTasks,
   type ManagerOrigin,
 } from '@/lib/managers'
+import { taskReferences } from '@/lib/tasks-table'
 import { runTitle } from '@/lib/task-groups'
 import { useNow } from '@/lib/use-now'
 import { managerAccessOf, type ManagerMessage, type ManagerSummary, type RunRecord } from '@open-mercato/cezar-api-client'
@@ -74,7 +77,9 @@ export function WatchingPanel({
 }) {
   const now = useNow(30_000)
   const registry = useProjects().data?.projects
-  const runs = useRunsIndex().data?.runs
+  const runsIndex = useRunsIndex().data
+  const runs = runsIndex?.runs
+  const indexedStatuses = runsIndex?.referenceStatuses
   const connected = useMemo(
     () => (registry ?? []).filter((project) => manager.connectedProjectIds.includes(project.id)),
     [registry, manager.connectedProjectIds],
@@ -87,6 +92,26 @@ export function WatchingPanel({
     return counts
   }, [runs])
   const started = useMemo(() => cardedTasks(messages).slice(0, STARTED_LIMIT), [messages])
+  const startedRows = useMemo(() => started.map(({ projectId, runId }) => {
+    const run = runs?.find((entry) => entry.projectId === projectId && entry.id === runId)
+    const repoBase = registry?.find((project) => project.id === projectId)?.repoUrl
+    return {
+      projectId,
+      runId,
+      run,
+      title: run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`,
+      // Every PR, strongest first: the chip shows the first and `+N` lists the rest (sidebar rule).
+      prs: run ? taskReferences(run, repoBase).filter((reference) => reference.kind === 'PR') : [],
+    }
+  }), [started, runs, registry])
+  // One batched status request per project for every chip; the index seeds what it had cached.
+  const prRequests = useMemo(
+    () => startedRows.flatMap((row) => row.prs.map((pr) => ({ projectId: row.projectId, kind: 'PR' as const, number: pr.number }))),
+    [startedRows],
+  )
+  useEffect(() => {
+    if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
+  }, [indexedStatuses])
   const result = lastCheckResult(messages, manager.lastCheckAt, loadedAll)
   const next = manager.cronMinutes > 0 ? nextCheckLabel(manager.nextCheckAt, new Date(now)) : ''
   const origin: ManagerOrigin = { id: manager.id, name: manager.name }
@@ -159,23 +184,32 @@ export function WatchingPanel({
 
       {started.length > 0 ? (
         <Section title="Tasks it started">
-          {started.map(({ projectId, runId }) => {
-            const run = runs?.find((entry) => entry.projectId === projectId && entry.id === runId)
-            const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
-            return (
-              <Link
-                key={`${projectId}/${runId}`}
-                to={taskPath(projectId, runId)}
-                state={{ manager: origin }}
-                data-slot="manager-watching-task"
-                className="flex min-h-8 items-center gap-2 border-b border-border px-2.5 py-1.5 text-xs no-underline outline-none last:border-b-0 hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
-              >
-                <StatusDot tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} />
-                <span className="min-w-0 flex-1 truncate">{run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`}</span>
-                {run ? <span className="shrink-0 text-muted-foreground">{shortAge(run.lastActivityAt, now)}</span> : null}
-              </Link>
-            )
-          })}
+          <ReferenceStatusProvider requests={prRequests}>
+            {startedRows.map(({ projectId, runId, run, title, prs: [pr] }) => {
+              const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
+              return (
+                // The PR chips are links of their own, so they sit beside the task's link, not in it.
+                <div key={`${projectId}/${runId}`} data-slot="manager-watching-task-row" className="border-b border-border last:border-b-0">
+                  <Link
+                    to={taskPath(projectId, runId)}
+                    state={{ manager: origin }}
+                    data-slot="manager-watching-task"
+                    className="flex min-h-8 items-center gap-2 px-2.5 py-1.5 text-xs no-underline outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+                  >
+                    <StatusDot tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} />
+                    <span className="min-w-0 flex-1 truncate">{title}</span>
+                    {run ? <span className="shrink-0 text-muted-foreground">{shortAge(run.lastActivityAt, now)}</span> : null}
+                  </Link>
+                  {run && pr ? (
+                    // 25 px = the row padding + dot + gap, so the chip lines up under the title.
+                    <div data-slot="manager-watching-task-prs" className="flex pr-2.5 pb-1.5 pl-[25px]">
+                      <TaskReferenceChip run={run} projectId={projectId} reference={pr} />
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </ReferenceStatusProvider>
         </Section>
       ) : null}
     </aside>
