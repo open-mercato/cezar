@@ -1,6 +1,6 @@
 # Releasing the mobile apps
 
-The exact steps to put the cezar app (`packages/mobile`) on Google Play and the App Store. Everything
+The exact steps to put CezarBot, the cezar phone app (`packages/mobile`), on Google Play and the App Store. Everything
 that can be built is in the repository; what is left needs an account, a secret or a decision that only
 the owner can make. Each step says where it is done.
 
@@ -68,7 +68,7 @@ Keep the `.jks` file and both passwords in the team password manager.
 
 ### 2.2 The app in Play Console
 
-1. **Create app**: name `cezar`, default language English (United States), App, Free. Accept the
+1. **Create app**: name `CezarBot`, default language English (United States), App, Free. Accept the
    declarations.
 2. **Policy and programs > App content**, every item:
    - Privacy policy: the URL from step 5.
@@ -87,7 +87,7 @@ Keep the `.jks` file and both passwords in the team password manager.
 1. In Google Cloud (https://console.cloud.google.com), pick or create a project, enable the **Google
    Play Android Developer API**, create a service account and add a JSON key. Download the JSON.
 2. In Play Console, **Users and permissions > Invite new users**: the service account's email. Under
-   **App permissions** add `cezar` with **Release to testing tracks** and **Manage testing track
+   **App permissions** add `CezarBot` with **Release to testing tracks** and **Manage testing track
    releases** (nothing else).
 
 ### 2.4 GitHub secrets
@@ -125,7 +125,7 @@ be updated by one. Say that wherever the APK is linked. Publish the draft GitHub
 1. **Identifier**: https://developer.apple.com/account/resources/identifiers > **+** > App IDs > App,
    explicit bundle ID `com.openmercato.cezar.mobile`, description `cezar`. Tick **Push Notifications**
    when iOS push lands.
-2. **App record**: App Store Connect > **Apps > + > New App**: iOS, name `cezar` (if taken, `cezar:
+2. **App record**: App Store Connect > **Apps > + > New App**: iOS, name `CezarBot` (if taken, `CezarBot:
    coding agents`), primary language English (U.S.), the bundle ID above, SKU `cezar-mobile`, full
    access.
 3. **API key**: App Store Connect > **Users and Access > Integrations > App Store Connect API > Team

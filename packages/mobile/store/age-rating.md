@@ -1,6 +1,6 @@
 # Age rating answers
 
-The app is a developer tool. It shows the cockpit of a cezar the user runs: tasks, code, diffs and the
+CezarBot is a developer tool. It shows the cockpit of a cezar the user runs: tasks, code, diffs and the
 Manager, an AI chat run by the user's own coding agents. Navigation is confined to the paired server's
 origin; any other link opens in the system browser (`NavigationPolicy`). No purchases, ads, gambling,
 location sharing or contact with strangers.

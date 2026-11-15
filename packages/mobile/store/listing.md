@@ -8,7 +8,7 @@ by `test/store.test.mjs`.
 
 | Field | Value |
 | --- | --- |
-| App name | `cezar` |
+| App name | `CezarBot` |
 | Category | Developer Tools (App Store: *Developer Tools*; Play: *Tools*) |
 | Price | Free, no in-app purchases, no ads |
 | Support URL | https://github.com/open-mercato/cezar/issues |
@@ -43,7 +43,7 @@ Pair your phone with cezar on your computer in seconds by scanning a QR code. Se
 **Keywords** (100 max, comma separated, no spaces after commas):
 
 <!-- ios-keywords -->
-coding agent,AI,developer,claude,codex,git,pull request,terminal,remote,orchestrator,devtools
+cezar,coding agent,AI,developer,claude,codex,git,pull request,terminal,remote,orchestrator,devtools
 <!-- /ios-keywords -->
 
 **Description** (4000 max): the shared full description below.
@@ -51,9 +51,9 @@ coding agent,AI,developer,claude,codex,git,pull request,terminal,remote,orchestr
 ## Full description (both stores)
 
 <!-- full-description -->
-cezar runs AI coding agents (Claude Code, Codex, OpenCode and others) in parallel on your own computer or server, each task in its own git worktree, and stops at a review gate before anything is merged. This app is cezar's companion for your phone.
+cezar runs AI coding agents (Claude Code, Codex, OpenCode and others) in parallel on your own computer or server, each task in its own git worktree, and stops at a review gate before anything is merged. CezarBot is cezar's companion for your phone.
 
-Open the app, and cezar's Manager tells you what needs you: a task waiting for a decision, a review that is ready, an agent that is stuck. Answer it, look at the changes, start a new task or check on a running one, all from the cockpit you already know, sized for a phone.
+Open CezarBot, and cezar's Manager tells you what needs you: a task waiting for a decision, a review that is ready, an agent that is stuck. Answer it, look at the changes, start a new task or check on a running one, all from the cockpit you already know, sized for a phone.
 
 PAIR IN SECONDS
 On your computer, open cezar, go to Settings, then Connect a phone, and scan the QR code. No account, no sign-up, no port forwarding. If you cannot use the camera, type the short code instead.
@@ -76,7 +76,7 @@ YOUR PHONE, YOUR RULES
 WHAT YOU NEED
 cezar running on a computer or server you control. cezar is free and open source (MIT): https://cezar.run
 
-The app does not run agents itself. It shows and controls the cezar you connect it to.
+CezarBot does not run agents itself. It shows and controls the cezar you connect it to.
 <!-- /full-description -->
 
 ## Release notes for the first version

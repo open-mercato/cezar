@@ -1,6 +1,6 @@
 {
   "appId": "com.openmercato.cezar.mobile",
-  "appName": "cezar",
+  "appName": "CezarBot",
   "webDir": "connect",
   "plugins": {
     "CapacitorHttp": {

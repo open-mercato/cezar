@@ -1,6 +1,6 @@
 # Store-review demo server
 
-A dry-run cezar on a small Ubuntu VPS. Apple and Google reviewers sign in to it from the Cezar app
+A dry-run cezar on a small Ubuntu VPS. Apple and Google reviewers sign in to it from the CezarBot app
 using only the text in the review notes. Agents are the bundled mock, so there are no model keys,
 no tokens and no real work. The box resets every night at 03:00 UTC. The design comes from
 `.ai/specs/2026-10-31-mobile-apps-manager-first.md` (§ App Store review, Q10: reviewers only,

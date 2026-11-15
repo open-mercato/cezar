@@ -113,7 +113,7 @@ async function graphics(chrome) {
     .mark { height: 144px; width: auto; display: block; }
     .name { font: 600 96px/1 'Chakra Petch'; color: #FFFFFF; margin: 0; }
     .line { font: 400 30px/1.3 Inter; color: #A9A2AD; margin: 18px 0 0; }
-  </style></head><body><div class="lockup">${mark}<div><p class="name">cezar</p><p class="line">Your coding agents, in your pocket.</p></div></div></body></html>`;
+  </style></head><body><div class="lockup">${mark}<div><p class="name">CezarBot</p><p class="line">Your coding agents, in your pocket.</p></div></div></body></html>`;
   save(join(GRAPHICS, 'feature-graphic.png'), await renderHtml(chrome, feature, 1024, 500), 1024, 500);
 
   // Play applies its own mask, so the icon is the brand tile edge to edge (as the iOS icon in

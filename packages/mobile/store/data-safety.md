@@ -1,4 +1,4 @@
-# Data safety (Google Play) and App Privacy (App Store)
+# Data safety (Google Play) and App Privacy (App Store) for CezarBot
 
 Answers from the code at the top of the mobile stack (#1901 on #1883), checked against the release
 APK's merged manifest (`aapt2 dump permissions`) on 2026-11-10. The longer reasoning, with a source for

@@ -1,4 +1,4 @@
-# Cezar mobile shell
+# CezarBot, the cezar mobile shell
 
 A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit.
 Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`. Version 0.1.0. Release builds, signing

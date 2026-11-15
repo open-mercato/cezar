@@ -1,4 +1,4 @@
-# Cezar mobile app privacy policy
+# CezarBot privacy policy
 
 Effective date: [OPEN MERCATO TO CONFIRM: effective date]
 
@@ -7,7 +7,7 @@ controller, if any]. Contact: [OPEN MERCATO TO CONFIRM: privacy contact address]
 
 ## What this policy covers
 
-This policy covers the Cezar mobile app, the relay that connects the app to a computer, and push
+This policy covers CezarBot, the Cezar mobile app (called "the app" below), the relay that connects the app to a computer, and push
 notifications.
 
 The app is available for Android. An iOS version is not released yet, and this policy does not describe

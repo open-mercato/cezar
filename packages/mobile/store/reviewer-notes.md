@@ -27,7 +27,7 @@ lands) or the demo runs with `DEMO_RELAY=0`.
 ```text
 WHAT THE APP IS
 cezar is a free, open-source tool that people run on their own computer or server to supervise AI
-coding agents. This app is its companion: it connects to the user's own cezar and shows that
+coding agents. CezarBot is its companion: it connects to the user's own cezar and shows that
 server's Manager and tasks, sized for a phone. The app has no account system and no server of ours
 that holds user data.
 
@@ -46,7 +46,7 @@ DEMO ACCESS
 We run a demo cezar for review. Its agents are simulated: nothing you do runs a real AI model or
 changes real code, and it resets every night at 03:00 UTC.
 
-1. Open the app. On "Connect to cezar", enter the server address (if the screen shows "Scan QR
+1. Open CezarBot. On "Connect to cezar", enter the server address (if the screen shows "Scan QR
    code" and "Enter code", open "Advanced" first):
    https://cezar-demo.example.com
 2. Tap Connect. When asked, enter the user name and password from the sign-in fields above.
