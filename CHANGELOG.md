@@ -1,4 +1,4 @@
-# Unreleased
+# 0.20.0 (2026-11-15)
 
 ## ✨ Features
 - ✨ The cockpit is installable: add it to a phone or desktop home screen and it opens standalone, including behind a Basic auth gate. Live data stays live, there is no service worker. (#1762, #2038) *(@patzick)*
