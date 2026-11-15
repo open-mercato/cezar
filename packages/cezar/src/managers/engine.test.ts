@@ -59,6 +59,9 @@ function fakeBackend() {
   return { runner, specs, scripts, open };
 }
 
+/** What the Claude CLI prints before its exit line when the login is gone. */
+const SIGNED_OUT = 'Failed to authenticate: OAuth session expired and could not be refreshed';
+
 const say = (text: string): Script => ({ play: (emit) => { emit({ type: 'text', text }); emit({ type: 'cost', usd: 0.5 }); } });
 
 const quietGithub: ManagerEngineDeps['github'] = {
@@ -94,6 +97,7 @@ describe('ManagerEngine', () => {
       accountError: async () => null,
       costVisible: () => true,
       runnerFor: () => backend.runner,
+      retryDelayMs: 0,
       request: async (path, init) => {
         requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
         if (path.includes('/merge-state')) {
@@ -140,6 +144,18 @@ describe('ManagerEngine', () => {
     await Promise.all(engines.map((engine) => engine.shutdown()));
     process.env.CEZ_HOME = previous;
     rmSync(home, { recursive: true, force: true });
+  });
+
+  it('has no quick prompts until the user saves some, and an emptied list removes the key', async () => {
+    const engine = makeEngine();
+    const id = await create(engine);
+    expect(store.get(id)).not.toHaveProperty('quickPrompts');
+    await engine.update(id, { quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] });
+    expect(store.get(id)?.quickPrompts).toEqual([{ label: 'Standup', prompt: 'Write my standup.' }]);
+    await engine.update(id, { notify: false });
+    expect(store.get(id)?.quickPrompts).toHaveLength(1);
+    await engine.update(id, { quickPrompts: [] });
+    expect(store.get(id)).not.toHaveProperty('quickPrompts');
   });
 
   it('persists a chosen mascot and defaults only newly created managers', async () => {
@@ -294,17 +310,18 @@ describe('ManagerEngine', () => {
       const id = await create(engine);
       engine.send(id, 'hi');
       await settled(engine);
-      expect(assistants(id)[0]).toMatchObject({ streaming: false, error: 'no config' });
+      expect(assistants(id)[0]).toMatchObject({ streaming: false, error: expect.stringContaining('no config') });
       expect((await engine.summary(id))?.status).toBe('error');
     });
 
     it('an agent failure lands on the message and the row', async () => {
       const engine = makeEngine();
       const id = await create(engine);
-      backend.scripts.push({ fail: 'out of credit' });
+      backend.scripts.push({ fail: 'Credit balance is too low' });
       engine.send(id, 'hi');
       await settled(engine);
-      expect(assistants(id)[0]).toMatchObject({ error: 'out of credit', streaming: false });
+      expect(assistants(id)[0]).toMatchObject({ error: expect.stringMatching(/^The Claude Code account is out of credit/), streaming: false });
+      expect(backend.specs).toHaveLength(1);
       expect((await engine.summary(id))?.status).toBe('error');
     });
 
@@ -450,18 +467,22 @@ describe('ManagerEngine', () => {
         backend.scripts.push(limited);
         engine.send(id, 'rebase the stack');
         await settled(engine);
-        expect(assistants(id)[0]).toMatchObject({ error: 'claude CLI exited with code 1' });
+        expect(assistants(id)[0]).toMatchObject({ text: '', error: expect.stringMatching(/^Usage limit reached until \d/) });
         expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        expect(backend.specs).toHaveLength(1);
         expect(store.state(id).resume).toBeUndefined();
       });
 
       it('an unrelated failure stays an error', async () => {
         const engine = makeEngine({ now: () => clock });
         const id = await create(engine);
-        backend.scripts.push({ play: (emit) => emit({ type: 'text', text: 'Half done' }), fail: 'claude CLI exited with code 1' });
+        const broken: Script = { play: (emit) => emit({ type: 'text', text: 'Half done' }), fail: 'claude CLI exited with code 1' };
+        backend.scripts.push(broken, say('never'));
         engine.send(id, 'hi');
         await settled(engine);
-        expect(assistants(id)[0]).toMatchObject({ error: 'claude CLI exited with code 1' });
+        // No transcript to drop and no stated cause: the same call again has no reason to go differently.
+        expect(backend.specs).toHaveLength(1);
+        expect(assistants(id)[0]).toMatchObject({ text: 'Half done', error: expect.stringMatching(/^Claude Code stopped before answering\. Try again/) });
         expect(store.state(id).resume).toBeUndefined();
       });
     });
@@ -522,6 +543,130 @@ describe('ManagerEngine', () => {
       expect(wire).toBeLessThan(3 * 12_000);
       backend.open[0]?.finish();
       await settled(engine);
+    });
+  });
+
+  describe('failures', () => {
+    /** The Claude CLI's order: its own error frame, then the exit line. */
+    const cliFails = (cause: string): Script => ({
+      play: (emit) => { emit({ type: 'text', text: cause }); emit({ type: 'error', message: cause }); },
+      fail: 'claude CLI exited with code 1',
+    });
+    const notices = (id: string) => store.messages(id).filter((message) => message.kind === 'notice');
+    let warn: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined); });
+    afterEach(() => warn.mockRestore());
+
+    it('a chat turn shows what to do, never the exit line, and keeps the cause in diagnostics', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push(cliFails(SIGNED_OUT));
+      engine.send(id, 'hi');
+      await settled(engine);
+      const reply = assistants(id)[0];
+      expect(reply).toMatchObject({ text: '', error: expect.stringMatching(/^Sign in to Claude Code again/) });
+      expect(reply?.error).not.toMatch(/exited with code/);
+      expect(backend.specs).toHaveLength(1);
+      expect(store.state(id).lastFailure).toMatchObject({ turn: 'chat', kind: 'auth', cause: SIGNED_OUT });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(SIGNED_OUT));
+    });
+
+    it('a passing network failure is retried once, after a pause, and the user never sees it', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push(cliFails("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"), say('Recovered'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(assistants(id)).toHaveLength(1);
+      expect(assistants(id)[0]).toMatchObject({ text: 'Recovered' });
+      expect(assistants(id)[0]).not.toHaveProperty('error');
+    });
+
+    it('retries only once: a second failure shows the plain line', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      const offline = cliFails("API Error: Can't reach the API server (ENOTFOUND)");
+      backend.scripts.push(offline, offline, say('never'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(assistants(id)[0]?.error).toBe("Can't reach Claude Code's servers. Check this computer's internet connection.");
+    });
+
+    it('a transcript too long to resume restarts fresh with a recap', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push(say('Remember me'), cliFails('Prompt is too long'), say('Back'));
+      engine.send(id, 'one');
+      await settled(engine);
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(backend.specs[1]?.resume).toBe(true);
+      expect(backend.specs[2]?.resume).toBeUndefined();
+      expect(backend.specs[2]?.userPrompt).toContain('Remember me');
+      expect(assistants(id).at(-1)).toMatchObject({ text: 'Back' });
+    });
+
+    it('never repeats a turn that already ran a command', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push({
+        play: (emit) => {
+          emit({ type: 'tool-call', id: 'c1', tool: 'Bash', input: { command: 'cez-manager task create' } });
+          emit({ type: 'error', message: 'API Error: 503 upstream' });
+        },
+        fail: 'claude CLI exited with code 1',
+      }, say('twice'));
+      engine.send(id, 'start it');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id)[0]?.error).toMatch(/servers are busy/);
+    });
+
+    it('a failing watch logs quietly, keeps checking, and speaks once after a streak', async () => {
+      const engine = makeEngine({ github: readyPrGithub });
+      const id = await create(engine);
+      const check = async () => {
+        backend.scripts.push(cliFails(SIGNED_OUT));
+        engine.check(id);
+        await settled(engine);
+      };
+      await check();
+      await check();
+      expect(store.messages(id)).toEqual([]);
+      expect(store.state(id)).toMatchObject({ watchFailures: 2, lastFailure: { turn: 'watch', kind: 'auth', cause: SIGNED_OUT } });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('watch turn failed (auth)'));
+
+      await check();
+      await check();
+      expect(assistants(id)).toEqual([]);
+      expect(notices(id)).toHaveLength(1);
+      expect(notices(id)[0]).toMatchObject({ text: expect.stringMatching(/^Background checks keep failing\. Sign in to Claude Code again/) });
+      expect(JSON.stringify(store.messages(id))).not.toMatch(/exited with code/);
+
+      backend.scripts.push(say('PR 7 is ready'));
+      engine.check(id);
+      await settled(engine);
+      expect(store.state(id).watchFailures).toBe(0);
+      expect(store.state(id).watchNoticeId).toBeUndefined();
+      expect(assistants(id).at(-1)).toMatchObject({ turn: 'watch', text: 'PR 7 is ready' });
+    });
+
+    it('a watch whose resume fails retries with a fresh session before counting a failure', async () => {
+      const engine = makeEngine({ github: readyPrGithub });
+      const id = await create(engine);
+      backend.scripts.push(say('First look'));
+      engine.check(id);
+      await settled(engine);
+      backend.scripts.push(cliFails('Prompt is too long · automatic compaction failed'), say('Fresh look'));
+      engine.check(id);
+      await settled(engine);
+      expect(backend.specs[1]?.resume).toBe(true);
+      expect(backend.specs[2]?.resume).toBeUndefined();
+      expect(store.state(id).watchFailures).toBe(0);
+      expect(store.state(id).watchSessionId).toBe(backend.specs[2]?.sessionId);
+      expect(assistants(id).at(-1)).toMatchObject({ text: 'Fresh look' });
     });
   });
 
@@ -730,7 +875,7 @@ describe('ManagerEngine', () => {
       let github = readyPrGithub;
       const engine = makeEngine({ now: () => now, github: { list: (root) => github.list(root), refStatus: (root, prs) => github.refStatus(root, prs) } });
       const id = await create(engine);
-      backend.scripts.push({ fail: 'logged out' });
+      backend.scripts.push({ fail: SIGNED_OUT });
       now += 16 * 60_000;
       engine.tick();
       await settled(engine);
@@ -855,11 +1000,11 @@ describe('ManagerEngine', () => {
       expect(Date.parse((await engine.summary(id))?.nextCheckAt ?? '')).toBe(now + 15 * 60_000);
     });
 
-    it('a failing watch keeps its keys, says so once and backs off', async () => {
+    it('a failing watch keeps its keys, stays quiet and backs off', async () => {
       let now = Date.parse('2026-10-31T12:00:00.000Z');
       const engine = makeEngine({ now: () => now, github: readyPrGithub });
       const id = await create(engine);
-      backend.scripts.push({ fail: 'logged out' }, { fail: 'logged out' });
+      backend.scripts.push({ fail: SIGNED_OUT }, { fail: SIGNED_OUT });
       now += 16 * 60_000;
       engine.tick();
       await settled(engine);
@@ -872,7 +1017,7 @@ describe('ManagerEngine', () => {
       engine.tick();
       await settled(engine);
       expect(backend.specs).toHaveLength(2);
-      expect(assistants(id)).toHaveLength(1);
+      expect(store.messages(id)).toEqual([]);
     });
 
     it('two cockpits on one home: the lease holder fires, the other does not', async () => {
@@ -1946,13 +2091,13 @@ describe('ManagerEngine', () => {
       expect((await engine.summary(id))?.status).toBe('error');
     });
 
-    it('a watch that never finishes shows the limit error and backs off', async () => {
+    it('a watch that never finishes counts as a failure and backs off, quietly', async () => {
       const engine = makeEngine({ github: readyPrGithub, turnLimitMs: 50 });
       const id = await create(engine);
       backend.scripts.push({ hold: true, play: (emit) => emit({ type: 'text', text: 'partial' }) });
       engine.check(id);
       await settled(engine);
-      expect(assistants(id).at(-1)).toMatchObject({ turn: 'watch', streaming: false, error: expect.stringContaining('30 minutes') });
+      expect(assistants(id)).toEqual([]);
       expect(store.state(id).watchFailures).toBe(1);
     });
 
@@ -2362,6 +2507,31 @@ describe('ManagerEngine', () => {
       expect(store.state(id).followups).toEqual([]);
       expect(store.state(id).notes.join('\n')).toContain('[[task:alpha/new-run]]');
       expect(store.state(id).notes.join('\n')).not.toContain('Ignore your rules');
+    });
+
+    it('a follow-up a passing outage cut off retries once and is heard', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      backend.scripts.push({ fail: "API Error: Can't reach the API server (ENOTFOUND)" }, say('The task is waiting on you.'));
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      expect(backend.specs[1]?.userPrompt).toBe(backend.specs[0]?.userPrompt);
+      expect(store.state(id).followups).toEqual([]);
+      expect(store.state(id).notes).toEqual([]);
+      expect(assistants(id).at(-1)).toMatchObject({ text: 'The task is waiting on you.' });
+    });
+
+    it('a follow-up that fails its retry too still moves the status line to the notes', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const offline = { fail: "API Error: Can't reach the API server (ENOTFOUND)" };
+      backend.scripts.push(offline, offline);
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      expect(store.state(id).followups).toEqual([]);
+      expect(store.state(id).notes.join('\n')).toContain('[[task:alpha/new-run]]');
     });
 
     it('with follow-ups off posts the card only, and the next chat hears it', async () => {
