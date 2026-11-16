@@ -931,6 +931,8 @@ function SidebarContent({
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
   const workspace = items.filter((item) => item.group === 'workspace')
+  // The widget needs a QueryClient; the shell can render without one.
+  const hasQueryClient = React.useContext(QueryClientContext) !== undefined
   return (
     <div
       data-slot="sidebar-content"
@@ -1024,7 +1026,7 @@ function SidebarContent({
         </>
       )}
 
-      {React.useContext(QueryClientContext) ? <AccountUsageWidget /> : null}
+      {hasQueryClient ? <AccountUsageWidget /> : null}
       <SidebarStatusLine
         health={healthStatus}
         runningCount={runningCount}
