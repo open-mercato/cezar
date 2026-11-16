@@ -152,6 +152,8 @@ export function WatchingSheet({
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(measure)
+    // The body has one stable, naturally sized sections wrapper. Observing it catches sections
+    // mounted after opening as well as text/row changes inside already mounted sections.
     for (const element of [header, footer, body, ...body.children]) observer.observe(element)
     return () => observer.disconnect()
   }, [open, compact, expanded, viewport.height, sheetNode])
@@ -207,7 +209,9 @@ export function WatchingSheet({
           {compact && !expanded && viewport.height >= 600 ? <Button variant="ghost" className="min-h-12" onClick={() => setExpanded(true)}>Expand</Button> : null}
         </SheetHeader>
         <div data-touch="" className="group/watching flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
-          <WatchingSections {...props} tasksFirst />
+          <div className="flex shrink-0 flex-col gap-4">
+            <WatchingSections {...props} tasksFirst />
+          </div>
         </div>
         <Button asChild variant="ghost" className="min-h-12 shrink-0 whitespace-normal">
           <Link data-slot="manager-watching-sheet-all-tasks" to={managerTasksPath(props.manager.id)} replace state={{ manager: { id: props.manager.id, name: props.manager.name }, managerHistoryBack }}>View all tasks</Link>

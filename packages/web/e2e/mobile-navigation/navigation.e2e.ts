@@ -19,7 +19,7 @@ test('responsive Manager directory and modal controls', { timeout: 120000 }, asy
     await expect(screen.getByRole('dialog', 'Tasks · Global Manager')).toBeVisible()
     await expect(screen.getByRole('button', 'Close', { exact: true })).toBeVisible()
     await expect(screen.getByRole('link', 'View all tasks', { exact: true })).toBeVisible()
-    await browser.evaluate(async () => { await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))); return true })
+    await browser.evaluate(async () => { await Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((animation) => animation.finished.catch(() => {}))); return true })
     const bounds = await browser.evaluate(() => {
       const rect = document.querySelector('[data-slot="manager-watching-sheet"]')!.getBoundingClientRect()
       return { top: rect.top, bottom: rect.bottom, right: rect.right, left: rect.left, overflow: document.documentElement.scrollWidth > innerWidth }
@@ -48,7 +48,7 @@ test('responsive Manager directory and modal controls', { timeout: 120000 }, asy
   await expect(screen.getByRole('dialog')).toHaveCount(0)
   expect(await browser.evaluate(() => document.activeElement?.textContent ?? null)).toBe('Tasks')
   await screen.getByRole('button', 'Tasks', { exact: true }).tap()
-  await browser.evaluate(async () => { await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))); return true })
+  await browser.evaluate(async () => { await Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => {}))); return true })
   const handle = await browser.evaluate(() => {
     const r = document.querySelector('[data-slot="sheet-header"]')!.getBoundingClientRect()
     return { x: r.left + 30, y: r.top + 8 }
@@ -84,7 +84,7 @@ for (const timing of ['before opening', 'while open'] as const) {
     await screen.getByRole('button', 'Tasks', { exact: true }).tap()
     await expect(screen.getByRole('dialog', 'Tasks · Global Manager')).toBeVisible()
     if (timing === 'while open') {
-      await browser.evaluate(async () => { await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))); return true })
+      await browser.evaluate(async () => { await Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => {}))); return true })
       expect(await browser.evaluate(() => document.querySelector('[role="dialog"]')!.getBoundingClientRect().height)).toBe(384)
       await browser.evaluate(() => { document.documentElement.style.fontSize = '32px'; return true })
     }
@@ -92,7 +92,7 @@ for (const timing of ['before opening', 'while open'] as const) {
     await browser.evaluate(async () => {
       await document.fonts.ready
       await new Promise(requestAnimationFrame)
-      await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {})))
+      await Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => {})))
       await new Promise(requestAnimationFrame)
       return true
     })
@@ -125,3 +125,47 @@ for (const timing of ['before opening', 'while open'] as const) {
     expect(geometry.task.bottom).toBeLessThanOrEqual(geometry.body.bottom)
   })
 }
+
+
+test('late task sections expand an initially empty medium sheet', async ({ app, browser, screen }) => {
+  mkdirSync(artifacts, { recursive: true })
+  await browser.setViewport({ width: 375, height: 640 })
+  await app.open('/e2e/mobile-navigation/index.html?empty=1')
+  await browser.evaluate(() => { document.documentElement.style.fontSize = '20px'; return true })
+  await screen.getByRole('button', 'Tasks', { exact: true }).tap()
+  await expect(screen.getByRole('dialog')).toBeVisible()
+  await browser.evaluate(async () => {
+    await Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => {})))
+    return true
+  })
+  expect(await browser.evaluate(() => document.querySelector('[role="dialog"]')!.getBoundingClientRect().height)).toBe(384)
+  await expect(screen.getByRole('heading', 'Tasks it started', { exact: true })).toHaveCount(0)
+  await browser.evaluate(() => { window.dispatchEvent(new Event('fixture:tasks-ready')); return true })
+  await expect(screen.getByRole('heading', 'Tasks it started', { exact: true })).toBeVisible()
+  await browser.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise(requestAnimationFrame)
+    await Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => {})))
+    await new Promise(requestAnimationFrame)
+    return true
+  })
+  const geometry = await browser.evaluate(() => {
+    const dialog = document.querySelector('[role="dialog"]')!
+    const body = dialog.querySelector('[data-touch]')!
+    const rect = (element: Element) => {
+      const r = element.getBoundingClientRect()
+      return { top: r.top, bottom: r.bottom, height: r.height }
+    }
+    return {
+      dialog: rect(dialog), body: rect(body),
+      rows: [...body.querySelectorAll('[data-slot="manager-watching-task-row"]')].map(rect),
+      footer: rect(dialog.querySelector('[data-slot="manager-watching-sheet-all-tasks"]')!),
+    }
+  })
+  writeFileSync(resolve(artifacts, 'late-tasks-geometry.json'), JSON.stringify(geometry, null, 2))
+  copyFileSync(await app.screenshot('late-tasks-settled'), resolve(artifacts, 'late-tasks-settled.png'))
+  expect(geometry.dialog.height).toBeGreaterThan(384)
+  expect(geometry.rows).toHaveLength(2)
+  expect(geometry.rows[1]!.bottom).toBeLessThanOrEqual(geometry.body.bottom)
+  expect(geometry.footer.bottom).toBeLessThanOrEqual(640)
+})
