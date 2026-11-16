@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.regex.Pattern;
 
 /**
  * The plain-HTTP face of the tunnel under the webview (spec "The proxy's rules", RELAY_PROTOCOL.md § 13).
@@ -292,16 +293,44 @@ public final class LoopbackProxy implements Closeable {
         }
     }
 
+    private static final Pattern ARTIFACT_FILE = Pattern.compile(
+            "/api/v1/(?:p/[A-Za-z0-9_-]{1,64}/)?runs/[A-Za-z0-9_-]{1,64}/artifacts/[^/?#\\\\]{1,255}(?:/[^/?#\\\\]{1,255})?(?:\\?[^#]*)?");
+    private static final Set<String> MEDIA_DEST = new HashSet<>(Arrays.asList("image", "video", "audio"));
+
+    /**
+     * A sandboxed HTML artifact has an opaque origin, so its `<img>`, `<video>` and `<audio>` loads are
+     * cross-site, and Blink sends them without the gate cookie. Only that exact shape passes without it:
+     * a bodyless GET or HEAD for media under a run's artifacts, with no Origin. The tunnel still needs a
+     * live session, and the request is forwarded without cookies like every other.
+     */
+    static boolean isArtifactMediaRead(ProxyRequest request) {
+        if (!request.method.equals("GET") && !request.method.equals("HEAD")) return false;
+        if (!request.all("content-length").isEmpty() || !request.all("transfer-encoding").isEmpty()) return false;
+        if (!request.all("origin").isEmpty()) return false;
+        if (!request.all("sec-fetch-site").equals(Arrays.asList("cross-site"))) return false;
+        if (!request.all("sec-fetch-mode").equals(Arrays.asList("no-cors"))) return false;
+        List<String> dest = request.all("sec-fetch-dest");
+        if (dest.size() != 1 || !MEDIA_DEST.contains(dest.get(0))) return false;
+        String target = request.target;
+        if (!ARTIFACT_FILE.matcher(target).matches()) return false;
+        String path = target.split("\\?", 2)[0];
+        String lower = path.toLowerCase(Locale.ROOT);
+        if (lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c") || lower.contains("%00")) return false;
+        for (String segment : path.split("/")) if (segment.equals(".") || segment.equals("..")) return false;
+        return true;
+    }
+
     /** The gate of § 13.1: a status to refuse with, or 0. */
     private int gate(ProxyRequest request) {
         List<String> hosts = request.all("host");
         if (hosts.size() != 1 || !authority.equals(hosts.get(0))) return 403;
-        if (!hasCookie(request)) return 403;
+        boolean media = isArtifactMediaRead(request);
+        if (!media && !hasCookie(request)) return 403;
         List<String> origins = request.all("origin");
         if (origins.size() > 1 || (origins.size() == 1 && !allowedOrigin.equals(origins.get(0)))) return 403;
         List<String> sites = request.all("sec-fetch-site");
         if (sites.size() > 1) return 403;
-        if (sites.size() == 1 && !sites.get(0).equals("same-origin") && !sites.get(0).equals("none")) return 403;
+        if (!media && sites.size() == 1 && !sites.get(0).equals("same-origin") && !sites.get(0).equals("none")) return 403;
         if (!request.all("upgrade").isEmpty()) return 400;
         if (!TunnelFrame.validMethod(request.method)) return 405;
         if (request.target.length() > TunnelFrame.MAX_TARGET_BYTES) return 431;

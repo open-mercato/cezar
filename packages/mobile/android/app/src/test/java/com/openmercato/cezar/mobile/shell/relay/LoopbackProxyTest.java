@@ -238,6 +238,71 @@ public class LoopbackProxyTest {
         assertTrue("only a policy is rewritten", head.contains("x-relay: http://relay.invalid/kept\r\n"));
     }
 
+    /** What Blink sends for an `<img>` in a sandboxed artifact: cross-site, no-cors, no cookie, no Origin. */
+    private String media(String method, String target, String dest, String extra) {
+        return method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1:" + proxy.port() + "\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: " + dest + "\r\n" + extra + "\r\n";
+    }
+
+    private void forwarded(String request) throws Exception {
+        Socket socket = connect();
+        send(socket, request);
+        TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
+        assertNotNull(request, open);
+        for (TunnelFrame.Header header : open.headers) assertNotEquals("never forwards the cookie", "cookie", header.name);
+        socket.close();
+    }
+
+    @Test
+    public void anArtifactsMediaLoadsWithoutTheCookie() throws Exception {
+        forwarded(media("GET", "/api/v1/p/rome/runs/r1/artifacts/chart.png", "image", ""));
+        forwarded(media("GET", "/api/v1/runs/r1/artifacts/shots/a.webp", "image", "Accept: image/*\r\n"));
+        forwarded(media("HEAD", "/api/v1/p/rome/runs/r1/artifacts/clip.mp4?raw=1", "video", "Range: bytes=0-\r\n"));
+        forwarded(media("GET", "/api/v1/p/rome/runs/r1/artifacts/a%20b.mp3", "audio", ""));
+        // WebKit: the same shape, and it does send the cookie and a Referer.
+        forwarded(media("GET", "/api/v1/p/rome/runs/r1/artifacts/chart.png", "image",
+                "Cookie: " + LoopbackProxy.COOKIE + "=" + proxy.cookieValue() + "\r\nReferer: http://127.0.0.1:" + proxy.port() + "/api/v1/p/rome/runs/r1/artifacts/report.html\r\n"));
+    }
+
+    @Test
+    public void everythingElseWithoutTheCookieIsStillRefused() throws Exception {
+        String png = "/api/v1/p/rome/runs/r1/artifacts/chart.png";
+        refused(media("POST", png, "image", "Content-Length: 0\r\n"), "403");
+        refused(media("PUT", png, "image", ""), "403");
+        refused(media("DELETE", png, "image", ""), "403");
+        refused(media("GET", png, "image", "Content-Length: 1\r\n\r\nx"), "403");
+        refused(media("GET", png, "image", "Transfer-Encoding: chunked\r\n"), "403");
+        refused(media("GET", png, "image", "Origin: null\r\n"), "403");
+        refused(media("GET", png, "document", ""), "403");
+        refused(media("GET", png, "iframe", ""), "403");
+        refused(media("GET", png, "script", ""), "403");
+        refused(media("GET", png, "empty", ""), "403");
+        refused(media("GET", png, "image", "Sec-Fetch-Dest: video\r\n"), "403");
+        refused(media("GET", png, "image", "Sec-Fetch-Site: cross-site\r\n"), "403");
+        refused("GET " + png + " HTTP/1.1\r\nHost: 127.0.0.1:" + proxy.port() + "\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: image\r\n\r\n", "403");
+        refused("GET " + png + " HTTP/1.1\r\nHost: 127.0.0.1:" + proxy.port() + "\r\nSec-Fetch-Site: same-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n\r\n", "403");
+        refused("GET " + png + " HTTP/1.1\r\nHost: 127.0.0.1:" + proxy.port() + "\r\n\r\n", "403");
+        refused("GET " + png + " HTTP/1.1\r\nHost: evil.example\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n\r\n", "403");
+        for (String target : new String[] {
+                "/api/v1/workspace/phones", "/api/v1/p/rome/runs/r1/events", "/api/v1/p/rome/runs/r1/artifacts",
+                "/api/v1/p/rome/runs/r1/artifacts/", "/api/v1/p/rome/runs/r1/artifacts/a/b/c.png",
+                "/api/v1/p/rome/runs/r1/artifacts/../../workspace/phones", "/api/v1/p/rome/runs/r1/artifacts/%2e%2e/x.png",
+                "/api/v1/p/rome/runs/r1/artifacts/a%2fb.png", "/api/v1/p/rome/runs/r1/artifacts/a%5cb.png",
+                "/api/v1/p/rome/runs/r1/artifacts/./x.png", "/api/v1/p/rome/runs/../artifacts/x.png", "/x/api/v1/runs/r1/artifacts/x.png",
+                "/api/v1/runs/r1/artifacts/x.png#f", "/"}) {
+            refused(media("GET", target, "image", ""), "403");
+        }
+    }
+
+    @Test
+    public void anArtifactsMediaNeedsALiveSession() throws Exception {
+        sessionUp = false;
+        Socket socket = connect();
+        send(socket, media("GET", "/api/v1/p/rome/runs/r1/artifacts/chart.png", "image", ""));
+        String head = readHead(socket.getInputStream());
+        assertTrue(head, head.startsWith("HTTP/1.1 502"));
+        assertNull(peer.opened.poll(100, TimeUnit.MILLISECONDS));
+    }
+
     @Test
     public void headersAreDroppedAndTheUserAgentReplaced() throws Exception {
         Socket socket = connect();
