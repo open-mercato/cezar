@@ -491,7 +491,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
     case 'assistant':
       return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} onRetry={onRetry} />
     case 'action':
-      return <ActionCard managerId={origin.id} message={message} onDecide={onDecide} />
+      return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }

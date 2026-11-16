@@ -1837,6 +1837,86 @@ describe('ManagerEngine', () => {
       expect(await engine.decide(id, proposed.actionId, 'approve')).toMatchObject({ status: 409 });
     });
 
+    describe('dismissing', () => {
+      /** The PR is open at the proposal; `prState` is what GitHub says afterwards. */
+      const forge = (prState: () => string): ManagerEngineDeps['request'] => async (path, init) => {
+        requests.push({ path, method: init?.method ?? 'GET' });
+        if (path.includes('/merge-state')) {
+          const state = path.endsWith('?refresh=1') ? prState() : 'open';
+          return Response.json({ available: true, mergeState: { title: 'Ship', state, headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+        }
+        return Response.json({ merged: true });
+      };
+
+      it('closes a card without merging, and tells the manager', async () => {
+        const engine = makeEngine({ request: forge(() => 'open') });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'dismiss')).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: 'Dismissed' });
+        expect(requests.some((request) => request.path.endsWith('/merge'))).toBe(false);
+        expect(store.state(id).notes.at(-1)).toContain('Dismissed');
+        expect(await engine.decide(id, proposed.actionId, 'approve')).toMatchObject({ status: 409 });
+      });
+
+      it('onlyIfStale leaves a card whose PR is still open', async () => {
+        let state = 'open';
+        const engine = makeEngine({ request: forge(() => state) });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toMatchObject({ status: 409 });
+        expect(actions(id)[0]?.status).toBe('pending');
+        state = 'merged';
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+      });
+
+      it('approving a PR merged meanwhile dismisses the card instead of failing it', async () => {
+        const engine = makeEngine({ request: forge(() => 'merged') });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        await engine.decide(id, proposed.actionId, 'approve');
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(requests.some((request) => request.path.endsWith('/merge'))).toBe(false);
+      });
+
+      it('a watch check dismisses a card whose PR left the open list, and only after GitHub confirms', async () => {
+        let state = 'open';
+        const engine = makeEngine({ request: forge(() => state) });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        const watch = async () => {
+          store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+          engine.tick();
+          await settled(engine);
+        };
+        // Missing from a capped list proves nothing on its own.
+        await watch();
+        expect(actions(id)[0]?.status).toBe('pending');
+        state = 'closed';
+        await watch();
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already closed' });
+      });
+
+      it('a watch check asks GitHub about no card whose PR is still listed open', async () => {
+        const engine = makeEngine({ request: forge(() => 'merged'), github: readyPrGithub });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        requests = [];
+        backend.scripts.push(say(MANAGER_QUIET));
+        store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        engine.tick();
+        await settled(engine);
+        expect(requests.some((request) => request.path.includes('/merge-state'))).toBe(false);
+        expect(actions(id)[0]?.status).toBe('pending');
+      });
+    });
+
     it('a repeated proposal reuses the pending card', async () => {
       const engine = makeEngine();
       const id = await create(engine);
