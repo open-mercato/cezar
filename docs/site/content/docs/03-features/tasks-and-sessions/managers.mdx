@@ -10,7 +10,7 @@ sources:
   - label: "Chat composer layout"
     path: packages/web/src/routes/manager/manager-chat.tsx
     line: 794
-    commit: e91fd6cfd636693d733290f6f289e884091fe924
+    commit: a5cb0c5dbf038ba32e3799a57dc51a797b59425e
   - label: "Specification"
     path: .ai/specs/2026-10-31-managers.md
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
@@ -95,7 +95,7 @@ If a turn hits a provider usage limit and the provider gives a reset time, the c
 
 On a desktop, Enter sends and Shift+Enter starts a new line.
 
-The prompt sits above the toolbar in one rounded composer. Attach files, choose **Model and effort** or **Agent for new tasks**, and send from that toolbar. **Options** opens the manager's account picker; the model menu also keeps its agent, account and effort choices. The working-status line remains below the composer. Manager chat and setup have no dictation control.
+The prompt sits above the attachment and send controls in one rounded composer. Open the settings gear in the chat's top bar to choose **Model and effort**, **Agent account**, or **Agent for new tasks**. The composer has no **Options** button or configuration pickers. The working-status line remains below the composer. Manager chat and setup have no dictation control.
 
 ### On a phone
 
@@ -127,7 +127,7 @@ Cezar refuses any `cez-manager` command that targets a project the manager is no
 
 ## Refresh
 
-**Refresh** sets how often a manager checks its connected projects. The default is 15 minutes. Change it in the footer under the composer: **Off**, 5, 15, or 30 minutes, 1 or 4 hours, or 1 day.
+**Refresh** sets how often a manager checks its connected projects. The default is 15 minutes. Change it in the top-bar settings gear: **Off**, 5, 15, or 30 minutes, 1 or 4 hours, or 1 day.
 
 A check reads the task stores and the same GitHub data the GitHub tab uses, then looks for attention items:
 
