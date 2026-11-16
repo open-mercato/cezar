@@ -17,7 +17,11 @@ import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, type ManagerAttention } from '@/lib/managers'
 import { rememberTasksLocation, tasksHref } from '@/lib/manager-location'
+<<<<<<< HEAD
 import { showsBottomBar } from '@/lib/phone-app'
+=======
+import { isCezarShell } from '@/lib/phone-app'
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { AddProjectMenu } from '@/components/add-project-menu'
@@ -42,10 +46,7 @@ import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
-/** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
- *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
- *  for CSS and once for the state machine. */
-const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
+import { useCompactNavigation } from '@/lib/use-compact-navigation'
 
 export type RepoChip = {
   name: string
@@ -286,8 +287,20 @@ export const AppShell = React.memo(function AppShell({
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const openMenu = React.useCallback(() => setMenuOpen(true), [])
+<<<<<<< HEAD
   const [phoneApp] = React.useState(showsBottomBar)
   const bottomBar = phoneApp && managersAvailable && !chromeless && !inTaskThread
+=======
+  const shellRef = React.useRef<HTMLDivElement>(null)
+  const compact = useCompactNavigation(shellRef)
+  const [shellApp] = React.useState(isCezarShell)
+  const phoneNav = compact || (shellApp && managersAvailable)
+  const bottomBar = phoneNav && managersAvailable && !chromeless
+  // A thread keeps the bar, as a manager chat does, and its own header is the top row.
+  const threadBar = bottomBar && inTaskThread
+  const [managerTasks, setManagerTasks] = React.useState<ManagerTasksTab | null>(null)
+  const tasksTab = React.useMemo(() => (bottomBar ? { publish: setManagerTasks, everyWidth: phoneNav } : null), [bottomBar, phoneNav])
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
@@ -317,6 +330,7 @@ export const AppShell = React.memo(function AppShell({
     setMenuOpen(false)
   }, [pathname])
 
+<<<<<<< HEAD
   // The drawer must not outlive its breakpoint: widening past `md` reveals the real sidebar, and
   // an open drawer would leave a focus-trapping modal over an already-visible nav.
   React.useEffect(() => {
@@ -329,6 +343,12 @@ export const AppShell = React.memo(function AppShell({
     query.addEventListener('change', onChange)
     return () => query.removeEventListener('change', onChange)
   }, [])
+=======
+  // A wider shell reveals the sidebar: close its modal drawer and release the focus trap.
+  React.useEffect(() => {
+    if (!phoneNav) setMenuOpen(false)
+  }, [phoneNav])
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
 
   const items = React.useMemo(
     () => visibleNavItems({
@@ -391,6 +411,7 @@ export const AppShell = React.memo(function AppShell({
 
   return (
     <div
+      ref={shellRef}
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
       data-chromeless={chromeless ? '' : undefined}
@@ -428,6 +449,12 @@ export const AppShell = React.memo(function AppShell({
         className={cn(
           'relative grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
           desktop === 'macos' && 'pt-[28px]',
+<<<<<<< HEAD
+=======
+          // An iPad is `md+`, where no phone header pads the status bar: the column does. Settings
+          // pads its own. A thread on the bar has no shell header at any width.
+          desktop !== 'macos' && !chromeless && (threadBar ? 'pt-[env(safe-area-inset-top)]' : !phoneNav && 'md:pt-[env(safe-area-inset-top)]'),
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
         )}
       >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
@@ -436,10 +463,22 @@ export const AppShell = React.memo(function AppShell({
             keeps the scroller in row 3 either way. */}
         {chromeless ? null : (
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+<<<<<<< HEAD
             <MobileTopBar
               title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
               attention={managersAvailable && !managerMode ? managerAttention : null}
             />
+=======
+            {threadBar ? null : (
+              <MobileTopBar
+                title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
+                attention={managersAvailable && !managerMode ? managerAttention : null}
+                // Where neither the sidebar nor the bottom bar is (a thread on a tablet), the menu is.
+                everyWidth={phoneNav}
+                computerName={computerName}
+              />
+            )}
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
             <LinkScope projectId={linkScope}>
@@ -1186,7 +1225,7 @@ function MobileTopBar({ title, attention = null }: { title: string; attention?: 
   return (
     <header
       data-slot="mobile-top-bar"
-      className="row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)] md:hidden"
+      className={cn('row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)]', !everyWidth && 'md:hidden')}
     >
       <div className="flex h-11 items-center gap-2.5 px-3">
         {/* A real SheetTrigger rather than an onClick that flips our state: it is what registers
