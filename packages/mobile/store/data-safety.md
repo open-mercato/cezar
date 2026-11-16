@@ -5,6 +5,12 @@ APK's merged manifest (`aapt2 dump permissions`) on 2026-11-10. The longer reaso
 each claim, is in #1913's draft (`.ai/specs/drafts/mobile-privacy-policy.md` on `cez/72de188f`,
 Appendix A). Re-check this file whenever the app gains an SDK, a permission or a network call.
 
+For `0.1.1`, the iOS storage and push descriptions also follow `KeychainCredentialStore`,
+`KeychainDeviceKeyStore`, `WebsiteData`, `ApnsTokenSource`, `PushStore`, `DeviceBookKeychain`, the
+notification extension and `RELAY_PROTOCOL.md` §§ 7 and 18. These are proposed store answers, not
+approved legal declarations or verification of the deployed relay. Resolve the marked questions
+and the identifier/account linkage below before submission.
+
 **What leaves the phone, and to whom:**
 
 | Data | Goes to | When | Protection |
@@ -14,7 +20,8 @@ Appendix A). Re-check this file whenever the app gains an SDK, a permission or a
 | Device ID (random, per pairing) and public keys | Relay (Open Mercato, on Cloudflare) | Relay servers | TLS. Stored on the relay until the phone is removed, or 90 days after cezar was last seen |
 | IP address | Relay, as a salted hash for one-hour rate limits; Cloudflare, to carry traffic | Relay servers | Not stored in plain form by the relay's code |
 | Firebase installation ID and FCM push token | Google (Firebase Cloud Messaging) | Only after the user turns notifications on, and only in a build with `google-services.json` | TLS. The relay seals the token into a grant and does not store it |
-| Notification content | Google, Apple later | Each push | Fixed text "Cezar needs you" and cezar's ID only |
+| APNs push token | Apple; relay when notifications are enabled | iOS registers with Apple at launch; token handover to the relay requires the notification switch | TLS. Token held in memory, a digest in app preferences; the relay seals the token into a grant |
+| Notification content | Apple (iOS), Google (Android with Firebase) | Each remote push | Fixed text "Cezar needs you", cezar's ID and badge count (0–99); the phone adds the saved computer name locally |
 | Relay account: email, accepted terms version (RELAY_PROTOCOL.md § 18) | Relay (Open Mercato) | Entered in **cezar on the computer**, never in the app. The app only reads the status back, signed by its device key, with the email masked (`p***@gmail.com`) to show where the link went, and can ask for a new link; it sends no code | TLS. Kept until the account is deleted; unconfirmed addresses 30 days |
 | Images in cockpit pages (GitHub avatars, Markdown images) | Their own hosts | When a page shows one | Ordinary HTTPS loads; the host sees the phone's IP |
 
@@ -50,7 +57,7 @@ FCM token. Firebase is Google acting as a service provider, which Play does not 
 | --- | --- |
 | Personal info > Email address | The relay account's email is typed into cezar on the computer and sent by cezar, not by the app. The app receives it back only to display it and neither stores nor sends it. [OPEN MERCATO TO CONFIRM: that Play does not count a displayed, unsent value as collected] |
 | Messages, Files and docs, Other user-generated content, Emails | Sent only to the user's own cezar. Through the relay it is end-to-end encrypted, so the developer can never read it; directly it goes to a server the user runs. Play's guidance exempts end-to-end encrypted data; **confirm the direct case against the current form text** |
-| Passwords / Credentials | Kept in the phone's Keystore; sent only to the user's own server |
+| Passwords / Credentials | Android Keystore-encrypted storage or iOS device-only Keychain; sent only to the user's own server |
 | Photos and videos | The camera scans a QR code on the phone; no image is stored or sent |
 | App activity, App info and performance (crash logs, diagnostics) | No telemetry or crash SDK. cezar's own opt-in telemetry is sent by the user's cezar, not by the app |
 | Location, Personal info, Financial info, Health and fitness, Contacts, Calendar, Audio, Web browsing | Not accessed |
@@ -62,7 +69,7 @@ App Store Connect > the app > **App Privacy**. Data collection: **Yes, we collec
 
 | Data type | Collected | Linked to the user's identity | Used for tracking | Purposes |
 | --- | --- | --- | --- | --- |
-| Identifiers > Device ID | Yes | No | No | App Functionality |
+| Identifiers > Device ID | Yes | [OPEN MERCATO TO CONFIRM: the relay account associates computers and phone device IDs with an email address; confirm the linked-to-identity answer] | No | App Functionality |
 
 Everything else: **not collected**, for the reasons in the Play table. That includes **Contact Info >
 Email Address**: the relay account's email is collected by cezar on the computer, not by the app, which
@@ -74,12 +81,14 @@ Before the first iOS submission:
 - On iOS the Device ID row is the relay device ID, public keys and the APNs token; there is no
   Firebase. Re-read the iOS code against this table for the build you submit.
 - Apple's privacy manifest is `ios/App/App/PrivacyInfo.xcprivacy`: no tracking, no tracking domains,
-  Device ID collected for app functionality, not linked and not tracking, and `UserDefaults` for the
-  app's own flags (reason `CA92.1`). Its collected data types must match the
-  table above; re-read it, and the manifest of any SDK the build adds, before each submission.
+  Device ID collected for app functionality, currently marked not linked and not tracking, and
+  `UserDefaults` for the app's own flags and APNs-token digest (reason `CA92.1`). The current
+  not-linked flag is not evidence that the account linkage is exempt from disclosure. Confirm the
+  answer above and align the manifest and store form before submission; also review SDK manifests.
 - **Export compliance** (asked for every build, or set `ITSAppUsesNonExemptEncryption` in
   `Info.plist`): the app implements end-to-end encryption with standard algorithms (Noise with
-  X25519 and ChaCha20-Poly1305). That is "standard encryption algorithms", not exempt as HTTPS-only
-  would be. It qualifies as mass-market under EAR 5A992/5D992, which in the US means a yearly
-  self-classification report to BIS. Have the person responsible for compliance confirm the answer
-  once; then set the `Info.plist` key so builds stop asking.
+  X25519 and ChaCha20-Poly1305), beyond HTTPS transport. [OPEN MERCATO TO CONFIRM: the applicable
+  encryption/export classification, exemptions, reporting obligations and App Store Connect answers
+  for the release and its distribution territories]. The code alone does not establish a
+  mass-market classification or reporting obligation. Set the `Info.plist` key only after the person
+  responsible for compliance has approved the answer.

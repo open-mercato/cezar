@@ -20,6 +20,49 @@ npm --prefix docs/site start   # serve the built out/ folder on port 4322
 `out/` is plain HTML, CSS, and JavaScript. Host it on any static file server; search runs in the
 browser from a prebuilt index.
 
+## Mobile privacy policy deployment
+
+The mobile apps and store listings link to **https://cezar.run/mobile/privacy**. The source is
+`packages/mobile/store/privacy-policy.md`, with a standalone HTML renderer in the same package.
+This static site can carry the approved page, but no cezar.run production deployment configuration
+is present here. Confirm who deploys that domain and whether it serves this site's export before
+using these steps. Building this site alone does not publish the policy.
+
+After the owner has resolved every `OPEN MERCATO TO CONFIRM` fact, run from the repository root:
+
+```bash
+node packages/mobile/store/scripts/render-privacy.mjs --final
+```
+
+Stop if this fails. It refuses unfinished legal facts; never copy a draft into `public/`. Only after
+it succeeds, stage the approved HTML and build the static site:
+
+```bash
+mkdir -p docs/site/public/mobile/privacy
+cp packages/mobile/store/privacy-policy.html docs/site/public/mobile/privacy/index.html
+npm run docs:build
+cmp packages/mobile/store/privacy-policy.html docs/site/out/mobile/privacy/index.html
+```
+
+The staged `public/mobile/privacy/` directory is generated and ignored by git. Repeat the final
+render and copy whenever the policy changes. It is deliberately absent from normal docs builds
+until approved text is staged, so an ordinary build cannot publish the draft accidentally.
+
+The deployment owner must serve `/mobile/privacy` as `text/html` from
+`out/mobile/privacy/index.html`, or redirect it to `/mobile/privacy/` and serve that index there.
+Neither path may require authentication or fall through to a landing page/404. If cezar.run uses a
+different landing-site deployment, give that owner the same approved standalone HTML and route
+requirement instead of deploying this entire docs site. After the authorized deployment, verify:
+
+```bash
+curl --fail --location --max-time 30 https://cezar.run/mobile/privacy -o /tmp/cezar-mobile-privacy.html
+cmp packages/mobile/store/privacy-policy.html /tmp/cezar-mobile-privacy.html
+```
+
+The response must contain the approved policy with no highlighted facts or draft banner. A local
+build or a successful request for some other page is not proof that the mobile policy URL works.
+`RELEASING-MOBILE.md` lists the remaining legal, provider and store-submission requirements.
+
 ## Layout
 
 | Path | What it is |

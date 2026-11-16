@@ -25,6 +25,10 @@ The app has its own version, `packages/mobile/package.json`. `release-version.mj
 | Android `versionCode`, iOS `CFBundleVersion` | `10099` | `20003` |
 | iOS `CFBundleShortVersionString` | `0.1.0` | `0.2.0` |
 
+For production `0.1.1`, both `package.json` and its lockfile record `0.1.1`. The Android version code
+and iOS build number are **10199**, above `0.1.1-rc.4` (**10104**); the iOS marketing version stays
+`0.1.1`. Confirm in both consoles that no equal or higher build has already been uploaded.
+
 Code = major × 1 000 000 + minor × 10 000 + patch × 100 + (rc number, or 99 for the final release), so
 every rc sorts below its release and both stores accept each upload as newer. Minor and patch stay
 below 100, rc numbers run 1 to 98.
@@ -164,18 +168,51 @@ be updated by one. Say that wherever the APK is linked. Publish the draft GitHub
 
 Both stores, and Apple's guideline 5.1.1 inside the app too, need a public privacy policy URL.
 
-1. Fill every `[OPEN MERCATO TO CONFIRM: …]` in `packages/mobile/store/privacy-policy.md` (legal entity,
-   contact, effective date, rights, relay hostname, Cloudflare terms, Firebase in the build). #1913's
-   draft lists why each one is open.
+1. Fill every `[OPEN MERCATO TO CONFIRM: …]` in `packages/mobile/store/privacy-policy.md` using approved
+   facts (legal entity, contact, effective date, rights, Cloudflare terms, Firebase in the Android
+   build and production push delivery). #1913's draft lists the original open questions. The default
+   relay hostname, `https://rome.cezar.run`, is already established by the repository; legal and
+   production deployment facts are not established by a source-code default.
 2. `node packages/mobile/store/scripts/render-privacy.mjs --final` writes `privacy-policy.html`; it refuses
    while any open fact is left.
-3. Host that single file at **`https://cezar.run/mobile/privacy`**: cezar.run is the project's own
-   domain and already the listing's marketing URL, so the address survives a change of hosting.
-   Serve it over HTTPS with no login. Any static host behind that domain works (the landing site's
-   `public/` folder, Cloudflare Pages, GitHub Pages with a custom domain).
+3. Host that single file at **`https://cezar.run/mobile/privacy`**, over HTTPS with no login. The
+   repository-owned static export in `docs/site` can carry the file; its README's **Mobile privacy
+   policy deployment** section gives the staging/build steps and exact route requirement. This
+   repository does not contain the production cezar.run deployment or prove that it serves that
+   export. Confirm the deployment owner and route mapping before claiming this URL is live. If the
+   domain uses another landing site, publish the same generated file through that site's deployment.
 4. Put the URL in both consoles. The app already links to `https://cezar.run/mobile/privacy` from the
    connect screen (`packages/mobile/connect/index.html`, Apple 5.1.1); if you host it anywhere else,
    change that link in the same release.
+
+### Production 0.1.1 submission blockers
+
+The version bump prepares a production build; it does not approve publication. Keep the PR a draft
+until the following evidence is available:
+
+- **Approved policy:** legal entity/controller and address, privacy contact, effective date, lawful
+  bases for account and relay processing, rights/request process and authority, children's wording,
+  governing law, international transfers, change notices, and no-sale/no-marketing commitments.
+- **Production providers:** Cloudflare account holder, DPA, processing regions and provider retention;
+  actual email provider; confirmation that deployed relay retention/logging matches the policy and
+  that its IP hashing uses a secret salt. The relay source is maintained in a separate repository;
+  the historic audit in `.ai/specs/drafts/mobile-privacy-policy.md` is not deployment evidence.
+- **Live policy URL:** approved text rendered with `--final`, deployed by the cezar.run owner, and
+  `https://cezar.run/mobile/privacy` verified from outside the host without authentication. It
+  returned HTTP 404 during preparation on 2026-11-16. Do not publish the highlighted draft.
+- **Store declarations:** resolve the open questions in `store/data-safety.md`, including how the
+  relay account links device identifiers to email. Do not infer "not linked" solely from a random
+  device ID or treat `PrivacyInfo.xcprivacy` as approval of the App Privacy answers. Apple requires
+  accurate app and third-party collection declarations:
+  https://developer.apple.com/app-store/app-privacy-details/.
+- **iOS distribution:** confirm signing/provisioning and a successful signed archive/TestFlight
+  upload, production APNs configuration and real-device delivery, the encryption/export-compliance
+  determination, and a build number above earlier uploads. No export-compliance answer is inferred
+  from this PR. Confirm Firebase/FCM inclusion and delivery separately for Android.
+- **Review access and metadata:** real demo hostname with a working reset/demo flow, reviewer
+  credentials entered privately in each console, App Review contact, public support email in
+  `store/listing.md`, current screenshots, age-rating answers and the real-device checklist below.
+  The demo hostname and password placeholders are intentional until the operator supplies them.
 
 ## 6. Reviewer demo
 

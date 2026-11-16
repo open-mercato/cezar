@@ -10,8 +10,8 @@ controller, if any]. Contact: [OPEN MERCATO TO CONFIRM: privacy contact address]
 This policy covers CezarBot, the Cezar mobile app (called "the app" below), the relay that connects the app to a computer, and push
 notifications.
 
-The app is available for Android. An iOS version is not released yet, and this policy does not describe
-it. Before an iOS release this policy has to be checked again.
+This policy describes the iOS and Android apps. Platform-specific storage, permissions and
+notification delivery are explained below.
 
 The app is a small shell. It shows the Cezar cockpit from a Cezar server that you run or that someone
 runs for you. It connects in one of two ways:
@@ -29,43 +29,63 @@ runs for you. It connects in one of two ways:
   computer when you use the relay. The relay cannot read it.
 - The relay can still see some connection details, such as IP addresses, timing and data volume.
   These are listed below.
-- Notifications are optional and off until you turn them on for a server. A notification says only
-  "Cezar needs you". It never carries your tasks, code or messages.
+- Notifications are optional and off until you turn them on for a server. The relay sends the fixed
+  text "Cezar needs you", a computer identifier and a badge count. The phone can add the computer's
+  saved name locally. Your tasks, code and messages are never included in the remote push payload.
 
 ## What stays on your phone
 
 The app keeps the following in its private storage. Android's backup and device transfer are turned
-off for this app, so this data is not copied to your cloud backup or to a new phone.
+off for this app. On iOS, the app excludes its saved-server directory, relay bundle cache and push
+state directory from backups. Passwords and pairing keys use device-only Keychain items, rather than
+iCloud Keychain sync. This does not promise that all WebKit or system-managed data is excluded from
+an iOS backup.
 
 | Data | Why | How it is kept |
 | --- | --- | --- |
 | Your device list: name, address, and for direct servers the username and login realm | To reconnect | Plain JSON in app-private storage |
 | For paired servers: relay address, Cezar's public identifiers and key, the phone's ID on that server, a local port number | To reconnect through the relay | Plain JSON in app-private storage |
-| Your server password, if you saved one | To sign in to a direct server | Encrypted with a key in the Android Keystore that cannot be exported |
-| The phone's private keys for each paired server | To prove the phone is yours and to encrypt the connection | Encrypted with the same Keystore key |
+| Your server password, if you saved one | To sign in to a direct server | Android: encrypted with a non-exportable Android Keystore key. iOS: device-only Keychain, readable while the phone is unlocked |
+| The phone's private keys for each paired server | To prove the phone is yours and to encrypt the connection | Android: encrypted with the same Keystore key. iOS: device-only Keychain, readable while unlocked, with sync disabled |
 | Whether the phone lock is on | To apply the lock | An empty file. It holds no secret |
-| Cookies, page storage and the browser cache of the server's pages | So the cockpit works | Android WebView's normal storage for this app |
+| Cookies, page storage and the browser cache of the server's pages | So the cockpit works | Android: this app's WebView storage. iOS: a separate persistent WebKit data store for each saved server |
+| Cached cockpit scripts and styles for relay servers | To open the cockpit faster | App-private files, excluded from backups; no API responses are cached by this bundle cache |
+| Notification switches, sealed grants and pending revocations | To deliver optional notifications and revoke permission | App-private JSON; iOS excludes the push directory from backups |
+| Saved computer names, identifiers and last-known badge counts | To name notifications locally and add up the app badge | iOS: a device-only Keychain item shared with the app's notification extension, accessible after the first unlock |
+| A digest of the last APNs token | To detect a changed token | iOS app preferences; the APNs token itself is held in memory |
+| Recent connection diagnostics | To help you troubleshoot a connection | App-private log, capped at 300 lines of startup steps, timings and connection states; Android can also record the relay hostname. The Devices screen lets you copy it yourself |
 
-**Removing a server.** When you forget a server, the app deletes its saved password or keys and its
-entry in the list. It also clears the page storage for that server, and most cookies of a direct
-server. Cookies set for a wider domain or a sub-path, and cookies from a single sign-on provider, can stay. It does not clear the WebView's HTTP cache, or cookies for a paired server, so these can stay on
-the phone until you clear the app's storage or uninstall the app.
+**Removing a server.** Forgetting a server removes its saved entry, password and cached cockpit bundle.
+If a push grant still needs revoking, the app keeps the pairing key and a pending revocation record
+until the revocation is settled or the grant expires; it retries when the app runs again.
 
-**Phone lock.** The optional lock is off by default. It uses Android's own prompt for your biometrics
-or screen lock. The app never receives your fingerprint, face data or PIN. It only learns whether the
-prompt succeeded. The lock hides the app, but it does not change how keys are stored. With the lock
-on, the app's preview is hidden on the recent apps screen, although the app itself stays listed there.
-On Android 12 and older this also blocks screenshots of the app.
+On Android, the app clears the server's page storage and most cookies of a direct server. Cookies
+set for a wider domain or a sub-path, and cookies from a single sign-on provider, can stay. It does
+not clear the WebView's HTTP cache or a paired server's cookies, so those can stay until you clear
+the app's storage or uninstall it.
+
+On iOS, the app wipes that server's WebKit data, including cookies, page storage and cache, and
+requests deletion of its separate data store. If WebKit cannot remove the store immediately, the
+app retries at the next launch. iOS Keychain items can survive uninstalling an app; CezarBot clears
+its old saved passwords and pairing keys on the first launch after reinstalling. Do not rely on an
+uninstall alone to erase Keychain data, including the shared notification names and badge counts.
+
+**Phone lock.** The optional lock is off by default. Android uses its own biometric or screen-lock
+prompt; iOS uses Face ID, Touch ID or the device passcode. The app never receives your fingerprint,
+face data or PIN. It only learns whether the prompt succeeded. The lock hides the app, but does not
+change how keys are stored. With the lock on, the app's preview is covered in the app switcher.
+On Android 12 and older this also blocks screenshots of the app. The iOS lock does not prevent
+screenshots while you use the unlocked app.
 
 ## Permissions
 
 | Permission | Why |
 | --- | --- |
-| Internet | To reach the relay, your server, and images a cockpit page shows from other sites |
-| Camera | Only to scan the pairing QR code, when you choose to. The app reads the code on the phone and does not save or send the images |
-| Biometrics (`USE_BIOMETRIC`, `USE_FINGERPRINT`) | Only for the optional phone lock. These come from the Android biometric library |
-| Notifications (`POST_NOTIFICATIONS`) | Asked for on Android 13 and newer, only when you turn notifications on for a server |
-| Receive push messages, keep the phone awake briefly, see whether the network is up (`c2dm.permission.RECEIVE`, `WAKE_LOCK`, `ACCESS_NETWORK_STATE`) | Added by Firebase Cloud Messaging, so a notification can arrive while the app is closed. Unused until you turn notifications on |
+| Internet (Android manifest permission; network access on iOS) | To reach the relay, your server, and images a cockpit page shows from other sites |
+| Camera (both platforms) | Only to scan the pairing QR code, when you choose to. The app reads the code on the phone and does not save or send the images |
+| Biometrics (`USE_BIOMETRIC`, `USE_FINGERPRINT` on Android; Face ID permission on iOS) | Only for the optional phone lock |
+| Notifications (`POST_NOTIFICATIONS` on Android 13 and newer; notification authorization on iOS) | Asked for when you turn notifications on for a server |
+| Receive push messages, keep the phone awake briefly, see whether the network is up (`c2dm.permission.RECEIVE`, `WAKE_LOCK`, `ACCESS_NETWORK_STATE`, Android only) | Added by Firebase Cloud Messaging in builds that include it, so a notification can arrive while the app is closed |
 
 If a cockpit page offers a file upload, Android's file picker opens. Only the file you pick is sent, and
 it goes to your Cezar server.
@@ -78,7 +98,7 @@ This data is on your own computer, in `~/.cezar/relay/devices.json`, and is read
 user account. It does not reach us through this mechanism.
 
 - The phone's name, taken from the phone's model name, which you can rename
-- The platform (`android`)
+- The platform (`android` or `ios`)
 - The phone's public keys and its device ID
 - When it was added and when it was last seen
 - Push grant IDs, if you turned notifications on
@@ -184,6 +204,10 @@ relay's processing]
   holder, data processing agreement, regions, Cloudflare's retention]
 - **Google**, through Firebase Cloud Messaging, only if you turn notifications on and the build
   includes Firebase. It receives the push token and each notification described under Notifications.
+- **Apple**, through Apple Push Notification service (APNs) on iOS. The app registers with APNs at
+  launch, before notifications are enabled. Registering does not enable alerts or hand a token to the
+  relay; that happens only after you enable notifications. Apple then delivers remote notifications
+  as described below. The iOS app does not use Firebase.
 - **The Cezar server you connect to.** It receives everything you do in the cockpit. If you run it,
   that is you. If someone else runs it, their own terms apply.
 - **The coding agents your Cezar runs** are chosen and configured by you on your computer. The app does
@@ -212,40 +236,50 @@ documentation. An answer to that question given on the phone is saved as your Ce
 
 Notifications are off until you turn them on for a server paired through the relay. You can turn them
 on when the app asks after your first pairing, or with the **Notifications** switch on the Devices list.
-Android 13 and newer then asks for the notification permission.
+Android 13 and newer and iOS then ask for notification permission.
 
-**While the app is open**, or for 30 seconds after you leave it, the app asks your Cezar for signals
-inside the encrypted connection and shows a notification itself. Nothing leaves the encrypted
-connection for this.
+**While the app is open**, the app asks your Cezar for signals inside the encrypted connection and
+shows a notification itself. It attempts to keep this connection for up to 30 seconds after you leave;
+the operating system can suspend it sooner. This does not require a remote push through Apple or Google.
 
-**While the app is closed**, a notification comes through Firebase Cloud Messaging (Google):
+**While the app is closed**, remote delivery uses APNs (Apple) on iOS, or Firebase Cloud Messaging
+(Google) on Android if Firebase is included in the build and the relay is configured to deliver it:
 
-- When you turn notifications on, the app gets a push token from Firebase and sends it to the relay.
-  The relay seals the token into a grant that only your Cezar can use, and returns the grant without
-  storing the token. The app hands the grant to your Cezar inside the encrypted connection.
+- On iOS the app registers with APNs at launch and holds the token in memory; it stores only a digest
+  to detect token changes. On Android it asks Firebase for a token only after a notification switch
+  is on. Once you enable notifications, the app sends the token to the relay. The relay seals it into
+  a grant that only your Cezar can use, and returns the grant without storing the token. The app hands
+  the grant to your Cezar inside the encrypted connection.
 - When Cezar needs you and the phone is not connected, Cezar asks the relay to send a push. The
-  notification carries the fixed text "Cezar needs you" and Cezar's ID, and nothing about your tasks,
-  projects or messages. Google sees that notification, the token and the time.
+  notification carries the fixed text "Cezar needs you", Cezar's ID and a badge count from 0 to 99,
+  and nothing about your task titles, code, projects or messages. Apple or Google sees this payload,
+  the token and the delivery time. The phone can replace the generic title with the saved computer
+  name and combine badge counts locally; the saved name is not part of the remote push payload.
 - The relay keeps a revoked grant's ID for up to 90 days, so it cannot be reused, and refuses a
   repeated push ID for 10 minutes.
-- Turning the switch off revokes the grant at the relay at once. Forgetting the server revokes it too.
-- The app does not ask Firebase for anything until a switch is on, and it turns off Firebase
-  analytics.
+- Turning the switch off or forgetting the server requests revocation at the relay. If it cannot
+  complete, the app keeps the pending revocation and retries; it does not promise immediate remote
+  revocation while offline.
+- The Android app does not ask Firebase for anything until a switch is on, and it turns off Firebase
+  analytics. iOS uses APNs and contains no Firebase SDK.
 
 [OPEN MERCATO TO CONFIRM: whether the released build includes Firebase (`google-services.json`). Without
-it, notifications arrive only while the app is open, and the Firebase paragraphs above do not apply.]
+it, Android has no closed-app push delivery. Confirm that the production relay is configured for APNs
+and, if used, FCM, and that delivery has been verified on the store builds.]
 
 ## Your choices
 
 - Forget a server in the app, or remove a phone on your computer. Either one stops the connection.
 - Turn the phone lock on or off.
-- Uninstalling the app removes its data from the phone.
+- Uninstalling the app removes its app-private files. On iOS, Keychain cleanup occurs on the next
+  installation's first launch, as described above.
 - Deny the camera permission and pair by typing a code instead.
 - Turn notifications off for a server, or deny the notification permission.
 - Change or delete the relay account's email in Cezar's Settings, under Connect a phone.
 
-Records on the relay contain no name. They hold keys and IDs, and the relay account's email address
-described above, which you can delete from Cezar's Settings. To ask about your data:
+The relay holds keys and IDs, the relay account's email address and acceptance records, and may receive
+your computer's saved name for confirmation emails. You can delete the account from Cezar's Settings.
+To ask about your data:
 [OPEN MERCATO TO CONFIRM: how to make a request, which rights apply, response time, supervisory
 authority].
 

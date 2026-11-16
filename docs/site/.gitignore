@@ -3,6 +3,7 @@
 
 # generated content
 .source
+/public/mobile/privacy/
 
 # test & build
 /coverage
