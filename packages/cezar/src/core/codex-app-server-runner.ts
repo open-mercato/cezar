@@ -112,7 +112,7 @@ export class CodexAppServerRunner implements AgentRunner {
     this.resumeLockRetryMs = opts.resumeLockRetryMs ?? RESUME_LOCK_RETRY_MS;
   }
 
-  run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
+  async run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
     return this.startSession(spec, onEvent, { autoEndAfterFirstTurn: true }).result;
   }
 

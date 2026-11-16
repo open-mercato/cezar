@@ -226,6 +226,12 @@ grants before starting, including on retries and Continue. Only the omitted or e
 default (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, with unrestricted shell) is supported.
 An empty list is a restriction. Read-only workflows such as `review-pr` must use Claude Code
 or Pi. A Codex filesystem sandbox cannot enforce GitHub, MCP or shell tool permissions.
+This also affects internal calls: a Codex manager refuses chat and watch turns with a diagnostic.
+The Codex planner returns a single-step fallback with the policy reason. Automatic titles and
+branch names keep their heuristic fallback and record the policy reason in the task transcript;
+explicit branch naming instructions cannot be applied by Codex. Landing commit messages keep
+their file-list fallback and explain why model naming was unavailable. Ask and manager-created
+read-only Codex tasks fail before the agent starts. Choose Claude Code or Pi for restricted tasks.
 OpenCode and Cursor do not enforce Claude's `allowedTools`.
 
 **Settings changes apply to new tasks.** Existing tasks retain their saved list; tasks created

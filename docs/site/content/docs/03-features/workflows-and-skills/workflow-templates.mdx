@@ -30,6 +30,8 @@ Its agents get Read, Grep, Glob and a Bash limited to read-only `gh` and `git` c
 
 > **Good to know**: Codex also refuses restricted steps inside a workflow that has write steps. Retries and Continue keep the restriction. An empty tool list means no tools; use Claude Code or Pi for a restricted task. Codex supports only the historical unrestricted default grant until Cezar can verify enforcement for shell, filesystem and MCP operations.
 
+Codex manager chat and watch turns also refuse to start. Planning falls back to a single step; title, branch and commit-message naming use their existing fallback. The planner and task transcript report the policy reason. Choose Claude Code or Pi when you need tools restricted.
+
 ## What each workflow can do
 
 The workflow list (`GET /api/v1/workflows`) reports `capabilities` for every workflow: `push`, `openPr` and `postToGithub`, read from its definition. Draft PR means push and open PR; Push means push; PR comment, Issue comment and Update PR mean post to GitHub. An agent with an unrestricted shell, a dispatched subtask, or a check command that is not a read-only `gh`/`git` command counts as all three, because it could. Managers use this to pick a safe workflow.

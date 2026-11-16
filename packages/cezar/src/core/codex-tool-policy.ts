@@ -1,5 +1,15 @@
 import { DEFAULT_ALLOWED_TOOLS, type AgentRunSpec } from './agent-runner.ts';
 
+export class CodexToolPolicyError extends Error {
+  constructor() {
+    super('codex: tool-policy enforcement unavailable; refusing to start a restricted step. '
+      + 'The app-server has no verified gate for every shell, filesystem, MCP and nested tool call. '
+      + 'A read-only sandbox or approval prompt is insufficient. Pick Claude Code or Pi; '
+      + 'cezar will not discard allowedTools, bashAllowlist or enforceReadOnly.');
+    this.name = 'CodexToolPolicyError';
+  }
+}
+
 /**
  * App-server approvals are not a universal pre-execution hook. In particular, a read-only
  * filesystem sandbox does not constrain MCP or remote mutations. Until a verified transport
@@ -14,8 +24,5 @@ export function assertCodexToolPolicy(spec: Pick<AgentRunSpec,
     DEFAULT_ALLOWED_TOOLS.every((tool) => tools.includes(tool))
   );
   if (!spec.enforceReadOnly && spec.bashAllowlist === undefined && spec.bashHookCommand === undefined && unrestricted) return;
-  throw new Error('codex: tool-policy enforcement unavailable; refusing to start a restricted step. '
-    + 'The app-server has no verified gate for every shell, filesystem, MCP and nested tool call. '
-    + 'A read-only sandbox or approval prompt is insufficient. Pick Claude Code or Pi; '
-    + 'cezar will not discard allowedTools, bashAllowlist or enforceReadOnly.');
+  throw new CodexToolPolicyError();
 }

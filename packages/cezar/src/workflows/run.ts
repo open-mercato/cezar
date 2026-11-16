@@ -9168,7 +9168,8 @@ export class RunManager {
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
         execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows };
       }
-      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
+      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,
+        (reason) => this.store.appendEvent(runId, { type: 'note', message: `model naming unavailable — ${reason}` }));
       if (!result) return undefined;
       const run = this.store.getRun(runId);
       // Marker-owned state outranks the namer (spec 2026-07-18-task-ref-markers):

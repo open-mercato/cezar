@@ -48,6 +48,7 @@ import {
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
+import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
@@ -2046,6 +2047,8 @@ export class ManagerEngine {
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
+    // Every manager turn requires a tool fence, including chats and unattended watches.
+    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError()), runner };
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
