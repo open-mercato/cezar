@@ -35,6 +35,14 @@ The server must run in hosted mode. Links that leave your server open in the sys
 
 **Turn on app lock** on the **Devices** list asks for your fingerprint, face or screen lock (Face ID, Touch ID or the passcode on an iPhone) each time the app starts and after a minute in the background. It is off by default and needs a screen lock on the phone. It only hides the app: anyone who knows the phone's screen lock can open it, and your login is stored the same way with the lock on or off. The iOS lock has not run on a phone yet.
 
+## Reloading after a cezar update
+
+**cezar was updated. This page is from the previous version.** means the cockpit open on your phone comes from a different build than the computer's running server. Tap **Reload** to check that the computer can serve the updated cockpit, then reload the current page. Your selected server, pairing and login stay in place. While the check runs, the button shows **Reloading…**. If the computer is unreachable or still restarting, the page stays open with a message and you can retry.
+
+Older iOS builds, including CezarBot 0.1.1 (10104), can return the same cached cockpit on every reload. Close and reopen the server from the app's **Devices** list to start a new cache check after the computer reconnects. If the banner persists, close and reopen CezarBot. Avoid **Forget**, which removes pairing and website data.
+
+The reliable reload fix requires an iOS app update as well as the cockpit update: the old app's native relay cache controls which HTML a page reload receives. A server update alone cannot replace that native code. The separate **restart to finish** banner means the server process needs restarting; reloading the phone page does not restart the computer's service.
+
 ## Relay terms on the phone
 
 A phone paired through the Cezar relay accepts the relay's terms once. Right after pairing, and the first time a server opens while the phone has not accepted them, the app shows **Accept the relay terms**: the Terms and Privacy Policy links, an **I accept** box and **Continue**. **Not now** opens the server anyway; after 48 hours the relay refuses the phone until it accepts, and the app shows the same sheet without **Not now**. Accepting reconnects at once, with no new pairing.

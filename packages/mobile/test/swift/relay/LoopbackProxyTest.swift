@@ -741,6 +741,58 @@ func loopbackProxyTests() {
         expect(cache.get(.shell, "/").map { text($0.body) } == "<p>new</p>", "new shell kept")
     }
 
+    run("reload bypasses a stale shell after this listener already revalidated") { w in
+        let cache = bundle()
+        defer { cache.clear() }
+        let html = [TunnelFrame.Header(name: "content-type", value: "text/html"), TunnelFrame.Header(name: "cache-control", value: "no-cache"),
+                    TunnelFrame.Header(name: "content-length", value: "7")]
+        cache.put(.shell, "/", headers: html, body: Bytes.ascii("old"))
+        let proxy = try w.cached(cache)
+        defer { proxy.close() }
+        let first = try w.connect(proxy)
+        first.send(w.gated(proxy, "/manager", "Sec-Fetch-Dest: document\r\n"))
+        let firstHead = first.readHead()
+        expect(text(readBody(first, contentLength(firstHead))) == "old", "cold start still paints immediately")
+        guard let check = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("no initial check") }
+        w.peer.head(check.stream, 304)
+        w.peer.reply(TunnelFrame.end(stream: check.stream))
+
+        // The computer updates/reconnects while the same phone listener and gate stay alive.
+        for directive in ["no-cache", "no-store", "max-age=0"] {
+            let client = try w.connect(proxy)
+            client.send(w.gated(proxy, "/manager?tab=tasks", "Sec-Fetch-Dest: document\r\nCache-Control: \(directive)\r\nIf-None-Match: old\r\n"))
+            guard let open = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("reload never reached cezar: \(directive)") }
+            expect(open.target == "/manager?tab=tasks", "route and query survive")
+            expect(!open.headers.contains { $0.name == "if-none-match" }, "reload needs whole HTML")
+            expect(!open.headers.contains { $0.name == "cookie" }, "gate never leaves the phone")
+            w.peer.reply(try TunnelFrame.head(stream: open.stream, status: 200, headers: html))
+            w.peer.data(open.stream, Bytes.ascii("current"))
+            w.peer.reply(TunnelFrame.end(stream: open.stream))
+            let head = client.readHead()
+            expect(text(readBody(client, contentLength(head))) == "current", "current HTML returned synchronously")
+            expect(eventually { cache.get(.shell, "/").map { text($0.body) } == "current" }, "next start gets current shell")
+        }
+        expect(w.peer.opened.poll(timeoutMs: 100) == nil, "no automatic reload or revalidation loop")
+
+        w.sessionUp.value = false
+        let offline = try w.connect(proxy)
+        offline.send(w.gated(proxy, "/manager", "Sec-Fetch-Dest: document\r\nCache-Control: no-cache\r\n"))
+        expect(offline.readHead().hasPrefix("HTTP/1.1 502"), "offline reload fails instead of claiming stale HTML is fresh")
+        expect(cache.get(.shell, "/").map { text($0.body) } == "current", "offline failure preserves last good cache")
+        proxy.sessionWaitMs = 3000
+        let retry = try w.connect(proxy)
+        retry.send(w.gated(proxy, "/manager", "Sec-Fetch-Dest: document\r\nCache-Control: no-cache\r\n"))
+        expect(w.peer.opened.poll(timeoutMs: 100) == nil, "reload waits for the reconnect")
+        w.sessionUp.value = true
+        guard let resumed = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("reload did not resume") }
+        expect(resumed.target == "/manager", "same proxy and pairing work after reconnect")
+        w.peer.reply(try TunnelFrame.head(stream: resumed.stream, status: 200, headers: html))
+        w.peer.data(resumed.stream, Bytes.ascii("current"))
+        w.peer.reply(TunnelFrame.end(stream: resumed.stream))
+        let resumedHead = retry.readHead()
+        expect(text(readBody(retry, contentLength(resumedHead))) == "current", "pending reload receives current HTML")
+    }
+
     run("a request waits for a session that is coming up") { w in
         w.sessionUp.value = false
         w.proxy.sessionWaitMs = 3000

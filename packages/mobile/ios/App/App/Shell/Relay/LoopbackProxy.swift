@@ -420,7 +420,7 @@ final class LoopbackProxy {
     private func exchange(_ connection: ProxyConnection, _ request: ProxyRequest) throws -> Bool {
         let kind = cache == nil ? BundleCache.Kind.none
             : BundleCache.kindOf(method: request.method, target: request.target, fetchDest: request.header("sec-fetch-dest"), accept: request.header("accept"))
-        if kind != .none, let cache, let hit = cache.get(kind, request.target) {
+        if kind != .none, BundleCache.mayReuse(request.headers), let cache, let hit = cache.get(kind, request.target) {
             // The shell paints at once; a newer one is fetched behind it, once the session is up.
             if kind == .shell { revalidate(request.target, hit) }
             try Self.cached(connection, request, hit)
