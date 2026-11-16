@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { managerKeys } from '@/api/managers'
@@ -29,7 +30,7 @@ function renderCard(
   if (managerConfirm) client.setQueryData(workspaceQueryKeys.uiState, { managerConfirm })
   client.setQueryData(managerKeys.list, { managers: [{ id: 'm1', ...(own ? { confirm: own } : {}) }] })
   const ui = (next: typeof message) => (
-    <QueryClientProvider client={client}><ActionCard managerId="m1" message={next} onDecide={onDecide} /></QueryClientProvider>
+    <QueryClientProvider client={client}><ActionCard origin={{ id: 'm1', name: 'Mira' }} message={next} onDecide={onDecide} /></QueryClientProvider>
   )
   const { rerender } = render(ui(message))
   return { onDecide, rerender: (next: typeof message) => rerender(ui(next)) }
@@ -365,5 +366,79 @@ describe('the confirmation setting', () => {
     approve()
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(onDecide).toHaveBeenCalledWith('a1', 'approve')
+  })
+})
+
+describe('ActionCard tasks behind the PR', () => {
+  const task = (id: string, extra: Record<string, unknown> = {}) => ({
+    projectId: 'alpha', id, title: `Task ${id}`, status: 'review', archived: false, workflow: 'quick-task',
+    createdAt: '2026-10-31T09:00:00Z', lastActivityAt: '2026-10-31T09:00:00Z', ...extra,
+  })
+  const creator = task('creator', { pullRequestUrl: 'https://github.com/o/alpha/pull/12' })
+
+  function TaskPage() {
+    const location = useLocation()
+    return <p data-slot="task-page">{location.pathname} {JSON.stringify(location.state)}</p>
+  }
+
+  function renderWithRuns(runs: unknown[], status: 'pending' | 'done' | 'rejected' = 'pending') {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(workspaceQueryKeys.projects, { projects: [{ id: 'alpha', name: 'Meblohand', repoUrl: 'https://github.com/o/alpha' }], bootProject: 'alpha', projectsDir: '' })
+    client.setQueryData(managerKeys.list, { managers: [{ id: 'm1' }] })
+    client.setQueryData(workspaceQueryKeys.runsIndex, { runs })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/manager/m1']}>
+          <Routes>
+            <Route path="/manager/:id" element={<ActionCard origin={{ id: 'm1', name: 'Mira' }} message={actionMessage(1, { action: merge, status })} onDecide={vi.fn()} />} />
+            <Route path="/p/:projectId/tasks/:runId" element={<TaskPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  const tasksRow = () => document.querySelector<HTMLElement>('[data-slot="manager-action-tasks"]')
+
+  it('names the one task right under Pull request, and opening it carries the manager along (#2220)', () => {
+    renderWithRuns([creator])
+    const label = screen.getByText('Task')
+    expect(label.parentElement?.previousElementSibling?.textContent).toContain('Pull request')
+    const chip = within(tasksRow()!).getByRole('link')
+    expect(chip.textContent).toContain('Task creator')
+    expect(chip.textContent).toContain('Meblohand')
+    expect(chip.querySelector('[data-slot="status-dot"]')).toBeTruthy()
+    fireEvent.click(chip)
+    const page = document.querySelector('[data-slot="task-page"]')
+    expect(page?.textContent).toContain('/p/alpha/tasks/creator')
+    expect(page?.textContent).toContain('"manager":{"id":"m1","name":"Mira"}')
+  })
+
+  it('lists the creator first, then the rest, three at most and +N', () => {
+    renderWithRuns([
+      task('r1', { markerRefs: { pr: 12 }, createdAt: '2026-10-31T10:00:00Z' }),
+      task('r2', { markerRefs: { pr: 12 }, createdAt: '2026-10-31T11:00:00Z' }),
+      task('r3', { prNumber: 12 }),
+      creator,
+      task('r4', { prNumber: 12, projectId: 'zeta' }),
+    ])
+    expect(screen.getByText('Tasks')).toBeTruthy()
+    const links = within(tasksRow()!).getAllByRole('link')
+    expect(links.map((link) => link.getAttribute('data-run'))).toEqual(['creator', 'r2', 'r1'])
+    expect(document.querySelector('[data-slot="manager-action-tasks-more"]')?.textContent).toBe('+1 more task')
+  })
+
+  it('keeps the row once decided, merged or refused', () => {
+    renderWithRuns([creator], 'done')
+    expect(within(tasksRow()!).getByRole('link')).toBeTruthy()
+    cleanup()
+    renderWithRuns([creator], 'rejected')
+    expect(within(tasksRow()!).getByRole('link')).toBeTruthy()
+  })
+
+  it('draws no row when no task carries the PR', () => {
+    renderWithRuns([task('other', { prNumber: 99 })])
+    expect(tasksRow()).toBeNull()
+    expect(screen.queryByText(/^Tasks?$/)).toBeNull()
   })
 })
