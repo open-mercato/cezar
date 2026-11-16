@@ -200,6 +200,8 @@ describe('ManagerEngine', () => {
       expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash', `Write(/${files}/**)`, `Edit(/${files}/**)`]);
       expect(spec?.bashAllowlist).toContain('cez-manager');
       expect(spec?.bashAllowlist?.some((entry) => /gh pr merge|^gh$|^git$/.test(entry))).toBe(false);
+      // Only cez-manager leaves the user's sandbox, which blocks its loopback fetch to the cockpit.
+      expect(spec?.sandboxExcludedCommands).toEqual(['cez-manager *']);
       expect(spec?.env).toMatchObject({ CEZ_MANAGER_ID: id, CEZ_MANAGER_TURN: 'chat' });
       expect(spec?.env?.PATH?.startsWith(join(home, 'managers', 'bin'))).toBe(true);
       expect(spec?.additionalDirectories).toEqual(['/alpha']);
@@ -262,6 +264,8 @@ describe('ManagerEngine', () => {
       engine.send(id, 'again');
       await settled(engine);
       expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      // Claude's sandbox setting means nothing to another backend.
+      expect(backend.specs.at(-1)?.sandboxExcludedCommands).toBeUndefined();
     });
 
     it('spells a Windows drive the way Claude rules do', () => {
