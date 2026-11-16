@@ -16,7 +16,7 @@ const GLOBAL_PROMPT_MAX = 20_000
 
 /**
  * Settings → Agents → Global instructions: rules every task in every project reads. The
- * project's own system prompt is merged after them and wins where they conflict
+ * project's own system prompt is merged after them and yields where they conflict
  * (`resolveExtraSystemPrompt`). Saves on blur or ⌘↵ — the one text-field save model.
  */
 export function GlobalInstructionsCard() {
@@ -73,7 +73,7 @@ function GlobalInstructionsForm({ config }: { config: WorkspaceConfigResponse })
         saved={saved}
         htmlFor="global-instructions-prompt"
         label="System prompt for every task"
-        description="Read by every agent step of every new task, in every project. A project's own system prompt is added after it and takes precedence where they conflict. Saves when you leave the field or press ⌘↵; leave it empty to clear. Applied to new runs only."
+        description="Read by every agent step of every new task, in every project. These take precedence over repository, project, workflow and skill instructions. Saves when you leave the field or press ⌘↵; leave it empty to clear. Applied to new runs only."
       >
         <Textarea
           id="global-instructions-prompt"

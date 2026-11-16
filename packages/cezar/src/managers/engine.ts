@@ -247,9 +247,6 @@ export const MANAGER_BASH_ALLOWLIST = [
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
 const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
 
-/** A task keeps a task's full shell, so this is a request, not a fence (spec, Safety). */
-const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
-
 /** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
 const ATTACHMENT_BASE64_LIMIT = 7_000_000;
 const FORWARD_TEXT_LIMIT = 100_000;
@@ -1958,11 +1955,11 @@ export class ManagerEngine {
         workflow: input.workflow ?? 'quick-task',
         task: composed.text,
         ...(forward && forward.images.length > 0 ? { images: forward.images } : {}),
-        systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         ...(input.runner ? { runner: input.runner } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
+        startedByManager: { id: scope.manager.id, name: scope.manager.name },
       },
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);

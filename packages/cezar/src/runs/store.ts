@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, queueWaitReasonSchema, startedByManagerSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -220,6 +220,8 @@ export const runRecordSchema = z.object({
    *  contract are derivable from the persisted workflow and would bloat the
    *  index. Resolved at execute time (a queued run picks up config edits). */
   systemPrompt: z.string().optional(),
+  /** Manager restrictions must survive queued recovery and child dispatch after restart. */
+  startedByManager: startedByManagerSchema.optional().catch(undefined),
   /** Per-task follow-up inbox contract (spec 007, #444). Missing on old runs
    *  means enabled — the historical behavior. */
   generateFollowups: z.boolean().optional(),

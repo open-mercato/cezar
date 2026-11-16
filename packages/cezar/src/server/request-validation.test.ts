@@ -76,6 +76,17 @@ describe('request validation bounds (#429)', () => {
   // ---- createRunInputSchema.task -------------------------------------------------
   const stepsBody = { steps: [{ id: 'work', prompt: '{{task}}' }] };
 
+  it.each([
+    { id: '', name: 'Manager' },
+    { id: 'x'.repeat(65), name: 'Manager' },
+    { id: 'manager', name: '' },
+    { id: 'manager', name: 'x'.repeat(81) },
+  ])('rejects invalid manager provenance before starting a task (%j)', async (startedByManager) => {
+    const res = await postJson('/api/v1/runs', { ...stepsBody, task: 'Fix the bug', startedByManager });
+    expect(res.status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
   it('accepts a 100k-char task', async () => {
     const res = await postJson('/api/v1/runs', { ...stepsBody, task: 'x'.repeat(100_000) });
     expect(res.status).toBe(201);

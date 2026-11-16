@@ -1767,6 +1767,8 @@ describe('ManagerEngine', () => {
       const id = await create(engine);
       expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', title: 'Fix' })).toEqual({ projectId: 'alpha', runId: 'new-run' });
       expect(requests[0]).toMatchObject({ path: '/api/v1/p/alpha/runs', method: 'POST', body: { workflow: 'quick-task', task: 'Fix it' } });
+      expect(requests[0]?.body).not.toHaveProperty('systemPrompt');
+      expect(requests[0]?.body).toMatchObject({ startedByManager: { id, name: 'Manager' } });
       expect(requests[1]).toMatchObject({ path: '/api/v1/p/alpha/runs/new-run', method: 'PATCH', body: { title: 'Fix' } });
     });
 
