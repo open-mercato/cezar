@@ -49,10 +49,40 @@ function serverShellUrl(): string | null {
 }
 
 /** The build the shell on disk names right now — read from index.html, never from a cache. */
-async function diskBuild(url: string): Promise<string | null> {
-  const res = await fetch(url, { cache: 'no-store', credentials: 'include' })
-  if (!res.ok) return null
+async function diskBuild(url: string, signal?: AbortSignal): Promise<string | null> {
+  const res = await fetch(url, { cache: 'no-store', credentials: 'include', ...(signal ? { signal } : {}) })
+  if (!res.ok) throw new Error('Cannot reach the cockpit')
   return /<meta\s+name="cezar-build"\s+content="([^"]+)"/.exec(await res.text())?.[1] ?? null
+}
+
+const RELOAD_ATTEMPT = 'cez:build-reload-from'
+
+/** A manual reload came back to the same bundle, as older CezarBot proxies can do. */
+export function buildReloadWarning(): string | null {
+  try {
+    if (pageBuild && window.sessionStorage.getItem(RELOAD_ATTEMPT) === pageBuild) {
+      return 'The previous reload returned this old page. In CezarBot, close and reopen this server, then try again. You may need to update CezarBot.'
+    }
+  } catch { /* Storage is optional; reload never depends on it. */ }
+  return null
+}
+
+/** Keep the working page on screen until the paired computer can serve a newer shell. */
+export async function reloadUpdatedPage(reload = () => window.location.reload()): Promise<void> {
+  const shell = serverShellUrl()
+  if (!shell) throw new Error('Cannot find the updated cockpit. Reopen this server and try again.')
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 15_000)
+  try {
+    const disk = await diskBuild(shell, controller.signal)
+    if (!disk || disk === pageBuild) throw new Error('The updated cockpit is not ready. Try again after cezar finishes restarting.')
+    try {
+      if (pageBuild) window.sessionStorage.setItem(RELOAD_ATTEMPT, pageBuild)
+    } catch { /* Do not clear cookies, pairing or the server's data store to refresh HTML. */ }
+    reload()
+  } finally {
+    window.clearTimeout(timeout)
+  }
 }
 
 /** Fed the build header of every API response (api/client.ts). A no-op unless the two builds

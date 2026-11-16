@@ -32,7 +32,7 @@ import { MascotPicker } from './mascot-picker'
 import { SheetContent } from './manager-approval'
 import { ConnectorsDialog } from './manager-connectors'
 import { ShellAccessDialog } from './manager-shell-access'
-import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -401,6 +401,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
             {...(manager.agentProfile ? { agentProfile: manager.agentProfile } : {})}
             onChange={onPatch}
           />
+          <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} />
           <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
           <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
             <BellIcon aria-hidden="true" className="size-3.5 shrink-0" />
@@ -484,10 +485,11 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
 }
 
 /** The optional keys `exactOptionalPropertyTypes` won't take as `undefined`. */
-export function pickModel(manager: Pick<ManagerSummary, 'runner' | 'model' | 'effort'>) {
+export function pickModel(manager: Pick<ManagerSummary, 'runner' | 'model' | 'effort' | 'agentProfile'>) {
   return {
     ...(manager.runner ? { runner: manager.runner } : {}),
     ...(manager.model ? { model: manager.model } : {}),
     ...(manager.effort ? { effort: manager.effort } : {}),
+    ...(manager.agentProfile !== undefined ? { agentProfile: manager.agentProfile } : {}),
   }
 }

@@ -54,7 +54,7 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { ModelPicker, type ManagerPatch } from './manager-pickers'
+import { ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
@@ -670,14 +670,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         </div>
       ) : null}
 
-      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame. */}
+      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame.
+          `relative`: a row's `sr-only` text is positioned in here, or it stretches the shell's
+          scroller below the composer. */}
       <section
         ref={scroll.ref}
         data-slot="manager-transcript"
         aria-label={`Conversation with ${manager.name}`}
         tabIndex={0}
         onScroll={scroll.onScroll}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
         {/* The floating jump button sits over the tail: room for exactly it, at any width. */}
         <div
@@ -793,7 +795,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           key={id}
           compact
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 pointer-coarse:max-md:[&>button]:h-11"><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
+          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -811,6 +813,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           // Phones: the interval lives in the gear and the spinner beside the name.
           <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
             <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
+            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
             {working ? (
               <>
                 <span aria-hidden="true">·</span>

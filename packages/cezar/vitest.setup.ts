@@ -36,6 +36,9 @@ if (insideGitWorkTree(realpathSync(tmpdir()))) {
   process.env.TMPDIR = process.env.TMP = process.env.TEMP = outside
 }
 
+// Node resolves macOS's /tmp and /var aliases in cwd; metadata and storage fixtures must agree.
+process.env.TMPDIR = process.env.TMP = process.env.TEMP = realpathSync(tmpdir())
+
 // Nothing in this suite may write to the developer's own `~/.cezar`. Most cases pin
 // `CEZ_HOME` themselves, but the pin is one global for the whole worker and their
 // `afterEach` deletes it — so a write that outlives its test (a timeout is enough)
@@ -69,6 +72,11 @@ process.env.GIT_CEILING_DIRECTORIES = [
 // suite would inherit them, so a case's env would depend on where it ran — and a spawned mock
 // would write into the outer run. A case that needs one sets it itself.
 for (const name of RUN_SCOPED_ENV) delete process.env[name]
+
+// Desktop identity and its macOS trampoline must not change telemetry or clone synthetic CLIs.
+// Launcher tests opt in explicitly with their own environment and executable fixtures.
+delete process.env.CEZ_DESKTOP
+delete process.env.CEZ_DISCLAIM_EXEC
 
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants

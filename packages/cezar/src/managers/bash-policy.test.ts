@@ -5,6 +5,7 @@ import {
   MANAGER_BASH_ALLOWLIST,
   MANAGER_BASH_DENIED,
   MANAGER_BASH_FILTERS,
+  MANAGER_TEXT_IN_FILES,
   managerBashHookCommand,
   managerBashHookDecision,
   managerBashPatternIssue,
@@ -308,6 +309,15 @@ describe('managerBashPromptSection', () => {
     const own = managerBashPromptSection(['gh label list', 'gh label create']);
     expect(own).toContain('gh label list    (the user allowed these)');
     expect(own).not.toContain('gh label create');
+  });
+
+  // #2258: Claude's sandbox lets only a plain cez-manager call out, so a Claude manager files text.
+  it('sends a Claude manager\'s text through --file, and keeps the heredoc elsewhere', () => {
+    expect(section).toContain("--stdin <<'EOF'");
+    expect(section).not.toContain(MANAGER_TEXT_IN_FILES);
+    const files = managerBashPromptSection([], { textInFiles: true });
+    expect(files).toContain(MANAGER_TEXT_IN_FILES);
+    expect(files).not.toContain('<<');
   });
 });
 

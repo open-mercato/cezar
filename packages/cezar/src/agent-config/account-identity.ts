@@ -280,5 +280,8 @@ async function readCursorIdentity(
   if (!authenticated) {
     return { available: false, reason: NOT_SIGNED_IN, fields: [] };
   }
+  if (fields.length === 0) {
+    return { available: false, reason: 'Cursor CLI reports a login but does not expose account details. Verify connection or sign in again to check the account.', fields: [] };
+  }
   return { available: true, fields };
 }

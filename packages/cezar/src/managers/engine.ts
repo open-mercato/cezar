@@ -32,6 +32,7 @@ import {
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
+  type ManagerTaskAgent,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
@@ -40,7 +41,6 @@ import {
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
-import { loadConfig } from '../config.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
@@ -88,6 +88,7 @@ import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystem
 import { buildSnapshot, findRun, gateAttention, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
 import { finalAssistantText, resumeLabel } from './automation-reports.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -114,6 +115,8 @@ export interface ManagerEngineDeps {
   autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
+  /** Wakes a sleeping phone (spec relay R5). Takes the manager's id only: no text reaches a push. */
+  pushSignal?: (managerId: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   /** Usage telemetry (docs/telemetry.md); absent sends nothing. Consent is the sender's to check. */
   telemetry?: ManagerTelemetry;
@@ -294,6 +297,8 @@ const TAIL_BYTES = 256 * 1024;
 const PREVIEW_LIMIT = 120;
 
 export const MANAGER_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+/** Claude's wildcard spelling: `cez-manager` alone or with arguments, nothing else. */
+export const MANAGER_SANDBOX_EXCLUDED = ['cez-manager *'] as const;
 /** Claude's absolute-path rule spelling: `//abs/path`, a Windows drive as `//c/…`. */
 const claudeAbsolutePath = (path: string): string =>
   `/${path.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`)}`;
@@ -308,9 +313,6 @@ export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
 const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
-
-/** A task keeps a task's full shell, so this is a request, not a fence (spec, Safety). */
-const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
 
 /** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
 const ATTACHMENT_BASE64_LIMIT = 7_000_000;
@@ -472,6 +474,8 @@ export class ManagerEngine {
   private readonly followupTimers = new Map<string, NodeJS.Timeout>();
   /** Per manager, the newest `manager-change` asked for: summaries resolve out of order. */
   private readonly changes = new Map<string, number>();
+  /** Attention keys already pushed, so a watch that keeps failing does not push the same task again. */
+  private readonly pushedAttention = new Map<string, Set<string>>();
 
   constructor(private readonly deps: ManagerEngineDeps) {}
 
@@ -736,8 +740,16 @@ export class ManagerEngine {
     return error ? { error, status: 400 } : undefined;
   }
 
+  private async taskAccountsIssue(agents: ManagerTaskAgent[] | null | undefined): Promise<ManagerRefusal | undefined> {
+    for (const agent of agents ?? []) {
+      const issue = await this.accountIssue(agent.runner, agent.agentProfile);
+      if (issue) return issue;
+    }
+    return undefined;
+  }
+
   async create(input: CreateManagerInput, ctx: ManagerTelemetryContext = {}): Promise<ManagerSummary | ManagerRefusal> {
-    const issue = await this.accountIssue(input.runner, input.agentProfile);
+    const issue = await this.accountIssue(input.runner, input.agentProfile) ?? await this.taskAccountsIssue(input.taskAgents);
     if (issue) return issue;
     const first = this.deps.store.list().length === 0;
     const id = randomUUID();
@@ -753,6 +765,8 @@ export class ManagerEngine {
       ...(input.access !== undefined ? { access: input.access } : {}),
       ...(input.projectAccess !== undefined ? { projectAccess: input.projectAccess } : {}),
       ...(input.runner !== undefined ? { runner: input.runner } : {}),
+      ...(input.taskRunner !== undefined ? { taskRunner: input.taskRunner } : {}),
+      ...(input.taskAgents !== undefined ? { taskAgents: input.taskAgents } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
@@ -777,17 +791,17 @@ export class ManagerEngine {
     const issue = await this.accountIssue(
       input.runner === null ? undefined : (input.runner ?? current.runner),
       input.agentProfile === null ? undefined : input.agentProfile,
-    );
+    ) ?? await this.taskAccountsIssue(input.taskAgents);
     if (issue) return issue;
     const badPattern = input.bashAllow?.map(managerBashPatternIssue).find(Boolean);
     if (badPattern) return { error: badPattern, status: 400 };
-    const optional = <K extends 'runner' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
+    const optional = <K extends 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
       const value = input[key];
       if (value === null) return {};
       const kept = value ?? current[key];
       return kept === undefined ? {} : ({ [key]: kept } as Partial<Pick<Manager, K>>);
     };
-    const { runner: _runner, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
+    const { runner: _runner, taskRunner: _taskRunner, taskAgents: _taskAgents, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
     const bashAllow = input.bashAllow ? [...new Set(input.bashAllow)] : current.bashAllow;
     // An emptied list is stored as no list.
     const quickPrompts = input.quickPrompts ?? current.quickPrompts;
@@ -819,6 +833,8 @@ export class ManagerEngine {
           }
         : {}),
       ...optional('runner'),
+      ...optional('taskRunner'),
+      ...optional('taskAgents'),
       ...optional('model'),
       ...optional('effort'),
       ...optional('agentProfile'),
@@ -860,6 +876,7 @@ export class ManagerEngine {
     this.runtimes.delete(id);
     // A summary still in flight must not bring the row back.
     this.changes.delete(id);
+    this.pushedAttention.delete(id);
     this.deps.emit('manager-change', { id, deleted: true });
     this.deps.telemetry?.track('manager_deleted', managerAgeLabel(existing.createdAt, this.now()), ctx);
     this.reschedule();
@@ -972,11 +989,12 @@ export class ManagerEngine {
     return true;
   }
 
+  /** A turn outlives the request that asked for it, so it reads the unscoped value. */
   private enqueue(id: string, item: QueueItem): void {
     const runtime = this.runtime(id);
     runtime.queue.push(item);
     this.emitChange(id);
-    this.pump(id);
+    outsideRelayScope(() => this.pump(id));
   }
 
   /** Chat outranks timers, and everything the user typed meanwhile folds into one turn. */
@@ -1085,6 +1103,7 @@ export class ManagerEngine {
       if (!snapshot || !store.get(id)) return;
       await this.dismissStaleMerges(id, snapshot);
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
+      this.pushWaitingTasks(id, fresh);
       // Keys a failed turn could not report stay fresh, so none left means the failure is over.
       store.updateState(id, (state) => ({ ...state, reported: kept, ...(fresh.length === 0 ? { watchFailures: 0 } : {}) }));
       // The brake that makes a 15-minute default affordable: a quiet repository costs nothing.
@@ -1462,16 +1481,30 @@ export class ManagerEngine {
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
   private alert(id: string, message: { id: string; seq: number }, body: string): void {
-    const { notifySystem, store } = this.deps;
-    if (!notifySystem) return;
-    const timer = setTimeout(() => {
+    const { notifySystem, pushSignal, store } = this.deps;
+    if (!notifySystem && !pushSignal) return;
+    const timer = outsideRelayScope(() => setTimeout(() => {
       this.alerts.delete(timer);
       const manager = store.get(id);
       if (!manager || manager.notify === false || !unseen(store.state(id), message)) return;
-      notifySystem(manager.name, body);
-    }, SYSTEM_NOTIFY_DELAY_MS);
+      notifySystem?.(manager.name, body);
+      pushSignal?.(id);
+    }, SYSTEM_NOTIFY_DELAY_MS));
     timer.unref?.();
     this.alerts.add(timer);
+  }
+
+  /** A task newly waiting on the user wakes the phone before the model is asked, whatever it says. */
+  private pushWaitingTasks(id: string, fresh: ManagerSnapshot['attention']): void {
+    const { pushSignal, store } = this.deps;
+    if (!pushSignal) return;
+    const waiting = fresh.filter((item) => item.kind === 'task-needs-you').map((item) => item.key);
+    const pushed = this.pushedAttention.get(id) ?? new Set<string>();
+    const newKeys = waiting.filter((key) => !pushed.has(key));
+    // Only keys still fresh are worth remembering; the rest were reported and will not come back.
+    this.pushedAttention.set(id, new Set(waiting));
+    if (newKeys.length === 0 || store.get(id)?.notify === false) return;
+    pushSignal(id);
   }
 
   private async watchTurn(
@@ -1644,12 +1677,16 @@ export class ManagerEngine {
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
         connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
+        // Only where the turn can Write the file it would pass.
+        { textInFiles: runner === 'claude' && writable !== undefined },
       ),
       userPrompt: prompt,
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
       ...(bashHook ? { bashHookCommand: bashHook } : {}),
+      // The user's Bash sandbox blocks the loopback cockpit `cez-manager` talks to; the hook still vets it.
+      ...(runner === 'claude' ? { sandboxExcludedCommands: [...MANAGER_SANDBOX_EXCLUDED] } : {}),
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
         ...sources.filter((source) => source.available).map((source) => source.root),
@@ -1811,10 +1848,10 @@ export class ManagerEngine {
     const dues = this.deps.store.list().flatMap((manager) => this.nextDue(manager, now) ?? []);
     if (dues.length === 0) return;
     const delay = Math.min(Math.max(Math.min(...dues) - now, TICK_FLOOR_MS), MAX_TIMER_MS);
-    this.timer = setTimeout(() => {
+    this.timer = outsideRelayScope(() => setTimeout(() => {
       this.tick();
       this.reschedule();
-    }, delay);
+    }, delay));
     this.timer.unref?.();
   }
 
@@ -2090,8 +2127,20 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
+    const agents = scope.manager.taskAgents;
+    const preferred = await this.runnerOf(scope.manager);
+    const candidates = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
+      && (input.agentProfile === undefined || agent.agentProfile === input.agentProfile));
+    if (candidates?.length === 0) {
+      return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
+    }
+    const selected = candidates?.find((agent) => agent.runner === preferred) ?? candidates?.[0];
+    const runner = selected?.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
+    const agentProfile = selected ? selected.agentProfile : input.agentProfile;
+    if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    const accountIssue = await this.accountIssue(runner, agentProfile);
+    if (accountIssue) return accountIssue;
     if (input.model || input.effort) {
-      const runner = input.runner ?? (scope.source ? (await loadConfig(scope.source.root).catch(() => undefined))?.defaultRunner : undefined) ?? 'claude';
       const issue = await this.modelIssue(runner, input.model, input.effort);
       if (issue) return issue;
     }
@@ -2104,9 +2153,9 @@ export class ManagerEngine {
         workflow: input.workflow ?? 'quick-task',
         task: composed.text,
         ...(forward && forward.images.length > 0 ? { images: forward.images } : {}),
-        systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
-        ...(input.runner ? { runner: input.runner } : {}),
+        runner,
+        ...(agentProfile !== undefined ? { agentProfile } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { reasoningEffort: input.effort } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
@@ -2219,6 +2268,9 @@ export class ManagerEngine {
     }
     if (run.workflow === '(planned)') return { error: 'an inline plan cannot be retried: start a new task with its objective instead', status: 409 };
     const effort = run.reasoningEffort && (['low', 'medium', 'high', 'max'] as const).find((level) => level === run.reasoningEffort);
+    const allowed = scope.manager.taskAgents
+      ? scope.manager.taskAgents.some((agent) => agent.runner === run.runner && agent.agentProfile === run.agentProfile)
+      : !scope.manager.taskRunner || scope.manager.taskRunner === run.runner;
     return this.createTask(id, {
       projectId: input.projectId,
       task: run.task,
@@ -2226,7 +2278,8 @@ export class ManagerEngine {
       allowPlaceholder: true,
       workflow: run.workflow,
       ...(run.titleOrigin === 'user' ? { title: run.title } : {}),
-      ...(run.runner ? { runner: run.runner } : {}),
+      ...(allowed && run.runner ? { runner: run.runner } : {}),
+      ...(allowed && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
     });

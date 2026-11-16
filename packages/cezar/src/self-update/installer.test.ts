@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { installFromRegistry, type InstallOptions, npmCacheUnwritable, npmFallbackCache } from './installer.ts';
+import { installFromRegistry, type InstallOptions, npmCacheUnwritable, npmFallbackCache, npmVersionNotFound, REGISTRY_RETRY_DELAYS_MS } from './installer.ts';
 import { ensurePathHook } from './launcher.ts';
 import { listInstalled, readManifest, versionDir, versionEntry, versionsDir } from './layout.ts';
 import { SelfUpdateService } from './service.ts';
@@ -94,19 +94,112 @@ describe('installing into the managed layout', () => {
     expect(staged()).toEqual([]);
   });
 
-  it('does not retry an npm failure that is not about its cache', async () => {
+  it('does not retry an npm failure that is neither its cache nor a missing version', async () => {
     let runs = 0;
     await expect(
       installFromRegistry('0.12.1', {
         env,
+        sleep: async () => {},
         runNpm: async (_args, _cwd, onLog) => {
           runs += 1;
-          onLog?.('npm error code ETARGET');
-          throw new Error('npm install failed (exit 1): ETARGET');
+          onLog?.('npm error code ERESOLVE');
+          throw new Error('npm install failed (exit 1): ERESOLVE');
         },
       }),
-    ).rejects.toThrow('ETARGET');
+    ).rejects.toThrow('ERESOLVE');
     expect(runs).toBe(1);
+  });
+
+  // A nightly the cockpit already offers can still be missing from npm's view of the registry.
+  const notYetVisible = [
+    'npm error code ETARGET',
+    'npm error notarget No matching version found for @open-mercato/cezar@0.21.0-nightly.20261116.115.',
+  ];
+
+  it('retries a version npm cannot see yet, with backoff and a revalidated packument', async () => {
+    const seen: string[][] = [];
+    const waits: number[] = [];
+    const log: string[] = [];
+    await installFromRegistry('0.12.1', {
+      env,
+      onLog: (line) => log.push(line),
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+      runNpm: async (args, cwd, onLog) => {
+        seen.push(args);
+        // Each attempt starts from an empty staging directory.
+        expect(readdirSync(cwd)).toEqual([]);
+        if (seen.length < 3) {
+          notYetVisible.forEach((line) => onLog?.(line));
+          throw new Error('npm install failed (exit 1)');
+        }
+        await npmThatInstalls()(args, cwd, onLog);
+      },
+    });
+    expect(seen).toHaveLength(3);
+    expect(waits).toEqual(REGISTRY_RETRY_DELAYS_MS.slice(0, 2));
+    expect(seen[0]).not.toContain('--prefer-online');
+    expect(seen[1]).toContain('--prefer-online');
+    expect(seen[2]?.filter((arg) => arg === '--prefer-online')).toHaveLength(1);
+    expect(seen[2]?.at(-1)).toBe('@open-mercato/cezar@0.12.1');
+    expect(log.some((line) => line.includes(`retry 1 of ${REGISTRY_RETRY_DELAYS_MS.length}`))).toBe(true);
+    expect(existsSync(versionEntry('0.12.1', env))).toBe(true);
+    expect(staged()).toEqual([]);
+  });
+
+  it('gives up after a bounded number of retries with a message that says what to do', async () => {
+    let runs = 0;
+    const waits: number[] = [];
+    await expect(
+      installFromRegistry('0.12.1', {
+        env,
+        sleep: async (ms) => {
+          waits.push(ms);
+        },
+        runNpm: async (_args, _cwd, onLog) => {
+          runs += 1;
+          notYetVisible.forEach((line) => onLog?.(line));
+          throw new Error('npm install failed (exit 1)');
+        },
+      }),
+    ).rejects.toThrow(/@open-mercato\/cezar@0\.12\.1 is not visible on npm's registry yet.*try again in a few minutes/);
+    expect(runs).toBe(REGISTRY_RETRY_DELAYS_MS.length + 1);
+    expect(waits).toEqual([...REGISTRY_RETRY_DELAYS_MS]);
+    expect(staged()).toEqual([]);
+    expect(existsSync(versionDir('0.12.1', env))).toBe(false);
+  });
+
+  it('falls back to its own cache and still retries a version npm cannot see yet', async () => {
+    const seen: string[][] = [];
+    await installFromRegistry('0.12.1', {
+      env,
+      sleep: async () => {},
+      runNpm: async (args, cwd, onLog) => {
+        seen.push(args);
+        if (seen.length === 1) {
+          rootOwnedCache.forEach((line) => onLog?.(line));
+          throw new Error('npm install failed (exit 1)');
+        }
+        if (seen.length === 2) {
+          notYetVisible.forEach((line) => onLog?.(line));
+          throw new Error('npm install failed (exit 1)');
+        }
+        await npmThatInstalls()(args, cwd, onLog);
+      },
+    });
+    expect(seen).toHaveLength(3);
+    expect(seen[2]).toContain('--cache');
+    expect(seen[2]).toContain('--prefer-online');
+    expect(existsSync(versionEntry('0.12.1', env))).toBe(true);
+  });
+
+  it('recognizes only missing-version failures as not yet visible', () => {
+    expect(npmVersionNotFound(notYetVisible)).toBe(true);
+    expect(npmVersionNotFound(['npm ERR! code E404', 'npm ERR! 404 Not Found - GET https://registry.npmjs.org/@open-mercato%2fcezar'])).toBe(true);
+    expect(npmVersionNotFound([])).toBe(false);
+    expect(npmVersionNotFound(['npm error code ETIMEDOUT'])).toBe(false);
+    expect(npmVersionNotFound(rootOwnedCache)).toBe(false);
   });
 
   it('recognizes only permission failures inside npm cache folders', () => {

@@ -53,6 +53,8 @@ export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials'>, ManagerSettingField> = {
   cronMinutes: 'watch',
   runner: 'runner',
+  taskRunner: 'runner',
+  taskAgents: 'runner',
   agentProfile: 'runner',
   model: 'model',
   effort: 'model',

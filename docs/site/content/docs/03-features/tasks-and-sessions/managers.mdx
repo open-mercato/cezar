@@ -44,6 +44,10 @@ sources:
     path: packages/cezar/src/core/pi-runner.ts
     line: 293
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
+  - label: "Agent, account and task agent pickers"
+    path: packages/web/src/routes/manager/manager-pickers.tsx
+    line: 308
+    commit: f2f0ea8aeae718382c7bb6720401639711150192
 ---
 A manager is a global, long-lived agent you chat with instead of visiting each repository. It watches the projects connected to it, tells you what needs you, starts and steers tasks, sets up automations, and proposes merges. Tasks stay where they are, and the manager is your point of contact above them. No project owns a manager, and you can create several.
 
@@ -64,7 +68,7 @@ A dot on **Manager** and on each manager's row means it wants you: amber when an
 
 1. Open **Manager**. With no manager yet, Cezar shows **Set up your first manager**.
 2. Describe the job in **What should this manager do?**, or pick a preset: **Watch my repositories**, **Keep PRs moving**, or **Run big tasks**.
-3. Choose the projects, model, effort, and account, then select **Create**.
+3. Choose the projects, manager agent, model, account, and agent for new tasks, then select **Create**.
 
 Your text becomes the manager's standing instructions and its first message, so it starts working right away. Each manager gets its own character in the sidebar. To change its character, name or instructions later, open the gear and select **Persona…**.
 
@@ -226,13 +230,21 @@ A write produces an approval card, like a merge. The card shows the connector, t
 > - Connectors disconnect and reconnect on their own. When one is down, the manager tells you it is temporarily unavailable, and a write card for it fails with the same message.
 > - Cezar does not pass connector grants to tasks the manager starts.
 
-## Model, effort and cancelling
+## Agents, accounts, model and cancelling
+
+Open **Model and effort** in the chat or settings to change the manager's agent, model and account. The **Account** section lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. The separate **Agent account** picker has the same choices.
+
+Use **Agent for new tasks** during setup, in settings or beside the composer to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
+
+**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Codex manager's task runs on Codex even when the project's default is Claude. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
+
+The manager passes an account with `cez-manager task create --runner claude --account <id>`. The task records the requested account and the account that actually ran; open its agent badge to see the account label. If a selected account was deleted, task creation is refused instead of using another account.
 
 A manager can pick the model and reasoning effort of a task it starts, for example `cez-manager task create --model opus --effort max`, and of a finished task it continues with `task say`. Cezar checks the choice against the task's agent and the models it discovered on this machine. An unknown model, another agent's model, or an effort the model lacks is refused with the valid choices, instead of quietly running on the default. `cez-manager task <run>` and `tasks --json` show each task's agent, model and effort.
 
 `cez-manager task cancel <run> --reason "…"` stops a task and every task it dispatched. They become **cancelled**, the task thread shows who cancelled it and why, and the worktree and branch stay for you to inspect. A manager may cancel only the tasks it started. To let it cancel other tasks in its write repositories, yours included, turn on **Cancel any task** in its settings menu. A read-only repository never allows it.
 
-`cez-manager task retry <run>` starts a failed or cancelled task again as a new task, with the same objective, workflow, agent, model and effort.
+`cez-manager task retry <run>` starts a failed or cancelled task again as a new task, with the same objective, workflow, model and effort. With **Automatic**, it keeps the original agent. A selected **Agent for new tasks** also applies to retries; an incompatible model or effort is refused.
 
 Tasks you start yourself also appear in the manager's task list and attention, marked as started by the user, and each task lists the pull request it opened. So a manager can see work that already exists before it starts more. `cez-manager workflows` marks what each workflow can do (push, open a pull request, post to GitHub, or read-only), and the manager is told to use a read-only workflow when you ask only for a review.
 

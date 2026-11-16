@@ -486,11 +486,9 @@ class CodexSession implements AgentSession {
       this.emitUi((state) => codexSessionStarted(threadId, state));
     }
 
-    // Seed the first turn. The system prompt (skill body + handoff contract)
-    // has no dedicated app-server field, so it rides along as a leading block
-    // of the opening message.
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
-    await this.startOrSteerTurn(first);
+    // Native developerInstructions replaces config guidance and stays stale on resume/fork.
+    // Keep each invocation's current guidance in its opening turn instead.
+    await this.startOrSteerTurn(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
   }
 
   /**
