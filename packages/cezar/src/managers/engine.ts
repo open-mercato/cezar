@@ -37,7 +37,7 @@ import {
   type ManagerTurnKind,
   type UpdateManagerInput,
 } from '@open-mercato/cezar-contract';
-import type { AutomationDefinition, AutomationReportMode } from '@open-mercato/cezar-contract';
+import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { loadConfig } from '../config.ts';
@@ -60,7 +60,14 @@ import {
   type ManagerTelemetry,
   type ManagerTelemetryContext,
 } from './telemetry.ts';
-import { MANAGER_BASH_ALLOWLIST, managerBashHookCommand } from './bash-policy.ts';
+import {
+  isManagerBashAllowed,
+  MANAGER_BASH_ALLOW_ENV,
+  MANAGER_BASH_ALLOWLIST,
+  managerBashHookCommand,
+  managerBashPatternIssue,
+  managerBashSuggestion,
+} from './bash-policy.ts';
 import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan, type ManagerFailureKind } from './failure.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
 import {
@@ -269,6 +276,20 @@ const RETRY_BACKOFF_MS = 5_000;
 /** Failed watch checks in a row before the chat hears about them; fewer are logged quietly. */
 const WATCH_NOTICE_AFTER = 3;
 const OUTPUT_LIMIT = 4_000;
+const DENIAL_COMMAND_LIMIT = 300;
+const DENIALS_KEPT = 20;
+/** The hook's deny, and Claude's own `dontAsk` refusal of a command no rule allows. */
+const BASH_DENIED = /cezar manager policy:|Permission to use Bash has been denied/;
+
+/** Denials a pattern the user since allowed now covers are gone; each carries its suggestion. */
+function denialsOf(manager: Manager, denials: ManagerState['bashDenials']): { bashDenials?: ManagerBashDenial[] } {
+  const shown = denials.flatMap((denial): ManagerBashDenial[] => {
+    const suggestion = managerBashSuggestion(denial.command);
+    if (suggestion && manager.bashAllow?.includes(suggestion)) return [];
+    return [{ ...denial, ...(suggestion ? { suggestion } : {}) }];
+  });
+  return shown.length > 0 ? { bashDenials: shown } : {};
+}
 const TAIL_BYTES = 256 * 1024;
 const PREVIEW_LIMIT = 120;
 
@@ -646,6 +667,7 @@ export class ManagerEngine {
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
       followedTasks: followedTasks(state),
+      ...denialsOf(manager, state.bashDenials),
     };
   }
 
@@ -757,13 +779,16 @@ export class ManagerEngine {
       input.agentProfile === null ? undefined : input.agentProfile,
     );
     if (issue) return issue;
+    const badPattern = input.bashAllow?.map(managerBashPatternIssue).find(Boolean);
+    if (badPattern) return { error: badPattern, status: 400 };
     const optional = <K extends 'runner' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
       const value = input[key];
       if (value === null) return {};
       const kept = value ?? current[key];
       return kept === undefined ? {} : ({ [key]: kept } as Partial<Pick<Manager, K>>);
     };
-    const { runner: _runner, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, ...base } = current;
+    const { runner: _runner, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
+    const bashAllow = input.bashAllow ? [...new Set(input.bashAllow)] : current.bashAllow;
     // An emptied list is stored as no list.
     const quickPrompts = input.quickPrompts ?? current.quickPrompts;
     const previousJobs = new Map(current.jobs.map((job) => [job.id, job]));
@@ -783,6 +808,7 @@ export class ManagerEngine {
       ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
       ...(quickPrompts?.length ? { quickPrompts } : {}),
       ...(input.cancelAnyTask !== undefined ? { cancelAnyTask: input.cancelAnyTask } : {}),
+      ...(bashAllow?.length ? { bashAllow } : {}),
       ...(input.jobs
         ? {
             jobs: input.jobs.map((job): ManagerJob => {
@@ -800,6 +826,7 @@ export class ManagerEngine {
     };
     const updated = this.deps.store.update(id, () => next);
     if (!updated) return { error: 'manager not found', status: 404 };
+    if (input.clearBashDenials) this.deps.store.updateState(id, (state) => ({ ...state, bashDenials: [] }));
     for (const field of changedSettingFields(current, updated)) this.deps.telemetry?.track('manager_settings_changed', field, ctx);
     if (JSON.stringify(current.projects) !== JSON.stringify(updated.projects)) {
       const names = (await this.sources(updated)).map((source) => source.name);
@@ -1550,6 +1577,20 @@ export class ManagerEngine {
     return managerFailureMessage(kind, cause, runner, kind === 'usage-limit' ? parseUsageLimit(cause, this.now())?.resetAt : undefined);
   }
 
+  /** Logged for the settings menu, where the user can allow the pattern when it is read-only. */
+  private recordBashDenial(id: string, command: string): void {
+    const manager = this.deps.store.get(id);
+    if (!manager) return;
+    const verdict = isManagerBashAllowed(command, manager.bashAllow);
+    const reason = verdict.ok ? 'Claude Code refused it' : verdict.reason;
+    const text = command.trim().slice(0, DENIAL_COMMAND_LIMIT);
+    this.deps.store.updateState(id, (state) => {
+      const previous = state.bashDenials.find((denial) => denial.command === text);
+      const rest = state.bashDenials.filter((denial) => denial.command !== text);
+      return { ...state, bashDenials: [{ command: text, reason, at: this.iso(), count: (previous?.count ?? 0) + 1 }, ...rest].slice(0, DENIALS_KEPT) };
+    });
+  }
+
   private addCost(id: string, usd: number): void {
     if (usd > 0) this.deps.store.updateState(id, (state) => ({ ...state, costUsd: state.costUsd + usd }));
   }
@@ -1606,7 +1647,7 @@ export class ManagerEngine {
       userPrompt: prompt,
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
-      bashAllowlist: MANAGER_BASH_ALLOWLIST,
+      bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
       ...(bashHook ? { bashHookCommand: bashHook } : {}),
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
@@ -1618,6 +1659,7 @@ export class ManagerEngine {
         ...profile.env,
         CEZ_MANAGER_ID: id,
         CEZ_MANAGER_TURN: turn.kind,
+        ...(manager.bashAllow?.length ? { [MANAGER_BASH_ALLOW_ENV]: JSON.stringify(manager.bashAllow) } : {}),
         ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
         ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
         ...(shimDir ? { PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` } : {}),
@@ -1666,6 +1708,7 @@ export class ManagerEngine {
     let error: string | undefined;
     let saved = false;
     const commands: ManagerCommand[] = [];
+    const bashCommands = new Map<string, string>();
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
     // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
     const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
@@ -1696,10 +1739,15 @@ export class ManagerEngine {
           progress();
           break;
         case 'tool-call':
+          if (event.tool === 'Bash' && typeof (event.input as { command?: unknown } | undefined)?.command === 'string') {
+            bashCommands.set(event.id, (event.input as { command: string }).command);
+          }
           commands.push({ id: event.id, tool: event.tool, summary: commandSummary(event.input) || event.tool });
           progress();
           break;
         case 'tool-result': {
+          const bash = bashCommands.get(event.toolCallId);
+          if (bash !== undefined && event.isError && BASH_DENIED.test(event.result)) this.recordBashDenial(id, bash);
           const index = commands.findIndex((command) => command.id === event.toolCallId);
           const command = commands[index];
           if (command) {

@@ -206,6 +206,41 @@ describe('ManagerEngine', () => {
       expect(spec?.cwd).toBe(join(home, 'managers', id, 'workdir'));
     });
 
+    it('logs refused Bash calls and lets the user allow a read-only pattern from them', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push({ play: (emit) => {
+        emit({ type: 'tool-call', id: 'b1', tool: 'Bash', input: { command: 'gh label list --limit 5' } });
+        emit({ type: 'tool-result', toolCallId: 'b1', result: 'cezar manager policy: `gh label list` is not read-only', isError: true });
+        emit({ type: 'tool-call', id: 'b2', tool: 'Bash', input: { command: 'gh pr merge 1' } });
+        emit({ type: 'tool-result', toolCallId: 'b2', result: 'Permission to use Bash has been denied because Claude Code is running in don\'t ask mode.', isError: true });
+        emit({ type: 'tool-call', id: 'b3', tool: 'Bash', input: { command: 'gh pr view 1' } });
+        emit({ type: 'tool-result', toolCallId: 'b3', result: 'no such PR', isError: true });
+        emit({ type: 'text', text: 'Done.' });
+      } });
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect((await engine.summary(id))?.bashDenials).toEqual([
+        { command: 'gh pr merge 1', reason: '`gh pr merge` is not read-only', at: expect.any(String), count: 1 },
+        { command: 'gh label list --limit 5', reason: expect.stringMatching(/not read-only/), at: expect.any(String), count: 1, suggestion: 'gh label list' },
+      ]);
+
+      expect(await engine.update(id, { bashAllow: ['gh pr merge'] })).toMatchObject({ status: 400 });
+      expect(await engine.update(id, { bashAllow: ['gh label create'] })).toMatchObject({ status: 400 });
+      const allowed = await engine.update(id, { bashAllow: ['gh label list'] });
+      expect(allowed).toMatchObject({ bashAllow: ['gh label list'], bashDenials: [{ command: 'gh pr merge 1' }] });
+
+      engine.send(id, 'again');
+      await settled(engine);
+      const spec = backend.specs.at(-1)!;
+      expect(spec.env?.CEZ_MANAGER_BASH_ALLOW).toBe('["gh label list"]');
+      expect(spec.bashAllowlist).toContain('gh label list');
+      expect(spec.systemPrompt).toContain('gh label list    (the user allowed these)');
+
+      expect(await engine.update(id, { clearBashDenials: true })).not.toHaveProperty('bashDenials');
+      expect(await engine.update(id, { bashAllow: [] })).not.toHaveProperty('bashAllow');
+    });
+
     it('lets Claude write only under files/: never .claude/ in its cwd, never a bare Write, Edit or Bash', async () => {
       const engine = makeEngine();
       const id = await create(engine);

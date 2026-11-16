@@ -1,4 +1,4 @@
-import { BellIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -31,6 +31,7 @@ import { MascotPicker } from './mascot-picker'
 
 import { SheetContent } from './manager-approval'
 import { ConnectorsDialog } from './manager-connectors'
+import { ShellAccessDialog } from './manager-shell-access'
 import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -347,7 +348,7 @@ export interface ManagerSettingsHandle {
 export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void; ref?: Ref<ManagerSettingsHandle> }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'connectors' | 'prompts' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const connectorCount = Object.values(manager.connectors ?? {}).filter((grant) => grant.level !== 'off').length
   const trigger = useRef<HTMLButtonElement>(null)
@@ -366,7 +367,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
     },
     openJobs: () => setDialog('jobs'),
   }), [])
-  const openDialog = (next: 'rename' | 'jobs' | 'connectors' | 'prompts' | 'delete') => {
+  const openDialog = (next: 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete') => {
     setMenuOpen(false)
     setDialog(next)
   }
@@ -436,6 +437,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           <MenuRow icon={<PlugIcon aria-hidden="true" />} onClick={() => openDialog('connectors')}>
             Connectors{connectorCount > 0 ? ` (${connectorCount})` : ''}…
           </MenuRow>
+          <MenuRow icon={<TerminalIcon aria-hidden="true" />} onClick={() => openDialog('shell')}>
+            Shell access{manager.bashDenials?.length ? ` (${manager.bashDenials.length} refused)` : ''}…
+          </MenuRow>
           <MenuRow icon={<MessageSquareTextIcon aria-hidden="true" />} onClick={() => openDialog('prompts')}>
             Prompt buttons{manager.quickPrompts?.length ? ` (${manager.quickPrompts.length})` : ''}…
           </MenuRow>
@@ -454,6 +458,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       ) : null}
       {dialog === 'connectors' ? (
         <ConnectorsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(connectors) => update.mutateAsync({ connectors })} />
+      ) : null}
+      {dialog === 'shell' ? (
+        <ShellAccessDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onUpdate={(patch) => update.mutateAsync(patch)} />
       ) : null}
       {dialog === 'prompts' ? (
         <QuickPromptsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(quickPrompts) => update.mutateAsync({ quickPrompts })} />
