@@ -54,7 +54,7 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
+import { AccountPicker, ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
@@ -793,9 +793,13 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         ) : null}
         <Composer
           key={id}
-          compact
+          dictation={false}
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
+          footerStart={<>
+            <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
+            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
+          </>}
+          options={{ rows: [{ id: 'account', label: 'Agent account', control: <AccountPicker {...pickModel(manager)} onChange={onPatch} /> }] }}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -805,25 +809,19 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           slashCommands={MANAGER_COMMANDS}
           placeholder={`Message ${manager.name}, or / for commands`}
           ariaLabel={`Message ${manager.name}`}
+          textareaClassName="max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)]"
           sendShortcut="↵"
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
-        {keyboardOpen ? null : (
-          // One status line (design, Proposal 10): the model chip, then what the turn is doing.
+        {keyboardOpen || !working ? null : (
+          // The pickers live in the composer; the status line keeps what the turn is doing.
           // Phones: the interval lives in the gear and the spinner beside the name.
           <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
-            <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
-            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
-            {working ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <span role="status" aria-label="Working" data-slot="manager-working" className="flex min-w-0 items-center gap-1.5">
-                  <StatusDot tone="violet" pulse />
-                  <span className="truncate">Working{turnLabel ? ` on ${turnLabel}` : '…'}</span>
-                </span>
-                <Button variant="ghost" size="xs" data-slot="manager-footer-stop" onClick={stop}>Stop</Button>
-              </>
-            ) : null}
+            <span role="status" aria-label="Working" data-slot="manager-working" className="flex min-w-0 items-center gap-1.5">
+              <StatusDot tone="violet" pulse />
+              <span className="truncate">Working{turnLabel ? ` on ${turnLabel}` : '…'}</span>
+            </span>
+            <Button variant="ghost" size="xs" data-slot="manager-footer-stop" onClick={stop}>Stop</Button>
           </div>
         )}
       </div>

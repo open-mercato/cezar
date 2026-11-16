@@ -119,6 +119,7 @@ export function ManagerNewRoute() {
       </div>
       <div className="w-full max-w-xl">
         <Composer
+          dictation={false}
           value={prompt}
           onValueChange={setPrompt}
           onSubmit={submit}

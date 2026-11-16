@@ -202,7 +202,7 @@ export function ModelPicker({
           type="button"
           data-slot="manager-model-picker"
           aria-label="Model and effort"
-          className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 rounded-full border border-border px-2.5 text-xs')}
+          className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs')}
         >
           {chip ? (
             <span className="truncate">
@@ -343,7 +343,7 @@ export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = fals
           data-slot="manager-task-runner-picker"
           aria-label="Agent for new tasks"
           title="Choose the accounts the manager may use for new tasks. Automatic lets it choose freely."
-          className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 rounded-full border border-border px-2.5 text-xs')}
+          className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs')}
         >
           <TriggerLabel>Tasks: {label}</TriggerLabel>
         </button>

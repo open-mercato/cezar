@@ -131,12 +131,16 @@ export interface ComposerProps {
   allowEmptySubmit?: boolean
   placeholder?: string
   ariaLabel?: string
+  /** Host-specific prompt sizing, such as the Manager's mobile keyboard height cap. */
+  textareaClassName?: string
   /** `/` opens the project-first skills autocomplete (#380). */
   autocompleteSkills?: boolean
   /** `/` lists these instead of skills: a host whose agent has fixed commands, not skills. */
   slashCommands?: ReadonlyArray<{ name: string; description: string }>
   /** Off: no attach button, and paste/drop leave files alone. For a host that cannot deliver them. */
   attachments?: boolean
+  /** Off: hide dictation and its language option, even when the browser supports speech. */
+  dictation?: boolean
   /**
    * One row on desktop: `footerStart`, the text, then the mic and send inside at the right, send
    * only once there is something to send (the manager frame, spec 2026-10-31-managers). On a phone
@@ -219,9 +223,11 @@ export function Composer({
   allowEmptySubmit = false,
   placeholder = 'Reply — / for skills, @ for files…',
   ariaLabel = 'Reply to the agent',
+  textareaClassName,
   autocompleteSkills = true,
   slashCommands,
   attachments = true,
+  dictation: dictationEnabled = true,
   compact = false,
   quickReplies = false,
   getMentionCandidates,
@@ -736,7 +742,7 @@ export function Composer({
     ? 'size-10 rounded-full bg-muted text-muted-foreground pointer-coarse:max-md:size-11 md:size-8 md:rounded-md md:bg-transparent'
     : 'size-8 text-muted-foreground pointer-coarse:max-md:size-11'
   const micIcon = <MicIcon aria-hidden="true" className={compact ? 'size-4' : 'size-[15px]'} />
-  const micControl = dictation.supported && dictation.unavailable ? (
+  const micControl = !dictationEnabled ? null : dictation.supported && dictation.unavailable ? (
     // aria-disabled, not disabled: a disabled button never gets the hover/focus
     // that opens the tooltip saying why.
     <IconTooltip label={dictation.unavailable} side="top">
@@ -771,7 +777,7 @@ export function Composer({
   ) : null
   // The composer's own Options row: which language the mic listens in. Per browser, like the
   // mic itself — it is about the speaker, not the project.
-  const languageRow: ComposerOptionRow | null = dictation.supported
+  const languageRow: ComposerOptionRow | null = dictationEnabled && dictation.supported
     ? {
         id: 'language',
         label: 'Language',
@@ -859,6 +865,7 @@ export function Composer({
           // A third of what the keyboard leaves visible; autosize still stops at 220px.
           ? 'order-first min-h-11 min-w-0 basis-full px-2 py-1.5 max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)] md:order-none md:min-h-9 md:flex-1 md:basis-auto md:px-1.5'
           : 'min-h-11 px-3 pt-2.5 pb-1 md:min-h-[54px] md:px-4 md:pt-3',
+        textareaClassName,
       )}
       onChange={(event) => {
         setText(event.target.value)
