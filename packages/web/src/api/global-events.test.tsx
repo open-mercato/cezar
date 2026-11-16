@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createUsageStore, type UsageStore } from './events'
 import { connectionStatus } from './connection-status'
-import { GlobalEventsProvider, RECONCILE_TIMEOUT_MS, RETURN_SILENCE_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
+import { GlobalEventsProvider, POLL_WHILE_DOWN_MS, PROBE_DELAY_MS, PROBE_WHILE_DOWN_MS, RECONCILE_TIMEOUT_MS, RETURN_SILENCE_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope, WORKSPACE_RUN_EVENT_OMITTED_KEYS } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
 import { queryKeys, useProviderStatus, useRuns, useTodos, workspaceQueryKeys } from './queries'
@@ -373,6 +373,59 @@ describe('useGlobalEvents — liveness watchdog', () => {
     act(() => vi.advanceTimersByTime(60_000))
 
     expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
+describe('useGlobalEvents — polling while the stream is down', () => {
+  it('reconciles on a timer while a visible stream stays down, and not while it is live', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    for (let i = 0; i < 6; i++) {
+      act(() => vi.advanceTimersByTime(15_000))
+      source.emit('ping', '')
+    }
+    expect(invalidate).not.toHaveBeenCalled()
+
+    source.fail() // a proxy that drops SSE: plain HTTP may still work
+    act(() => vi.advanceTimersByTime(POLL_WHILE_DOWN_MS + 10_000))
+    expect(invalidate).toHaveBeenCalled()
+  })
+})
+
+describe('useGlobalEvents — probing plain HTTP when the stream drops', () => {
+  afterEach(() => connectionStatus.requestSettled(false))
+
+  it('asks once, so an answer from before the drop does not keep saying "paused"', async () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    connectionStatus.requestSettled(true) // the last request, before the server went away
+    vi.mocked(fetch).mockRejectedValue(new TypeError('Failed to fetch'))
+    source.drop()
+    source.drop() // the browser's own retries do not multiply the probe
+    expect(fetch).not.toHaveBeenCalled()
+    act(() => vi.advanceTimersByTime(PROBE_DELAY_MS))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain('/health')
+    await act(async () => {})
+    expect(connectionStatus.answering()).toBe(false)
+
+    act(() => vi.advanceTimersByTime(PROBE_WHILE_DOWN_MS))
+    source.drop()
+    act(() => vi.advanceTimersByTime(PROBE_DELAY_MS))
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('sends no probe for a blip the stream recovers from at once', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    source.drop()
+    source.open()
+    act(() => vi.advanceTimersByTime(PROBE_DELAY_MS))
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
 
