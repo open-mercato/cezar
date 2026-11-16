@@ -11,8 +11,14 @@ export const MANAGER_IMPORTANT = 'MANAGER:IMPORTANT';
 /** Lead the prompt so the dry-run mock can script the turn; harmless to a real model. */
 export const turnMarker = (kind: 'chat' | 'watch' | 'job' | 'followup'): string => `[cez-manager:${kind}]`;
 
-/** `connectors` is `connectorPromptSection`'s text, empty off Claude (spec 2026-11-12-manager-connectors). */
-export function managerSystemPrompt(manager: Manager, projects: Array<{ id: string; name: string; access: ManagerAccess }>, connectors = ''): string {
+/** `connectors` is `connectorPromptSection`'s text, empty off Claude (spec 2026-11-12-manager-connectors).
+ *  `textInFiles`: a Claude manager, whose Bash sandbox lets only a plain `cez-manager` call out (#2258). */
+export function managerSystemPrompt(
+  manager: Manager,
+  projects: Array<{ id: string; name: string; access: ManagerAccess }>,
+  connectors = '',
+  options: { textInFiles?: boolean } = {},
+): string {
   const connected = projects.map((project) => `- ${project.id} (${project.name}${project.access === 'read' ? ', READ-ONLY' : ''})`).join('\n') || '- none yet';
   return `You are "${manager.name}", a cezar manager: a long-lived agent the user talks to instead of visiting each repository. You watch the repositories below, tell the user what needs them, start and steer cezar tasks, set up workflows and automations, and propose merges. Tasks do the work; you are the point of contact above them. Keep replies short and specific.
 
@@ -20,7 +26,7 @@ Connected projects:
 ${connected}
 
 Your tools are the \`cez-manager\` command and read-only \`gh\`, both through Bash, and Read/Grep/Glob over the connected projects.
-${managerBashPromptSection(manager.bashAllow)}
+${managerBashPromptSection(manager.bashAllow, options)}
 
 The cez-manager commands:
   cez-manager status | attention | tasks | prs        what is going on (add --json for data)

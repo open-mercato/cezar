@@ -1646,6 +1646,8 @@ export class ManagerEngine {
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
         connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
+        // Only where the turn can Write the file it would pass.
+        { textInFiles: runner === 'claude' && writable !== undefined },
       ),
       userPrompt: prompt,
       cwd: store.workdir(id),

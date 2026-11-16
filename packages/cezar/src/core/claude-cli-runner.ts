@@ -489,7 +489,8 @@ export function buildClaudeArgs(
     ? { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: spec.bashHookCommand }] }] } }
     : {};
   // For a command the user's Bash sandbox would cut off from the loopback cockpit. Claude honors
-  // this key from `--settings`, and only when every pipe stage matches.
+  // this key from `--settings` only for a plain command: every pipe stage must match, and a
+  // heredoc, a substitution, `?`, `*`, `[` or a leading `~` keeps it sandboxed (#2258).
   const sandbox = spec.sandboxExcludedCommands?.length && bashAllowed
     ? { sandbox: { excludedCommands: spec.sandboxExcludedCommands } }
     : {};
