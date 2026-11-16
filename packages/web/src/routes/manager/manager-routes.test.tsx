@@ -1207,6 +1207,9 @@ describe('/manager/:id', () => {
     renderAt('/manager/global')
     const spinner = await screen.findByRole('status', { name: 'Working' })
     expect(spinner.closest('header')).not.toBeNull()
+    // The only working signal left, so desktop must see it too.
+    expect(spinner.className).not.toContain('md:hidden')
+    await waitFor(() => expect(spinner.getAttribute('title')).toBe('Working on the watch check'))
     expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
     expect(screen.queryByText('Working on the watch check')).toBeNull()
     const stop = screen.getByRole('button', { name: 'Stop' })

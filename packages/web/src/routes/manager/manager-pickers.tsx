@@ -209,8 +209,6 @@ export function ModelPicker({
   effort,
   agentProfile,
   onChange,
-  pill = false,
-  chip = false,
   modelOnly = false,
   className,
 }: {
@@ -219,10 +217,6 @@ export function ModelPicker({
   effort?: ManagerEffort
   agentProfile?: string
   onChange: (patch: ManagerPatch) => void
-  /** The phone composer's round control. */
-  pill?: boolean
-  /** The desktop status line's "Opus · Medium" chip (design, Proposal 10). */
-  chip?: boolean
   /** The dialog has separate agent/account fields; setup keeps its combined menu. */
   modelOnly?: boolean
   className?: string
@@ -241,19 +235,12 @@ export function ModelPicker({
           type="button"
           data-slot="manager-model-picker"
           aria-label="Model and effort"
-          className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs', className)}
+          className={cn(PICKER_TRIGGER, className)}
         >
-          {chip ? (
-            <span className="truncate">
-              <span className="text-foreground">{label}</span>
-              {effortApplies && effort ? <span className="ml-1">· {effortLabel(effort)}</span> : null}
-            </span>
-          ) : (
-            <TriggerLabel>
-              <span className="text-foreground">{label}</span>
-              {effortApplies && effort ? <span className="ml-1.5">{effortLabel(effort)}</span> : null}
-            </TriggerLabel>
-          )}
+          <TriggerLabel>
+            <span className="text-foreground">{label}</span>
+            {effortApplies && effort ? <span className="ml-1.5">{effortLabel(effort)}</span> : null}
+          </TriggerLabel>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-2rem)] overflow-y-auto">
@@ -348,12 +335,10 @@ function AccountOptions({ runner, agentProfile, onChange }: { runner: Runner; ag
   )
 }
 
-export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = false, chip = false, className }: {
+export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, className }: {
   taskRunner?: Runner
   taskAgents?: ManagerTaskAgent[] | undefined
   onChange: (patch: ManagerPatch) => void
-  pill?: boolean
-  chip?: boolean
   className?: string
 }) {
   const status = useProviderStatus().data
@@ -387,7 +372,7 @@ export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = fals
           data-slot="manager-task-runner-picker"
           aria-label="Agent for new tasks"
           title="Choose the accounts the manager may use for new tasks. Automatic lets it choose freely."
-          className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs', className)}
+          className={cn(PICKER_TRIGGER, className)}
         >
           <TriggerLabel>Tasks: {label}</TriggerLabel>
         </button>

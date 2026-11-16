@@ -37,6 +37,8 @@ import {
   needsYouLabel,
   parseManagerCommand,
   retryOf,
+  streamingReply,
+  turnKindLabel,
   watchingLine,
 } from '@/lib/managers'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
@@ -461,9 +463,9 @@ function BackToList() {
   )
 }
 
-function WorkingSpinner({ className }: { className?: string }) {
+function WorkingSpinner({ label }: { label: string }) {
   return (
-    <span role="status" aria-label="Working" data-slot="manager-working" className={cn('flex shrink-0', className)}>
+    <span role="status" aria-label="Working" title={label ? `Working on ${label}` : undefined} data-slot="manager-working" className="flex shrink-0">
       <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />
     </span>
   )
@@ -606,7 +608,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h1 className="truncate text-body font-semibold md:text-base">{manager.name}</h1>
-            {working ? <WorkingSpinner className="md:hidden" /> : null}
+            {working ? <WorkingSpinner label={turnKindLabel(streamingReply(chat.messages))} /> : null}
           </div>
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
