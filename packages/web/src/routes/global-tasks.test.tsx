@@ -12,6 +12,8 @@ import { deriveAttention } from '@/lib/attention'
 
 import { clearManagerOrigins } from '@/lib/managers'
 
+import { tasksScroll } from '@/lib/global-tasks'
+
 import { GlobalTasksRoute } from './global-tasks'
 import { ManagerBackLink } from './manager/manager-back-link'
 import { resolveConflictsPrompt } from './task-thread/run-actions'
@@ -426,7 +428,26 @@ describe('global tasks page', () => {
     })
   })
 
-  it('offers no way back to a manager on an unfiltered list', async () => {
+  it('comes back at the scroll position it was left at', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1'] }] })
+    tasksScroll.save('?manager=mobile', 240)
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        {/* The initial entry is a POP: what browser Back lands on. */}
+        <MemoryRouter initialEntries={['/tasks?manager=mobile']}>
+          <ListViewProvider>
+            <main data-slot="main">
+              <GlobalTasksRoute />
+            </main>
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Checkout page')
+    await waitFor(() => expect(document.querySelector<HTMLElement>('[data-slot="main"]')!.scrollTop).toBe(240))
+  })
+
+    it('offers no way back to a manager on an unfiltered list', async () => {
     stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1'] }] })
     renderPage()
     await screen.findByText('Checkout page')
