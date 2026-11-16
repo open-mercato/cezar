@@ -158,6 +158,24 @@ const agentDefaultsSchema = z
   })
   .passthrough();
 
+const HEX = /^[0-9a-f]+$/;
+
+/** `auth` is the salted scrypt hash `server/auth-crypto.ts` writes — never a password. */
+const securitySchema = z
+  .object({
+    lanAccess: z.boolean().default(false).catch(false),
+    auth: z
+      .object({
+        username: z.string().min(1).max(64),
+        salt: z.string().regex(HEX),
+        hash: z.string().regex(HEX),
+      })
+      .passthrough()
+      .optional()
+      .catch(undefined),
+  })
+  .passthrough();
+
 const workspacePathSchema = (envName: 'CEZ_BROWSE_ROOT' | 'CEZ_PROJECTS_DIR', fallback: string) => {
   const defaultValue = () => process.env[envName]?.trim() || fallback;
   return z.string().min(1).max(4096).default(defaultValue).catch(defaultValue);
@@ -239,6 +257,9 @@ export const workspaceConfigSchema = z
       .catch(undefined),
     /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
     lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
+    /** LAN access (spec 2026-10-20-lan-basic-auth-https). Absent = off; a damaged block reads as
+     *  absent, which fails closed to loopback only. */
+    security: securitySchema.optional().catch(undefined),
     /** Global instructions: read by every agent step in every project, merged BEFORE the
      *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
     systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),

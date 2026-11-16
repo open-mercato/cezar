@@ -529,6 +529,7 @@ Useful environment variables:
 | `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode. Cezar has no cockpit permission response channel; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_RUNS_KEEP=<n>` / `CEZ_ARCHIVED_RUNS_KEEP=<n>` | How many settled runs (and archived ones) a project's index keeps before the oldest are pruned. Defaults 300 / 500, minimum 1; live runs, runs pinned by an active dispatch tree and tasks the user pinned are never pruned. |
 | `CEZ_DESIGN_MODE=0` | Turn off Design Mode in a task's **Preview** tab (spec `.ai/specs/2026-10-09-design-mode.md`). Unset, it is on for a local cockpit: switching it on makes cezar re-serve the previewed local `http://` dev server on a second `127.0.0.1` port with an element picker injected, so you can click an element and send the agent a note about it. The port opens only on that click and closes when idle. Always off on a hosted cockpit, where a loopback port reaches nobody — there is no `=1`. |
+| `CEZ_LAN_ACCESS=0` | Turn off LAN access (spec `.ai/specs/2026-10-20-lan-basic-auth-https.md`). Unset, LAN access is available on a local cockpit (off until enabled in Settings → Security behind HTTP Basic Auth and TLS). Set to 0 to guarantee the LAN listener stays closed and the security endpoints report unavailable. Always off on a hosted cockpit (`CEZ_REMOTE=1` or non-loopback bind host) — there is no `=1`. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
 | `CEZ_MANAGERS=0` | Turn **managers** off (spec `.ai/specs/2026-10-31-managers.md`). On by default, and nothing runs until you create one: a manager is a global, long-lived agent you chat with, connected to one or more projects. It watches them on its cadence (a check with no new attention item makes no model call), starts and steers tasks, and proposes merges and automation enables that only happen when you approve them in the chat. Tool limits (`Read`, `Grep`, `Glob`, a `Bash` allowlist of `cez-manager` plus read-only `gh`/`git`, and Write only under the manager's own `files/` folder) are enforced on Claude only; other backends do not honor `allowedTools`, so there the system prompt is the only fence. Only the exact value `0` opts out; opted out, the Manager mode is absent, the endpoints answer `409` and no timer starts. Read at boot; definitions and chats in `~/.cezar/` are kept either way. |
 | `CEZ_AUTOMATIONS=0` | Turn **automations** off. On by default since the automations redesign (spec `.ai/specs/2026-09-14-automations-redesign.md`): the Automations view lists GitHub-triggered and scheduled automations, and cezar polls GitHub or fires schedules on each enabled one while it is running — nothing runs until you enable an automation yourself. An agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Only the exact value `0` opts out (`CEZ_AUTOMATIONS=1`, the old opt-in, is accepted and changes nothing); opted out, the nav item is absent, the endpoints answer `409`, and the workspace scheduler never starts. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are kept either way. |
@@ -862,6 +863,28 @@ none of its own. [Details →](server-install/ubuntu-vps.md#the-box-already-has-
 
 See the **[Remote access overview](server-install/README.md)** for how it
 works and how to redeploy new versions.
+
+### From another device on your network (Settings → Security)
+
+To watch runs from a laptop on the same LAN, no server install is needed: on the
+machine running cezar, open **Settings → Security**, switch on **Allow LAN
+access**, pick a username and password (8+ characters) and save. cezar then also
+listens on this machine's LAN addresses — **HTTPS only**, with a self-signed
+certificate kept in `~/.cezar/certs/`, behind HTTP Basic Auth — and shows the
+`https://<lan-ip>:<port>` address to open.
+
+- The first visit from another device shows a certificate warning. Compare the
+  certificate's SHA-256 fingerprint with the one Settings shows, then proceed.
+- `localhost` keeps working exactly as before: no password, full desktop
+  features. LAN browsers get the hosted-mode cockpit (no editor or terminal
+  handoff, agent config read-only) and can never change LAN access themselves.
+- Locked out? Open the cockpit on the machine itself, or run `cezar auth reset`
+  there (LAN off, credentials forgotten) and restart cezar.
+- The password is stored as a salted scrypt hash in `~/.cezar/config.json`,
+  never in plain text. Ten failed sign-ins from one address pause it for five
+  minutes.
+- Not available on a hosted cockpit (`CEZ_REMOTE=1`, `--bind-host`), whose
+  reverse proxy already owns authentication.
 
 ---
 

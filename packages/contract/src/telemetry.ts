@@ -38,7 +38,7 @@ export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'assets',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
-  'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy',
+  'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy', 'security',
   'instructions', 'global-instructions',
 ];
 

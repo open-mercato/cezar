@@ -14,6 +14,7 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
+  LockIcon,
   SlidersHorizontalIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -29,6 +30,7 @@ import { InstructionsSection } from './instructions-section'
 import { KeyboardSection } from './keyboard-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
+import { SecuritySection } from './security-section'
 import { ProjectsSection } from './projects-section'
 import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
@@ -74,6 +76,7 @@ export type SettingsSectionId =
   | 'webhooks'
   | 'workspace-secrets'
   | 'transfer'
+  | 'security'
   | 'privacy'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
@@ -256,6 +259,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Secrets shared by every project, configuration transfer, and what cezar shares with its maintainers.',
     icon: ShieldCheckIcon,
     component: DataPrivacySection,
+    scope: 'global',
+    group: 'workspace',
+  },
+  {
+    id: 'security',
+    title: 'Security',
+    description: 'Reach this cockpit from other devices on your network, over HTTPS with a password.',
+    icon: LockIcon,
+    component: SecuritySection,
     scope: 'global',
     group: 'workspace',
   },
