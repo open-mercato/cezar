@@ -70,6 +70,12 @@ process.env.GIT_CEILING_DIRECTORIES = [
 // would write into the outer run. A case that needs one sets it itself.
 for (const name of RUN_SCOPED_ENV) delete process.env[name]
 
+// What the desktop shell exports to its sidecar: the spawn trampoline (`src/core/disclaim-spawn.ts`)
+// rewrote every spawned argv the suite asserts on, and `CEZ_DESKTOP` turned telemetry's runtime
+// into `app`. Run from the app, the suite inherited both; a case that needs one sets it itself.
+delete process.env.CEZ_DISCLAIM_EXEC
+delete process.env.CEZ_DESKTOP
+
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants
 // a host sets `GH_CONFIG_DIR` itself.
