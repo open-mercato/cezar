@@ -36,7 +36,16 @@ export interface InstallOptions {
   env?: NodeJS.ProcessEnv;
   /** The npm runner; tests substitute one that touches no network. */
   runNpm?: typeof runNpm;
+  /** Waits between registry retries; tests substitute one that does not. */
+  sleep?: (ms: number) => Promise<void>;
 }
+
+/**
+ * How long to wait before each retry of a registry install npm cannot see yet. A nightly is
+ * offered as soon as the full packument lists it, while npm reads the abbreviated one — a
+ * separately cached CDN object (plus npm's own cache) that can lag a fresh publish by minutes.
+ */
+export const REGISTRY_RETRY_DELAYS_MS: readonly number[] = [10_000, 20_000, 40_000, 60_000];
 
 export interface InstallResult {
   id: string;
@@ -52,7 +61,7 @@ export async function installFromRegistry(version: string, opts: InstallOptions 
     opts.onLog?.(`${id} is already installed`);
     return { id, version, entry: versionEntry(id, env) };
   }
-  await installSpec(id, `${PACKAGE_NAME}@${version}`, { version, source: 'registry' }, opts);
+  await installSpec(id, `${PACKAGE_NAME}@${version}`, { version, source: 'registry' }, opts, REGISTRY_RETRY_DELAYS_MS);
   return { id, version, entry: versionEntry(id, env) };
 }
 
@@ -75,7 +84,7 @@ export async function installFromLocal(packageRoot: string, opts: InstallOptions
     // A local reinstall replaces the previous local build of the same version — it is the
     // point of the exercise when iterating on a checkout.
     rmSync(versionDir(id, env), { recursive: true, force: true });
-    await installSpec(id, join(packDir, tarball), { version, source: 'local' }, opts);
+    await installSpec(id, join(packDir, tarball), { version, source: 'local' }, opts, []);
   } finally {
     rmSync(packDir, { recursive: true, force: true });
   }
@@ -87,28 +96,56 @@ async function installSpec(
   spec: string,
   manifest: { version: string; source: 'registry' | 'local' },
   opts: InstallOptions,
+  retryDelaysMs: readonly number[],
 ): Promise<void> {
   const env = opts.env ?? process.env;
+  const npm = opts.runNpm ?? runNpm;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // Both callers validate before they get here, but the staging path is built from `id` and
   // recursively removed — make that invariant structural rather than a property of call order.
   const staging = join(versionsDir(env), `.staging-${assertSafeId(id)}-${process.pid}`);
-  rmSync(staging, { recursive: true, force: true });
-  mkdirSync(staging, { recursive: true });
+  const freshStaging = () => {
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(staging, { recursive: true });
+  };
+  freshStaging();
   try {
     opts.onLog?.(`npm install --prefix ${staging} ${spec}`);
     const args = ['install', '--prefix', staging, '--omit=dev', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=notice'];
-    const output: string[] = [];
-    try {
-      await (opts.runNpm ?? runNpm)([...args, spec], staging, (line) => {
-        output.push(line);
-        opts.onLog?.(line);
-      });
-    } catch (error) {
-      // A root-owned ~/.npm (an old `sudo npm`) must not block the install (telemetry 7a3f659a).
-      if (!npmCacheUnwritable(output)) throw error;
-      const cache = npmFallbackCache(env);
-      opts.onLog?.(`npm's cache is not writable; retrying with ${cache}`);
-      await (opts.runNpm ?? runNpm)([...args, '--cache', cache, spec], staging, opts.onLog);
+    const extra: string[] = [];
+    let retries = 0;
+    for (;;) {
+      const output: string[] = [];
+      try {
+        await npm([...args, ...extra, spec], staging, (line) => {
+          output.push(line);
+          opts.onLog?.(line);
+        });
+        break;
+      } catch (error) {
+        // A root-owned ~/.npm (an old `sudo npm`) must not block the install (telemetry 7a3f659a).
+        if (!extra.includes('--cache') && npmCacheUnwritable(output)) {
+          const cache = npmFallbackCache(env);
+          opts.onLog?.(`npm's cache is not writable; retrying with ${cache}`);
+          extra.push('--cache', cache);
+          freshStaging();
+          continue;
+        }
+        if (!npmVersionNotFound(output)) throw error;
+        const delay = retryDelaysMs[retries];
+        if (delay === undefined) {
+          if (retryDelaysMs.length === 0) throw error;
+          throw new Error(
+            `${spec} is not visible on npm's registry yet. A version published minutes ago can take a while to reach every registry mirror — try again in a few minutes.`,
+          );
+        }
+        retries += 1;
+        opts.onLog?.(`${spec} is not visible on the registry yet (a fresh publish can lag); retry ${retries} of ${retryDelaysMs.length} in ${Math.round(delay / 1000)}s`);
+        await sleep(delay);
+        // Revalidate every cached packument instead of trusting npm's copy from before the publish.
+        if (!extra.includes('--prefer-online')) extra.push('--prefer-online');
+        freshStaging();
+      }
     }
     const entry = join(staging, 'node_modules', ...PACKAGE_NAME.split('/'), 'dist', 'index.js');
     if (!existsSync(entry)) throw new Error('install finished but the entry file is missing');
@@ -131,6 +168,15 @@ function npmErrorField(output: readonly string[], field: string): string | undef
     if (match?.[1] === field) return match[2]?.trim();
   }
   return undefined;
+}
+
+/**
+ * npm could not find the requested version (`ETARGET`) or package (`E404`) — what a registry that
+ * has not caught up with a fresh publish answers.
+ */
+export function npmVersionNotFound(output: readonly string[]): boolean {
+  const code = npmErrorField(output, 'code');
+  return code === 'ETARGET' || code === 'E404';
 }
 
 /**
@@ -172,7 +218,8 @@ export function runNpm(args: string[], cwd: string, onLog?: (line: string) => vo
       for (const line of lines) {
         const trimmed = line.trim();
         if (trimmed) {
-          tail = trimmed;
+          // npm's last line points at its debug log; the line before it names the problem.
+          if (!/A complete log of this run can be found in/.test(trimmed)) tail = trimmed;
           onLog?.(trimmed);
         }
       }
