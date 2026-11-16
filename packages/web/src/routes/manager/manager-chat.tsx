@@ -670,14 +670,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         </div>
       ) : null}
 
-      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame. */}
+      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame.
+          `relative`: a row's `sr-only` text is positioned in here, or it stretches the shell's
+          scroller below the composer. */}
       <section
         ref={scroll.ref}
         data-slot="manager-transcript"
         aria-label={`Conversation with ${manager.name}`}
         tabIndex={0}
         onScroll={scroll.onScroll}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
         {/* The floating jump button sits over the tail: room for exactly it, at any width. */}
         <div
