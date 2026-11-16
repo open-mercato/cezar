@@ -40,7 +40,7 @@ Play Console > **Policy and programs > App content > Data safety**.
 | Does your app collect or share any of the required user data types? | **Yes** |
 | Is all of the user data collected by your app encrypted in transit? | **Yes** |
 | Which of the following methods of account creation does your app support? | **My app does not allow users to create an account**: the relay account is created in cezar on the computer, and a direct server's login belongs to the user's own server. [OPEN MERCATO TO CONFIRM: that Play treats an account created outside the app this way; if not, answer "username and other authentication" and give the deletion route below] |
-| Do you provide a way for users to request that their data is deleted? | **Yes**: removing the phone in cezar (Settings > Connect a phone) or forgetting the server in the app deletes the relay record, and **Delete account** in the same place deletes the relay account's email after an emailed link. Give the privacy policy URL as the deletion route |
+| Do you provide a way for users to request that their data is deleted? | **Yes**: removing the phone in cezar (Settings > Connect a phone) or forgetting the server in the app deletes the relay record, and **Delete account** in the same place deletes the relay account's email after an emailed link. The documented web deletion route is https://rome.cezar.run/account/delete (RELAY_PROTOCOL.md § 18), separate from the published privacy-policy URL |
 
 **Data types.** Declare exactly these:
 

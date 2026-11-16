@@ -1,5 +1,9 @@
 # CezarBot privacy policy
 
+Published privacy policy: [Open Mercato privacy policy](https://openmercatocloud.com/privacy).
+This repository document is an internal technical draft covering iOS and Android, not the published
+legal text. Unconfirmed facts below remain unresolved; do not publish this draft as a replacement.
+
 Effective date: [OPEN MERCATO TO CONFIRM: effective date]
 
 Who this policy is from: [OPEN MERCATO TO CONFIRM: legal entity name, registered address and data
