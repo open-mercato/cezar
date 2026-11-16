@@ -387,4 +387,50 @@ describe('NowRoute', () => {
     expect(screen.getByRole('link', { name: 'Needs a look' })).toBeTruthy()
     await waitFor(() => expect(document.querySelector('[data-slot="now-date"]')?.textContent).toContain('cezar · '))
   })
+
+  // The route reads Manager availability from health (now.tsx's `managersAvailable` prop).
+  function renderRouteWith(capabilities: Record<string, unknown>) {
+    const health = {
+      version: 't', repoRoot: '/r', repo: null, checks: [], defaultRunner: 'claude', forge: null,
+      capabilities, projects: [{ id: 'cezar', name: 'cezar' }], bootProject: 'cezar',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path = String(input)
+        const body =
+          path.startsWith('/api/v1/runs') ? [run({ id: 'rv', status: 'review', title: 'Needs a look' })]
+          : path === '/api/v1/health' ? health
+          : path === '/api/v1/providers/status' ? PROVIDERS
+          : {}
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/cezar/']}>
+          <Routes>
+            <Route path="/p/:projectId/" element={<NowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('hides the New task button when health says Manager is available', async () => {
+    renderRouteWith({ managers: true })
+    // Health has answered (the project name comes from it) before the absence is read.
+    await waitFor(() => expect(document.querySelector('[data-slot="now-date"]')?.textContent).toContain('cezar · '))
+    await waitFor(() => expect(rowsOf('needs-you')).toEqual(['rv']))
+    expect(screen.queryByRole('link', { name: 'New task' })).toBeNull()
+  })
+
+  it('keeps the New task button when Manager is off or health does not mention it', async () => {
+    for (const capabilities of [{ managers: false }, {}]) {
+      renderRouteWith(capabilities)
+      await waitFor(() => expect(document.querySelector('[data-slot="now-date"]')?.textContent).toContain('cezar · '))
+      expect(screen.getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/p/cezar/new')
+      cleanup()
+    }
+  })
 })
