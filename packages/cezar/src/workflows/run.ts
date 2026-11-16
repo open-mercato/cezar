@@ -1148,6 +1148,18 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
     .join('\n\n---\n\n');
 }
 
+/** Shared-history guardrail for task worktrees (#2180): they share the repo's object store and
+ *  `shallow` file, so a depth-limited fetch there shortens the user's own checkout. Prompt
+ *  guidance only — not shell enforcement; `shallowHistoryProblem` is the detection half. */
+export const SHARED_GIT_HISTORY_PROMPT = [
+  '## Shared Git history',
+  'This worktree shares its Git object store and shallow-state with the main checkout. Never run a depth-limited fetch (`git fetch --depth`, `--deepen`, `--shallow-since`, `--shallow-exclude`, `git clone --depth`): it would shorten the history of the user\'s own repository and can break their next fast-forward pull. To inspect a pull request or branch use an ordinary non-shallow fetch (e.g. `git fetch origin pull/<n>/head`) or read the source with `gh pr diff` / `gh pr view` / `gh api`. If history looks truncated, run `git fetch --unshallow` instead of resetting anything.',
+].join('\n');
+
+export function sharedGitHistoryPromptPart(cwd: string, repoRoot: string): string | undefined {
+  return resolvePath(cwd) === resolvePath(repoRoot) ? undefined : SHARED_GIT_HISTORY_PROMPT;
+}
+
 /**
  * The DISPATCH prompt part of a run's system prompt (spec 2026-09-10-dispatch) — composed at
  * BOTH session sites, so a task knows how to dispatch and report on its first step, on every
@@ -6090,6 +6102,7 @@ export class RunManager {
             state.automationsPrompt,
             record?.systemPrompt,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
+            sharedGitHistoryPromptPart(state.cwd, this.repoRoot),
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
           userPrompt: attachments.length
@@ -8313,6 +8326,7 @@ export class RunManager {
             state.automationsPrompt,
             extraSystemPrompt,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
+            sharedGitHistoryPromptPart(state.cwd, this.repoRoot),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,

@@ -829,6 +829,17 @@ export async function pushBranch(dir: string, branch: string): Promise<{ ok: tru
   return push.ok ? { ok: true } : { ok: false, error: (push.stderr || push.stdout).trim().split('\n')[0] || 'git push failed' };
 }
 
+/** True when the repository `dir` belongs to is shallow. Linked worktrees share the primary
+ *  checkout's `shallow` file, so a depth-limited fetch by a task makes this true for everyone (#2180). */
+export async function isShallowRepository(dir: string): Promise<boolean> {
+  const r = await git(dir, ['rev-parse', '--is-shallow-repository']);
+  return r.ok && r.stdout.trim() === 'true';
+}
+
+/** Actionable diagnostic separating "history was cut short" from genuine divergence. Never repairs. */
+export const SHALLOW_HISTORY_HINT =
+  'the repository history is shallow (a depth-limited fetch shortens it for every worktree); this is not a real divergence — run `git fetch --unshallow` and retry';
+
 /**
  * Merge the freshest base into the worktree (the graph `git.sync-base` node): `<remote>/<base>`
  * after a fetch when the base remote (or the remote a recorded `upstream/main` names) has it,
@@ -857,6 +868,7 @@ export async function syncWithBase(
   const files = unmerged.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   if (files.length) return { result: 'conflict', files };
   await git(dir, ['merge', '--abort']);
+  if (await isShallowRepository(dir)) return { result: 'failed', error: SHALLOW_HISTORY_HINT };
   return { result: 'failed', error: (merge.stderr || merge.stdout).trim().split('\n')[0] || 'git merge failed' };
 }
 

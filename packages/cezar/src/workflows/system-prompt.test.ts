@@ -17,6 +17,7 @@ import {
   GLOBAL_INSTRUCTIONS_HEADING,
   PROJECT_INSTRUCTIONS_HEADING,
   composeSystemPrompt,
+  SHARED_GIT_HISTORY_PROMPT,
   dispatchPromptPart,
   makeRunTitle,
   resolveExtraSystemPrompt,
@@ -27,7 +28,7 @@ const run = promisify(execFile);
 
 /** The artifacts line every agent step carries (spec 2026-10-22-html-artifacts, O3). */
 const artifactsLine = (repoRoot: string, runId: string): string =>
-  artifactsPromptPart(artifactsDir(join(repoRoot, '.ai/cezar'), runId));
+  composeSystemPrompt(artifactsPromptPart(artifactsDir(join(repoRoot, '.ai/cezar'), runId)), SHARED_GIT_HISTORY_PROMPT);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 /** Precedence table (R2 2.3): per-run override REPLACES the config default. */
