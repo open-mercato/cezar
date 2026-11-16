@@ -8880,7 +8880,8 @@ export function createApp(deps: ServerDeps) {
     // The one route that performs a proposal. The agent's tools below can only create them.
     .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {
       const { id, actionId } = c.req.valid('param');
-      const outcome = await managerEngine.decide(id, actionId, c.req.valid('json').decision, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      const { decision, onlyIfStale } = c.req.valid('json');
+      const outcome = await managerEngine.decide(id, actionId, decision, { sid: deviceSid(c.req.header('x-cezar-sid')) }, onlyIfStale === true);
       return 'error' in outcome ? c.json({ error: outcome.error }, outcome.status) : c.json(outcome);
     })
     // The agent's tools (`cez manager`): scope and the watch refusal live in the engine.

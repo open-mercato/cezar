@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { managerKeys } from '@/api/managers'
 import { workspaceQueryKeys } from '@/api/queries'
-import type { ManagerActionRequest, ManagerConfirm } from '@open-mercato/cezar-api-client'
+import type { ManagerActionRequest, ManagerConfirm, ManagerMessage } from '@open-mercato/cezar-api-client'
 
-import { ActionCard, type DecideAction } from './manager-approval'
+import { ActionCard, forgetStaleChecks, useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { actionMessage } from './manager-fixtures'
 
 const merge: ManagerActionRequest = { type: 'merge-pr', projectId: 'alpha', number: 12, title: 'Fix the thing', method: 'squash', headSha: '3fa9c1d2e4b5a69788' }
@@ -85,7 +85,7 @@ describe('ActionCard', () => {
     expect(facts).toEqual(['Project', 'Pull request', 'Method', 'Head'])
     expect(card.querySelector('[data-slot="pr-chip"]')?.textContent).toContain('#12')
     expect(card.textContent).toContain('3fa9c1d2e4b5 · pinned, a new push refuses')
-    expect(card.querySelector('[data-slot="manager-card-actions"]')?.textContent).toBe('ApproveReject')
+    expect(card.querySelector('[data-slot="manager-card-actions"]')?.textContent).toBe('ApproveRejectDismiss')
     cleanup()
     renderCard(actionMessage(1, { status: 'done', result: 'Merged #12' }))
     const done = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
@@ -366,6 +366,41 @@ describe('the confirmation setting', () => {
     approve()
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(onDecide).toHaveBeenCalledWith('a1', 'approve')
+  })
+})
+
+describe('Dismiss', () => {
+  it('offers Dismiss on a waiting card, which decides nothing and shows the card as Dismissed', async () => {
+    const { onDecide, rerender } = renderCard(actionMessage(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'dismiss'))
+    rerender(actionMessage(1, { status: 'dismissed', result: '#12 was already merged' }))
+    const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
+    expect(card.querySelector('[data-slot="manager-card-status"]')?.textContent).toBe('Dismissed')
+    expect(within(card).queryByRole('button', { name: 'Dismiss' })).toBeNull()
+    expect(within(card).getByText('#12 was already merged')).toBeTruthy()
+  })
+})
+
+describe('useDismissStaleMerges', () => {
+  afterEach(forgetStaleChecks)
+
+  function Probe({ messages, onDecide }: { messages: ManagerMessage[]; onDecide: DecideAction }) {
+    useDismissStaleMerges(messages, onDecide)
+    return null
+  }
+
+  it('asks once per waiting merge card, only if its PR is no longer open, and swallows the 409', async () => {
+    const onDecide = vi.fn<DecideAction>(async () => { throw new Error('this proposal is still current') })
+    const messages = [
+      actionMessage(1),
+      actionMessage(2, { status: 'done' }),
+      actionMessage(3, { action: job }),
+    ]
+    const { rerender } = render(<Probe messages={messages} onDecide={onDecide} />)
+    rerender(<Probe messages={[...messages]} onDecide={onDecide} />)
+    await waitFor(() => expect(onDecide).toHaveBeenCalledTimes(1))
+    expect(onDecide).toHaveBeenCalledWith('a1', 'dismiss', { onlyIfStale: true })
   })
 })
 

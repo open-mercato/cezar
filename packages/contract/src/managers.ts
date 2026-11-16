@@ -362,7 +362,8 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
 export type ManagerActionRequest = z.infer<typeof managerActionRequestSchema>;
 
 
-export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed']);
+/** `dismissed`: closed without a decision, by the user or because its PR is no longer open. */
+export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed', 'dismissed']);
 export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;
 
 /** The questions of a `CEZ:ASK` line, the same shape a task's ask card shows. */
@@ -476,7 +477,11 @@ export const sendManagerMessageInputSchema = z
   });
 export type SendManagerMessageInput = z.input<typeof sendManagerMessageInputSchema>;
 
-export const managerActionDecisionInputSchema = z.object({ decision: z.enum(['approve', 'reject']) });
+export const managerActionDecisionInputSchema = z.object({
+  decision: z.enum(['approve', 'reject', 'dismiss']),
+  /** With `dismiss`: only when the card's pull request is no longer open, else `409`. */
+  onlyIfStale: z.boolean().optional(),
+});
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;
 
 export const managerOkResponseSchema = z.object({ ok: z.literal(true) });

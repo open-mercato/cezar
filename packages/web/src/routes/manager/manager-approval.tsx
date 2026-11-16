@@ -1,5 +1,5 @@
 import { CircleAlertIcon, CircleCheckIcon, ClockIcon, ExternalLinkIcon, GitMergeIcon, PlugIcon, ZapIcon, type LucideIcon } from 'lucide-react'
-import { useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { useProjects, useRunsIndex, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
@@ -21,7 +21,7 @@ import { ManagerCard } from './manager-card'
 import { ForgeReference } from './manager-reference'
 import { taskPath } from './manager-session-card'
 
-export type DecideAction = (actionId: string, decision: 'approve' | 'reject') => Promise<unknown>
+export type DecideAction = (actionId: string, decision: 'approve' | 'reject' | 'dismiss', opts?: { onlyIfStale?: boolean }) => Promise<unknown>
 
 type ActionMessage = Extract<ManagerMessage, { kind: 'action' }>
 
@@ -31,6 +31,7 @@ const ACTION_STATUS: Record<ManagerActionStatus, { tone: StatusDotTone; label: s
   done: { tone: 'success', label: 'Done' },
   rejected: { tone: 'neutral', label: 'Rejected' },
   failed: { tone: 'danger', label: 'Failed' },
+  dismissed: { tone: 'neutral', label: 'Dismissed' },
 }
 
 /** Keyed by string: a type from a newer server must still get a sheet, never a crash. */
@@ -295,6 +296,28 @@ function ActionSheet({
   )
 }
 
+/** Merge cards already asked about this page session, so a re-render never asks again. */
+const staleChecked = new Set<string>()
+
+/**
+ * Asks the server once per pending merge card whether its PR is still open; one that is not is
+ * closed as `dismissed`. The chip's colour cannot decide this: it can be a cached 'ready'.
+ */
+export function useDismissStaleMerges(messages: readonly ManagerMessage[], onDecide: DecideAction): void {
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.kind !== 'action' || message.status !== 'pending' || message.action.type !== 'merge-pr' || staleChecked.has(message.id)) continue
+      staleChecked.add(message.id)
+      // A 409 is the answer "still open"; nothing to show.
+      onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
+    }
+  }, [messages, onDecide])
+}
+
+export function forgetStaleChecks(): void {
+  staleChecked.clear()
+}
+
 export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigin; message: ActionMessage; onDecide: DecideAction }) {
   const managerId = origin.id
   const { action } = message
@@ -328,7 +351,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
     card.current.focus({ preventScroll: true })
   }
 
-  const decide = async (decision: 'approve' | 'reject') => {
+  const decide = async (decision: 'approve' | 'reject' | 'dismiss') => {
     if (inFlight.current) return
     inFlight.current = true
     setDeciding(true)
@@ -372,6 +395,8 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
             Approve
           </Button>
           <Button variant="outline" className="max-md:h-10 max-md:flex-1" disabled={deciding} onClick={() => void decide('reject')}>Reject</Button>
+          {/* Neither yes nor no: the proposal is moot, e.g. its PR was merged elsewhere. */}
+          <Button variant="ghost" className="ml-auto max-md:h-10" disabled={deciding} onClick={() => void decide('dismiss')}>Dismiss</Button>
         </>
       ) : undefined}
     >

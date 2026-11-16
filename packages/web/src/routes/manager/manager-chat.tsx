@@ -49,6 +49,7 @@ import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOp
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import { managerAccessOf, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
@@ -544,7 +545,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
   }, [update])
 
-  const onDecide = useCallback((actionId: string, decision: 'approve' | 'reject') => decideManagerAction(id, actionId, decision), [id])
+  const onDecide = useCallback<DecideAction>((actionId, decision, opts) => decideManagerAction(id, actionId, decision, opts), [id])
+  useDismissStaleMerges(chat.messages, onDecide)
   const needsYou = useNeedsYouJump(manager, chat, scroll)
   const floating = useFloatingOverlap()
   const waiting = needsYouCount(manager)

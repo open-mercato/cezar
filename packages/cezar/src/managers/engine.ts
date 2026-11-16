@@ -1083,6 +1083,7 @@ export class ManagerEngine {
       const snapshot = await this.snapshot(id);
       // Deleted meanwhile: writing the gate's state would bring the directory back.
       if (!snapshot || !store.get(id)) return;
+      await this.dismissStaleMerges(id, snapshot);
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
       // Keys a failed turn could not report stay fresh, so none left means the failure is over.
       store.updateState(id, (state) => ({ ...state, reported: kept, ...(fresh.length === 0 ? { watchFailures: 0 } : {}) }));
@@ -2289,30 +2290,41 @@ export class ManagerEngine {
   }
 
   /** The only path to a merge or an enabled automation; the agent's tools cannot reach it. */
-  async decide(id: string, actionId: string, decision: 'approve' | 'reject', ctx: ManagerTelemetryContext = {}): Promise<{ ok: true } | ManagerRefusal> {
+  async decide(
+    id: string,
+    actionId: string,
+    decision: 'approve' | 'reject' | 'dismiss',
+    ctx: ManagerTelemetryContext = {},
+    onlyIfStale = false,
+  ): Promise<{ ok: true } | ManagerRefusal> {
     const manager = this.deps.store.get(id);
     if (!manager) return { error: 'manager not found', status: 404 };
-    const message = this.deps.store.message(id, actionId);
+    let message = this.deps.store.message(id, actionId);
     if (message?.kind !== 'action') return { error: 'action not found', status: 404 };
     if (message.status !== 'pending') return { error: `this action is already ${message.status}`, status: 409 };
+    if (decision === 'dismiss') {
+      const stale = message.action.type === 'merge-pr' ? await this.closedPr(message.action) : undefined;
+      if (onlyIfStale && !stale) return { error: 'this proposal is still current', status: 409 };
+      // Re-read after the forge call: another tab may have decided meanwhile.
+      const current = this.deps.store.message(id, actionId);
+      if (current?.kind !== 'action' || current.status !== 'pending') return { error: 'this action was already decided', status: 409 };
+      message = current;
+      if (!onlyIfStale) this.deps.telemetry?.track('manager_action_decided', `${managerActionLabel(message.action)}:dismiss`, ctx);
+      this.settleAction(id, message, 'dismissed', stale ?? 'Dismissed');
+      return { ok: true as const };
+    }
     const type = managerActionLabel(message.action);
     this.deps.telemetry?.track('manager_action_decided', `${type}:${decision}`, ctx);
     const proposedAt = Date.parse(message.at);
     if (Number.isFinite(proposedAt)) this.deps.telemetry?.timing('manager_action_decision', Math.max(0, this.now() - proposedAt), { operation: type, target: decision, outcome: 'ok' });
-    const settle = (status: ManagerActionStatus, result: string) => {
-      // Deleted while the action ran: writing the result would recreate its directory.
-      if (!this.deps.store.get(id)) return;
-      this.publish(id, { ...message, status, result }, true);
-      this.addNote(id, `${describe(message.action)}: ${result}`);
-      this.emitChange(id);
-    };
+    const settle = (status: ManagerActionStatus, result: string) => this.settleAction(id, message, status, result);
     if (decision === 'reject') {
       settle('rejected', 'Rejected');
       return { ok: true as const };
     }
     this.publish(id, { ...message, status: 'running' }, true);
     const projectId = actionProject(message.action);
-    let outcome: { ok: boolean; result: string };
+    let outcome: { ok: boolean; result: string; dismissed?: boolean };
     try {
       const connected = projectId === undefined || (await this.sources(manager)).some((source) => source.id === projectId);
       // Read fresh: access may have been lowered while the card waited.
@@ -2326,11 +2338,46 @@ export class ManagerEngine {
       // `running` has no other exit but a restart.
       outcome = { ok: false, result: cause instanceof Error ? cause.message : String(cause) };
     }
-    settle(outcome.ok ? 'done' : 'failed', outcome.result);
+    settle(outcome.dismissed ? 'dismissed' : outcome.ok ? 'done' : 'failed', outcome.result);
     return { ok: true as const };
   }
 
-  private async perform(id: string, action: ManagerActionRequest): Promise<{ ok: boolean; result: string }> {
+  private settleAction(id: string, message: Extract<ManagerMessage, { kind: 'action' }>, status: ManagerActionStatus, result: string): void {
+    // Deleted while the action ran: writing the result would recreate its directory.
+    if (!this.deps.store.get(id)) return;
+    this.publish(id, { ...message, status, result }, true);
+    this.addNote(id, `${describe(message.action)}: ${result}`);
+    this.emitChange(id);
+  }
+
+  /** Why a merge card is moot ("#12 was already merged"), or `undefined` while its PR is open or unknown. */
+  private async closedPr(action: Extract<ManagerActionRequest, { type: 'merge-pr' }>): Promise<string | undefined> {
+    try {
+      const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/merge-state?refresh=1`);
+      if (!response.ok) return undefined;
+      const body = (await response.json()) as { available?: boolean; mergeState?: { state?: string } };
+      const state = body.available ? body.mergeState?.state : undefined;
+      return state === 'merged' || state === 'closed' ? `#${action.number} was already ${state}` : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Watch checks close merge cards whose PR left the open list, confirmed one by one: the list is capped. */
+  private async dismissStaleMerges(id: string, snapshot: ManagerSnapshot): Promise<void> {
+    const open = new Map(snapshot.projects.filter((project) => project.available && !project.prsUnavailable).map((project) => [project.projectId, new Set(project.prs.map((pr) => pr.number))]));
+    const suspects = this.deps.store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'action' }> =>
+      message.kind === 'action' && message.status === 'pending' && message.action.type === 'merge-pr' &&
+      open.get(message.action.projectId)?.has(message.action.number) === false);
+    for (const message of suspects) {
+      if (message.action.type !== 'merge-pr') continue;
+      const stale = await this.closedPr(message.action);
+      const current = this.deps.store.message(id, message.id);
+      if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale);
+    }
+  }
+
+  private async perform(id: string, action: ManagerActionRequest): Promise<{ ok: boolean; result: string; dismissed?: boolean }> {
     if (action.type === 'connector-call') return this.callConnector(id, action);
     if (action.type === 'add-job') {
       // Counted from now: an approved job must not fire seconds after the click.
@@ -2348,8 +2395,10 @@ export class ManagerEngine {
       return { ok: false, result: (await ManagerEngine.refusalOf(response)).error };
     }
     const state = await this.forward(`${prefix}/github/prs/${action.number}/merge-state?refresh=1`);
-    const body = (await state.json().catch(() => ({}))) as { available?: boolean; reason?: string; mergeState?: { headSha: string; defaultMethod: 'merge' | 'squash' | 'rebase' | null; methods: Array<'merge' | 'squash' | 'rebase'> } };
+    const body = (await state.json().catch(() => ({}))) as { available?: boolean; reason?: string; mergeState?: { state?: string; headSha: string; defaultMethod: 'merge' | 'squash' | 'rebase' | null; methods: Array<'merge' | 'squash' | 'rebase'> } };
     if (!body.available || !body.mergeState) return { ok: false, result: body.reason ?? 'GitHub merge is unavailable' };
+    const prState = body.mergeState.state;
+    if (prState === 'merged' || prState === 'closed') return { ok: false, dismissed: true, result: `#${action.number} was already ${prState}` };
     const method = action.method ?? body.mergeState.defaultMethod ?? body.mergeState.methods[0];
     if (!method) return { ok: false, result: 'This repository allows no merge method.' };
     // The head the user was shown: a push after the proposal refuses instead of merging unseen code.
