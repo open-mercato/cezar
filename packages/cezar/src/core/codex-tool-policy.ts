@@ -13,7 +13,7 @@ export function assertCodexToolPolicy(spec: Pick<AgentRunSpec,
     tools.length === DEFAULT_ALLOWED_TOOLS.length &&
     DEFAULT_ALLOWED_TOOLS.every((tool) => tools.includes(tool))
   );
-  if (!spec.enforceReadOnly && spec.bashAllowlist === undefined && !spec.bashHookCommand && unrestricted) return;
+  if (!spec.enforceReadOnly && spec.bashAllowlist === undefined && spec.bashHookCommand === undefined && unrestricted) return;
   throw new Error('codex: tool-policy enforcement unavailable; refusing to start a restricted step. '
     + 'The app-server has no verified gate for every shell, filesystem, MCP and nested tool call. '
     + 'A read-only sandbox or approval prompt is insufficient. Pick Claude Code or Pi; '

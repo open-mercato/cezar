@@ -3562,7 +3562,7 @@ export class RunManager {
           prompt: '{{task}}',
           // The order's own tool list when it names one (#430: `allowedTools` is the only tool
           // seam a step has), else the run-wide default.
-          ...(input.allowed_tools?.length ? { allowedTools: input.allowed_tools } : {}),
+          ...(input.allowed_tools !== undefined ? { allowedTools: input.allowed_tools } : {}),
         },
       ],
     };

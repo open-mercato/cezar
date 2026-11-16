@@ -23,6 +23,7 @@ const policies: Array<Partial<AgentRunSpec>> = [
   { bashAllowlist: ['git status'] },
   { bashAllowlist: ['git status; git push'] },
   { bashHookCommand: 'custom-hook' },
+  { bashHookCommand: '' },
   { enforceReadOnly: true },
 ];
 
