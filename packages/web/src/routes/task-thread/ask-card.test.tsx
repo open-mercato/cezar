@@ -194,11 +194,24 @@ describe('AskCard', () => {
     expect(mutateAsync).toHaveBeenCalledWith({ text: 'Sections: Profile, Billing' })
   })
 
-  it('a resolved ask collapses to a compact answered summary with no option buttons', () => {
+  it('a resolved ask collapses to answer chips with no option buttons', () => {
     renderAsk({ ...singleAsk, resolved: true, answer: 'Library: date-fns' })
     expect(screen.getByText('Answered')).toBeTruthy()
-    expect(screen.getByText('Library: date-fns').className).toContain('break-words')
-    expect(screen.queryByRole('button', { name: /date-fns/ })).toBeNull()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    const chips = [...document.querySelectorAll('[data-slot="ask-answers"] [data-slot="chip"]')]
+    expect(chips.map((chip) => [chip.textContent, chip.getAttribute('data-active')])).toEqual([
+      ['date-fns (chosen)', 'true'],
+      ['Luxon', null],
+    ])
+    // The chosen option keeps its description; the others keep theirs as a tooltip.
+    expect(document.querySelector('[data-slot="ask-answer-description"]')?.textContent).toBe('Tree-shakeable')
+    expect(chips[1]?.getAttribute('title')).toBe('Immutable, tz-aware')
+  })
+
+  it('a resolved ask in the user\'s own words stays prose', () => {
+    renderAsk({ ...singleAsk, resolved: true, answer: 'whichever is smaller' })
+    expect(screen.getByText('whichever is smaller').className).toContain('break-words')
+    expect(document.querySelector('[data-slot="chip"]')).toBeNull()
   })
 
   it.each([
