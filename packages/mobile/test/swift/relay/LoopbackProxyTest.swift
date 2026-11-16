@@ -358,6 +358,31 @@ func loopbackProxyTests() {
         expect(lost.value == 0, "no rebind for our own close")
     }
 
+    test("a listener torn down from outside close() is told once") {
+        let proxy = LoopbackProxy(tunnel: { nil }, userAgent: "ua")
+        let lost = Locked(0)
+        proxy.setOnListenerLost { lost.value += 1 }
+        _ = try proxy.open(preferredPort: 0)
+        proxy.dropListener()
+        expect(eventually { lost.value == 1 }, "told")
+        expect(!proxy.listening(), "no longer listening")
+        Thread.sleep(forTimeInterval: 0.2)
+        proxy.close()
+        Thread.sleep(forTimeInterval: 0.1)
+        expect(lost.value == 1, "once, and close() after it adds nothing: \(lost.value)")
+    }
+
+    test("only the page's current proxy, on screen and staying, is bound again") {
+        let mine = LoopbackProxy(tunnel: { nil }, userAgent: "ua")
+        let other = LoopbackProxy(tunnel: { nil }, userAgent: "ua")
+        expect(LoopbackProxy.shouldRebind(mine, current: mine, started: true, leaving: false), "lost on screen")
+        expect(!LoopbackProxy.shouldRebind(mine, current: mine, started: false, leaving: false), "in the background becameVisible binds")
+        expect(!LoopbackProxy.shouldRebind(mine, current: mine, started: true, leaving: true), "the page is leaving")
+        expect(!LoopbackProxy.shouldRebind(mine, current: other, started: true, leaving: false), "already replaced")
+        expect(!LoopbackProxy.shouldRebind(mine, current: nil, started: true, leaving: false), "a rebind in flight")
+        expect(!LoopbackProxy.shouldRebind(mine, current: mine, started: true, leaving: false, answered: true), "it answered its probe")
+    }
+
     run("credit follows the consumer, so a stalled page stalls the sender") { w in
         let client = try w.connect()
         client.setReceiveBuffer(1024)

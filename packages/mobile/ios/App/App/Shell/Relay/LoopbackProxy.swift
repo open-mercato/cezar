@@ -64,6 +64,7 @@ final class LoopbackProxy {
     private let serving = Locked(true)
     private let closed = Locked(false)
     private let up = Locked(false)
+    private let lostTold = Locked(false)
 
     init(tunnel: @escaping Tunnel, userAgent: String, cache: BundleCache? = nil) {
         self.tunnel = tunnel
@@ -157,7 +158,10 @@ final class LoopbackProxy {
             switch state {
             case .failed, .cancelled:
                 up.value = false
-                if let self, !self.closed.value { self.onListenerLost.value?() }
+                // `.failed` is followed by `.cancelled`: one loss, one rebind.
+                guard let self, !self.closed.value, !self.lostTold.value else { return }
+                self.lostTold.value = true
+                self.onListenerLost.value?()
             default: break
             }
         }
@@ -183,6 +187,16 @@ final class LoopbackProxy {
     /// Told once the listener fails or is cancelled by anything but `close()`.
     func setOnListenerLost(_ listener: (() -> Void)?) {
         onListenerLost.value = listener
+    }
+
+    /// Whether a lost or silent listener is bound again: only the page's current one, on screen, with the page staying.
+    static func shouldRebind(_ checked: LoopbackProxy, current: LoopbackProxy?, started: Bool, leaving: Bool, answered: Bool = false) -> Bool {
+        !answered && started && !leaving && current === checked
+    }
+
+    /// Tests: the listener torn down by something other than `close()`, as iOS does to a suspended app.
+    func dropListener() {
+        listener?.cancel()
     }
 
     /// Whether a loopback client really gets an answer. iOS can reclaim a suspended app's listening

@@ -259,7 +259,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         opened.setOnListenerLost { [weak self] in
             DispatchQueue.main.async {
                 // In the background `becameVisible` binds again; on screen nothing else would.
-                guard let self, self.started, !self.leaving, self.proxy === opened else { return }
+                guard let self, LoopbackProxy.shouldRebind(opened, current: self.proxy, started: self.started, leaving: self.leaving) else { return }
                 self.rebindProxy("listener failed")
             }
         }
@@ -531,7 +531,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let answered = checked.answers()
             DispatchQueue.main.async {
-                guard let self, !answered, self.started, !self.leaving, self.proxy === checked else { return }
+                guard let self, LoopbackProxy.shouldRebind(checked, current: self.proxy, started: self.started, leaving: self.leaving, answered: answered) else { return }
                 self.rebindProxy("listener not answering (\(why))")
             }
         }
