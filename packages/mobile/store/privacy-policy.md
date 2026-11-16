@@ -157,8 +157,9 @@ CONFIRM: the email sending provider, which is Cloudflare Email Sending in the re
 
 **If the email is not confirmed.** Phones keep working for 48 hours after the computer first gives an
 email, or after the computer was first seen by the relay. After that the relay refuses to connect that
-computer's phones until the email is confirmed. Confirming, in Cezar's Settings or from the phone's
-**Confirm your email** screen, reconnects them. No phone has to pair again.
+computer's phones until the email is confirmed. Opening the link in the email reconnects them. Cezar's
+Settings and the phone's **Confirm your email** screen can only check the status and send a new link. No
+phone has to pair again.
 
 **What the phone sees.** When the relay refuses a phone for this reason, the app asks the relay for
 the account's status, signed with the phone's key. The relay sends the address masked, such as
