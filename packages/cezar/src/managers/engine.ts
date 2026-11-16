@@ -229,6 +229,8 @@ const TAIL_BYTES = 256 * 1024;
 const PREVIEW_LIMIT = 120;
 
 export const MANAGER_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+/** Claude's wildcard spelling: `cez-manager` alone or with arguments, nothing else. */
+export const MANAGER_SANDBOX_EXCLUDED = ['cez-manager *'] as const;
 /** Claude's absolute-path rule spelling: `//abs/path`, a Windows drive as `//c/…`. */
 const claudeAbsolutePath = (path: string): string =>
   `/${path.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`)}`;
@@ -1517,11 +1519,20 @@ export class ManagerEngine {
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
         connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
+        // Only where the turn can Write the file it would pass.
+        { textInFiles: runner === 'claude' && writable !== undefined },
       ),
       userPrompt: prompt,
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
+<<<<<<< HEAD
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
+=======
+      bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
+      ...(bashHook ? { bashHookCommand: bashHook } : {}),
+      // The user's Bash sandbox blocks the loopback cockpit `cez-manager` talks to; the hook still vets it.
+      ...(runner === 'claude' ? { sandboxExcludedCommands: [...MANAGER_SANDBOX_EXCLUDED] } : {}),
+>>>>>>> 0440ed0 (fix(manager): let cez-manager out of Claude's Bash sandbox so it reaches the cockpit (#2258))
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
         ...sources.filter((source) => source.available).map((source) => source.root),

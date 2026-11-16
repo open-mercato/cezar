@@ -90,6 +90,39 @@ describe('buildClaudeArgs enforceReadOnly', () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe('buildClaudeArgs bashHookCommand', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr view'] };
+
+  it('installs it as a Bash PreToolUse hook beside the prefix rules', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: "'/usr/bin/node' '/x/hook.js'" });
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Bash(gh pr view:*)');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "'/usr/bin/node' '/x/hook.js'" }] }] },
+    });
+  });
+
+  it('adds no settings without a hook, or when Bash is not allowed at all', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--settings');
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], bashHookCommand: 'x' })).not.toContain('--settings');
+  });
+
+  // The Seatbelt sandbox denies the loopback connect, so `cez-manager` failed with `fetch failed`.
+  it('excludes sandboxExcludedCommands from the sandbox in the same settings as the hook', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: 'h', sandboxExcludedCommands: ['cez-manager *'] });
+    expect(args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'h' }] }] },
+      sandbox: { excludedCommands: ['cez-manager *'] },
+    });
+    const alone = buildClaudeArgs({ ...spec, sandboxExcludedCommands: ['cez-manager *'] });
+    expect(JSON.parse(alone[alone.indexOf('--settings') + 1]!)).toEqual({ sandbox: { excludedCommands: ['cez-manager *'] } });
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], sandboxExcludedCommands: ['cez-manager *'] })).not.toContain('--settings');
+  });
+});
+
+>>>>>>> 0440ed0 (fix(manager): let cez-manager out of Claude's Bash sandbox so it reaches the cockpit (#2258))
 describe('buildClaudeArgs output mode', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 
