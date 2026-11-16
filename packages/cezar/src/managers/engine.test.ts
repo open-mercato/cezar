@@ -2929,6 +2929,8 @@ describe('ManagerEngine', () => {
       const done = run({ id: 'new-run', status: 'done', finishedAt: later(1) });
       first.taskChanged('alpha', dataDir(), done, () => undefined);
       await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      // The reply exists from the turn's first delta; under load a shutdown here interrupted it.
+      await settled(first);
       await first.shutdown();
 
       // cezar was down while the task was continued and failed.
