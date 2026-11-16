@@ -1168,6 +1168,14 @@ describe('/manager/:id', () => {
     expect((await screen.findByText(/what needs you/)).closest('[data-slot="manager-empty"]')).toBeTruthy()
   })
 
+  it('returns focus and scroll to the decision named by a source-task return link', async () => {
+    server.messages = [assistantMessage(99, { ask: { questions: [{ header: 'Ready', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] } })]
+    renderAt('/manager/global#decision-m99')
+    await screen.findByRole('button', { name: 'Yes' })
+    await waitFor(() => expect(document.activeElement?.id).toBe('decision-m99'))
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+  })
+
   it('sends a message', async () => {
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })

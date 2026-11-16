@@ -2864,9 +2864,39 @@ describe('ManagerEngine', () => {
       expect(fence).toBeTruthy();
       expect(prompt.split(`\n${fence}\n`)[1]).toContain('Alina and Maciek: give me their surnames.');
       expect(prompt).toContain('end your reply with the CEZ:ASK line');
-      expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The notes are filed.', ask });
+      expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The notes are filed.', ask, sourceTasks: [{ projectId: 'alpha', runId: 'new-run' }] });
       // The chat note stays short: the excerpt rides only the follow-up.
       expect(store.state(id).notes).toEqual([]);
+    });
+
+    it('keeps the source when Need more info causes a terse reasked decision', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const ask = { questions: [{ header: 'Approve', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+      const text = `Here is the decision.\nCEZ:ASK ${JSON.stringify(ask)}`;
+      backend.scripts.push(say(text));
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      const first = assistants(id)[1]!;
+      backend.scripts.push(say(text));
+      engine.send(id, 'Approve: Need more info', [], first.id);
+      await settled(engine);
+      expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'new-run' }] });
+    });
+
+    it('tracks a task discovered by a detail tool during an ordinary chat', async () => {
+      runs.push(run({ id: 'read-task' }));
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      const ask = { questions: [{ header: 'Approve', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+      backend.scripts.push({ ...say(`Ready.\nCEZ:ASK ${JSON.stringify(ask)}`), hold: true });
+      engine.send(id, 'What should we do?');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(await engine.taskDetail(id, 'alpha', 'read-task')).toMatchObject({ task: { runId: 'read-task' } });
+      backend.open[0]!.finish();
+      await settled(engine);
+      expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'read-task' }] });
     });
 
     it('marks a failure and a wait on the user important, and raises the notification', async () => {

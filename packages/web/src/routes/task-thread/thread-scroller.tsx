@@ -88,12 +88,14 @@ export function useThreadScroll(
   viewKey: string,
   options: {
     surface?: 'document' | 'panel'
+    /** Explicit status/result links override an old reading position on arrival. */
+    startAtLatest?: boolean
     onLoadOlder?: () => Promise<void>
     onJumpToLatest?: () => Promise<void>
     rowKeys?: readonly string[]
   } = {},
 ): ThreadScrollControls {
-  const { surface = 'document', onLoadOlder, onJumpToLatest, rowKeys = [] } = options
+  const { startAtLatest = false, surface = 'document', onLoadOlder, onJumpToLatest, rowKeys = [] } = options
   const scrollElRef = useRef<HTMLElement | null>(null)
   // State, not a ref: crossing the virtualization threshold mid-replay REPLACES the rows
   // container, and the observers below must re-subscribe to the new element.
@@ -130,7 +132,7 @@ export function useThreadScroll(
     if (!scroller) return
     if (arrivedForRef.current !== viewKey) {
       arrivedForRef.current = viewKey
-      const memory = readThreadScroll(viewKey)
+      const memory = startAtLatest ? undefined : readThreadScroll(viewKey)
       if (memory && !memory.atBottom) {
         stuckRef.current = false
         pendingRestoreRef.current = memory.top
@@ -141,7 +143,7 @@ export function useThreadScroll(
     }
     if (pendingRestoreRef.current !== null) setOffset(pendingRestoreRef.current)
     else if (stuckRef.current) toBottom()
-  }, [viewKey, setOffset, toBottom])
+  }, [viewKey, startAtLatest, setOffset, toBottom])
 
   // The callback ref runs in the destination commit itself. Applying arrival here closes the
   // gap between the route render and the follow-up state update that installs subscriptions;

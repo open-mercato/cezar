@@ -5,7 +5,7 @@ import { RESTORE_SCROLL_STATE } from '@/lib/global-tasks'
 import { resolveManagerOrigin } from '@/lib/managers'
 import { noteManagerChatSource, noteManagerEntry } from '@/lib/manager-telemetry'
 
-const LINK = 'inline-flex items-center gap-1 rounded-sm outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50'
+const LINK = 'min-h-11 inline-flex items-center gap-1 rounded-sm outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50'
 
 /** The way home from a task opened off a session card or a manager's Tasks table (spec 2026-10-31-managers). */
 export function ManagerBackLink({ runId }: { runId: string }) {
@@ -14,7 +14,7 @@ export function ManagerBackLink({ runId }: { runId: string }) {
   if (!origin) return null
   const manager = (
     <Link
-      to={`/manager/${encodeURIComponent(origin.id)}`}
+      to={`/manager/${encodeURIComponent(origin.id)}${origin.decision ? `#decision-${encodeURIComponent(origin.decision)}` : ''}`}
       data-slot="manager-back-link"
       aria-label={`Back to ${origin.name}`}
       onClick={() => {

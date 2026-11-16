@@ -409,7 +409,17 @@ export type ManagerAttachment = z.infer<typeof managerAttachmentSchema>;
 export const managerTaskReportStateSchema = z.enum(['done', 'review', 'failed', 'needs-you', 'cancelled']);
 export type ManagerTaskReportState = z.infer<typeof managerTaskReportStateSchema>;
 
-const managerMessageBase = { id: z.string(), seq: z.number().int().min(0), at: z.string() };
+export const managerTaskSourceSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+});
+export type ManagerTaskSource = z.infer<typeof managerTaskSourceSchema>;
+
+const managerMessageBase = {
+  id: z.string(), seq: z.number().int().min(0), at: z.string(),
+  /** Task context carried by the turn, independent of the model's wording. */
+  sourceTasks: z.array(managerTaskSourceSchema).optional(),
+};
 
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
 export const managerMessageSchema = z.discriminatedUnion('kind', [
