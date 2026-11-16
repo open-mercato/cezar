@@ -11,6 +11,14 @@ sources:
     path: packages/web/src/routes/manager/manager-approvals.tsx
     line: 116
     commit: f8f7b54bab158e5ca6e1a848862194fa5ee381dc
+  - label: "Chat composer layout"
+    path: packages/web/src/routes/manager/manager-chat.tsx
+    line: 790
+    commit: d7bdf3ac510844e5e38873e8ad1fcdd64524fd6a
+  - label: "Manager agent dialog"
+    path: packages/web/src/routes/manager/manager-agent-dialog.tsx
+    line: 12
+    commit: d7bdf3ac510844e5e38873e8ad1fcdd64524fd6a
   - label: "Specification"
     path: .ai/specs/2026-10-31-managers.md
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
@@ -99,6 +107,8 @@ If a turn hits a provider usage limit and the provider gives a reset time, the c
 
 On a desktop, Enter sends and Shift+Enter starts a new line.
 
+The prompt sits above the attachment and send controls in one rounded composer. Open the settings gear in the chat's top bar and select **Manager agent**. The dialog groups the agent, account, model and effort choices, with a separate section for agents allowed to start new tasks. Changes save as you choose. The composer has no **Options** button, configuration pickers or status row beneath it; **Stop** stays inside the composer while the Manager works. Manager chat and setup have no dictation control.
+
 ### On a phone
 
 A phone opens on Manager when you load the cockpit's address with nothing after it, in a browser tab or from the home screen. Tablets and desktops keep returning to your last page, and so does a server with Manager off or a first run that isn't finished. Links keep working as they are, and **Tasks** in the menu takes you to your last project page.
@@ -129,7 +139,7 @@ Cezar refuses any `cez-manager` command that targets a project the manager is no
 
 ## Refresh
 
-**Refresh** sets how often a manager checks its connected projects. The default is 15 minutes. Change it in the footer under the composer: **Off**, 5, 15, or 30 minutes, 1 or 4 hours, or 1 day.
+**Refresh** sets how often a manager checks its connected projects. The default is 15 minutes. Change it in the top-bar settings gear: **Off**, 5, 15, or 30 minutes, 1 or 4 hours, or 1 day.
 
 A check reads the task stores and the same GitHub data the GitHub tab uses, then looks for attention items:
 
@@ -240,9 +250,9 @@ A write produces an approval card, like a merge. The card shows the connector, t
 
 ## Agents, accounts, model and cancelling
 
-Open **Model and effort** in the chat or settings to change the manager's agent, model and account. The **Account** section lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. The separate **Agent account** picker has the same choices.
+Open the chat's settings gear → **Manager agent** to change the manager's agent, account, model and effort in one dialog. The account field lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. During setup, **Model and effort** also offers agent and account choices.
 
-Use **Agent for new tasks** during setup, in settings or beside the composer to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
+Use **Agent for new tasks** during setup or in the dialog's **For new tasks** section to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
 
 **Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Codex manager's task runs on Codex even when the project's default is Claude. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
 

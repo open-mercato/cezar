@@ -1,7 +1,6 @@
 import type { ProjectsResponse, ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 
 import { bareRootLanding, locationToRestore } from './last-location'
-import { hasSignedInAgent } from './onboarding'
 import { pathnameProjectId } from './project-router'
 
 /** Manager first on a phone (spec 2026-10-31-managers, Phones). */
@@ -22,19 +21,6 @@ export const shellRequest = {
   },
 }
 
-function isInstalled(): boolean {
-  const installed = typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches
-  // iOS home-screen apps report this even where the media query lags behind.
-  return installed || (navigator as { standalone?: boolean }).standalone === true
-}
-
-/**
- * The phone navigation: the CezarBot shell at any size (an iPad too, in split view or landscape),
- * and a phone PWA. A browser tab keeps the breakpoints: it has its own bottom bar, and iPadOS
- * Safari asks for the desktop site.
- */
-export const showsBottomBar = (): boolean => isCezarShell() || (isPhone() && isInstalled())
-
 let firstLocationKey: string | undefined
 
 /** Set at boot and never again, so nothing an in-app link does can make `/` a fresh load. */
@@ -50,31 +36,17 @@ export function isFirstLocation(key: string): boolean {
 export interface PhoneLandingInput {
   health: { capabilities: { managers?: boolean } } | undefined
   healthFailed: boolean
-  registry: ProjectsResponse | undefined
-  registryFailed: boolean
   providers: ProviderStatusResponse | undefined
   providersFailed: boolean
-  /** The user skipped the sign-in page for good; `undefined` until ui-state answers. */
-  agentCheckSkipped: boolean | undefined
-  uiStateFailed: boolean
 }
 
-/** `FirstRun`'s two obstacle pages, read off the workspace: no agent, and no git project. */
-function firstRunFinished(input: PhoneLandingInput): boolean {
-  const agentReady = input.agentCheckSkipped === true || hasSignedInAgent(input.providers) === true
-  return agentReady && (input.registry?.projects.some((project) => project.status === 'ok') ?? false)
-}
-
-/** `restore` is the existing bare-root path, so every unknown ends where a desktop would. */
+/** Agent setup lives at the Manager entry; a Git project is not needed to talk to a manager. */
 export function phoneLanding(input: PhoneLandingInput): 'wait' | 'manager' | 'restore' {
   if (input.health === undefined && !input.healthFailed) return 'wait'
   if (input.health?.capabilities.managers !== true) return 'restore'
-  if (input.registry === undefined && !input.registryFailed) return 'wait'
-  // A signed-in agent settles the first-run question without ui-state, so a restored provider
-  // list lands at once rather than waiting on the network for it.
-  if (input.agentCheckSkipped === undefined && !input.uiStateFailed && hasSignedInAgent(input.providers) !== true) return 'wait'
-  if (input.agentCheckSkipped !== true && input.providers === undefined && !input.providersFailed) return 'wait'
-  return firstRunFinished(input) ? 'manager' : 'restore'
+  if (input.providers === undefined && !input.providersFailed) return 'wait'
+  if (input.providersFailed && input.providers === undefined) return 'restore'
+  return 'manager'
 }
 
 /** The bottom bar's Tasks: the last project's index, without restoring the page inside it. */

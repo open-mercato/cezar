@@ -120,6 +120,18 @@ describe('buildClaudeArgs bashHookCommand', () => {
   });
 });
 
+describe('buildClaudeArgs bypassPermissions', () => {
+  const spec = { userPrompt: 'go', cwd: '/tmp' };
+  const mode = (args: string[]) => args[args.indexOf('--permission-mode') + 1];
+
+  it('skips every prompt only when the project opted in, and never for a read-only run', () => {
+    expect(mode(buildClaudeArgs(spec))).toBe('dontAsk');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true }))).toBe('bypassPermissions');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true }, { CEZ_APPROVAL_GATE: '1' }))).toBe('bypassPermissions');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true, enforceReadOnly: true }))).toBe('dontAsk');
+  });
+});
+
 describe('buildClaudeArgs output mode', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 

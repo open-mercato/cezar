@@ -99,4 +99,6 @@ The example below is part of an optional project configuration. `reviewGate` is 
 }
 ```
 
+`bypassPermissions` is also disabled by default. Setting it to true (Settings → Agents → **Skip all permission prompts**) runs the project's Claude Code tasks with `--permission-mode bypassPermissions`: every tool call is approved without asking, including commands outside the Claude Code Bash sandbox. Read-only tasks and a manager's own turns are never affected. cezar ignores the key while `.ai/cezar/config.json` is tracked by git, so a cloned repository cannot turn approvals off, and while it runs as root, because Claude Code refuses bypass mode for root. It is local-only: a hosted cockpit refuses to turn it on and ignores it.
+
 > **Good to know**: Set `baseBranch` to the correct branch for the repository. Missing or invalid configuration usually falls back to defaults. Configured lifecycle transitions have separate, strict validation.

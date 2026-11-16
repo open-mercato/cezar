@@ -1306,24 +1306,18 @@ describe('AppShell', () => {
       expect(screen.getByTestId('location').textContent).toBe('/')
     })
 
-    it('closes when the viewport widens past md, where the real sidebar takes over', async () => {
-      // Otherwise an open drawer survives a rotation into a desktop-width layout and traps focus
-      // in a modal copy of a sidebar that is now visible right next to it.
-      const listeners = new Set<(event: MediaQueryListEvent) => void>()
-      vi.stubGlobal('matchMedia', (query: string) => ({
-        matches: false,
-        media: query,
-        addEventListener: (_: string, fn: (event: MediaQueryListEvent) => void) => listeners.add(fn),
-        removeEventListener: (_: string, fn: (event: MediaQueryListEvent) => void) => listeners.delete(fn),
-      }))
-
+    it('closes when available width reveals the desktop sidebar', async () => {
+      const originalWidth = window.innerWidth
+      vi.stubGlobal('innerWidth', 700)
       renderShell()
       openMenu()
       expect(drawer()).not.toBeNull()
-
-      // Every registered listener gets the event; only the shell's breakpoint one acts on it.
-      for (const fn of listeners) fn({ matches: true } as MediaQueryListEvent)
+      act(() => {
+        vi.stubGlobal('innerWidth', 1200)
+        window.dispatchEvent(new Event('resize'))
+      })
       await waitFor(() => expect(drawer()).toBeNull())
+      vi.stubGlobal('innerWidth', originalWidth)
     })
 
     it('pads the drawer for the safe-area insets', () => {

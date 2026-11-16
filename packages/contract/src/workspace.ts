@@ -458,6 +458,10 @@ export const configResponseSchema = z.object({
   askSkill: z.string().nullable(),
   /** False when `skillsRepos` is `[]` — team skill repositories are off for this project. */
   teamSkills: z.boolean(),
+  /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`). */
+  bypassPermissions: z.boolean(),
+  /** Why `bypassPermissions` is not honored here (a git-tracked config.json), or null. */
+  bypassPermissionsBlocked: z.string().nullable(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -514,6 +518,8 @@ export const setConfigInputSchema = z.object({
   askSkill: z.string().trim().max(200).nullable().optional(),
   /** `false` writes `skillsRepos: []`; `true` drops that override back to the default repos. */
   teamSkills: z.boolean().optional(),
+  /** `true` turns permission prompts off for Claude Code tasks; `false`/`null` turns them back on. */
+  bypassPermissions: z.boolean().nullable().optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 
