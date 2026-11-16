@@ -350,16 +350,39 @@ final class LoopbackProxy {
         }
     }
 
+    private static let ARTIFACT_FILE = try! NSRegularExpression(
+        pattern: #"^/api/v1/(?:p/[A-Za-z0-9_-]{1,64}/)?runs/[A-Za-z0-9_-]{1,64}/artifacts/[^/?#\\]{1,255}(?:/[^/?#\\]{1,255})?(?:\?[^#]*)?$"#)
+    private static let MEDIA_DEST: Set<String> = ["image", "video", "audio"]
+
+    /// A sandboxed HTML artifact has an opaque origin, so its `<img>`, `<video>` and `<audio>` loads are
+    /// cross-site. Only that exact shape passes without the gate cookie: a bodyless GET or HEAD for media
+    /// under a run's artifacts, with no Origin. The tunnel still needs a live session, and the request is
+    /// forwarded without cookies like every other.
+    static func isArtifactMediaRead(_ request: ProxyRequest) -> Bool {
+        guard request.method == "GET" || request.method == "HEAD" else { return false }
+        guard request.all("content-length").isEmpty, request.all("transfer-encoding").isEmpty else { return false }
+        guard request.all("origin").isEmpty else { return false }
+        guard request.all("sec-fetch-site") == ["cross-site"], request.all("sec-fetch-mode") == ["no-cors"] else { return false }
+        let dest = request.all("sec-fetch-dest")
+        guard dest.count == 1, MEDIA_DEST.contains(dest[0]) else { return false }
+        let target = request.target
+        guard ARTIFACT_FILE.firstMatch(in: target, range: NSRange(target.startIndex..., in: target)) != nil else { return false }
+        let path = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)[0].lowercased()
+        for bad in ["%2e", "%2f", "%5c", "%00"] where path.contains(bad) { return false }
+        return !path.split(separator: "/").contains { $0 == "." || $0 == ".." }
+    }
+
     /// The gate of § 13.1: a status to refuse with, or 0.
     private func gate(_ request: ProxyRequest) -> Int {
         let hosts = request.all("host")
         if hosts.count != 1 || hosts[0] != authority { return 403 }
-        if !hasCookie(request) { return 403 }
+        let media = Self.isArtifactMediaRead(request)
+        if !media && !hasCookie(request) { return 403 }
         let origins = request.all("origin")
         if origins.count > 1 || (origins.count == 1 && origins[0] != allowedOrigin) { return 403 }
         let sites = request.all("sec-fetch-site")
         if sites.count > 1 { return 403 }
-        if sites.count == 1 && sites[0] != "same-origin" && sites[0] != "none" { return 403 }
+        if !media && sites.count == 1 && sites[0] != "same-origin" && sites[0] != "none" { return 403 }
         if !request.all("upgrade").isEmpty { return 400 }
         if !TunnelFrame.validMethod(request.method) { return 405 }
         if request.target.utf8.count > TunnelFrame.MAX_TARGET_BYTES { return 431 }

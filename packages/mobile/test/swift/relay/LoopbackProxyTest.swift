@@ -147,6 +147,64 @@ func loopbackProxyTests() {
         }
     }
 
+    /// What a browser engine sends for an `<img>` in a sandboxed artifact: cross-site, no-cors, no Origin.
+    func media(_ w: World, _ method: String, _ target: String, _ dest: String, _ extra: String) -> String {
+        "\(method) \(target) HTTP/1.1\r\nHost: 127.0.0.1:\(w.proxy.port())\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: \(dest)\r\n\(extra)\r\n"
+    }
+
+    run("an artifact's media loads without the cookie, and the cookie is never forwarded") { w in
+        let cookie = "Cookie: \(LoopbackProxy.COOKIE)=\(w.proxy.cookieValue())\r\n"
+        for request in [
+            media(w, "GET", "/api/v1/p/rome/runs/r1/artifacts/chart.png", "image", ""),
+            media(w, "GET", "/api/v1/runs/r1/artifacts/shots/a.webp", "image", "Accept: image/*\r\n"),
+            media(w, "HEAD", "/api/v1/p/rome/runs/r1/artifacts/clip.mp4?raw=1", "video", "Range: bytes=0-\r\n"),
+            media(w, "GET", "/api/v1/p/rome/runs/r1/artifacts/a%20b.mp3", "audio", ""),
+            // WebKit sends the same shape with the cookie and a Referer.
+            media(w, "GET", "/api/v1/p/rome/runs/r1/artifacts/chart.png", "image", cookie + "Referer: http://127.0.0.1:\(w.proxy.port())/api/v1/p/rome/runs/r1/artifacts/report.html\r\n"),
+        ] {
+            let client = try w.connect()
+            client.send(request)
+            guard let open = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("not opened: \(request.prefix(70))") }
+            expect(!open.headers.contains { $0.name == "cookie" }, "no cookie forwarded")
+            client.close()
+        }
+    }
+
+    run("everything else without the cookie is still refused") { w in
+        let png = "/api/v1/p/rome/runs/r1/artifacts/chart.png"
+        let host = "Host: 127.0.0.1:\(w.proxy.port())\r\n"
+        try w.refused(media(w, "POST", png, "image", "Content-Length: 0\r\n"), "403")
+        try w.refused(media(w, "PUT", png, "image", ""), "403")
+        try w.refused(media(w, "DELETE", png, "image", ""), "403")
+        try w.refused(media(w, "GET", png, "image", "Content-Length: 1\r\n\r\nx"), "403")
+        try w.refused(media(w, "GET", png, "image", "Transfer-Encoding: chunked\r\n"), "403")
+        try w.refused(media(w, "GET", png, "image", "Origin: null\r\n"), "403")
+        for dest in ["document", "iframe", "script", "empty"] { try w.refused(media(w, "GET", png, dest, ""), "403") }
+        try w.refused(media(w, "GET", png, "image", "Sec-Fetch-Dest: video\r\n"), "403")
+        try w.refused(media(w, "GET", png, "image", "Sec-Fetch-Site: cross-site\r\n"), "403")
+        try w.refused("GET \(png) HTTP/1.1\r\n" + host + "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: image\r\n\r\n", "403")
+        try w.refused("GET \(png) HTTP/1.1\r\n" + host + "Sec-Fetch-Site: same-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n\r\n", "403")
+        try w.refused("GET \(png) HTTP/1.1\r\n" + host + "\r\n", "403")
+        try w.refused("GET \(png) HTTP/1.1\r\nHost: evil.example\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n\r\n", "403")
+        for target in [
+            "/api/v1/workspace/phones", "/api/v1/p/rome/runs/r1/events", "/api/v1/p/rome/runs/r1/artifacts",
+            "/api/v1/p/rome/runs/r1/artifacts/", "/api/v1/p/rome/runs/r1/artifacts/a/b/c.png",
+            "/api/v1/p/rome/runs/r1/artifacts/../../workspace/phones", "/api/v1/p/rome/runs/r1/artifacts/%2e%2e/x.png",
+            "/api/v1/p/rome/runs/r1/artifacts/a%2fb.png", "/api/v1/p/rome/runs/r1/artifacts/a%5cb.png",
+            "/api/v1/p/rome/runs/r1/artifacts/./x.png", "/api/v1/p/rome/runs/../artifacts/x.png", "/x/api/v1/runs/r1/artifacts/x.png",
+            "/api/v1/runs/r1/artifacts/x.png#f", "/",
+        ] { try w.refused(media(w, "GET", target, "image", ""), "403") }
+    }
+
+    run("an artifact's media needs a live session") { w in
+        w.sessionUp.value = false
+        let client = try w.connect()
+        client.send(media(w, "GET", "/api/v1/p/rome/runs/r1/artifacts/chart.png", "image", ""))
+        let head = client.readHead()
+        expect(head.hasPrefix("HTTP/1.1 502"), "no session, no media: \(head.prefix(20))")
+        expect(w.peer.opened.poll(timeoutMs: 100) == nil, "nothing enters the tunnel")
+    }
+
     run("the gate refuses before the tunnel") { w in
         let host = "Host: 127.0.0.1:\(w.proxy.port())\r\n"
         let cookie = "Cookie: \(LoopbackProxy.COOKIE)=\(w.proxy.cookieValue())\r\n"
