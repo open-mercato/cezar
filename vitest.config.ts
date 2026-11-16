@@ -8,6 +8,9 @@ import { defineConfig } from 'vitest/config'
 //   - packages/desktop    desktop release helpers, without making it an npm workspace
 export default defineConfig({
   test: {
+    // Git and subprocess fixtures share host resources. Bound concurrency so their
+    // liveness checks can meet the existing deadlines on a busy development machine.
+    maxWorkers: 2,
     // The suites are still being grown; a project that currently matches no file must not
     // fail the validation gate. Root-level only — vitest rejects this inside a project.
     passWithNoTests: true,
