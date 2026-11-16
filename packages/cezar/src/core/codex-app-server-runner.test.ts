@@ -506,6 +506,37 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
   }, 20_000);
 });
 
+describe('Codex instruction App Server mapping', () => {
+  it.each([
+    { resume: false, instructions: 'Do not run the full test suite.', locked: undefined },
+    { resume: true, instructions: 'Do not run the full test suite.', locked: undefined },
+    { resume: true, instructions: 'Updated instructions: run only focused tests.', locked: 'always' },
+    { resume: true, instructions: undefined, locked: undefined },
+  ])('preserves native guidance and delivers current instructions once ($resume, $instructions, locked=$locked)', async ({ resume, instructions, locked }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cezar-codex-instructions-'));
+    const file = join(dir, 'requests.ndjson');
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0, resumeLockRetryMs: [1] }).startSession({
+      userPrompt: 'Fix the regression', systemPrompt: instructions, cwd: process.cwd(),
+      ...(resume ? { resume: true, sessionId: 'th_saved' } : {}),
+      env: { CEZ_MOCK_CODEX_REQUESTS_FILE: file, ...(locked ? { MOCK_CODEX_RESUME_LOCKED: locked } : {}) },
+    }, undefined, { autoEndAfterFirstTurn: true });
+    try {
+      await session.result;
+      const requests = requestsFrom(file);
+      expect(paramsFor(requests, resume ? 'thread/resume' : 'thread/start')).not.toHaveProperty('developerInstructions');
+      if (locked) expect(paramsFor(requests, 'thread/fork')).not.toHaveProperty('developerInstructions');
+      const turn = JSON.stringify(paramsFor(requests, 'turn/start'));
+      if (instructions) expect(turn.split(instructions)).toHaveLength(2);
+      else expect(turn).not.toContain('instructions');
+      expect(turn).toContain('Fix the regression');
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Codex reasoning effort App Server mapping', () => {
   it('sends effort only on turn/start, including a resumed thread, and never on steer', async () => {
     const captureDir = mkdtempSync(join(tmpdir(), 'cezar-codex-effort-'));
@@ -763,7 +794,7 @@ describe('the artifacts directory under the Codex sandbox (spec 2026-10-22-html-
     });
   });
 
-  it('leaves the default full-access overrides byte-identical', () => {
+  it('keeps the default full-access policy', () => {
     expect(codexThreadOverrides(spec, undefined, {})).toEqual({
       model: 'gpt-5',
       cwd: '/wt',

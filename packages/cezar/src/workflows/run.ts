@@ -1052,6 +1052,8 @@ export interface StartRunInput {
    *  Replaces the `config.json` default for this run — see
    *  `resolveExtraSystemPrompt` for the precedence contract. */
   systemPrompt?: string;
+  /** Manager provenance also carries the task's restrictions to descendants and continuations. */
+  startedByManager?: RunRecord['startedByManager'];
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -1110,8 +1112,8 @@ export interface StartRunInput {
  * `config.json` default — they are the same knob at two scopes, so the more
  * specific one wins outright; they never concatenate. The global instructions
  * (`~/.cezar/config.json` `systemPrompt`) are a different knob: they always
- * ride along, placed FIRST and labelled as yielding to the project's. Whichever
- * wins is ADDITIVE to the skill body and the handoff contract (see
+ * ride along, placed FIRST and take precedence over repository and workflow guidance.
+ * The result is ADDITIVE to the skill body and the handoff contract (see
  * `composeSystemPrompt`). Blank strings count as unset.
  */
 export function resolveExtraSystemPrompt(
@@ -1121,7 +1123,8 @@ export function resolveExtraSystemPrompt(
 ): string | undefined {
   const project = override?.trim() || configDefault?.trim() || undefined;
   const global = globalDefault?.trim() || undefined;
-  if (!global || !project) return project ?? global;
+  if (!global) return project;
+  if (!project) return `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}`;
   return [
     `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}`,
     `${PROJECT_INSTRUCTIONS_HEADING}\n\n${project}`,
@@ -1129,9 +1132,11 @@ export function resolveExtraSystemPrompt(
 }
 
 export const GLOBAL_INSTRUCTIONS_HEADING =
-  '## Global instructions\n\nThese apply to every project. Where they conflict with the project instructions below, the project instructions win.';
+  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict.';
 export const PROJECT_INSTRUCTIONS_HEADING =
-  '## Project instructions\n\nThese are specific to this project and take precedence over the global instructions above.';
+  '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
+
+const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -1152,10 +1157,8 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
  * BOTH session sites, so a task knows how to dispatch and report on its first step, on every
  * Continue, and after a restart.
  *
- * De-duplicated against the run's extra system prompt, and that is not a micro-optimisation:
- * `dispatch()` seeds a child's extra prompt with the very same text, so composing both would
- * hand the backend the same instructions twice. Containment, not equality: with global
- * instructions set, `resolveExtraSystemPrompt` wraps that seed under its own heading.
+ * Older dispatched runs stored this text in their extra prompt. Keep those snapshots from
+ * repeating it on Continue; new children receive it only from `prepareDispatchSession`.
  */
 export function dispatchPromptPart(prompt: string | undefined, extra: string | undefined): string | undefined {
   const part = prompt?.trim();
@@ -2057,7 +2060,10 @@ export class RunManager {
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
-    this.store.updateRun(run.id, { workflowDef: workflow });
+    this.store.updateRun(run.id, {
+      workflowDef: workflow,
+      ...(input.startedByManager ? { startedByManager: input.startedByManager } : {}),
+    });
     // On the record, not only the input: restart recovery rebuilds the run from it.
     if (run.worktree === false && input.newBranch) {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
@@ -3072,8 +3078,9 @@ export class RunManager {
    * gets no dispatch prompt and behaves exactly as it did before this feature existed.
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
-    if (!this.dispatchReachable()) return;
     const dispatch = this.store.getRun(runId)?.dispatch;
+    // A child keeps its reporting instructions even if transport disappears before it starts.
+    if (!dispatch?.parentRunId && !this.dispatchReachable()) return;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
   }
@@ -3441,7 +3448,7 @@ export class RunManager {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
-      systemPrompt: composeDispatchPrompt(input.kind),
+      ...(parent.startedByManager ? { startedByManager: parent.startedByManager } : {}),
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
@@ -6303,6 +6310,7 @@ export class RunManager {
       ? original.systemPrompt
       : composeSystemPrompt(
         resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt),
+        this.store.getRun(runId)?.startedByManager ? MANAGER_TASK_SYSTEM_PROMPT : undefined,
         state.autoLand ? landingPromptPart(state.autoLand.baseLabel, state.autoLand.checks, state.autonomous === true) : undefined,
         state.readOnly ? READ_ONLY_PROMPT : undefined,
       ) || undefined;
