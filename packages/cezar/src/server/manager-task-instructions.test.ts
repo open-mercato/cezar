@@ -95,6 +95,7 @@ describe('manager task instruction propagation through the HTTP API and workflow
     const response = await request(`${BASE}/${manager.id}/tasks`, { projectId, task: 'Fix the module mock:done', workflow, runner });
     expect(response.status).toBe(201);
     const task = await response.json() as { runId: string };
+    expect(store.getRun(task.runId)).toMatchObject({ startedByManager: { id: manager.id } });
     return { ...task, managerId: manager.id, projectId };
   }
 
@@ -149,6 +150,12 @@ describe('manager task instruction propagation through the HTTP API and workflow
   it.each(['claude', 'codex'] as const)('propagates current instructions and manager restrictions to a dispatched %s child exactly once', async (runner) => {
     const parent = await createTask('quick-task', 'claude');
     await expect.poll(() => store.getRun(parent.runId)?.status, { timeout: 20_000 }).toMatch(/done|review/);
+    // Reload from disk: an in-memory marker alone would lose the safety rule after restart.
+    store.flush();
+    runs.dispose();
+    store = RunStore.open(join(root, '.ai/cezar'));
+    runs = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 2 } }) });
+    expect(store.getRun(parent.runId)).toMatchObject({ startedByManager: { id: parent.managerId } });
     // Dispatch requires a live parent. Reopen it with a turn that waits for user input.
     expect(runs.continueRun(parent.runId, { text: 'Keep investigating' }).ok).toBe(true);
     await expect.poll(() => store.getRun(parent.runId)?.status, { timeout: 20_000 }).toBe('waiting');
@@ -161,6 +168,7 @@ describe('manager task instruction propagation through the HTTP API and workflow
       workflow: { name: '(planned)', source: 'built-in', steps: [{ id: 'task', prompt: '{{task}}' }, { id: 'verify', command: 'true' }] },
     });
     if ('refused' in child) throw new Error(child.refused);
+    expect(store.getRun(child.id)).toMatchObject({ startedByManager: { id: parent.managerId } });
     await expect.poll(() => specs.some((spec) => spec.cwd === store.getRun(child.id)?.worktreePath), { timeout: 20_000 }).toBe(true);
     const spec = specs.find((candidate) => candidate.cwd === store.getRun(child.id)?.worktreePath);
     if (!spec) throw new Error('missing child session');

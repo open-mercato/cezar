@@ -1959,6 +1959,7 @@ export class ManagerEngine {
         ...(input.runner ? { runner: input.runner } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
+        startedByManager: { id: scope.manager.id, name: scope.manager.name },
       },
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);

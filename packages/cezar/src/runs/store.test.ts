@@ -42,6 +42,24 @@ const LEGACY_RUN = {
   steps: [],
 };
 
+it('loads legacy tasks alongside persisted manager provenance', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'cez-manager-provenance-'));
+  const startedByManager = { id: 'manager-1', name: 'Manager' };
+  try {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([
+      LEGACY_RUN,
+      { ...LEGACY_RUN, id: 'managed-1', startedByManager },
+    ]));
+    const store = RunStore.open(dataDir);
+    expect(store.getRun(LEGACY_RUN.id)?.task).toBe(LEGACY_RUN.task);
+    expect(store.getRun(LEGACY_RUN.id)?.startedByManager).toBeUndefined();
+    expect(store.getRun('managed-1')?.startedByManager).toEqual(startedByManager);
+    store.flush();
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
   let parent: string;
 

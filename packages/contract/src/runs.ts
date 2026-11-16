@@ -45,6 +45,12 @@ import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracke
 
 // ---- the record --------------------------------------------------------------------------
 
+/** Manager provenance carries task restrictions; it does not grant authorization. */
+export const startedByManagerSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(80),
+});
+
 /** One authoritative PR association; optional for compatibility with older run records. */
 export const runPrRefSchema = z.object({
   number: z.number().int().positive(),
@@ -216,6 +222,8 @@ export const runRecordSchema = z.object({
   }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
+  /** Optional so tasks written before manager provenance still load. */
+  startedByManager: startedByManagerSchema.optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
   generateFollowups: z.boolean().optional(),
   /** Autonomous mode (#autonomous): the run never parks at `waiting` or the terminal `review`
@@ -1286,6 +1294,8 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    /** The manager starting the task; kept separately from the user's system prompt. */
+    startedByManager: startedByManagerSchema.optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
