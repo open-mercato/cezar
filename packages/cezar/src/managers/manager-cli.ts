@@ -632,7 +632,17 @@ export async function runManagerCommand(
         return 2;
     }
   } catch (error) {
-    io.error(`cez manager: ${error instanceof Error ? error.message : String(error)}`);
+    io.error(`cez manager: ${error instanceof Error ? error.message : String(error)}${sandboxBlocked(error) ? `\n${SANDBOX_BLOCKED_HINT}` : ''}`);
     return 1;
   }
 }
+
+/** Claude Code's Bash sandbox refuses the loopback connect outright (#2258); a stopped cockpit
+ *  answers ECONNREFUSED instead. */
+function sandboxBlocked(error: unknown): boolean {
+  const cause = (error as { cause?: { code?: unknown } } | undefined)?.cause;
+  return error instanceof TypeError && cause?.code === 'EPERM';
+}
+
+export const SANDBOX_BLOCKED_HINT =
+  'The Bash sandbox blocked this call. cez-manager leaves the sandbox only as one plain command: no heredoc, no line breaks and no ? * [ ~ anywhere in it. Write any text to files/<name>.md with Write, pass --file files/<name>.md, keep titles and reasons to plain words, and run it again.';

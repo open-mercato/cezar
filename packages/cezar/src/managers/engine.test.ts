@@ -9,6 +9,7 @@ import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } fr
 import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
+import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET, managerSystemPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
@@ -203,6 +204,10 @@ describe('ManagerEngine', () => {
       expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash', `Write(/${files}/**)`, `Edit(/${files}/**)`]);
       expect(spec?.bashAllowlist).toContain('cez-manager');
       expect(spec?.bashAllowlist?.some((entry) => /gh pr merge|^gh$|^git$/.test(entry))).toBe(false);
+      // Only cez-manager leaves the user's sandbox, which blocks its loopback fetch to the cockpit.
+      expect(spec?.sandboxExcludedCommands).toEqual(['cez-manager *']);
+      // ...but only as a plain command, so its text goes through --file (#2258).
+      expect(spec?.systemPrompt).toContain(MANAGER_TEXT_IN_FILES);
       expect(spec?.env).toMatchObject({ CEZ_MANAGER_ID: id, CEZ_MANAGER_TURN: 'chat' });
       expect(spec?.env?.PATH?.startsWith(join(home, 'managers', 'bin'))).toBe(true);
       expect(spec?.additionalDirectories).toEqual(['/alpha']);
@@ -265,6 +270,9 @@ describe('ManagerEngine', () => {
       engine.send(id, 'again');
       await settled(engine);
       expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      // Claude's sandbox setting means nothing to another backend.
+      expect(backend.specs.at(-1)?.sandboxExcludedCommands).toBeUndefined();
+      expect(backend.specs.at(-1)?.systemPrompt).not.toContain(MANAGER_TEXT_IN_FILES);
     });
 
     it('spells a Windows drive the way Claude rules do', () => {
