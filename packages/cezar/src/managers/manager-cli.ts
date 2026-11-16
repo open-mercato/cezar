@@ -33,7 +33,7 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
 
   cez manager status | attention | tasks | prs   what is going on (add --json for data)
   cez manager task <run> [--project <id>]        one task, its model, PR, last message and children
-  cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--model m] [--effort e] [--dispatch] "<objective>"
+  cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--account id] [--model m] [--effort e] [--dispatch] "<objective>"
   cez manager task say --project <id> <run> [--model m] [--effort e] "<text>"
                                                  --model/--effort only when it continues a finished task
   cez manager task cancel --project <id> <run> [--reason "…"]
@@ -110,7 +110,8 @@ Starts a task.
   --project <id>     the project (required unless only one is connected)
   --title <t>        its title
   --workflow <w>     a workflow name (default quick-task); see cez manager workflows
-  --runner <r>       the agent backend, e.g. claude or codex (Automatic only; otherwise the manager's task agent is enforced)
+  --runner <r>       the agent backend, e.g. claude or codex, from the manager's allowed task accounts
+  --account <id>     the agent account id (default selects the discovered account)
   --model <m>        a model id or alias the runner can use, e.g. opus; refused with the valid ones otherwise
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
   --dispatch         start it as the root of a dispatch tree${CONTENT_HELP}`,
@@ -422,7 +423,7 @@ export async function runManagerCommand(
         if (sub === 'create') {
           const { values, positionals } = parse('task create', taskArgs, {
             project: { type: 'string' }, title: { type: 'string' }, workflow: { type: 'string' },
-            runner: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, dispatch: { type: 'boolean' },
+            runner: { type: 'string' }, account: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, dispatch: { type: 'boolean' },
             ...CONTENT_OPTIONS,
           }, true);
           const effort = effortOf(values.effort);
@@ -438,6 +439,7 @@ export async function runManagerCommand(
               ...(values.title ? { title: values.title } : {}),
               ...(values.workflow ? { workflow: values.workflow } : {}),
               ...(values.runner ? { runner: values.runner } : {}),
+              ...(values.account ? { agentProfile: values.account } : {}),
               ...(values.model ? { model: values.model } : {}),
               ...(effort ? { effort } : {}),
               ...(values.dispatch ? { dispatch: true } : {}),

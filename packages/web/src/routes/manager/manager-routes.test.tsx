@@ -292,10 +292,28 @@ describe('/manager/new', () => {
       )) })
     })
     fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: runner }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: `${runner} · Default` }))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
     fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate my tasks' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
-    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ taskRunner: runner }))
+    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ taskAgents: [{ runner, agentProfile: 'default' }] }))
+  })
+
+  it('creates a manager with two Claude accounts and one Codex account from setup', async () => {
+    renderAt('/manager/new', (client) => {
+      client.setQueryData(workspaceQueryKeys.providerStatus, { providers: ['claude', 'codex'].map((provider) => ({ provider, status: 'connected', enabled: true })) })
+      client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [
+        { provider: 'claude', id: 'one', label: 'One' }, { provider: 'claude', id: 'two', label: 'Two' }, { provider: 'codex', id: 'work', label: 'Work' },
+      ] })
+    })
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
+    for (const name of ['claude · One', 'claude · Two', 'codex · Work']) fireEvent.click(await screen.findByRole('menuitemcheckbox', { name }))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate the selected accounts' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ taskAgents: [
+      { runner: 'claude', agentProfile: 'one' }, { runner: 'claude', agentProfile: 'two' }, { runner: 'codex', agentProfile: 'work' },
+    ] }))
   })
 
   it('omits the task agent from creation after returning to Automatic', async () => {
@@ -305,13 +323,14 @@ describe('/manager/new', () => {
       ] })
     })
     fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'codex' }))
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Agent for new tasks' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Automatic' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'codex · Default' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Automatic' }))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
     fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate automatically' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
     await waitFor(() => expect(posted('/workspace/managers')).toHaveLength(1))
     expect(posted('/workspace/managers')[0]?.body).not.toHaveProperty('taskRunner')
+    expect(posted('/workspace/managers')[0]?.body).not.toHaveProperty('taskAgents')
   })
 })
 

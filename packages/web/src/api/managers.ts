@@ -499,6 +499,7 @@ export function useManagerChat(id: string) {
 export function useUpdateManager(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
+    scope: { id: `manager-settings:${id}` },
     mutationFn: (patch: UpdateManagerInput) => updateManager(id, patch),
     onSuccess: (manager) => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, false))

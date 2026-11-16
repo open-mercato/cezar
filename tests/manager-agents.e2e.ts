@@ -37,9 +37,10 @@ test('manager accounts and task agents persist and reach the launched task', { t
   try {
     await app.open(`/manager/${manager.id}`);
     await screen.getByRole('button', 'Agent for new tasks').first().tap();
-    await screen.getByRole('menuitemradio', 'codex', { exact: true }).tap();
-    await expect.poll(async () => managerSummarySchema.parse(await call(path)).taskRunner).toBe('codex');
-    await startTask('claude');
+    await screen.getByRole('menuitemcheckbox', 'codex · Default', { exact: true }).tap();
+    await browser.keyboard.press('Escape');
+    await expect.poll(async () => managerSummarySchema.parse(await call(path)).taskAgents?.[0]?.runner).toBe('codex');
+    await startTask('codex');
 
     await screen.getByRole('button', 'Model and effort').first().tap();
     await screen.getByRole('menuitemradio', 'codex', { exact: true }).tap();
@@ -54,8 +55,9 @@ test('manager accounts and task agents persist and reach the launched task', { t
     await browser.keyboard.press('Escape');
 
     await screen.getByRole('button', 'Agent for new tasks').first().tap();
-    await screen.getByRole('menuitemradio', 'Automatic', { exact: true }).tap();
-    await expect.poll(async () => managerSummarySchema.parse(await call(path)).taskRunner ?? null).toBe(null);
+    await screen.getByRole('menuitemcheckbox', 'Automatic', { exact: true }).tap();
+    await browser.keyboard.press('Escape');
+    await expect.poll(async () => managerSummarySchema.parse(await call(path)).taskAgents ?? null).toBe(null);
     await startTask();
     await browser.setViewport({ width: 390, height: 844 });
     await expect(screen.getByRole('button', 'Agent for new tasks', { visible: true })).toContainText('Automatic');

@@ -401,7 +401,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
             {...(manager.agentProfile ? { agentProfile: manager.agentProfile } : {})}
             onChange={onPatch}
           />
-          <TaskRunnerPicker {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} />
+          <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} />
           <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
           <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
             <BellIcon aria-hidden="true" className="size-3.5 shrink-0" />

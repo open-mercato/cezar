@@ -6,7 +6,7 @@ import { delimiter, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagerMessage } from '@open-mercato/cezar-contract';
-import { runnerSchema } from '@open-mercato/cezar-contract';
+import { agentProfileResponseSchema, runnerSchema } from '@open-mercato/cezar-contract';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import type { AgentEvent } from '../core/agent-runner.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
@@ -228,6 +228,48 @@ describe('the managers routes', () => {
     expect(await pinned.json()).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
     expect(new ManagerStore().get(id)?.taskRunner).toBe(runner);
     expect(await spawn()).toMatchObject({ runner });
+  });
+
+  it('persists two Claude accounts and one Codex account and forwards only selected pairs into POST /runs', async () => {
+    const add = async (provider: 'claude' | 'codex', label: string) => {
+      const configDir = join(home, label);
+      mkdirSync(configDir);
+      const response = await request('/api/v1/workspace/agent-profiles', { method: 'POST', body: { provider, label, configDir } });
+      expect(response.status).toBe(201);
+      return agentProfileResponseSchema.parse(await response.json()).profile.id;
+    };
+    const first = await add('claude', 'First');
+    const second = await add('claude', 'Second');
+    const codex = await add('codex', 'Codex');
+    const agents = [{ runner: 'claude', agentProfile: first }, { runner: 'claude', agentProfile: second }, { runner: 'codex', agentProfile: codex }];
+    const { id, connectedProjectIds: [projectId] } = await createManager({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents: agents, cronMinutes: 0 });
+    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskAgents: agents });
+    for (const agent of agents) {
+      expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Use this exact account', ...agent } })).status).toBe(201);
+      expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject(agent);
+    }
+    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents: [{ runner: 'codex', agentProfile: first }] } })).status).toBe(400);
+    const before = startRun.mock.calls.length;
+    for (const agent of [{ runner: 'opencode' }, { runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: first }]) {
+      expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Outside the allowed set', ...agent } })).status).toBe(403);
+    }
+    expect(startRun).toHaveBeenCalledTimes(before);
+    await request(`${BASE}/${id}`, { method: 'PATCH', body: { name: 'Renamed' } });
+    expect(new ManagerStore().get(id)?.taskAgents).toEqual(agents);
+    const clear = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents: null, taskRunner: null } });
+    expect(await clear.json()).not.toHaveProperty('taskAgents');
+    expect(new ManagerStore().get(id)).not.toHaveProperty('taskAgents');
+    expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Automatic account choice', runner: 'claude', agentProfile: 'default' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'claude', agentProfile: 'default' });
+  });
+
+  it('rejects empty, repeated, unknown and cross-provider task account choices before saving', async () => {
+    const { id } = await createManager({ instructions: '', projects: 'all', cronMinutes: 0 });
+    for (const taskAgents of [[], [{ runner: 'claude', agentProfile: 'missing' }], [{ runner: 'imaginary', agentProfile: 'default' }], [{ runner: 'claude' }, { runner: 'claude' }]]) {
+      expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents } })).status).toBe(400);
+      expect(new ManagerStore().get(id)).not.toHaveProperty('taskAgents');
+    }
+    expect(startRun).not.toHaveBeenCalled();
   });
 
   it('merges only through the decision route, on the same code the GitHub tab uses', async () => {

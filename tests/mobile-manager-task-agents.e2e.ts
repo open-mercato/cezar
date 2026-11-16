@@ -27,25 +27,28 @@ test('phone task-agent choices persist and control newly spawned task metadata a
   }));
   const path = `/workspace/managers/${manager.id}`;
   const runIds: string[] = [];
+  await call(path, 'PATCH', { followUp: false });
   try {
     await browser.setViewport({ width: 390, height: 844 });
     await app.open(`/manager/${manager.id}`);
     // Explicit pins must override a contrary agent request; Automatic may choose per task.
     for (const choice of [...runnerSchema.options, null]) {
       await screen.getByRole('button', 'Agent for new tasks', { visible: true }).tap();
-      const option = screen.getByRole('menuitemradio', choice ?? 'Automatic', { exact: true });
+      await screen.getByRole('menuitemcheckbox', 'Automatic', { exact: true }).tap();
+      const option = screen.getByRole('menuitemcheckbox', choice ? `${choice} · Default` : 'Automatic', { exact: true });
       await option.scrollIntoView();
       await option.tap();
-      await expect.poll(async () => managerSummarySchema.parse(await call(path)).taskRunner ?? null).toBe(choice);
+      await browser.keyboard.press('Escape');
+      await expect.poll(async () => JSON.stringify(managerSummarySchema.parse(await call(path)).taskAgents ?? null)).toBe(JSON.stringify(choice ? [{ runner: choice, agentProfile: 'default' }] : null));
       await browser.reload();
       await screen.getByRole('button', 'Agent for new tasks', { visible: true }).tap();
-      await expect(screen.getByRole('menuitemradio', choice ?? 'Automatic', { exact: true })).toHaveAttribute('aria-checked', 'true');
+      await expect(screen.getByRole('menuitemcheckbox', choice ? `${choice} · Default` : 'Automatic', { exact: true })).toHaveAttribute('aria-checked', 'true');
       await browser.keyboard.press('Escape');
       await expect(screen.getByRole('menu', 'Agent for new tasks')).toBeHidden();
       expect(managerSummarySchema.parse(await call(path))).toMatchObject({ runner: 'codex', agentProfile: 'default' });
       const expected = choice ?? 'codex';
       const created = managerCreateTaskResponseSchema.parse(await call(`${path}/tasks`, 'POST', {
-        projectId, task: 'Say hello. mock:done', ...(choice ? { runner: choice === 'claude' ? 'codex' : 'claude' } : {}),
+        projectId, task: 'Say hello. mock:done', ...(choice ? { runner: choice, agentProfile: 'default' } : {}),
       }));
       runIds.push(created.runId);
       const record = async () => apiRunSchema.parse(await call(`/p/${projectId}/runs/${created.runId}`));
@@ -99,8 +102,8 @@ test('phone and tablet keep both manager and task-agent controls readable and re
         }) && document.documentElement.scrollWidth <= innerWidth;
       })).toBe(true);
       await taskPicker.tap();
-      await expect(screen.getByRole('menuitemradio', 'Automatic', { exact: true })).toBeVisible();
-      await expect(screen.getByRole('menuitemradio', 'antigravity', { exact: true })).toHaveAttribute('aria-checked', 'true');
+      await expect(screen.getByRole('menuitemcheckbox', 'Automatic', { exact: true })).toBeVisible();
+      await expect(screen.getByRole('menuitemcheckbox', 'antigravity · Automatic account', { exact: true })).toHaveAttribute('aria-checked', 'true');
       await app.screenshot(`task-agents-${size.width}x${size.height}`);
       await browser.keyboard.press('Escape');
       await modelPicker.tap();
