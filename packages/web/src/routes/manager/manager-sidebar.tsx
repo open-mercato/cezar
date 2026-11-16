@@ -90,13 +90,13 @@ export const ManagerRow = memo(function ManagerRow({
   )
 })
 
-function useOrderedManagers(): { ordered: ManagerSummary[]; loading: boolean; isFetching: boolean; isError: boolean } {
+function useOrderedManagers(): { ordered: ManagerSummary[]; loading: boolean; hasData: boolean; isFetching: boolean; isError: boolean } {
   const capability = useHealth().data?.capabilities.managers
   const query = useManagers(capability === true)
   const managers = query.data?.managers
   const ordered = useMemo(() => orderManagers(managers ?? []), [managers])
   // Health still loading counts as pending; managers switched off or a failed list do not.
-  return { ordered, loading: query.isPending && capability !== false, isFetching: query.isFetching, isError: query.isError }
+  return { ordered, loading: query.isPending && capability !== false, hasData: managers !== undefined, isFetching: query.isFetching, isError: query.isError }
 }
 
 /** One manager in the folded rail: its static portrait (never the animated mascot), named by
@@ -252,18 +252,18 @@ const WORKSPACE_COUNT_CLASS = 'ml-auto rounded-full bg-muted px-1.5 py-px text-m
 
 /**
  * Manager mode's sidebar body, between the switch and the footer (design 2026-11 "Manager mode"):
- * New manager, the managers with their latest line, and a small Workspace group — Approvals (the
- * first chat waiting on you), the active chat's Jobs, and the global Manager settings.
+ * New manager, the managers with their latest line, and a small Workspace group — workspace
+ * Approvals, the active chat's Jobs, and the global Manager settings.
  */
 export function ManagerSidebar() {
   const { pathname } = useLocation()
   const onNavigate = useSidebarNavigate()
-  const { ordered, loading, isFetching, isError } = useOrderedManagers()
+  const { ordered, loading, hasData, isFetching, isError } = useOrderedManagers()
   const now = useNow(60_000)
   const activeId = /^\/manager\/([^/?#]+)$/.exec(pathname)?.[1]
   const active = activeId === undefined || activeId === 'new' ? undefined : ordered.find((manager) => manager.id === decodeURIComponent(activeId))
-  const waiting = ordered.reduce((sum, manager) => sum + needsYouCount(manager), 0)
-  const firstWaiting = ordered.find((manager) => needsYouCount(manager) > 0)
+  const waiting = ordered.reduce((sum, manager) => sum + manager.pendingActions, 0)
+  const approvalsActive = pathname === '/manager/approvals'
   return (
     <>
       <div className="px-3 pb-2">
@@ -291,25 +291,21 @@ export function ManagerSidebar() {
         </nav>
         <nav aria-label="Workspace" data-slot="manager-sidebar-workspace" className="px-2.5">
           <h2 className="px-3 pt-3 pb-1 eyebrow text-muted-foreground">Workspace</h2>
-          {/* No approvals page exists: the row opens the first chat whose cards wait on you. */}
-          {firstWaiting ? (
-            <Link
-              to={`/manager/${encodeURIComponent(firstWaiting.id)}`}
-              data-slot="manager-sidebar-approvals"
-              onClick={() => {
-                noteManagerChatSource('sidebar')
-                onNavigate?.()
-              }}
-              className={NAV_ROW_CLASS}
-            >
-              <CheckCheckIcon className="size-4 shrink-0" aria-hidden="true" />
-              Approvals
-              <span className={WORKSPACE_COUNT_CLASS}>
-                {waiting}
-                <span className="sr-only"> waiting on you</span>
-              </span>
-            </Link>
-          ) : null}
+          <Link
+            to="/manager/approvals"
+            data-slot="manager-sidebar-approvals"
+            aria-label={hasData ? `Approvals, ${waiting} pending ${waiting === 1 ? 'approval' : 'approvals'}` : 'Approvals'}
+            aria-current={approvalsActive ? 'page' : undefined}
+            onClick={onNavigate}
+            className={cn(NAV_ROW_CLASS, approvalsActive && 'bg-muted text-foreground')}
+          >
+            <CheckCheckIcon className="size-4 shrink-0" aria-hidden="true" />
+            Approvals
+            {hasData ? <span className={WORKSPACE_COUNT_CLASS}>
+              {waiting}
+              <span className="sr-only"> pending approvals</span>
+            </span> : null}
+          </Link>
           {active ? <SidebarJobs key={active.id} manager={active} /> : null}
           <Link
             to="/settings/global/manager"

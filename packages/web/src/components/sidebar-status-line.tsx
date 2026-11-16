@@ -1,6 +1,7 @@
-import { EllipsisIcon, MonitorIcon, MoonIcon, SearchIcon, StarIcon, SunIcon, WrenchIcon } from 'lucide-react'
+import { EllipsisIcon, MonitorIcon, MoonIcon, SearchIcon, SettingsIcon, StarIcon, SunIcon, WrenchIcon } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
+import { NavLink } from 'react-router'
 
 import { openCommandPalette } from '@/components/command-palette'
 import { Kbd } from '@/components/kbd'
@@ -72,7 +73,7 @@ const FOCUS_RING = 'outline-none focus-visible:ring-[3px] focus-visible:ring-rin
 /**
  * The sidebar's footer, two rows: a search launcher, then health and running count beside the
  * version chip (main's footer placement, #368) and a "⋯" panel for the machine glance, Tools,
- * What's new, the ⭐ ask and the theme.
+ * Global Settings, What's new, the ⭐ ask and the theme.
  */
 export function SidebarStatusLine({
   health,
@@ -241,6 +242,13 @@ function MoreMenu({
             <DropdownMenuSeparator />
           </>
         ) : null}
+        <DropdownMenuItem asChild className="min-h-11 text-ui aria-[current=page]:bg-muted aria-[current=page]:font-semibold aria-[current=page]:text-foreground md:min-h-0 no-hover:min-h-11">
+          {/* Global settings live outside the active project's URL scope. */}
+          <NavLink to="/settings/global">
+            <SettingsIcon aria-hidden="true" />
+            Global Settings
+          </NavLink>
+        </DropdownMenuItem>
         {toolsMenu ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger data-slot="tools-menu" className="text-ui">

@@ -17,6 +17,7 @@ function device({ standalone = true, userAgent = 'Mozilla/5.0', width = 390, hei
     removeEventListener: () => {},
   }))
   vi.stubGlobal('screen', { width, height })
+  vi.stubGlobal('innerWidth', width)
   vi.stubGlobal('navigator', { ...navigator, userAgent })
 }
 
@@ -121,10 +122,10 @@ describe('PhoneBottomBar', () => {
     await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/m-1'))
   })
 
-  it('stays out of a phone browser tab', () => {
+  it('appears in a narrow browser tab', () => {
     device({ standalone: false })
     renderShell('/manager')
-    expect(bar()).toBeNull()
+    expect(bar()).not.toBeNull()
   })
 
   it('reserves its height for the New-task FAB only while it is there', () => {
@@ -334,10 +335,11 @@ describe('PhoneBottomBar', () => {
       expect(within(drawer).getByText('manager rows')).toBeTruthy()
     })
 
-    it('pads the status bar above the column, where no phone header does', () => {
+    it('pads the status bar once in the visible top header', () => {
       device(IPAD)
       renderShell('/manager/m-1')
-      expect(column().className).toContain('md:pt-[env(safe-area-inset-top)]')
+      expect(column().className).not.toContain('md:pt-[env(safe-area-inset-top)]')
+      expect(document.querySelector('[data-slot="mobile-top-bar"]')!.className).not.toContain('md:hidden')
     })
 
     it('keeps the bar in a thread, with no top menu bar', () => {
@@ -367,6 +369,35 @@ describe('PhoneBottomBar', () => {
       fireEvent.click(tasks)
       expect(open).toHaveBeenCalledOnce()
     })
+  })
+
+  it.each([600, 834, 1023])('uses mobile navigation with a fine pointer at %spx', (width) => {
+    device({ width, standalone: false })
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    renderShell('/manager')
+    expect(bar()).not.toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+  })
+
+  it('responds to container resizing inside a wide viewport', () => {
+    device({ width: 1440, standalone: false })
+    let width = 700
+    let observeResize = () => {}
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width }) as DOMRect)
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { observeResize = callback }
+      observe() {}
+      disconnect() {}
+    })
+    renderShell('/manager')
+    expect(bar()).not.toBeNull()
+    act(() => { width = 1024; observeResize() })
+    expect(bar()).toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).not.toBeNull()
+    act(() => { width = 800; observeResize() })
+    expect(bar()).not.toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+    vi.restoreAllMocks()
   })
 
   it('a desktop browser keeps the sidebar and no bar', () => {
