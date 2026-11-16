@@ -347,6 +347,7 @@ export function ThreadView({
   const scroll = useThreadScroll(`${run.id}:main`, {
     onLoadOlder: history?.hasOlder ? history.loadOlder : undefined,
     onJumpToLatest: history?.jumpToLatest,
+    startAtLatest: hash === '#latest',
     rowKeys: rows.map(({ key }) => key),
   })
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins

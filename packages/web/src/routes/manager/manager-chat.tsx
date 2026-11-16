@@ -498,6 +498,15 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
   const scroll = useChatScroll(id, chat.messages, loadOlder)
+  const returnedDecision = useRef('')
+  useEffect(() => {
+    if (!location.hash.startsWith('#decision-') || returnedDecision.current === location.key) return
+    let target: string
+    try { target = decodeURIComponent(location.hash.slice(1)) } catch { return }
+    if (scroll.reveal((box) => Array.from(box.querySelectorAll<HTMLElement>('[id]')).find((node) => node.id === target))) {
+      returnedDecision.current = location.key
+    } else if (hasNextPage) loadOlder()
+  }, [location.hash, location.key, chat.messages, hasNextPage, loadOlder, scroll.reveal])
   useKeyboardInsetVar(scroll.restick)
   // Recovery unmounts Retry: a keyboard user who was on it lands in the transcript, not on <body>.
   const retryFocused = useRef(false)

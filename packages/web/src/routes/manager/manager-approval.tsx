@@ -17,6 +17,7 @@ import { runTitle } from '@/lib/task-groups'
 import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage, RunRecord } from '@open-mercato/cezar-api-client'
 
+import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
 import { ForgeReference } from './manager-reference'
 import { taskPath } from './manager-session-card'
@@ -376,6 +377,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
   return (
     <ManagerCard
       ref={card}
+      id={`decision-${message.id}`}
       data-slot="manager-action"
       data-status={message.status}
       data-action-id={message.id}
@@ -400,6 +402,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
         </>
       ) : undefined}
     >
+      <DecisionSources message={message} origin={origin} />
       <ReferenceStatusProvider requests={references}>
         <dl className="flex flex-col gap-1.5">
           <CardFacts action={action} projectName={projectName} origin={origin} />

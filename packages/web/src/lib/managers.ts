@@ -302,6 +302,7 @@ export interface ManagerOrigin {
   name: string
   /** The manager's filtered Tasks table the task was opened from (`/tasks?manager=…`). */
   tasks?: string
+  decision?: string
 }
 
 const origins = new Map<string, ManagerOrigin>()
@@ -319,7 +320,7 @@ export function managerOriginOf(state: unknown): ManagerOrigin | undefined {
   const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
   if (typeof origin?.id !== 'string' || typeof origin.name !== 'string') return undefined
   const tasks = typeof origin.tasks === 'string' && origin.tasks.startsWith('/tasks?') ? origin.tasks : undefined
-  return { id: origin.id, name: origin.name, ...(tasks ? { tasks } : {}) }
+  return { id: origin.id, name: origin.name, ...(tasks ? { tasks } : {}), ...(typeof origin.decision === 'string' ? { decision: origin.decision } : {}) }
 }
 
 export function clearManagerOrigins(): void {

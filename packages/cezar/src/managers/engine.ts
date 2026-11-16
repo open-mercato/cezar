@@ -32,6 +32,7 @@ import {
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
+  type ManagerTaskSource,
   type ManagerTaskAgent,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
@@ -224,7 +225,17 @@ type QueueItem =
   /** The chat a usage limit cut off; read from state under the lease, so only one cockpit replays it. */
   | { kind: 'resume' };
 
+/** Explicit task references only: never guess a task from a title or an unrelated prior card. */
+function taskSources(text: string): ManagerTaskSource[] {
+  const sources = new Map<string, ManagerTaskSource>();
+  for (const match of text.matchAll(/\[\[task:([^\]/\s]+)\/([^\]\s]+)\]\]/g)) {
+    sources.set(match[0], { projectId: match[1]!, runId: match[2]! });
+  }
+  return [...sources.values()];
+}
+
 interface ActiveTurn {
+  sourceTasks?: ReturnType<typeof taskSources>;
   kind: ManagerTurnKind;
   /** Screenshots the user sent with this message, for the model to see. */
   images?: ContentBlock[];
@@ -902,6 +913,7 @@ export class ManagerEngine {
       seq,
       at: this.iso(),
       kind: 'user',
+      sourceTasks: answered.flatMap((message) => message.sourceTasks ?? taskSources(message.text)),
       text,
       ...(files.length > 0 ? { attachments: files.map((file) => file.saved) } : {}),
     }, true);
@@ -1118,6 +1130,7 @@ export class ManagerEngine {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
       // Task events still owed a follow-up ride along: the user asking first answers them too.
       const { notes, followups } = store.state(id);
+      turn.sourceTasks = [...item.messageIds.flatMap((messageId) => store.message(id, messageId)?.sourceTasks ?? []), ...taskSources([item.text, ...notes, ...followups.map((entry) => entry.line)].join('\n'))];
       const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line)), 'chat', turn, undefined, item)) === 'heard';
       if (heard) this.consumeNotes(id, notes, followups);
       return;
@@ -1126,6 +1139,7 @@ export class ManagerEngine {
       const { notes, followups, resume } = store.state(id);
       // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
       if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
+      turn.sourceTasks = taskSources(followups.map((entry) => entry.line).join('\n'));
       const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes), 'chat', turn);
       if (outcome === 'heard') this.consumeNotes(id, notes, followups);
       // Failed: no retry that could bill in a loop; the next chat hears them instead.
@@ -1147,6 +1161,7 @@ export class ManagerEngine {
       ...current,
       jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
     }));
+    turn.sourceTasks = taskSources(job.prompt);
     const outcome = await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt), 'job', turn, job.name);
     // Due again, so it runs as soon as the limit lifts.
     if (outcome === 'limited') {
@@ -1182,7 +1197,7 @@ export class ManagerEngine {
     chat?: Extract<QueueItem, { kind: 'chat' }>,
   ): Promise<TurnOutcome> {
     const { store } = this.deps;
-    const base = { id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
+    const base = { sourceTasks: turn.sourceTasks ?? [], id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
     let sent = this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
     let keyframe = 0;
     let throttle: NodeJS.Timeout | undefined;
@@ -1239,6 +1254,7 @@ export class ManagerEngine {
     this.publish(id, {
       ...base,
       text: judgement.text,
+      sourceTasks: taskSources(judgement.text).length ? taskSources(judgement.text) : turn.sourceTasks,
       ...judgedFields(judgement),
       streaming: false,
       commands: result.commands,
@@ -1516,6 +1532,7 @@ export class ManagerEngine {
     turn: ActiveTurn,
   ): Promise<void> {
     const { store } = this.deps;
+    turn.sourceTasks = fresh.flatMap((item) => item.runId ? [{ projectId: item.projectId, runId: item.runId }] : []);
     const startedAt = this.now();
     const result = await this.drive(id, manager, watchPrompt(snapshot, fresh), turn, () => undefined).catch(turnFailure);
     this.reportTurn(manager, turn, startedAt, result);
@@ -1579,6 +1596,7 @@ export class ManagerEngine {
       kind: 'assistant',
       turn: 'watch',
       text: judgement.text,
+      sourceTasks: taskSources(judgement.text).length ? taskSources(judgement.text) : turn.sourceTasks,
       ...judgedFields(judgement),
       streaming: false,
       commands: result.commands,
@@ -2057,13 +2075,22 @@ export class ManagerEngine {
     };
   }
 
+  /** Tool reads and writes can discover a source after the turn started. */
+  private rememberTaskSource(id: string, projectId: string, runId: string): void {
+    const active = this.runtimes.get(id)?.active;
+    if (active && !active.sourceTasks?.some((entry) => entry.projectId === projectId && entry.runId === runId)) {
+      active.sourceTasks = [...(active.sourceTasks ?? []), { projectId, runId }];
+    }
+  }
+
   async taskDetail(id: string, projectId: string, runId: string): Promise<ManagerTaskDetail | ManagerRefusal> {
     const scope = await this.toolScope(id, projectId, false);
     if ('error' in scope) return scope;
     const source = scope.source;
     const rows = source ? taskDetailRows(source.runs(), runId) : undefined;
     if (!source || !rows) return { error: 'task not found', status: 404 };
-    const lastMessage = lastAssistantText(source.root, runId);
+    this.rememberTaskSource(id, projectId, rows.task.runId);
+    const lastMessage = lastAssistantText(source.root, rows.task.runId);
     return { ...rows, ...(lastMessage ? { lastMessage } : {}) };
   }
 
@@ -2169,6 +2196,7 @@ export class ManagerEngine {
     if (input.title) {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);
     }
+    this.rememberTaskSource(id, input.projectId, run.id);
     return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
   }
 
@@ -2185,6 +2213,7 @@ export class ManagerEngine {
     if ('error' in composed) return composed;
     const { forward } = composed;
     const body = { text: composed.text, ...(forward && forward.images.length > 0 ? { images: forward.images } : {}) };
+    this.rememberTaskSource(id, input.projectId, input.runId);
     const sent = { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
     if (input.model || input.effort) {
@@ -2330,6 +2359,7 @@ export class ManagerEngine {
       seq: this.deps.store.nextSeq(id),
       at: this.iso(),
       kind: 'action',
+      sourceTasks: taskSources(input.reason ?? '').length ? taskSources(input.reason ?? '') : this.runtime(id).active?.sourceTasks ?? [],
       action,
       ...(input.reason ? { reason: input.reason } : {}),
       status: 'pending',

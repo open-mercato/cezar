@@ -38,6 +38,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import { ActionCard, type DecideAction } from './manager-approval'
+import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
 import { ForgeReference } from './manager-reference'
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
@@ -143,10 +144,12 @@ function ManagerQuestions({
   ask,
   answer,
   answerOnCard,
+  source,
 }: {
   managerId: string
   messageId: string
   ask: ManagerAsk
+  source: ReactNode
   answer: string | undefined
   /** The next row is this answer and is not drawn: the card says it instead. */
   answerOnCard: boolean
@@ -221,12 +224,15 @@ function ManagerQuestions({
   }
   return (
     <ManagerCard
+      id={`decision-${messageId}`}
+      tabIndex={-1}
       data-slot="manager-ask"
       data-resolved="false"
       icon={<MessageCircleQuestionIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
       title="Your decision"
       status={<><StatusDot tone="info" />Open</>}
     >
+      {source}
       {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
           chips per question are the design's ghost actions. */}
       <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
@@ -306,7 +312,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
+          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
