@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { attachmentListSchema } from './runs.ts';
+import { runnerSchema } from './runners.ts';
 
 /**
  * Managers (spec `.ai/specs/2026-10-31-managers.md`): global, long-lived agents the user talks to
@@ -195,6 +196,7 @@ export const managerSchema = z.object({
   access: managerAccessSchema.optional(),
   projectAccess: managerProjectAccessSchema.optional(),
   runner: z.string().optional(),
+  taskRunner: runnerSchema.optional(),
   model: z.string().optional(),
   effort: managerEffortSchema.optional(),
   /** Agent account id ("Account" in the design); absent = the runner's default. */
@@ -259,6 +261,7 @@ export const createManagerInputSchema = z.object({
   access: managerAccessSchema.optional(),
   projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.optional(),
+  taskRunner: runnerSchema.optional(),
   model: modelInput.optional(),
   effort: managerEffortSchema.optional(),
   agentProfile: z.string().max(64).optional(),
@@ -278,6 +281,7 @@ export const updateManagerInputSchema = z.object({
   /** Replaces the whole map. */
   projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.nullable().optional(),
+  taskRunner: runnerSchema.nullable().optional(),
   model: modelInput.nullable().optional(),
   effort: managerEffortSchema.nullable().optional(),
   agentProfile: z.string().max(64).nullable().optional(),

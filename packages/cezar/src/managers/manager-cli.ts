@@ -110,7 +110,7 @@ Starts a task.
   --project <id>     the project (required unless only one is connected)
   --title <t>        its title
   --workflow <w>     a workflow name (default quick-task); see cez manager workflows
-  --runner <r>       the agent backend, e.g. claude or codex
+  --runner <r>       the agent backend, e.g. claude or codex (Automatic only; otherwise the manager's task agent is enforced)
   --model <m>        a model id or alias the runner can use, e.g. opus; refused with the valid ones otherwise
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
   --dispatch         start it as the root of a dispatch tree${CONTENT_HELP}`,

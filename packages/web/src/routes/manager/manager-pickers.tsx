@@ -1,8 +1,7 @@
 import { CheckIcon, ChevronDownIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
-import { useAgentAccounts } from '@/api/agent-accounts'
-import { useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { useAgentProfiles, useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import {
   DropdownMenu,
@@ -23,6 +22,7 @@ import {
   MANAGER_CRON_MINUTES,
   managerCronMinutesSchema,
   managerEffortSchema,
+  runnerSchema,
   type ManagerEffort,
   type ManagerProjects,
   type Runner,
@@ -34,7 +34,7 @@ import {
 /** What a picker edits. `null` clears, as in the update route; the setup screen maps it to absent. */
 export type ManagerPatch = Pick<
   UpdateManagerInput,
-  'projects' | 'access' | 'projectAccess' | 'runner' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
+  'projects' | 'access' | 'projectAccess' | 'runner' | 'taskRunner' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
 >
 
 export const PICKER_TRIGGER =
@@ -171,6 +171,7 @@ export function ModelPicker({
   runner: pinnedRunner,
   model,
   effort,
+  agentProfile,
   onChange,
   pill = false,
   chip = false,
@@ -178,6 +179,7 @@ export function ModelPicker({
   runner?: string
   model?: string
   effort?: ManagerEffort
+  agentProfile?: string
   onChange: (patch: ManagerPatch) => void
   /** The phone composer's round control. */
   pill?: boolean
@@ -214,7 +216,7 @@ export function ModelPicker({
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto">
+      <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-2rem)] overflow-y-auto">
         {runners.length > 1 ? (
           <>
             <DropdownMenuLabel className="text-xs text-muted-foreground">Agent</DropdownMenuLabel>
@@ -230,6 +232,9 @@ export function ModelPicker({
             <DropdownMenuSeparator />
           </>
         ) : null}
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Account</DropdownMenuLabel>
+        <AccountOptions runner={runner} {...(agentProfile !== undefined ? { agentProfile } : {})} onChange={onChange} />
+        <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-xs text-muted-foreground">Model</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(next) => onChange({ model: next === '' ? null : next })}>
           {models.map((entry) => (
@@ -266,25 +271,65 @@ export function AccountPicker({
   onChange: (patch: ManagerPatch) => void
 }) {
   const runner = useManagerRunner(pinnedRunner)
-  const logins = useAgentAccounts().accounts.filter((account) => account.provider === runner)
-  const current = logins.find((account) => account.id === agentProfile)
-  const named = logins.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID)
+  const profiles = useAgentProfiles().data
+  const selected = agentProfile ?? profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const current = profiles?.profiles.find((account) => account.provider === runner && account.id === selected)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" data-slot="manager-account-picker" aria-label="Agent account" className={PICKER_TRIGGER}>
-          <TriggerLabel>{current ? `Account ${current.label}` : 'Account'}</TriggerLabel>
+          <TriggerLabel>Account {current?.label ?? (selected === DEFAULT_AGENT_ACCOUNT_ID ? 'Default' : selected)}</TriggerLabel>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-w-[calc(100vw-2rem)]">
+        <AccountOptions runner={runner} {...(agentProfile !== undefined ? { agentProfile } : {})} onChange={onChange} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function AccountOptions({ runner, agentProfile, onChange }: { runner: Runner; agentProfile?: string; onChange: (patch: ManagerPatch) => void }) {
+  const profiles = useAgentProfiles().data
+  const accounts = profiles?.profiles.filter((account) => account.provider === runner) ?? []
+  const defaultId = profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const defaultLabel = accounts.find((account) => account.id === defaultId)?.label ?? 'Default'
+  return (
+    <DropdownMenuRadioGroup value={agentProfile ?? ''} onValueChange={(next) => onChange({ agentProfile: next === '' ? null : next })}>
+      <DropdownMenuRadioItem value=""><span className="min-w-0 break-words whitespace-normal">Use workspace default ({defaultLabel})</span></DropdownMenuRadioItem>
+      <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
+      {accounts.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID).map((account) => (
+        <DropdownMenuRadioItem key={account.id} value={account.id}><span className="min-w-0 break-words whitespace-normal">{account.label}</span></DropdownMenuRadioItem>
+      ))}
+    </DropdownMenuRadioGroup>
+  )
+}
+
+export function TaskRunnerPicker({ taskRunner, onChange, pill = false, chip = false }: {
+  taskRunner?: Runner
+  onChange: (patch: ManagerPatch) => void
+  pill?: boolean
+  chip?: boolean
+}) {
+  const runners = usableRunners(useProviderStatus().data)
+  const choices = taskRunner && !runners.includes(taskRunner) ? [taskRunner, ...runners] : runners
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="manager-task-runner-picker"
+          aria-label="Agent for new tasks"
+          title="Choose the agent for new tasks. Automatic lets the manager choose for each task."
+          className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 rounded-full border border-border px-2.5 text-xs')}
+        >
+          <TriggerLabel>Tasks: {taskRunner ?? 'Automatic'}</TriggerLabel>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        <DropdownMenuRadioGroup
-          value={agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}
-          onValueChange={(next) => onChange({ agentProfile: next === DEFAULT_AGENT_ACCOUNT_ID ? null : next })}
-        >
-          <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
-          {named.map((account) => (
-            <DropdownMenuRadioItem key={account.id} value={account.id}>{account.label}</DropdownMenuRadioItem>
-          ))}
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Agent for new tasks</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={taskRunner ?? ''} onValueChange={(next) => onChange({ taskRunner: next === '' ? null : runnerSchema.parse(next) })}>
+          <DropdownMenuRadioItem value="">Automatic</DropdownMenuRadioItem>
+          {choices.map((runner) => <DropdownMenuRadioItem key={runner} value={runner}>{runner}</DropdownMenuRadioItem>)}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
