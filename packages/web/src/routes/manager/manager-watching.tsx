@@ -1,13 +1,13 @@
 import { ArrowRightIcon, ClockIcon, PlusIcon } from 'lucide-react'
-import { useEffect, useMemo, type ReactNode } from 'react'
-import { Link } from 'react-router'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Link, useLocation } from 'react-router'
 
 import { rememberReferenceStatuses, useProjects, useRunsIndex } from '@/api/queries'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { deriveAttention } from '@/lib/attention'
 import { managerTaskCount, managerTasksPath, toGlobalTasks } from '@/lib/global-tasks'
 import { cn } from '@/lib/utils'
@@ -100,28 +100,87 @@ export function WatchingSheet({
   everyWidth = false,
   ...props
 }: WatchingProps & { open: boolean; onOpenChange: (open: boolean) => void; everyWidth?: boolean }) {
+  const location = useLocation()
+  const managerHistoryBack = (location.state as Record<string, unknown> | null)?.managerWatchingPushed === true
+  const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight, top: 0 })
+  const [expanded, setExpanded] = useState(false)
+  const drag = useRef<{ x: number; y: number; at: number; id: number } | null>(null)
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const compact = viewport.width < 600
+  useEffect(() => {
+    if (!open) return
+    setExpanded(false)
+    const resize = () => {
+      const visual = window.visualViewport
+      setViewport({ width: window.innerWidth, height: visual?.height ?? window.innerHeight, top: visual?.offsetTop ?? 0 })
+      drag.current = null
+      if (visual && window.innerHeight - visual.height > 120) setExpanded(true)
+    }
+    resize()
+    window.addEventListener('resize', resize)
+    window.visualViewport?.addEventListener('resize', resize)
+    window.visualViewport?.addEventListener('scroll', resize)
+    return () => {
+      window.removeEventListener('resize', resize)
+      window.visualViewport?.removeEventListener('resize', resize)
+      window.visualViewport?.removeEventListener('scroll', resize)
+    }
+  }, [open])
+  const height = compact
+    ? (expanded || viewport.height < 600 ? viewport.height - 12 : viewport.height * .6)
+    : Math.min(720, viewport.height - 48)
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="bottom"
+        showCloseButton={false}
+        aria-modal="true"
         data-slot="manager-watching-sheet"
-        // `dvh`: the URL bar and the keyboard must not push the sheet's top off screen.
-        // CezarBot has no column at `lg`: the sheet is its way to the tasks on a landscape iPad.
-        className={cn('max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none', !everyWidth && 'lg:hidden')}
-        // The sheet itself takes focus: a ring on its first control reads as a selection on touch.
+        style={{ top: compact ? viewport.top + viewport.height - height : viewport.top + viewport.height / 2, height: compact ? height : undefined, maxHeight: height }}
+        className={cn('bottom-auto gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none motion-reduce:animate-none motion-reduce:transition-none min-[600px]:inset-x-auto min-[600px]:left-1/2 min-[600px]:w-[calc(100%-48px)] min-[600px]:max-w-[640px] min-[600px]:-translate-x-1/2 min-[600px]:rounded-xl min-[600px]:-translate-y-1/2', !everyWidth && 'lg:hidden')}
         onOpenAutoFocus={(event) => {
+          returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
           event.preventDefault()
           const sheet = event.currentTarget as HTMLElement | null
           sheet?.focus({ preventScroll: true })
         }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          if (returnFocus.current?.isConnected) returnFocus.current.focus({ preventScroll: true })
+        }}
       >
-        <SheetHeader className="px-4 pt-4 pb-2">
-          <SheetTitle>{props.manager.name}</SheetTitle>
-          <SheetDescription className="sr-only">The tasks this manager started and what it watches.</SheetDescription>
+        <SheetHeader
+          className="shrink-0 touch-none px-4 pt-2 pb-2"
+          onPointerDown={(event) => {
+            if (event.target instanceof Element && event.target.closest('button, a')) return
+            if (!event.isPrimary || event.button !== 0) return
+            drag.current = { x: event.clientX, y: event.clientY, at: event.timeStamp, id: event.pointerId }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerCancel={() => { drag.current = null }}
+          onPointerUp={(event) => {
+            const start = drag.current
+            drag.current = null
+            if (!start || start.id !== event.pointerId) return
+            const dy = event.clientY - start.y
+            const dx = Math.abs(event.clientX - start.x)
+            if (dy > 12 && dy > dx && (dy >= 80 || dy / Math.max(1, event.timeStamp - start.at) >= .5)) onOpenChange(false)
+          }}
+        >
+          {compact ? <span aria-hidden="true" className="mx-auto mb-1 h-1 w-10 rounded-full bg-muted-foreground/40" /> : null}
+          <div className="flex items-center gap-2">
+            <SheetTitle className="min-w-0 flex-1 break-words">Tasks · {props.manager.name}</SheetTitle>
+            <SheetClose asChild><Button variant="ghost" className="min-h-12 shrink-0">Close</Button></SheetClose>
+          </div>
+          <SheetDescription className="sr-only">The tasks this manager started and what it watches. Swipe down from the header or use Close.</SheetDescription>
+          {compact && !expanded && viewport.height >= 600 ? <Button variant="ghost" className="min-h-12" onClick={() => setExpanded(true)}>Expand</Button> : null}
         </SheetHeader>
-        <div data-touch="" className="group/watching flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
+        <div data-touch="" className="group/watching flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
           <WatchingSections {...props} tasksFirst />
         </div>
+        <Button asChild variant="ghost" className="min-h-12 shrink-0 whitespace-normal">
+          <Link to={managerTasksPath(props.manager.id)} replace state={{ manager: { id: props.manager.id, name: props.manager.name }, managerHistoryBack }}>View all tasks</Link>
+        </Button>
       </SheetContent>
     </Sheet>
   )
@@ -140,6 +199,8 @@ function WatchingSections({
   onAddJob,
   tasksFirst = false,
 }: WatchingProps & { tasksFirst?: boolean }) {
+  const location = useLocation()
+  const managerHistoryBack = !tasksFirst || (location.state as Record<string, unknown> | null)?.managerWatchingPushed === true
   const now = useNow(30_000)
   const registry = useProjects().data?.projects
   const runsIndex = useRunsIndex().data
@@ -196,7 +257,8 @@ function WatchingSections({
             <div key={`${projectId}/${runId}`} data-slot="manager-watching-task-row" className="border-b border-border last:border-b-0">
               <Link
                 to={taskPath(projectId, runId)}
-                state={{ manager: origin }}
+                replace={tasksFirst}
+                state={{ manager: origin, managerHistoryBack }}
                 data-slot="manager-watching-task"
                 className={cn('flex min-h-8 items-center gap-2 px-2.5 py-1.5 text-xs no-underline outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset', ROW_TOUCH)}
               >
@@ -220,6 +282,8 @@ function WatchingSections({
       {manager.followedTasks.length > 0 ? (
         <Link
           to={managerTasksPath(manager.id)}
+          replace={tasksFirst}
+          state={{ manager: origin, managerHistoryBack }}
           data-slot="manager-watching-all-tasks"
           className={cn('flex min-h-8 items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted-foreground no-underline outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset', ROW_TOUCH)}
         >

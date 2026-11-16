@@ -32,6 +32,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
 import { CacheStatusChip } from '@/components/cache-status'
+import { isCezarShell } from '@/lib/phone-app'
 import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -167,7 +168,10 @@ export function TasksOverview({
   firstRun,
   initialQuery = '',
   cacheStatus,
+  managersAvailable = false,
 }: {
+  /** Manager owns task creation on mobile/app navigation when available. */
+  managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
   runs: RunRecord[] | undefined
@@ -414,6 +418,7 @@ export function TasksOverview({
         ) : null}
         {runs === undefined ? null : hasScheduledTasks && all.length === 0 ? <p className="text-sm text-muted-foreground">No tasks have started yet.</p> : visible.length === 0 ? (
           <TasksEmptyState
+            managersAvailable={managersAvailable}
             view={view}
             query={query}
             filtered={activeTaskFacetCount(filters) > 0}
@@ -581,19 +586,18 @@ export function TasksOverview({
         ))}
       </div>
 
-      {/* The mobile New-task FAB. The desktop CTA lives in the sidebar. A router Link since
-          R4 step 1.3 re-pointed /new at the React composer — no full page load needed. */}
-      <Link
-        to="/new"
-        data-slot="new-task-fab"
-        aria-label="New task"
-        className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
-      >
-        <PlusIcon className="size-[22px]" aria-hidden="true" />
-      </Link>
+      {!managersAvailable ? <ManualTaskFab /> : null}
     </div>
     </LiveNowProvider>
   )
+}
+
+/** The capability fallback stays available when Manager cannot create tasks. */
+function ManualTaskFab() {
+  return <Link to="/new" data-slot="new-task-fab" aria-label="New task"
+    className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden">
+    <PlusIcon className="size-[22px]" aria-hidden="true" />
+  </Link>
 }
 
 /**
@@ -655,6 +659,7 @@ function TaskCardList({ cards }: { cards: React.ReactElement[] }) {
  * a fact, so those stay flat. `heading="h2"` because the page's h1 is the header's "Tasks".
  */
 function TasksEmptyState({
+  managersAvailable = false,
   view,
   query,
   filtered = false,
@@ -664,6 +669,7 @@ function TasksEmptyState({
   onShowAll = () => undefined,
   firstRun,
 }: {
+  managersAvailable?: boolean
   view: ListView
   query: string
   /** A status/workflow/automation facet is narrowing the list. */
@@ -733,7 +739,10 @@ function TasksEmptyState({
           subtitle="Finished tasks you archive land here."
         />
       ) : firstRun ? (
-        firstRun
+        managersAvailable ? <>
+          <div className={isCezarShell() ? 'p-4' : 'p-4 md:hidden'}><Button asChild><Link to="/manager">Ask a manager to start a task</Link></Button></div>
+          <div className={isCezarShell() ? 'hidden' : 'hidden md:block'}>{firstRun}</div>
+        </> : firstRun
       ) : (
         <CenteredState
           heading="h2"
@@ -743,12 +752,12 @@ function TasksEmptyState({
           title="No tasks yet"
           subtitle="Describe a task to get started."
           actions={
-            <Button asChild>
-              <Link to="/new">
-                <PlusIcon aria-hidden="true" />
-                New task
-              </Link>
-            </Button>
+            <>
+              {managersAvailable ? <Button asChild className={isCezarShell() ? undefined : "md:hidden"}><Link to="/manager">Ask a manager</Link></Button> : null}
+              <Button asChild className={managersAvailable ? (isCezarShell() ? 'hidden' : 'hidden md:inline-flex') : undefined}>
+                <Link to="/new"><PlusIcon aria-hidden="true" />New task</Link>
+              </Button>
+            </>
           }
         />
       )}
@@ -1893,6 +1902,7 @@ export function TasksOverviewRoute() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TasksOverview
+        managersAvailable={health.data?.capabilities?.managers === true}
         scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
         hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}
         runs={runs.data}

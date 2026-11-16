@@ -5,16 +5,19 @@ import { Link, Navigate, useLocation, useSearchParams } from 'react-router'
 import { managerKeys, orderManagers, useManagers } from '@/api/managers'
 import { useShellTasksTab } from '@/components/app-shell'
 import { CacheStatusChip } from '@/components/cache-status'
-import { useHealth } from '@/api/queries'
+import { useHealth, useWorkspaceConfig } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useNow } from '@/lib/use-now'
 import { noteManagerChatSource } from '@/lib/manager-telemetry'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
-import { carriesComposerFocus, FOCUS_COMPOSER, FROM_MANAGER_LIST } from './manager-focus'
+import { carriesComposerFocus, FOCUS_COMPOSER } from './manager-focus'
 import { ManagerIndexLoading } from './manager-loading'
-import { ManagerRow } from './manager-sidebar'
+import { ManagerDirectoryCard } from './manager-directory-card'
+import { DeviceChip } from '@/components/device-avatar'
+import { isCezarShell } from '@/lib/phone-app'
 import { ManagerNewRoute } from './manager-new'
 
 const DESKTOP = '(min-width: 768px)'
@@ -42,11 +45,28 @@ export function pendingFirst(managers: readonly ManagerSummary[]): ManagerSummar
 /** The phone has no sidebar column, so its list is a screen (spec, Surface). */
 function ManagerListScreen({ managers, isFetching, isError }: { managers: readonly ManagerSummary[]; isFetching: boolean; isError: boolean }) {
   const now = useNow(60_000)
+  const deviceLabel = useWorkspaceConfig().data?.computerName ?? 'This device'
+  const [search, setSearch] = useState('')
+  const [needsYou, setNeedsYou] = useState(false)
+  // Live attention updates change card contents without moving the user's target.
+  const [order] = useState(() => pendingFirst(managers).map((manager) => manager.id))
+  const entries = [...managers].sort((a, b) => {
+    const rank = (id: string) => { const index = order.indexOf(id); return index < 0 ? order.length : index }
+    return rank(a.id) - rank(b.id)
+  }).filter((manager) => (!needsYou || waitsOnUser(manager)) && `${manager.name} ${deviceLabel}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+    .map((manager) => ({ key: `current-device/${manager.id}`, deviceLabel, manager, href: `/manager/${encodeURIComponent(manager.id)}` }))
   return (
-    <div data-route="manager-list" className="flex flex-col gap-0.5 p-2">
-      <h1 className="sr-only">Managers</h1>
+    <div data-route="manager-list" className="@container/directory mx-auto flex w-full max-w-[1200px] flex-col gap-3 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">Managers</h1>{isCezarShell() ? <DeviceChip name={deviceLabel} /> : <span className="text-sm text-muted-foreground">{deviceLabel}</span>}</div>
       <CacheStatusChip queryKey={managerKeys.list} isFetching={isFetching} isError={isError} className="mx-1 mb-1 self-start" />
-      {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} state={FROM_MANAGER_LIST} source="list" />)}
+      <div className="flex flex-wrap items-center gap-3">
+        <Input aria-label="Search managers or device" placeholder="Search managers or device" value={search} onChange={(event) => setSearch(event.target.value)} className="min-h-12 min-w-0 flex-1" />
+        <label className="flex min-h-12 items-center gap-2 text-sm"><input type="checkbox" checked={needsYou} onChange={(event) => setNeedsYou(event.target.checked)} />Needs you</label>
+      </div>
+      {entries.length === 0 ? <p role="status" className="p-3 text-muted-foreground">No matching managers</p> : null}
+      <div className="grid grid-cols-1 gap-3 @min-[576px]/directory:grid-cols-2 @min-[936px]/directory:grid-cols-3">
+        {entries.map((entry) => <ManagerDirectoryCard key={entry.key} entry={entry} now={now} />)}
+      </div>
       <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground pointer-coarse:min-h-11">
         <Link to="/manager/new">
           <PlusIcon aria-hidden="true" className="size-4" />

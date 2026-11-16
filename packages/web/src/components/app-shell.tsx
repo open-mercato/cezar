@@ -925,7 +925,7 @@ export function managerReturn(
 const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, everyWidth, ...props }: NavProps & { onNavigate: () => void; everyWidth: boolean }) {
   return (
     <SidebarDrawer slot="mobile-nav-drawer" title="Navigation" everyWidth={everyWidth}>
-      {(closeButton) => <SidebarContent {...props} onNavigate={onNavigate} headerAction={closeButton} />}
+      {(closeButton) => <SidebarContent {...props} mobile onNavigate={onNavigate} headerAction={closeButton} />}
     </SidebarDrawer>
   )
 })
@@ -943,6 +943,7 @@ function SidebarContent({
   onNavigate,
   headerAction,
   compactHeader = false,
+  mobile = false,
   ...props
 }: NavProps & {
   brandName: string
@@ -955,6 +956,7 @@ function SidebarContent({
   headerAction?: ReactNode
   /** Under the desktop shell's title strip the brand row already has 28px above it. */
   compactHeader?: boolean
+  mobile?: boolean
 }) {
   const {
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
@@ -999,7 +1001,7 @@ function SidebarContent({
             </div>
           ) : null}
 
-          <div className="px-3 pb-2">
+          {!(managersAvailable && (mobile || isCezarShell())) ? <div className="px-3 pb-2">
             <Button asChild variant="primary" className="relative w-full justify-center">
               {/* A Router Link since R4 Step 1.1: the React /new composer is real. */}
               <Link to="/new" onClick={onNavigate}>
@@ -1014,7 +1016,7 @@ function SidebarContent({
                 </kbd>
               </Link>
             </Button>
-          </div>
+          </div> : null}
 
           <div data-slot="sidebar-scroll" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
             <nav aria-label="Main" className="px-2.5">
