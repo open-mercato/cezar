@@ -183,7 +183,7 @@ export function useShellManagerMode(): boolean {
 export type ManagerTasksTab = { count: number; open: () => void; expanded: boolean }
 
 /** Set while the phone bottom bar is mounted: a chat publishes its tasks there, `null` on leave.
- *  `everyWidth`: the bar is the navigation at every width (CezarBot), not only below `md`. */
+ *  `everyWidth`: the bar is the shell's only navigation (compact width or CezarBot), not only below `md`. */
 export type ShellTasksTab = { publish: (tab: ManagerTasksTab | null) => void; everyWidth: boolean }
 
 const ShellTasksTabContext = React.createContext<ShellTasksTab | null>(null)
@@ -456,9 +456,12 @@ export const AppShell = React.memo(function AppShell({
         className={cn(
           'relative grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
           desktop === 'macos' && 'pt-[28px]',
-          // An iPad is `md+`, where no phone header pads the status bar: the column does. Settings
+          // At `md+` the column pads the status bar unless the shell's top bar does (phoneNav). A
+          // manager chat hides that bar but pads only below `md`, so the column takes over. Settings
           // pads its own. A thread on the bar has no shell header at any width.
-          desktop !== 'macos' && !chromeless && (threadBar ? 'pt-[env(safe-area-inset-top)]' : !phoneNav && 'md:pt-[env(safe-area-inset-top)]'),
+          desktop !== 'macos' && !chromeless && (threadBar
+            ? 'pt-[env(safe-area-inset-top)]'
+            : phoneNav ? 'md:has-[>[data-slot=mobile-top-bar][hidden]]:pt-[env(safe-area-inset-top)]' : 'md:pt-[env(safe-area-inset-top)]'),
         )}
       >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
@@ -471,7 +474,7 @@ export const AppShell = React.memo(function AppShell({
               <MobileTopBar
                 title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
                 attention={managersAvailable && !managerMode ? managerAttention : null}
-                // Where neither the sidebar nor the bottom bar is (a thread on a tablet), the menu is.
+                // The compact navigation keeps this bar at every width; the sidebar replaces it otherwise.
                 everyWidth={phoneNav}
                 computerName={computerName}
               />

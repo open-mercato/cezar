@@ -358,6 +358,8 @@ function ManagerAgentSetup() {
   const providers = useProviderStatus()
   const uiState = useWorkspaceUiState()
   const signedIn = hasSignedInAgent(providers.data)
+  // A skipped sign-in page is final, as in FirstRun: no wait on provider detection.
+  if (uiState.data?.onboarding?.agentCheckSkipped === true) return <ManagerIndexRoute />
   if (signedIn === undefined && !providers.isError) return <ManagerIndexLoading />
   if (signedIn === false) {
     if (uiState.data === undefined && !uiState.isError) return <ManagerIndexLoading />

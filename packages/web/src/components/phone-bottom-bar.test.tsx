@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import * as React from 'react'
 import { Link, MemoryRouter, useLocation, useNavigate, type InitialEntry } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { LAST_LOCATION_STORAGE_KEY } from '@/lib/last-location'
@@ -335,8 +335,17 @@ describe('PhoneBottomBar', () => {
     it('pads the status bar once in the visible top header', () => {
       device(IPAD)
       renderShell('/manager/m-1')
-      expect(column().className).not.toContain('md:pt-[env(safe-area-inset-top)]')
+      expect(column().className).not.toMatch(/(^| )md:pt-\[env\(safe-area-inset-top\)\]/)
       expect(document.querySelector('[data-slot="mobile-top-bar"]')!.className).not.toContain('md:hidden')
+    })
+
+    it('pads the status bar in the column when a manager chat hides the top bar', () => {
+      // The chat's header pads the inset only below `md` (manager-chat.tsx), so the column must.
+      device(IPAD)
+      renderShell('/manager/m-1')
+      const bar = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')!
+      expect(bar.parentElement).toBe(column())
+      expect(column().className).toContain('md:has-[>[data-slot=mobile-top-bar][hidden]]:pt-[env(safe-area-inset-top)]')
     })
 
     it('keeps the bar in a thread, with no top menu bar', () => {
@@ -377,6 +386,7 @@ describe('PhoneBottomBar', () => {
   })
 
   it('responds to container resizing inside a wide viewport', () => {
+    onTestFinished(() => { vi.restoreAllMocks() })
     device({ width: 1440, standalone: false })
     let width = 700
     let observeResize = () => {}
@@ -394,7 +404,6 @@ describe('PhoneBottomBar', () => {
     act(() => { width = 800; observeResize() })
     expect(bar()).not.toBeNull()
     expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
-    vi.restoreAllMocks()
   })
 
   it('a desktop browser keeps the sidebar and no bar', () => {
