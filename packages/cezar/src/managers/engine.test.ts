@@ -1907,7 +1907,7 @@ describe('ManagerEngine', () => {
         const id = await create(engine);
         const proposed = await engine.propose(id, { action: merge });
         if ('error' in proposed) throw proposed;
-        requests = []
+        requests = [];
         backend.scripts.push(say(MANAGER_QUIET));
         store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
         engine.tick();
