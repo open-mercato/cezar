@@ -903,6 +903,15 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
     expect(currentPathname()).toBe('/manager')
   })
 
+  it('a skipped sign-in page opens Manager without waiting on provider detection', async () => {
+    device()
+    preloadManagerRoutes()
+    await import('./routes/manager/manager-index')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    load('/manager?all=1', { providers: null, managers: [managerFixture()], uiState: { onboarding: { agentCheckSkipped: true } } })
+    expect(routeName()).toBe('manager-list')
+  })
+
   it('waits for the agent answer: the overview must not flash on the way to Manager', () => {
     device()
     load('/', { providers: null })

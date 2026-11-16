@@ -1307,7 +1307,7 @@ describe('AppShell', () => {
     })
 
     it('closes when available width reveals the desktop sidebar', async () => {
-      const originalWidth = window.innerWidth
+      onTestFinished(() => { vi.unstubAllGlobals() })
       vi.stubGlobal('innerWidth', 700)
       renderShell()
       openMenu()
@@ -1317,7 +1317,6 @@ describe('AppShell', () => {
         window.dispatchEvent(new Event('resize'))
       })
       await waitFor(() => expect(drawer()).toBeNull())
-      vi.stubGlobal('innerWidth', originalWidth)
     })
 
     it('pads the drawer for the safe-area insets', () => {
