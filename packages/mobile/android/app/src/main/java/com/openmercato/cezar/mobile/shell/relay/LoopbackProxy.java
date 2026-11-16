@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * The plain-HTTP face of the tunnel under the webview (spec "The proxy's rules", RELAY_PROTOCOL.md § 13).
@@ -219,17 +220,24 @@ public final class LoopbackProxy implements Closeable {
                 }
                 connections.add(socket);
                 ungated.add(socket);
-                workers.execute(() -> {
-                    try {
-                        serve(socket);
-                    } catch (IOException e) {
-                        // The connection went away. The stream, if any, was cancelled on the way out.
-                    } finally {
-                        connections.remove(socket);
-                        ungated.remove(socket);
-                        closeQuietly(socket);
-                    }
-                });
+                try {
+                    workers.execute(() -> {
+                        try {
+                            serve(socket);
+                        } catch (IOException e) {
+                            // The connection went away. The stream, if any, was cancelled on the way out.
+                        } finally {
+                            connections.remove(socket);
+                            ungated.remove(socket);
+                            closeQuietly(socket);
+                        }
+                    });
+                } catch (RejectedExecutionException e) {
+                    // Accepted while close() shut the workers down: nobody will serve it.
+                    connections.remove(socket);
+                    ungated.remove(socket);
+                    closeQuietly(socket);
+                }
             } catch (IOException e) {
                 if (closed) return;
                 // Out of file descriptors, say: accept fails at once, and this must not spin.
