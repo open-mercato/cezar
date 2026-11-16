@@ -294,8 +294,8 @@ rate-limited even though any key may call it.
 `platform` is `ios` or `android`. `token` is 1 to 1,024 characters. The answer is
 `200 { "grant": "…", "grantId": "…", "expiresAt": 1801267200 }`. A grant lasts 90 days, and the phone
 renews on app open once under 30 days remain. The phone hands it to cezar as an HTTP request inside
-the session, so no tunnel frame exists for it. R5 names that route in the spec and in
-BACKWARD_COMPATIBILITY.md §2 before any app build calls it.
+the session, so no tunnel frame exists for it: `PUT /api/v1/workspace/phone/push`, listed in
+BACKWARD_COMPATIBILITY.md §2.
 
 **Send.** `POST /v1/push`, signed with the key sealed in the grant:
 
