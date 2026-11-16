@@ -68,3 +68,60 @@ test('manager accounts and task agents persist and reach the launched task', { t
     rmSync(configDir, { recursive: true, force: true });
   }
 });
+
+test('long manager account names stay selectable in narrow model and account menus', { trace: 'on', timeout: 90_000 }, async ({ app, screen, browser }) => {
+  const base = app.baseUrl;
+  if (!base) throw new Error('The cockpit URL is required');
+  const call = async (path: string, method = 'GET', body?: unknown): Promise<unknown> => {
+    const response = await fetch(new URL(`/api/v1${path}`, base), {
+      method,
+      headers: { 'content-type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`);
+    return response.json();
+  };
+  const configDir = mkdtempSync(join(tmpdir(), 'cez-e2e-long-account-'));
+  const label = `QA Work ${'LongAccountLabel'.repeat(10)}`;
+  const { profile } = agentProfileResponseSchema.parse(await call('/workspace/agent-profiles', 'POST', { provider: 'codex', label, configDir }));
+  const manager = managerSummarySchema.parse(await call('/workspace/managers', 'POST', {
+    name: 'Narrow account menus', instructions: '', projects: 'all', runner: 'codex', cronMinutes: 0,
+  }));
+  const path = `/workspace/managers/${manager.id}`;
+  const menuRight = () => browser.evaluate(() =>
+    document.querySelector('[data-slot="dropdown-menu-content"][data-state="open"]')?.getBoundingClientRect().right ?? 9999);
+  try {
+    await call('/workspace/agent-profiles/selection', 'PUT', { projectId: null, provider: 'codex', profileId: profile.id });
+    for (const width of [320, 390]) {
+      await browser.setViewport({ width, height: 844 });
+      await app.open(`/manager/${manager.id}`);
+      await screen.getByRole('button', 'Model and effort', { visible: true }).tap();
+      await screen.getByRole('menuitemradio', label, { exact: true }).scrollIntoView();
+      await expect.poll(menuRight).toBeLessThanOrEqual(width);
+      await expect.poll(() => browser.evaluate(() => {
+        const menu = document.querySelector('[data-slot="dropdown-menu-content"][data-state="open"]');
+        return menu ? Number(getComputedStyle(menu).opacity) : 0;
+      })).toBe(1);
+      await app.screenshot(`manager-account-menu-${width}`);
+      await screen.getByRole('menuitemradio', label, { exact: true }).tap();
+      await expect.poll(async () => managerSummarySchema.parse(await call(path)).agentProfile).toBe(profile.id);
+      await screen.getByRole('button', 'Manager settings').tap();
+      await screen.getByRole('button', 'Agent account').tap();
+      await expect.poll(menuRight).toBeLessThanOrEqual(width);
+      await expect.poll(() => browser.evaluate(() => {
+        const menu = document.querySelector('[data-slot="dropdown-menu-content"][data-state="open"]');
+        return menu ? Number(getComputedStyle(menu).opacity) : 0;
+      })).toBe(1);
+      await app.screenshot(`manager-account-settings-${width}`);
+      await screen.getByRole('menuitemradio', `Use workspace default (${label})`, { exact: true }).tap();
+      await expect.poll(async () => managerSummarySchema.parse(await call(path)).agentProfile ?? null).toBe(null);
+      await browser.keyboard.press('Escape');
+    }
+  } finally {
+    await app.open('/manager/new');
+    await call(path, 'DELETE');
+    await call('/workspace/agent-profiles/selection', 'PUT', { projectId: null, provider: 'codex', profileId: null });
+    await call(`/workspace/agent-profiles/${profile.id}`, 'DELETE');
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
