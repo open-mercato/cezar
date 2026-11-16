@@ -73,7 +73,7 @@ describe('ReferenceChip with a status', () => {
     ['checks-failing', 'text-danger-strong', 'lucide-circle-x'],
     ['changes-requested', 'text-danger-strong', 'lucide-message-square-warning'],
     ['open', 'text-muted-foreground', 'lucide-circle-dot'],
-    ['completed', 'text-success-strong', 'lucide-circle-check'],
+    ['completed', 'text-merged', 'lucide-circle-check'],
     ['not-planned', 'text-muted-foreground', 'lucide-circle-slash'],
   ] as const)('paints %s with %s and the %s glyph', (status, tone, icon) => {
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />)

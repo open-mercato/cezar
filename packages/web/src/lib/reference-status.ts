@@ -8,8 +8,8 @@ import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
  * status whose color says "fine" while its sentence says "blocked" is the exact defect a shared
  * table prevents.
  *
- * `tone` names a role, never a color: blue = waiting on a reviewer, green = ready or done,
- * purple (`merged`) = a merged pull request, red = something to fix (checks, requested changes),
+ * `tone` names a role, never a color: blue = waiting on a reviewer, green = ready to act on,
+ * purple (`merged`) = landed (a merged PR, a completed issue), red = something to fix (checks, requested changes),
  * grey = parked or finished without landing, amber = checks running, orange = conflicts. The
  * accent violet stays absent — it is the running pulse, never a chip at rest.
  */
@@ -88,7 +88,8 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   completed: {
     label: 'Closed as completed',
     hint: 'the issue was resolved',
-    tone: 'success',
+    // Purple like a merged PR: the work landed. Green would read as "ready — act on it".
+    tone: 'merged',
   },
   'not-planned': {
     label: 'Closed as not planned',
