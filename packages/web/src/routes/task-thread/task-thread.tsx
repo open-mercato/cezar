@@ -344,10 +344,15 @@ export function ThreadView({
     if (hash === '#reply') focusComposer()
   }, [hash, focusComposer, run.id])
   const mode = threadRenderMode(search, rows.length)
+  // A wait can ask for a plain-text reply. Without an open question card to handle #ask,
+  // reveal the latest request instead of restoring an unrelated reading position.
+  const hasAskTarget = hash === '#ask' && sections.some((section) =>
+    section.entries.some((entry) => entry.kind === 'ask' && !entry.resolved),
+  )
   const scroll = useThreadScroll(`${run.id}:main`, {
     onLoadOlder: history?.hasOlder ? history.loadOlder : undefined,
     onJumpToLatest: history?.jumpToLatest,
-    startAtLatest: hash === '#latest',
+    startAtLatest: hash === '#latest' || (hash === '#ask' && !hasAskTarget),
     rowKeys: rows.map(({ key }) => key),
   })
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
