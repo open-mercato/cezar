@@ -34,5 +34,5 @@ Prevent Cezar from failing a successful Antigravity turn when `agy` reports a co
 
 ### Phase 1: Mapper fix and test fixtures
 
-- [ ] 1.1 Update Antigravity UI mapper to ignore conversation-sticky result errors
-- [ ] 1.2 Add sticky-error-resume golden fixture and unit tests
+- [x] 1.1 Update Antigravity UI mapper to ignore conversation-sticky result errors — 6c1789af4
+- [x] 1.2 Add sticky-error-resume golden fixture and unit tests — 6c1789af4
