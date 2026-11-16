@@ -6,9 +6,11 @@ import { delimiter, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagerMessage } from '@open-mercato/cezar-contract';
+import { runnerSchema } from '@open-mercato/cezar-contract';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import type { AgentEvent } from '../core/agent-runner.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
+import { ManagerStore } from '../managers/store.ts';
 import { RunStore } from '../runs/store.ts';
 import { track } from '../telemetry.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -200,6 +202,32 @@ describe('the managers routes', () => {
     const { id } = await createManager();
     expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: 'imaginary' } })).status).toBe(400);
     expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it.each(runnerSchema.options)('persists %s for newly spawned tasks independently of the manager agent and account', async (runner) => {
+    const { id, connectedProjectIds: [projectId] } = await createManager({
+      instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskRunner: runner, cronMinutes: 0,
+    });
+    const managerPath = `${BASE}/${id}`;
+    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
+    const spawn = async (requested?: string) => {
+      const response = await request(`${managerPath}/tasks`, {
+        method: 'POST', body: { projectId, task: 'Spawn with the selected agent', ...(requested ? { runner: requested } : {}) },
+      });
+      expect(response.status).toBe(201);
+      return startRun.mock.calls.at(-1)?.[1];
+    };
+    // The real manager-task route forwards its resolved runner into the real POST /runs.
+    expect(await spawn(runner === 'claude' ? 'codex' : 'claude')).toMatchObject({ runner });
+    const automatic = await request(managerPath, { method: 'PATCH', body: { taskRunner: null } });
+    expect(await automatic.json()).not.toHaveProperty('taskRunner');
+    expect(new ManagerStore().get(id)).not.toHaveProperty('taskRunner');
+    expect(await spawn()).toMatchObject({ runner: 'codex' });
+    expect(await spawn(runner)).toMatchObject({ runner });
+    const pinned = await request(managerPath, { method: 'PATCH', body: { taskRunner: runner } });
+    expect(await pinned.json()).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
+    expect(new ManagerStore().get(id)?.taskRunner).toBe(runner);
+    expect(await spawn()).toMatchObject({ runner });
   });
 
   it('merges only through the decision route, on the same code the GitHub tab uses', async () => {

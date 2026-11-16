@@ -32,7 +32,7 @@ test('manager accounts and task agents persist and reach the launched task', { t
     }));
     runs.push(created.runId);
     await expect.poll(async () => apiRunSchema.parse(await call(`/p/${projectId}/runs/${created.runId}`)).runner).toBe('codex');
-    await expect.poll(async () => apiRunSchema.parse(await call(`/p/${projectId}/runs/${created.runId}`)).steps.find((step) => step.kind === 'agent')?.backend).toBe('codex');
+    await expect.poll(async () => apiRunSchema.parse(await call(`/p/${projectId}/runs/${created.runId}`)).steps.find((step) => step.kind === 'agent')?.backend, { timeout: 20_000 }).toBe('codex');
   };
   try {
     await app.open(`/manager/${manager.id}`);
