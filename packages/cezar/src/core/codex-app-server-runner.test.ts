@@ -395,6 +395,27 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
     new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
   );
 
+  it('keeps the final answer last when abandoned commentary was never completed (#2197)', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    let ended: () => void = () => {};
+    const turnEnd = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    const session = runner.startSession(
+      { userPrompt: 'mock:abandoned-commentary go', cwd: process.cwd() },
+      (event) => {
+        events.push(event);
+        if (event.type === 'turn-end') ended();
+      },
+    );
+    await turnEnd;
+    const texts = events.filter((e) => e.type === 'text').map((e) => (e as { text: string }).text);
+    expect(texts).toEqual(['abandoned fragment', 'Still working.\nCEZ:MONITORING']);
+    session.end();
+    await session.result.catch(() => undefined);
+  }, 20_000);
+
   it('surfaces a refused follow-up turn/start as an error, not a quiet note', async () => {
     const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
     const events: AgentEvent[] = [];
