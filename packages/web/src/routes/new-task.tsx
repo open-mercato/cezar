@@ -100,6 +100,7 @@ import {
   type NewTaskDraft,
 } from './new-task-draft'
 import {
+  RUNNERS,
   buildCreateRunBody,
   modelsForRunner,
   modelCatalogStatus,
@@ -181,6 +182,7 @@ export function NewTaskRoute() {
   // (legacy's `history.replaceState` — the launch key must not survive in history or survive
   // a reload to re-trigger), so live search params would vanish under us.
   const [deepLink] = useState(() => parseNewTaskParams(search))
+  const [requestedRunner] = useState(() => RUNNERS.find((entry) => entry.id === search.get('runner'))?.id)
 
   const health = useHealth()
   const workflows = useWorkflows()
@@ -203,6 +205,7 @@ export function NewTaskRoute() {
     const stored = readDraft(draftProjectId)
     return {
       ...stored,
+      ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, reasoningEffort: null } : {}),
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
       ...(deepLink.skill !== ''
         ? { source: { source: 'skill', ref: deepLink.skill } as TaskSource }

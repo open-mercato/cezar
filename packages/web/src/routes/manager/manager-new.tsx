@@ -12,7 +12,7 @@ import type { AttachmentEntry, CreateManagerInput, ManagerAccess, ManagerEffort,
 import { MascotPicker } from './mascot-picker'
 import { FOCUS_COMPOSER } from './manager-focus'
 
-import { AccountPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { AccountPicker, ModelPicker, ProjectsPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
 
 export const MANAGER_PRESETS = [
   {
@@ -52,6 +52,7 @@ interface Setup {
   access?: ManagerAccess
   projectAccess?: Record<string, ManagerAccess>
   runner?: string
+  taskRunner?: CreateManagerInput['taskRunner']
   model?: string
   effort?: ManagerEffort
   agentProfile?: string
@@ -65,6 +66,8 @@ export function applySetupPatch(setup: Setup, patch: ManagerPatch): Setup {
   if (patch.projectAccess !== undefined) next.projectAccess = patch.projectAccess
   if (patch.runner === null) delete next.runner
   else if (patch.runner !== undefined) next.runner = patch.runner
+  if (patch.taskRunner === null) delete next.taskRunner
+  else if (patch.taskRunner !== undefined) next.taskRunner = patch.taskRunner
   if (patch.model === null) delete next.model
   else if (patch.model !== undefined) next.model = patch.model
   if (patch.effort === null) delete next.effort
@@ -142,6 +145,7 @@ export function ManagerNewRoute() {
         <ProjectsPicker value={setup.projects} access={setup.access} projectAccess={setup.projectAccess} onAccess={onChange} onChange={(projects) => onChange({ projects })} />
         <ModelPicker {...setup} onChange={onChange} />
         <AccountPicker {...setup} onChange={onChange} />
+        <TaskRunnerPicker {...(setup.taskRunner ? { taskRunner: setup.taskRunner } : {})} onChange={onChange} />
       </div>
     </div>
   )

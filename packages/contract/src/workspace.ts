@@ -602,6 +602,14 @@ export type ProviderStatusResponse = z.infer<typeof providerStatusResponseSchema
 /** `POST /api/v1/providers/connect` — either a terminal was handed the login command, or the
  *  provider turned out to be connected already. Every other outcome is a 409/500 carrying the
  *  same `command` for the clipboard fallback. */
+export const providerConnectSchema = z.object({
+  provider: providerIdSchema,
+  profileId: z.string().max(64).optional(),
+  /** Explicitly open sign-in even when the CLI reports an existing login. */
+  reconnect: z.boolean().optional(),
+}).strict();
+export type ProviderConnectInput = z.infer<typeof providerConnectSchema>;
+
 export const providerConnectResponseSchema = z.discriminatedUnion('opened', [
   z.object({ opened: z.literal(true), command: z.string() }),
   z.object({ opened: z.literal(false), connected: z.literal(true), command: z.string() }),

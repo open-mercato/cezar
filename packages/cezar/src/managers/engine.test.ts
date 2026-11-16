@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
@@ -106,6 +107,7 @@ describe('ManagerEngine', () => {
           return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha, defaultMethod: 'squash', methods: ['squash'] } });
         }
         if (path.endsWith('/merge')) return Response.json({ merged: true });
+        if (path.startsWith('/api/v1/models?')) return Response.json({ models: [] });
         if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
         if (/\/automations\/[^/]+$/.test(path)) return Response.json({ automation: { id: 'a1', revision: automationRevision, name: 'Nightly', enabled: false } });
         return Response.json({ ok: true });
@@ -338,6 +340,26 @@ describe('ManagerEngine', () => {
       engine.send(id, 'two');
       await settled(engine);
       expect(backend.specs[1]?.resume).toBeUndefined();
+    });
+
+    it('uses the selected account environment after switching agent and account', async () => {
+      const configDir = join(home, 'codex-work');
+      mkdirSync(configDir);
+      await mergeWriteAgentAccounts((accounts) => ({
+        ...accounts,
+        accounts: [{ id: 'work', provider: 'codex', label: 'Work', configDir, addedAt: '' }],
+      }));
+      const runnerFor = vi.fn(() => backend.runner);
+      const engine = makeEngine({ runnerFor });
+      const id = await create(engine, 0);
+      engine.send(id, 'one');
+      await settled(engine);
+      await engine.update(id, { runner: 'codex', agentProfile: 'work' });
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(runnerFor).toHaveBeenLastCalledWith('codex');
+      expect(backend.specs.at(-1)?.env?.CODEX_HOME).toBe(configDir);
+      expect(backend.specs.at(-1)?.resume).toBeUndefined();
     });
 
     it('a turn that throws before its agent starts closes its message', async () => {
@@ -2040,6 +2062,48 @@ describe('ManagerEngine', () => {
       const id = await create(engine);
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', text: 'more' })).toEqual({ ok: true });
       expect(requests.at(-1)?.path).toBe('/api/v1/p/alpha/runs/r/continue');
+    });
+  });
+
+  describe('task agent selection', () => {
+    it('automatically uses the manager backend instead of the project default', async () => {
+      const engine = makeEngine({ defaultRunner: async () => 'codex' });
+      const id = await create(engine, 0);
+      await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+    });
+
+    it('lets Automatic select a different agent for each task', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      await engine.update(id, { runner: 'codex' });
+      await engine.createTask(id, { projectId: 'alpha', task: 'Review it', runner: 'claude' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+      await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+    });
+
+    it('enforces the saved task agent even if the manager requests another', async () => {
+      const engine = makeEngine();
+      const created = await engine.create({ instructions: '', projects: 'all', cronMinutes: 0, taskRunner: 'codex' });
+      if ('error' in created) throw created;
+      expect(new ManagerStore().get(created.id)?.taskRunner).toBe('codex');
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'Fix it', runner: 'claude' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+      await engine.update(created.id, { name: 'Renamed' });
+      expect(store.get(created.id)?.taskRunner).toBe('codex');
+      await engine.update(created.id, { taskRunner: null });
+      expect(new ManagerStore().get(created.id)).not.toHaveProperty('taskRunner');
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'Next', runner: 'claude' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+    });
+
+    it('validates a model against the enforced task agent', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      await engine.update(id, { taskRunner: 'codex' });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude', model: 'opus' })).toMatchObject({ status: 400 });
+      expect(requests.some((request) => request.method === 'POST')).toBe(false);
     });
   });
 

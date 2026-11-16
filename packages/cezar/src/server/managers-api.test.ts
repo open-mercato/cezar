@@ -179,6 +179,29 @@ describe('the managers routes', () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
+  it('persists the task agent and enforces it through the real run route, then clears to Automatic', async () => {
+    const { id, connectedProjectIds } = await createManager({ instructions: '', projects: 'all', runner: 'claude', taskRunner: 'codex', cronMinutes: 0 });
+    const [projectId] = connectedProjectIds;
+    expect(await (await request(`${BASE}/${id}`)).json()).toMatchObject({ taskRunner: 'codex' });
+    const path = `${BASE}/${id}/tasks`;
+    expect((await request(path, { method: 'POST', body: { projectId, task: 'Use my selection', runner: 'claude' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
+    const automatic = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: null, runner: 'codex' } });
+    expect(automatic.status).toBe(200);
+    expect(await automatic.json()).not.toHaveProperty('taskRunner');
+    expect((await request(path, { method: 'POST', body: { projectId, task: 'Use the manager backend' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
+    expect((await request(path, { method: 'POST', body: { projectId, task: 'Choose another agent', runner: 'claude' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'claude' });
+  });
+
+  it('rejects an unknown task agent on create and update', async () => {
+    expect((await request(BASE, { method: 'POST', body: { instructions: '', projects: 'all', taskRunner: 'imaginary' } })).status).toBe(400);
+    const { id } = await createManager();
+    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: 'imaginary' } })).status).toBe(400);
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   it('merges only through the decision route, on the same code the GitHub tab uses', async () => {
     const { id, connectedProjectIds } = await createManager();
     const [projectId] = connectedProjectIds;

@@ -36,6 +36,7 @@ import type {
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
+  providerConnectSchema,
   providerUpdateResponseSchema,
   providerStatusResponseSchema,
   runnerModelCatalogResponseSchema,
@@ -189,6 +190,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     200
   >;
   type ProviderConnect200 = InferResponseType<typeof client.api.v1.providers.connect.$post, 200>;
+  type ProviderConnectBody = InferRequestType<typeof client.api.v1.providers.connect.$post>['json'];
   type ProviderUpdate200 = InferResponseType<
     (typeof client.api.v1.providers)[':provider']['update']['$post'],
     200
@@ -303,6 +305,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderRetry200>>,
     Assert<Exact<z.infer<typeof providerConnectResponseSchema>, ProviderConnect200>>,
+    Assert<Exact<z.infer<typeof providerConnectSchema>, ProviderConnectBody>>,
     Assert<Exact<z.infer<typeof providerUpdateResponseSchema>, ProviderUpdate200>>,
     Assert<Exact<z.infer<typeof runnerModelCatalogResponseSchema>, Models200>>,
     Assert<Exact<z.infer<typeof openTargetsResponseSchema>, OpenTargets200>>,

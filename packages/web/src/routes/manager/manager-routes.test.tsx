@@ -280,6 +280,22 @@ describe('/manager/new', () => {
   it('folds picker patches, null meaning back to the default', () => {
     const setup = { projects: 'all' as const, model: 'm', effort: 'high' as const }
     expect(applySetupPatch(setup, { model: null, effort: 'low', projects: ['a'] })).toEqual({ projects: ['a'], effort: 'low' })
+    expect(applySetupPatch(setup, { taskRunner: 'codex' })).toMatchObject({ taskRunner: 'codex' })
+    expect(applySetupPatch({ ...setup, taskRunner: 'codex' }, { taskRunner: null })).not.toHaveProperty('taskRunner')
+  })
+
+  it('includes the selected task agent when creating a manager from setup', async () => {
+    renderAt('/manager/new', (client) => {
+      client.setQueryData(workspaceQueryKeys.providerStatus, { providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+      ] })
+    })
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'codex' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate my tasks' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ taskRunner: 'codex' }))
   })
 })
 
@@ -332,6 +348,26 @@ describe('/manager/:id', () => {
     const sidebar = document.querySelector('[data-slot="sidebar"]')!
     expect([...sidebar.querySelectorAll('[data-slot="manager-row"]')].map((row) => row.getAttribute('href'))).toEqual(['/manager/global', '/manager/shop'])
     expect(document.querySelectorAll('[data-slot="manager-row"]')).toHaveLength(2)
+  })
+
+  // An `sr-only` row positioned against the chat, not the scroller, sat at the transcript's
+  // unscrolled tail and let the shell's <main> scroll far below the composer.
+  it('positions what its scrollers hold inside them, so the page never scrolls past the composer', async () => {
+    seedChat()
+    server.messages = [...server.messages, assistantMessage(3, { text: 'Later', commands: [{ id: 'd', tool: 'Bash', summary: 'gh pr view' }] })]
+    renderAt('/manager/global')
+    await screen.findByText('Later')
+    const positioned = /(^|\s)(relative|absolute|fixed|sticky)(\s|$)/
+    for (const slot of ['manager-transcript', 'manager-watching']) {
+      const scroller = document.querySelector<HTMLElement>(`[data-slot="${slot}"]`)!
+      expect(scroller.className).toMatch(/overflow-y-auto/)
+      expect(scroller.className, slot).toMatch(positioned)
+      for (const hidden of scroller.querySelectorAll<HTMLElement>('.sr-only')) {
+        let block = hidden.parentElement
+        while (block && !positioned.test(block.className)) block = block.parentElement
+        expect(scroller.contains(block), `${slot}: ${hidden.textContent}`).toBe(true)
+      }
+    }
   })
 
   it('checks now from the header', async () => {
@@ -1174,7 +1210,7 @@ describe('/manager/:id', () => {
     const bubbles = [...document.querySelectorAll('[data-slot="manager-user"]')].map((row) => row.textContent)
     expect(bubbles).toEqual(['questions please', 'cheapest one'])
     const cards = [...document.querySelectorAll('[data-slot="manager-ask"][data-resolved="true"]')].map((card) => card.textContent)
-    expect(cards).toEqual(['AnsweredShell:TauriDefault:No', 'Answered:Shell · Default'])
+    expect(cards).toEqual(['AnsweredShell:CapacitorTauri (chosen)Default:No (chosen)Yes', 'Answered:ShellDefault'])
   })
 
   it('approves through the decision route, never as a chat message', async () => {
