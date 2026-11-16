@@ -136,15 +136,20 @@ Notable fields (full doc-comments in the source):
   unattended watch turns, spec `2026-10-31-managers`); an Ask task never sets it and keeps only its
   read-only `allowedTools`. When set, the task must not change the repository or publish anything, on every backend:
   Claude through `allowedTools` plus `--disallowedTools` for the write tools (settings allow
-  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex `sandbox: read-only`,
+  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex refuses (its filesystem sandbox cannot fence remote or MCP mutations),
   OpenCode denied `edit`/`bash` in `OPENCODE_CONFIG_CONTENT` at the top level and in every agent, Cursor `--mode ask` without `--force`, Copilot
   `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
-  refused, Gemini `--approval-mode default` with its prompts refused. Kimi, omp and Antigravity
+  refused, Gemini `--approval-mode default` with its prompts refused. Codex, Kimi, omp and Antigravity
   cannot, so `runner-factory.ts` refuses a read-only run on them. `read-only-env.ts` is the shared floor (no `gh` login, no git credential). A new runner
   that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes
-  unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.
+  unrestricted `Bash`. OpenCode does not honor `allowedTools`; Codex refuses any grant other
+  than the omitted or exact historical default, and refuses `bashAllowlist`, `bashHookCommand`
+  and `enforceReadOnly` before spawning. This also applies to direct runner calls, nested steps,
+  retries and resumed threads. The workflow-level read-only refusal remains in force.
+  Restricted Codex execution is unavailable until a verified universal pre-execution gate exists;
+  approvals, environment scrubbing and a read-only filesystem sandbox cannot substitute for it.
   Treat the default `auto` permission mode as full shell access, not a
   sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
   OpenCode runs under its own permission config: a prompt it still raises is

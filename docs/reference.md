@@ -221,8 +221,12 @@ held for queued tasks until that time, even if the original task is completed or
 While choosing a successor, the task shows “switching agent” without a failure notification.
 The transcript records skips and handovers, and identifies the automatic continuation message.
 The next provider receives the task and repository context and may bill its own plan. Existing
-task budgets apply; tool restrictions depend on the backend (Codex, OpenCode and Cursor do not
-enforce Claude's `allowedTools`).
+task budgets apply; tool restrictions depend on the backend. Codex refuses restricted tool
+grants before starting, including on retries and Continue. Only the omitted or exact historical
+default (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, with unrestricted shell) is supported.
+An empty list is a restriction. Read-only workflows such as `review-pr` must use Claude Code
+or Pi. A Codex filesystem sandbox cannot enforce GitHub, MCP or shell tool permissions.
+OpenCode and Cursor do not enforce Claude's `allowedTools`.
 
 **Settings changes apply to new tasks.** Existing tasks retain their saved list; tasks created
 with fallback off do not acquire it later. Turning it off cancels unstarted handovers, but does

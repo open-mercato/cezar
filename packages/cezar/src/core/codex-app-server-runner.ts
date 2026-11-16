@@ -1,4 +1,5 @@
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
+import { assertCodexToolPolicy } from './codex-tool-policy.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -66,7 +67,7 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * agent runs autonomously via `sandbox: danger-full-access` +
  * `approvalPolicy: never`, matching cezar's default auto permission mode
  * (spec 2026-07-17-permission-modes). Codex has no per-tool allowlist, so
- * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
+ * restricted tool grants are refused before spawning. `CEZ_CODEX_NETWORK=0` retains the previous
  * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
 /**
@@ -124,6 +125,7 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertCodexToolPolicy(spec);
     const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
