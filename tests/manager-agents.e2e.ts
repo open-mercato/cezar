@@ -37,36 +37,36 @@ test('manager accounts and task agents persist and reach the launched task', { t
   };
   try {
     await app.open(`/manager/${manager.id}`);
-    await openManagerSettings(screen);
+    await openManagerSettings(screen, browser);
     await screen.getByRole('button', 'Agent for new tasks').first().tap();
     await screen.getByRole('menuitemcheckbox', 'codex · Default', { exact: true }).tap();
     await browser.keyboard.press('Escape');
     await expect.poll(async () => managerSummarySchema.parse(await call(path)).taskAgents?.[0]?.runner).toBe('codex');
     await startTask('codex');
 
-    await openManagerSettings(screen);
-    await screen.getByRole('button', 'Model and effort').first().tap();
+    await openManagerSettings(screen, browser);
+    await screen.getByRole('button', 'Manager agent', { exact: true }).tap();
     await screen.getByRole('menuitemradio', 'codex', { exact: true }).tap();
     await expect.poll(async () => managerSummarySchema.parse(await call(path)).runner).toBe('codex');
-    await openManagerSettings(screen);
-    await screen.getByRole('button', 'Model and effort').first().tap();
+    await openManagerSettings(screen, browser);
+    await screen.getByRole('button', 'Agent account').tap();
     await screen.getByRole('menuitemradio', 'Task agent QA', { exact: true }).tap();
     await expect.poll(async () => managerSummarySchema.parse(await call(path)).agentProfile).toBe(profile.id);
     await browser.reload();
-    await openManagerSettings(screen);
-    await screen.getByRole('button', 'Model and effort').first().tap();
+    await openManagerSettings(screen, browser);
+    await screen.getByRole('button', 'Agent account').tap();
     await expect(screen.getByRole('menuitemradio', 'Task agent QA', { exact: true })).toHaveAttribute('aria-checked', 'true');
     await app.screenshot('manager-agent-account');
     await browser.keyboard.press('Escape');
 
-    await openManagerSettings(screen);
+    await openManagerSettings(screen, browser);
     await screen.getByRole('button', 'Agent for new tasks').first().tap();
     await screen.getByRole('menuitemcheckbox', 'Automatic', { exact: true }).tap();
     await browser.keyboard.press('Escape');
     await expect.poll(async () => managerSummarySchema.parse(await call(path)).taskAgents ?? null).toBe(null);
     await startTask();
     await browser.setViewport({ width: 390, height: 844 });
-    await openManagerSettings(screen);
+    await openManagerSettings(screen, browser);
     await expect(screen.getByRole('button', 'Agent for new tasks', { visible: true })).toContainText('Automatic');
     await app.screenshot('manager-task-agent-mobile');
   } finally {
@@ -78,7 +78,7 @@ test('manager accounts and task agents persist and reach the launched task', { t
   }
 });
 
-test('long manager account names stay selectable in narrow model and account menus', { trace: 'on', timeout: 90_000 }, async ({ app, screen, browser }) => {
+test('long manager account names stay selectable in the narrow agent dialog', { trace: 'on', timeout: 90_000 }, async ({ app, screen, browser }) => {
   const base = app.baseUrl;
   if (!base) throw new Error('The cockpit URL is required');
   const call = async (path: string, method = 'GET', body?: unknown): Promise<unknown> => {
@@ -104,8 +104,8 @@ test('long manager account names stay selectable in narrow model and account men
     for (const width of [320, 390]) {
       await browser.setViewport({ width, height: 844 });
       await app.open(`/manager/${manager.id}`);
-      await openManagerSettings(screen);
-      await screen.getByRole('button', 'Model and effort', { visible: true }).tap();
+      await openManagerSettings(screen, browser);
+      await screen.getByRole('button', 'Agent account', { visible: true }).tap();
       await screen.getByRole('menuitemradio', label, { exact: true }).scrollIntoView();
       await expect.poll(menuRight).toBeLessThanOrEqual(width);
       await expect.poll(() => browser.evaluate(() => {
@@ -115,7 +115,7 @@ test('long manager account names stay selectable in narrow model and account men
       await app.screenshot(`manager-account-menu-${width}`);
       await screen.getByRole('menuitemradio', label, { exact: true }).tap();
       await expect.poll(async () => managerSummarySchema.parse(await call(path)).agentProfile).toBe(profile.id);
-      await openManagerSettings(screen);
+      await openManagerSettings(screen, browser);
       await screen.getByRole('button', 'Agent account').tap();
       await expect.poll(menuRight).toBeLessThanOrEqual(width);
       await expect.poll(() => browser.evaluate(() => {

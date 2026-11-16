@@ -713,8 +713,12 @@ describe('/manager/:id', () => {
     })
     fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
     const settings = document.querySelector('[data-slot="manager-settings-menu"]')!
+    expect(within(settings as HTMLElement).getByRole('button', { name: 'Manager agent…' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Model and effort' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Manager agent…' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
     for (const name of ['Model and effort', 'Agent for new tasks', 'Agent account']) {
-      expect(settings.contains(screen.getByRole('button', { name }))).toBe(true)
+      expect(dialog.contains(screen.getByRole('button', { name }))).toBe(true)
     }
     expect(screen.getByRole('button', { name: 'Agent account' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Options' })).toBeNull()
@@ -955,13 +959,15 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
   })
 
-  it('hides the working footer while the keyboard is open, keeping controls in the composer', async () => {
+  it('keeps one composer Stop while the keyboard opens and closes, without a status footer', async () => {
     Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query !== '(min-width: 768px)', addEventListener() {}, removeEventListener() {} }))
     seedChat({ status: 'working' })
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
-    expect(document.querySelector('[data-slot="manager-footer"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
+    const stop = screen.getByRole('button', { name: 'Stop' })
+    expect(stop.closest('[data-slot="composer"]')).not.toBeNull()
     act(() => {
       composer().focus()
       Object.defineProperty(window, 'innerHeight', { value: 500, configurable: true })
@@ -973,7 +979,8 @@ describe('/manager/:id', () => {
       Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
       window.dispatchEvent(new Event('resize'))
     })
-    expect(document.querySelector('[data-slot="manager-footer"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBe(stop)
   })
 
   it('re-pins a reader at the tail once the keyboard settles, and writes --kb', async () => {
@@ -1194,27 +1201,24 @@ describe('/manager/:id', () => {
     expect(item.textContent).toContain('/attention')
   })
 
-  it('says what it works on in the status line, with Stop beside it, and posts the stop', async () => {
+  it('keeps a single Stop inside the composer and removes the redundant working row', async () => {
     server.managers = [managerFixture({ status: 'working' })]
     server.messages = [userMessage(1), assistantMessage(2, { turn: 'watch', text: '', streaming: true })]
     renderAt('/manager/global')
-    // One beside the name for phones, one in the desktop status line: CSS shows exactly one.
-    const spinners = await waitFor(() => {
-      const found = screen.getAllByRole('status', { name: 'Working' })
-      expect(found).toHaveLength(2)
-      return found
-    })
-    expect(spinners.map((spinner) => spinner.closest('header') ? 'header' : 'footer')).toEqual(['header', 'footer'])
-    expect(spinners[0]!.className).toContain('md:hidden')
-    expect(spinners[1]!.closest('[data-slot="manager-footer"]')!.className).toContain('max-md:hidden')
-    await waitFor(() => expect(spinners[1]!.textContent).toBe('Working on the watch check'))
-    // The composer's own Stop stays for phones and an empty box; the status line adds the design's.
-    expect(screen.getAllByRole('button', { name: 'Stop' }).length).toBeGreaterThanOrEqual(2)
-    fireEvent.click(document.querySelector('[data-slot="manager-footer-stop"]')!)
+    const spinner = await screen.findByRole('status', { name: 'Working' })
+    expect(spinner.closest('header')).not.toBeNull()
+    expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
+    expect(screen.queryByText('Working on the watch check')).toBeNull()
+    const stop = screen.getByRole('button', { name: 'Stop' })
+    expect(stop.closest('[data-slot="composer"]')).not.toBeNull()
+    fireEvent.change(composer(), { target: { value: 'A follow-up' } })
+    expect(screen.getByRole('button', { name: 'Stop' })).toBe(stop)
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(stop)
     await waitFor(() => expect(posted('/global/stop')).toHaveLength(1))
   })
 
-  it('keeps model, account, task agents and interval in the header gear', async () => {
+  it('groups agent choices in one dialog and restores focus to the settings gear', async () => {
     seedChat()
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
@@ -1222,10 +1226,25 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('button', { name: 'Model and effort' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
     const menu = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)
-    for (const name of ['Model and effort', 'Agent account', 'Agent for new tasks']) {
-      expect(menu.contains(screen.getByRole('button', { name }))).toBe(true)
-    }
     expect(menu.querySelector('[data-slot="manager-chron-picker"]')?.textContent).toContain('Refresh: 15 min')
+    expect(screen.queryByRole('button', { name: 'Agent account' })).toBeNull()
+    fireEvent.click(within(menu).getByRole('button', { name: 'Manager agent…' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+    for (const name of ['Model and effort', 'Agent account', 'Agent for new tasks']) {
+      expect(dialog.contains(screen.getByRole('button', { name }))).toBe(true)
+    }
+    expect(screen.getByRole('button', { name: 'Manager agent' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Manager agent' })).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Manager settings' }))
+  })
+
+  it('opens the agent dialog on the account field from a failed check', async () => {
+    server.messages = [assistantMessage(1, { turn: 'watch', error: 'Usage limit reached until 14:00', text: '' })]
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch account' }))
+    await screen.findByRole('dialog', { name: 'Manager agent' })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Agent account' })))
   })
 
   const ask = { questions: [

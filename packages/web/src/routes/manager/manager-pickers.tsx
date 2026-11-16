@@ -167,6 +167,35 @@ export function useManagerRunner(pinned: string | undefined): Runner {
   return (pinned as Runner | undefined) ?? health.data?.defaultRunner ?? 'claude'
 }
 
+function useManagerRunners() {
+  // Pi cannot grant the manager's restricted shell tools.
+  return usableRunners(useProviderStatus().data).filter((runner) => runner !== 'pi')
+}
+
+export function ManagerRunnerPicker({ runner: pinnedRunner, onChange, className }: {
+  runner?: string
+  onChange: (patch: ManagerPatch) => void
+  className?: string
+}) {
+  const runner = useManagerRunner(pinnedRunner)
+  const runners = useManagerRunners()
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" aria-label="Manager agent" className={cn(PICKER_TRIGGER, className)}>
+          <TriggerLabel>{runner}</TriggerLabel>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuLabel>Agent</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={runner} onValueChange={(next) => onChange({ runner: next, model: null, agentProfile: null })}>
+          {runners.map((entry) => <DropdownMenuRadioItem key={entry} value={entry}>{entry}</DropdownMenuRadioItem>)}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 /** Model and effort are one control, as drawn: `Opus 5.5 Medium`. */
 export function ModelPicker({
   runner: pinnedRunner,
@@ -176,6 +205,8 @@ export function ModelPicker({
   onChange,
   pill = false,
   chip = false,
+  modelOnly = false,
+  className,
 }: {
   runner?: string
   model?: string
@@ -186,10 +217,12 @@ export function ModelPicker({
   pill?: boolean
   /** The desktop status line's "Opus · Medium" chip (design, Proposal 10). */
   chip?: boolean
+  /** The dialog has separate agent/account fields; setup keeps its combined menu. */
+  modelOnly?: boolean
+  className?: string
 }) {
   const runner = useManagerRunner(pinnedRunner)
-  // Pi fails closed on `bashAllowlist`, so a Pi manager would have no `cez-manager` to act with.
-  const runners = usableRunners(useProviderStatus().data).filter((candidate) => candidate !== 'pi')
+  const runners = useManagerRunners()
   const catalog = useRunnerModels(runner)
   const models = modelsForRunner(runner, catalog.data, [model])
   const label = models.find((entry) => entry.id === (model ?? ''))?.label ?? model ?? 'auto'
@@ -202,7 +235,7 @@ export function ModelPicker({
           type="button"
           data-slot="manager-model-picker"
           aria-label="Model and effort"
-          className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs')}
+          className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs', className)}
         >
           {chip ? (
             <span className="truncate">
@@ -218,7 +251,7 @@ export function ModelPicker({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-2rem)] overflow-y-auto">
-        {runners.length > 1 ? (
+        {!modelOnly && runners.length > 1 ? (
           <>
             <DropdownMenuLabel className="text-xs text-muted-foreground">Agent</DropdownMenuLabel>
             <DropdownMenuRadioGroup
@@ -233,9 +266,11 @@ export function ModelPicker({
             <DropdownMenuSeparator />
           </>
         ) : null}
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Account</DropdownMenuLabel>
-        <AccountOptions runner={runner} {...(agentProfile !== undefined ? { agentProfile } : {})} onChange={onChange} />
-        <DropdownMenuSeparator />
+        {modelOnly ? null : <>
+          <DropdownMenuLabel className="text-xs text-muted-foreground">Account</DropdownMenuLabel>
+          <AccountOptions runner={runner} {...(agentProfile !== undefined ? { agentProfile } : {})} onChange={onChange} />
+          <DropdownMenuSeparator />
+        </>}
         <DropdownMenuLabel className="text-xs text-muted-foreground">Model</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(next) => onChange({ model: next === '' ? null : next })}>
           {models.map((entry) => (
@@ -266,10 +301,12 @@ export function AccountPicker({
   runner: pinnedRunner,
   agentProfile,
   onChange,
+  className,
 }: {
   runner?: string
   agentProfile?: string
   onChange: (patch: ManagerPatch) => void
+  className?: string
 }) {
   const runner = useManagerRunner(pinnedRunner)
   const profiles = useAgentProfiles().data
@@ -278,7 +315,7 @@ export function AccountPicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" data-slot="manager-account-picker" aria-label="Agent account" className={PICKER_TRIGGER}>
+        <button type="button" data-slot="manager-account-picker" aria-label="Agent account" className={cn(PICKER_TRIGGER, className)}>
           <TriggerLabel>Account {current?.label ?? (selected === DEFAULT_AGENT_ACCOUNT_ID ? 'Default' : selected)}</TriggerLabel>
         </button>
       </DropdownMenuTrigger>
@@ -305,12 +342,13 @@ function AccountOptions({ runner, agentProfile, onChange }: { runner: Runner; ag
   )
 }
 
-export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = false, chip = false }: {
+export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = false, chip = false, className }: {
   taskRunner?: Runner
   taskAgents?: ManagerTaskAgent[] | undefined
   onChange: (patch: ManagerPatch) => void
   pill?: boolean
   chip?: boolean
+  className?: string
 }) {
   const status = useProviderStatus().data
   const profiles = useAgentProfiles().data?.profiles ?? []
@@ -343,7 +381,7 @@ export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = fals
           data-slot="manager-task-runner-picker"
           aria-label="Agent for new tasks"
           title="Choose the accounts the manager may use for new tasks. Automatic lets it choose freely."
-          className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs')}
+          className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 max-w-full rounded-full border border-border px-2.5 text-xs', className)}
         >
           <TriggerLabel>Tasks: {label}</TriggerLabel>
         </button>

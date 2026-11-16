@@ -56,22 +56,40 @@ test('Manager keeps message actions in the composer and configuration in the hea
       await field.fill('Keep the Manager wording and behavior');
       await expect(screen.getByRole('button', 'Send', { exact: true })).toBeEnabled();
       await screen.getByRole('button', 'Manager settings', { exact: true }).tap();
+      await expect(screen.getByRole('button', 'Manager agent…')).toBeVisible();
+      for (const name of ['Model and effort', 'Agent account', 'Agent for new tasks']) {
+        await expect(screen.getByRole('button', name, { exact: true })).toHaveCount(0);
+      }
+      await screen.getByRole('button', 'Manager agent…').tap();
+      await expect(screen.getByRole('dialog', 'Manager agent')).toBeVisible();
       await expect(screen.getByRole('button', 'Agent account')).toBeVisible();
       await expect(screen.getByRole('combobox', 'Dictation language')).toHaveCount(0);
       await browser.evaluate(async () => {
-        const panel = document.querySelector('[data-slot="manager-settings-menu"]');
+        const panel = document.querySelector('[data-slot="manager-agent-dialog"]');
         await Promise.all(panel?.getAnimations({ subtree: true }).map((animation) => animation.finished) ?? []);
       });
-      await screenshot(`manager-settings-${size.width}x${size.height}`);
-      await expect(field).toHaveValue('Keep the Manager wording and behavior');
+      await expect.poll(() => browser.evaluate(() => {
+        const dialog = document.querySelector('[data-slot="manager-agent-dialog"]')?.getBoundingClientRect();
+        return !!dialog && dialog.top >= 0 && dialog.bottom <= innerHeight && dialog.left >= 0 && dialog.right <= innerWidth;
+      })).toBe(true);
+      await screenshot(`manager-agent-dialog-${size.width}x${size.height}`);
       await screen.getByRole('button', 'Agent for new tasks').tap();
       await expect(screen.getByRole('menuitemcheckbox', 'antigravity · Automatic account')).toHaveAttribute('aria-checked', 'true');
       await browser.keyboard.press('Escape');
-      await screen.getByRole('button', 'Model and effort').tap();
+      await screen.getByRole('button', 'Manager agent', { exact: true }).tap();
       await expect(screen.getByRole('menuitemradio', 'pi', { exact: true })).toHaveCount(0);
+      await expect(screen.getByRole('menuitemradio', 'codex', { exact: true })).toHaveAttribute('aria-checked', 'true');
+      await browser.keyboard.press('Escape');
+      await screen.getByRole('button', 'Agent account').tap();
       await expect(screen.getByRole('menuitemradio', 'Use workspace default (Default)', { exact: true })).toBeVisible();
       await browser.keyboard.press('Escape');
+      await screen.getByRole('button', 'Model and effort').tap();
+      await expect(screen.getByRole('menuitemradio', 'codex', { exact: true })).toHaveCount(0);
       await browser.keyboard.press('Escape');
+      await screen.getByRole('button', 'Done').tap();
+      await expect(screen.getByRole('dialog', 'Manager agent')).toBeHidden();
+      await expect(field).toHaveValue('Keep the Manager wording and behavior');
+      await expect.poll(() => browser.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Manager settings');
     }
     await app.open('/manager/new');
     await expect(screen.getByRole('textbox', 'What should this manager do?')).toBeVisible();

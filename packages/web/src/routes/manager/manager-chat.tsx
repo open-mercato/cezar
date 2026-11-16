@@ -37,11 +37,9 @@ import {
   needsYouLabel,
   parseManagerCommand,
   retryOf,
-  streamingReply,
-  turnKindLabel,
   watchingLine,
 } from '@/lib/managers'
-import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { useMediaQuery } from '@/lib/use-media-query'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -488,7 +486,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll. A
   // reader left scrolled up keeps them, or their place would not be there to come back to.
   useEffect(() => () => { if (!leftAt.has(id)) trimManagerChat(queryClient, id) }, [id, queryClient])
-  const keyboardOpen = useKeyboardOpen()
   const location = useLocation()
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
   const [focusComposer] = useState(() => shouldFocusComposer(location.state))
@@ -521,7 +518,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     nextCheckAt: manager.nextCheckAt,
     now: new Date(now),
   })
-  const turnLabel = turnKindLabel(streamingReply(chat.messages))
   const checkNow = useCheckNow(id)
   const settings = useRef<ManagerSettingsHandle>(null)
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
@@ -808,17 +804,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           sendShortcut="↵"
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
-        {keyboardOpen || !working ? null : (
-          // Configuration lives in the header gear; this line keeps what the turn is doing.
-          // Phones: the interval lives in the gear and the spinner beside the name.
-          <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
-            <span role="status" aria-label="Working" data-slot="manager-working" className="flex min-w-0 items-center gap-1.5">
-              <StatusDot tone="violet" pulse />
-              <span className="truncate">Working{turnLabel ? ` on ${turnLabel}` : '…'}</span>
-            </span>
-            <Button variant="ghost" size="xs" data-slot="manager-footer-stop" onClick={stop}>Stop</Button>
-          </div>
-        )}
       </div>
     </div>
     {watchingOpen && !barEverywhere ? (
