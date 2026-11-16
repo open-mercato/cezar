@@ -261,6 +261,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const managerHeads = useMemo(() => <ManagerHeads />, [])
   const connectPhone = useMemo(() => <ConnectPhoneLink />, [])
   const phonesLink = useMemo(() => <PhonesLink />, [])
+  const phonesRail = useMemo(() => <PhonesLink rail />, [])
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -312,6 +313,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         toolsMenu={toolsMenu}
         connectPhone={connectPhone}
         phonesLink={phonesLink}
+        phonesRail={phonesRail}
         managersAvailable={managersAvailable}
         managerAttention={managersAttention(managers.data?.managers)}
         managerTo={managerTo}

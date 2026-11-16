@@ -9068,6 +9068,7 @@ export function createApp(deps: ServerDeps) {
         return accountRefusal(c, error);
       }
     })
+    .post('/workspace/phones/reconnect', (c) => c.json(phonePairing.reconnect()))
     // Keep this computer awake for your phone: the user's toggle, saved in cezar's relay state.
     .put('/workspace/phones/keep-awake', jsonZodValidator(setRelayKeepAwakeInputSchema), (c) => {
       try {

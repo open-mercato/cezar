@@ -23,6 +23,9 @@ const BLOCKED: Partial<Record<PhonesResponse['relay']['status'], string>> = {
   suspended: 'Phones blocked: this computer’s relay access is suspended',
 }
 
+/** Still retrying on its own soon: amber, not red. */
+const DEGRADED = new Set<PhonesResponse['relay']['status']>(['rate-limited', 'replaced'])
+
 const OFFLINE: Partial<Record<PhonesResponse['relay']['status'], string>> = {
   replaced: 'another cezar on this computer holds the connection',
   'rate-limited': 'too many connections, retrying soon',
@@ -55,6 +58,50 @@ export function relayIndicator(data: PhonesResponse | undefined): RelayIndicator
   if (relay.status === 'unreachable') {
     return { tone: 'danger', pulse: false, text: `Can’t reach the phone relay (${lastReason(relay)}): attempt ${attempt}${nextTry(relay)}`, blocked: false }
   }
-  const why = OFFLINE[relay.status] ?? relay.status
-  return { tone: 'danger', pulse: false, text: `Phone relay offline: ${why}${relay.detail ? ` (${relay.detail})` : ''}`, blocked: false }
+  const why = `${OFFLINE[relay.status] ?? relay.status}${relay.detail ? ` (${relay.detail})` : ''}`
+  if (DEGRADED.has(relay.status)) return { tone: 'pending', pulse: false, text: `Phone relay degraded: ${why}`, blocked: false }
+  return { tone: 'danger', pulse: false, text: `Phone relay offline: ${why}`, blocked: false }
+}
+
+/**
+ * The phone entry's look. All well (relay up, a phone paired): the icon itself is green and carries
+ * no dot. A dot means something needs the user: amber while it recovers, red when it will not.
+ */
+export interface PhoneIconState {
+  icon: 'ok' | 'neutral'
+  dot: 'pending' | 'danger' | null
+  pulse: boolean
+  /** The popover header's status in a word or two. */
+  summary: string
+  /** The tooltip and accessible label, after `Phones · `. */
+  text: string
+  blocked: boolean
+}
+
+const BLOCKED_SUMMARY: Partial<Record<PhonesResponse['relay']['status'], string>> = {
+  'email-unconfirmed': 'Confirm your email',
+  'account-required': 'Email needed',
+  suspended: 'Suspended',
+}
+
+export function phoneIconState(data: PhonesResponse | undefined): PhoneIconState {
+  const paired = (data?.phones.length ?? 0) > 0
+  const indicator = relayIndicator(data)
+  if (!indicator) {
+    const text = paired ? 'Not connected to the phone relay' : 'Not set up'
+    return { icon: 'neutral', dot: null, pulse: false, summary: paired ? 'Not connected' : 'Not set up', text, blocked: false }
+  }
+  if (indicator.tone === 'success') {
+    // Connected with no phone is only a removal still owed to the relay: nothing to celebrate.
+    return paired
+      ? { icon: 'ok', dot: null, pulse: false, summary: 'Connected', text: indicator.text, blocked: false }
+      : { icon: 'neutral', dot: null, pulse: false, summary: 'No phone paired', text: 'No phone paired', blocked: false }
+  }
+  const status = data!.relay.status
+  const summary = indicator.blocked
+    ? BLOCKED_SUMMARY[status] ?? 'Blocked'
+    : indicator.tone === 'pending'
+      ? (DEGRADED.has(status) ? 'Degraded' : (data!.relay.attempt ?? 0) > 0 ? 'Reconnecting' : 'Connecting')
+      : 'Offline'
+  return { icon: 'neutral', dot: indicator.tone, pulse: indicator.pulse, summary, text: indicator.text, blocked: indicator.blocked }
 }

@@ -99,6 +99,16 @@ export function usePhones(enabled = true) {
   return useQuery({ queryKey: phoneKeys.list, queryFn: ({ signal }) => getPhones({ signal }), enabled })
 }
 
+/** The footer popover's **Reconnect now**: a socket that is not up tries at once. */
+export async function reconnectRelay(): Promise<PhonesResponse> {
+  return unwrap(await phones().reconnect.$post({}), `${PATH}/reconnect`)
+}
+
+/** Whatever Settings last read of the relay account, never a fetch: the footer must not ask the relay. */
+export function useCachedRelayAccount(): RelayAccountResponse | undefined {
+  return useQuery({ queryKey: phoneKeys.account, queryFn: ({ signal }) => getRelayAccount({ signal }), enabled: false }).data
+}
+
 /** Keep this computer awake for your phone, Settings > Connect a phone. */
 export async function setRelayKeepAwake(enabled: boolean): Promise<RelayKeepAwake> {
   return unwrap(await phones()['keep-awake'].$put({ json: { enabled } }), `${PATH}/keep-awake`)

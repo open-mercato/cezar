@@ -219,7 +219,7 @@ describe('RelayConnection recovery (Mac online, relay link lost)', () => {
   it('diagnostics say when it connected, why it last went down, the attempt and the next try', () => {
     const script = new Script(true);
     const connection = connect(script);
-    expect(connection.diagnostics()).toEqual({});
+    expect(connection.diagnostics()).toEqual({ stats: { since: new Date(Date.now()).toISOString(), relayedToday: 0, uptime: 0 } });
     script.hello();
     expect(connection.diagnostics().connectedAt).toBe(new Date(Date.now()).toISOString());
     vi.advanceTimersByTime(45_000 + PONG_WAIT_MS);
@@ -230,6 +230,22 @@ describe('RelayConnection recovery (Mac online, relay link lost)', () => {
     expect(down.nextRetryAt).toBe(new Date(Date.now() + backoffMs(1, HALF)).toISOString());
     vi.advanceTimersByTime(backoffMs(1, HALF));
     expect(connection.diagnostics().nextRetryAt).toBeUndefined();
+  });
+
+  it('stats count data frames both ways since local midnight and the share of time the socket was up', () => {
+    vi.setSystemTime(new Date(2026, 10, 16, 23, 0, 0));
+    const script = new Script(true);
+    const connection = connect(script);
+    vi.advanceTimersByTime(20_000);
+    script.hello();
+    const frame = Buffer.concat([Buffer.from([1]), Buffer.alloc(16, 7), Buffer.from('x')]);
+    script.last.handlers.onMessage(frame);
+    connection.sendData(Buffer.alloc(16, 7).toString('base64url'), Buffer.from('y'));
+    expect(connection.diagnostics().stats).toMatchObject({ relayedToday: 2, uptime: 0 });
+    vi.advanceTimersByTime(20_000);
+    expect(connection.diagnostics().stats?.uptime).toBeCloseTo(0.5);
+    vi.setSystemTime(new Date(2026, 10, 17, 0, 0, 1));
+    expect(connection.diagnostics().stats?.relayedToday).toBe(0);
   });
 
   it('diagnostics keep the last 4451 reason and close code, and a relay reason never as free text', () => {

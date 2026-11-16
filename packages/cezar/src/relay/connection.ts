@@ -121,6 +121,11 @@ export class RelayConnection {
   private nextRetryAt = 0;
   private lastDown: { at: number; reason: string; code?: number } | undefined;
   private lastBlock: { at: number; reason: string } | undefined;
+  /** The popover's quick stats: since the first `start`, in memory only. */
+  private trackedFrom = 0;
+  private upMs = 0;
+  private upSince = 0;
+  private relayed = { day: '', count: 0 };
   private readonly commands = new Map<string, PendingCommand>();
   private commandTimes: number[] = [];
   private nextFrameAt = 0;
@@ -142,7 +147,28 @@ export class RelayConnection {
       ...(this.reconnectTimer && this.nextRetryAt ? { nextRetryAt: iso(this.nextRetryAt) } : {}),
       ...(this.lastDown ? { lastDown: { at: iso(this.lastDown.at), reason: this.lastDown.reason, ...(this.lastDown.code !== undefined ? { code: this.lastDown.code } : {}) } } : {}),
       ...(this.lastBlock ? { lastBlock: { at: iso(this.lastBlock.at), reason: this.lastBlock.reason } } : {}),
+      ...(this.trackedFrom ? { stats: this.stats() } : {}),
     };
+  }
+
+  private stats(): NonNullable<RelayDiagnostics['stats']> {
+    const now = this.now();
+    const span = now - this.trackedFrom;
+    const up = this.upMs + (this.upSince ? now - this.upSince : 0);
+    return {
+      since: new Date(this.trackedFrom).toISOString(),
+      relayedToday: this.relayed.day === localDay(now) ? this.relayed.count : 0,
+      uptime: span > 0 ? Math.min(1, up / span) : (this.upSince ? 1 : 0),
+    };
+  }
+
+  private countFrame(): void {
+    const day = localDay(this.now());
+    this.relayed = this.relayed.day === day ? { day, count: this.relayed.count + 1 } : { day, count: 1 };
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
   }
 
   private noteDown(reason: string, code?: number): void {
@@ -151,6 +177,7 @@ export class RelayConnection {
 
   start(): void {
     this.stopped = false;
+    if (!this.trackedFrom) this.trackedFrom = this.now();
     this.armWake();
     if (!this.socket && !this.reconnectTimer) this.connect();
   }
@@ -225,8 +252,9 @@ export class RelayConnection {
 
   /** Only a session calls this, which is what keeps § 6 rule 5 true. */
   sendData(deviceId: string, ciphertext: Buffer): void {
-    if (!this.live) return;
-    this.socket?.send(Buffer.concat([Buffer.from([1]), Buffer.from(deviceId, 'base64url'), ciphertext]));
+    if (!this.live || !this.socket) return;
+    this.countFrame();
+    this.socket.send(Buffer.concat([Buffer.from([1]), Buffer.from(deviceId, 'base64url'), ciphertext]));
   }
 
   private connect(): void {
@@ -284,6 +312,7 @@ export class RelayConnection {
 
   private onBinary(data: Buffer): void {
     if (!this.live || data.length < 17 || data[0] !== 1) return;
+    this.countFrame();
     this.deps.onData(b64u(data.subarray(1, 17)), data.subarray(17));
   }
 
@@ -302,6 +331,7 @@ export class RelayConnection {
     this.proofRetried = false;
     this.clearHello();
     this.connectedAt = Date.now();
+    this.upSince = this.now();
     this.log(`connected attempt=${this.attempts}`);
     this.deps.onStatus('connected');
     this.armPing();
@@ -420,6 +450,8 @@ export class RelayConnection {
   private teardown(): void {
     const wasLive = this.live;
     this.live = false;
+    if (this.upSince) this.upMs += this.now() - this.upSince;
+    this.upSince = 0;
     this.socket = undefined;
     this.clearHello();
     if (this.pingTimer) clearInterval(this.pingTimer);
@@ -619,3 +651,6 @@ export class RelayConnection {
 const reasonCode = (reason: string): string => (/^[a-z0-9-]{1,40}$/.test(reason) ? reason : 'other');
 
 const accountHeader = (token: string | undefined): Record<string, string> => (token ? { 'X-Cezar-Relay-Account': token } : {});
+
+/** "Today" is the user's own calendar day, as the popover shows it. */
+const localDay = (at: number): string => new Date(at).toDateString();

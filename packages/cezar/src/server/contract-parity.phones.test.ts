@@ -51,6 +51,7 @@ describe('src/contract/phones.ts matches the phones routes exactly', () => {
     Assert<Mutual<z.infer<typeof relayAccountResponseSchema>, InferResponseType<Phones['account']['check']['$post'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<Phones['account']['delete']['$post'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<Phones['account']['dismiss']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof phonesResponseSchema>, InferResponseType<Phones['reconnect']['$post'], 200>>>,
     Assert<Mutual<z.infer<typeof relayKeepAwakeSchema>, InferResponseType<Phones['keep-awake']['$put'], 200>>>,
     Assert<Mutual<z.input<typeof setRelayKeepAwakeInputSchema>, InferRequestType<Phones['keep-awake']['$put']>['json']>>,
   ];

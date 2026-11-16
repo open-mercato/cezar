@@ -213,6 +213,12 @@ export class RelayService {
     return { enabled: this.preferences.keepAwake, active: this.keepAwake.active, ...(unavailable ? { unavailable } : {}) };
   }
 
+  /** The popover's **Reconnect now**: a socket that is not up tries at once (a suspension still holds). */
+  reconnect(): PhonesResponse {
+    this.connection?.retryNow();
+    return this.list();
+  }
+
   /** Settings' toggle. Saved in `~/.cezar/relay/settings.json`; a read-only home keeps it until restart. */
   setKeepAwake(enabled: boolean): RelayKeepAwake {
     try {

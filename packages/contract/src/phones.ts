@@ -121,6 +121,11 @@ export const relayDiagnosticsSchema = z.object({
   lastDown: z.object({ at: z.string(), reason: z.string(), code: z.number().int().optional() }).optional(),
   /** The last 4451 (§ 18), so a blocked computer says which account gate held it. */
   lastBlock: z.object({ at: z.string(), reason: z.string() }).optional(),
+  /**
+   * Counted in memory since this cezar first opened the socket: data frames to and from phones since
+   * local midnight, and the share of that time the socket was up (0–1).
+   */
+  stats: z.object({ since: z.string(), relayedToday: z.number().int(), uptime: z.number() }).optional(),
 });
 export type RelayDiagnostics = z.infer<typeof relayDiagnosticsSchema>;
 
