@@ -225,6 +225,11 @@ describe('the Phones summary popover', () => {
     expect(within(menu).getByRole('menuitem', { name: 'Reconnect now' })).toBeTruthy()
   })
 
+  it.each([['error'], ['update-required'], ['locked'], ['suspended']] as const)('%s: no Reconnect now, which could not change it', async (status) => {
+    const menu = await opened(list(PHONES.slice(0, 1), { status }))
+    expect(within(menu).queryByRole('menuitem', { name: 'Reconnect now' })).toBeNull()
+  })
+
   it('never asks the relay for the account: it reads what Settings last cached', async () => {
     await opened(list(PHONES.slice(0, 1), { status: 'connected' }))
     expect(api.getRelayAccount).not.toHaveBeenCalled()

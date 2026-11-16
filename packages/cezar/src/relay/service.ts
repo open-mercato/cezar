@@ -34,7 +34,7 @@ export class RelayAccountActionError extends Error {
 
 const ACCOUNT_MESSAGES: Record<string, [string, RelayAccountActionError['status']]> = {
   'bad-request': ['The relay did not accept that email address.', 400],
-      'rate-limited': ['Too many tries. Try again later.', 429],
+  'rate-limited': ['Too many tries. Try again later.', 429],
   'already-confirmed': ['Your email is already confirmed.', 409],
   'no-account': ['No account is attached to this computer yet.', 404],
   'terms-required': ['Accept the Terms and Privacy Policy first.', 409],
@@ -619,8 +619,10 @@ export class RelayService {
     return origin;
   }
 
-  /** Asks the relay. Read only when Settings is open, so a closed cockpit sends nothing. */
-  /** `force`: the user's **Check now**, which skips the minute's cache but not a 10 s floor. */
+  /**
+   * Asks the relay. Read only when Settings is open, so a closed cockpit sends nothing. `force`: the
+   * user's **Check now**, which skips the minute's cache but not a 10 s floor.
+   */
   accountStatus(force = false): Promise<RelayAccountResponse> {
     return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
       const origin = this.origin;

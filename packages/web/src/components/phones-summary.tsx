@@ -77,6 +77,9 @@ export function ago(iso: string, now = Date.now()): string {
 
 export const percent = (share: number): string => `${Math.floor(share * 1000) / 10}%`
 
+/** Statuses **Reconnect now** cannot change: up, off, stopped until restart, or suspended by the operator. */
+const NO_RECONNECT: ReadonlySet<PhonesResponse['relay']['status']> = new Set(['connected', 'off', 'error', 'update-required', 'locked', 'suspended'])
+
 function Rows({ children }: { children: ReactNode }) {
   return <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 px-2 pb-1.5 text-meta">{children}</dl>
 }
@@ -126,7 +129,7 @@ export function PhonesSummary({
   const email = data.account.email ?? account?.status?.email ?? undefined
   const word = accountWord(data, account, now)
   const awake = keepAwake.isPending && keepAwake.variables !== undefined ? keepAwake.variables : data.keepAwake.enabled
-  const canReconnect = relay.status !== 'connected' && relay.status !== 'off'
+  const canReconnect = !NO_RECONNECT.has(relay.status)
   return (
     <>
       <div data-slot="phones-summary-header" className="flex items-center gap-2 px-2 pt-1.5 pb-1">
