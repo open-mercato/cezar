@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
@@ -10,7 +10,10 @@ import { __clearRememberedStatusesForTests, workspaceQueryKeys } from '@/api/que
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
 
+import { clearManagerOrigins } from '@/lib/managers'
+
 import { GlobalTasksRoute } from './global-tasks'
+import { ManagerBackLink } from './manager/manager-back-link'
 import { resolveConflictsPrompt } from './task-thread/run-actions'
 
 // Every row derives its attention once per render, which makes the call count a render count for
@@ -346,6 +349,88 @@ describe('global tasks page', () => {
     const menu = await screen.findByTestId('facet-manager-menu')
     expect(menu.textContent).toContain('Mobile app creator')
     expect(menu.textContent).not.toContain('Idle')
+  })
+
+  it('leads back to the manager, and its rows carry the way back to this list and to it', async () => {
+    onTestFinished(() => clearManagerOrigins())
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1'] }] })
+    function Task() {
+      const location = useLocation()
+      return <ManagerBackLink runId={location.pathname.split('/').at(-1)!} />
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks?manager=mobile']}>
+          <ListViewProvider>
+            <main data-slot="main">
+              <Routes>
+                <Route path="/tasks" element={<GlobalTasksRoute />} />
+                <Route path="/p/:projectId/tasks/:id" element={<Task />} />
+              </Routes>
+            </main>
+            <LocationProbe />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const back = await screen.findByRole('link', { name: 'Back to Mobile app creator' })
+    expect(back.getAttribute('href')).toBe('/manager/mobile')
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+
+    const main = document.querySelector<HTMLElement>('[data-slot="main"]')!
+    main.scrollTop = 420
+    fireEvent.scroll(main)
+    fireEvent.click(screen.getByRole('link', { name: 'Bump the runner' }))
+    // The task's header: Mobile app creator › Tasks started.
+    const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
+    expect(within(crumbs).getByRole('link', { name: 'Back to Mobile app creator' }).getAttribute('href')).toBe('/manager/mobile')
+    main.scrollTop = 0
+    fireEvent.click(within(crumbs).getByRole('link', { name: 'Back to tasks started by Mobile app creator' }))
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+    expect(search()).toBe('?manager=mobile')
+    await waitFor(() => expect(main.scrollTop).toBe(420))
+  })
+
+  it('offers no way back to a manager for an unfiltered list', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1'] }] })
+    renderPage()
+    await screen.findByText('Checkout page')
+    expect(document.querySelector('[data-slot="global-tasks-manager-back"]')).toBeNull()
+  })
+
+  it('leads back to the manager, and its rows carry the way back to this list', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1'] }] })
+    const client = createQueryClient()
+    function StateProbe() {
+      const location = useLocation()
+      return <span data-testid="state">{JSON.stringify(location.state)}</span>
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/tasks?manager=mobile']}>
+          <ListViewProvider>
+            <Routes>
+              <Route path="/tasks" element={<GlobalTasksRoute />} />
+              <Route path="*" element={<StateProbe />} />
+            </Routes>
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const back = await screen.findByRole('link', { name: 'Back to Mobile app creator' })
+    expect(back.getAttribute('href')).toBe('/manager/mobile')
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+    fireEvent.click(screen.getByRole('link', { name: 'Checkout page' }))
+    expect(JSON.parse(screen.getByTestId('state').textContent!)).toEqual({
+      manager: { id: 'mobile', name: 'Mobile app creator', tasks: '/tasks?manager=mobile' },
+    })
+  })
+
+  it('offers no way back to a manager on an unfiltered list', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1'] }] })
+    renderPage()
+    await screen.findByText('Checkout page')
+    expect(document.querySelector('[data-slot="global-tasks-manager-back"]')).toBeNull()
   })
 
   it('finds the repos nobody has tagged yet', async () => {

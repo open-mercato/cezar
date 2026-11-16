@@ -502,3 +502,17 @@ export function managerTaskCount(tasks: readonly GlobalTask[], managerId: string
   const byOrigin = filterGlobalTasksByOrigin(tasks, origin, globalAutomationIndex(tasks))
   return filterGlobalTasks(byOrigin, { ...NO_FILTERS, managers: [managerId] }, 'active').length
 }
+
+/** Router state asking the Tasks table to come back where it was left (the manager breadcrumb). */
+export const RESTORE_SCROLL_STATE = { restoreScroll: true } as const
+
+export const wantsScrollRestore = (state: unknown): boolean =>
+  (state as { restoreScroll?: unknown } | null | undefined)?.restoreScroll === true
+
+const scrollOffsets = new Map<string, number>()
+
+/** Where each filtered list was scrolled to, per tab: keyed by its query string. */
+export const tasksScroll = {
+  save: (search: string, top: number): void => void scrollOffsets.set(search, top),
+  get: (search: string): number | undefined => scrollOffsets.get(search),
+}

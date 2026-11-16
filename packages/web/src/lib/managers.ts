@@ -300,6 +300,8 @@ export function actionConfirms(setting: ManagerConfirm | undefined, type: string
 export interface ManagerOrigin {
   id: string
   name: string
+  /** The manager's filtered Tasks table the task was opened from (`/tasks?manager=…`). */
+  tasks?: string
 }
 
 const origins = new Map<string, ManagerOrigin>()
@@ -309,7 +311,8 @@ const origins = new Map<string, ManagerOrigin>()
 export function resolveManagerOrigin(runId: string, state: unknown): ManagerOrigin | undefined {
   const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
   if (typeof origin?.id === 'string' && typeof origin.name === 'string') {
-    origins.set(runId, { id: origin.id, name: origin.name })
+    const tasks = typeof origin.tasks === 'string' && origin.tasks.startsWith('/tasks?') ? origin.tasks : undefined
+    origins.set(runId, { id: origin.id, name: origin.name, ...(tasks ? { tasks } : {}) })
   }
   return origins.get(runId)
 }
