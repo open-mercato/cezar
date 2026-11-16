@@ -263,10 +263,30 @@ into the directory, so the issues are visible in Assets and the next turn can fi
 - **Navigation.** No sidebar. A sticky horizontal section bar (Overview · Capabilities ·
   Architecture n · Public API · Flows · Trade-offs · Fit · Questions) with scroll-spy. The
   numbered architecture views keep their numbers because they are an ordered set.
-- **Density.** The content column fills the frame up to 1280 px. Capability cards use an
+- **Density.** The content column fills the frame up to 1180 px. Capability cards use an
   auto-fill grid; architecture boards scroll on their own when narrower than their columns.
 - The hero answers three things on the first screen: what changes for the user, the provisional
   decision with its main condition, and **whether the public API breaks** (R3).
+
+**Readability revision (2026-11-16).** Readers found the first design hard to scan. The token
+names, sections, ids, `data-ref`s and the CSP are unchanged; the presentation changes:
+
+- **Order.** The three facts come first, directly under the title, as cards with jump links. Then
+  the recommendation beside *Before merging* (the conditions), then *What the change does*.
+- **Verdict tone.** It is read from the words of `decision.label` (`tone()` in the template):
+  ✓ approve, ! comments/conditions/direction, ✕ request changes/reject/block, · otherwise. A
+  `decision.tone` field in the model would make this explicit; it is not added yet.
+- **Public API is actionable.** Each change is a card with *What breaks*, who is affected, and *What
+  to do*: the conditions that name it (`api_changes`), with their owner, its migration, *Decide
+  whether this breaks* for an undecided row, and *Copy as review comment*. Signatures fold away.
+- **Type and contrast.** 16 px body text, about 68 characters per line, sentence-case labels, and
+  every text ink AA on its surface (the soft label ink was 3.45:1 in light, 4.24:1 in dark).
+  Backticked model text renders as `<code>` after escaping; SHAs are shortened.
+- **Surface.** Off-white or near-black page, raised cards instead of bordered boxes, a floating
+  pill navigation, and a faint tone-tinted wash behind the title.
+- **Evidence chips** carry their kind, preview title and source on hover or focus, and open the
+  dialog on click. Print appends every source and prints chips as `[E1]`.
+- Covered by `report-dom.test.ts`, which runs the report's own script in jsdom.
 
 ### Public API delta (R3)
 
