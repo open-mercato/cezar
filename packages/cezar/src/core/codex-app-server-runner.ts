@@ -11,7 +11,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import {
   AUTO_END_DELAY_MS,
   DEFAULT_RUN_TIMEOUT_MS,
@@ -77,7 +77,7 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * publish (spec 2026-10-22-html-artifacts-and-impact).
  */
 export function codexThreadOverrides(
-  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'enforceReadOnly' | 'systemPrompt'>,
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'enforceReadOnly'>,
   mcpConfig: Record<string, unknown> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
@@ -93,8 +93,6 @@ export function codexThreadOverrides(
     cwd: spec.cwd,
     sandbox: spec.enforceReadOnly ? 'read-only' : sandboxed ? 'workspace-write' : 'danger-full-access',
     approvalPolicy: 'never',
-    // Replace the thread's previous cezar instructions on resume, including when cleared.
-    developerInstructions: spec.systemPrompt ?? '',
     config,
   };
 }
@@ -488,7 +486,9 @@ class CodexSession implements AgentSession {
       this.emitUi((state) => codexSessionStarted(threadId, state));
     }
 
-    await this.startOrSteerTurn(this.spec.userPrompt);
+    // Native developerInstructions replaces config guidance and stays stale on resume/fork.
+    // Keep each invocation's current guidance in its opening turn instead.
+    await this.startOrSteerTurn(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
   }
 
   /**

@@ -129,9 +129,9 @@ Notable fields (full doc-comments in the source):
   `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
-  Codex sends `systemPrompt` as native `developerInstructions` on thread start, resume and fork;
-  it never copies those instructions into the opening user message. Claude appends it to its
-  system prompt; backends without a system channel prepend it to the opening message.
+  Codex sends the current `systemPrompt` with each invocation's opening user turn, preserving
+  native configured guidance. `developerInstructions` replaces native config and does not
+  refresh retained developer history on resume/fork; it is unsuitable for task instructions.
 - `enforceReadOnly?` — set only for a manager's read-only work (its read-only tasks and its
   unattended watch turns, spec `2026-10-31-managers`); an Ask task never sets it and keeps only its
   read-only `allowedTools`. When set, the task must not change the repository or publish anything, on every backend:
@@ -161,9 +161,12 @@ Use the shared helper so the mapping is uniform:
 ```ts
 prependSystemPrompt(spec.systemPrompt, spec.userPrompt)
 // claude:          --append-system-prompt   (native channel, do NOT prepend)
-// codex:          developerInstructions   (native channel, do NOT prepend)
-// opencode / gemini: prepended here
+// codex / opencode / gemini: prepended here
 ```
+
+The opt-in native Codex regression inspects model requests against an isolated loopback stub:
+`node --import tsx --test packages/cezar/test/native/codex-instructions.test.ts` from the repo root.
+It requires a local Codex CLI and makes no real model calls; the ordinary unit gate remains CLI-free.
 
 `ContentBlock` mirrors the Anthropic wire format (`text` | `image` base64) so it
 can be written to the claude CLI's stdin verbatim.

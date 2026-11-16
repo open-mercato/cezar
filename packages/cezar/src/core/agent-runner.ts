@@ -107,10 +107,10 @@ export interface AgentRunSpec {
 }
 
 /**
- * Backends without a dedicated system-prompt channel (for example,
+ * Backends without a replaceable system-prompt channel (codex app-server,
  * opencode serve) deliver `spec.systemPrompt` as a leading block of the
  * opening user message — the documented per-backend mapping (spec §protocol
- * v2: claude = `--append-system-prompt`, codex = `developerInstructions`).
+ * v2: claude = `--append-system-prompt`, codex/opencode = prepended here).
  */
 export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt: string): string {
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
