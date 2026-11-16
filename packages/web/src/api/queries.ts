@@ -147,6 +147,7 @@ import type {
   AgentSetupAction,
   AgentSetupProvider,
   AgentSetupState,
+  ProviderConnectInput,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
@@ -921,8 +922,8 @@ export function useAgentAccountStatus(routeId: string, enabled: boolean) {
 export function useConnectAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, profileId }: { provider: ProviderId; profileId?: string }) =>
-      connectProvider(provider, profileId),
+    mutationFn: ({ provider, profileId, reconnect }: ProviderConnectInput) =>
+      connectProvider(provider, profileId, reconnect),
     retry: false,
     onSuccess: async () => {
       await Promise.all([
@@ -947,6 +948,10 @@ export function useRecheckAgentAccount() {
     retry: false,
     onSuccess: (answer, routeId) => {
       queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentAccountDetails(routeId) })
+      if (answer.status.provider === 'cursor') {
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.models('cursor') })
+      }
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles })
     },
   })

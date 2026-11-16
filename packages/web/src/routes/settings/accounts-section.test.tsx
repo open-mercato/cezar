@@ -69,6 +69,7 @@ function serve(
     targets?: unknown
     status?: unknown
     connect?: { status: number; body: unknown }
+    cursorModels?: { source: 'live' | 'cache' | 'unavailable'; stale: boolean; models: Array<{ id: string; label: string; description: string }> }
   } = {},
 ) {
   requests = []
@@ -84,6 +85,7 @@ function serve(
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
+      if (url === '/api/v1/providers/status') return json({ providers: state.profiles.map((p) => p.status ?? { provider: p.provider, status: 'unknown' }) })
       if (url === '/api/v1/workspace/agent-profiles' && method === 'GET') return json(state)
       if (url.startsWith('/api/v1/workspace/agent-profiles/') && method === 'DELETE') {
         if (options.deleteStatus) return json({ error: options.deleteError }, options.deleteStatus)
@@ -152,6 +154,7 @@ function serve(
       }
       if (String(input).startsWith('/api/v1/models?runner=')) {
         const runner = String(input).includes('cursor') ? 'cursor' : 'codex'
+        if (runner === 'cursor' && options.cursorModels) return json({ runner, ...options.cursorModels })
         return json({ runner, models: [], source: 'unavailable', stale: false })
       }
       return new Promise<never>(() => {})
@@ -229,6 +232,65 @@ afterEach(() => {
   act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
+})
+
+describe('Cursor connection', () => {
+  function serveCursor(state: 'connected' | 'disconnected' | 'not-installed' | 'unknown' = 'connected', options: Parameters<typeof serve>[1] = {}) {
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'], selections: {}, defaults: {}, profiles: [
+      profile({ id: 'default', provider: 'cursor', isDefault: true, status: { provider: 'cursor', status: state } }),
+    ] }, { status: { provider: 'cursor', status: state }, ...options })
+  }
+
+  it('gives a connected Cursor user sign-in, verification, live models, and a new-task action', async () => {
+    serveCursor('connected', {
+      connect: { status: 200, body: { opened: true, command: 'cursor-agent login' } },
+      cursorModels: { source: 'live', stale: false, models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }] },
+    })
+    renderAccounts()
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }))
+    await screen.findByText(/Finish signing in with Cursor/)
+    expect(requests.find((r) => r.url === '/api/v1/providers/connect')?.body).toEqual({ provider: 'cursor', reconnect: true })
+    expect(await screen.findByText('Composer 2.5')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'New task with Cursor' }).getAttribute('href')).toBe('/new?runner=cursor')
+    expect(screen.getByText(/attaching or listing existing Cloud Agent sessions is not supported/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Verify connection' }))
+    await waitFor(() => expect(statusReads.some((url) => url.includes('recheck=1'))).toBe(true))
+    await waitFor(() => expect(requests.filter((r) => r.url === '/api/v1/models?runner=cursor').length).toBeGreaterThan(1))
+    expect(await screen.findByText('Cursor connection check: connected.')).toBeTruthy()
+  })
+
+  it.each(['disconnected', 'unknown'] as const)('offers sign-in for a %s CLI and retains the manual command on failure', async (state) => {
+    serveCursor(state, { connect: { status: 409, body: { error: 'No terminal emulator could be opened. Run this command manually.', command: '/opt/cursor-agent login' } } })
+    renderAccounts()
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Cursor account' }))
+    expect(await screen.findByText('/opt/cursor-agent login')).toBeTruthy()
+    expect(screen.getByText(/No terminal emulator could be opened/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'New task with Cursor' })).toBeNull()
+  })
+
+  it('explains installation when CLI is missing without opening a doomed login', async () => {
+    serveCursor('not-installed')
+    renderAccounts()
+    expect(await screen.findByRole('link', { name: 'Installation help' })).toBeTruthy()
+    expect(screen.getByText(/Install Cursor CLI on the machine running Cezar/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Connect Cursor account' })).toBeNull()
+  })
+
+  it('keeps verification useful when models are unavailable', async () => {
+    serveCursor()
+    renderAccounts()
+    expect(await screen.findByText(/Models could not be verified/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Verify connection' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Sign-in help' }).getAttribute('href')).toContain('/authentication')
+  })
+
+  it('shows host-side login instructions when local handoff is unavailable', async () => {
+    serveCursor('disconnected')
+    renderAccounts('/settings/global/accounts', null, false)
+    expect(await screen.findByText(/Sign in on the machine hosting Cezar/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Connect Cursor account' })).toBeNull()
+    expect(requests.some((r) => r.url === '/api/v1/providers/connect')).toBe(false)
+  })
 })
 
 /**

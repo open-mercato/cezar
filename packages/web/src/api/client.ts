@@ -1493,10 +1493,11 @@ export async function getGroup(groupId: string, opts?: ReadOptions): Promise<Gro
 export async function connectProvider(
   provider: ProviderId,
   profileId?: string,
+  reconnect?: boolean,
 ): Promise<ProviderConnectResponse> {
   return unwrap(
     await cez.api.v1.providers.connect.$post({
-      json: { provider, ...(profileId ? { profileId } : {}) },
+      json: { provider, ...(profileId ? { profileId } : {}), ...(reconnect ? { reconnect } : {}) },
     }),
     '/providers/connect',
   )
