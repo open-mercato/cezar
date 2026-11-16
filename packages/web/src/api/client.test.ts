@@ -48,7 +48,7 @@ import {
   retryProviderAuth,
 } from './client'
 import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
-import { nativeConnectionStatus } from './connection-status'
+import { connectionStatus, nativeConnectionStatus } from './connection-status'
 
 /** A message's idempotency key (telemetry 1a212342) — fixed here so the request shape is exact. */
 const KEY = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f'
@@ -866,5 +866,27 @@ describe("the CezarBot shell's 502", () => {
     reply({ ok: true })
     await getHealth()
     expect(nativeConnectionStatus.current()).toBeUndefined()
+  })
+})
+
+describe('whether cezar still answers plain requests', () => {
+  afterEach(() => connectionStatus.requestSettled(false))
+
+  it("is cezar's own answer, not a gateway's 502/503/504 or no answer at all", async () => {
+    reply({ ok: true })
+    await getHealth()
+    expect(connectionStatus.answering()).toBe(true)
+    for (const status of [502, 503, 504]) {
+      connectionStatus.requestSettled(true)
+      fetchMock.mockResolvedValueOnce(new Response('', { status }))
+      await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+      expect(connectionStatus.answering()).toBe(false)
+    }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'nope' }), { status: 404 }))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(connectionStatus.answering()).toBe(true)
+    fetchMock.mockRejectedValueOnce(new TypeError('Load failed'))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(connectionStatus.answering()).toBe(false)
   })
 })

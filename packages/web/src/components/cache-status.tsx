@@ -1,11 +1,11 @@
 import type { NativeConnectionStatus } from '@open-mercato/cezar-api-client'
 import type { QueryKey } from '@tanstack/react-query'
-import { CheckCircle2Icon, CloudOffIcon, LaptopIcon, RefreshCwIcon } from 'lucide-react'
+import { CheckCircle2Icon, CloudOffIcon, LaptopIcon, PauseCircleIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { dashboardLive } from '@/api/dashboard-live'
 import { cachedAt, cachedVersion, subscribeCached } from '@/api/query-persist'
-import { connectionStatus, useNativeConnectionStatus, useReconnectAttempt } from '@/api/connection-status'
+import { connectionStatus, useNativeConnectionStatus, useReconnectAttempt, useRequestsAnswered } from '@/api/connection-status'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { isCezarShell, shellRequest } from '@/lib/phone-app'
@@ -162,8 +162,12 @@ export function ConnectionBanner() {
   const visible = useVisible()
   const [everConnected, setEverConnected] = useState(connected)
   if (connected && !everConnected) setEverConnected(true)
+  const answered = useRequestsAnswered()
   // A hidden tab releases its stream on purpose (#1753); only a visible one is "down".
-  const down = streamAvailable() && visible && (!connected || !online)
+  const streamDown = streamAvailable() && visible && (!connected || !online)
+  // cezar still answers plain requests: only the live updates are gone, and polling covers them.
+  const paused = useDelayed(streamDown && online && answered, CONNECTION_BANNER_DELAY_MS)
+  const down = streamDown && !(online && answered)
   const shown = useDelayed(down, !online ? 0 : everConnected ? CONNECTION_BANNER_DELAY_MS : FIRST_CONNECT_BANNER_DELAY_MS)
   const long = useDelayed(shown, LONG_OFFLINE_MS)
   const [phase, setPhase] = useState<BannerPhase>('hidden')
@@ -182,9 +186,23 @@ export function ConnectionBanner() {
     return () => clearTimeout(timer)
   }, [retrying])
 
+  const inset = 'pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))]'
+  if (phase === 'hidden' && paused) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-slot="connection-banner"
+        data-state="paused"
+        className={cn('flex min-h-7 items-center gap-1.5 border-b border-border text-meta text-muted-foreground', inset)}
+      >
+        <PauseCircleIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="min-w-0">Live updates paused — refreshing periodically.</span>
+      </div>
+    )
+  }
   if (phase === 'hidden') return null
   const back = phase !== 'down'
-  const inset = 'pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))]'
   if (back) {
     return (
       <div
