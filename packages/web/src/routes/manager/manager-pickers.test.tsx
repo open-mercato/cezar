@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { AccountPicker, ModelPicker, TaskRunnerPicker } from './manager-pickers'
+import { AccountPicker, ManagerRunnerPicker, ModelPicker, TaskRunnerPicker } from './manager-pickers'
 
 vi.mock('@/api/queries', () => ({
   useHealth: () => ({ data: { defaultRunner: 'claude' } }),
@@ -22,6 +22,43 @@ vi.mock('@/api/queries', () => ({
 afterEach(cleanup)
 
 describe('manager agent and account selection', () => {
+  it('keeps the dialog agent picker restricted and clears incompatible model/account pins', async () => {
+    const onChange = vi.fn()
+    render(<ManagerRunnerPicker runner="claude" onChange={onChange} />)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Manager agent' }))
+    const codex = await screen.findByRole('menuitemradio', { name: 'codex' })
+    expect(screen.queryByRole('menuitemradio', { name: 'pi' })).toBeNull()
+    fireEvent.click(codex)
+    expect(onChange).toHaveBeenCalledWith({ runner: 'codex', model: null, agentProfile: null })
+  })
+
+  it('keeps the model and account pins when the current agent is chosen again', async () => {
+    const onChange = vi.fn()
+    render(<ManagerRunnerPicker runner="claude" onChange={onChange} />)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Manager agent' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'claude' }))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('pins the default agent without clearing its pins when none was pinned', async () => {
+    const onChange = vi.fn()
+    render(<ManagerRunnerPicker onChange={onChange} />)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Manager agent' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'claude' }))
+    expect(onChange).toHaveBeenCalledWith({ runner: 'claude' })
+  })
+
+  it('offers model and effort alone when the dialog has separate agent/account fields', async () => {
+    const onChange = vi.fn()
+    render(<ModelPicker runner="claude" modelOnly onChange={onChange} />)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Model and effort' }))
+    expect(await screen.findByRole('menuitemradio', { name: 'High' })).toBeTruthy()
+    expect(screen.queryByRole('menuitemradio', { name: 'codex' })).toBeNull()
+    expect(screen.queryByRole('menuitemradio', { name: 'Use workspace default (Default)' })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'High' }))
+    expect(onChange).toHaveBeenCalledWith({ effort: 'high' })
+  })
+
   it('offers accounts in the model menu on the selected agent', async () => {
     const onChange = vi.fn()
     render(<ModelPicker runner="codex" agentProfile="work" onChange={onChange} />)

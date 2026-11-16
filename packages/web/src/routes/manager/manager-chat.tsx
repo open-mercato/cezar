@@ -41,7 +41,7 @@ import {
   turnKindLabel,
   watchingLine,
 } from '@/lib/managers'
-import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { useMediaQuery } from '@/lib/use-media-query'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -54,8 +54,8 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
-import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
+import type { ManagerPatch } from './manager-pickers'
+import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
 
@@ -463,9 +463,9 @@ function BackToList() {
   )
 }
 
-function WorkingSpinner({ className }: { className?: string }) {
+function WorkingSpinner({ label }: { label: string }) {
   return (
-    <span role="status" aria-label="Working" data-slot="manager-working" className={cn('flex shrink-0', className)}>
+    <span role="status" aria-label="Working" title={label ? `Working on ${label}` : undefined} data-slot="manager-working" className="flex shrink-0">
       <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />
     </span>
   )
@@ -488,7 +488,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll. A
   // reader left scrolled up keeps them, or their place would not be there to come back to.
   useEffect(() => () => { if (!leftAt.has(id)) trimManagerChat(queryClient, id) }, [id, queryClient])
-  const keyboardOpen = useKeyboardOpen()
   const location = useLocation()
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
   const [focusComposer] = useState(() => shouldFocusComposer(location.state))
@@ -521,7 +520,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     nextCheckAt: manager.nextCheckAt,
     now: new Date(now),
   })
-  const turnLabel = turnKindLabel(streamingReply(chat.messages))
   const checkNow = useCheckNow(id)
   const settings = useRef<ManagerSettingsHandle>(null)
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
@@ -610,7 +608,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h1 className="truncate text-body font-semibold md:text-base">{manager.name}</h1>
-            {working ? <WorkingSpinner className="md:hidden" /> : null}
+            {working ? <WorkingSpinner label={turnKindLabel(streamingReply(chat.messages))} /> : null}
           </div>
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
@@ -793,9 +791,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         ) : null}
         <Composer
           key={id}
-          compact
+          dictation={false}
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -805,27 +802,10 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           slashCommands={MANAGER_COMMANDS}
           placeholder={`Message ${manager.name}, or / for commands`}
           ariaLabel={`Message ${manager.name}`}
+          textareaClassName="max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)]"
           sendShortcut="↵"
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
-        {keyboardOpen ? null : (
-          // One status line (design, Proposal 10): the model chip, then what the turn is doing.
-          // Phones: the interval lives in the gear and the spinner beside the name.
-          <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
-            <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
-            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
-            {working ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <span role="status" aria-label="Working" data-slot="manager-working" className="flex min-w-0 items-center gap-1.5">
-                  <StatusDot tone="violet" pulse />
-                  <span className="truncate">Working{turnLabel ? ` on ${turnLabel}` : '…'}</span>
-                </span>
-                <Button variant="ghost" size="xs" data-slot="manager-footer-stop" onClick={stop}>Stop</Button>
-              </>
-            ) : null}
-          </div>
-        )}
       </div>
     </div>
     {watchingOpen && !barEverywhere ? (

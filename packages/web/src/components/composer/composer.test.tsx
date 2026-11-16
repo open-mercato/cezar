@@ -981,6 +981,19 @@ describe('disabled state', () => {
     renderComposer()
     expect(screen.queryByText('Dictation')).toBeNull()
   })
+
+  it.each([false, true])('a host can omit dictation and its language option (compact: %s)', (compact) => {
+    const recognition = vi.fn()
+    vi.stubGlobal('SpeechRecognition', recognition)
+    renderComposer({ compact, dictation: false, options: { rows: [{ id: 'host', label: 'Host option', control: <button>Choose</button> }] } })
+    expect(screen.queryByRole('button', { name: 'Start dictation' })).toBeNull()
+    if (!compact) {
+      fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+      expect(screen.getByText('Host option')).toBeTruthy()
+      expect(screen.queryByRole('combobox', { name: 'Dictation language' })).toBeNull()
+    }
+    expect(recognition).not.toHaveBeenCalled()
+  })
 })
 
 describe('host seams (R4: the /new hero)', () => {
