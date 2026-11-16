@@ -512,3 +512,98 @@ test('suspended says so and asks native for nothing more', async () => {
   await settle();
   assert.deepEqual(calls, ['launch']);
 });
+
+/** A native answer the test settles by hand. */
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+const pendingStatus = { state: 'pending', email: 'owner@example.com' };
+
+test('Confirm your email: the first check draws the status, Check now says not yet, and confirmed opens the server', async (t) => {
+  // The 60 s status poll would otherwise keep the run alive.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const launch = { screen: 'email-pending', serverId: 'r', servers: [relayServer], pairing: true };
+  const statuses = [pendingStatus, pendingStatus, { state: 'confirmed' }];
+  const { app, sent } = await boot(none, () => none, launch, { accountStatus: () => statuses.shift() });
+  await settle();
+  assert.match(app.text, /Confirm your email/);
+  assert.deepEqual(sent[1], ['accountStatus', { id: 'r' }]);
+  labelled(app, 'Check now').onclick();
+  await settle();
+  assert.match(app.text, /Not confirmed yet/);
+  labelled(app, 'Check now').onclick();
+  await settle();
+  await settle();
+  assert.deepEqual(sent.at(-1), ['open', { id: 'r' }]);
+});
+
+test('Send a new link says where it went', async (t) => {
+  // The 60 s status poll would otherwise keep the run alive.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const launch = { screen: 'email-pending', serverId: 'r', servers: [relayServer], pairing: true };
+  const { app } = await boot(none, () => none, launch, { accountStatus: pendingStatus, accountResend: { ok: true } });
+  await settle();
+  await labelled(app, 'Send a new link').onclick();
+  assert.match(app.text, /A new link is on its way to owner@example\.com\./);
+  assert.ok(labelled(app, 'Link sent. Send another'));
+});
+
+test('checks that overlap leave one status poll, not two', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const launch = { screen: 'email-pending', serverId: 'r', servers: [relayServer], pairing: true };
+  const answers = [];
+  const { app, calls, returned } = await boot(none, () => none, launch, {
+    accountStatus: () => {
+      const next = deferred();
+      answers.push(next);
+      return next.promise;
+    },
+  });
+  answers.shift().resolve(pendingStatus);
+  await settle();
+  // Check now and a return to the foreground, both before either answers.
+  labelled(app, 'Check now').onclick();
+  await returned();
+  assert.equal(answers.length, 2);
+  for (const answer of answers.splice(0)) answer.resolve(pendingStatus);
+  await settle();
+  const before = calls.filter((name) => name === 'accountStatus').length;
+  t.mock.timers.tick(60_000);
+  await settle();
+  assert.equal(calls.filter((name) => name === 'accountStatus').length, before + 1);
+});
+
+test('terms accepted after Back opens nothing', async () => {
+  const launch = { screen: 'terms-required-device', serverId: 'r', servers: [relayServer], pairing: true };
+  const answer = deferred();
+  const { app, sent } = await boot(none, () => none, launch, { deviceTerms: () => answer.promise });
+  const box = find(app, (node) => node.type === 'checkbox');
+  box.checked = true;
+  box.onchange();
+  labelled(app, 'Continue').onclick();
+  await settle();
+  assert.equal(window.cezarBack(), true);
+  answer.resolve({ device: { termsVersion: '2026-11-13', acceptedAt: 1 } });
+  await settle();
+  await settle();
+  assert.equal(sent.some(([method]) => method === 'open'), false);
+});
+
+test('a new link answered after Back writes nothing on the screen below', async (t) => {
+  // The 60 s status poll would otherwise keep the run alive.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const launch = { screen: 'email-pending', serverId: 'r', servers: [relayServer], pairing: true };
+  const answer = deferred();
+  const { app } = await boot(none, () => none, launch, { accountStatus: pendingStatus, accountResend: () => answer.promise });
+  await settle();
+  labelled(app, 'Send a new link').onclick();
+  assert.equal(window.cezarBack(), true);
+  const below = app.text;
+  answer.resolve({ ok: true });
+  await settle();
+  assert.equal(app.text, below);
+  assert.doesNotMatch(app.text, /on its way/);
+});

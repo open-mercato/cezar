@@ -119,6 +119,13 @@ function keep(props) {
   if (stack.length) stack = [...stack.slice(0, -1), { ...stack.at(-1), ...props }];
 }
 
+/** Taken before an await: true while the same screen is still on top, so a late answer acts on nothing else. */
+function stillHere() {
+  const depth = stack.length;
+  const { name, serverId } = stack.at(-1) ?? {};
+  return () => !inflight && stack.length === depth && stack.at(-1)?.name === name && stack.at(-1)?.serverId === serverId;
+}
+
 function render(lockNotice) {
   const top = stack.at(-1) ?? { name: rootScreen({ servers, pairing }) };
   if (top.name !== 'pair-confirm') confirming = false;
@@ -388,6 +395,8 @@ function drawRemoved({ serverId, label }) {
 // confirmed (the email link, opened anywhere) opens the server at once.
 const STATUS_POLL_MS = 60_000;
 let statusPoll = null;
+// Only the newest check's answer re-arms the poll, so overlapping checks leave one chain.
+let accountCheck = 0;
 
 function confirmScreen() {
   const top = stack.at(-1);
@@ -396,7 +405,9 @@ function confirmScreen() {
 
 function checkAccount(serverId, { manual = false } = {}) {
   clearTimeout(statusPoll);
+  const mine = ++accountCheck;
   return call('accountStatus', { id: serverId }).then((answer) => {
+    if (mine !== accountCheck) return;
     const top = confirmScreen();
     if (top?.serverId !== serverId) return;
     if (!answer.error && accountOpens(answer, top.blocked)) {
@@ -421,7 +432,9 @@ function drawConfirmEmail({ serverId, blocked, status, notice: text, sent }) {
   }, 'primary');
   const resend = button(sent ? 'Link sent. Send another' : 'Send a new link', async () => {
     resend.disabled = true;
+    const here = stillHere();
     const answer = await call('accountResend', { id: serverId }).catch((error) => ({ error: String(error?.message ?? error) }));
+    if (!here()) return;
     keep({ notice: answer.error ?? `A new link is on its way${status?.email ? ` to ${status.email}` : ''}.`, sent: !answer.error });
     render();
   });
@@ -451,7 +464,9 @@ function drawDeviceTerms({ serverId, label, blocked, notice: text, version, acce
   const box = element('input', { type: 'checkbox', checked: Boolean(accepted) });
   const proceed = button('Continue', async () => {
     proceed.disabled = true;
+    const here = stillHere();
     const answer = await call('deviceTerms', { id: serverId, termsVersion: version ?? RELAY_TERMS.version }).catch((error) => ({ error: String(error?.message ?? error) }));
+    if (!here()) return;
     const next = termsOutcome(answer);
     if (next.open) return run('open', { id: serverId }, { serverId });
     keep(next.again ? { version: next.version, notice: next.notice, accepted: false } : { notice: next.notice });
