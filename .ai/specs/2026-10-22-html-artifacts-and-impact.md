@@ -274,8 +274,8 @@ names, sections, ids, `data-ref`s and the CSP are unchanged; the presentation ch
 - **Order.** The three facts come first, directly under the title, as cards with jump links. Then
   the recommendation beside *Before merging* (the conditions), then *What the change does*.
 - **Verdict tone.** It is read from the words of `decision.label` (`tone()` in the template):
-  ✓ approve, ! comments/conditions/direction, ✕ request changes/reject/block, · otherwise. A
-  `decision.tone` field in the model would make this explicit; it is not added yet.
+  ✓ approve, ! comments/conditions/direction, ✕ request changes/reject/block or a negated approve,
+  · otherwise. A `decision.tone` field in the model would make this explicit; it is not added yet.
 - **Public API is actionable.** Each change is a card with *What breaks*, who is affected, and *What
   to do*: the conditions that name it (`api_changes`), with their owner, its migration, *Decide
   whether this breaks* for an undecided row, and *Copy as review comment*. Signatures fold away.

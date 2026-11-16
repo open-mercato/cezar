@@ -474,7 +474,8 @@ const E=v=>String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'
 const T=v=>E(v).replace(/`([^`\n]+)`/g,"<code>$1</code>");
 const shortSha=s=>/^[0-9a-f]{12,40}$/i.test(s)?s.slice(0,7):s;
 // The decision label is free text; until the model carries a tone, read it from the words.
-function tone(label){const l=String(label).toLowerCase();if(/request(ed)? changes|reject|block|do not merge|don.t merge|not ready|needs work/.test(l))return "bad";if(/comment|condition|direction|follow|but |once |after /.test(l))return "warn";if(/approve|merge|ready|accept|lgtm/.test(l))return "good";return "neutral";}
+// Negation is checked first, so "Do not approve" or "Not mergeable" never reads as ✓.
+function tone(label){const l=String(label).toLowerCase();if(/request(ed)? changes|changes (are )?requested|reject|block|(\bnot|n['’]t|cannot|never)\s+(yet\s+)?(be\s+)?(approv|merg|ready|accept)|unmergeable|needs work/.test(l))return "bad";if(/comment|condition|direction|follow|but |once |after /.test(l))return "warn";if(/approve|merge|ready|accept|lgtm/.test(l))return "good";return "neutral";}
 const toneGlyph={good:"✓",warn:"!",bad:"✕",neutral:"·"};
 // Ask and correct (R4): the ref bridge speaks only when framed, and only outward.
 const framed=window.parent!==window;
@@ -715,9 +716,11 @@ function renderApi(){
         +'</div>'+sources(a.evidence)+'</div></article>';}).join("")+'</div>';}).join("");
 }
 function toggleApi(button){const row=$(button.dataset.expand);if(!row)return;row.hidden=!row.hidden;button.setAttribute("aria-expanded",String(!row.hidden));button.textContent=row.hidden?"Show signatures and evidence":"Hide signatures and evidence";}
+// Inline code survives GitHub Markdown where bold does not: `<token>` would be stripped as HTML, `/api/*` breaks `**`.
+const mdCode=s=>{const run=Math.max(0,...(String(s).match(/`+/g)||[]).map(m=>m.length)),f="`".repeat(run+1),pad=/^`|`$/.test(s)?" ":"";return f+pad+s+pad+f;};
 function apiComment(a){
   const conds=condsByApi.get(a.id)||[];
-  return ["**"+a.name+"** — "+(a.breaking===true?"breaking":a.breaking==="unknown"?"breaking: undecided":"not breaking")+" ("+a.status+")",
+  return [mdCode(a.name)+" — "+(a.breaking===true?"breaking":a.breaking==="unknown"?"breaking: undecided":"not breaking")+" ("+a.status+")",
     a.impact?"Impact: "+a.impact:"",...conds.map(x=>"Before merge: condition "+(x.i+1)+" — "+x.c.title+" ("+x.c.owner+")"),
     a.migration?"Consumers: "+a.migration:"","Evidence: "+a.evidence.join(", ")].filter(Boolean).join("\n");
 }

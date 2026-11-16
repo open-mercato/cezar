@@ -81,6 +81,11 @@ describe('impact report in a DOM', () => {
     ['Request changes', 'bad', '✕'],
     ['Approve in direction, request changes before merge', 'bad', '✕'],
     ['Needs a human', 'neutral', '·'],
+    ['Do not approve', 'bad', '✕'],
+    ['Cannot approve yet', 'bad', '✕'],
+    ['Not mergeable', 'bad', '✕'],
+    ['Don’t merge', 'bad', '✕'],
+    ['Changes requested', 'bad', '✕'],
   ])('reads the verdict tone of %j as %s, with a glyph', (label, tone, glyph) => {
     const model = demo();
     model.decision.label = label;
@@ -133,12 +138,23 @@ describe('impact report in a DOM', () => {
     await vi.waitFor(() => expect(button.textContent).toBe('Copied ✓'));
     const comment = writeText.mock.calls[0]?.[0] ?? '';
     expect(comment.split('\n')).toEqual([
-      '**Authorization: Bearer <personal token> on /api/*** — breaking (removed)',
+      '`Authorization: Bearer <personal token> on /api/*` — breaking (removed)',
       'Impact: Integrations that still send an employee\'s personal token are refused once the compatibility path is gone.',
       'Before merge: condition 2 — Migration without cutting anyone off (Product owner)',
       'Consumers: Create an organization key in the console, replace the personal token in every integration, then confirm the audit log shows no personal-token calls.',
       'Evidence: D5, D2',
     ]);
+  });
+
+  it('fences a name that itself contains backticks', async () => {
+    const model = demo();
+    model.api_changes[0]!.name = '`id` → `key`';
+    const { dom, $ } = open(model);
+    const writeText = vi.fn(async (_: string) => {});
+    Object.defineProperty(dom.window.navigator, 'clipboard', { value: { writeText }, configurable: true });
+    $(`#api .api-item[data-ref="${model.api_changes[0]!.id}"] [data-copy]`)!.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls[0]?.[0].split('\n')[0]).toMatch(/^`` `id` → `key` `` — /);
   });
 
   it('turns backticks into code and nothing else into markup', () => {

@@ -23,7 +23,8 @@ template; this file tells you what the reader will see, so you can write a model
   `~ Changed` amber ink, `− Removed` danger red with dashed outlines and edges, `· Unchanged`
   soft. API changes add `↓ Deprecated`; breaking reads `✕ Breaking`, undecided `? Undecided`.
 - **The verdict has a tone**, read from the words of `decision.label`: approve → ✓ green;
-  comments, conditions or a direction → ! amber; request changes, reject or block → ✕ red;
+  comments, conditions or a direction → ! amber; request changes, reject, block or a negated
+  approve (`Do not approve`, `Not mergeable`) → ✕ red;
   anything else neutral. Write a label that says which one it is.
 - **Phone and print.** At phone width everything stacks into one column. Print uses light ink,
   opens every Public API panel, prints evidence chips as `[E1]` and appends every source.
