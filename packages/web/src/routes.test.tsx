@@ -869,10 +869,31 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
     ['no project is a git repository', {
       registry: { ...REGISTRY, projects: REGISTRY.projects.map((row) => ({ ...row, status: 'not-git' as const })) },
     }],
-  ])('leaves an unfinished first run on the overview when %s', (_case, options) => {
+  ])('opens the Manager entry without requiring a project when %s', (_case, options) => {
     device()
     load('/', options)
-    expect(currentPathname()).toBe('/p/other/git')
+    expect(currentPathname()).toBe('/manager')
+  })
+
+  it.each(['ios', 'android'])('a %s shell keeps agent setup until a usable account connects', async (platform) => {
+    device({ width: 834, height: 1194 })
+    vi.stubGlobal('navigator', { userAgent: `CezarMobile/0.1 (${platform})` })
+    const client = load('/manager', { providers: { providers: [{ provider: 'claude', status: 'connected', enabled: false }] } })
+    act(() => { client.setQueryData(workspaceQueryKeys.agentSetup, { available: false }) })
+    await waitFor(() => expect(document.querySelector('[data-first-run="sign-in"]')).not.toBeNull())
+    expect(currentPathname()).toBe('/manager')
+    act(() => { client.setQueryData(workspaceQueryKeys.providerStatus, SIGNED_IN) })
+    await waitFor(() => expect(document.querySelector('[data-first-run="sign-in"]')).toBeNull())
+    expect(currentPathname()).toBe('/manager')
+  })
+
+  it('does not interrupt a native task deep link with agent setup', () => {
+    device()
+    vi.stubGlobal('navigator', { userAgent: 'CezarMobile/0.1 (ios)' })
+    load('/p/other/tasks/t1?view=files#kept', { providers: SIGNED_OUT })
+    expect(currentPathname()).toBe('/p/other/tasks/t1')
+    expect(currentSearch()).toBe('?view=files')
+    expect(currentHash()).toBe('#kept')
   })
 
   it('counts a skipped sign-in page as finished', () => {

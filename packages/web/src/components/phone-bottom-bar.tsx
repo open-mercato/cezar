@@ -27,13 +27,8 @@ function useThreadOrigin(runId: string | undefined, state: unknown): ManagerOrig
 }
 
 /**
- * Now, Tasks, New task, Manager and More for a phone PWA (spec 2026-10-31-managers, Phones; the
- * redesign's one-sidebar items). The bar mounts only with managers on and the PWA opens on
- * Manager, so Manager is a tab; Git stays one tap away in More. `md:hidden`: a phone wide enough
- * in landscape has the real sidebar instead; CezarBot has none at any width. Mounted only there, which is what lets it read the
- * query cache from the QueryClient-free shell. Project items point into the last project's
- * index, so they never restore the page inside it. In a manager chat, Tasks is that manager's. A
- * thread opened from a manager keeps Manager current, and the tab leads back to that chat.
+ * Compact navigation (spec 2026-10-31-managers, Phones). Project links use the current or last
+ * project; a task opened from Manager keeps its originating chat as the Manager destination.
  */
 export function PhoneBottomBar({
   menuOpen,
@@ -53,7 +48,7 @@ export function PhoneBottomBar({
   managerTo?: string
   /** In a manager chat: Tasks opens the tasks it started, not the project's. */
   managerTasks?: ManagerTasksTab | null
-  /** CezarBot: the navigation on a tablet too. */
+  /** The shell selected compact navigation, including inside a narrow desktop container. */
   everyWidth?: boolean
 }) {
   const keyboardOpen = useKeyboardOpen()
