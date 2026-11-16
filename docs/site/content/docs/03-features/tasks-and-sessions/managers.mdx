@@ -7,6 +7,10 @@ related:
     - features/git-and-github/github-merge
     - features/workflows-and-skills/scheduled-automations
 sources:
+  - label: "Chat composer layout"
+    path: packages/web/src/routes/manager/manager-chat.tsx
+    line: 794
+    commit: e91fd6cfd636693d733290f6f289e884091fe924
   - label: "Specification"
     path: .ai/specs/2026-10-31-managers.md
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
@@ -90,6 +94,8 @@ If a turn fails, the chat says what happened and what to do, for example *Sign i
 If a turn hits a provider usage limit and the provider gives a reset time, the chat shows when the manager resumes instead of an error. Until then, the manager runs no watch checks or jobs. When the limit resets, it sends your message again, and any job the limit stopped runs again. A message you send before then runs right away, together with the waiting one. **Don't resume**, or `/stop`, cancels the replay. Turning off **Auto-resume after a usage limit** in Settings → Resources makes a usage limit show as a normal error again.
 
 On a desktop, Enter sends and Shift+Enter starts a new line.
+
+The prompt sits above the toolbar in one rounded composer. Attach files, choose **Model and effort** or **Agent for new tasks**, and send from that toolbar. **Options** opens the manager's account picker; the model menu also keeps its agent, account and effort choices. The working-status line remains below the composer. Manager chat and setup have no dictation control.
 
 ### On a phone
 
