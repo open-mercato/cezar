@@ -350,6 +350,26 @@ describe('/manager/:id', () => {
     expect(document.querySelectorAll('[data-slot="manager-row"]')).toHaveLength(2)
   })
 
+  // An `sr-only` row positioned against the chat, not the scroller, sat at the transcript's
+  // unscrolled tail and let the shell's <main> scroll far below the composer.
+  it('positions what its scrollers hold inside them, so the page never scrolls past the composer', async () => {
+    seedChat()
+    server.messages = [...server.messages, assistantMessage(3, { text: 'Later', commands: [{ id: 'd', tool: 'Bash', summary: 'gh pr view' }] })]
+    renderAt('/manager/global')
+    await screen.findByText('Later')
+    const positioned = /(^|\s)(relative|absolute|fixed|sticky)(\s|$)/
+    for (const slot of ['manager-transcript', 'manager-watching']) {
+      const scroller = document.querySelector<HTMLElement>(`[data-slot="${slot}"]`)!
+      expect(scroller.className).toMatch(/overflow-y-auto/)
+      expect(scroller.className, slot).toMatch(positioned)
+      for (const hidden of scroller.querySelectorAll<HTMLElement>('.sr-only')) {
+        let block = hidden.parentElement
+        while (block && !positioned.test(block.className)) block = block.parentElement
+        expect(scroller.contains(block), `${slot}: ${hidden.textContent}`).toBe(true)
+      }
+    }
+  })
+
   it('checks now from the header', async () => {
     seedChat()
     renderAt('/manager/global')
