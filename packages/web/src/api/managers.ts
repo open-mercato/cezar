@@ -90,6 +90,19 @@ export async function getOldestPendingAction(id: string): Promise<ManagerMessage
   }
 }
 
+/** Workspace approvals must include cards older than the newest chat page. */
+export async function getPendingManagerActions(id: string, signal?: AbortSignal): Promise<ManagerMessage[]> {
+  let before: number | undefined
+  const messages: ManagerMessage[] = []
+  for (;;) {
+    const page = await getManagerMessages(id, before, { pending: true, signal })
+    messages.unshift(...page.messages.filter((message) => message.kind === 'action' && message.status === 'pending'))
+    const first = page.messages[0]
+    if (!page.hasMore || !first) return messages
+    before = first.seq
+  }
+}
+
 /** How long a send may stay unanswered. The route answers at once; a request still open after this
  *  went into a dropped tunnel, and nothing else would ever settle it (relay incident 2026-11-15). */
 export const MANAGER_SEND_TIMEOUT_MS = 30_000
@@ -208,6 +221,8 @@ export const managerKeys = {
   all: ['workspace', 'managers'] as const,
   list: ['workspace', 'managers', 'list'] as const,
   messages: (id: string) => ['workspace', 'managers', 'messages', id] as const,
+  approvals: (id: string) => ['workspace', 'managers', 'approvals', id] as const,
+  allApprovals: ['workspace', 'managers', 'approvals'] as const,
   connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
 }
 
@@ -381,6 +396,7 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
       else remember(message)
     }
     queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
+    if (message.kind === 'action') void queryClient.invalidateQueries({ queryKey: managerKeys.approvals(managerId) })
     return
   }
   const parsed = managerChangeEventSchema.safeParse(payload)
@@ -390,7 +406,11 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
   queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, deleted))
   if (deleted) {
     queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+    queryClient.removeQueries({ queryKey: managerKeys.approvals(id) })
     for (const [messageId, entry] of live) if (entry.managerId === id) forget(messageId)
+  }
+  else if (manager?.pendingActions !== before?.pendingActions) {
+    void queryClient.invalidateQueries({ queryKey: managerKeys.approvals(id) })
   }
   // A frame that raced the page fetch would otherwise leave a half-written reply until reload.
   if (before?.status === 'working' && manager && manager.status !== 'working') {
@@ -541,6 +561,7 @@ export function useDeleteManager(id: string) {
     onSuccess: () => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, undefined, true))
       queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+      queryClient.removeQueries({ queryKey: managerKeys.approvals(id) })
     },
   })
 }

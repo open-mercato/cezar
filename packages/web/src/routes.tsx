@@ -123,6 +123,9 @@ const managerNew = preloadableRoute('manager', () =>
 const managerChat = preloadableRoute('manager', () =>
   import('./routes/manager/manager-chat').then((m) => m.ManagerChatRoute),
 )
+const ManagerApprovalsRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-approvals').then((m) => ({ default: m.ManagerApprovalsRoute })),
+)
 const ManagerIndexRoute = managerIndex.Route
 const ManagerNewRoute = managerNew.Route
 const ManagerChatRoute = managerChat.Route
@@ -378,6 +381,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/tasks', pageLabel: 'Tasks' },
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/manager/new', pageLabel: 'New manager' },
+  { pattern: '/manager/approvals', pageLabel: 'Approvals' },
   { pattern: '/manager/*', pageLabel: 'Manager' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
@@ -780,6 +784,7 @@ export const AppRoutes = memo(function AppRoutes() {
       {/* Managers are global (spec 2026-10-31-managers): no project owns one. */}
       <Route path="/manager" element={<ManagersGate fallback={<ManagerIndexLoading />}><ManagerIndexRoute /></ManagersGate>} />
       <Route path="/manager/new" element={<ManagersGate fallback={<ScreenLoading label="Loading setup…" />}><ManagerNewRoute /></ManagersGate>} />
+      <Route path="/manager/approvals" element={<ManagersGate fallback={<ScreenLoading label="Loading approvals…" />}><ManagerApprovalsRoute /></ManagersGate>} />
       <Route path="/manager/:id" element={<ManagersGate fallback={<ManagerChatLoading />}><ManagerChatRoute /></ManagersGate>} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT

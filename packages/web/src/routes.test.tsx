@@ -195,6 +195,7 @@ describe('pageTitleContext', () => {
     ['/manager', 'Manager'],
     ['/manager/m-1', 'Manager'],
     ['/manager/new', 'New manager'],
+    ['/manager/approvals', 'Approvals'],
   ])('labels %s as %s', (pathname, pageLabel) => {
     expect(pageTitleContext(pathname)).toEqual({ pageLabel, taskId: null })
   })
@@ -922,6 +923,13 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
 describe('the Manager routes', () => {
   const MANAGERS_ON = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } }
 
+  it('a cold approvals link resolves to the workspace page instead of a manager id', async () => {
+    renderAt('/manager/approvals', { health: MANAGERS_ON, managers: [managerFixture()] })
+    expect(await screen.findByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
+    expect(routeName()).toBe('manager-approvals')
+    expect(currentPathname()).toBe('/manager/approvals')
+  })
+
   it('a cold chat waits behind its own skeleton, never the list’s', () => {
     renderAt('/manager/m-1', { health: MANAGERS_ON })
     expect(screen.queryByText('Loading managers…')).toBeNull()
@@ -939,6 +947,9 @@ describe('the Manager routes', () => {
   it('with managers off, /manager lands on the cockpit and its settings link on Settings', () => {
     const off = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } }
     renderAt('/manager/m-1', { health: off })
+    expect(currentPathname()).toBe(`/p/${BOOT}/`)
+    cleanup()
+    renderAt('/manager/approvals', { health: off })
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
     cleanup()
     renderAt('/settings/global/manager', { health: off })

@@ -9,6 +9,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createUsageStore, type UsageStore } from './events'
+import { managerKeys } from './managers'
 import { connectionStatus } from './connection-status'
 import { GlobalEventsProvider, POLL_WHILE_DOWN_MS, PROBE_DELAY_MS, PROBE_WHILE_DOWN_MS, RECONCILE_TIMEOUT_MS, RETURN_SILENCE_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope, WORKSPACE_RUN_EVENT_OMITTED_KEYS } from '@open-mercato/cezar-api-client'
@@ -1498,6 +1499,8 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.worktrees, // the Resources panel's list/total (#483)
       workspaceQueryKeys.providerStatus,
       workspaceQueryKeys.skillsUpdateAll, // its poll stops once a check settles
+      managerKeys.list,
+      managerKeys.allApprovals, // pending cards decided while this cockpit was disconnected
       ['run-history', 'default'],
       ['run-history-context', 'default'],
     ]))

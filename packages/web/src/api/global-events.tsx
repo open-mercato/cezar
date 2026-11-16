@@ -488,6 +488,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     workspaceQueryKeys.skillsUpdateAll,
     // Replies and approvals produced while the stream was down; the chats catch up below.
     managerKeys.list,
+    managerKeys.allApprovals,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
