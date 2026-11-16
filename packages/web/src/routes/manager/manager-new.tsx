@@ -53,6 +53,7 @@ interface Setup {
   projectAccess?: Record<string, ManagerAccess>
   runner?: string
   taskRunner?: CreateManagerInput['taskRunner']
+  taskAgents?: CreateManagerInput['taskAgents']
   model?: string
   effort?: ManagerEffort
   agentProfile?: string
@@ -68,6 +69,8 @@ export function applySetupPatch(setup: Setup, patch: ManagerPatch): Setup {
   else if (patch.runner !== undefined) next.runner = patch.runner
   if (patch.taskRunner === null) delete next.taskRunner
   else if (patch.taskRunner !== undefined) next.taskRunner = patch.taskRunner
+  if (patch.taskAgents === null) delete next.taskAgents
+  else if (patch.taskAgents !== undefined) next.taskAgents = patch.taskAgents
   if (patch.model === null) delete next.model
   else if (patch.model !== undefined) next.model = patch.model
   if (patch.effort === null) delete next.effort
@@ -145,7 +148,7 @@ export function ManagerNewRoute() {
         <ProjectsPicker value={setup.projects} access={setup.access} projectAccess={setup.projectAccess} onAccess={onChange} onChange={(projects) => onChange({ projects })} />
         <ModelPicker {...setup} onChange={onChange} />
         <AccountPicker {...setup} onChange={onChange} />
-        <TaskRunnerPicker {...(setup.taskRunner ? { taskRunner: setup.taskRunner } : {})} onChange={onChange} />
+        <TaskRunnerPicker taskAgents={setup.taskAgents} {...(setup.taskRunner ? { taskRunner: setup.taskRunner } : {})} onChange={onChange} />
       </div>
     </div>
   )

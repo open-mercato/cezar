@@ -32,6 +32,7 @@ import {
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
+  type ManagerTaskAgent,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
@@ -740,8 +741,16 @@ export class ManagerEngine {
     return error ? { error, status: 400 } : undefined;
   }
 
+  private async taskAccountsIssue(agents: ManagerTaskAgent[] | null | undefined): Promise<ManagerRefusal | undefined> {
+    for (const agent of agents ?? []) {
+      const issue = await this.accountIssue(agent.runner, agent.agentProfile);
+      if (issue) return issue;
+    }
+    return undefined;
+  }
+
   async create(input: CreateManagerInput, ctx: ManagerTelemetryContext = {}): Promise<ManagerSummary | ManagerRefusal> {
-    const issue = await this.accountIssue(input.runner, input.agentProfile);
+    const issue = await this.accountIssue(input.runner, input.agentProfile) ?? await this.taskAccountsIssue(input.taskAgents);
     if (issue) return issue;
     const first = this.deps.store.list().length === 0;
     const id = randomUUID();
@@ -758,6 +767,7 @@ export class ManagerEngine {
       ...(input.projectAccess !== undefined ? { projectAccess: input.projectAccess } : {}),
       ...(input.runner !== undefined ? { runner: input.runner } : {}),
       ...(input.taskRunner !== undefined ? { taskRunner: input.taskRunner } : {}),
+      ...(input.taskAgents !== undefined ? { taskAgents: input.taskAgents } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
@@ -782,17 +792,17 @@ export class ManagerEngine {
     const issue = await this.accountIssue(
       input.runner === null ? undefined : (input.runner ?? current.runner),
       input.agentProfile === null ? undefined : input.agentProfile,
-    );
+    ) ?? await this.taskAccountsIssue(input.taskAgents);
     if (issue) return issue;
     const badPattern = input.bashAllow?.map(managerBashPatternIssue).find(Boolean);
     if (badPattern) return { error: badPattern, status: 400 };
-    const optional = <K extends 'runner' | 'taskRunner' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
+    const optional = <K extends 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
       const value = input[key];
       if (value === null) return {};
       const kept = value ?? current[key];
       return kept === undefined ? {} : ({ [key]: kept } as Partial<Pick<Manager, K>>);
     };
-    const { runner: _runner, taskRunner: _taskRunner, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
+    const { runner: _runner, taskRunner: _taskRunner, taskAgents: _taskAgents, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
     const bashAllow = input.bashAllow ? [...new Set(input.bashAllow)] : current.bashAllow;
     // An emptied list is stored as no list.
     const quickPrompts = input.quickPrompts ?? current.quickPrompts;
@@ -825,6 +835,7 @@ export class ManagerEngine {
         : {}),
       ...optional('runner'),
       ...optional('taskRunner'),
+      ...optional('taskAgents'),
       ...optional('model'),
       ...optional('effort'),
       ...optional('agentProfile'),
@@ -2113,8 +2124,19 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
-    const runner = scope.manager.taskRunner ?? input.runner ?? await this.runnerOf(scope.manager);
+    const agents = scope.manager.taskAgents;
+    const preferred = await this.runnerOf(scope.manager);
+    const candidates = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
+      && (input.agentProfile === undefined || agent.agentProfile === input.agentProfile));
+    if (candidates?.length === 0) {
+      return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
+    }
+    const selected = candidates?.find((agent) => agent.runner === preferred) ?? candidates?.[0];
+    const runner = selected?.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
+    const agentProfile = selected ? selected.agentProfile : input.agentProfile;
     if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    const accountIssue = await this.accountIssue(runner, agentProfile);
+    if (accountIssue) return accountIssue;
     if (input.model || input.effort) {
       const issue = await this.modelIssue(runner, input.model, input.effort);
       if (issue) return issue;
@@ -2131,6 +2153,7 @@ export class ManagerEngine {
         systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         runner,
+        ...(agentProfile !== undefined ? { agentProfile } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { reasoningEffort: input.effort } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
@@ -2243,6 +2266,9 @@ export class ManagerEngine {
     }
     if (run.workflow === '(planned)') return { error: 'an inline plan cannot be retried: start a new task with its objective instead', status: 409 };
     const effort = run.reasoningEffort && (['low', 'medium', 'high', 'max'] as const).find((level) => level === run.reasoningEffort);
+    const allowed = scope.manager.taskAgents
+      ? scope.manager.taskAgents.some((agent) => agent.runner === run.runner && agent.agentProfile === run.agentProfile)
+      : !scope.manager.taskRunner || scope.manager.taskRunner === run.runner;
     return this.createTask(id, {
       projectId: input.projectId,
       task: run.task,
@@ -2250,7 +2276,8 @@ export class ManagerEngine {
       allowPlaceholder: true,
       workflow: run.workflow,
       ...(run.titleOrigin === 'user' ? { title: run.title } : {}),
-      ...(run.runner ? { runner: run.runner } : {}),
+      ...(allowed && run.runner ? { runner: run.runner } : {}),
+      ...(allowed && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
     });
