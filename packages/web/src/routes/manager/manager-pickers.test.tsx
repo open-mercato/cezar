@@ -32,6 +32,22 @@ describe('manager agent and account selection', () => {
     expect(onChange).toHaveBeenCalledWith({ runner: 'codex', model: null, agentProfile: null })
   })
 
+  it('keeps the model and account pins when the current agent is chosen again', async () => {
+    const onChange = vi.fn()
+    render(<ManagerRunnerPicker runner="claude" onChange={onChange} />)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Manager agent' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'claude' }))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('pins the default agent without clearing its pins when none was pinned', async () => {
+    const onChange = vi.fn()
+    render(<ManagerRunnerPicker onChange={onChange} />)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Manager agent' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'claude' }))
+    expect(onChange).toHaveBeenCalledWith({ runner: 'claude' })
+  })
+
   it('offers model and effort alone when the dialog has separate agent/account fields', async () => {
     const onChange = vi.fn()
     render(<ModelPicker runner="claude" modelOnly onChange={onChange} />)

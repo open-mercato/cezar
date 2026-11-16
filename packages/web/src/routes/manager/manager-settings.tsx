@@ -352,17 +352,17 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
   const [menuOpen, setMenuOpen] = useState(false)
   const connectorCount = Object.values(manager.connectors ?? {}).filter((grant) => grant.level !== 'off').length
   const trigger = useRef<HTMLButtonElement>(null)
-  const focusAccount = useRef(false)
+  const [focusAccount, setFocusAccount] = useState(false)
   useImperativeHandle(ref, () => ({
     openAccount: () => {
-      focusAccount.current = true
+      setFocusAccount(true)
       setMenuOpen(false)
       setDialog('agent')
     },
     openJobs: () => { setMenuOpen(false); setDialog('jobs') },
   }), [])
   const openDialog = (next: 'agent' | 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete') => {
-    focusAccount.current = false
+    setFocusAccount(false)
     setMenuOpen(false)
     setDialog(next)
   }
@@ -440,7 +440,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           ) : null}
         </PopoverContent>
       </Popover>
-      {dialog === 'agent' ? <ManagerAgentDialog manager={manager} onPatch={onPatch} onClose={() => setDialog(null)} onCloseAutoFocus={returnFocus} focusAccount={focusAccount.current} /> : null}
+      {dialog === 'agent' ? <ManagerAgentDialog manager={manager} onPatch={onPatch} onClose={() => setDialog(null)} onCloseAutoFocus={returnFocus} focusAccount={focusAccount} /> : null}
       {dialog === 'rename' ? (
         <PersonaDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(patch) => update.mutateAsync(patch)} />
       ) : null}

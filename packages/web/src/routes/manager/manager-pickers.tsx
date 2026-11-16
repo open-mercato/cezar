@@ -172,6 +172,12 @@ function useManagerRunners() {
   return usableRunners(useProviderStatus().data).filter((runner) => runner !== 'pi')
 }
 
+/** Radix re-fires on the checked item: only a different agent drops its model and account pins. */
+function selectRunner(current: Runner, pinned: string | undefined, next: string, onChange: (patch: ManagerPatch) => void) {
+  if (next !== current) onChange({ runner: next, model: null, agentProfile: null })
+  else if (!pinned) onChange({ runner: next })
+}
+
 export function ManagerRunnerPicker({ runner: pinnedRunner, onChange, className }: {
   runner?: string
   onChange: (patch: ManagerPatch) => void
@@ -188,7 +194,7 @@ export function ManagerRunnerPicker({ runner: pinnedRunner, onChange, className 
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuLabel>Agent</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={runner} onValueChange={(next) => onChange({ runner: next, model: null, agentProfile: null })}>
+        <DropdownMenuRadioGroup value={runner} onValueChange={(next) => selectRunner(runner, pinnedRunner, next, onChange)}>
           {runners.map((entry) => <DropdownMenuRadioItem key={entry} value={entry}>{entry}</DropdownMenuRadioItem>)}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
@@ -257,7 +263,7 @@ export function ModelPicker({
             <DropdownMenuRadioGroup
               value={runner}
               // A model and an account belong to their runner, so changing agent drops both pins.
-              onValueChange={(next) => onChange({ runner: next, model: null, agentProfile: null })}
+              onValueChange={(next) => selectRunner(runner, pinnedRunner, next, onChange)}
             >
               {runners.map((entry) => (
                 <DropdownMenuRadioItem key={entry} value={entry}>{entry}</DropdownMenuRadioItem>
