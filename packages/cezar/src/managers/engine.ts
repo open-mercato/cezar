@@ -40,7 +40,6 @@ import {
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
-import { loadConfig } from '../config.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
@@ -753,6 +752,7 @@ export class ManagerEngine {
       ...(input.access !== undefined ? { access: input.access } : {}),
       ...(input.projectAccess !== undefined ? { projectAccess: input.projectAccess } : {}),
       ...(input.runner !== undefined ? { runner: input.runner } : {}),
+      ...(input.taskRunner !== undefined ? { taskRunner: input.taskRunner } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
@@ -781,13 +781,13 @@ export class ManagerEngine {
     if (issue) return issue;
     const badPattern = input.bashAllow?.map(managerBashPatternIssue).find(Boolean);
     if (badPattern) return { error: badPattern, status: 400 };
-    const optional = <K extends 'runner' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
+    const optional = <K extends 'runner' | 'taskRunner' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
       const value = input[key];
       if (value === null) return {};
       const kept = value ?? current[key];
       return kept === undefined ? {} : ({ [key]: kept } as Partial<Pick<Manager, K>>);
     };
-    const { runner: _runner, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
+    const { runner: _runner, taskRunner: _taskRunner, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
     const bashAllow = input.bashAllow ? [...new Set(input.bashAllow)] : current.bashAllow;
     // An emptied list is stored as no list.
     const quickPrompts = input.quickPrompts ?? current.quickPrompts;
@@ -819,6 +819,7 @@ export class ManagerEngine {
           }
         : {}),
       ...optional('runner'),
+      ...optional('taskRunner'),
       ...optional('model'),
       ...optional('effort'),
       ...optional('agentProfile'),
@@ -2090,8 +2091,9 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
+    const runner = scope.manager.taskRunner ?? input.runner ?? await this.runnerOf(scope.manager);
+    if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
     if (input.model || input.effort) {
-      const runner = input.runner ?? (scope.source ? (await loadConfig(scope.source.root).catch(() => undefined))?.defaultRunner : undefined) ?? 'claude';
       const issue = await this.modelIssue(runner, input.model, input.effort);
       if (issue) return issue;
     }
@@ -2106,7 +2108,7 @@ export class ManagerEngine {
         ...(forward && forward.images.length > 0 ? { images: forward.images } : {}),
         systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
-        ...(input.runner ? { runner: input.runner } : {}),
+        runner,
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { reasoningEffort: input.effort } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),

@@ -54,7 +54,7 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { ModelPicker, type ManagerPatch } from './manager-pickers'
+import { ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
@@ -793,7 +793,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           key={id}
           compact
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 pointer-coarse:max-md:[&>button]:h-11"><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
+          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -811,6 +811,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           // Phones: the interval lives in the gear and the spinner beside the name.
           <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
             <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
+            <TaskRunnerPicker {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
             {working ? (
               <>
                 <span aria-hidden="true">·</span>
