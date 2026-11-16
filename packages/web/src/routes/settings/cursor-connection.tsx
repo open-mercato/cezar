@@ -96,4 +96,3 @@ export function CursorConnection({ status, installCommand }: { status: ProviderS
     </div>
   )
 }
-
