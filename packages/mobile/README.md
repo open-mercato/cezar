@@ -2,7 +2,7 @@
 
 A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit, or
 pairs with a cezar through the relay. Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`
-and `.ai/specs/2026-11-01-relay-qr-pairing.md`; the wire contract is `RELAY_PROTOCOL.md`. Version 0.1.0.
+and `.ai/specs/2026-11-01-relay-qr-pairing.md`; the wire contract is `RELAY_PROTOCOL.md`.
 Release builds, signing and store uploads: [RELEASING-MOBILE.md](../../RELEASING-MOBILE.md). No quick
 actions yet. Push is for relay-paired servers. Without a `google-services.json`
 (Android) or an APNs key at the relay (iOS) it works only while the app is open ([below](#push-notifications-android)).
