@@ -147,6 +147,8 @@ import type {
   AgentSetupAction,
   AgentSetupProvider,
   AgentSetupState,
+  AgentProfilesResponse,
+  ProviderConnectInput,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
@@ -921,8 +923,8 @@ export function useAgentAccountStatus(routeId: string, enabled: boolean) {
 export function useConnectAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, profileId }: { provider: ProviderId; profileId?: string }) =>
-      connectProvider(provider, profileId),
+    mutationFn: ({ provider, profileId, reconnect }: ProviderConnectInput) =>
+      connectProvider(provider, profileId, reconnect),
     retry: false,
     onSuccess: async () => {
       await Promise.all([
@@ -943,10 +945,36 @@ export function useConnectAgentAccount() {
 export function useRecheckAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { recheck: true }),
+    mutationFn: async (routeId: string) => {
+      if (routeId === 'default:cursor') {
+        const cached = queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)
+        const profiles = queryClient.getQueryData<AgentProfilesResponse>(workspaceQueryKeys.agentProfiles)
+        const observed = cached?.providers.find((row) => row.provider === 'cursor')
+          ?? profiles?.profiles.find((row) => row.isDefault && row.provider === 'cursor')?.status
+        // Verify is explicit recovery; the retry endpoint refuses an incident newer than this click.
+        if (observed?.authFailureId) await retryProviderAuth('cursor', observed.authFailureId)
+      }
+      return getAgentAccountStatus(routeId, { recheck: true })
+    },
     retry: false,
-    onSuccess: (answer, routeId) => {
-      queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)
+    onMutate: () => queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus),
+    onSuccess: (answer, routeId, requestStart) => {
+      let verified = answer
+      const cached = queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)
+      if (routeId === `default:${answer.status.provider}` && cached) {
+        const response = { providers: cached.providers.map((row) => row.provider === answer.status.provider
+          ? { ...answer.status, enabled: answer.status.enabled ?? row.enabled }
+          : row) }
+        const merged = mergeProviderStatusResponse(requestStart, cached, response)
+        queryClient.setQueryData(workspaceQueryKeys.providerStatus, merged)
+        const status = merged.providers.find((row) => row.provider === answer.status.provider)
+        if (status) verified = { status }
+      }
+      queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), verified)
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentAccountDetails(routeId) })
+      if (answer.status.provider === 'cursor') {
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.models('cursor') })
+      }
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles })
     },
   })

@@ -10,7 +10,7 @@ import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-cli
 import { AppShell } from '@/components/app-shell'
 import { ThemeProvider } from '@/components/theme-provider'
 
-import { ManagerChatRoute } from './manager-chat'
+import { ManagerChatRoute, forgetChatPlaces } from './manager-chat'
 import { actionMessage, assistantMessage, managerFixture, userMessage } from './manager-fixtures'
 import { ManagerIndexRoute } from './manager-index'
 import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS, managerNameFrom } from './manager-new'
@@ -85,6 +85,7 @@ function Location() {
       <span data-testid="url" hidden>{pathname + search}</span>
       {/* The system Back, out of the accessibility tree so role queries never see it. */}
       <button type="button" hidden data-testid="history-back" onClick={() => void navigate(-1)} />
+      <button type="button" hidden data-testid="history-forward" onClick={() => void navigate(1)} />
     </>
   )
 }
@@ -122,6 +123,8 @@ function renderAt(entry: string | string[], seed?: (client: QueryClient) => void
   return client
 }
 
+/** Every manager send carries one (relay incident 2026-11-15). */
+const SEND_KEY = expect.stringMatching(/^[0-9a-f-]{36}$/)
 const posted = (suffix: string) => calls.filter((call) => call.method === 'POST' && call.path.endsWith(suffix))
 const composer = () => screen.getByRole('textbox') as HTMLTextAreaElement
 function send(text: string) {
@@ -141,6 +144,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  forgetChatPlaces()
   vi.unstubAllGlobals()
 })
 
@@ -217,7 +221,7 @@ describe('/manager/new', () => {
       effort: 'medium',
       mascot: 'base',
     })
-    expect(posted('/made/messages')[0]?.body).toEqual({ text: MANAGER_PRESETS[0].prompt })
+    expect(posted('/made/messages')[0]?.body).toEqual({ text: MANAGER_PRESETS[0].prompt, idempotencyKey: SEND_KEY })
   })
 
   it('sends the chosen mascot when creating a manager', async () => {
@@ -276,6 +280,22 @@ describe('/manager/new', () => {
   it('folds picker patches, null meaning back to the default', () => {
     const setup = { projects: 'all' as const, model: 'm', effort: 'high' as const }
     expect(applySetupPatch(setup, { model: null, effort: 'low', projects: ['a'] })).toEqual({ projects: ['a'], effort: 'low' })
+    expect(applySetupPatch(setup, { taskRunner: 'codex' })).toMatchObject({ taskRunner: 'codex' })
+    expect(applySetupPatch({ ...setup, taskRunner: 'codex' }, { taskRunner: null })).not.toHaveProperty('taskRunner')
+  })
+
+  it('includes the selected task agent when creating a manager from setup', async () => {
+    renderAt('/manager/new', (client) => {
+      client.setQueryData(workspaceQueryKeys.providerStatus, { providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'codex', status: 'connected', enabled: true },
+      ] })
+    })
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'codex' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate my tasks' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ taskRunner: 'codex' }))
   })
 })
 
@@ -330,6 +350,26 @@ describe('/manager/:id', () => {
     expect(document.querySelectorAll('[data-slot="manager-row"]')).toHaveLength(2)
   })
 
+  // An `sr-only` row positioned against the chat, not the scroller, sat at the transcript's
+  // unscrolled tail and let the shell's <main> scroll far below the composer.
+  it('positions what its scrollers hold inside them, so the page never scrolls past the composer', async () => {
+    seedChat()
+    server.messages = [...server.messages, assistantMessage(3, { text: 'Later', commands: [{ id: 'd', tool: 'Bash', summary: 'gh pr view' }] })]
+    renderAt('/manager/global')
+    await screen.findByText('Later')
+    const positioned = /(^|\s)(relative|absolute|fixed|sticky)(\s|$)/
+    for (const slot of ['manager-transcript', 'manager-watching']) {
+      const scroller = document.querySelector<HTMLElement>(`[data-slot="${slot}"]`)!
+      expect(scroller.className).toMatch(/overflow-y-auto/)
+      expect(scroller.className, slot).toMatch(positioned)
+      for (const hidden of scroller.querySelectorAll<HTMLElement>('.sr-only')) {
+        let block = hidden.parentElement
+        while (block && !positioned.test(block.className)) block = block.parentElement
+        expect(scroller.contains(block), `${slot}: ${hidden.textContent}`).toBe(true)
+      }
+    }
+  })
+
   it('checks now from the header', async () => {
     seedChat()
     renderAt('/manager/global')
@@ -379,6 +419,28 @@ describe('/manager/:id', () => {
       const task = section('Tasks it started')!.querySelector<HTMLAnchorElement>('[data-slot="manager-watching-task"]')!
       expect(task.textContent).toContain('Fix CI')
       expect(task.getAttribute('href')).toBe('/p/alpha/tasks/r1')
+    })
+
+    it('links every task it started or follows to the Tasks table, counted as the table opens', async () => {
+      seedChat({ followedTasks: ['alpha/r1', 'beta/r2', 'alpha/r3', 'alpha/gone'] })
+      const run = (projectId: string, id: string, extra: object = {}) => ({
+        projectId, id, title: id, status: 'done', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', ...extra,
+      })
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+          run('alpha', 'r1'),
+          run('beta', 'r2', { status: 'failed' }),
+          // Archived: behind the table's Archived view, so not in the count it opens on.
+          run('alpha', 'r3', { archived: true }),
+          run('alpha', 'other'),
+        ] })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      // No reply carded a task: the followed ones alone bring the section and its link.
+      await waitFor(() => expect(section('Tasks it started')).not.toBeNull())
+      const all = section('Tasks it started')!.querySelector<HTMLAnchorElement>('[data-slot="manager-watching-all-tasks"]')!
+      expect(all.textContent).toBe('View all (2)')
+      expect(all.getAttribute('href')).toBe('/tasks?manager=global')
     })
 
     it('lists each started task\'s pull requests on a line below it, with their statuses', async () => {
@@ -777,7 +839,7 @@ describe('/manager/:id', () => {
     const chip = screen.getByRole('button', { name: 'Standup' })
     fireEvent.click(chip)
     fireEvent.click(chip)
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Write my standup.' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Write my standup.', idempotencyKey: SEND_KEY }))
     expect(posted('/global/messages')).toHaveLength(1)
   })
 
@@ -806,7 +868,7 @@ describe('/manager/:id', () => {
     server.messages = [userMessage(1, 'status please'), assistantMessage(2, { text: '', error: 'Sign in to Claude Code again.' })]
     renderAt('/manager/global')
     fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'status please' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'status please', idempotencyKey: SEND_KEY }))
   })
 
   it('offers no retry once a newer reply landed, or for a background check', async () => {
@@ -937,6 +999,29 @@ describe('/manager/:id', () => {
     expect(box.scrollTop).toBe(720)
   })
 
+  it('comes back to where the reader left it, with its older pages, after a task opened from it', async () => {
+    seedChat()
+    const client = renderAt(['/start', '/manager/global'])
+    await screen.findByText('Reply body')
+    const box = () => document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    Object.defineProperty(box(), 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(box(), 'clientHeight', { value: 500, configurable: true })
+    box().scrollTop = 1500
+    fireEvent.scroll(box())
+    box().scrollTop = 600
+    fireEvent.scroll(box())
+    const pages = client.getQueryData<{ pages: unknown[] }>(managerKeys.messages('global'))!
+    client.setQueryData(managerKeys.messages('global'), { pages: [...pages.pages, pages.pages[0]], pageParams: [undefined, 'older'] })
+    // Away to another page (`/start` stands in for a task) and back.
+    fireEvent.click(screen.getByTestId('history-back'))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/start'))
+    expect(client.getQueryData<{ pages: unknown[] }>(managerKeys.messages('global'))!.pages).toHaveLength(2)
+    fireEvent.click(screen.getByTestId('history-forward'))
+    await screen.findAllByText('Reply body')
+    expect(box().scrollTop).toBe(600)
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
+  })
+
   it('keeps a reader at the tail pinned when the composer grows, even if a scroll lands first', async () => {
     seedChat()
     renderAt('/manager/global')
@@ -1008,14 +1093,14 @@ describe('/manager/:id', () => {
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     send('hello there')
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'hello there' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'hello there', idempotencyKey: SEND_KEY }))
   })
 
   it('expands a prompt command and routes /check and /stop', async () => {
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     send('/status')
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Give me a short status of my connected projects.' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Give me a short status of my connected projects.', idempotencyKey: SEND_KEY }))
     await waitFor(() => expect(composer().value).toBe(''))
     send('/check')
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
@@ -1125,7 +1210,7 @@ describe('/manager/:id', () => {
     const bubbles = [...document.querySelectorAll('[data-slot="manager-user"]')].map((row) => row.textContent)
     expect(bubbles).toEqual(['questions please', 'cheapest one'])
     const cards = [...document.querySelectorAll('[data-slot="manager-ask"][data-resolved="true"]')].map((card) => card.textContent)
-    expect(cards).toEqual(['AnsweredShell:TauriDefault:No', 'Answered:Shell · Default'])
+    expect(cards).toEqual(['AnsweredShell:CapacitorTauri (chosen)Default:No (chosen)Yes', 'Answered:ShellDefault'])
   })
 
   it('approves through the decision route, never as a chat message', async () => {

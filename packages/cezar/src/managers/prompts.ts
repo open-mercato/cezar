@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { managerBashPromptSection } from './bash-policy.ts';
 import type { Manager, ManagerAccess, ManagerAttentionItem, ManagerMessage, ManagerSnapshot } from '@open-mercato/cezar-contract';
 
 /** A watch reply meaning "nothing deserves the user"; that turn leaves no message. */
@@ -18,10 +19,13 @@ export function managerSystemPrompt(manager: Manager, projects: Array<{ id: stri
 Connected projects:
 ${connected}
 
-Your tools are the \`cez-manager\` command (run it through Bash), read-only \`gh\` (view, list, diff, checks, search, and \`gh api\` GET; one command at a time, piped only into jq, grep, head or wc), and Read/Grep/Glob over the connected projects:
+Your tools are the \`cez-manager\` command and read-only \`gh\`, both through Bash, and Read/Grep/Glob over the connected projects.
+${managerBashPromptSection(manager.bashAllow)}
+
+The cez-manager commands:
   cez-manager status | attention | tasks | prs        what is going on (add --json for data)
   cez-manager task <run> [--project <id>]             one task: who started it, model, effort, PR, last message, children
-  cez-manager task create --project <id> [--title t] [--workflow w] [--model m] [--effort low|medium|high|max] [--dispatch] "<objective>"
+  cez-manager task create --project <id> [--title t] [--workflow w] [--runner r] [--model m] [--effort low|medium|high|max] [--dispatch] "<objective>"
   cez-manager task say --project <id> <run> "<text>"  message a running task, or continue a finished one (--model/--effort only then)
   cez-manager task follow|unfollow [--project <id>] <run>   hear when a task you did not start finishes or needs the user
       both take --attach-last-user-message | --from-message <id>   copy a user's message in, verbatim, with its files
@@ -54,6 +58,7 @@ Rules:
 - A run of an automation that reports to you is already in this chat, posted by cezar: never repeat or summarize it unasked. The same goes for a task's status card: build on it, never restate it.
 - Pick a workflow by what it can do (\`cez-manager workflows\`). When the user asks only for a review, use a read-only workflow, review-pr (input: the PR URL) when the project has it, and never one that can push, open a pull request or post to GitHub.
 - Before starting work, check \`cez-manager tasks\`: tasks the user started themselves are there too, and a task's prNumber means that work already has a pull request.
+- ${manager.taskRunner ? `The user selected ${manager.taskRunner} for new tasks. That backend is enforced even if you pass a different --runner. Choose models and effort for ${manager.taskRunner}.` : `New tasks use Automatic agent selection: choose --runner for each task when the user requests a backend or another backend suits the work. Without --runner a task uses your own agent backend. Honor a user's requested agent, and choose its model and effort rather than carrying over another agent's settings.`}
 - Use --model and --effort only when the user asks or the work needs it; a refusal lists the valid choices. Cancel only what you started, unless the user allowed more in your settings; say why with --reason.
 - Dispatched tasks read as a tree: report the root, and open it with \`cez-manager task\` when the user asks.${manager.instructions.trim() ? `\n\nWhat the user wants from you:\n${manager.instructions.trim()}` : ''}`;
 }

@@ -10,7 +10,7 @@ import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
-import { prOwnerRun, ResolveConflictsButton, TaskReferenceChip } from './reference-conflict-action'
+import { prOwnerRun, prTaskRuns, ResolveConflictsButton, TaskReferenceChip } from './reference-conflict-action'
 
 /**
  * The one button every surface hands a conflicting chip.
@@ -249,6 +249,24 @@ describe('prOwnerRun', () => {
     const foreign = row('foreign', { prNumber: 12, referencedPrCandidates: ['https://github.com/else/where/pull/12'] })
     expect(prOwnerRun([foreign], 'acme', 12, 'https://github.com/o/r')).toBeUndefined()
     expect(prOwnerRun([foreign], 'acme', 12)?.id).toBe('foreign')
+  })
+})
+
+describe('prTaskRuns', () => {
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({ projectId: 'acme', id, archived: false, createdAt: '2026-08-14T12:00:00.000Z', ...extra })
+
+  it('lists every task carrying the PR in the owner order, the creator first', () => {
+    const runs = [
+      row('shows', { prNumber: 12, createdAt: '2026-08-30T00:00:00.000Z' }),
+      row('reviewer-old', { markerRefs: { pr: 12 }, createdAt: '2026-08-15T00:00:00.000Z' }),
+      row('elsewhere', { projectId: 'zeta', pullRequestUrl: 'https://github.com/o/r/pull/12' }),
+      row('reviewer-new', { markerRefs: { pr: 12 }, createdAt: '2026-08-20T00:00:00.000Z' }),
+      row('creator', { pullRequestUrl: 'https://github.com/o/r/pull/12' }),
+      row('unrelated', { prNumber: 13 }),
+    ]
+    expect(prTaskRuns(runs, 'acme', 12).map((run) => run.id)).toEqual(['creator', 'reviewer-new', 'reviewer-old', 'shows'])
+    expect(prOwnerRun(runs, 'acme', 12)?.id).toBe('creator')
+    expect(prTaskRuns(runs, 'acme', 99)).toEqual([])
   })
 })
 

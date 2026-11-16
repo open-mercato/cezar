@@ -9,7 +9,8 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createUsageStore, type UsageStore } from './events'
-import { GlobalEventsProvider, RECONCILE_TIMEOUT_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
+import { connectionStatus } from './connection-status'
+import { GlobalEventsProvider, POLL_WHILE_DOWN_MS, PROBE_DELAY_MS, PROBE_WHILE_DOWN_MS, RECONCILE_TIMEOUT_MS, RETURN_SILENCE_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope, WORKSPACE_RUN_EVENT_OMITTED_KEYS } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
 import { queryKeys, useProviderStatus, useRuns, useTodos, workspaceQueryKeys } from './queries'
@@ -224,6 +225,102 @@ describe('useGlobalEvents — connection', () => {
   })
 })
 
+describe('useGlobalEvents — reconnect without waiting (relay incident 2026-11-15)', () => {
+  afterEach(() => connectionStatus.opened())
+
+  it('counts each failed attempt and clears the count once the stream opens', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    source.drop()
+    source.drop()
+    expect(connectionStatus.attempt()).toBe(2)
+    expect(dashboardLive.isConnected()).toBe(false)
+    source.open()
+    expect(connectionStatus.attempt()).toBe(0)
+    expect(dashboardLive.isConnected()).toBe(true)
+  })
+
+  it('a stalled stream reopens within a minute and counts as an attempt', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    act(() => vi.advanceTimersByTime(50_000))
+    expect(FakeEventSource.instances).toHaveLength(2)
+    expect(source.closeCount).toBe(1)
+    expect(connectionStatus.attempt()).toBe(1)
+    FakeEventSource.last.open()
+    expect(dashboardLive.isConnected()).toBe(true)
+  })
+
+  it('the network coming back reopens a dropped stream at once, not after the backoff', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    source.fail()
+    expect(FakeEventSource.instances).toHaveLength(1)
+    act(() => { window.dispatchEvent(new Event('online')) })
+    expect(FakeEventSource.instances).toHaveLength(2)
+    // The pending 3 s reopen was replaced, not doubled.
+    act(() => vi.advanceTimersByTime(5_000))
+    expect(FakeEventSource.instances).toHaveLength(2)
+  })
+
+  it('the network coming back leaves a live stream alone', () => {
+    const { source } = mount()
+    source.open()
+    act(() => { window.dispatchEvent(new Event('online')) })
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('a foreground return to a stream silent past a ping reopens it at once', () => {
+    // An iOS WebView resumed from the background: the socket died with the app frozen, and still
+    // reports OPEN. Before the fix the cockpit waited out the 40 s liveness threshold.
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    vi.setSystemTime(Date.now() + RETURN_SILENCE_MS + 1) // frozen: no timers ran
+    setVisibility('hidden')
+    setVisibility('visible')
+    expect(source.closeCount).toBe(1)
+    expect(FakeEventSource.instances).toHaveLength(2)
+  })
+
+  it('a foreground return to a stream that heard a ping recently keeps it', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(10_000))
+    source.emit('ping', '')
+    setVisibility('visible')
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('Retry now reopens the stream immediately and asks health again', async () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    source.fail()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    act(() => connectionStatus.reconnectNow())
+    expect(FakeEventSource.instances).toHaveLength(2)
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.health })
+    // Recovered: the reopened stream is live and the cache reconciles on its open.
+    FakeEventSource.last.open()
+    expect(dashboardLive.isConnected()).toBe(true)
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.all })
+  })
+
+  it('Retry now does nothing once the stream is unmounted', () => {
+    const { source, unmount } = mount()
+    source.open()
+    unmount()
+    act(() => connectionStatus.reconnectNow())
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
 describe('useGlobalEvents — liveness watchdog', () => {
   /**
    * The half-open socket: TCP is dead, `readyState` still says CONNECTING/OPEN, and no `error`
@@ -279,6 +376,59 @@ describe('useGlobalEvents — liveness watchdog', () => {
   })
 })
 
+describe('useGlobalEvents — polling while the stream is down', () => {
+  it('reconciles on a timer while a visible stream stays down, and not while it is live', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    for (let i = 0; i < 6; i++) {
+      act(() => vi.advanceTimersByTime(15_000))
+      source.emit('ping', '')
+    }
+    expect(invalidate).not.toHaveBeenCalled()
+
+    source.fail() // a proxy that drops SSE: plain HTTP may still work
+    act(() => vi.advanceTimersByTime(POLL_WHILE_DOWN_MS + 10_000))
+    expect(invalidate).toHaveBeenCalled()
+  })
+})
+
+describe('useGlobalEvents — probing plain HTTP when the stream drops', () => {
+  afterEach(() => connectionStatus.requestSettled(false))
+
+  it('asks once, so an answer from before the drop does not keep saying "paused"', async () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    connectionStatus.requestSettled(true) // the last request, before the server went away
+    vi.mocked(fetch).mockRejectedValue(new TypeError('Failed to fetch'))
+    source.drop()
+    source.drop() // the browser's own retries do not multiply the probe
+    expect(fetch).not.toHaveBeenCalled()
+    act(() => vi.advanceTimersByTime(PROBE_DELAY_MS))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain('/health')
+    await act(async () => {})
+    expect(connectionStatus.answering()).toBe(false)
+
+    act(() => vi.advanceTimersByTime(PROBE_WHILE_DOWN_MS))
+    source.drop()
+    act(() => vi.advanceTimersByTime(PROBE_DELAY_MS))
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('sends no probe for a blip the stream recovers from at once', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    source.drop()
+    source.open()
+    act(() => vi.advanceTimersByTime(PROBE_DELAY_MS))
+    expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
 describe('useGlobalEvents — hidden tab releases its stream (#1753)', () => {
   it('closes the stream after the grace and reconnects with a reconcile on return', () => {
     vi.useFakeTimers()
@@ -300,8 +450,13 @@ describe('useGlobalEvents — hidden tab releases its stream (#1753)', () => {
   it('keeps the stream when the tab returns inside the grace', () => {
     vi.useFakeTimers()
     const { source } = mount()
+    source.open()
     setVisibility('hidden')
-    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS - 1))
+    // A hidden tab still hears the server's 15 s pings.
+    for (let waited = 0; waited < HIDDEN_STREAM_GRACE_MS - 1; waited += 10_000) {
+      act(() => vi.advanceTimersByTime(Math.min(10_000, HIDDEN_STREAM_GRACE_MS - 1 - waited)))
+      source.emit('ping', '{}')
+    }
     setVisibility('visible')
     act(() => vi.advanceTimersByTime(5_000))
 

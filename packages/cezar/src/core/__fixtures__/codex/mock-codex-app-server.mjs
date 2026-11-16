@@ -46,6 +46,8 @@ const rl = createInterface({ input: process.stdin });
  *   mock:child-compaction    a CHILD thread compacts and ends its turn; the parent works on
  *   mock:steer-reject        the turn stays open, so a follow-up steers — and is REFUSED
  *
+ *   mock:abandoned-commentary  an unfinished commentary item, then a final_answer ending CEZ:MONITORING (#2197)
+ *
  * The continuation cezar sends after a boundary carries no `mock:` marker, so
  * the scenario is latched from the opening turn rather than re-read per turn.
  */
@@ -275,6 +277,14 @@ rl.on('line', (line) => {
       emit({ method: 'item/started', params: { item: { type: 'collabAgentToolCall', id: 'wait_1', tool: 'wait', status: 'inProgress', receiverThreadIds: [] } } });
       emit({ method: 'item/completed', params: { item: { type: 'collabAgentToolCall', id: 'wait_1', tool: 'wait', status: 'completed', receiverThreadIds: [] } } });
       emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } });
+      return;
+    }
+    if (turnText.includes('mock:abandoned-commentary')) {
+      emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_c1', phase: 'commentary', text: '' } } });
+      emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', itemId: 'item_c1', delta: 'abandoned fragment' } });
+      const text = 'Still working.\nCEZ:MONITORING';
+      emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_f1', phase: 'final_answer', text } } });
+      emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: 'turn_mock_1', status: 'completed' } } });
       return;
     }
     if (turnText.includes('mock:child-turn')) {

@@ -3,15 +3,13 @@ import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, 
 import { Link } from 'react-router'
 
 import { checkManager, managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
-import { useProjects, useRunsIndex } from '@/api/queries'
-import { ReferenceChip } from '@/components/reference-chip'
-import { ResolveConflictsForPr } from '@/components/reference-conflict-action'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { StaticChip } from '@/components/chip'
 import { chipClass } from '@/components/picker-pill'
 import {
   checkFailureCause,
@@ -22,67 +20,33 @@ import {
   parseReferenceLink,
   PR_LINK_PREFIX,
   TASK_LINK_PREFIX,
-  UNKNOWN_PROJECT,
   type ManagerOrigin,
   type ManagerReferenceProject,
 } from '@/lib/managers'
-import { runTitle } from '@/lib/task-groups'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered } from '@/lib/manager-telemetry'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
 import { AskForm } from '@/routes/task-thread/ask-card'
 import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
+import { AskAnswerSummary, askAnswerLines } from '@/routes/task-thread/ask-answer-summary'
 import {
   isImageAttachmentName,
   type ManagerAsk,
   type ManagerAttachment,
   type ManagerCommand,
   type ManagerMessage,
-  type RunRecord,
 } from '@open-mercato/cezar-api-client'
 
 import { ActionCard, type DecideAction } from './manager-approval'
 import { ManagerCard } from './manager-card'
+import { ForgeReference } from './manager-reference'
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
 const OriginContext = createContext<ManagerOrigin>({ id: '', name: '' })
 
-/** Pull request titles the chat already knows, from its merge proposals, keyed `project/number`. */
-export const PrTitlesContext = createContext<ReadonlyMap<string, string>>(new Map())
-
-/** Stable while no proposal changes, so a streamed delta does not re-render every chip. */
-export function usePrTitles(messages: readonly ManagerMessage[]): ReadonlyMap<string, string> {
-  const entries = JSON.stringify(messages.flatMap((message) =>
-    message.kind === 'action' && message.action.type === 'merge-pr' && message.action.title
-      ? [[`${message.action.projectId}/${message.action.number}`, message.action.title]]
-      : []))
-  return useMemo(() => new Map(JSON.parse(entries) as Array<[string, string]>), [entries])
-}
-
-/** The same bubble the task tables show. Its status comes from the reply's own provider. */
-function ForgeReference({ kind, projectId, number }: { kind: 'PR' | 'Issue'; projectId: string; number: number }) {
-  const project = useProjects().data?.projects.find((entry) => entry.id === projectId)
-  const proposed = useContext(PrTitlesContext).get(`${projectId}/${number}`)
-  // Named by the reference, not the manager: its title, the task that opened it, else its project.
-  const task = useRunsIndex().data?.runs.find((run) =>
-    kind === 'PR' && run.projectId === projectId && (run.prNumber === number || run.markerRefs?.pr === number))
-  const about = (kind === 'PR' ? proposed : undefined) ?? (task ? runTitle(task as unknown as RunRecord) : project?.name)
-  return (
-    <ReferenceChip
-      compact
-      reference={{ kind, number, ...(project?.repoUrl ? { url: `${project.repoUrl}/${kind === 'PR' ? 'pull' : 'issues'}/${number}` } : {}) }}
-      taskTitle={`#${number}${about ? `, ${about}` : ''}`}
-      {...(projectId === UNKNOWN_PROJECT ? {} : { projectId })}
-      // Either kind: a `#N` guessed as an issue can be a PR, and the chip shows this only then.
-      {...(projectId === UNKNOWN_PROJECT
-        ? {}
-        : { conflictAction: <ResolveConflictsForPr projectId={projectId} prNumber={number} /> })}
-      className="align-middle no-underline"
-    />
-  )
-}
+export { PrTitlesContext, usePrTitles } from './manager-reference'
 
 /** A reference inside a sentence: the markdown stays whole and only the link is swapped. */
 function ManagerLink({ href, children, ...props }: ComponentProps<'a'>) {
@@ -158,19 +122,7 @@ function UserAttachments({ managerId, attachments }: { managerId: string; attach
   )
 }
 
-/**
- * The card's own answer read back per question (`Header: choice` per line, as the ask form sends
- * it), or null when the text is not shaped like one: a reply typed in the composer stays a bubble.
- */
-export function askAnswerLines(ask: ManagerAsk, text: string): Array<{ header: string; value: string }> | null {
-  const lines = text.split('\n')
-  if (lines.length !== ask.questions.length) return null
-  const answers = lines.map((line, index) => {
-    const prefix = `${ask.questions[index]?.header ?? ''}: `
-    return line.startsWith(prefix) ? { header: ask.questions[index]!.header, value: line.slice(prefix.length) } : null
-  })
-  return answers.every((entry) => entry !== null && entry.value.trim() !== '') ? answers as Array<{ header: string; value: string }> : null
-}
+export { askAnswerLines }
 
 /** User messages an answered card above them already shows: drawn once, on the card. */
 export function answersShownOnCard(messages: readonly ManagerMessage[]): ReadonlySet<string> {
@@ -221,20 +173,13 @@ function ManagerQuestions({
         tabIndex={-1}
         data-slot="manager-ask"
         data-resolved="true"
-        className="inline-flex max-w-full flex-col gap-1 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="flex max-w-full flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         <span className="flex items-center gap-1.5">
           <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
           Answered
         </span>
-        <dl data-slot="manager-ask-answers" className="flex flex-col gap-0.5 pl-5">
-          {lines.map(({ header, value }, index) => (
-            <div key={index} className="flex min-w-0 flex-wrap gap-x-1.5">
-              <dt>{header}<span className="sr-only">:</span></dt>
-              <dd className="min-w-0 break-words text-foreground">{value}</dd>
-            </div>
-          ))}
-        </dl>
+        <AskAnswerSummary questions={ask.questions} lines={lines} slot="manager-ask-answers" />
       </div>
     )
   }
@@ -245,12 +190,14 @@ function ManagerQuestions({
         tabIndex={-1}
         data-slot="manager-ask"
         data-resolved="true"
-        className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         {/* Answered in other words (typed, or with files): that message below says it (#2038 walk). */}
         <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
         <span>Answered<span className="sr-only">:</span></span>
-        <span data-slot="manager-ask-topics" className="min-w-0 break-words text-foreground">{ask.questions.map((question) => question.header).join(' · ')}</span>
+        <ul data-slot="manager-ask-topics" className="flex min-w-0 flex-wrap gap-1.5">
+          {ask.questions.map((question, index) => <li key={index} className="flex min-w-0 max-w-full"><StaticChip>{question.header}</StaticChip></li>)}
+        </ul>
       </div>
     )
   }
@@ -529,7 +476,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
     case 'assistant':
       return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} onRetry={onRetry} />
     case 'action':
-      return <ActionCard managerId={origin.id} message={message} onDecide={onDecide} />
+      return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }

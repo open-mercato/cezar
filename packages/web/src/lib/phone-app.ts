@@ -15,6 +15,13 @@ export const isPhone = (): boolean =>
 /** The native shell announces itself in its User-Agent (spec 2026-10-31-managers, Phones). */
 export const isCezarShell = (): boolean => /\bCezarMobile\//.test(navigator.userAgent)
 
+/** Asks the shell for something by a `cezar://` navigation it cancels; outside the shell, nothing. */
+export const shellRequest = {
+  open(url: `cezar://${string}`): void {
+    if (isCezarShell()) window.location.assign(url)
+  },
+}
+
 function isInstalled(): boolean {
   const installed = typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches
   // iOS home-screen apps report this even where the media query lags behind.

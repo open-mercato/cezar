@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import * as React from 'react'
-import { MemoryRouter } from 'react-router'
+import { Link, MemoryRouter, useLocation, useNavigate, type InitialEntry } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
@@ -20,7 +20,19 @@ function device({ standalone = true, userAgent = 'Mozilla/5.0', width = 390, hei
   vi.stubGlobal('navigator', { ...navigator, userAgent })
 }
 
-function renderShell(entry: string, props: Partial<AppShellProps> = {}) {
+function At() {
+  const { pathname, search } = useLocation()
+  const navigate = useNavigate()
+  return (
+    <>
+      <span data-testid="at">{pathname + search}</span>
+      {/* The system Back (Android Back, the iOS swipe). */}
+      <button type="button" hidden data-testid="history-back" onClick={() => void navigate(-1)} />
+    </>
+  )
+}
+
+function renderShell(entry: InitialEntry | InitialEntry[], props: Partial<AppShellProps> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(queryKeys.health, { bootProject: 'boot', capabilities: { managers: true } })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -31,7 +43,8 @@ function renderShell(entry: string, props: Partial<AppShellProps> = {}) {
   render(
     <QueryClientProvider client={client}>
       <ThemeProvider>
-        <MemoryRouter initialEntries={[entry]}>
+        <MemoryRouter initialEntries={Array.isArray(entry) ? entry : [entry]}>
+          <At />
           <AppShell managersAvailable {...props}>
             {props.children ?? <input aria-label="field" />}
           </AppShell>
@@ -119,7 +132,7 @@ describe('PhoneBottomBar', () => {
     expect(bar()).not.toBeNull()
     expect(reserved()).toBe('3.5rem')
     cleanup()
-    renderShell('/p/boot/tasks/run-1')
+    renderShell('/settings/global/appearance')
     expect(bar()).toBeNull()
     expect(reserved()).toBe('')
   })
@@ -136,14 +149,98 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
-  it.each(['/p/boot/tasks/run-1', '/p/boot/tasks/run-1/changes', '/settings/global/appearance'])(
-    'hides in %s',
-    (entry) => {
+  it('hides in settings', () => {
+    device()
+    renderShell('/settings/global/appearance')
+    expect(bar()).toBeNull()
+  })
+
+  describe('in a task thread', () => {
+    const FROM_MANAGER = { manager: { id: 'm-1', name: 'Ops' } }
+    const at = () => screen.getByTestId('at').textContent
+    const tab = (name: string) => within(bar()!).getByRole('link', { name })
+
+    it('stays, in place of the top menu bar, with Manager current when the task came from one', () => {
       device()
-      renderShell(entry)
+      renderShell(['/manager/m-1', { pathname: '/p/boot/tasks/run-1', state: FROM_MANAGER }])
+      expect(document.querySelector('[data-slot="mobile-top-bar"]')).toBeNull()
+      expect(tab('Manager').getAttribute('aria-current')).toBe('page')
+      expect(tab('Manager').getAttribute('href')).toBe('/manager/m-1')
+      expect(tab('Tasks').getAttribute('aria-current')).toBeNull()
+      // No shell header above the run's own: the column pads the status bar at every width.
+      expect(document.querySelector('[data-slot="main-column"]')!.className).toContain(' pt-[env(safe-area-inset-top)]')
+      // The drawer stays one tap away.
+      fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
+      expect(document.querySelector('[data-slot="mobile-nav-drawer"]')).not.toBeNull()
+    })
+
+    it('lights Tasks for a task opened from anywhere else, and Tasks leads to the list', () => {
+      device()
+      renderShell(['/p/boot/tasks', '/p/boot/tasks/run-1'])
+      expect(tab('Tasks').getAttribute('aria-current')).toBe('page')
+      expect(tab('Manager').getAttribute('aria-current')).toBeNull()
+      fireEvent.click(tab('Tasks'))
+      expect(at()).toBe('/p/boot/tasks')
+    })
+
+    it('Manager goes back to the chat it came from; tapped again there, to the managers list', () => {
+      device()
+      renderShell(['/manager/m-1', { pathname: '/p/boot/tasks/run-1', state: FROM_MANAGER }])
+      fireEvent.click(tab('Manager'))
+      expect(at()).toBe('/manager/m-1')
+      expect(tab('Manager').getAttribute('aria-current')).toBe('page')
+      fireEvent.click(tab('Manager'))
+      expect(at()).toBe('/manager?all=1')
+    })
+
+    it('Back goes from the task to the manager, and Manager is that same Back', () => {
+      device()
+      const entries: InitialEntry[] = ['/p/boot/', '/manager/m-1', { pathname: '/p/boot/tasks/run-1', state: FROM_MANAGER }]
+      renderShell(entries)
+      fireEvent.click(screen.getByTestId('history-back'))
+      expect(at()).toBe('/manager/m-1')
+      cleanup()
+      renderShell(entries)
+      fireEvent.click(tab('Manager'))
+      expect(at()).toBe('/manager/m-1')
+      // No task pushed on top of the chat: Back from it leaves Manager, rather than reopening the task.
+      fireEvent.click(screen.getByTestId('history-back'))
+      expect(at()).toBe('/p/boot/')
+    })
+
+    it('keeps Manager current across the task\'s own tabs, whose links carry no state', () => {
+      device()
+      renderShell(['/manager/m-1', { pathname: '/p/boot/tasks/run-1', state: FROM_MANAGER }], {
+        children: <Link to="/p/boot/tasks/run-1/changes">changes</Link>,
+      })
+      fireEvent.click(screen.getByRole('link', { name: 'changes' }))
+      expect(at()).toBe('/p/boot/tasks/run-1/changes')
+      expect(tab('Manager').getAttribute('aria-current')).toBe('page')
+      // Not straight from the chat any more: the tab links to it rather than going Back.
+      fireEvent.click(tab('Manager'))
+      expect(at()).toBe('/manager/m-1')
+    })
+
+    it('a task deep-linked with that state but no history behind it links to the chat', () => {
+      device()
+      renderShell({ pathname: '/p/boot/tasks/run-1', state: FROM_MANAGER })
+      fireEvent.click(tab('Manager'))
+      expect(at()).toBe('/manager/m-1')
+    })
+
+    it('still hides while the keyboard is open', () => {
+      device()
+      vi.stubGlobal('innerHeight', 844)
+      renderShell({ pathname: '/p/boot/tasks/run-1', state: FROM_MANAGER })
+      expect(bar()).not.toBeNull()
+      vi.stubGlobal('innerHeight', 500)
+      act(() => {
+        screen.getByRole('textbox', { name: 'field' }).focus()
+        window.dispatchEvent(new Event('resize'))
+      })
       expect(bar()).toBeNull()
-    },
-  )
+    })
+  })
 
   it('leaves /manager/new its ways out: it has no route of its own to Tasks', () => {
     device()
@@ -152,11 +249,11 @@ describe('PhoneBottomBar', () => {
     expect(screen.getByRole('button', { name: 'Open menu' })).toBeTruthy()
   })
 
-  it('stays on the global Tasks page, which is not a thread, and lights nothing there', () => {
+  it('stays on the global Tasks page, which is not a thread, and keeps Tasks lit there', () => {
     device()
-    renderShell('/tasks')
+    renderShell('/tasks?manager=mobile')
     expect(bar()).not.toBeNull()
-    expect(within(bar()!).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+    expect(within(bar()!).getAllByRole('link', { current: 'page' }).map((link) => link.textContent)).toEqual(['Tasks'])
   })
 
   it('hides while the keyboard is open', () => {
@@ -231,13 +328,13 @@ describe('PhoneBottomBar', () => {
       expect(column().className).toContain('md:pt-[env(safe-area-inset-top)]')
     })
 
-    it('keeps the menu in a thread, where the bar steps aside', () => {
+    it('keeps the bar in a thread, with no top menu bar', () => {
       device(IPAD)
-      renderShell('/p/boot/tasks/run-1')
-      expect(bar()).toBeNull()
-      const top = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')!
-      expect(top.className).not.toContain('md:hidden')
-      expect(column().className).not.toContain('md:pt-[env(safe-area-inset-top)]')
+      renderShell(['/manager/m-1', { pathname: '/p/boot/tasks/run-1', state: { manager: { id: 'm-1', name: 'Ops' } } }])
+      expect(bar()).not.toBeNull()
+      expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
+      expect(document.querySelector('[data-slot="mobile-top-bar"]')).toBeNull()
+      expect(column().className).toContain(' pt-[env(safe-area-inset-top)]')
     })
 
     it("a manager chat's Tasks opens its own tasks, with the count", () => {

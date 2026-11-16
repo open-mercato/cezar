@@ -86,7 +86,7 @@ describe('ManagerMessageRow', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalled())
       const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
-      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2' })
+      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) })
     })
 
     it('still answers a server older than askId, by resending the answer without it', async () => {
@@ -101,8 +101,8 @@ describe('ManagerMessageRow', () => {
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
       const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)))
       expect(bodies).toEqual([
-        { text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2' },
-        { text: 'Shell: Capacitor (recommended)\nDefault: No' },
+        { text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+        { text: 'Shell: Capacitor (recommended)\nDefault: No', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
       ])
       await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer' })).toBeTruthy())
       expect(document.body.textContent).not.toContain('Unrecognized key')
@@ -163,7 +163,8 @@ describe('ManagerMessageRow', () => {
       const card = document.querySelector('[data-slot="manager-ask"]')!
       expect(card.getAttribute('data-resolved')).toBe('true')
       expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
-      expect(card.textContent).toBe('Answered:Shell · Default')
+      expect(card.textContent).toBe('Answered:ShellDefault')
+      expect([...card.querySelectorAll('[data-slot="manager-ask-topics"] [data-slot="chip"]')].map((chip) => chip.textContent)).toEqual(['Shell', 'Default'])
       expect(card.textContent).not.toContain('Tauri')
     })
 
@@ -181,8 +182,12 @@ describe('ManagerMessageRow', () => {
         </QueryClientProvider>,
       )
       const card = document.querySelector('[data-slot="manager-ask"][data-resolved="true"]')!
-      expect(card.textContent).toBe('AnsweredShell:Capacitor (recommended)Default:No')
       expect([...card.querySelectorAll('dt')].map((term) => term.textContent)).toEqual(['Shell:', 'Default:'])
+      // Every option is a chip; the chosen one wears the chip's `active` face and says so.
+      const chosen = [...card.querySelectorAll('[data-slot="chip"][data-active="true"]')].map((chip) => chip.textContent)
+      expect(chosen).toEqual(['Capacitor (recommended) (chosen)', 'No (chosen)'])
+      expect([...card.querySelectorAll('[data-slot="chip"]:not([data-active])')].map((chip) => chip.textContent)).toEqual(['Tauri', 'Yes'])
+      expect(screen.queryAllByRole('button')).toHaveLength(0)
     })
 
     describe('which answers the card draws', () => {

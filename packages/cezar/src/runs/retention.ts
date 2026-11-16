@@ -5,7 +5,7 @@
 // recoverable) and the thin I/O enforcer that performs the reclaim. The selector
 // is pure and unit-testable; the enforcer never throws (helper discipline).
 import { existsSync } from 'node:fs';
-import { branchFor, createWorktree, localBranchExists, removeWorktree } from '../git-worktree.ts';
+import { branchFor, createWorktree, localBranchExists, removeWorktree, worktreeHasUnpreservedWork } from '../git-worktree.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import { holderOf, worktreeHolders, type WorktreeHolder } from '../worktree-in-use.ts';
 import type { RunRecord, RunStatus } from './store.ts';
@@ -129,6 +129,8 @@ export interface ReclaimOptions {
    *  Injectable so tests can exercise the "removal failed" branch without brittle
    *  filesystem-permission tricks. */
   remove?: (repoRoot: string, worktreePath: string) => Promise<void>;
+  /** Does this tree hold uncommitted content? Defaults to a real `git status`; injectable for tests. */
+  hasUnpreservedWork?: (path: string) => Promise<boolean>;
   /** What runs from which path — defaults to the live probe (`worktree-in-use.ts`). */
   holders?: () => Promise<readonly WorktreeHolder[]>;
 }
@@ -170,6 +172,9 @@ export async function reclaimWorktrees(
     let settle!: () => void;
     reclaimsInFlight.set(id, new Promise<void>((resolve) => { settle = resolve; }));
     try {
+      // Retention keeps the branch, which restores only committed work. A tree the final autosave
+      // refused or failed to commit (or whose state git cannot read) stays on disk (#2215).
+      if (await (opts.hasUnpreservedWork ?? worktreeHasUnpreservedWork)(run.worktreePath)) continue;
       if (opts.lifecycle && await opts.lifecycle.requiresGate(id)) {
         await opts.lifecycle.reclaim(id);
         continue;

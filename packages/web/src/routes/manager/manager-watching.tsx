@@ -1,4 +1,4 @@
-import { ClockIcon, PlusIcon } from 'lucide-react'
+import { ArrowRightIcon, ClockIcon, PlusIcon } from 'lucide-react'
 import { useEffect, useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
@@ -9,6 +9,7 @@ import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { deriveAttention } from '@/lib/attention'
+import { managerTaskCount, managerTasksPath, toGlobalTasks } from '@/lib/global-tasks'
 import { cn } from '@/lib/utils'
 import { shortAge } from '@/lib/format'
 import {
@@ -21,6 +22,7 @@ import {
 } from '@/lib/managers'
 import { taskReferences } from '@/lib/tasks-table'
 import { runTitle } from '@/lib/task-groups'
+import { useTaskOrigin } from '@/lib/task-origin'
 import { useNow } from '@/lib/use-now'
 import { managerAccessOf, type ManagerMessage, type ManagerSummary, type RunRecord } from '@open-mercato/cezar-api-client'
 
@@ -75,11 +77,12 @@ type WatchingProps = {
  */
 export function WatchingPanel({ id, ...props }: WatchingProps & { id: string }) {
   return (
+    // `relative`: its `sr-only` text scrolls with it instead of stretching the page.
     <aside
       id={id}
       data-slot="manager-watching"
       aria-label="Watching"
-      className="group/watching flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
+      className="group/watching relative flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
     >
       <WatchingSections {...props} />
     </aside>
@@ -174,10 +177,16 @@ function WatchingSections({
   useEffect(() => {
     if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
   }, [indexedStatuses])
+  // What the Tasks table opens on for this manager, counted by the table's own filter.
+  const [taskOrigin] = useTaskOrigin()
+  const allCount = useMemo(
+    () => managerTaskCount(toGlobalTasks(runs ?? [], registry ?? [], [manager]), manager.id, taskOrigin),
+    [runs, registry, manager, taskOrigin],
+  )
   const result = lastCheckResult(messages, manager.lastCheckAt, loadedAll)
   const next = manager.cronMinutes > 0 ? nextCheckLabel(manager.nextCheckAt, new Date(now)) : ''
   const origin: ManagerOrigin = { id: manager.id, name: manager.name }
-  const tasks = started.length > 0 ? (
+  const tasks = started.length > 0 || manager.followedTasks.length > 0 ? (
     <Section title="Tasks it started">
       <ReferenceStatusProvider requests={prRequests}>
         {startedRows.map(({ projectId, runId, run, title, prs: [pr] }) => {
@@ -208,6 +217,16 @@ function WatchingSections({
           )
         })}
       </ReferenceStatusProvider>
+      {manager.followedTasks.length > 0 ? (
+        <Link
+          to={managerTasksPath(manager.id)}
+          data-slot="manager-watching-all-tasks"
+          className={cn('flex min-h-8 items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted-foreground no-underline outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset', ROW_TOUCH)}
+        >
+          <span className="flex-1">View all ({allCount})</span>
+          <ArrowRightIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        </Link>
+      ) : null}
     </Section>
   ) : null
   return (

@@ -569,6 +569,14 @@ export async function autosaveCommit(
   return commit.ok ? 'committed' : 'failed';
 }
 
+/** Does the worktree hold content no commit has? Unreadable state counts as yes: automatic
+ *  retention must never discard on uncertainty (#2215). A directory that is gone holds nothing. */
+export async function worktreeHasUnpreservedWork(dir: string): Promise<boolean> {
+  if (!existsSync(dir)) return false;
+  const status = await git(dir, ['status', '--porcelain', '--untracked-files=all']);
+  return !status.ok || status.stdout.trim().length > 0;
+}
+
 /** Return paths currently changed in the worktree, including untracked files. */
 export async function worktreeChangedPaths(dir: string): Promise<string[]> {
   const status = await git(dir, ['status', '--porcelain=v1', '--untracked-files=all', '-z']);

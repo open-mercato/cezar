@@ -1,5 +1,6 @@
 import { BotIcon, CircleDotIcon, EllipsisIcon, ListChecksIcon, PlusIcon } from 'lucide-react'
-import { Link, useLocation } from 'react-router'
+import * as React from 'react'
+import { Link, matchPath, useLocation, useNavigate } from 'react-router'
 
 import type { ManagerTasksTab } from '@/components/app-shell'
 
@@ -8,7 +9,7 @@ import { activeNavPath } from '@/components/nav-items'
 import { useKeyboardOpen } from '@/lib/keyboard-inset'
 import { locationToSave, readStoredLastLocation } from '@/lib/last-location'
 import { noteManagerEntry } from '@/lib/manager-telemetry'
-import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
+import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, managerOriginOf, type ManagerAttention, type ManagerOrigin } from '@/lib/managers'
 import { lastProjectIndex } from '@/lib/phone-app'
 import { stripProjectPrefix } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
@@ -17,13 +18,22 @@ const ITEM =
   'relative flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-meta font-medium text-muted-foreground outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50'
 const CURRENT = 'font-semibold text-foreground'
 
+/** The manager a thread was opened from, kept across the task's own tabs, whose links carry no state. */
+function useThreadOrigin(runId: string | undefined, state: unknown): ManagerOrigin | undefined {
+  const fromEntry = managerOriginOf(state)
+  const [held, setHeld] = React.useState<{ runId?: string; origin?: ManagerOrigin }>({})
+  if (held.runId !== runId || (fromEntry !== undefined && fromEntry.id !== held.origin?.id)) setHeld({ runId, origin: fromEntry })
+  return fromEntry ?? (held.runId === runId ? held.origin : undefined)
+}
+
 /**
  * Now, Tasks, New task, Manager and More for a phone PWA (spec 2026-10-31-managers, Phones; the
  * redesign's one-sidebar items). The bar mounts only with managers on and the PWA opens on
  * Manager, so Manager is a tab; Git stays one tap away in More. `md:hidden`: a phone wide enough
  * in landscape has the real sidebar instead; CezarBot has none at any width. Mounted only there, which is what lets it read the
  * query cache from the QueryClient-free shell. Project items point into the last project's
- * index, so they never restore the page inside it. In a manager chat, Tasks is that manager's.
+ * index, so they never restore the page inside it. In a manager chat, Tasks is that manager's. A
+ * thread opened from a manager keeps Manager current, and the tab leads back to that chat.
  */
 export function PhoneBottomBar({
   menuOpen,
@@ -50,11 +60,21 @@ export function PhoneBottomBar({
   const health = useHealth()
   const projects = useProjects()
   const location = useLocation()
+  const navigate = useNavigate()
+  const runId = matchPath({ path: '/tasks/:id/*', end: true }, stripProjectPrefix(location.pathname))?.params.id
+  const origin = useThreadOrigin(runId, location.state)
   if (keyboardOpen) return null
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
   // The current page first: the store is written in an effect, after this render.
   const index = lastProjectIndex(locationToSave(location, projects.data) ?? readStoredLastLocation(), projects.data, bootProject)
-  const active = location.pathname === '/tasks' ? null : activeNavPath(stripProjectPrefix(location.pathname))
+  // The global table is Tasks too: a manager's "View all" lands there.
+  const active = origin ? null : activeNavPath(stripProjectPrefix(location.pathname))
+  const managerCurrent = manager || origin !== undefined
+  // Straight from that chat, Back is the way: the chat keeps its place and history stays linear.
+  const backToOrigin = origin !== undefined && managerOriginOf(location.state)?.id === origin.id && location.key !== 'default'
+  const managerHref = origin
+    ? `/manager/${encodeURIComponent(origin.id)}`
+    : !manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'
   const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string) => (
     <Link to={`${index}${to}`} aria-current={active === area ? 'page' : undefined} className={cn(ITEM, active === area && CURRENT)}>
       <Icon className="size-5" aria-hidden="true" />
@@ -92,11 +112,16 @@ export function PhoneBottomBar({
         </span>
       </Link>
       <Link
-        to={!manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'}
-        aria-current={manager ? 'page' : undefined}
-        onClick={() => { if (!manager) noteManagerEntry('bottom_bar') }}
+        to={managerHref}
+        aria-current={managerCurrent ? 'page' : undefined}
+        onClick={(event) => {
+          if (!manager) noteManagerEntry('bottom_bar')
+          if (!backToOrigin || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          event.preventDefault()
+          void navigate(-1)
+        }}
         data-slot="bottom-bar-manager"
-        className={cn(ITEM, manager && CURRENT)}
+        className={cn(ITEM, managerCurrent && CURRENT)}
       >
         <BotIcon className="size-5" aria-hidden="true" />
         Manager

@@ -654,7 +654,10 @@ class CodexSession implements AgentSession {
         if (type === 'agentMessage') {
           // One v1 `text` per finished message — the snapshot's full text when
           // present (also covers turns that send no deltas), else the deltas.
-          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined);
+          // A parent's final answer is the last block (#2197): drain abandoned commentary first.
+          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined, {
+            drainOlder: ownThread && stringField(item, 'phase') === 'final_answer',
+          });
         } else if (type && !NON_TOOL_ITEMS.has(type) && id) {
           this.emit({
             type: 'tool-result',

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { attachmentListSchema } from './runs.ts';
+import { runnerSchema } from './runners.ts';
 
 /**
  * Managers (spec `.ai/specs/2026-10-31-managers.md`): global, long-lived agents the user talks to
@@ -165,6 +166,21 @@ export type ManagerConfirm = z.infer<typeof managerConfirmSchema>;
 /** A manager's own answers: a plain object, so the route's wire type stays exact. */
 export const managerOwnConfirmSchema = z.object(managerConfirmShape);
 
+/** A user-allowed read-only shell pattern, `gh <group> <verb>`; the engine vets the verb. */
+export const managerBashPatternSchema = z.string().regex(/^gh [a-z][a-z0-9-]{0,39} [a-z][a-z0-9-]{0,39}$/);
+export const MANAGER_BASH_ALLOW_MAX = 32;
+
+/** A Bash command the manager's policy refused, newest first in the summary. */
+export const managerBashDenialSchema = z.object({
+  command: z.string(),
+  reason: z.string(),
+  at: z.string(),
+  count: z.number().int().min(1),
+  /** The `gh <group> <verb>` pattern that would allow it, when the user may allow one. */
+  suggestion: z.string().optional(),
+});
+export type ManagerBashDenial = z.infer<typeof managerBashDenialSchema>;
+
 /** The user-owned definition, persisted in `~/.cezar/managers.json`. */
 export const managerSchema = z.object({
   id: managerIdSchema,
@@ -180,6 +196,7 @@ export const managerSchema = z.object({
   access: managerAccessSchema.optional(),
   projectAccess: managerProjectAccessSchema.optional(),
   runner: z.string().optional(),
+  taskRunner: runnerSchema.optional(),
   model: z.string().optional(),
   effort: managerEffortSchema.optional(),
   /** Agent account id ("Account" in the design); absent = the runner's default. */
@@ -197,6 +214,8 @@ export const managerSchema = z.object({
   quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   /** `task cancel` may stop tasks it did not start, in its connected write projects. Absent = own only. */
   cancelAnyTask: z.boolean().optional(),
+  /** Read-only `gh` patterns the user allowed beyond the built-in policy. Absent = none. */
+  bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
   jobs: z.array(managerJobSchema).max(32),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -228,6 +247,10 @@ export const managerSummarySchema = managerSchema.extend({
   nextCheckAt: z.string().optional(),
   /** Spend across this manager's own turns. Excludes tasks it started: they bill to the task. */
   costUsd: z.number().min(0),
+  /** `<projectId>/<runId>` of every task it started or follows, newest first (the Tasks table's manager facet). */
+  followedTasks: z.array(z.string()),
+  /** Recently refused Bash commands; absent when there are none. */
+  bashDenials: z.array(managerBashDenialSchema).optional(),
 });
 export type ManagerSummary = z.infer<typeof managerSummarySchema>;
 
@@ -238,6 +261,7 @@ export const createManagerInputSchema = z.object({
   access: managerAccessSchema.optional(),
   projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.optional(),
+  taskRunner: runnerSchema.optional(),
   model: modelInput.optional(),
   effort: managerEffortSchema.optional(),
   agentProfile: z.string().max(64).optional(),
@@ -257,6 +281,7 @@ export const updateManagerInputSchema = z.object({
   /** Replaces the whole map. */
   projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.nullable().optional(),
+  taskRunner: runnerSchema.nullable().optional(),
   model: modelInput.nullable().optional(),
   effort: managerEffortSchema.nullable().optional(),
   agentProfile: z.string().max(64).nullable().optional(),
@@ -272,6 +297,10 @@ export const updateManagerInputSchema = z.object({
   /** Replaces the whole list; `[]` removes every chip. */
   quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   cancelAnyTask: z.boolean().optional(),
+  /** Replaces the whole list; `[]` removes every pattern. */
+  bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
+  /** Forget the refused-command log. */
+  clearBashDenials: z.literal(true).optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
@@ -337,7 +366,8 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
 export type ManagerActionRequest = z.infer<typeof managerActionRequestSchema>;
 
 
-export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed']);
+/** `dismissed`: closed without a decision, by the user or because its PR is no longer open. */
+export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed', 'dismissed']);
 export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;
 
 /** The questions of a `CEZ:ASK` line, the same shape a task's ask card shows. */
@@ -442,6 +472,8 @@ export const sendManagerMessageInputSchema = z
     images: attachmentListSchema.optional(),
     // Sent from one question card: closes that card alone (absent, from the composer: every open card).
     askId: z.string().min(1).max(200).optional(),
+    // A resend of a send that already landed answers the first result (relay incident 2026-11-15).
+    idempotencyKey: z.string().uuid().optional(),
   })
   .refine((input) => input.text !== '' || (input.images?.length ?? 0) > 0, {
     message: 'write a message or attach a file',
@@ -449,7 +481,11 @@ export const sendManagerMessageInputSchema = z
   });
 export type SendManagerMessageInput = z.input<typeof sendManagerMessageInputSchema>;
 
-export const managerActionDecisionInputSchema = z.object({ decision: z.enum(['approve', 'reject']) });
+export const managerActionDecisionInputSchema = z.object({
+  decision: z.enum(['approve', 'reject', 'dismiss']),
+  /** With `dismiss`: only when the card's pull request is no longer open, else `409`. */
+  onlyIfStale: z.boolean().optional(),
+});
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;
 
 export const managerOkResponseSchema = z.object({ ok: z.literal(true) });
