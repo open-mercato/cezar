@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import * as React from 'react'
 import { Link, MemoryRouter, useLocation, useNavigate, type InitialEntry } from 'react-router'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -71,15 +71,15 @@ afterEach(() => {
 })
 
 describe('PhoneBottomBar', () => {
-  it('leads Now, Tasks and New task into the last project, then Manager, in a phone PWA', () => {
+  it('leads Now and Tasks into the last project, then Manager, in a phone PWA', () => {
     device()
     localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
     renderShell('/manager/m-1')
     const links = within(bar()!)
-    expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'New task', 'Manager'])
+    expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'Manager'])
     expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/other/')
     expect(links.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/other/tasks')
-    expect(links.getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/p/other/new')
+    expect(links.queryByRole('link', { name: 'New task' })).toBeNull()
     // Inside Manager the tab is current and leads back to the list, like a tab bar.
     const manager = links.getByRole('link', { name: 'Manager' })
     expect(manager.getAttribute('aria-current')).toBe('page')
@@ -115,15 +115,18 @@ describe('PhoneBottomBar', () => {
     expect(within(bar()!).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
   })
 
-  it('renders New task as the primary centre item', () => {
+  it('has four destinations without manual task creation', () => {
     device()
     renderShell('/p/boot/')
-    const newTask = within(bar()!).getByRole('link', { name: 'New task' })
-    expect(newTask.dataset.slot).toBe('bottom-bar-new-task')
-    expect(newTask.querySelector('.bg-primary')).not.toBeNull()
-    const items = [...bar()!.children]
-    expect(items.indexOf(newTask)).toBe(2)
-    expect(items).toHaveLength(5)
+    expect(within(bar()!).queryByRole('link', { name: 'New task' })).toBeNull()
+    expect([...bar()!.children]).toHaveLength(4)
+  })
+
+  it('returns to a clean manager from a consumed direct sheet link without popping unrelated history', async () => {
+    device()
+    renderShell(['/dashboard', { pathname: '/p/boot/tasks/run-1', state: { manager: { id: 'm-1', name: 'Ops' }, managerHistoryBack: false } }])
+    fireEvent.click(within(bar()!).getByRole('link', { name: 'Manager' }))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/m-1'))
   })
 
   it('appears in a narrow browser tab', () => {

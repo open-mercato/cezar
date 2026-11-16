@@ -1264,6 +1264,12 @@ describe('AppShell', () => {
       expect(within(drawer() as HTMLElement).getByRole('button', { name: 'More' })).toBeTruthy()
     })
 
+    it('omits New task from More when Manager is available', () => {
+      renderShell('/', { managersAvailable: true })
+      openMenu()
+      expect(within(drawer() as HTMLElement).queryByRole('link', { name: /New task/ })).toBeNull()
+    })
+
     it('marks the active nav item inside the drawer too', () => {
       renderShell('/skills')
       openMenu()

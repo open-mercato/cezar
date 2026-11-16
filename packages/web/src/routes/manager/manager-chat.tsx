@@ -394,6 +394,7 @@ function useWatchingSheet(): [boolean, (open: boolean) => void] {
     const params = new URLSearchParams(location.search)
     if (next === open) return
     if (next) {
+      if (document.activeElement instanceof HTMLElement && document.activeElement.matches('input, textarea, [contenteditable=true]')) document.activeElement.blur()
       params.set(WATCHING_PARAM, '1')
       const state = { ...(location.state as Record<string, unknown> | null), [WATCHING_PUSHED]: true }
       void navigate({ pathname: location.pathname, search: `?${params}` }, { state })

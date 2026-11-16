@@ -669,6 +669,33 @@ describe('/manager/:id', () => {
       expect(url()).toBe('/manager/global?watching=1')
     })
 
+    it.each(['task', 'all'])('consumes sheet history on %s navigation so Back and Forward stay closed', async (destination) => {
+      renderAt('/manager/global', seedTasks())
+      fireEvent.click(await screen.findByRole('button', { name: 'Tasks · 2' }))
+      await screen.findByRole('dialog', { name: 'Tasks · Global Manager' })
+      fireEvent.click(destination === 'task'
+        ? sheet()!.querySelector('[data-slot="manager-watching-task"]')!
+        : within(sheet()!).getByRole('link', { name: 'View all tasks' }))
+      await waitFor(() => expect(url()).not.toContain('/manager/global'))
+      expect(sheet()).toBeNull()
+      fireEvent.click(screen.getByTestId('history-back'))
+      await waitFor(() => expect(url()).toBe('/manager/global'))
+      expect(sheet()).toBeNull()
+      fireEvent.click(screen.getByTestId('history-forward'))
+      await waitFor(() => expect(url()).not.toContain('/manager/global'))
+      expect(sheet()).toBeNull()
+    })
+
+    it('offers a visible Close and restores the opener on a legacy deep link', async () => {
+      renderAt('/manager/global?watching=1&filter=mine', seedTasks())
+      const dialog = await screen.findByRole('dialog', { name: 'Tasks · Global Manager' })
+      expect(within(dialog).getByRole('button', { name: 'Close' }).textContent).toBe('Close')
+      expect(dialog.getAttribute('aria-modal')).toBe('true')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+      await waitFor(() => expect(url()).toBe('/manager/global?filter=mine'))
+      expect(sheet()).toBeNull()
+    })
+
     it('offers no tasks chip before a reply cards one', async () => {
       seedChat()
       renderAt('/manager/global')
@@ -753,6 +780,26 @@ describe('/manager/:id', () => {
     const names = () => [...document.querySelectorAll('[data-route="manager-list"] a[href^="/manager/"]')]
       .map((row) => row.getAttribute('href'))
       .filter((href) => href !== '/manager/new')
+
+    it('shows responsive cards and the native connected-device picker without remote reads', async () => {
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'CezarMobile/0.1 (ios)' })
+      server.managers = [managerFixture({ pendingQuestions: 2 }), managerFixture({ id: 'other', name: 'Other' })]
+      renderAt('/manager?all=1')
+      const cards = await waitFor(() => {
+        const found = document.querySelectorAll('[data-slot="manager-directory-card"]')
+        expect(found).toHaveLength(2)
+        return found
+      })
+      expect(cards[0]!.textContent).toContain('2 need you')
+      expect(cards[0]!.getAttribute('href')).toBe('/manager/global')
+      fireEvent.change(screen.getByRole('textbox', { name: 'Search managers or device' }), { target: { value: 'Other' } })
+      expect(document.querySelectorAll('[data-slot="manager-directory-card"]')).toHaveLength(1)
+      fireEvent.change(screen.getByRole('textbox', { name: 'Search managers or device' }), { target: { value: '' } })
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Needs you' }))
+      expect(document.querySelectorAll('[data-slot="manager-directory-card"]')).toHaveLength(1)
+      expect(screen.getByRole('link', { name: /^Switch computer/ }).getAttribute('href')).toBe('cezar://servers')
+      expect(calls.filter((call) => call.method === 'GET').every((call) => call.path.startsWith('/api/v1/workspace/managers'))).toBe(true)
+    })
 
     it('opens the only manager straight in its chat', async () => {
       server.managers = [managerFixture({ id: 'solo' })]

@@ -1,4 +1,4 @@
-import { BotIcon, CircleDotIcon, EllipsisIcon, ListChecksIcon, PlusIcon } from 'lucide-react'
+import { BotIcon, CircleDotIcon, EllipsisIcon, ListChecksIcon } from 'lucide-react'
 import * as React from 'react'
 import { Link, matchPath, useLocation, useNavigate } from 'react-router'
 
@@ -66,7 +66,7 @@ export function PhoneBottomBar({
   const active = origin ? null : activeNavPath(stripProjectPrefix(location.pathname))
   const managerCurrent = manager || origin !== undefined
   // Straight from that chat, Back is the way: the chat keeps its place and history stays linear.
-  const backToOrigin = origin !== undefined && managerOriginOf(location.state)?.id === origin.id && location.key !== 'default'
+  const backToOrigin = (location.state as Record<string, unknown> | null)?.managerHistoryBack !== false && origin !== undefined && managerOriginOf(location.state)?.id === origin.id && location.key !== 'default'
   const managerHref = origin
     ? `/manager/${encodeURIComponent(origin.id)}`
     : !manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'
@@ -101,11 +101,6 @@ export function PhoneBottomBar({
           ) : null}
         </button>
       ) : item('tasks', 'Tasks', ListChecksIcon, '/tasks')}
-      <Link to={`${index}new`} aria-label="New task" data-slot="bottom-bar-new-task" className={cn(ITEM, 'text-foreground')}>
-        <span className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <PlusIcon className="size-5" aria-hidden="true" />
-        </span>
-      </Link>
       <Link
         to={managerHref}
         aria-current={managerCurrent ? 'page' : undefined}
