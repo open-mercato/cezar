@@ -5483,6 +5483,9 @@ export class RunManager {
     // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
     // registers it in `active`.
     this.starting.add(runId);
+    // #2216: preparation (worktree restore, lifecycle gate) awaits before `runContinuation` writes
+    // `running`; a dequeued continuation reads `queued` through the same window, so this one does too.
+    this.store.updateRun(runId, { status: 'queued', error: undefined, finishedAt: undefined, currentStepId: undefined });
     void this.runContinuation(
       runId,
       stepId,
@@ -5497,6 +5500,10 @@ export class RunManager {
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
+        // Preparation threw before an owner registered: do not strand the run on `queued` (#2216).
+        if (!this.active.has(runId) && !this.cancelledStarting.has(runId) && this.store.getRun(runId)?.status === 'queued') {
+          this.publishRunFailure(runId, { status: 'failed', error: `continue crashed: ${message}`, finishedAt: new Date().toISOString() });
+        }
         // A cancel that landed before the throw still owes the parent its report.
         if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
       },
