@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 import type { ProviderStatus } from '@open-mercato/cezar-api-client'
 
 import { ApiError } from '@/api/client'
-import { useConnectAgentAccount, useHealth, useRunnerModels } from '@/api/queries'
+import { useConnectAgentAccount, useHealth, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
@@ -11,6 +11,8 @@ export function CursorConnection({ status, installCommand }: { status: ProviderS
   const connect = useConnectAgentAccount()
   const health = useHealth()
   const connected = status?.status === 'connected'
+  const providers = useProviderStatus()
+  const enabled = providers.data?.providers.find((row) => row.provider === 'cursor')?.enabled ?? status?.enabled ?? true
   const models = useRunnerModels('cursor', connected)
   const [notice, setNotice] = useState<{ message: string; command?: string } | null>(null)
   const local = health.data?.capabilities?.localHandoff === true
@@ -82,9 +84,13 @@ export function CursorConnection({ status, installCommand }: { status: ProviderS
             </>
           )}
           <p className="text-muted-foreground">A connected CLI does not guarantee access to every model. Cursor enforces your plan and team permissions when a task runs.</p>
-          <Button asChild size="sm" variant="outline" className="self-start">
-            <Link to="/new?runner=cursor">New task with Cursor</Link>
-          </Button>
+          {enabled ? (
+            <Button asChild size="sm" variant="outline" className="self-start">
+              <Link to="/new?runner=cursor">New task with Cursor</Link>
+            </Button>
+          ) : (
+            <p>Cursor is disabled for tasks. Enable Cursor before starting a task. <Link className="underline" to="/settings/agents">Open task agent settings</Link></p>
+          )}
         </div>
       ) : null}
     </div>

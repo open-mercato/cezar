@@ -284,6 +284,16 @@ describe('Cursor connection', () => {
     expect(screen.getByRole('link', { name: 'Sign-in help' }).getAttribute('href')).toContain('/authentication')
   })
 
+  it('explains how to enable a connected Cursor without offering a task that would select another runner', async () => {
+    serve({ editable: true, profileCapableProviders: [], selections: {}, defaults: {}, profiles: [
+      profile({ id: 'default', provider: 'cursor', isDefault: true, status: { provider: 'cursor', status: 'connected', enabled: false } }),
+    ] })
+    renderAccounts()
+    expect(await screen.findByText(/Cursor is disabled for tasks/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'New task with Cursor' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Open task agent settings' }).getAttribute('href')).toBe('/settings/agents')
+  })
+
   it('shows host-side login instructions when local handoff is unavailable', async () => {
     serveCursor('disconnected')
     renderAccounts('/settings/global/accounts', null, false)

@@ -136,6 +136,8 @@ an agent can discover that a token has been revoked after the vendor CLI reporte
 in. The status service keeps an in-memory latch per provider for that condition and reports the
 latched provider as disconnected with a safe, fixed reconnect hint.
 
+Cursor’s Accounts → **Verify connection** also uses this explicit retry endpoint for the incident observed at the click, then refreshes discovery and models. It updates both account and task-picker status caches without replacing a newer streamed incident.
+
 Ordinary 30-second polling and **Check again** preserve a latch, even when the vendor's
 stored-login probe still finds credentials. Check again (`?refresh=1`) refreshes discovery only;
 it cannot turn a known runtime rejection green. Connect also preserves the latch, so a launched

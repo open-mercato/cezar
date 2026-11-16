@@ -48,3 +48,30 @@ for (const [width, height] of [[1280, 720], [390, 844]]) {
     await app.screenshot(`cursor-new-task-${width}`);
   });
 }
+
+test('manual Cursor login and verification select Cursor after a disconnected bootstrap', async ({ app, screen, browser }) => {
+  let signedIn = false;
+  const cursor = () => ({ provider: 'cursor', status: signedIn ? 'connected' : 'disconnected', enabled: true });
+  await browser.route('**/api/v1/models?*', (route) => route.fulfill({ json: {
+    runner: new URL(route.request.url).searchParams.get('runner'), source: 'live', stale: false, models: [],
+  } }));
+  await browser.route('**/api/v1/workspace/agent-profiles', (route) => route.fulfill({ json: {
+    editable: true, profileCapableProviders: [], defaults: {}, selections: {}, profiles: [{
+      id: 'default', provider: 'cursor', label: 'Default', configDir: '~/.cursor', path: '/test/.cursor',
+      isDefault: true, exists: true, looksValid: true, files: [], status: cursor(),
+    }],
+  } }));
+  await browser.route('**/api/v1/providers/status*', (route) => route.fulfill({ json: { providers: [
+    { provider: 'claude', status: 'connected', enabled: true }, cursor(),
+  ] } }));
+  await browser.route('**/api/v1/workspace/agent-profiles/default%3Acursor/status?*', (route) => {
+    signedIn = true;
+    return route.fulfill({ json: { status: cursor() } });
+  });
+  await app.open('/settings/global/agents');
+  await expect(screen.getByRole('button', 'Connect Cursor account')).toBeVisible();
+  await screen.getByRole('button', 'Verify connection').tap();
+  await screen.getByRole('link', 'New task with Cursor').tap();
+  await expect.poll(() => browser.evaluate(() => document.querySelector('[data-slot="runner-pill"]')?.textContent)).toContain('cursor');
+  await expect(screen.getByRole('textbox', 'Describe a task for the agent')).toHaveValue('');
+});
