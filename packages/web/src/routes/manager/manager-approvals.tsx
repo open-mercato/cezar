@@ -61,8 +61,11 @@ function ManagerApprovals({ manager, heading, results, saveResult }: {
     // before the HTTP response or its final failed/done message arrives.
     if (!opts?.onlyIfStale) saveResult(manager.id, actionId, { ...message, status: 'running', result: undefined })
     const result = await decideManagerAction(manager.id, actionId, decision, opts).catch((error: unknown) => {
-      if (!opts?.onlyIfStale) saveResult(manager.id, actionId)
-      restoreFocus()
+      // A stale check's 409 means "still open": the card stays, so focus inside it stays too.
+      if (!opts?.onlyIfStale) {
+        saveResult(manager.id, actionId)
+        restoreFocus()
+      }
       throw error
     })
     // The resolved card leaves this pending-only list. Keep keyboard focus on the page instead

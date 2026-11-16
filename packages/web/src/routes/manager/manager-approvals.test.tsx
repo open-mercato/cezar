@@ -18,6 +18,7 @@ let failed: string | undefined
 let onDecision: (() => void | Promise<void>) | undefined
 let beforeReadReturns: (() => Promise<void>) | undefined
 let beforeListReturns: (() => Promise<void>) | undefined
+let staleCheck: (() => Promise<void>) | undefined
 const requests: string[] = []
 const decisions: Array<{ manager: string; action: string; decision: string }> = []
 
@@ -30,6 +31,7 @@ beforeEach(() => {
   onDecision = undefined
   beforeReadReturns = undefined
   beforeListReturns = undefined
+  staleCheck = undefined
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input, 'http://localhost')
     requests.push(url.pathname + url.search)
@@ -51,8 +53,13 @@ beforeEach(() => {
       await beforeReadReturns?.()
       return response
     }
-    const decision = JSON.parse(init!.body as string).decision as string
+    const body = JSON.parse(init!.body as string) as { decision: string; onlyIfStale?: boolean }
+    const decision = body.decision
     decisions.push({ manager: id, action: parts[3]!, decision })
+    if (body.onlyIfStale) {
+      await staleCheck?.()
+      return Response.json({ error: 'The pull request is still open.' }, { status: 409 })
+    }
     if (failed === 'decision') return Response.json({ error: 'This action changed. Refresh before deciding.' }, { status: 409 })
     messages[id] = messages[id]!.map((message) => message.id === parts[3] ? { ...job(message.seq), status: 'dismissed', result: 'Dismissed' } : message)
     managers = managers.map((manager) => manager.id === id ? { ...manager, pendingActions: messages[id]!.filter((message) => message.kind === 'action' && message.status === 'pending').length } : manager)
@@ -240,6 +247,23 @@ it('keeps a refused decision pending with its guard error visible', async () => 
   expect(document.querySelector('[data-slot="manager-action"][data-status="pending"]')).not.toBeNull()
   expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
   expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Approvals' }))
+})
+
+it('leaves focus inside an open merge card when its background stale check answers "still open"', async () => {
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1 })]
+  messages = { shop: [actionMessage(3, { action: { type: 'merge-pr', projectId: 'alpha', number: 12, title: 'Fix the thing', method: 'squash' } })] }
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  staleCheck = () => held
+  renderApprovals()
+  const approve = await screen.findByRole('button', { name: 'Approve' })
+  await waitFor(() => expect(decisions).toEqual([{ manager: 'shop', action: messages.shop![0]!.id, decision: 'dismiss' }]))
+  // The keyboard user tabs into the card while the merge-state check is still in flight.
+  approve.focus()
+  await act(async () => { release(); await held })
+  await waitFor(() => expect(requests.filter((path) => path.includes('/decision'))).toHaveLength(1))
+  expect(document.activeElement).toBe(approve)
+  expect(document.querySelector('[data-slot="manager-action"][data-status="pending"]')).not.toBeNull()
 })
 
 it.each(['action', 'summary', 'both'])('reconciles a %s frame racing an unseeded first manager list without inventing a partial list', async (event) => {
