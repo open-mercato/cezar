@@ -256,6 +256,13 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let proxyOrigin = ProxyOrigin(port: opened.port())
         origin = proxyOrigin
         if opened.port() != saved { connector.saveRelayPort(id: server.id, port: opened.port()) }
+        opened.setOnListenerLost { [weak self] in
+            DispatchQueue.main.async {
+                // In the background `becameVisible` binds again; on screen nothing else would.
+                guard let self, self.started, !self.leaving, self.proxy === opened else { return }
+                self.rebindProxy("listener failed")
+            }
+        }
         opened.setOnShellChanged { [weak self] in
             DispatchQueue.main.async {
                 // The shell painted from the phone was older than the server's: load the new one once.
@@ -508,19 +515,37 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         started = true
         ForegroundServers.shared.started(serverId)
         endBackgroundTask()
-        guard let proxy, let relayServer else { return }
+        guard let proxy, relayServer != nil else { return }
         startLog.step("foreground, link \(link?.status().kind.rawValue ?? "-")")
         if proxy.listening() {
             startRelay()
+            // The listener's state arrives late or never after a suspension: ask it for real.
+            checkProxy(proxy, "foreground")
             return
         }
-        // A long suspension can tear the listener down: bind a new one, with a new gate cookie, and reload.
+        rebindProxy("listener gone")
+    }
+
+    /// One loopback round trip off the main thread; a listener that does not answer is bound again.
+    private func checkProxy(_ checked: LoopbackProxy, _ why: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let answered = checked.answers()
+            DispatchQueue.main.async {
+                guard let self, !answered, self.started, !self.leaving, self.proxy === checked else { return }
+                self.rebindProxy("listener not answering (\(why))")
+            }
+        }
+    }
+
+    /// A long suspension can tear the listener down: bind a new one, with a new gate cookie, and reload.
+    private func rebindProxy(_ why: String) {
+        guard let proxy, let relayServer else { return }
         // Blank first: until then the page would keep sending the old cookie to a port another app may
         // hold now (security review F3).
         webView.stopLoading()
         webView.loadHTMLString("", baseURL: nil)
         if let cookie = proxy.gateCookie() { webView.configuration.websiteDataStore.httpCookieStore.delete(cookie) }
-        startLog.step("listener gone, binds again")
+        startLog.step("\(why), binds again")
         network?.cancel()
         network = nil
         link?.setDiagnostics(nil)
@@ -609,6 +634,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             decisionHandler(.cancel)
             startLog.step("page asked to reconnect")
             link?.start(reason: "page")
+            if let proxy { checkProxy(proxy, "page") }
         case .block:
             decisionHandler(.cancel)
         }

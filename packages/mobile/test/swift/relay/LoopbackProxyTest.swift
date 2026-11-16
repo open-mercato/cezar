@@ -310,6 +310,52 @@ func loopbackProxyTests() {
         }
     }
 
+    run("an SSE stream stays open past the 30 s head and 60 s keep-alive timers, events flowing") { w in
+        // The cockpit's workspace stream lives as long as the page; no proxy timer may end it.
+        let client = try w.connect()
+        client.setTimeout(20000)
+        client.send(w.gated("GET", "/api/v1/workspace/events?slim=1", "Accept: text/event-stream\r\n"))
+        guard let open = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("not opened") }
+        w.peer.head(open.stream, 200, "content-type", "text/event-stream", "cache-control", "no-cache, no-transform")
+        _ = client.readHead()
+        let started = relayNowMs()
+        var seen = 0
+        while relayNowMs() - started < 65000 {
+            let event = "event: ping\ndata: \(seen)\n\n"
+            w.peer.data(open.stream, Bytes.utf8(event))
+            guard text(try client.read(max: 256)).contains(event) else { break }
+            seen += 1
+            Thread.sleep(forTimeInterval: 5)
+        }
+        expect(seen >= 13, "an event every 5 s for 65 s: \(seen)")
+        expect(w.peer.resets.poll(timeoutMs: 10) == nil, "never reset")
+    }
+
+    test("a listener that answers is told from one that does not") {
+        let proxy = LoopbackProxy(tunnel: { nil }, userAgent: "ua")
+        _ = try proxy.open(preferredPort: 0)
+        expect(proxy.answers(), "a live proxy answers its own probe")
+        let port = proxy.port()
+        proxy.close()
+        expect(!proxy.answers() && !LoopbackProxy.answers(port: port, timeoutMs: 500), "a closed one does not")
+        // A reclaimed listener can still take the connection into its backlog: nobody answers it.
+        let hog = try LoopbackHog()
+        defer { hog.close() }
+        let before = relayNowMs()
+        expect(!LoopbackProxy.answers(port: hog.port, timeoutMs: 500), "a socket that accepts and never answers")
+        expect(relayNowMs() - before < 2000, "within the timeout")
+    }
+
+    test("close() is not a lost listener") {
+        let proxy = LoopbackProxy(tunnel: { nil }, userAgent: "ua")
+        let lost = Locked(0)
+        proxy.setOnListenerLost { lost.value += 1 }
+        _ = try proxy.open(preferredPort: 0)
+        proxy.close()
+        Thread.sleep(forTimeInterval: 0.2)
+        expect(lost.value == 0, "no rebind for our own close")
+    }
+
     run("credit follows the consumer, so a stalled page stalls the sender") { w in
         let client = try w.connect()
         client.setReceiveBuffer(1024)

@@ -41,6 +41,7 @@ final class LoopbackProxy {
     /// Nil: everything goes through the tunnel, as before the cache.
     private let cache: BundleCache?
     private let onShellChanged = Locked<(() -> Void)?>(nil)
+    private let onListenerLost = Locked<(() -> Void)?>(nil)
     private let why = Locked<Why?>(nil)
     private let revalidating = Locked(false)
     /// Tests: how long a request waits for the session to come up.
@@ -152,9 +153,11 @@ final class LoopbackProxy {
         }
         let up = self.up
         up.value = true
-        candidate.stateUpdateHandler = { state in
+        candidate.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .failed, .cancelled: up.value = false
+            case .failed, .cancelled:
+                up.value = false
+                if let self, !self.closed.value { self.onListenerLost.value?() }
             default: break
             }
         }
@@ -176,6 +179,49 @@ final class LoopbackProxy {
 
     /// False once iOS has torn the listener down (a long suspension can): open a new proxy then.
     func listening() -> Bool { up.value && !closed.value }
+
+    /// Told once the listener fails or is cancelled by anything but `close()`.
+    func setOnListenerLost(_ listener: (() -> Void)?) {
+        onListenerLost.value = listener
+    }
+
+    /// Whether a loopback client really gets an answer. iOS can reclaim a suspended app's listening
+    /// socket while the listener still reads ready, and every page request then fails with the relay
+    /// green. Blocks up to `timeoutMs`: call it off the main thread.
+    func answers(timeoutMs: Int = 2000) -> Bool {
+        listening() && Self.answers(port: boundPort, timeoutMs: timeoutMs)
+    }
+
+    /// A gate refusal is an answer: the probe carries no cookie and never enters the tunnel.
+    static func answers(port: Int, timeoutMs: Int) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        if fd < 0 { return false }
+        defer { Darwin.close(fd) }
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        var wait = timeval(tv_sec: timeoutMs / 1000, tv_usec: Int32(timeoutMs % 1000) * 1000)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(clamping: port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        if connected != 0 { return false }
+        let request = Array("GET / HTTP/1.1\r\nHost: probe.invalid\r\nConnection: close\r\n\r\n".utf8)
+        if request.withUnsafeBytes({ Darwin.send(fd, $0.baseAddress, $0.count, 0) }) != request.count { return false }
+        let want = 9
+        var head = [UInt8](repeating: 0, count: want)
+        var got = 0
+        while got < want {
+            let read = head.withUnsafeMutableBytes { recv(fd, $0.baseAddress! + got, want - got, 0) }
+            if read <= 0 { return false }
+            got += read
+        }
+        return head == Array("HTTP/1.1 ".utf8)
+    }
 
     func port() -> Int { boundPort }
 
