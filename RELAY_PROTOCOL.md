@@ -141,7 +141,7 @@ its claim window gets a 4408 close at once, with no `hello`.
 | 4426 | 426 | `protocol-unsupported` | Show "update the app" or "update cezar" |
 | 4429 | 429 | `rate-limited` | Reconnect after `retryAfter`, except on a rendezvous |
 | 4430 | | `quota-exhausted` | Reconnect after `retryAfter`, and say so in the UI |
-| 4451 | | `email-unconfirmed`, `account-required` | § 18. The reason is in an `error` frame with no `id`, else in the close reason; neither means `email-unconfirmed`. Retry every 10 minutes plus up to 60 s of jitter, at once after a change |
+| 4451 | | `email-unconfirmed`, `account-required`, `suspended`, `terms-required-device` | § 18. The reason is in an `error` frame with no `id`, else in the close reason; neither means `email-unconfirmed`. cezar retries every 10 minutes plus up to 60 s of jitter, at once after a change, and at most once an hour when `suspended`. A phone stops and says why |
 | 4503 | 503 | `relay-disabled` | Back off 5 to 15 minutes. The operator's kill switch |
 
 Any other close or network loss is treated like 1001. Reconnection uses full jitter: attempt `n`
@@ -858,7 +858,7 @@ clients' reading of it. Additive: protocol version stays 1, and an account never
 traffic, keys or sessions.
 
 **Model.** One account per email. A cezar's link to an account is its *attachment*, and confirmation is
-per attachment: a code goes to the email even when the account is already confirmed elsewhere. All
+per attachment: a link goes to the email even when the account is already confirmed elsewhere. All
 times are Unix seconds.
 
 **Endpoints.** All `POST`, JSON bodies of at most `controlBytes`, sharing `ipUpgradesPerMinute`. "cezar
@@ -889,8 +889,8 @@ Refusals: 401 `bad-proof`, 401 `bad-token`, 404 `no-account`, 409 `already-confi
 `account-unavailable`, 503 `email-unavailable`.
 
 **Status object.** `{ state, email, termsVersion, acceptedAt, confirmedAt, graceEndsAt, secondsLeft,
-label, handoverEndsAt, suspended }`; the last three were added later the same day, and a client that
-ignores them keeps working.
+label, handoverEndsAt, suspended }`. A client that ignores `label`, `handoverEndsAt` and `suspended`
+keeps working.
 `state` is `confirmed`, `pending` (inside the 48-hour grace, everything works) or `blocked` (grace over,
 sockets refused). With no attachment the email, terms and confirmation fields are null. A phone gets
 `email` masked, the first character of the local part, `***`, then `@` and the domain
@@ -955,8 +955,7 @@ through and refuses rendezvous with 503 `account-unavailable`.
   suspended does.
 - On 4451, say why in Settings and retry every 10 minutes plus up to 60 s of random jitter, with no
   growing backoff, so a confirmation made by the email link takes effect within one interval.
-  Reconnect at once after `confirm` succeeds, `POST /v1/accounts` attaches, or `status` turns
-  `confirmed` or `pending`. Poll `status` at most once a minute.
+  Reconnect at once after `POST /v1/accounts` attaches, or `status` turns `confirmed` or `pending`. Poll `status` at most once a minute.
 - Phones paired before accounts: a dismissible notice with the grace left, never a modal, and never
   break them inside the grace. Confirmation is the emailed link only; cezar never calls `confirm`.
 
