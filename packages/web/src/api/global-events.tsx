@@ -32,7 +32,7 @@ import {
 } from './events'
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
-import { ApiError, getProjectRun } from './client'
+import { ApiError, getHealth, getProjectRun } from './client'
 import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
 import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
 import type {
@@ -79,6 +79,21 @@ const CLOSED = 2
  *  own retry, which we neither can nor should replace. */
 const REOPEN_DELAY_MS = 3_000
 
+<<<<<<< HEAD
+=======
+/** A visible return whose stream heard nothing for this long (one missed 15 s ping) reopens at
+ *  once: an iOS WebView resumed from the background keeps a dead socket reporting OPEN. */
+export const RETURN_SILENCE_MS = 20_000
+
+/** While the stream is down on a visible page, ask for everything this often instead: plain HTTP
+ *  can work where the stream does not (a proxy that drops SSE), and the reader still sees changes. */
+export const POLL_WHILE_DOWN_MS = 30_000
+/** At most one plain-HTTP probe per this long while the stream keeps erroring, sent this long
+ *  after the drop (well inside the banner's 5 s delay) so a blip that reconnects at once sends none. */
+export const PROBE_WHILE_DOWN_MS = 10_000
+export const PROBE_DELAY_MS = 2_000
+
+>>>>>>> fe1ec2d (fix(web): poll and say only 'live updates paused' while requests still get through (#2236))
 /** Everything the stream is allowed to say. An unknown name never reaches `parseGlobalEvent`,
  *  because SSE only delivers named events to a matching listener in the first place. */
 const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
@@ -709,7 +724,22 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       refetchUncachedProviderStatus()
     }
 
+    let lastReconcileAt = Date.now()
+    // The banner reads the LAST request's outcome, usually from before the drop: ask once, shortly, so a
+    // dead server says "reconnecting" rather than "paused". Throttled past the browser's own retries.
+    let lastProbeAt = 0
+    let probeTimer: ReturnType<typeof setTimeout> | undefined
+    const probeRequests = (): void => {
+      if (probeTimer !== undefined || Date.now() - lastProbeAt < PROBE_WHILE_DOWN_MS) return
+      probeTimer = setTimeout(() => {
+        probeTimer = undefined
+        if (disposed || dashboardLive.isConnected()) return
+        lastProbeAt = Date.now()
+        void getHealth().catch(() => {})
+      }, PROBE_DELAY_MS)
+    }
     const reconcileNow = (): void => {
+      lastReconcileAt = Date.now()
       reconciliationDepth += 1
       runEventBatcher.beginReconcile()
       void reconcile(queryClient).finally(() => {
@@ -935,6 +965,11 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // boots). Nothing would ever reopen it, so the cockpit would sit there looking live and
         // showing yesterday's state.
         dashboardLive.connected(false)
+<<<<<<< HEAD
+=======
+        connectionStatus.failedAttempt()
+        probeRequests()
+>>>>>>> fe1ec2d (fix(web): poll and say only 'live updates paused' while requests still get through (#2236))
         if (current.readyState === CLOSED) reopenLater()
       })
     }
@@ -1024,6 +1059,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     // that cannot — a socket still reported OPEN that has silently stopped delivering.
     livenessTimer = setInterval(() => {
       if (disposed || document.visibilityState !== 'visible') return
+      if (!dashboardLive.isConnected() && reconciliationDepth === 0 && Date.now() - lastReconcileAt >= POLL_WHILE_DOWN_MS) reconcileNow()
       if (Date.now() - lastFrameAt <= STALE_MS) return
       clearTimeout(reopenTimer)
       reopenTimer = undefined
@@ -1041,6 +1077,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       clearTimeout(reopenTimer)
       clearTimeout(reopenReconcileTimer)
       clearInterval(livenessTimer)
+      clearTimeout(probeTimer)
       clearTimeout(hiddenTimer)
       dashboardLive.connected(false)
       clearTimeout(dashboardTimer); clearTimeout(dashboardMax)

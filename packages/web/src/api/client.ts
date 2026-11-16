@@ -219,6 +219,10 @@ import type { AppType } from '@open-mercato/cezar/app-type'
 import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
 import { BUILD_HEADER, noteServerBuild } from '@/lib/build-identity'
+<<<<<<< HEAD
+=======
+import { answeredByCezar, connectionStatus, nativeConnectionStatus } from './connection-status'
+>>>>>>> fe1ec2d (fix(web): poll and say only 'live updates paused' while requests still get through (#2236))
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -488,10 +492,16 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     headers.set(SID_HEADER, sid())
     const res = await fetch(url, { ...init, headers, credentials: 'include' })
     noteServerBuild(res.headers?.get(BUILD_HEADER) ?? null)
+<<<<<<< HEAD
+=======
+    nativeConnectionStatus.fromResponse(res)
+    connectionStatus.requestSettled(answeredByCezar(res.status))
+>>>>>>> fe1ec2d (fix(web): poll and say only 'live updates paused' while requests still get through (#2236))
     if (!res.ok) noteFailedRequest(url, init?.method, res.status, init?.body)
     return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    connectionStatus.requestSettled(false)
     noteFailedRequest(url, init?.method, 0, init?.body, cause)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }

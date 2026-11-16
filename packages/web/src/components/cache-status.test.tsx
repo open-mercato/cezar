@@ -86,7 +86,34 @@ describe('ConnectionBanner', () => {
     vi.stubGlobal('EventSource', function EventSource() {})
     dashboardLive.connected(false)
   })
+<<<<<<< HEAD
   afterEach(() => dashboardLive.connected(false))
+=======
+  afterEach(() => {
+    dashboardLive.connected(false)
+    connectionStatus.opened()
+    connectionStatus.requestSettled(false)
+    vi.restoreAllMocks()
+  })
+>>>>>>> fe1ec2d (fix(web): poll and say only 'live updates paused' while requests still get through (#2236))
+
+  it('says only that live updates are paused while cezar still answers requests', () => {
+    render(<ConnectionBanner />)
+    act(() => connectionStatus.requestSettled(true))
+    act(() => vi.advanceTimersByTime(CONNECTION_BANNER_DELAY_MS - 1))
+    expect(banner()).toBeNull()
+    act(() => vi.advanceTimersByTime(1))
+    expect(banner()?.getAttribute('data-state')).toBe('paused')
+    expect(banner()?.textContent).toBe('Live updates paused — refreshing periodically.')
+    expect(banner()?.textContent).not.toContain('reconnecting')
+    expect(screen.queryByRole('button', { name: 'Retry now' })).toBeNull()
+    // Requests stop getting through too: that is an outage again.
+    act(() => connectionStatus.requestSettled(false))
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
+    expect(banner()?.getAttribute('data-state')).toBe('reconnecting')
+    act(() => dashboardLive.connected(true))
+    expect(banner()?.getAttribute('data-state')).toBe('online')
+  })
 
   it('waits out a short drop, then says it is reconnecting', () => {
     render(<ConnectionBanner />)
