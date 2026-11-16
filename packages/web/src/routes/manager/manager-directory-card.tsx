@@ -32,7 +32,7 @@ export function ManagerDirectoryCard({ entry, now }: { entry: ManagerDirectoryEn
         </span>
         <span className="block break-words text-meta text-muted-foreground">{entry.deviceLabel} · {status}{attention ? ` · ${MANAGER_ATTENTION_TEXT[attention].replace(/^, /, '')}` : ''}</span>
         <span className="mt-1 block line-clamp-2 break-words text-sm text-muted-foreground">{managerRowPreview(manager)}</span>
-        {waiting > 0 ? <span className="mt-1 block text-sm font-semibold text-info">{waiting} need you</span> : null}
+        {waiting > 0 ? <span className="mt-1 block text-sm font-semibold text-info">{waiting} {waiting === 1 ? 'needs' : 'need'} you</span> : null}
       </span>
     </Link>
   )

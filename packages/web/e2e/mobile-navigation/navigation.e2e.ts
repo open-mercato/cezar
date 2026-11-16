@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
 
-const artifacts = process.env.CEZ_ARTIFACTS_DIR ?? resolve(import.meta.dirname, '../../../../.e2e/mobile-navigation')
+const artifacts = resolve(import.meta.dirname, '../../../../.e2e/mobile-navigation')
 test('responsive Manager directory and modal controls', { timeout: 120000 }, async ({ app, browser, screen }) => {
   mkdirSync(artifacts, { recursive: true })
   const results = []
