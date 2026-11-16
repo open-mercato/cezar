@@ -8,6 +8,7 @@ import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { LAST_LOCATION_STORAGE_KEY } from '@/lib/last-location'
 
 import { AppShell, useShellTasksTab, type AppShellProps } from './app-shell'
+import { useHideShellTopBar } from '@/routes/manager/manager-loading'
 import { ThemeProvider } from './theme-provider'
 
 function device({ standalone = true, userAgent = 'Mozilla/5.0', width = 390, height = 844 } = {}) {
@@ -56,6 +57,12 @@ function renderShell(entry: InitialEntry | InitialEntry[], props: Partial<AppShe
 }
 
 const bar = () => screen.queryByRole('navigation', { name: 'App' })
+
+/** Stands in for the manager chat, which hides the shell's top bar for its own header. */
+function HidesTopBar() {
+  useHideShellTopBar()
+  return null
+}
 
 afterEach(() => {
   cleanup()
@@ -342,8 +349,9 @@ describe('PhoneBottomBar', () => {
     it('pads the status bar in the column when a manager chat hides the top bar', () => {
       // The chat's header pads the inset only below `md` (manager-chat.tsx), so the column must.
       device(IPAD)
-      renderShell('/manager/m-1')
+      renderShell('/manager/m-1', { children: <HidesTopBar /> })
       const bar = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')!
+      expect(bar.hidden).toBe(true)
       expect(bar.parentElement).toBe(column())
       expect(column().className).toContain('md:has-[>[data-slot=mobile-top-bar][hidden]]:pt-[env(safe-area-inset-top)]')
     })

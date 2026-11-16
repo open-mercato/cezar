@@ -1307,6 +1307,7 @@ describe('AppShell', () => {
     })
 
     it('closes when available width reveals the desktop sidebar', async () => {
+      onTestFinished(() => { vi.unstubAllGlobals() })
       vi.stubGlobal('innerWidth', 700)
       renderShell()
       openMenu()
