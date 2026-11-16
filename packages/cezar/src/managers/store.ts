@@ -70,6 +70,8 @@ const stateSchema = z
       /** When its recent follow-up turns were owed: bounds a manager↔task ping-pong. */
       turns: z.array(z.string()).optional(),
     })).catch({}),
+    /** Tasks it created, `<projectId>/<runId>` → when: kept past an unfollow (the Tasks table's manager facet). */
+    created: z.record(z.string(), z.string()).catch({}),
     /** Followed-task events the follow-up turn has not taken up yet; `ledger` is the event's identity. */
     followups: z.array(z.object({ ledger: z.string(), line: z.string() })).catch([]),
     /** The MCP servers the last Claude session reported (spec 2026-11-12-manager-connectors). */

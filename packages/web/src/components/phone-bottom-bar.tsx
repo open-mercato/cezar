@@ -67,7 +67,8 @@ export function PhoneBottomBar({
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
   // The current page first: the store is written in an effect, after this render.
   const index = lastProjectIndex(locationToSave(location, projects.data) ?? readStoredLastLocation(), projects.data, bootProject)
-  const active = location.pathname === '/tasks' || origin ? null : activeNavPath(stripProjectPrefix(location.pathname))
+  // The global table is Tasks too: a manager's "View all" lands there.
+  const active = origin ? null : activeNavPath(stripProjectPrefix(location.pathname))
   const managerCurrent = manager || origin !== undefined
   // Straight from that chat, Back is the way: the chat keeps its place and history stays linear.
   const backToOrigin = origin !== undefined && managerOriginOf(location.state)?.id === origin.id && location.key !== 'default'

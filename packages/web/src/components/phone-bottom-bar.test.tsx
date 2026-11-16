@@ -249,11 +249,11 @@ describe('PhoneBottomBar', () => {
     expect(screen.getByRole('button', { name: 'Open menu' })).toBeTruthy()
   })
 
-  it('stays on the global Tasks page, which is not a thread, and lights nothing there', () => {
+  it('stays on the global Tasks page, which is not a thread, and keeps Tasks lit there', () => {
     device()
-    renderShell('/tasks')
+    renderShell('/tasks?manager=mobile')
     expect(bar()).not.toBeNull()
-    expect(within(bar()!).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+    expect(within(bar()!).getAllByRole('link', { current: 'page' }).map((link) => link.textContent)).toEqual(['Tasks'])
   })
 
   it('hides while the keyboard is open', () => {

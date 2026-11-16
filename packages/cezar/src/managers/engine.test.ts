@@ -2624,6 +2624,8 @@ describe('ManagerEngine', () => {
       await engine.followTask(id, { projectId: 'alpha', runId: 'other' }).then((answer) => expect(answer).toMatchObject({ error: 'task not found' }));
       runs = [run({ id: 'other', title: 'Docs pass' })];
       expect(await engine.followTask(id, { projectId: 'alpha', runId: 'other' })).toEqual({ projectId: 'alpha', runId: 'other', following: true });
+      // Started and followed alike: what the Tasks table's manager facet filters on.
+      expect([...(await engine.summary(id))!.followedTasks].sort()).toEqual(['alpha/new-run', 'alpha/other']);
       backend.scripts.push({ ...say('On it.'), hold: true }, say('Both are done; next I review the docs.'));
       engine.send(id, 'what is going on?');
       await vi.waitFor(() => expect(backend.open).toHaveLength(1));
@@ -2750,6 +2752,29 @@ describe('ManagerEngine', () => {
       expect(await engine.followTask(id, { projectId: 'alpha', runId: 'old', follow: false })).toMatchObject({ following: false });
       engine.taskChanged('alpha', dataDir(), { ...earlier, status: 'failed', finishedAt: later(2) }, () => undefined);
       expect(cards(id)).toHaveLength(1);
+    });
+
+    it('keeps a task it created in its task list after unfollowing it; a merely followed one leaves', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      runs = [...runs, run({ id: 'other' })];
+      await engine.followTask(id, { projectId: 'alpha', runId: 'other' });
+      expect([...(await engine.summary(id))!.followedTasks].sort()).toEqual(['alpha/new-run', 'alpha/other']);
+      await engine.followTask(id, { projectId: 'alpha', runId: 'new-run', follow: false });
+      await engine.followTask(id, { projectId: 'alpha', runId: 'other', follow: false });
+      expect(store.state(id).follows).toEqual({});
+      expect((await engine.summary(id))!.followedTasks).toEqual(['alpha/new-run']);
+      // Unfollowing stops the cards: the created task is no longer heard about.
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'done', finishedAt: later(1) }), () => undefined);
+      expect(cards(id)).toEqual([]);
+    });
+
+    it('moves a created follow written before the created record into it on unfollow', async () => {
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      store.updateState(id, (state) => ({ ...state, follows: { 'alpha/legacy': { at: new Date().toISOString(), created: true } } }));
+      await engine.followTask(id, { projectId: 'alpha', runId: 'legacy', follow: false });
+      expect((await engine.summary(id))!.followedTasks).toEqual(['alpha/legacy']);
     });
 
     it('posts nothing twice across a restart, and delivers what happened while it was down', async () => {
