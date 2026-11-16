@@ -1479,15 +1479,15 @@ describe('useGlobalEvents — reconcile doctrine', () => {
     expect(invalidate).not.toHaveBeenCalled()
   })
 
-  it('refetches the authoritative endpoints on reconnect', () => {
+  it('refetches the authoritative endpoints on reconnect', async () => {
+    client.setQueryData(managerKeys.approvals('global'), [])
     const { source } = mount()
     source.open()
     const invalidate = vi.spyOn(client, 'invalidateQueries')
 
     // The socket dropped; EventSource retried it on its own and got back in. Whatever happened in
     // between never reached this client, so the cache is now a guess.
-    source.drop()
-    source.open()
+    await act(async () => { source.drop(); source.open() })
 
     expect(invalidatedKeys(invalidate)).toEqual(expect.arrayContaining([
       queryKeys.runs.all, // covers the list and every detail under it
@@ -1500,7 +1500,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       workspaceQueryKeys.providerStatus,
       workspaceQueryKeys.skillsUpdateAll, // its poll stops once a check settles
       managerKeys.list,
-      managerKeys.allApprovals, // pending cards decided while this cockpit was disconnected
+      managerKeys.approvals('global'), // pending cards decided while this cockpit was disconnected
       ['run-history', 'default'],
       ['run-history-context', 'default'],
     ]))

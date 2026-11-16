@@ -74,10 +74,12 @@ test('workspace approvals navigate, confirm and dismiss on desktop and mobile', 
     await screen.getByRole('button', 'Cancel', { exact: true }).tap();
     await opsRegion.getByRole('button', 'Dismiss', { exact: true }).focus();
     await browser.keyboard.press('Enter');
-    await expect(opsRegion).toBeHidden();
+    await expect(opsRegion.getByText('Dismissed', { exact: true }).first()).toBeVisible();
     await expect.poll(() => browser.evaluate(() => document.activeElement?.textContent)).toBe('Approvals');
     await shopRegion.getByRole('button', 'Dismiss', { exact: true }).tap();
-    await expect(shopRegion).toBeHidden();
+    await expect(shopRegion.getByText('Dismissed', { exact: true }).first()).toBeVisible();
+    await app.screenshot('approvals-mobile-results');
+    await screen.getByRole('button', 'Clear results', { exact: true }).tap();
     if (total === 2) {
       await expect(screen.getByRole('heading', 'No pending approvals', { exact: true })).toBeVisible();
       await browser.reload();
@@ -88,5 +90,43 @@ test('workspace approvals navigate, confirm and dismiss on desktop and mobile', 
   } finally {
     await app.open('/manager/approvals');
     for (const id of created) await call(`/${id}`, 'DELETE');
+  }
+});
+
+test('a failed approval keeps its server result visible on desktop and mobile', { trace: 'on', timeout: 90_000 }, async ({ app, screen, browser }) => {
+  if (!app.baseUrl) throw new Error('The cockpit URL is required');
+  const base = app.baseUrl;
+  const call = async (path: string, method = 'GET', body?: unknown): Promise<unknown> => {
+    const response = await fetch(new URL(`/api/v1/workspace/managers${path}`, base), {
+      method, headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`);
+    return response.json();
+  };
+  const manager = managerSummarySchema.parse(await call('', 'POST', { name: 'Approval failure QA', instructions: '', projects: 'all', cronMinutes: 0, followUp: false }));
+  try {
+    // Fill the job registry with disabled jobs: approving one more must fail without enabling
+    // anything. The decision route still answers HTTP 200; its action carries the refusal.
+    await call(`/${manager.id}`, 'PATCH', { jobs: Array.from({ length: 32 }, (_, index) => ({
+      name: `Disabled job ${index}`, prompt: 'Never run.', everyMinutes: 60, enabled: false,
+    })) });
+    for (const width of [1440, 390]) {
+      await call(`/${manager.id}/actions`, 'POST', { action: { type: 'add-job', name: `No capacity ${width}`, prompt: 'Report health.', everyMinutes: 60 } });
+      await browser.setViewport({ width, height: width === 390 ? 844 : 1000 });
+      await app.open('/manager/approvals');
+      const region = screen.getByRole('region', 'Approval failure QA');
+      await region.getByRole('button', 'Approve', { exact: true }).tap();
+      await screen.getByRole('dialog').getByRole('button', 'Add job', { exact: true }).tap();
+      await expect(screen.getByText('a manager holds at most 32 jobs', { exact: true })).toBeVisible();
+      await expect(region.getByText('Failed', { exact: true }).first()).toBeVisible();
+      await expect(screen.getByText('0 pending approvals across all managers', { exact: true })).toBeVisible();
+      await expect(screen.getByRole('dialog')).toBeHidden();
+      await app.screenshot(`approvals-failed-${width}`);
+      await screen.getByRole('button', 'Clear results', { exact: true }).tap();
+      await expect(screen.getByRole('heading', 'No pending approvals', { exact: true })).toBeVisible();
+    }
+  } finally {
+    await call(`/${manager.id}`, 'DELETE');
   }
 });

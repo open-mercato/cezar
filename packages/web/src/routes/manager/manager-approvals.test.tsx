@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { applyManagerEvent, managerKeys } from '@/api/managers'
+import { applyManagerEvent, managerKeys, refreshManagerApprovalLists } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
@@ -15,7 +15,8 @@ const job = (seq: number, name = `Job ${seq}`) => actionMessage(seq, { action: {
 let managers: ManagerSummary[]
 let messages: Record<string, ManagerMessage[]>
 let failed: string | undefined
-let onDecision: (() => void) | undefined
+let onDecision: (() => void | Promise<void>) | undefined
+let beforeReadReturns: (() => Promise<void>) | undefined
 const requests: string[] = []
 const decisions: Array<{ manager: string; action: string; decision: string }> = []
 
@@ -26,6 +27,7 @@ beforeEach(() => {
   decisions.length = 0
   failed = undefined
   onDecision = undefined
+  beforeReadReturns = undefined
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input, 'http://localhost')
     requests.push(url.pathname + url.search)
@@ -34,17 +36,21 @@ beforeEach(() => {
     if (!parts) return Response.json({})
     const id = parts[1]!
     if (parts[2] === 'messages') {
-      if (failed === id) return Response.json({ error: 'Connection failed' }, { status: 503 })
+      if (failed === id || (failed === 'result' && !url.searchParams.has('pending'))) return Response.json({ error: 'Connection failed' }, { status: 503 })
       // One pending card per page: the oldest action is outside the newest chat page.
       const before = Number(url.searchParams.get('before') ?? Infinity)
-      const pending = (messages[id] ?? []).filter((message) => message.seq < before)
-      return Response.json({ messages: pending.slice(-1), hasMore: pending.length > 1 })
+      const pending = (messages[id] ?? []).filter((message) => message.seq < before
+        && (!url.searchParams.has('pending') || (message.kind === 'action' && message.status === 'pending')))
+      const response = Response.json({ messages: pending.slice(-1), hasMore: pending.length > 1 })
+      await beforeReadReturns?.()
+      return response
     }
     const decision = JSON.parse(init!.body as string).decision as string
     decisions.push({ manager: id, action: parts[3]!, decision })
-    messages[id] = messages[id]!.filter((message) => message.id !== parts[3])
-    managers = managers.map((manager) => manager.id === id ? { ...manager, pendingActions: messages[id]!.length } : manager)
-    onDecision?.()
+    if (failed === 'decision') return Response.json({ error: 'This action changed. Refresh before deciding.' }, { status: 409 })
+    messages[id] = messages[id]!.map((message) => message.id === parts[3] ? { ...job(message.seq), status: 'dismissed', result: 'Dismissed' } : message)
+    managers = managers.map((manager) => manager.id === id ? { ...manager, pendingActions: messages[id]!.filter((message) => message.kind === 'action' && message.status === 'pending').length } : manager)
+    await onDecision?.()
     return Response.json({ ok: true })
   }))
 })
@@ -116,10 +122,12 @@ it('uses the owning manager’s decision route and preserves focus after the las
   onDecision = () => act(() => applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'shop', manager: managers[0] })))
   dismiss.focus()
   fireEvent.click(dismiss)
-  await screen.findByRole('heading', { name: 'No pending approvals' })
+  await screen.findByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })
   expect(decisions).toEqual([{ manager: 'shop', action: 'a2', decision: 'dismiss' }])
   expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Approvals' }))
   expect(client.getQueryData(managerKeys.list)).toMatchObject({ managers: [{ pendingActions: 0 }] })
+  fireEvent.click(screen.getByRole('button', { name: 'Clear results' }))
+  expect(screen.getByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
 })
 
 it('opens the existing confirmation before approving a card', async () => {
@@ -150,4 +158,80 @@ it('does not report zero approvals when the workspace list fails to load', async
   expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t load managers.')
   expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
   expect(screen.getByRole('link', { name: 'Approvals' }).textContent).toBe('Approvals')
+})
+
+it.each(['action', 'summary', 'both', 'reconnect'])('keeps a %s event that arrives during the initial approvals read', async (event) => {
+  managers = [managerFixture({ pendingActions: 1 })]
+  messages = { global: [job(1)] }
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  let started = false
+  beforeReadReturns = async () => {
+    if (started) return
+    started = true
+    await held
+  }
+  const client = renderApprovals()
+  await waitFor(() => expect(started).toBe(true))
+  messages.global = [job(1), job(2)]
+  act(() => {
+    if (event === 'action' || event === 'both') applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'global', message: job(2) }))
+    if (event === 'summary' || event === 'both') applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managerFixture({ pendingActions: 2 }) }))
+    if (event === 'reconnect') void refreshManagerApprovalLists(client)
+  })
+  await act(async () => { release(); await held })
+  expect(await screen.findByText('Job 2')).toBeTruthy()
+  expect(requests.filter((path) => path.includes('/messages')).length).toBeGreaterThan(1)
+})
+
+it('keeps a running decision and its failed result visible after pending count reaches zero', async () => {
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, confirm: { 'add-job': false } })]
+  const client = renderApprovals()
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const failure = { ...job(2), status: 'failed' as const, result: 'Required checks are failing.' }
+  onDecision = async () => {
+    act(() => {
+      applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'shop', message: { ...job(2), status: 'running' } }))
+      applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'shop', manager: managers[0] }))
+    })
+    await held
+    messages.shop = [failure]
+    act(() => applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'shop', message: failure })))
+  }
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+  try {
+    await waitFor(() => expect(document.querySelector('[data-slot="manager-action"][data-status="running"]')).not.toBeNull())
+    expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
+  } finally { release() }
+  expect(await screen.findByText('Required checks are failing.')).toBeTruthy()
+  expect(document.querySelector('[data-slot="manager-action"][data-status="failed"]')).not.toBeNull()
+  expect(screen.getByText('0 pending approvals across all managers')).toBeTruthy()
+  expect(decisions).toHaveLength(1)
+})
+
+it('can retry reading a decision result without submitting the decision again', async () => {
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1 })]
+  renderApprovals()
+  const dismiss = await screen.findByRole('button', { name: 'Dismiss' })
+  failed = 'result'
+  fireEvent.click(dismiss)
+  expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t load the result')
+  failed = undefined
+  fireEvent.click(screen.getByRole('button', { name: 'Retry result' }))
+  expect(await screen.findByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })).toBeTruthy()
+  expect(decisions).toHaveLength(1)
+})
+
+it('keeps a refused decision pending with its guard error visible', async () => {
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1 })]
+  renderApprovals()
+  const dismiss = await screen.findByRole('button', { name: 'Dismiss' })
+  failed = 'decision'
+  dismiss.focus()
+  fireEvent.click(dismiss)
+  expect((await screen.findByRole('alert')).textContent).toContain('This action changed. Refresh before deciding.')
+  expect(document.querySelector('[data-slot="manager-action"][data-status="pending"]')).not.toBeNull()
+  expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
+  expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Approvals' }))
 })

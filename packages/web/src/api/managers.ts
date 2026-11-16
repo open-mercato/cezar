@@ -103,6 +103,17 @@ export async function getPendingManagerActions(id: string, signal?: AbortSignal)
   }
 }
 
+/** The cursor ends at this action even when it is older than the newest chat page. A successful
+ * decision response acknowledges the request; its actual outcome lives on the action message. */
+export async function getManagerActionResult(id: string, action: Pick<ManagerMessage, 'id' | 'seq'>) {
+  const page = await bounded((signal) => getManagerMessages(id, action.seq + 1, { signal }), MANAGER_SEND_TIMEOUT_MS, 'The action result could not be loaded. Retry or open the manager’s chat.')
+  const result = page.messages.find((message) => message.id === action.id)
+  if (result?.kind !== 'action' || result.status === 'pending' || result.status === 'running') {
+    throw new Error('The action result is not available yet. Retry or open the manager’s chat.')
+  }
+  return result
+}
+
 /** How long a send may stay unanswered. The route answers at once; a request still open after this
  *  went into a dropped tunnel, and nothing else would ever settle it (relay incident 2026-11-15). */
 export const MANAGER_SEND_TIMEOUT_MS = 30_000
@@ -396,7 +407,7 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
       else remember(message)
     }
     queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
-    if (message.kind === 'action') void queryClient.invalidateQueries({ queryKey: managerKeys.approvals(managerId) })
+    if (message.kind === 'action') void refreshManagerApprovals(queryClient, managerId)
     return
   }
   const parsed = managerChangeEventSchema.safeParse(payload)
@@ -410,7 +421,7 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
     for (const [messageId, entry] of live) if (entry.managerId === id) forget(messageId)
   }
   else if (manager?.pendingActions !== before?.pendingActions) {
-    void queryClient.invalidateQueries({ queryKey: managerKeys.approvals(id) })
+    void refreshManagerApprovals(queryClient, id)
   }
   // A frame that raced the page fetch would otherwise leave a half-written reply until reload.
   if (before?.status === 'working' && manager && manager.status !== 'working') {
@@ -448,6 +459,20 @@ function fetchIdle(queryClient: QueryClient, key: readonly unknown[]): Promise<v
       resolve()
     })
   })
+}
+
+/** Invalidation during a first fetch is deduplicated against its stale snapshot. Re-read after
+ * that fetch settles so an action/summary frame cannot disappear with the initial response. */
+async function refreshManagerApprovals(queryClient: QueryClient, id: string): Promise<void> {
+  const key = managerKeys.approvals(id)
+  await fetchIdle(queryClient, key)
+  await queryClient.invalidateQueries({ queryKey: key, exact: true })
+}
+
+/** Reconnects use the same post-fetch guarantee as individual action and summary frames. */
+export async function refreshManagerApprovalLists(queryClient: QueryClient): Promise<void> {
+  const ids = queryClient.getQueryCache().findAll({ queryKey: managerKeys.allApprovals }).map((query) => String(query.queryKey[3]))
+  await Promise.all(ids.map((id) => refreshManagerApprovals(queryClient, id)))
 }
 
 /**
