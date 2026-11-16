@@ -434,7 +434,8 @@ final class LoopbackProxy {
                 flowing = false
             }
         }
-        if flowing { try stream.finishRequest() }
+        // A session lost under the END has already queued `.lost`: the answer is the 502, not a dropped socket.
+        if flowing { flowing = (try? stream.finishRequest()) != nil }
         return flowing
     }
 

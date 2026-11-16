@@ -394,7 +394,14 @@ public final class LoopbackProxy implements Closeable {
                 flowing = false;
             }
         }
-        if (flowing) stream.finishRequest();
+        if (flowing) {
+            // A session lost under the END has already queued LOST: the answer is the 502, not a dropped socket.
+            try {
+                stream.finishRequest();
+            } catch (IOException e) {
+                flowing = false;
+            }
+        }
         return flowing;
     }
 

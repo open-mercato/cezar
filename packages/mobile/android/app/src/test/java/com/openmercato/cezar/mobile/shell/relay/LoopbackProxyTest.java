@@ -46,20 +46,24 @@ public class LoopbackProxyTest {
         final LinkedBlockingQueue<TunnelFrame> resets = new LinkedBlockingQueue<>();
         volatile int dataBytes;
         volatile int credit = -1;
+        /** A frame this answers true for fails on the wire, as a socket that dies under it would. */
+        volatile java.util.function.Predicate<TunnelFrame> breaks = frame -> false;
 
         Peer(NoiseCipher receive, NoiseCipher send) {
             this.receive = receive;
             this.send = send;
         }
 
-        void onWire(byte[] ciphertext) {
-            thread.execute(() -> {
-                try {
-                    handle(TunnelFrame.parse(TunnelRecord.unpad(receive.decrypt(ciphertext))));
-                } catch (Exception e) {
-                    throw new AssertionError(e);
-                }
-            });
+        /** Decrypted here: the session calls it under its lock, so nonce order holds. */
+        void onWire(byte[] ciphertext) throws IOException {
+            TunnelFrame frame;
+            try {
+                frame = TunnelFrame.parse(TunnelRecord.unpad(receive.decrypt(ciphertext)));
+            } catch (Exception e) {
+                throw new AssertionError(e);
+            }
+            if (breaks.test(frame)) throw new IOException("the wire broke");
+            thread.execute(() -> handle(frame));
         }
 
         void handle(TunnelFrame frame) {
@@ -384,6 +388,18 @@ public class LoopbackProxyTest {
         assertTrue(readHead(waiting.getInputStream()).startsWith("HTTP/1.1 502"));
         assertEquals(-1, in.read());
         assertNull("a write is never retried", peer.opened.poll(200, TimeUnit.MILLISECONDS));
+    }
+
+    /** CI run 43829148527: the session ended while the request's END waited for the frame pacer. */
+    @Test
+    public void aSessionLostWhileTheRequestsEndIsInFlightIsStill502() throws Exception {
+        proxy.setUnreachable(why(Unreachable.RELAY_UNREACHABLE, null));
+        peer.breaks = frame -> frame.type == TunnelFrame.END;
+        Socket socket = connect();
+        send(socket, gated("POST", "/approve", "Content-Length: 0\r\n"));
+        String head = readHead(socket.getInputStream());
+        assertTrue(head, head.startsWith("HTTP/1.1 502") && head.contains("x-cezar-unreachable: relay-unreachable\r\n"));
+        assertFalse("the broken wire ended the session", session.live());
     }
 
     /** Security review F5: bytes past content-length would read as a second response on a kept-alive socket. */

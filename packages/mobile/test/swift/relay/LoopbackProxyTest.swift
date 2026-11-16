@@ -15,20 +15,22 @@ func loopbackProxyTests() {
         let resets = BlockingQueue<TunnelFrame>()
         let dataBytes = Locked(0)
         let credit = Locked(-1)
+        /// A frame this answers true for fails on the wire, as a socket that dies under it would.
+        let breaks = Locked<(TunnelFrame) -> Bool>({ _ in false })
 
         init(receive: NoiseCipher, send: NoiseCipher) {
             self.receive = receive
             self.send = send
         }
 
-        func onWire(_ ciphertext: [UInt8]) {
-            queue.async { [self] in
-                guard let frame = try? TunnelFrame.parse(TunnelRecord.unpad(receive.decrypt(ciphertext))) else {
-                    expect(false, "the peer could not read a frame")
-                    return
-                }
-                handle(frame)
+        /// Decrypted here: the session calls it under its lock, so nonce order holds.
+        func onWire(_ ciphertext: [UInt8]) throws {
+            guard let frame = try? TunnelFrame.parse(TunnelRecord.unpad(receive.decrypt(ciphertext))) else {
+                expect(false, "the peer could not read a frame")
+                return
             }
+            if breaks.value(frame) { throw RelayIOError("the wire broke") }
+            queue.async { [self] in handle(frame) }
         }
 
         func handle(_ frame: TunnelFrame) {
@@ -81,7 +83,7 @@ func loopbackProxyTests() {
             let toPhone = RelayCrypto.random(32)
             let peer = Peer(receive: NoiseCipher(toCezar), send: NoiseCipher(toPhone))
             self.peer = peer
-            session = TunnelSession(wire: { peer.onWire($0) }, keys: NoiseHandshake.Keys(send: NoiseCipher(toCezar), receive: NoiseCipher(toPhone)),
+            session = TunnelSession(wire: { try peer.onWire($0) }, keys: NoiseHandshake.Keys(send: NoiseCipher(toCezar), receive: NoiseCipher(toPhone)),
                                     frameBytes: 65552, listener: { _ in }, clock: relayNowMs)
             peer.session = session
             try session.start()
@@ -401,6 +403,17 @@ func loopbackProxyTests() {
         expect(waiting.readHead().hasPrefix("HTTP/1.1 502"), "502")
         expect(try streaming.read() == -1, "aborted")
         expect(w.peer.opened.poll(timeoutMs: 200) == nil, "a write is never retried")
+    }
+
+    // CI run 43829148527: the session ended while the request's END waited for the frame pacer.
+    run("a session lost while the request's END is in flight is still 502") { w in
+        w.proxy.setUnreachable { (.relayUnreachable, nil) }
+        w.peer.breaks.value = { $0.type == TunnelFrame.END }
+        let client = try w.connect()
+        client.send(w.gated("POST", "/approve", "Content-Length: 0\r\n"))
+        let head = client.readHead()
+        expect(head.hasPrefix("HTTP/1.1 502") && head.contains("x-cezar-unreachable: relay-unreachable\r\n"), "502 with the reason: \(head)")
+        expect(!w.session.live(), "the broken wire ended the session")
     }
 
     run("a reset after END does not abort a complete response") { w in
