@@ -2,7 +2,13 @@ package com.openmercato.cezar.mobile.shell;
 
 /** What `GET /api/v1/health` said, in the terms of the add-server table (spec Decision 2). */
 public final class HealthAnswer {
-    public enum Kind { CEZAR, BASIC_GATE, LOCAL_MODE, LOGIN_PAGE, TLS_FAILURE, UNREACHABLE, NOT_CEZAR }
+    public enum Kind {
+        CEZAR, BASIC_GATE, LOCAL_MODE, LOGIN_PAGE, TLS_FAILURE, UNREACHABLE, NOT_CEZAR,
+        /** Relay servers only: why the tunnel gave no answer. */
+        CEZAR_OFFLINE, NOT_ANSWERING, RELAY_DOWN, QUOTA, DEVICE_REMOVED, UPDATE_APP, UPDATE_CEZAR,
+        /** The relay refused with 4451 (RELAY_PROTOCOL.md § 18). */
+        EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED, SUSPENDED, TERMS_REQUIRED_DEVICE
+    }
 
     public final Kind kind;
     public final int status;
@@ -11,16 +17,68 @@ public final class HealthAnswer {
     public final String version;
     /** `capabilities.managers`; null when the server does not send it. */
     public final Boolean managers;
+    /** Counts only, sent to an authenticated reader (switcher spec); null is unknown, never zero. */
+    public final Attention attention;
+
+    /** `attention` from health: what needs the user, and failed tasks still flagged. */
+    public static final class Attention {
+        public final int waiting;
+        public final int failed;
+
+        public Attention(int waiting, int failed) {
+            this.waiting = waiting;
+            this.failed = failed;
+        }
+
+        public int need() {
+            return waiting + failed;
+        }
+    }
 
     HealthAnswer(Kind kind, int status, String realm, String version, Boolean managers) {
+        this(kind, status, realm, version, managers, null);
+    }
+
+    HealthAnswer(Kind kind, int status, String realm, String version, Boolean managers, Attention attention) {
         this.kind = kind;
         this.status = status;
         this.realm = realm;
         this.version = version;
         this.managers = managers;
+        this.attention = attention;
     }
 
-    static HealthAnswer of(Kind kind, int status) {
+    public static HealthAnswer of(Kind kind, int status) {
         return new HealthAnswer(kind, status, null, null, null);
+    }
+
+    /** A relay status that is not READY. `CONNECTING` past the wait reads as a relay outage, never as the computer. */
+    public static HealthAnswer fromRelay(String relayKind, int minutes) {
+        switch (relayKind) {
+            case "CEZAR_OFFLINE":
+                return of(Kind.CEZAR_OFFLINE, 0);
+            case "NOT_ANSWERING":
+                return of(Kind.NOT_ANSWERING, 0);
+            case "QUOTA":
+                return of(Kind.QUOTA, minutes);
+            case "DEVICE_REMOVED":
+                return of(Kind.DEVICE_REMOVED, 0);
+            case "UPDATE_APP":
+                return of(Kind.UPDATE_APP, 0);
+            case "UPDATE_CEZAR":
+                return of(Kind.UPDATE_CEZAR, 0);
+            case "EMAIL_UNCONFIRMED":
+                return of(Kind.EMAIL_UNCONFIRMED, 0);
+            case "ACCOUNT_REQUIRED":
+                return of(Kind.ACCOUNT_REQUIRED, 0);
+            case "SUSPENDED":
+                return of(Kind.SUSPENDED, 0);
+            case "TERMS_REQUIRED_DEVICE":
+                return of(Kind.TERMS_REQUIRED_DEVICE, 0);
+            case "BROKEN":
+                return of(Kind.NOT_CEZAR, 0);
+            default:
+                return of(Kind.RELAY_DOWN, 0);
+        }
     }
 }

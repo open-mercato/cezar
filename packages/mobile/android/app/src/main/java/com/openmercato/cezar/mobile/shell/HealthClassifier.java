@@ -29,7 +29,7 @@ public final class HealthClassifier {
             JSONObject capabilities = json.optJSONObject("capabilities");
             if (version.isEmpty() || capabilities == null) return HealthAnswer.of(HealthAnswer.Kind.NOT_CEZAR, status);
             Boolean managers = capabilities.opt("managers") instanceof Boolean ? capabilities.optBoolean("managers") : null;
-            return new HealthAnswer(HealthAnswer.Kind.CEZAR, status, null, version, managers);
+            return new HealthAnswer(HealthAnswer.Kind.CEZAR, status, null, version, managers, attentionOf(json.optJSONObject("attention")));
         }
         // server.ts answers `{ error: 'unexpected Host header' }` on a local-mode cockpit.
         if (status == 403 && json != null && json.optString("error", "").toLowerCase(Locale.ROOT).contains("host header")) {
@@ -39,6 +39,20 @@ public final class HealthClassifier {
         boolean htmlGate = (status == 200 || status == 401 || status == 403) && isHtml(http);
         if (redirect || htmlGate) return HealthAnswer.of(HealthAnswer.Kind.LOGIN_PAGE, status);
         return HealthAnswer.of(HealthAnswer.Kind.NOT_CEZAR, status);
+    }
+
+    /** Both counts as non-negative integers, or nothing: a half-read field is unknown. */
+    static HealthAnswer.Attention attentionOf(JSONObject attention) {
+        if (attention == null) return null;
+        int waiting = count(attention.opt("waiting"));
+        int failed = count(attention.opt("failed"));
+        return waiting < 0 || failed < 0 ? null : new HealthAnswer.Attention(waiting, failed);
+    }
+
+    private static int count(Object value) {
+        if (!(value instanceof Number)) return -1;
+        double number = ((Number) value).doubleValue();
+        return number >= 0 && number <= Integer.MAX_VALUE && number == Math.floor(number) ? (int) number : -1;
     }
 
     private static boolean isHtml(HttpAnswer http) {

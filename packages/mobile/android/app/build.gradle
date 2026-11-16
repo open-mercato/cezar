@@ -43,6 +43,15 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    buildFeatures {
+        buildConfig = true
+    }
+    testOptions {
+        unitTests.all {
+            // The shared protocol vectors, read directly so a copy can never drift.
+            systemProperty 'relay.vectors', rootProject.file('../../../test-vectors/relay').absolutePath
+        }
+    }
     signingConfigs {
         if (hasUploadKey) {
             release {
@@ -76,9 +85,16 @@ repositories {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.biometric:biometric:$androidxBiometricVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    implementation "org.bouncycastle:bcprov-jdk18on:$bouncyCastleVersion"
+    implementation "com.squareup.okhttp3:okhttp:$okHttpVersion"
+    implementation("com.journeyapps:zxing-android-embedded:$zxingEmbeddedVersion") { transitive = false }
+    implementation "com.google.zxing:core:$zxingCoreVersion"
+    // Inert without google-services.json: no FirebaseApp starts, and push stays off (README, Push notifications).
+    implementation "com.google.firebase:firebase-messaging:$firebaseMessagingVersion"
     testImplementation "junit:junit:$junitVersion"
     testImplementation "org.json:json:20250517"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

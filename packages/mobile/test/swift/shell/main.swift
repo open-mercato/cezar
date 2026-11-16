@@ -83,6 +83,18 @@ for kind in [HealthAnswer.Kind.unreachable, .notCezar, .tlsFailure] {
     expect(StartDecision.decide(health(kind), passwordSaved: true) == .connectionError, "error")
 }
 
+// StartDecision, relay rows (#1901)
+expect(StartDecision.decide(health(.cezarOffline), passwordSaved: false) == .cezarOffline, "offline")
+expect(StartDecision.decide(health(.notAnswering), passwordSaved: false) == .cezarOffline, "not answering")
+expect(StartDecision.decide(health(.relayDown), passwordSaved: false) == .relayDown, "relay down")
+expect(StartDecision.decide(health(.quota), passwordSaved: false) == .relayDown, "quota")
+expect(StartDecision.decide(health(.deviceRemoved), passwordSaved: false) == .deviceRemoved, "removed")
+expect(StartDecision.decide(health(.updateApp), passwordSaved: false) == .protocolMismatch, "update app")
+expect(StartDecision.decide(health(.updateCezar), passwordSaved: false) == .protocolMismatch, "update cezar")
+expect(HealthAnswer.fromRelay("CONNECTING", minutes: 0).kind == .relayDown, "connecting past the wait is the relay")
+expect(HealthAnswer.fromRelay("QUOTA", minutes: 10).kind == .quota && HealthAnswer.fromRelay("QUOTA", minutes: 10).status == 10, "quota minutes")
+expect(HealthAnswer.fromRelay("BROKEN", minutes: 0).kind == .notCezar, "broken")
+
 // BasicChallengeResponder
 let saved = ServerRecord(id: "id", label: "box", url: "https://cezar.example.com", username: "me", realm: "cezar", noteShown: nil)
 var reads = 0
@@ -127,6 +139,26 @@ expect(nav("cezar://servers") == .servers, "servers")
 expect(nav("cezar://servers/") == .servers, "servers slash")
 expect(nav("cezar://servers", main: false) == .block, "servers in a frame")
 expect(nav("cezar://other") == .block, "other cezar")
+expect(nav("cezar://reconnect") == .reconnect, "the cockpit's Retry now")
+expect(nav("CEZAR://reconnect/") == .reconnect, "reconnect slash")
+expect(nav("cezar://reconnect", main: false) == .block, "reconnect in a frame")
+
+// StartupLog: steps with offsets, capped, kept across a restart.
+do {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("startup-\(UUID().uuidString).log")
+    defer { try? FileManager.default.removeItem(at: file) }
+    var now: Int64 = 1_763_200_000_000
+    let log = StartupLog(file: file, clock: { now })
+    log.begin("open relay")
+    now += 250
+    log.step("relay lost pong-timeout up=61000ms")
+    let lines = StartupLog(file: file, clock: { now }).text().split(separator: "\n").map(String.init)
+    expect(lines.count == 2 && lines[0].hasPrefix("── 2025-11-15T") && lines[1] == "+250ms relay lost pong-timeout up=61000ms", "kept with offsets")
+    for index in 0..<(StartupLog.maxLines + 50) { log.step("s\(index)\nx") }
+    let capped = log.text().split(separator: "\n")
+    expect(capped.count == StartupLog.maxLines && capped.last?.hasSuffix("s\(StartupLog.maxLines + 49) x") == true, "capped, one line per step")
+    expect(StartupLog(file: file.appendingPathComponent("missing/dir"), clock: { now }).text().isEmpty, "a missing file is an empty log")
+}
 expect(nav("https://github.com/x") == .external, "off origin")
 expect(nav("https://cezar.example.com:8443/") == .external, "other port")
 expect(nav("mailto:a@b.c") == .external, "mailto")
@@ -139,6 +171,36 @@ expect(nav("file:///etc/hosts") == .block, "file")
 expect(NavigationPolicy.decideWindow(origin: origin, url: "https://cezar.example.com/p/x") == .allow, "window same origin")
 expect(NavigationPolicy.decideWindow(origin: origin, url: "https://github.com/x") == .external, "window elsewhere")
 expect(NavigationPolicy.decideWindow(origin: origin, url: "intent://x") == .block, "window intent")
+
+// PageOrigin: a manual server allows SSO, a relay page never does (#1901)
+expect(origin.allowsSso && origin.sameHost("https://cezar.example.com:8443/x") && !origin.sameHost("https://evil.com/"), "server origin host")
+let proxy = ProxyOrigin(port: 4242)
+expect(!proxy.allowsSso && proxy.sameOrigin("http://127.0.0.1:4242/manager") && !proxy.sameOrigin("http://localhost:4242/"), "proxy origin")
+expect(NavigationPolicy.decide(origin: proxy, url: "https://sso.example.org/login", pageUrl: proxy.url("/"), mainFrame: true, redirect: true) == .external,
+       "no in-app SSO on a relay page")
+
+// Security review F1: nothing on the page reaches another loopback port, where the gate cookie would go too.
+expect(NavigationPolicy.decide(origin: proxy, url: "http://127.0.0.1:8080/", pageUrl: proxy.url("/"), mainFrame: false, redirect: false) == .block,
+       "frame to another loopback port")
+expect(NavigationPolicy.decide(origin: proxy, url: "http://localhost:4242/", pageUrl: proxy.url("/"), mainFrame: false, redirect: false) == .block,
+       "frame to another loopback spelling")
+expect(NavigationPolicy.decide(origin: proxy, url: proxy.url("/frame"), pageUrl: proxy.url("/"), mainFrame: false, redirect: false) == .allow,
+       "frame on its own origin")
+expect(nav("https://cezar.example.com:8443/x", main: false) == .block, "frame to the same host on another port")
+for url in ["http://127.0.0.1:8080/x.png", "http://127.0.0.2:4242/", "http://localhost:4242/", "ws://127.0.0.1:9/", "http://[::1]:4242/",
+            "http://[0:0:0:0:0:0:0:1]:80/", "http://0.0.0.0:4242/", "http://[::ffff:7f00:1]:4242/", "HTTP://LOCALHOST/"] {
+    expect(RequestGate.blocks(url, port: 4242), "gate blocks \(url)")
+}
+for url in ["http://127.0.0.1:4242/", "http://127.0.0.1:4242/api/v1/health", "https://github.com/x.png", "https://example.com/127.0.0.1"] {
+    expect(!RequestGate.blocks(url, port: 4242), "gate lets \(url) through")
+}
+expect(RequestGate.blocks("http://127.0.0.1:42420/", port: 4242), "a longer port is another port")
+let rulesJson = try! JSONSerialization.jsonObject(with: Data(RequestGate.rules(port: 4242).utf8)) as! [[String: [String: String]]]
+expect(rulesJson.count == RequestGate.loopbackFilters.count + 1 && rulesJson.last?["action"]?["type"] == "ignore-previous-rules"
+       && rulesJson.first?["trigger"]?["url-filter"] == RequestGate.loopbackFilters.first, "rule JSON round-trips")
+expect(NavigationPolicy.decide(origin: proxy, url: "http://127.0.0.1:4242/p/x", pageUrl: proxy.url("/"), mainFrame: true, redirect: false) == .allow,
+       "relay page on origin")
+expect(NavigationPolicy.decideWindow(origin: proxy, url: "http://127.0.0.1:9999/") == .external, "other loopback port leaves")
 
 // ShellConnector
 final class Memory: CredentialStore {
@@ -171,7 +233,180 @@ func world() -> (ShellConnector, Script, Memory, ServerListStore) {
     return (ShellConnector(servers: store, credentials: memory, probe: HealthProbe(http: script, userAgent: "ua")), script, memory, store)
 }
 
+// Quick start (Android's QuickStartTest): a start with the bundle on the phone opens at once; the probe stays for every other open.
+final class QuickRelay: ShellConnector.RelayPort {
+    var calls: [String] = []
+    var quick: String?
+    var health = HealthAnswer.of(.unreachable, 0)
+    func probe(_ server: ServerRecord) async -> HealthAnswer {
+        calls.append("probe")
+        return health
+    }
+    func goodbye(_ server: ServerRecord) { calls.append("goodbye") }
+    func forgetKeys(_ id: String) { calls.append("forgetKeys") }
+    func quickPath(_ server: ServerRecord) -> String? { quick }
+    func opened(_ server: ServerRecord, path: String) { calls.append("opened " + path) }
+    func forgetBundle(_ id: String) { calls.append("forgetBundle") }
+}
+
+/// Only the protocol's three original methods: the bundle ones default to nothing.
+final class PlainRelay: ShellConnector.RelayPort {
+    var probes = 0
+    func probe(_ server: ServerRecord) async -> HealthAnswer {
+        probes += 1
+        return HealthClassifier.classify(cezar)
+    }
+    func goodbye(_ server: ServerRecord) {}
+    func forgetKeys(_ id: String) {}
+}
+
+func quickWorld(_ relay: ShellConnector.RelayPort) -> (ShellConnector, String) {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let connector = ShellConnector(servers: ServerListStore(directory: directory), credentials: Memory(),
+                                   probe: HealthProbe(http: Script(), userAgent: "ua"), relay: relay)
+    let fields = RelayFields(origin: "https://relay.example.test", cezarId: "cezar-id", cezarKey: "key", deviceId: "device-id", port: 0)
+    let id = connector.saveRelayServer(id: connector.relayServerId(cezarId: fields.cezarId, cezarKey: fields.cezarKey), label: "Laptop", fields: fields)
+    return (connector, id)
+}
+
+func quickStart() async {
+    var relay = QuickRelay()
+    var (connector, id) = quickWorld(relay)
+    relay.quick = "/manager"
+    let cold = await connector.launch(cookiesForLast: nil)
+    expect(cold.screen == "open" && cold.url == "/manager" && relay.calls.isEmpty, "a cold start with the bundle cached skips the probe")
+
+    relay = QuickRelay()
+    (connector, id) = quickWorld(relay)
+    relay.health = HealthClassifier.classify(cezar)
+    let probed = await connector.launch(cookiesForLast: nil)
+    expect(probed.url == "/manager" && relay.calls == ["probe", "opened /manager"], "with nothing cached the start probes and remembers where it landed")
+
+    relay = QuickRelay()
+    (connector, id) = quickWorld(relay)
+    relay.quick = "/manager"
+    relay.health = HealthClassifier.classify(cezar)
+    _ = await connector.open(id, cookies: nil)
+    expect(relay.calls.first == "probe", "retry from the list still probes")
+    relay.calls = []
+    let back = await connector.open(id, cookies: nil, quick: true)
+    expect(back.url == "/manager" && relay.calls.isEmpty, "Back from Servers opens at once")
+
+    relay = QuickRelay()
+    (connector, id) = quickWorld(relay)
+    relay.health = HealthAnswer.of(.deviceRemoved, 0)
+    let removed = await connector.open(id, cookies: nil)
+    expect(removed.screen == "device-removed" && relay.calls.contains("forgetBundle"), "a removed phone loses the bundle")
+    relay.calls = []
+    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in connector.forget(id) { done.resume() } }
+    expect(relay.calls.first == "forgetBundle", "forget clears the bundle first, before the relay's goodbye: \(relay.calls)")
+    expect(connector.server(id) == nil, "forgotten")
+
+    let plain = PlainRelay()
+    let (plainConnector, _) = quickWorld(plain)
+    let opened = await plainConnector.launch(cookiesForLast: nil)
+    expect(opened.url == "/manager" && plain.probes == 1, "a relay port with no bundle cache probes as before")
+}
+
+// DeviceLanding: the device switcher lands on the same kind of page on the other computer.
+expect(DeviceLanding.path(currentPath: "/manager", startPath: "/manager") == "/manager", "manager stays manager")
+expect(DeviceLanding.path(currentPath: "/manager/abc?x=1", startPath: "/manager") == "/manager", "below manager is manager")
+expect(DeviceLanding.path(currentPath: "/manager?tab=2", startPath: nil) == "/manager", "manager with a query, start unknown")
+expect(DeviceLanding.path(currentPath: "/managers", startPath: "/manager") == "/tasks", "/managers is not manager")
+expect(DeviceLanding.path(currentPath: "/p/abc/tasks/123", startPath: "/manager") == "/tasks", "a project page lands on the global tasks")
+expect(DeviceLanding.path(currentPath: "/", startPath: "/manager") == "/tasks", "root lands on tasks")
+expect(DeviceLanding.path(currentPath: nil, startPath: "/manager") == "/tasks", "no page lands on tasks")
+expect(DeviceLanding.path(currentPath: "/manager", startPath: "/") == "/tasks", "a target without manager gets tasks")
+expect(DeviceLanding.pathOf("https://cezar.example.com/manager?x=1") == "/manager", "path of a url")
+expect(DeviceLanding.pathOf("http://127.0.0.1:4242") == "/", "bare origin is root")
+expect(DeviceLanding.pathOf("/tasks") == "/tasks" && DeviceLanding.pathOf(nil) == nil && DeviceLanding.pathOf("nonsense") == nil, "path or nil")
+
+/// Records which probe a switch used: the one beside the page on screen, never the one that takes its link.
+final class AsideRelay: ShellConnector.RelayPort {
+    var calls: [String] = []
+    var quick: String?
+    var health = HealthClassifier.classify(cezar)
+    func probe(_ server: ServerRecord) async -> HealthAnswer {
+        calls.append("probe")
+        return health
+    }
+    func probeAside(_ server: ServerRecord) async -> HealthAnswer {
+        calls.append("aside")
+        return health
+    }
+    func goodbye(_ server: ServerRecord) {}
+    func forgetKeys(_ id: String) {}
+    func quickPath(_ server: ServerRecord) -> String? { quick }
+    func opened(_ server: ServerRecord, path: String) { calls.append("opened " + path) }
+    func forgetBundle(_ id: String) { calls.append("forgetBundle") }
+}
+
+func switching() async {
+    var relay = AsideRelay()
+    var (connector, id) = quickWorld(relay)
+    relay.quick = "/manager"
+    var outcome = await connector.switchTo(id, cookies: nil, currentPath: "/p/x/tasks/1")
+    expect(outcome.screen == "open" && outcome.url == "/tasks" && relay.calls.isEmpty, "a cached relay switch skips the probe and lands on tasks")
+    outcome = await connector.switchTo(id, cookies: nil, currentPath: "/manager")
+    expect(outcome.url == "/manager", "manager to manager")
+
+    relay = AsideRelay()
+    (connector, id) = quickWorld(relay)
+    outcome = await connector.switchTo(id, cookies: nil, currentPath: "/manager/x")
+    expect(outcome.url == "/manager" && relay.calls == ["aside", "opened /manager"], "nothing cached probes beside the page on screen: \(relay.calls)")
+
+    relay = AsideRelay()
+    (connector, id) = quickWorld(relay)
+    relay.health = HealthAnswer.of(.suspended, 0)
+    outcome = await connector.switchTo(id, cookies: nil, currentPath: "/manager")
+    expect(outcome.screen == "suspended" && outcome.serverId == id && outcome.url == nil, "a refused target routes to its error screen")
+
+    let (direct, script, _, _) = world()
+    script.answers = [cezar]
+    let added = await direct.add(url: "https://other.example.com", username: nil, password: nil, label: "Other")
+    script.answers = [cezar]
+    outcome = await direct.switchTo(added.serverId!, cookies: nil, currentPath: "/p/a/tasks")
+    expect(outcome.screen == "open" && outcome.url == "https://other.example.com/tasks", "a direct switch lands on its tasks")
+    script.answers = [noManager]
+    outcome = await direct.switchTo(added.serverId!, cookies: nil, currentPath: "/manager")
+    expect(outcome.url == "https://other.example.com/tasks", "a direct target without manager gets tasks")
+    script.answers = []
+    outcome = await direct.switchTo(added.serverId!, cookies: nil, currentPath: "/manager")
+    expect(outcome.screen == "connection-error" && outcome.serverId == added.serverId, "an unreachable target routes to its error screen")
+
+    script.answers = [basicGate]
+    let gated = await direct.health(added.serverId!, cookies: nil)
+    expect(gated?.kind == .basicGate, "health reads a direct server")
+    let unknown = await direct.health("nope", cookies: nil)
+    expect(unknown == nil, "an unknown id has no health")
+    expect(ShellConnector.add == "add", "the connect page's add screen")
+}
+
+// FirstPaint: the cover goes once the page says so, or after the cap.
+expect(FirstPaint.done(true, coveredMs: 0), "painted")
+expect(!FirstPaint.done(false, coveredMs: 14999), "not yet")
+expect(!FirstPaint.done(nil, coveredMs: 100), "no answer")
+expect(FirstPaint.done(nil, coveredMs: FirstPaint.maxCoverMs), "never longer than the cap")
+
+// LaunchHold (Android's LaunchHoldTest): held until released, never past the cap.
+var holdNow: Int64 = 1000
+let hold = LaunchHold { holdNow }
+expect(!hold.holding(), "not held before a start")
+hold.start()
+expect(hold.holding(), "held")
+var told = 0
+hold.onRelease { told += 1 }
+hold.release()
+expect(!hold.holding() && told == 1, "released, and told once")
+hold.release()
+expect(told == 1, "told only once")
+hold.start()
+holdNow += LaunchHold.maxMs
+expect(!hold.holding(), "a start that never resolves still shows the app")
+
 func run() async {
+    await quickStart()
+    await switching()
     var (connector, script, memory, store) = world()
     script.answers = [cezar]
     let open = await connector.add(url: "https://cezar.example.com", username: nil, password: nil, label: "Box")

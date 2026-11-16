@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "sync": "cap sync",
-    "check": "node scripts/check-framework-free.mjs",
+    "check": "node scripts/check-framework-free.mjs && node scripts/sync-xcode-sources.mjs --check",
+    "xcode:sync": "node scripts/sync-xcode-sources.mjs",
     "brand": "node scripts/build-brand.mjs",
     "test": "node --test test/*.test.mjs",
     "test:swift": "sh scripts/test-swift.sh",

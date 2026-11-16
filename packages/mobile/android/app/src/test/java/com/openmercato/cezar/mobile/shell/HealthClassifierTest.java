@@ -32,6 +32,24 @@ public class HealthClassifierTest {
     }
 
     @Test
+    public void readsTheAttentionCounts() {
+        HealthAnswer health = classify(200, "application/json", null,
+                "{\"version\":\"0.20.0\",\"capabilities\":{},\"attention\":{\"waiting\":3,\"failed\":1}}");
+        assertEquals(3, health.attention.waiting);
+        assertEquals(1, health.attention.failed);
+        assertEquals(4, health.attention.need());
+    }
+
+    @Test
+    public void missingOrMalformedAttentionIsUnknown() {
+        assertNull(classify(200, "application/json", null, "{\"version\":\"0.9\",\"capabilities\":{}}").attention);
+        for (String bad : new String[] {"{\"waiting\":2}", "{\"waiting\":-1,\"failed\":0}", "{\"waiting\":1.5,\"failed\":0}",
+                "{\"waiting\":\"2\",\"failed\":0}", "3"}) {
+            assertNull(bad, classify(200, "application/json", null, "{\"version\":\"0.9\",\"capabilities\":{},\"attention\":" + bad + "}").attention);
+        }
+    }
+
+    @Test
     public void absentCapabilityStaysDistinctFromFalse() {
         assertNull(classify(200, "application/json", null, "{\"version\":\"0.9\",\"capabilities\":{}}").managers);
     }

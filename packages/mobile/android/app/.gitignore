@@ -1,2 +1,5 @@
 /build/*
 !/build/.npmkeep
+
+# Firebase config for push (README, Push notifications). Not a secret, but kept out until Open Mercato owns the project.
+google-services.json

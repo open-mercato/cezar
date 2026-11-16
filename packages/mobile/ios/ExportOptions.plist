@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- App Store export for mobile-release.yml. teamID is filled in from APPLE_TEAM_ID at export time. -->
+<!-- App Store export for mobile-release.yml. teamID is filled in from APPLE_TEAM_ID at export time.
+     Automatic signing covers every bundle in the archive, the NotificationService extension included. -->
 <plist version="1.0">
 <dict>
 	<key>method</key>

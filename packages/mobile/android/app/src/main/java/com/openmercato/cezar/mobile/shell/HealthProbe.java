@@ -3,10 +3,10 @@ package com.openmercato.cezar.mobile.shell;
 import java.io.IOException;
 import java.net.ProtocolException;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.net.ssl.SSLException;
+import org.bouncycastle.util.encoders.Base64;
 
 /** Reads a server's health natively, before any page loads (spec "In the shell"). */
 public final class HealthProbe {
@@ -36,8 +36,20 @@ public final class HealthProbe {
         }
     }
 
+    /** The tunnel transport: the same JSON, from a path, with no Basic and no cookie (spec). */
+    public HealthAnswer probePath() {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Accept", "application/json");
+        headers.put("User-Agent", userAgent);
+        try {
+            return HealthClassifier.classify(http.get("/api/v1/health", headers));
+        } catch (IOException e) {
+            return HealthAnswer.of(HealthAnswer.Kind.RELAY_DOWN, 0);
+        }
+    }
+
     private static String basic(String username, String password) {
         byte[] pair = ((username == null ? "" : username) + ":" + password).getBytes(StandardCharsets.UTF_8);
-        return "Basic " + Base64.getEncoder().encodeToString(pair);
+        return "Basic " + Base64.toBase64String(pair);
     }
 }

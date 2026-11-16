@@ -3,7 +3,6 @@ package com.openmercato.cezar.mobile.shell;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.security.GeneralSecurityException;
 import java.util.regex.Pattern;
 
@@ -27,7 +26,7 @@ public final class CredentialStore {
 
     public void put(String id, String password) {
         try {
-            Files.write(file(id).toPath(), cipher.seal(password.getBytes(StandardCharsets.UTF_8)));
+            FileBytes.write(file(id), cipher.seal(password.getBytes(StandardCharsets.UTF_8)));
         } catch (IOException | GeneralSecurityException e) {
             throw new IllegalStateException("cannot save the password", e);
         }
@@ -38,7 +37,7 @@ public final class CredentialStore {
         File file = file(id);
         if (!file.exists()) return null;
         try {
-            return new String(cipher.open(Files.readAllBytes(file.toPath())), StandardCharsets.UTF_8);
+            return new String(cipher.open(FileBytes.read(file)), StandardCharsets.UTF_8);
         } catch (IOException | GeneralSecurityException | RuntimeException e) {
             return null;
         }

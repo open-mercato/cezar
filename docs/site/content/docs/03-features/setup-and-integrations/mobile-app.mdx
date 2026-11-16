@@ -19,8 +19,24 @@ CezarBot, the mobile app, connects to a cezar you host and shows that server's o
 1. Build the debug app and install it on your phone.
 2. Enter your server's `https://` address.
 3. If the server has a Basic login, enter the username and password. The app saves them only after the server accepts them.
-4. The app reopens your last server on launch. The server list appears when that server cannot be reached. Inside the cockpit, tap your computer's avatar in the header, or its name at the top of the sidebar, to open it. The avatar's colour and initials come from the computer's name. **Forget** there deletes that server's password and website data from the phone.
+4. The app reopens your last server on launch. The **Devices** list appears when that server cannot be reached. **Forget** there deletes that server's password and website data from the phone.
+
+## Switching devices
+
+Your computer's avatar sits in the cockpit's header: a circle with its initials, in a colour picked from its name. On a wide screen the sidebar's top shows it with the computer's name. Tap it and the app shows a plain list of your computers, like an account switcher: each with its avatar, its name, a word for its state (Online, Offline since 14:02, Email not confirmed, Suspended) and how many tasks need you there, with a tick on the current one. Tap another computer to open it. **Add a device** and **Manage devices** are at the bottom. The list stays in the app: the cockpit page never learns about your other computers.
+
+A notification names the computer that needs you, and tapping it opens that computer. The app icon's badge shows the total across your computers.
 
 The server must run in hosted mode. Links that leave your server open in the system browser.
 
-> **Good to know**: Plain `http://` is refused. Without a public server, reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. A temporary `trycloudflare.com` tunnel loads the cockpit, but live updates do not arrive through it. The Android debug build has been tested on an emulator. The iOS code has not been compiled yet.
+> **Good to know**: Plain `http://` is refused. Without a public server, reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. A temporary `trycloudflare.com` tunnel loads the cockpit, but live updates do not arrive through it. Both apps build in CI, and test builds go out through TestFlight and Google Play internal testing.
+
+## App lock
+
+**Turn on app lock** on the **Devices** list asks for your fingerprint, face or screen lock (Face ID, Touch ID or the passcode on an iPhone) each time the app starts and after a minute in the background. It is off by default and needs a screen lock on the phone. It only hides the app: anyone who knows the phone's screen lock can open it, and your login is stored the same way with the lock on or off. The iOS lock has not run on a phone yet.
+
+## Relay terms on the phone
+
+A phone paired through the Cezar relay accepts the relay's terms once. Right after pairing, and the first time a server opens while the phone has not accepted them, the app shows **Accept the relay terms**: the Terms and Privacy Policy links, an **I accept** box and **Continue**. **Not now** opens the server anyway; after 48 hours the relay refuses the phone until it accepts, and the app shows the same sheet without **Not now**. Accepting reconnects at once, with no new pairing.
+
+If Open Mercato suspends a computer's relay access, the app says so and stops trying; contact Open Mercato.

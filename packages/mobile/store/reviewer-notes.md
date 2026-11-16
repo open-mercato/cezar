@@ -20,8 +20,7 @@ by `packages/mobile/demo/` (README there). Before pasting, replace `cezar-demo.e
 
 ## The notes text
 
-Delete the "Optional: pairing" part if the build has no relay client (iOS until #1901's iOS half
-lands) or the demo runs with `DEMO_RELAY=0`.
+Delete the "Optional: pairing" part if the demo runs with `DEMO_RELAY=0`.
 
 <!-- reviewer-notes -->
 ```text
@@ -40,7 +39,7 @@ HOW IT CONNECTS
    password is kept in the device's secure storage and answered natively, never by the web page.
 
 Native features: QR pairing with the camera, the encrypted relay connection, keychain sign-in,
-several servers, notifications when cezar needs the user, and an optional app lock with biometrics.
+several devices, notifications when cezar needs the user, and an optional app lock with biometrics.
 
 DEMO ACCESS
 We run a demo cezar for review. Its agents are simulated: nothing you do runs a real AI model or
