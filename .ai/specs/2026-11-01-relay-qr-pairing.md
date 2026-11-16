@@ -499,7 +499,7 @@ Devices live in `~/.cezar/relay/devices.json`, an own file like `agent-accounts.
 grant. Deleting the directory loses pairings, and the user pairs again. That is state, not configuration.
 
 Only `cezar serve` runs the client, never `cez run`. Identity is per home, so when a second process on the
-same home connects, the first gets 4409 and stops, and Settings says which situation it is in.
+same home connects, the first gets 4409, backs off and retries (RELAY_PROTOCOL.md §3.3: 10 minutes, doubling to an hour), and Settings says which situation it is in.
 
 New routes, contract first, in one chained workspace-level family and listed in BACKWARD_COMPATIBILITY.md §2:
 
@@ -511,13 +511,26 @@ New routes, contract first, in one chained workspace-level family and listed in 
 | `POST /workspace/phones/pairing/:id/approve` and `/deny` | Decide |
 | `PATCH /workspace/phones/:deviceId` | Rename |
 | `DELETE /workspace/phones/:deviceId` | Remove |
-
 | `PUT /workspace/phones/relay` | Save or clear the [relay address](#relay-address) |
 | `POST /workspace/phones/relay/test` | Check an address without saving it |
+| `POST /workspace/phones/reconnect` | The Phones popover's **Reconnect now** |
+| `PUT /workspace/phones/keep-awake` | The per-computer [keep-awake](#keep-awake) toggle |
+| `PUT /workspace/phones/computer-name` | The name sent to the relay as `label` ([Relay accounts](#relay-accounts)) |
+| `GET /workspace/phones/account` | Account status, asking the relay only once relay keys exist |
+| `POST /workspace/phones/account`, `/account/resend`, `/account/check`, `/account/delete`, `/account/dismiss` | Attach an email, send a new link, Check now, delete the account, dismiss the grace notice |
 
 A `phone-pairing` event on `/workspace/events` drives the screen. `capabilities.phonePairing`, false only
 under `CEZ_RELAY=0`, hides the section, and it lives in Settings' global side, since a phone reaches the
 whole workspace.
+
+### Keep-awake
+
+A screen-locked Mac naps and drops the relay socket, and the phone then sees "Can't reach cezar". On macOS,
+while the relay is on and at least one phone is paired, cezar runs one `caffeinate -i -w <pid>` child that
+holds off idle system sleep (never display sleep) and dies with the server. It is default-on, listed in
+AGENTS.md § Zero config as pending owner ratification; `CEZ_RELAY_KEEP_AWAKE=0` turns it off entirely and
+Settings has a per-computer toggle. It never runs under `CEZ_DRY_RUN=1` and degrades to nothing when
+`caffeinate` is missing. The cost is battery on a laptop.
 
 ### Relay address
 
@@ -589,9 +602,12 @@ Settings › Connect a phone
 │ Pixel 9       Connected          Remove  │
 │ iPhone        Seen 2 days ago    Remove  │
 ├──────────────────────────────────────────┤
-│ Relay: connected                         │
+│ Relay: connected · p***@gmail.com ✓      │
 └──────────────────────────────────────────┘
 ```
+
+With no account, **Connect a phone** first shows the email and `I accept` step; the account states are in
+[Relay accounts](#relay-accounts).
 
 Approval is a blocking dialog over Settings. It repeats the 6 digits at a large size and says plainly
 that this phone can run tasks on this computer. The list stays usable from any non-relay cockpit.
@@ -619,10 +635,9 @@ authoritative.
 | The email and the `I accept` checkbox are the pairing flow's first step, shown when **Connect a phone** is clicked with no account, before the code | The click that asks is still the consent: a fresh computer sends nothing before it. `GET /workspace/phones/account` asks the relay only once relay keys exist |
 | Terms links and version live in `RELAY_TERMS` (`packages/contract/src/phones.ts`), pointing at Open Mercato Cloud's terms and privacy policy for now | One place to move when the relay gets its own |
 | The token is sealed in `~/.cezar/relay/account.json` with AES-256-GCM under a key derived from the relay identity, which the OS keychain holds | No second keychain item, so no second access prompt; the file alone holds nothing usable |
-| Confirmation is the emailed link only; no code is typed anywhere. Settings shows confirmed, pending with time left, or blocked, with "We sent a link", Check now, Send a new link, Change email and Delete account, and a short why, re-checking once a minute and on focus | Every state has a way out on the computer |
-| Phones paired before accounts get a small dismissible notice with the grace left, linking to the same email step, never a modal |
-| A phone icon in the sidebar footer, beside the settings gear, opens Connect a phone; hidden below `md` and once a phone is paired | A way in without knowing Settings, that leaves the footer row alone once it has done its job |
-| Rome's contract confirms by link only: no `confirm` route, `linkSent` on attach | The link page's button is the confirmation, so no client asks for a code | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
+| Confirmation is the emailed link only; no code is typed anywhere. Settings shows confirmed, pending with time left, or blocked, with "We sent a link", Check now, Send a new link, Change email and Delete account, and a short why, re-checking once a minute and on focus. Rome's contract has no `confirm` route and answers an attach with `linkSent` | Every state has a way out on the computer, and the link page's button is the confirmation, so no client asks for a code |
+| Phones paired before accounts get a small dismissible notice with the grace left, linking to the same email step, never a modal | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
+| A labelled **Connect a phone** row in the sidebar footer opens Connect a phone; once a phone is paired it gives way to a Phones icon whose popover shows the relay's state, the paired phones, keep-awake and **Reconnect now** | A way in without knowing Settings, and a place to see the link's health once it has done its job |
 | A 4451 retries every 10 minutes plus up to 60 s of jitter, never backing off further, and at once after a confirmation, an attachment or a confirmed or pending status; status is polled at most once a minute | Rome's settled rule: a refused upgrade wakes no room, and a confirmation by email link must take effect within one interval |
 | A phone sees the email masked (`p***@gmail.com`) | A lost or shared phone does not hand the address out |
 | A relay that answers `no-route` is treated as having no accounts | A custom relay older than § 18 keeps working |
@@ -663,7 +678,7 @@ The test is what stops a bad change, and the metric catches what a test cannot, 
 | --- | --- | --- |
 | Relay unreachable | Backs off, retries, and shows `Relay: unreachable` in Settings. Everything else is unaffected | See below |
 | Worker deploy | 1001, jittered reconnect | Banner for seconds |
-| Laptop asleep or cezar stopped | Nothing runs | `cezar-offline` |
+| Laptop asleep or cezar stopped | Nothing runs. On macOS, [keep-awake](#keep-awake) holds off idle sleep while a phone is paired; a closed lid still sleeps | `cezar-offline` |
 | cezar restarts while a phone is open | Sessions end | Reconnects with a new handshake and reloads streams |
 | Phone loses network | Lease ends the session in 60 s | Reconnects on return |
 | Corporate network blocks `wss` | `Relay: unreachable`, with the Advanced path noted | |
@@ -831,9 +846,9 @@ succeeds and push is off. Tests use a fake token source and a fake relay transpo
 | 4.2 Minimum Functionality [V in parent] | **Better.** QR pairing, native scanning, keychain device keys, and an E2E transport are native value, and setup no longer needs a server |
 | 2.5.2 [V in parent] | Same stance, and weaker exposure than bundling a downloaded UI. A reviewer may ask about the loopback server. Review notes say it only serves the user's own cezar |
 | 2.1 demo access [V in parent] | **Harder.** See below |
-| 5.1.1 privacy | Policy must name the relay, Cloudflare, APNs and FCM, and state what the relay sees: IP address, `cezarId`, `deviceId`, timing and volume. Camera purpose string needed |
+| 5.1.1 privacy | Policy must name the relay, Cloudflare, APNs and FCM, and state what the relay sees: IP address, `cezarId`, `deviceId`, timing and volume. It must also state what the relay stores for [relay accounts](#relay-accounts): the email, the computer's name (`label`), the terms version with its acceptance and confirmation times, and that the relay's operator emails the user a confirmation link. Camera purpose string needed |
 | Encryption export | **New.** The app ships its own encryption. `ITSAppUsesNonExemptEncryption` must be answered. Standard algorithms likely need the App Store Connect declaration and possibly a yearly self-classification report [M]. See [QR7](#qr7-who-owns-export-compliance) |
-| Play data safety | Declare the device identifier and push token. Encrypted in transit, yes |
+| Play data safety | Declare the device identifier and push token, and the email address the relay account holds (entered in cezar, shown masked on the phone). Encrypted in transit, yes |
 | Background modes | None. Plain alert push only |
 
 ### How a reviewer pairs
@@ -868,7 +883,7 @@ repository.
 | R2 | **Relay in `open-mercato/rome`.** Contract, conformance against R1's vectors, hibernation test, metric, staging. Confirms Cloudflare pricing and limits | Staging relay | R1. Already started on the contract above | L |
 | R3 | **cezar client.** `narrowForRelay`, keys, device store, dispatcher, routes, Settings UI, quiet tests | Desktop half, behind `capabilities.phonePairing` until R4 | R1. Stubbed sockets until R2 | L |
 | R4 | **App client.** Noise, tunnel, proxy, scanner, connect screens, banners | Pairing on test builds, Android first | R0 on the same platform, R2, R3, M7 | L |
-| R5 | **Push through the relay.** Replaces M11's relay half. Names the route that hands a grant to cezar | Native notifications | R2, R4, M10, QR10 | M |
+| R5 | **Push through the relay.** Replaces M11's relay half. Names the route that hands a grant to cezar | Native notifications | R2, R4, M10. QR10 stays open and did not block it | M |
 | R6 | **Public release additions.** Demo code, privacy policy (the manager drafts it, Open Mercato approves and hosts it), export answers, the optional phone lock (QR3) and the independent Noise review (QR8). Extends M12 | Reviewable build | R5, Q10, QR7 | L, several PRs |
 
 **Ships before the relay, unchanged:** M1 installable PWA, M4 phone chat, M5 approvals, M6 Manager first,
@@ -977,8 +992,9 @@ R1 made these edits in `.ai/specs/2026-10-31-mobile-apps-manager-first.md`.
 
 ## Open questions for the maintainer
 
-QR1, QR2, QR4, QR6 and QR10 are open: each has a recommendation, and the work proceeds on it unless told
-otherwise. QR3, QR5, QR7, QR8 and QR9 were decided on 2026-11-02 and are marked below.
+QR4, QR6 and QR10 are open: each has a recommendation, and the work proceeds on it unless told otherwise.
+QR3, QR5, QR7, QR8 and QR9 were decided on 2026-11-02, QR1 was resolved on 2026-11-12, and QR2 is recorded
+in AGENTS.md § Zero config as an owner-approved exception. Each is marked below.
 
 ### QR1: What is the relay's hostname, and who owns its accounts?
 
@@ -995,6 +1011,8 @@ its repository is `open-mercato/rome`. `rome.patzick.workers.dev` was the stagin
 **Recommended: yes, record it in AGENTS.md § Zero config as an owner-approved exception,** like Q9: nothing
 connects before the Connect a phone click, the socket lasts only while a device is paired, and `CEZ_RELAY=0`
 blocks it. A separate env opt-in would defeat zero-setup pairing.
+
+**Decided:** recorded in AGENTS.md § Zero config as an owner-approved exception (2026-11-01).
 
 ### QR3: Does a phone need its own lock?
 
@@ -1039,7 +1057,7 @@ authentication, and the setting is an empty file in `noBackupFilesDir`, so no se
   restored after process death does the same: it loads its page and starts its socket before the unlock. Only
   `launch`, the bundled page's path to a server, waits. Backgrounded, nothing changes: the socket closes on
   stop and the proxy answers 503.
-- Android has no push yet. When it ships, a signal arrives while locked. The relay's push is text-free, so the
+- A push can arrive while locked. The relay's push is text-free, so the
   notification must stay generic, and opening it passes through the lock like any return.
 - A person holding the unlocked phone, without its credential, cannot see or use the app. With an authorised
   `adb` on a release build they can inject input, but only into the shield. `run-as`, backup and the WebView
@@ -1159,3 +1177,4 @@ wire shape changes either way.
 - 2026-11-13: Rome settled the account gaps: 4451 retry with jitter, reason from the close frame, masked email for phones, `device-sync` refused as a whole.
 - 2026-11-13: The email is asked in the pairing flow, existing pairings get a notice instead of a modal, and confirmation is by the emailed link only.
 - 2026-11-13: Sidebar footer entry for Connect a phone; Rome's link-only contract (`linkSent`, no confirm routes).
+- 2026-11-16: Re-review fixes. The routes table lists the account, computer-name, reconnect and keep-awake routes; keep-awake gets its own section; the privacy and data-safety rows name what relay accounts store; the sidebar entry, the 4409 wording, QR1, QR2 and R5 match the code and decisions.
