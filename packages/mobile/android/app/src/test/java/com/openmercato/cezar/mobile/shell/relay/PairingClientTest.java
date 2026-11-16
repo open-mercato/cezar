@@ -195,6 +195,19 @@ public class PairingClientTest {
     }
 
     @Test
+    public void anAddressTheSocketRejectsEndsThePairing() throws Exception {
+        SocketTransport rejecting = (url, headers, events) -> {
+            throw new IllegalArgumentException("Invalid URL host");
+        };
+        new PairingClient(rejecting, qrSecret(RelayCrypto.x25519Public(cezarSecret)), keys, "Pixel", states::add).start();
+        assertEquals(PairingClient.Phase.CONNECTING, states.poll(2, TimeUnit.SECONDS).phase);
+        PairingClient.State failed = states.poll(2, TimeUnit.SECONDS);
+        assertNotNull("a failure, not a spinner until Cancel", failed);
+        assertEquals(PairingClient.Phase.FAILED, failed.phase);
+        assertEquals("relay-unreachable", failed.reason);
+    }
+
+    @Test
     public void aTypedCodeHasNoPinAndStillPairs() throws Exception {
         PairSecret secret = PairSecret.fromCode("QRFX-7KMD-2NVB", RelayOrigin.parse("https://relay.example.test", false));
         client(secret);

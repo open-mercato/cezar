@@ -101,33 +101,43 @@ public final class PairingClient {
         actor.execute(() -> {
             updates.state(state(Phase.CONNECTING, null));
             String url = secret.relay.socketOrigin + "/v1/pair/" + secret.locator() + "?role=phone";
-            socket = transport.connect(url, Collections.<String, String>emptyMap(), new SocketTransport.Events() {
-                @Override
-                public void opened() {
-                    // Nothing is sent until hello and peer-joined.
-                }
-
-                @Override
-                public void text(String text) {
-                    post(() -> onText(text));
-                }
-
-                @Override
-                public void binary(byte[] bytes) {
-                    post(() -> onBinary(bytes));
-                }
-
-                @Override
-                public void closed(int code) {
-                    post(() -> onClosed(code));
-                }
-
-                @Override
-                public void failed(int status, String code, long retryAfter, long date) {
-                    post(() -> onRefused(status));
-                }
-            });
+            try {
+                socket = connect(url);
+            } catch (RuntimeException e) {
+                // OkHttp rejects some hosts RelayOrigin admits (`relay..example.com`): no deadline is armed yet.
+                finish(Phase.FAILED, "relay-unreachable");
+                return;
+            }
             actor.schedule(this::ping, PING_EVERY_MS, TimeUnit.MILLISECONDS);
+        });
+    }
+
+    private SocketTransport.Connection connect(String url) {
+        return transport.connect(url, Collections.<String, String>emptyMap(), new SocketTransport.Events() {
+            @Override
+            public void opened() {
+                // Nothing is sent until hello and peer-joined.
+            }
+
+            @Override
+            public void text(String text) {
+                post(() -> onText(text));
+            }
+
+            @Override
+            public void binary(byte[] bytes) {
+                post(() -> onBinary(bytes));
+            }
+
+            @Override
+            public void closed(int code) {
+                post(() -> onClosed(code));
+            }
+
+            @Override
+            public void failed(int status, String code, long retryAfter, long date) {
+                post(() -> onRefused(status));
+            }
         });
     }
 
