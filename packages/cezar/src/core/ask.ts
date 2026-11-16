@@ -107,7 +107,7 @@ export function parseAskRequest(value: unknown): AskRequest | null {
  * backends. The JSON is greedily captured from the first `{` after the keyword
  * to the last `}` at end-of-text.
  */
-export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
+export const ASK_MARKER_RE = /CEZ:ASK(?::[ \t]*|[ \t]+)(\{[\s\S]*\})\s*$/;
 
 /**
  * The payload candidate of the LAST `<keyword> ` occurrence in a turn — everything from there to
@@ -121,7 +121,7 @@ export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
  * malformed trailing marker from ordinary prose.
  */
 function lastMarkerCandidate(turnText: string, keyword: string): string | null {
-  const re = new RegExp(`${keyword}[ \\t]+`, 'g');
+  const re = new RegExp(`${keyword}(?::[ \\t]*|[ \\t]+)`, 'g');
   let last: RegExpExecArray | null = null;
   for (const match of turnText.matchAll(re)) last = match;
   if (!last) return null;
@@ -157,7 +157,7 @@ function trimTrailingControlMarkers(candidate: string): string {
  * `lastMarkerCandidate`: an earlier prose mention of the keyword survives the strip.
  */
 function stripLastMarker(text: string, keyword: string): string {
-  const re = new RegExp(`${keyword}[ \\t]+`, 'g');
+  const re = new RegExp(`${keyword}(?::[ \\t]*|[ \\t]+)`, 'g');
   let last: RegExpExecArray | null = null;
   for (const match of text.matchAll(re)) last = match;
   if (!last) return text;

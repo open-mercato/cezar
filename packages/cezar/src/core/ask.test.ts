@@ -158,6 +158,11 @@ describe('parseAskMarker', () => {
     expect(parseAskMarker(turn)).toEqual(valid);
   });
 
+  it('tolerates CEZ:ASK: with a colon', () => {
+    expect(parseAskMarker(`Here are the options.\nCEZ:ASK:${askJson}`)).toEqual(valid);
+    expect(parseAskMarker(`Here are the options.\nCEZ:ASK: ${askJson}`)).toEqual(valid);
+  });
+
   it('tolerates trailing whitespace/newlines after the JSON', () => {
     expect(parseAskMarker(`text\nCEZ:ASK ${askJson}\n  \n`)).toEqual(valid);
   });
