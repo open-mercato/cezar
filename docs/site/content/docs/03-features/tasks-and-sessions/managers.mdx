@@ -7,6 +7,10 @@ related:
     - features/git-and-github/github-merge
     - features/workflows-and-skills/scheduled-automations
 sources:
+  - label: "Workspace approvals"
+    path: packages/web/src/routes/manager/manager-approvals.tsx
+    line: 69
+    commit: d5998bfb1040727ef5ddc59bad9949fae915e406
   - label: "Specification"
     path: .ai/specs/2026-10-31-managers.md
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
@@ -63,6 +67,8 @@ The switch sits under the brand in the sidebar, and the mode comes from the URL:
 | Manager | One row per manager with its latest message, and **New manager**. |
 
 A dot on **Manager** and on each manager's row means it wants you: amber when an approval or a question waits on you, blue when there is only an unread message. **Manager** takes you back to the chat or list you left in that browser tab, and the tab's title names the manager you have open. The command palette also lists **Manager**, **New manager**, and each manager by name.
+
+Choose **Workspace → Approvals** in the Manager sidebar to review pending approval cards from all managers, grouped by manager. You can also open `/manager/approvals` directly. The count includes pending approvals; questions still appear in each manager’s chat and attention indicator. The page stays available when there are no pending approvals. **Open chat** jumps to that manager’s waiting cards. On a phone, open the menu to reach **Approvals**.
 
 ## How to use it
 
