@@ -30,6 +30,8 @@ Prevent Cezar from failing a successful Antigravity turn when `agy` reports a co
 
 ## Progress
 
+PR: #2255
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Mapper fix and test fixtures
