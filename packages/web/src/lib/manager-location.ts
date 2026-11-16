@@ -25,7 +25,7 @@ export function managerHref(managerIds: readonly string[] | undefined): string {
   }
   if (remembered === null || !/^\/manager(?:[/?]|$)/.test(remembered)) return '/manager'
   const id = /^\/manager\/([^/?#]+)/.exec(remembered)?.[1]
-  if (id !== undefined && managerIds !== undefined && !managerIds.includes(decodeURIComponent(id))) return '/manager'
+  if (id !== undefined && id !== 'approvals' && managerIds !== undefined && !managerIds.includes(decodeURIComponent(id))) return '/manager'
   return remembered
 }
 

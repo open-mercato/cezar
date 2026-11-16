@@ -1,8 +1,10 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SidebarStatusLine, type SidebarStatusLineProps } from './sidebar-status-line'
 import { ThemeProvider } from './theme-provider'
+import { DropdownMenuItem } from './ui/dropdown-menu'
 
 // The real dialog needs react-query; what is under test is only that the chip opens it.
 vi.mock('@/components/self-update-dialog', () => ({
@@ -19,10 +21,17 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderLine(props: Partial<SidebarStatusLineProps> = {}) {
+function LocationProbe() {
+  return <span data-testid="location">{useLocation().pathname}</span>
+}
+
+function renderLine(props: Partial<SidebarStatusLineProps> = {}, entry = '/') {
   return render(
     <ThemeProvider>
-      <SidebarStatusLine brandName="cezar" version="0.20.0" latestVersion={null} starCount={null} health="healthy" {...props} />
+      <MemoryRouter initialEntries={[entry]}>
+        <SidebarStatusLine brandName="cezar" version="0.20.0" latestVersion={null} starCount={null} health="healthy" {...props} />
+        <LocationProbe />
+      </MemoryRouter>
     </ThemeProvider>,
   )
 }
@@ -35,6 +44,60 @@ const openMore = () => {
 }
 
 describe('SidebarStatusLine', () => {
+  it('links to the unscoped Global Settings entry and closes the menu on selection', async () => {
+    renderLine({}, '/p/example/tasks')
+    const settings = within(openMore()).getByRole('menuitem', { name: 'Global Settings' })
+    expect(settings.tagName).toBe('A')
+    expect(settings.getAttribute('href')).toBe('/settings/global')
+    expect(settings.getAttribute('aria-current')).toBeNull()
+    fireEvent.click(settings)
+    expect(screen.getByTestId('location').textContent).toBe('/settings/global')
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  })
+
+  it.each([
+    ['/settings/global', true],
+    ['/settings/global/appearance', true],
+    ['/settings/global/agent-config/claude', true],
+    ['/p/example/settings/general', false],
+    ['/p/example/settings/global/appearance', false],
+    ['/settings/globalization', false],
+    ['/manager/example', false],
+  ])('marks Global Settings current only for the global settings URL family: %s', (entry, active) => {
+    renderLine({}, entry)
+    const settings = within(openMore()).getByRole('menuitem', { name: 'Global Settings' })
+    expect(settings.getAttribute('aria-current')).toBe(active ? 'page' : null)
+    expect(settings.className).toContain('aria-[current=page]:bg-muted')
+  })
+
+  it('restores focus to More when Escape dismisses the menu', async () => {
+    renderLine()
+    const more = within(footer()).getByRole('button', { name: 'More' })
+    more.focus()
+    fireEvent.keyDown(more, { key: 'ArrowDown' })
+    const settings = await screen.findByRole('menuitem', { name: 'Global Settings' })
+    await waitFor(() => expect(document.activeElement).toBe(settings))
+    fireEvent.keyDown(settings, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(more))
+  })
+
+  it('keeps Tools, What’s new, GitHub and theme controls beside Global Settings', () => {
+    renderLine({
+      hostWidget: <span>CPU 27%</span>,
+      toolsMenu: <DropdownMenuItem>Agent tools</DropdownMenuItem>,
+      whatsNew: <DropdownMenuItem>What’s new</DropdownMenuItem>,
+      starCount: 1234,
+    })
+    const menu = openMore()
+    expect(within(menu).getByText('This machine')).toBeTruthy()
+    expect(within(menu).getByRole('menuitem', { name: 'Global Settings' }).className).toContain('min-h-11')
+    expect(within(menu).getByRole('menuitem', { name: 'Tools' }).getAttribute('aria-haspopup')).toBe('menu')
+    expect(within(menu).getByRole('menuitem', { name: 'What’s new' })).toBeTruthy()
+    expect(within(menu).getByRole('menuitem', { name: /Star cezar on GitHub/ }).getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(3)
+  })
+
   it('puts the version chip in the footer, and it opens the updater', () => {
     renderLine()
     expect(chip().closest('[data-slot="sidebar-footer-controls"]')).not.toBeNull()
