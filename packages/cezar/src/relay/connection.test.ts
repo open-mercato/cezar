@@ -202,6 +202,23 @@ describe('RelayConnection recovery (Mac online, relay link lost)', () => {
     expect(script.sockets).toHaveLength(before + 1);
   });
 
+  it.each([[1012], [4409]])('a long uptime ended by %i clears the failure history', (code) => {
+    const script = new Script();
+    connect(script);
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      script.last.handlers.onClose(1006);
+      vi.advanceTimersByTime(backoffMs(attempt, HALF));
+    }
+    script.hello();
+    vi.setSystemTime(Date.now() + 2 * 3_600_000);
+    script.last.handlers.onClose(code, 'reconnect');
+    const before = script.sockets.length;
+    while (script.sockets.length === before) vi.advanceTimersByTime(1_000);
+    script.hello();
+    script.last.handlers.onClose(1006);
+    expect(lines.at(-1)).toMatch(/attempt=1 /);
+  });
+
   it('a reconnect storm stays on full-jitter backoff', () => {
     const script = new Script();
     connect(script);

@@ -485,10 +485,15 @@ export class RelayConnection {
     this.reconnectTimer.unref?.();
   }
 
-  private backoff(): number {
+  /** A socket that stayed up long enough clears the failure history, whichever way it then ended. */
+  private endUptime(): void {
     if (this.connectedAt && Date.now() - this.connectedAt >= RESET_ATTEMPTS_AFTER_MS) this.attempts = 0;
     if (this.connectedAt && Date.now() - this.connectedAt >= REPLACED_RETRY_MAX_MS) this.replacements = 0;
     this.connectedAt = 0;
+  }
+
+  private backoff(): number {
+    this.endUptime();
     this.attempts += 1;
     const delayMs = backoffMs(this.attempts, this.deps.random ?? Math.random);
     this.schedule(delayMs, true);
@@ -500,8 +505,7 @@ export class RelayConnection {
    * leave the phones with nobody, so look again later, slower each time it happens.
    */
   private replaced(): void {
-    if (this.connectedAt && Date.now() - this.connectedAt >= REPLACED_RETRY_MAX_MS) this.replacements = 0;
-    this.connectedAt = 0;
+    this.endUptime();
     this.replacements += 1;
     const delayMs = Math.min(REPLACED_RETRY_MAX_MS, REPLACED_RETRY_MS * 2 ** (this.replacements - 1))
       + (this.deps.random ?? Math.random)() * ACCOUNT_RETRY_JITTER_MS;
@@ -513,7 +517,7 @@ export class RelayConnection {
 
   /** Not a failure: no attempt counted, no growing backoff, `connecting` rather than `unreachable`. */
   private restartRequested(): void {
-    this.connectedAt = 0;
+    this.endUptime();
     const delayMs = SERVICE_RESTART_MIN_MS + (this.deps.random ?? Math.random)() * SERVICE_RESTART_JITTER_MS;
     this.log(`restart code=1012 retry=${Math.round(delayMs / 1000)}s`);
     this.deps.onStatus('connecting');
