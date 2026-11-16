@@ -5485,6 +5485,7 @@ export class RunManager {
     this.starting.add(runId);
     // #2216: preparation (worktree restore, lifecycle gate) awaits before `runContinuation` writes
     // `running`; a dequeued continuation reads `queued` through the same window, so this one does too.
+    const settledBefore = { status: run.status, error: run.error };
     this.store.updateRun(runId, { status: 'queued', error: undefined, finishedAt: undefined, currentStepId: undefined });
     void this.runContinuation(
       runId,
@@ -5496,6 +5497,7 @@ export class RunManager {
       undefined,
       undefined,
       ownerToken,
+      settledBefore,
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -5527,6 +5529,8 @@ export class RunManager {
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
     ownerToken?: symbol,
+    /** Status/error the record read before `continueRun` marked it `queued` — the handoff context quotes them. */
+    settledBefore?: { status: RunRecord['status']; error?: string },
   ): Promise<void> {
     const effectiveOwnerToken = ownerToken ?? Symbol('run-owner');
     // Continuation runs in the task's worktree when it still exists (spec
@@ -5568,7 +5572,7 @@ export class RunManager {
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
     const portableContext = record && sessionId === undefined
-      ? freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId))
+      ? freshContinuationContext(settledBefore ? { ...record, ...settledBefore } : record, this.store.readEvents(runId), this.attachmentsDir(runId))
       : undefined;
     // The record is mutated in place below; a missing-session fallback needs it as it was.
     const recordBeforeTurn = record && sessionId !== undefined

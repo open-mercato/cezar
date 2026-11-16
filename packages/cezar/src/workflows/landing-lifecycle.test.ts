@@ -100,7 +100,8 @@ for (const action of ['commit', 'finish'] as const) {
         writeFileSync(release, '');
         await work;
         expect(run.status).toBe('cancelled');
-        expect(statuses).toEqual(defer ? ['queued', 'cancelled'] : ['cancelled']);
+        // Both paths read `queued` while the continuation prepares (#2216).
+        expect(statuses).toEqual(['queued', 'cancelled']);
         expect(continueSpy).not.toHaveBeenCalled();
         expect(run.landing).toBeUndefined();
       } finally {
