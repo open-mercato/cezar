@@ -301,6 +301,7 @@ import {
   repoIndexContains,
 } from './git-changes.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
 import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
@@ -7864,6 +7865,8 @@ export function createApp(deps: ServerDeps) {
       defaultSkill: config.defaultSkill ?? null,
       askSkill: config.askSkill ?? null,
       teamSkills: config.skillsRepos.length > 0,
+      bypassPermissions: config.bypassPermissions === true,
+      bypassPermissionsBlocked: await bypassPermissionsBlocked(repoRoot, config),
     };
   };
   // ---- chained family: per-repo config (project-scoped) ----
@@ -7957,6 +7960,11 @@ export function createApp(deps: ServerDeps) {
           if (parsed.data.requiredChecks !== undefined) {
             if (!parsed.data.requiredChecks?.length) delete raw.requiredChecks;
             else raw.requiredChecks = parsed.data.requiredChecks;
+          }
+          // Only a real opinion is stored: off deletes the key.
+          if (parsed.data.bypassPermissions !== undefined) {
+            if (parsed.data.bypassPermissions === true) raw.bypassPermissions = true;
+            else delete raw.bypassPermissions;
           }
           if (parsed.data.teamSkills === false) raw.skillsRepos = [];
           else if (parsed.data.teamSkills === true && Array.isArray(raw.skillsRepos) && raw.skillsRepos.length === 0) {

@@ -512,7 +512,14 @@ the task's worktree — but note the zero-config default list (`Read`, `Edit`,
 `bashAllowlist`, so treat a run as having full shell access in its worktree,
 not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to select Claude's
 `acceptEdits` mode, but cezar has no cockpit permission response channel, so
-approval prompts are not actionable in the cockpit. Codex, Junie and OpenCode are driven through their own
+approval prompts are not actionable in the cockpit. A project can instead turn
+**Settings → Agents → Skip all permission prompts** on (`"bypassPermissions": true`
+in `.ai/cezar/config.json`): its Claude tasks then run with
+`--permission-mode bypassPermissions`, so every tool call — including commands
+outside the Claude Code Bash sandbox and tools a step did not list — is approved
+without asking. It is off by default, never applies to read-only tasks or a manager's
+own turns, and is ignored while `config.json` is tracked by git or cezar runs as root
+(Claude Code refuses bypass mode for root). Codex, Junie and OpenCode are driven through their own
 native protocols and don't honor `allowedTools` at all — see
 [Coding agent backends](#coding-agent-backends) for what each one actually
 locks down. Nothing runs on a server you don't own.

@@ -56,6 +56,7 @@ export const PROJECT_EXCLUDED: Record<string, string> = {
   maxParallel: 'workspace-wide now (resources)',
   memoryLimitMb: 'workspace-wide now (resources)',
   landing: 'auto-landing is a grant made on the machine that pushes',
+  bypassPermissions: 'skipping permission prompts is a grant made on the machine that runs the agent',
 };
 
 /** `host/owner/repo` — never the URL, which may carry `user:token@`. */

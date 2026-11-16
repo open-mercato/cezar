@@ -71,6 +71,9 @@ export interface AgentRunSpec {
   /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
    *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
   bashHookCommand?: string;
+  /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
+   *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
+  bypassPermissions?: boolean;
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control

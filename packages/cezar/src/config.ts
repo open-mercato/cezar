@@ -154,10 +154,12 @@ export const configSchema = z.object({
   /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
   defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
   askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
+  /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`).
+   *  Off by default; a git-tracked config.json cannot grant it, and read-only tasks never get it. */
+  bypassPermissions: z.boolean().optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;
-
 /**
  * Fold the machine-wide agent defaults under a repo's own config (spec 2026-07-29-agent-profiles).
  *

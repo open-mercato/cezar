@@ -76,6 +76,7 @@ import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
@@ -724,6 +725,9 @@ interface ActiveRun {
   /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
    *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
   autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
+  /** The project's opt-in `bypassPermissions` (Claude skips every prompt). Set at BOTH
+   *  construction sites through `bypassPolicy`. */
+  bypassPermissions?: boolean;
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
   /** A manager's read-only task: the backend enforces it too (`AgentRunSpec.enforceReadOnly`). */
@@ -5606,8 +5610,12 @@ export class RunManager {
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
     state.enforceReadOnly = state.readOnly && record?.enforceReadOnly === true;
+    const continueConfig = await loadConfig(this.repoRoot);
+    state.bypassPermissions = await this.bypassPolicy(state.readOnly, continueConfig, (message) =>
+      this.store.appendEvent(runId, { type: 'note', message }),
+    );
     if (state.cwd === this.repoRoot) {
-      state.autoLand = await this.landingPolicy(record, await loadConfig(this.repoRoot));
+      state.autoLand = await this.landingPolicy(record, continueConfig);
     }
     if (state.cwd === this.repoRoot && !state.readOnly) {
       if (repositoryRootLockDisabled()) {
@@ -6099,6 +6107,7 @@ export class RunManager {
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
           bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
@@ -6301,6 +6310,9 @@ export class RunManager {
     state.readOnly = input.readOnly === true && input.worktree === false;
     state.enforceReadOnly = state.readOnly && input.enforceReadOnly === true;
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
+      this.store.appendEvent(runId, { type: 'note', message }),
+    );
+    state.bypassPermissions = await this.bypassPolicy(state.readOnly, config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
@@ -8322,6 +8334,7 @@ export class RunManager {
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
           bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
@@ -8901,6 +8914,15 @@ export class RunManager {
       return undefined;
     }
     return { checks: config.requiredChecks ?? [], baseBranch: config.baseBranch, baseLabel: config.baseBranch ?? repo.branch, attempts: 0 };
+  }
+
+  /** Whether Claude skips permission prompts for this run. Like auto-land, only local
+   *  configuration can grant it: a cloned repository must not turn approvals off. */
+  private async bypassPolicy(readOnly: boolean | undefined, config: CezConfig, note?: (message: string) => void): Promise<boolean> {
+    if (readOnly || config.bypassPermissions !== true) return false;
+    const blocked = await bypassPermissionsBlocked(this.repoRoot, config);
+    if (blocked) note?.(blocked);
+    return blocked === null;
   }
 
   /** The most recent thing the user asked this task for — context for a commit message. */
