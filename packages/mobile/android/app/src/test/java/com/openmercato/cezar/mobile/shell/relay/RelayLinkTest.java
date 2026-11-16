@@ -572,6 +572,14 @@ public class RelayLinkTest {
     }
 
     @Test
+    public void theRelaysHelloTextReachesTheLogOnlyAsACode() {
+        assertEquals("online", RelayLink.helloCode("online"));
+        assertEquals("offline", RelayLink.helloCode("offline"));
+        assertEquals("-", RelayLink.helloCode(""));
+        assertEquals("other", RelayLink.helloCode("online\nrelay ready in=0ms"));
+    }
+
+    @Test
     public void networkChangeDecisions() {
         NetworkChange change = new NetworkChange();
         assertEquals("the first says where it started", RelayLink.NetworkAction.NONE, change.moved(1L));

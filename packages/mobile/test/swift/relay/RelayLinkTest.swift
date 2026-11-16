@@ -503,6 +503,12 @@ func relayLinkTests() {
         expect(!all.contains(world.cezarId) && !all.contains(world.keys.deviceId()), "no ids")
     }
 
+    test("the relay's hello text reaches the log only as a code") {
+        expect(RelayLink.helloCode("online") == "online" && RelayLink.helloCode("offline") == "offline", "known words kept")
+        expect(RelayLink.helloCode("") == "-", "absent")
+        expect(RelayLink.helloCode("online\nrelay ready in=0ms" + String(repeating: "x", count: 5000)) == "other", "anything else is one word")
+    }
+
     test("network change decisions") {
         let wifi = NetworkChange.Path(satisfied: true, interfaces: ["en0"])
         let both = NetworkChange.Path(satisfied: true, interfaces: ["en0", "pdp_ip0"])

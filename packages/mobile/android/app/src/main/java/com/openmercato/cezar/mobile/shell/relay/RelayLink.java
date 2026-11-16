@@ -412,8 +412,14 @@ public final class RelayLink {
         }
     }
 
+    /** The start-up log keeps codes only: the relay's own text never goes in as is. */
+    static String helloCode(String cezar) {
+        if (cezar.isEmpty()) return "-";
+        return cezar.equals("online") || cezar.equals("offline") ? cezar : "other";
+    }
+
     private void onHello(JSONObject hello) {
-        note("hello cezar=" + (hello.optString("cezar").isEmpty() ? "-" : hello.optString("cezar")));
+        note("hello cezar=" + helloCode(hello.optString("cezar")));
         helloSeen = true;
         relayAnswered = true;
         proofRetried = false;

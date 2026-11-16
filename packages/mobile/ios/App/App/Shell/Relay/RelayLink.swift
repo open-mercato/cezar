@@ -339,8 +339,17 @@ final class RelayLink {
         }
     }
 
+    /// The start-up log keeps codes only: the relay's own text never goes in as is.
+    static func helloCode(_ cezar: String) -> String {
+        switch cezar {
+        case "": return "-"
+        case "online", "offline": return cezar
+        default: return "other"
+        }
+    }
+
     private func onHello(_ hello: [String: Any]) {
-        note("hello cezar=\(RelayJson.string(hello, "cezar").isEmpty ? "-" : RelayJson.string(hello, "cezar"))")
+        note("hello cezar=\(Self.helloCode(RelayJson.string(hello, "cezar")))")
         helloSeen = true
         answered.value = true
         proofRetried = false
