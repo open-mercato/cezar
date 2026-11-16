@@ -1186,15 +1186,23 @@ describe('TasksOverview — mobile cards and FAB', () => {
     const title = head.querySelector('[data-slot="task-card-title"]')!
     expect(head.className).toContain('flex-wrap')
     expect(title.className).toContain('basis-full')
-    expect(title.className).toContain('order-last')
-    // Reading order is unchanged: status, then title, then age.
-    expect(head.textContent?.indexOf('Rework')).toBeGreaterThan(0)
+    // No CSS reordering: the title is the head's last child, so DOM and focus order match the
+    // visual one (pin, then title).
+    expect(title.className).not.toContain('order-')
+    expect(head.lastElementChild).toBe(title)
+    const focusable = [...head.querySelectorAll('a, button')]
+    expect(focusable.at(-1)).toBe(title)
+    // ...and it comes after the status pill in the DOM, where it is drawn.
+    const pill = head.querySelector('[data-slot="pill"]')!
+    expect(pill.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('keeps a quiet (finished) card title inline beside its small status dot', () => {
     renderOverview({ runs: [run({ id: 'quiet-title', status: 'done', title: 'Shipped' })] })
     const title = card('quiet-title')!.querySelector('[data-slot="task-card-title"]')!
     expect(title.className).not.toContain('basis-full')
+    // Inline: the title still follows the status dot, before the age and pin.
+    expect(card('quiet-title')!.querySelector('[data-slot="task-card-head"]')!.lastElementChild).not.toBe(title)
   })
 
   it('floats the New task FAB, linking to /new', () => {

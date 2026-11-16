@@ -1642,6 +1642,25 @@ const TaskCard = React.memo(function TaskCard({
   const statusId = React.useId()
   const quiet = isQuietStatus(run)
 
+  // Open cards put the title on its own line after the status, age and pin: rendered there in the
+  // DOM too, so reading and focus order follow what the eye sees.
+  const title = (
+    <Link
+      to={to}
+      aria-describedby={quiet ? statusId : undefined}
+      data-slot="task-card-title"
+      className={cn(
+        'min-w-0 flex-1 text-ui leading-[1.35] [overflow-wrap:anywhere]',
+        !quiet && 'basis-full',
+        unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+      )}
+    >
+      {runTitle(run)}
+      {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
+      {unread ? <UnreadMarker /> : null}
+    </Link>
+  )
+
   return (
     <div
       data-slot="task-card"
@@ -1672,20 +1691,7 @@ const TaskCard = React.memo(function TaskCard({
             {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
           </Pill>
         )}
-        <Link
-          to={to}
-          aria-describedby={quiet ? statusId : undefined}
-          data-slot="task-card-title"
-          className={cn(
-            'min-w-0 flex-1 text-ui leading-[1.35] [overflow-wrap:anywhere]',
-            !quiet && 'order-last basis-full',
-            unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
-          )}
-        >
-          {runTitle(run)}
-          {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
-          {unread ? <UnreadMarker /> : null}
-        </Link>
+        {quiet ? title : null}
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
         {dispatchKindLabel(run) ? (
           <span
@@ -1717,6 +1723,7 @@ const TaskCard = React.memo(function TaskCard({
             className="-mr-1 mt-px"
           />
         ) : null}
+        {quiet ? null : title}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-meta font-medium text-muted-foreground tabular-nums">
         <span>{workflowLabel(run)}</span>

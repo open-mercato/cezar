@@ -98,6 +98,38 @@ describe('the notifications section', () => {
     await waitFor(() => expect(putBody()).toEqual({ notifications: { enabled: true } }))
   })
 
+  it('a toggle made while settings are still loading survives the late first load', async () => {
+    requests = []
+    // The first GET answers only after the PUT has: the stale "off" must not win over the user's tap.
+    let answerFirstLoad: (payload: unknown) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
+        requests.push({ method, url, body })
+        const json = (payload: unknown) =>
+          new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+        if (url === '/api/v1/workspace/ui-state' && method === 'GET')
+          return new Promise<Response>((resolve) => { answerFirstLoad = (payload) => resolve(json(payload)) })
+        if (url === '/api/v1/workspace/ui-state' && method === 'PUT') return json(body)
+        return new Promise<never>(() => {})
+      }),
+    )
+    stubNotification('granted')
+    renderSection()
+    await waitFor(() => expect(requests.some((r) => r.method === 'GET')).toBe(true))
+
+    fireEvent.click(toggle())
+    await waitFor(() => expect(putBody()).toEqual({ notifications: { enabled: true } }))
+    await waitFor(() => expect(screen.getByText('Saved')).toBeTruthy())
+    answerFirstLoad({})
+    // Let the late answer settle before reading the switch.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(toggle().getAttribute('aria-checked')).toBe('true')
+  })
+
   it('enabling with permission already granted does not re-ask', async () => {
     serve()
     const requestPermission = stubNotification('granted')
