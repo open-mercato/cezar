@@ -133,6 +133,23 @@ describe('Managers', () => {
     browser.screenshot(`${artifactsDir}/manager-chat.png`)
   }, 60_000)
 
+  it('never lets the page scroll below the composer, however long the transcript', () => {
+    // A long transcript whose last row carries screen-reader-only text, as a task card's does: it
+    // once sat at the unscrolled tail and stretched <main> far below the composer.
+    const overflow = browser.evaluate(`(() => {
+      const body = document.querySelector('[data-slot="manager-transcript-body"]')
+      const tail = document.createElement('div')
+      tail.dataset.e2eTail = ''
+      tail.innerHTML = '<div style="height: 3000px"></div><span class="sr-only">Loading task</span>'
+      body.appendChild(tail)
+      const main = document.querySelector('main')
+      const extra = main.scrollHeight - main.clientHeight
+      tail.remove()
+      return extra
+    })()`)
+    expect(overflow).toBe(0)
+  })
+
   it('goes into the task from its card and back to the manager', () => {
     browser.click('[data-slot="session-card"]')
     browser.waitForFunction(`location.pathname.includes('/tasks/')`)
