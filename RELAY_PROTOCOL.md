@@ -779,6 +779,13 @@ the session, never from a header.
 **The proxy's gate.** It serves only on `127.0.0.1`, and a request needs its per-listener `HttpOnly`,
 `SameSite=Strict` cookie, `Host` exactly `127.0.0.1:<port>`, any `Origin` equal to that authority, and any
 `Sec-Fetch-Site` equal to `same-origin` or `none`. Otherwise it answers 403 and nothing enters the tunnel.
+One shape passes without the cookie and as `cross-site`: an HTML artifact is sandboxed to an opaque origin,
+so its media loads are cross-site and Blink sends them with no cookie. That is a `GET` or `HEAD` with no
+body (no `content-length` or `transfer-encoding`), no `Origin`, exactly one `Sec-Fetch-Site: cross-site`,
+`Sec-Fetch-Mode: no-cors` and `Sec-Fetch-Dest` of `image`, `video` or `audio`, for a file at
+`/api/v1/[p/<project>/]runs/<run>/artifacts/<name>` or `…/artifacts/<dir>/<name>`, with no `.` or `..`
+segment and no encoded `.`, `/`, `\` or NUL. It still needs the exact `Host` and a live session, and it is
+forwarded without cookies like every request.
 
 ### 13.2 Responses
 
