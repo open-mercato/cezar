@@ -495,11 +495,11 @@ describe('a relay request is a hosted request', () => {
     });
     /** Process-level state, the WebSocket upgrade, or fields `narrowForRelay` leaves alone. */
     const ALLOWED: Record<string, number> = {
-      'index.ts': 3, // webhook mode and singleProject at boot; self-update wraps it in narrowForRelay.
+      'index.ts': 4, // webhook mode, singleProject and the boot RunManager's `hosted` at boot; self-update wraps it in narrowForRelay.
       'automations/builtin-skill.ts': 1,
       'workflows/run.ts': 1, // `dispatch`
       'server/capabilities.ts': 8, // the definitions and their internal callers
-      'server/server.ts': 6, // the closure, the accounts closure, startServer's flags, verifyWsUpgrade
+      'server/server.ts': 7, // the closure, the accounts closure, startServer's flags and RunManagers' `hosted`, verifyWsUpgrade
     };
 
     it('a new direct read of the boundary in a request path fails here', () => {

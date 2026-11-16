@@ -154,6 +154,9 @@ export const configSchema = z.object({
   /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
   defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
   askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
+  /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`).
+   *  Off by default; see `bypassPermissionsBlocked` for where it is not honored. */
+  bypassPermissions: z.boolean().optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;

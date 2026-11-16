@@ -34,6 +34,7 @@ import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-
 import { CardNote, FormRow, SettingsCard } from './form-row'
 import { ProviderSettings } from './provider-settings'
 import { useConfigSave } from './use-config-save'
+import { BypassPermissionsField } from './bypass-permissions-field'
 
 /**
  * Settings → Agents (R6 Step 1.5, spec §"Settings"): which agent runs THIS repo's tasks —
@@ -114,6 +115,8 @@ function AgentsForm({
         saved={save.savedFor('defaultRunner')}
         onPick={(runner) => save.mutate({ defaultRunner: runner })}
       />
+
+      <BypassPermissionsField config={config} />
 
       <FallbackField
         policy={fallback.data}
