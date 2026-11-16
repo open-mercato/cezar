@@ -54,6 +54,7 @@ const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clear
   cronMinutes: 'watch',
   runner: 'runner',
   taskRunner: 'runner',
+  taskAgents: 'runner',
   agentProfile: 'runner',
   model: 'model',
   effort: 'model',

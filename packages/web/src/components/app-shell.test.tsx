@@ -805,6 +805,15 @@ describe('AppShell', () => {
       expect(screen.getByRole('menuitem', { name: 'cezar' }).getAttribute('aria-current')).toBe('true')
     })
 
+    it('keeps the Phones entry in the rail, above the expand button', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git', { phonesRail: <button type="button" data-slot="rail-phones">Phones</button> })
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      const phones = rail.querySelector('[data-slot="rail-phones"]') as HTMLElement
+      const unfold = rail.querySelector('[data-slot="sidebar-unfold"]') as HTMLElement
+      expect(phones.compareDocumentPosition(unfold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
     it('folds the switch into two stacked mode icons above the nav, each with its dot', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       const rail = () => document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement

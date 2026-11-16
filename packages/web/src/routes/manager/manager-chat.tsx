@@ -795,7 +795,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           key={id}
           compact
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
+          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -813,7 +813,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           // Phones: the interval lives in the gear and the spinner beside the name.
           <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
             <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
-            <TaskRunnerPicker {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
+            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
             {working ? (
               <>
                 <span aria-hidden="true">·</span>

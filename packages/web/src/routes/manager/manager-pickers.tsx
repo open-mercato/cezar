@@ -1,11 +1,12 @@
 import { CheckIcon, ChevronDownIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { useAgentProfiles, useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -22,9 +23,9 @@ import {
   MANAGER_CRON_MINUTES,
   managerCronMinutesSchema,
   managerEffortSchema,
-  runnerSchema,
   type ManagerEffort,
   type ManagerProjects,
+  type ManagerTaskAgent,
   type Runner,
   type UpdateManagerInput,
   managerAccessOf,
@@ -34,7 +35,7 @@ import {
 /** What a picker edits. `null` clears, as in the update route; the setup screen maps it to absent. */
 export type ManagerPatch = Pick<
   UpdateManagerInput,
-  'projects' | 'access' | 'projectAccess' | 'runner' | 'taskRunner' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
+  'projects' | 'access' | 'projectAccess' | 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
 >
 
 export const PICKER_TRIGGER =
@@ -304,33 +305,74 @@ function AccountOptions({ runner, agentProfile, onChange }: { runner: Runner; ag
   )
 }
 
-export function TaskRunnerPicker({ taskRunner, onChange, pill = false, chip = false }: {
+export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = false, chip = false }: {
   taskRunner?: Runner
+  taskAgents?: ManagerTaskAgent[] | undefined
   onChange: (patch: ManagerPatch) => void
   pill?: boolean
   chip?: boolean
 }) {
-  const runners = usableRunners(useProviderStatus().data)
-  const choices = taskRunner && !runners.includes(taskRunner) ? [taskRunner, ...runners] : runners
+  const status = useProviderStatus().data
+  const profiles = useAgentProfiles().data?.profiles ?? []
+  const selected = taskAgents ?? (taskRunner ? [{ runner: taskRunner }] : [])
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState<ManagerTaskAgent[]>(selected)
+  const value = open ? draft : selected
+  const same = (a: ManagerTaskAgent, b: ManagerTaskAgent) => a.runner === b.runner && a.agentProfile === b.agentProfile
+  const runners = [...new Set([
+    ...usableRunners(status),
+    ...profiles.filter((profile) => profile.id !== DEFAULT_AGENT_ACCOUNT_ID
+      && status?.providers.find((row) => row.provider === profile.provider)?.enabled !== false
+      && status?.providers.find((row) => row.provider === profile.provider)?.status !== 'not-installed').map((profile) => profile.provider),
+    ...value.map((agent) => agent.runner),
+  ])]
+  const accountLabel = (agent: ManagerTaskAgent) => agent.agentProfile === undefined ? 'Automatic account'
+    : profiles.find((profile) => profile.provider === agent.runner && profile.id === agent.agentProfile)?.label
+      ?? (agent.agentProfile === DEFAULT_AGENT_ACCOUNT_ID ? 'Default' : `Unavailable account (${agent.agentProfile})`)
+  const change = (next: ManagerTaskAgent[]) => {
+    setDraft(next)
+    onChange({ taskRunner: null, taskAgents: next.length ? next : null })
+  }
+  const label = value.length === 0 ? 'Automatic' : value.length === 1
+    ? value[0]!.runner : `${value.length} accounts`
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={(next) => { if (next) setDraft(selected); setOpen(next) }}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           data-slot="manager-task-runner-picker"
           aria-label="Agent for new tasks"
-          title="Choose the agent for new tasks. Automatic lets the manager choose for each task."
+          title="Choose the accounts the manager may use for new tasks. Automatic lets it choose freely."
           className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 rounded-full border border-border px-2.5 text-xs')}
         >
-          <TriggerLabel>Tasks: {taskRunner ?? 'Automatic'}</TriggerLabel>
+          <TriggerLabel>Tasks: {label}</TriggerLabel>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Agent for new tasks</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={taskRunner ?? ''} onValueChange={(next) => onChange({ taskRunner: next === '' ? null : runnerSchema.parse(next) })}>
-          <DropdownMenuRadioItem value="">Automatic</DropdownMenuRadioItem>
-          {choices.map((runner) => <DropdownMenuRadioItem key={runner} value={runner}>{runner}</DropdownMenuRadioItem>)}
-        </DropdownMenuRadioGroup>
+      <DropdownMenuContent align="start" className="max-w-[calc(100vw-2rem)]">
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Accounts for new tasks</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem checked={value.length === 0} onSelect={(event) => event.preventDefault()} onCheckedChange={() => change([])} className="pointer-coarse:min-h-11">
+          Automatic
+        </DropdownMenuCheckboxItem>
+        {runners.map((runner) => {
+          const choices: ManagerTaskAgent[] = [{ runner, agentProfile: DEFAULT_AGENT_ACCOUNT_ID },
+            ...profiles.filter((profile) => profile.provider === runner && profile.id !== DEFAULT_AGENT_ACCOUNT_ID).map((profile) => ({ runner, agentProfile: profile.id })),
+          ]
+          for (const agent of value.filter((agent) => agent.runner === runner)) if (!choices.some((choice) => same(choice, agent))) choices.push(agent)
+          return <div key={runner}>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs text-muted-foreground">{runner}</DropdownMenuLabel>
+            {choices.map((agent) => {
+              const checked = value.some((choice) => same(choice, agent))
+              return <DropdownMenuCheckboxItem
+                key={JSON.stringify(agent)}
+                checked={checked}
+                className="pointer-coarse:min-h-11"
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={() => change(checked ? value.filter((choice) => !same(choice, agent)) : [...value, agent])}
+              ><span className="min-w-0 break-words whitespace-normal">{runner} · {accountLabel(agent)}</span></DropdownMenuCheckboxItem>
+            })}
+          </div>
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   )

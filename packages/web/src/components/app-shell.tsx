@@ -112,6 +112,12 @@ export type AppShellProps = {
   offerAddProject?: boolean
   /** The Tools submenu's body (`ToolsMenuItems`). */
   toolsMenu?: ReactNode
+  /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
+  connectPhone?: ReactNode
+  /** Footer controls: the Phones icon beside the version chip, once a phone is paired. Gates itself. */
+  phonesLink?: ReactNode
+  /** The folded rail's Phones icon, above the expand button. Gates itself. */
+  phonesRail?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
@@ -259,6 +265,9 @@ export const AppShell = React.memo(function AppShell({
   linkProjectId = null,
   offerAddProject = false,
   toolsMenu,
+  connectPhone,
+  phonesLink,
+  phonesRail,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
@@ -387,6 +396,9 @@ export const AppShell = React.memo(function AppShell({
     healthReason,
     offerAddProject: offerAddProject && !singleProject,
     toolsMenu,
+    connectPhone,
+    phonesLink,
+    phonesRail,
     singleProject,
     brandName,
     brandLogoUrl,
@@ -572,6 +584,12 @@ type NavProps = {
   healthReason: string | null
   offerAddProject: boolean
   toolsMenu?: ReactNode
+  /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
+  connectPhone?: ReactNode
+  /** Footer controls: the Phones icon beside the version chip, once a phone is paired. Gates itself. */
+  phonesLink?: ReactNode
+  /** The folded rail's Phones icon, above the expand button. Gates itself. */
+  phonesRail?: ReactNode
   brandName: string
   brandLogoUrl: string | null
   singleProject: boolean
@@ -784,6 +802,7 @@ function SidebarIconRail({
           </nav>
         </>
       )}
+      {props.phonesRail ? <div className="mt-auto flex shrink-0 flex-col items-center">{props.phonesRail}</div> : null}
       <Button
         type="button"
         variant="ghost"
@@ -795,7 +814,8 @@ function SidebarIconRail({
         title={expandTitle}
         autoFocus={autoFocus}
         onClick={onExpand}
-        className="mt-auto shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground"
+        // With a phones slot, its wrapper takes the push to the foot; the button sits under it.
+        className={cn('shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground', props.phonesRail ? 'mt-1' : 'mt-auto')}
       >
         <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
       </Button>
@@ -926,7 +946,7 @@ function SidebarContent({
   const {
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
     newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
-    offerAddProject, toolsMenu, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
+    offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
   const workspace = items.filter((item) => item.group === 'workspace')
@@ -1032,6 +1052,8 @@ function SidebarContent({
         starCount={starCount}
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}
+        connectPhone={connectPhone}
+        phonesLink={phonesLink}
         whatsNew={whatsNew}
         whatsNewUnseen={whatsNewUnseen}
         healthReason={healthReason}

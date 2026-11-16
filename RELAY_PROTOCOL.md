@@ -130,12 +130,13 @@ its claim window gets a 4408 close at once, with no `hello`.
 | --- | --- | --- | --- |
 | 1000 | | `normal` | Nothing |
 | 1001 | | `going-away` | Reconnect with jitter. A relay deploy causes this |
+| 1012 | | `reconnect` | Reconnect within seconds (1–5 s, jittered), not counted as a failure. The relay operator asks for a fresh socket |
 | 4400 | 400 | `bad-frame` | Stop. A bug, reported in the UI |
 | 4401 | 401 | `bad-proof` | As the 401 refusal |
 | 4403 | 403 | `device-removed` | Phone: stop reconnecting and show that this phone was removed. Keep the keys and offer a manual retry, because the relay is untrusted and a lost room looks the same |
 | 4404 | 404 | `no-rendezvous` | Phone: "code not found or expired" |
 | 4408 | | `pair-expired` | Show a new code |
-| 4409 | | `replaced` | cezar: do not reconnect. Another process owns this identity. Phone: this socket was replaced, so do nothing |
+| 4409 | | `replaced` | cezar: another process owns this identity. Reconnect after 10 minutes, doubling to an hour, plus up to 60 s of jitter, so an owner that exited is not the end. Phone: this socket was replaced, so do nothing |
 | 4410 | 409 | `pair-taken` | Phone: show a warning. Pairing has failed safe |
 | 4413 | | `frame-too-large` | Stop. A bug, reported in the UI |
 | 4426 | 426 | `protocol-unsupported` | Show "update the app" or "update cezar" |
@@ -144,8 +145,13 @@ its claim window gets a 4408 close at once, with no `hello`.
 | 4451 | | `email-unconfirmed`, `account-required`, `suspended`, `terms-required-device` | § 18. The reason is in an `error` frame with no `id`, else in the close reason; neither means `email-unconfirmed`. cezar retries every 10 minutes plus up to 60 s of jitter, at once after a change, and at most once an hour when `suspended`. A phone stops and says why |
 | 4503 | 503 | `relay-disabled` | Back off 5 to 15 minutes. The operator's kill switch |
 
-Any other close or network loss is treated like 1001. Reconnection uses full jitter: attempt `n`
-waits a uniform random time from 1 s to `min(300 s, 2^n s)`, and `n` resets after 60 s connected.
+Any other close or network loss is treated like 1001, and so is an HTTP refusal with no relay `code`
+(a captive portal, a proxy or the CDN answered) and a 503 whose code is not `relay-disabled`.
+Reconnection uses full jitter: attempt `n` waits a uniform random time from 1 s to
+`min(300 s, 2^n s)`, and `n` resets after 60 s connected. A socket with no `hello` 30 s after it was
+opened is network loss. After a sleep (the wall clock jumped past the client's timers), cezar pings at
+once when connected, and otherwise cuts a pending network-loss backoff short with `n` reset; a wait
+the relay asked for is kept.
 
 ## 4. Frames
 
@@ -288,8 +294,8 @@ rate-limited even though any key may call it.
 `platform` is `ios` or `android`. `token` is 1 to 1,024 characters. The answer is
 `200 { "grant": "…", "grantId": "…", "expiresAt": 1801267200 }`. A grant lasts 90 days, and the phone
 renews on app open once under 30 days remain. The phone hands it to cezar as an HTTP request inside
-the session, so no tunnel frame exists for it. R5 names that route in the spec and in
-BACKWARD_COMPATIBILITY.md §2 before any app build calls it.
+the session, so no tunnel frame exists for it: `PUT /api/v1/workspace/phone/push`, listed in
+BACKWARD_COMPATIBILITY.md §2.
 
 **Send.** `POST /v1/push`, signed with the key sealed in the grant:
 
