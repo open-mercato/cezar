@@ -10,16 +10,24 @@ sources:
     line: 146
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
 ---
-Cezar runs tasks through Cursor Agent CLI installed and signed in on your computer. Select Cursor when creating a task, then choose a model or auto.
+Cezar runs tasks through the local Cursor Agent CLI using your Cursor account. You can sign in with the same account you use at [cursor.com/agents](https://cursor.com/agents).
 
-## Where to find it
+## Connect your account
 
-New task → runner → Cursor
+1. Open **Settings → Agents → Accounts** and find Cursor. The connection instructions remain visible even when it says Connected.
+2. If the CLI is missing, follow the installation link shown there, then click **Verify connection**.
+3. Click **Connect Cursor account** (or **Sign in again** for an existing login). Finish Cursor's sign-in in the terminal and browser. If Cezar cannot open a terminal, the page keeps the login command so you can run it manually.
+4. Click **Verify connection**. Cezar checks the CLI login and refreshes its model catalog immediately, including after a previous discovery failure.
+5. Review **Cursor models**, then click **New task with Cursor**. Choose a model or leave auto, enter a task, and start it.
 
-## How to use it
+Signing in on the Cursor website alone does not sign in the CLI. Cursor also supports a user API key through `CURSOR_API_KEY` in the environment of the process running Cezar; this screen does not accept or store API keys or import browser cookies. On a remote Cezar host, run `agent login` on that host and verify from Settings.
 
-1. Install the local agent CLI and sign in.
-2. Start Cezar and select Cursor.
-3. Choose a model or leave auto.
+## Local tasks and Cloud Agents
+
+This integration executes tasks in Cezar's local worktrees. It does not list, attach, or resume existing Cloud Agent sessions from cursor.com/agents. Cursor exposes a separate [Cloud Agents API](https://cursor.com/docs/cloud-agent/api/overview), which this backend does not implement. A working website session does not establish CLI authentication or API access.
+
+The model list comes from `agent models`. If discovery fails, run that command on the Cezar host to check account access, then click **Verify connection** to retry. A connected CLI does not guarantee access to every model: Cursor still applies your plan and team permissions at execution time.
+
+See Cursor's [authentication guide](https://cursor.com/docs/cli/reference/authentication) and [CLI parameters](https://cursor.com/docs/cli/reference/parameters) for the supported login methods and model commands.
 
 > **Good to know**: Continue opens a fresh session. This backend does not report tokens or cost, so a zero in the header does not confirm a free run.

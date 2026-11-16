@@ -433,6 +433,26 @@ async function pickSelect(label: string, option: string) {
 // ---- the hero surface -------------------------------------------------------------------------
 
 describe('the hero surface', () => {
+  it('prefills Cursor from the connection page without starting a task or keeping another runner\'s model', async () => {
+    writeDraft({ ...readDraft(), text: 'Keep my prompt', runner: 'claude', agentProfile: 'claude-work', model: 'opus', reasoningEffort: 'high' })
+    serve({ health: { ...HEALTH, checks: [...HEALTH.checks, { name: 'cursor', available: true }] },
+      providerStatus: { providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'cursor', status: 'connected', enabled: true },
+      ] },
+    })
+    renderNewTask('/new?runner=cursor')
+    await pillReady()
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('cursor'))
+    expect(textarea().value).toBe('Keep my prompt')
+    expect(readDraft()).toMatchObject({ runner: 'cursor', agentProfile: null, model: null, reasoningEffort: null })
+    expect(requests.some((r) => r.method === 'POST' && r.url.endsWith('/runs'))).toBe(false)
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Composer 2.5/ }))
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'cursor', model: 'composer-2.5', task: 'Keep my prompt' })
+  })
+
   it('offers one Start action without a plan-mode switcher', async () => {
     serve()
     renderNewTask()

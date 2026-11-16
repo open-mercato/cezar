@@ -6,6 +6,30 @@ const models: ModelOption[] = [
 ];
 
 describe('RunnerModelCatalog', () => {
+  it('rechecks models immediately after login, bypassing cached failure and old-account models', async () => {
+    const discover = vi.fn().mockRejectedValueOnce(new Error('signed out')).mockResolvedValueOnce(models)
+      .mockResolvedValueOnce([{ id: 'composer', label: 'Composer', description: '' }]);
+    const catalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+    await expect(catalog.get('cursor')).resolves.toMatchObject({ source: 'unavailable' });
+    await expect(catalog.refresh('cursor')).resolves.toMatchObject({ source: 'live', models });
+    await expect(catalog.refresh('cursor')).resolves.toMatchObject({ models: [{ id: 'composer' }] });
+    expect(discover).toHaveBeenCalledTimes(3);
+  });
+
+  it('waits out a pre-login discovery before refreshing the signed-in account', async () => {
+    let finish!: (value: ModelOption[]) => void;
+    const discover = vi.fn().mockImplementationOnce(() => new Promise<ModelOption[]>((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce(models);
+    const catalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+    const beforeLogin = catalog.get('cursor');
+    const afterLogin = catalog.refresh('cursor');
+    finish([{ id: 'old', label: 'Old', description: '' }]);
+    await beforeLogin;
+    await expect(afterLogin).resolves.toMatchObject({ models });
+    await expect(catalog.get('cursor')).resolves.toMatchObject({ models });
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
+
   it('returns a live discovery, then a cached value for five minutes', async () => {
     let now = 1_000;
     const discover = vi.fn(async () => models);

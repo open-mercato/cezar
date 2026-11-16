@@ -25,7 +25,7 @@ const MAX_MODELS = 500;
 export function parseCursorModelsOutput(text: string): ModelOption[] {
   const models: ModelOption[] = [];
   const seen = new Set<string>();
-  for (const rawLine of text.split(/\r?\n/)) {
+  for (const rawLine of text.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
     if (/^available models$/i.test(line)) continue;

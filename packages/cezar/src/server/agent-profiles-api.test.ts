@@ -12,6 +12,7 @@ import { clearProjectProbeCache, registerProject } from '../workspace/projects.t
 import { apiRequest } from './loopback-request.testkit.ts';
 import { PROFILE_CAPABLE_PROVIDERS } from '../core/agent-profiles.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { createApp, type ServerDeps } from './server.ts';
 
 // `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
@@ -1037,6 +1038,61 @@ describe('agent profiles API', () => {
    * signed in", and the branch the cockpit now calls. Connect creates a missing folder (#1918).
    */
   describe('connect, aimed at one account', () => {
+    it('opens Cursor sign-in again only on explicit reconnect, preserving normal connected behaviour', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const app = makeApp({ openTerminal });
+      const connect = (reconnect?: unknown) => apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cursor', ...(reconnect === undefined ? {} : { reconnect }) }),
+      });
+      const normal = await connect();
+      expect(await normal.json()).toMatchObject({ opened: false, connected: true });
+      expect(openTerminal).not.toHaveBeenCalled();
+      const again = await connect(true);
+      expect(again.status).toBe(200);
+      expect(await again.json()).toMatchObject({ opened: true, command: expect.stringContaining('login') });
+      expect(openTerminal).toHaveBeenCalledTimes(1);
+      expect((await connect('true')).status).toBe(400);
+    });
+
+    it('returns the login command when Cursor reconnect cannot open a terminal', async () => {
+      const app = makeApp({ openTerminal: async () => false });
+      const result = await apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cursor', reconnect: true }),
+      });
+      expect(result.status).toBe(409);
+      expect(await result.json()).toMatchObject({ error: expect.stringContaining('manually'), command: expect.stringContaining('login') });
+    });
+
+    it('keeps Cursor reconnect behind the hosted terminal boundary', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const app = makeApp({ bindHost: '0.0.0.0', openTerminal });
+      const result = await apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cursor', reconnect: true }),
+      });
+      expect(result.status).toBe(409);
+      expect(await result.json()).toMatchObject({ error: expect.stringContaining('hosting cezar') });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('refreshes Cursor models on explicit verification after a cached discovery failure', async () => {
+      const discover = vi.fn().mockRejectedValueOnce(new Error('signed out')).mockResolvedValueOnce([
+        { id: 'composer', label: 'Composer', description: '' },
+      ]);
+      const modelCatalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+      const app = makeApp({ modelCatalog });
+      await expect(modelCatalog.get('cursor')).resolves.toMatchObject({ source: 'unavailable' });
+      await apiRequest(app, '/api/v1/workspace/agent-profiles/default:cursor/status?refresh=1');
+      expect(discover).toHaveBeenCalledTimes(1);
+      const verified = await apiRequest(app, '/api/v1/workspace/agent-profiles/default:cursor/status?refresh=1&recheck=1');
+      expect(verified.status).toBe(200);
+      expect(discover).toHaveBeenCalledTimes(2);
+      const models = await apiRequest(app, '/api/v1/models?runner=cursor');
+      expect(await models.json()).toMatchObject({ models: [{ id: 'composer' }], stale: false });
+    });
+
     it('re-probes rather than answering "already connected" from a warm cache', async () => {
       // The trap: `profileStatus` serves the per-account cache, and a CONNECTED answer stands for
       // ten minutes. Without an eviction, Connect after a `claude /logout` opens nothing and says

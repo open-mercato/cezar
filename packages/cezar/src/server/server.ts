@@ -103,6 +103,7 @@ import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { getAgentFallbackPolicyQuerySchema, putAgentFallbackPolicySchema } from '@open-mercato/cezar-contract';
+import { providerConnectSchema } from '@open-mercato/cezar-contract';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -600,14 +601,6 @@ type ProjectApiEnv = { Variables: { project: ProjectContext } };
  *  or path. (`default` matches the slug regex too; the literal keeps the
  *  contract explicit.) */
 const projectIdSchema = z.union([z.literal('default'), z.string().regex(PROJECT_ID_RE)]);
-
-const providerConnectSchema = z.object({
-  provider: z.enum(PROVIDER_IDS),
-  /** Which agent account to sign in (spec 2026-07-29-agent-profiles). Absent = the discovered
-   *  default, which is what every pre-profiles client sends. Without this, "Connect" on a second
-   *  Claude account would open a login for the FIRST one and report success. */
-  profileId: z.string().max(64).optional(),
-}).strict();
 
 /** Agent-account bodies (spec 2026-07-29-agent-profiles). Bounds mirror `agentProfileSchema` in
  *  src/workspace/config.ts exactly, so a value these accept can never be degraded away by the
@@ -2420,7 +2413,7 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: 'Authentication could not be verified. Try again.' }, 500);
       }
 
-      if (row.status === 'connected') {
+      if (row.status === 'connected' && !body.data.reconnect) {
         trackLoginNotOpened(provider, 'already_connected', sid);
         return c.json({ opened: false, connected: true, command });
       }
@@ -2851,6 +2844,7 @@ export function createApp(deps: ServerDeps) {
         if (account.isDefault) {
           const all = await providerStatus(refresh ? { refresh: true } : undefined);
           const row = all.providers.find((candidate) => candidate.provider === account.provider);
+          if (recheck && account.provider === 'cursor') await modelCatalog.refresh('cursor');
           return c.json({ status: row ?? { provider: account.provider, status: 'unknown' as const } });
         }
         // "Check again" re-probes THIS account only — the other accounts' warm answers are not
