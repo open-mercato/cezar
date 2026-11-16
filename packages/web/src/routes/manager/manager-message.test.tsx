@@ -199,6 +199,8 @@ describe('ManagerMessageRow', () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri' }))
       const card = document.querySelector('[data-slot="manager-ask"]')!
       expect(card.getAttribute('data-resolved')).toBe('true')
+      // A back link to an answered decision still lands on it instead of paging all history.
+      expect(card.id).toMatch(/^decision-/)
       expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
       expect(card.textContent).toBe('Answered:ShellDefault')
       expect([...card.querySelectorAll('[data-slot="manager-ask-topics"] [data-slot="chip"]')].map((chip) => chip.textContent)).toEqual(['Shell', 'Default'])

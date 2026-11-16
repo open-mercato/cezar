@@ -173,6 +173,7 @@ function ManagerQuestions({
     return (
       <div
         ref={answered}
+        id={`decision-${messageId}`}
         tabIndex={-1}
         data-slot="manager-ask"
         data-resolved="true"
@@ -190,6 +191,7 @@ function ManagerQuestions({
     return (
       <div
         ref={answered}
+        id={`decision-${messageId}`}
         tabIndex={-1}
         data-slot="manager-ask"
         data-resolved="true"
