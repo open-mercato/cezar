@@ -1,4 +1,4 @@
-import { GitPullRequestIcon, UserRoundIcon } from 'lucide-react'
+import { GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon, GitPullRequestIcon, UserRoundIcon } from 'lucide-react'
 import type { GithubItem } from '@open-mercato/cezar-api-client'
 import { cn, isHttpUrl } from '@/lib/utils'
 
@@ -22,10 +22,11 @@ export function IssueOwnership({ item }: { item: GithubItem }) {
       ) : null}
       {item.linkedPrs?.map(pr => {
         const state = pr.state === 'merged' ? 'Merged' : pr.state === 'closed' ? 'Closed' : pr.isDraft ? 'Draft' : 'Open'
-        const content = <><GitPullRequestIcon aria-hidden="true" className="size-3 shrink-0" /><span className="truncate">PR #{pr.number} · {state}</span></>
-        // The reference chip's own tones (`lib/reference-status.ts`): merged = the green outcome,
-        // open = blue (waiting on a person) — one meaning per hue, nothing a linked PR invents.
-        const className = cn(chip, pr.state === 'merged' ? 'text-success' : pr.state === 'open' && !pr.isDraft ? 'text-info' : '')
+        const Icon = pr.state === 'merged' ? GitMergeIcon : pr.state === 'closed' ? GitPullRequestClosedIcon : pr.isDraft ? GitPullRequestDraftIcon : GitPullRequestIcon
+        const content = <><Icon aria-hidden="true" className="size-3 shrink-0" /><span className="truncate">PR #{pr.number} · {state}</span></>
+        // The reference chip's own GitHub tones (`lib/reference-status.ts`): open green, merged
+        // purple, closed red, draft grey.
+        const className = cn(chip, pr.state === 'merged' ? 'text-merged' : pr.state === 'closed' ? 'text-danger-strong' : pr.isDraft ? '' : 'text-success-strong')
         return isHttpUrl(pr.url) ? (
           <a key={pr.url} className={cn(className, 'hover:underline focus-visible:outline focus-visible:outline-ring')} href={pr.url} target="_blank" rel="noopener noreferrer" title={`${pr.title} — ${pr.url}`} aria-label={`PR #${pr.number} · ${state}: ${pr.title}`}>
             {content}

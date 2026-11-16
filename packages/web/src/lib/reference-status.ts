@@ -8,10 +8,10 @@ import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
  * status whose color says "fine" while its sentence says "blocked" is the exact defect a shared
  * table prevents.
  *
- * `tone` names a role, never a color — `danger` is what the token sheet paints red today. The
- * roles follow the attention grammar (`deriveAttention`, one meaning per hue): blue = waiting on
- * a person, green = the outcome, red = failed, amber = still moving, neutral = parked. Violet is
- * deliberately absent — it is the accent and the running pulse, never a chip at rest.
+ * `tone` names a role, never a color. The roles follow GitHub's own chips, so a reference reads
+ * the same here as on the page it links to: green = open, purple (`merged`) = merged or completed,
+ * red = closed unmerged or failing, grey = draft or not planned, amber = checks running, orange =
+ * conflicts. The accent violet stays absent — it is the running pulse, never a chip at rest.
  */
 export interface ReferenceStatusPresentation {
   /** The two or three words the tooltip leads with. Sentence case, never shouted. */
@@ -24,9 +24,9 @@ export interface ReferenceStatusPresentation {
 export type ReferenceStatusTone =
   | 'success'
   | 'danger'
+  | 'merged'
   | 'neutral'
   | 'pending'
-  | 'info'
   | 'conflict'
 
 export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentation> = {
@@ -40,9 +40,8 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   'review-required': {
     label: 'Waiting for review',
     hint: 'checks are fine, no one has reviewed it yet',
-    // Waiting on a person — the attention model paints that blue (`deriveAttention`), never
-    // violet, which is the running pulse.
-    tone: 'info',
+    // Open, as GitHub paints every open pull request.
+    tone: 'success',
   },
   'changes-requested': {
     label: 'Changes requested',
@@ -62,14 +61,14 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   ready: {
     label: 'Ready to merge',
     hint: 'open, checks pass, nothing is waiting on a reviewer — your move',
-    // Blue, not green: green is the outcome, and this one still waits on a person (you).
-    tone: 'info',
+    // Still open, so green; the check glyph is what sets it apart from waiting for review.
+    tone: 'success',
   },
   merged: {
     label: 'Merged',
-    hint: 'this landed on its base branch',
-    // The outcome tone, same as a `done` task.
-    tone: 'success',
+    hint: 'merged into its base branch — the work landed',
+    // GitHub's merge purple, not green: green is an OPEN pull request (#2171 read as one).
+    tone: 'merged',
   },
   closed: {
     label: 'Closed',
@@ -80,13 +79,12 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   open: {
     label: 'Open',
     hint: 'still open on the tracker',
-    // An open issue is a fact, not an outcome: quiet.
-    tone: 'neutral',
+    tone: 'success',
   },
   completed: {
     label: 'Closed as completed',
     hint: 'the issue was resolved',
-    tone: 'success',
+    tone: 'merged',
   },
   'not-planned': {
     label: 'Closed as not planned',

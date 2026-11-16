@@ -160,6 +160,12 @@
   --pending-strong: #fbbf24;
   /* The ink version of success, for the same reason: emerald-500 is a fill. */
   --success-strong: #34d399;
+  /* The ink version of danger: red-500 as words on white is 3.8:1. Red-400 here (6.5:1 on --card). */
+  --danger-strong: #f87171;
+  /* A MERGED pull request or a completed issue — GitHub's merge purple, so the chip reads the way
+   * the forge it links to does. Redder than `--violet` so the accent is not mistaken for it, and
+   * never alone: the git-merge glyph and the label carry it too. Ink-only, 5.4:1 on --card. */
+  --merged: #a371f7;
 
   /* diff tints */
   --diff-add-bg: rgba(16, 185, 129, 0.1);
@@ -236,6 +242,10 @@
   --pending-strong: #b45309;
   /* emerald-700: emerald-500 as ink on white is ~2.5:1; this is ~5.5:1. */
   --success-strong: #047857;
+  /* red-700, 6.5:1 on white. */
+  --danger-strong: #b91c1c;
+  /* GitHub's light-theme merge purple, 5.1:1 on white. */
+  --merged: #8250df;
 
   /* orange-700, for the same reason the amber above darkens: orange-400 as ink on white is ~2:1.
    * Far enough from `--pending-strong` (amber-700) to stay a different colour, not a shade. */
@@ -368,6 +378,8 @@
   --color-pending: var(--pending);
   --color-pending-strong: var(--pending-strong);
   --color-success-strong: var(--success-strong);
+  --color-danger-strong: var(--danger-strong);
+  --color-merged: var(--merged);
   /* Warning ink and borders — the readable amber, never the --pending fill. */
   --color-warning: var(--pending-strong);
   --color-info: var(--info);

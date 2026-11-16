@@ -28,13 +28,24 @@ import {
 } from '@/lib/reference-status'
 import { cn, isHttpUrl } from '@/lib/utils'
 
-/** Border + text per status tone. A reference with no status known is the NEUTRAL chip: nothing
- *  has been learned, so nothing is claimed. Violet is not here on purpose — the status grammar
- *  (redesign 2026-11, Proposal 7) reserves it for the accent and the running pulse. */
+/** The ink per status tone — the chip's text and the status card's headline. The `-strong`
+ *  tokens, not the fills: emerald-500 and red-500 fail AA as words on the light theme. */
+const TONE_TEXT: Record<ReferenceStatusTone, string> = {
+  success: 'text-success-strong',
+  danger: 'text-danger-strong',
+  merged: 'text-merged',
+  neutral: 'text-muted-foreground',
+  pending: 'text-pending-strong',
+  conflict: 'text-conflict',
+}
+
+/** Border + text per status tone, GitHub's palette (see `REFERENCE_STATUS`). A reference with no
+ *  status known is the NEUTRAL chip: nothing has been learned, so nothing is claimed. The accent
+ *  violet is not here on purpose — `merged` is GitHub's redder purple, its own token. */
 const TONE_CLASS: Record<ReferenceStatusTone, string> = {
-  success: 'border-success/40 text-success',
-  danger: 'border-danger/40 text-danger',
-  info: 'border-info/40 text-info',
+  success: 'border-success/40 text-success-strong',
+  danger: 'border-danger/40 text-danger-strong',
+  merged: 'border-merged/45 text-merged',
   neutral: 'border-border text-muted-foreground',
   // The WHOLE chip goes amber while checks run, not just its dot: "something is happening to this
   // right now" is the state a table is scanned for, and a neutral chip with a coloured dot reads
@@ -52,7 +63,7 @@ const TONE_CLASS: Record<ReferenceStatusTone, string> = {
 const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   success: 'hover:bg-success/10',
   danger: 'hover:bg-danger/10',
-  info: 'hover:bg-info/10',
+  merged: 'hover:bg-merged/10',
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
   conflict: 'hover:bg-conflict/10',
@@ -67,6 +78,7 @@ const STATUS_ICON: Record<ReferenceStatus, LucideIcon | null> = {
   'changes-requested': MessageSquareWarningIcon,
   'checks-pending': null,
   'checks-failing': CircleXIcon,
+  // Open like `review-required`, so green too; the check is what tells the two apart.
   ready: CircleCheckIcon,
   merged: GitMergeIcon,
   closed: GitPullRequestClosedIcon,
@@ -219,7 +231,20 @@ export function ReferenceChip({
     <>
       <span className="block font-medium">
         {kind === 'PR' ? 'Pull request' : 'Issue'}
-        {number ? ` #${number}` : ''} · {tooltip.headline}
+        {number ? ` #${number}` : ''} ·{' '}
+        {/* The status word in the chip's own ink and glyph, so the card and the chip agree. */}
+        <span data-slot="reference-status-headline" className={presentation && TONE_TEXT[presentation.tone]}>
+          {presentation ? (
+            <span className="mr-1 inline-flex align-middle">
+              {conflicting ? (
+                <TriangleAlertIcon className="size-2.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <StatusGlyph status={status} />
+              )}
+            </span>
+          ) : null}
+          {tooltip.headline}
+        </span>
       </span>
       <span className="block">{tooltip.detail}</span>
       {/* The status the conflict painted over. It is still true — a conflicting PR can also be
