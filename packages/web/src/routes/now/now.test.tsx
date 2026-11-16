@@ -297,6 +297,16 @@ describe('NowView — what main showed on the home', () => {
     expect(screen.queryByTestId('welcome-back')).toBeNull()
     expect(screen.queryByTestId('setup-pill')).toBeNull()
   })
+
+  it('leaves mobile task creation to Manager when it is available, as the Tasks page does (#2272)', () => {
+    renderNow({ runs: [run({ status: 'running' })], managersAvailable: true })
+    expect(document.querySelector('[data-slot="new-task-fab"]')).toBeNull()
+    cleanup()
+
+    // The capability fallback: without Manager the FAB is still the phone's way to start a task.
+    renderNow({ runs: [run({ status: 'running' })] })
+    expect(document.querySelector('[data-slot="new-task-fab"]')?.getAttribute('href')).toBe('/p/cezar/new')
+  })
 })
 
 describe('NowRoute — scheduled tasks (#1340)', () => {

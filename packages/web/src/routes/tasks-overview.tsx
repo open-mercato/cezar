@@ -67,8 +67,11 @@ import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention, isIdleClosed, type Attention } from '@/lib/attention'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import {
+  CONTROLS_COLUMN_WIDTH_PX,
+  FOLDED_COLUMN_WIDTH_PX,
   isColumnExpanded,
   normalizeExpandedColumns,
+  tableMinWidth,
   taskColumnsForCapabilities,
   type NormalizedExpandedColumns,
   type TaskColumnDefinition,
@@ -442,11 +445,17 @@ export function TasksOverview({
                 {/* Fixed layout: the Task column takes whatever the fixed-width columns leave,
                     so a title stops truncating at thirty characters while Branch, Ref and Mem keep
                     their room (spec: attention-first cockpit (2026-11-11), Finding 1). */}
-                <table className="w-full table-fixed border-collapse" aria-rowcount={tableWindow.ariaRowCount}>
+                {/* A fixed table ignores the Task cell's own floor: below the columns' sum it gave the
+                    title 0px (iPad portrait), so the table keeps that floor and scrolls instead. */}
+                <table
+                  className="w-full table-fixed border-collapse"
+                  style={{ minWidth: `${tableMinWidth(columns, expandedColumns, Boolean(onTaskAction))}px` }}
+                  aria-rowcount={tableWindow.ariaRowCount}
+                >
                   <colgroup>
                     {/* The checkbox is all the controls column reserves; the quick actions float over
                         the row on hover (owner review, 2026-11-12: "the left side fell apart"). */}
-                    {onTaskAction ? <col data-column-id="controls" style={{ width: '36px' }} /> : null}
+                    {onTaskAction ? <col data-column-id="controls" style={{ width: `${CONTROLS_COLUMN_WIDTH_PX}px` }} /> : null}
                     {columns.map((column) => {
                       const expanded = isColumnExpanded(column.id, expandedColumns)
                       return (
@@ -454,7 +463,7 @@ export function TasksOverview({
                           key={column.id}
                           data-column-id={column.id}
                           data-expanded={expanded}
-                          style={{ width: expanded ? column.width : '42px' }}
+                          style={{ width: expanded ? column.width : `${FOLDED_COLUMN_WIDTH_PX}px` }}
                         />
                       )
                     })}
@@ -1650,7 +1659,9 @@ const TaskCard = React.memo(function TaskCard({
       }}
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
-      <div className="flex items-start gap-2.5">
+      {/* A status pill beside the title left a phone title one word wide, overlapping the age at
+          large text: the title gets its own full-width line below the pill and age. */}
+      <div data-slot="task-card-head" className={cn('flex items-start gap-2.5', !quiet && 'flex-wrap gap-y-1.5')}>
         {selectable ? <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected}
           disabled={actionsBusy} onChange={() => onSelect(run.id)} /> : null}
         {quiet ? (
@@ -1664,8 +1675,10 @@ const TaskCard = React.memo(function TaskCard({
         <Link
           to={to}
           aria-describedby={quiet ? statusId : undefined}
+          data-slot="task-card-title"
           className={cn(
-            'min-w-0 flex-1 text-ui leading-[1.35]',
+            'min-w-0 flex-1 text-ui leading-[1.35] [overflow-wrap:anywhere]',
+            !quiet && 'order-last basis-full',
             unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
           )}
         >
@@ -1692,7 +1705,7 @@ const TaskCard = React.memo(function TaskCard({
             className="mt-px"
           />
         ) : null}
-        <span className="mt-0.5 shrink-0 text-meta text-soft-foreground tabular-nums">
+        <span className={cn('mt-0.5 shrink-0 text-meta text-soft-foreground tabular-nums', !quiet && 'ml-auto')}>
           <RelativeAge at={sortTimestamp(run, sortBy)} />
         </span>
         {/* Always visible here, not hover-revealed: a card has no hover to speak of on the

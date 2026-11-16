@@ -35,10 +35,11 @@ export function RunUsage({
   const visibility = usageMetricVisibility(useHealth().data)
   const showLiveUsage = useLiveUsageEnabled() && liveUsageParts(run.liveUsage).length > 0
   const account = accountPart(useRunClaudeAccount(run, showLiveUsage))
+  // Shrinkable: a fixed-width strip in the right-aligned dock overflowed off the phone's left edge.
   return (
     <span
       data-slot="run-usage"
-      className={cn('flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-1.5 text-meta text-muted-foreground', className)}
+      className={cn('flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-meta text-muted-foreground', className)}
     >
       {showLiveUsage ? <LiveUsage usage={run.liveUsage} account={account} /> : null}
       <UsageChip run={run} showTokens={visibility.tokens} showCost={visibility.cost} continuationEngine={continuationEngine} />

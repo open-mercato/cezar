@@ -797,6 +797,8 @@ describe('/manager/:id', () => {
       fireEvent.change(screen.getByRole('textbox', { name: 'Search managers or device' }), { target: { value: '' } })
       fireEvent.click(screen.getByRole('checkbox', { name: 'Needs you' }))
       expect(document.querySelectorAll('[data-slot="manager-directory-card"]')).toHaveLength(1)
+      // The whole bordered chip is the target, not the 13px box.
+      expect(document.querySelector('[data-slot="manager-needs-you-filter"]')?.className).toContain('min-h-12')
       expect(screen.getByRole('link', { name: /^Switch computer/ }).getAttribute('href')).toBe('cezar://servers')
       expect(calls.filter((call) => call.method === 'GET').every((call) => call.path.startsWith('/api/v1/workspace/managers'))).toBe(true)
     })

@@ -127,6 +127,36 @@ for (const timing of ['before opening', 'while open'] as const) {
 }
 
 
+// The directory search used to collapse to a few letters beside the filter at enlarged text.
+test('directory search and Needs you filter stay usable at normal and 200% text', async ({ app, browser, screen }) => {
+  mkdirSync(artifacts, { recursive: true })
+  await browser.setViewport({ width: 375, height: 812 })
+  for (const fontSize of ['16px', '32px'] as const) {
+    await app.open('/e2e/mobile-navigation/index.html')
+    await browser.evaluate((size) => { document.documentElement.style.fontSize = size; return true }, fontSize)
+    await expect(screen.getByRole('textbox', 'Search managers or device')).toBeVisible()
+    const geometry = await browser.evaluate(() => {
+      const rect = (selector: string) => document.querySelector(selector)!.getBoundingClientRect()
+      const search = rect('input[aria-label="Search managers or device"]')
+      const filter = rect('[data-slot="manager-needs-you-filter"]')
+      const list = rect('[data-route="manager-list"]')
+      return { search: { width: search.width, top: search.top }, filter: { height: filter.height, top: filter.top }, list: { width: list.width }, overflow: document.documentElement.scrollWidth > innerWidth }
+    })
+    writeFileSync(resolve(artifacts, `directory-toolbar-${fontSize}.json`), JSON.stringify(geometry, null, 2))
+    expect(geometry.overflow).toBe(false)
+    expect(geometry.filter.height).toBeGreaterThanOrEqual(44)
+    if (fontSize === '16px') {
+      // One row at normal size: the filter sits beside the search.
+      expect(geometry.filter.top).toBe(geometry.search.top)
+    } else {
+      // Wrapped: the search keeps the row to itself instead of shrinking to a few letters.
+      expect(geometry.filter.top).toBeGreaterThan(geometry.search.top)
+      expect(geometry.search.width).toBeGreaterThan(geometry.list.width * 0.8)
+    }
+  }
+})
+
+
 test('late task sections expand an initially empty medium sheet', async ({ app, browser, screen }) => {
   mkdirSync(artifacts, { recursive: true })
   await browser.setViewport({ width: 375, height: 640 })

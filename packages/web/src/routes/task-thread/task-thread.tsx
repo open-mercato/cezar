@@ -512,29 +512,25 @@ export function ThreadView({
         <AutoResumeHint run={run} />
 
         {!lifecycleGate && budget ? (
-          <div
-            data-slot="budget-hint"
-            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-          >
+          <div data-slot="budget-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
-            Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            <span className={HINT_TEXT}>
+              Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            </span>
             {run.status === 'waiting' ? (
               <>
-                <span aria-hidden="true">·</span>
+                <span aria-hidden="true" className="max-sm:hidden">·</span>
                 <EndSessionButton runId={run.id} />
               </>
             ) : null}
           </div>
         ) : !lifecycleGate && run.status === 'waiting' ? (
-          <div
-            data-slot="paused-hint"
-            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-          >
+          <div data-slot="paused-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
-            The agent is paused, waiting for your reply
+            <span className={HINT_TEXT}>The agent is paused, waiting for your reply</span>
             {/* The other answer to "your turn": not replying at all. It sits beside the hint
                 because that is the moment the choice is made — reply below, or end it here. */}
-            <span aria-hidden="true">·</span>
+            <span aria-hidden="true" className="max-sm:hidden">·</span>
             <EndSessionButton runId={run.id} />
           </div>
         ) : null}
@@ -570,6 +566,10 @@ export function ThreadView({
   )
 }
 
+// On a phone the hint text wraps in its own column so End session stays one tappable line beside it.
+const HINT_ROW = 'flex items-center gap-2 px-1 text-xs text-muted-foreground'
+const HINT_TEXT = 'max-sm:min-w-0 max-sm:flex-1'
+
 /** Ends a waiting session (`POST /finish`): the run completes as done, or parks at review when
  *  the worktree holds changes. A text button, like the footer's Continue — part of the hint line
  *  it answers, not a toolbar control. */
@@ -582,7 +582,7 @@ function EndSessionButton({ runId }: { runId: string }) {
         data-slot="end-session"
         disabled={finish.isPending}
         onClick={() => finish.mutate()}
-        className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+        className="shrink-0 rounded-sm font-medium whitespace-nowrap text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60 pointer-coarse:max-md:min-h-11 pointer-coarse:max-md:px-2"
       >
         End session
       </button>
