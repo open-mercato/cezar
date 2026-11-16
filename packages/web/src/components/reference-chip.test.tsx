@@ -63,19 +63,17 @@ describe('ReferenceChip with a status', () => {
     expect(chip.getAttribute('aria-label')).toContain('Checks failing')
   })
 
-  // GitHub's convention, so a chip reads the same as the page it links to: open green, merged
-  // and completed purple, closed and failing red, draft and not planned grey — each with GitHub's
-  // own glyph, so the colour is never the only channel.
+  // One colour per meaning, and a glyph beside it so colour is never the only channel.
   it.each([
-    ['review-required', 'text-success-strong', 'lucide-git-pull-request'],
+    ['review-required', 'text-info', 'lucide-git-pull-request'],
     ['ready', 'text-success-strong', 'lucide-circle-check'],
     ['merged', 'text-merged', 'lucide-git-merge'],
-    ['closed', 'text-danger-strong', 'lucide-git-pull-request-closed'],
+    ['closed', 'text-muted-foreground', 'lucide-git-pull-request-closed'],
     ['draft', 'text-muted-foreground', 'lucide-git-pull-request-draft'],
     ['checks-failing', 'text-danger-strong', 'lucide-circle-x'],
     ['changes-requested', 'text-danger-strong', 'lucide-message-square-warning'],
-    ['open', 'text-success-strong', 'lucide-circle-dot'],
-    ['completed', 'text-merged', 'lucide-circle-check'],
+    ['open', 'text-muted-foreground', 'lucide-circle-dot'],
+    ['completed', 'text-success-strong', 'lucide-circle-check'],
     ['not-planned', 'text-muted-foreground', 'lucide-circle-slash'],
   ] as const)('paints %s with %s and the %s glyph', (status, tone, icon) => {
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />)
@@ -83,17 +81,22 @@ describe('ReferenceChip with a status', () => {
     expect(chip.querySelector('svg')?.getAttribute('class')).toContain(icon)
   })
 
-  it('paints a merged pull request purple, never the green of an open one (#2171)', () => {
-    const toneOf = (status: 'review-required' | 'merged') =>
+  // Pairs that once shared a colour and were reported for it: a merged PR read as a ready one
+  // (#2171), ready read as waiting for review, and closed read as changes requested.
+  it.each([
+    ['merged', 'ready'],
+    ['ready', 'review-required'],
+    ['closed', 'changes-requested'],
+  ] as const)('never paints %s in the colour of %s', (a, b) => {
+    const toneOf = (status: ReferenceStatus) =>
       chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />).className
-    const open = toneOf('review-required')
+    const first = toneOf(a)
     cleanup()
-    const merged = toneOf('merged')
-    expect(merged).toContain('text-merged')
-    expect(merged).not.toContain('text-success')
+    const second = toneOf(b)
+    expect(first).not.toBe(second)
     // Nor the accent violet: that hue is the running pulse.
-    expect(open).not.toContain('text-violet')
-    expect(merged).not.toContain('text-violet')
+    expect(first).not.toContain('text-violet')
+    expect(second).not.toContain('text-violet')
   })
 
   it('turns the WHOLE chip amber while checks run, and keeps the pulsing dot', () => {

@@ -8,10 +8,10 @@ import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
  * status whose color says "fine" while its sentence says "blocked" is the exact defect a shared
  * table prevents.
  *
- * `tone` names a role, never a color. The roles follow GitHub's own chips, so a reference reads
- * the same here as on the page it links to: green = open, purple (`merged`) = merged or completed,
- * red = closed unmerged or failing, grey = draft or not planned, amber = checks running, orange =
- * conflicts. The accent violet stays absent — it is the running pulse, never a chip at rest.
+ * `tone` names a role, never a color: blue = waiting on a reviewer, green = ready or done,
+ * purple (`merged`) = a merged pull request, red = something to fix (checks, requested changes),
+ * grey = parked or finished without landing, amber = checks running, orange = conflicts. The
+ * accent violet stays absent — it is the running pulse, never a chip at rest.
  */
 export interface ReferenceStatusPresentation {
   /** The two or three words the tooltip leads with. Sentence case, never shouted. */
@@ -27,6 +27,7 @@ export type ReferenceStatusTone =
   | 'merged'
   | 'neutral'
   | 'pending'
+  | 'info'
   | 'conflict'
 
 export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentation> = {
@@ -40,8 +41,8 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   'review-required': {
     label: 'Waiting for review',
     hint: 'checks are fine, no one has reviewed it yet',
-    // Open, as GitHub paints every open pull request.
-    tone: 'success',
+    // Waiting on a person — blue, so it never reads as `ready`'s green.
+    tone: 'info',
   },
   'changes-requested': {
     label: 'Changes requested',
@@ -61,30 +62,33 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   ready: {
     label: 'Ready to merge',
     hint: 'open, checks pass, nothing is waiting on a reviewer — your move',
-    // Still open, so green; the check glyph is what sets it apart from waiting for review.
+    // Green: nothing left but the merge. Blue `review-required` is the state it graduates from.
     tone: 'success',
   },
   merged: {
     label: 'Merged',
     hint: 'merged into its base branch — the work landed',
-    // GitHub's merge purple, not green: green is an OPEN pull request (#2171 read as one).
+    // GitHub's merge purple, so a merged PR never reads as a `ready` one (#2171).
     tone: 'merged',
   },
   closed: {
     label: 'Closed',
     hint: 'closed without merging — the work did not land',
-    tone: 'danger',
+    // Grey, not red: red is "something to fix" (checks, requested changes), and a closed PR is
+    // nobody's move. Its closed glyph keeps it apart from a grey draft.
+    tone: 'neutral',
   },
   // ---- issues ---------------------------------------------------------------------------
   open: {
     label: 'Open',
     hint: 'still open on the tracker',
-    tone: 'success',
+    // An open issue is a fact, not an outcome: quiet.
+    tone: 'neutral',
   },
   completed: {
     label: 'Closed as completed',
     hint: 'the issue was resolved',
-    tone: 'merged',
+    tone: 'success',
   },
   'not-planned': {
     label: 'Closed as not planned',

@@ -24,9 +24,9 @@ export function IssueOwnership({ item }: { item: GithubItem }) {
         const state = pr.state === 'merged' ? 'Merged' : pr.state === 'closed' ? 'Closed' : pr.isDraft ? 'Draft' : 'Open'
         const Icon = pr.state === 'merged' ? GitMergeIcon : pr.state === 'closed' ? GitPullRequestClosedIcon : pr.isDraft ? GitPullRequestDraftIcon : GitPullRequestIcon
         const content = <><Icon aria-hidden="true" className="size-3 shrink-0" /><span className="truncate">PR #{pr.number} · {state}</span></>
-        // The reference chip's own GitHub tones (`lib/reference-status.ts`): open green, merged
-        // purple, closed red, draft grey.
-        const className = cn(chip, pr.state === 'merged' ? 'text-merged' : pr.state === 'closed' ? 'text-danger-strong' : pr.isDraft ? '' : 'text-success-strong')
+        // The reference chip's own tones (`lib/reference-status.ts`): merged purple, open blue
+        // (review state unknown here), closed and draft grey.
+        const className = cn(chip, pr.state === 'merged' ? 'text-merged' : pr.state === 'open' && !pr.isDraft ? 'text-info' : '')
         return isHttpUrl(pr.url) ? (
           <a key={pr.url} className={cn(className, 'hover:underline focus-visible:outline focus-visible:outline-ring')} href={pr.url} target="_blank" rel="noopener noreferrer" title={`${pr.title} — ${pr.url}`} aria-label={`PR #${pr.number} · ${state}: ${pr.title}`}>
             {content}
