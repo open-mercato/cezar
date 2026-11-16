@@ -126,6 +126,22 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect(existsSync(p.records.get(p.id)!.worktreePath!)).toBe(true);
   });
 
+  it('offers cancel-task on interrupted setup whose process cannot be verified (#2165)', async () => {
+    const p = await project(); await p.config([entry('exit 9')]);
+    const prepared = await p.prepare();
+    const setup = await p.coordinator.store.readOperation(prepared.operationId!);
+    setup!.state = 'interrupted';
+    setup!.executions.at(-1)!.process = {pid: 123, hostname: 'unverifiable-host', startedAt: new Date().toISOString(), quiescent: false};
+    setup!.revision++;
+    await p.coordinator.store.writeOperation(setup!, setup!.revision - 1);
+    const view = await p.coordinator.operation(setup!.id);
+    expect(view.allowedActions).toEqual(['cancel-task']);
+    await expect(p.coordinator.action(setup!.id, {requestId: randomUUID(), expectedRevision: view.revision, action: 'retry'})).rejects.toThrow('not available');
+    const done = await p.coordinator.action(setup!.id, {requestId: randomUUID(), expectedRevision: view.revision, action: 'cancel-task'});
+    expect(done.state).toBe('cancelled');
+    expect(existsSync(prepared.path)).toBe(true);
+  });
+
   it('retains interrupted setup with an unverifiable process rather than converting it to variant removal', async () => {
     const p = await project(); await p.config([entry('exit 9')]);
     const prepared = await p.prepare();
