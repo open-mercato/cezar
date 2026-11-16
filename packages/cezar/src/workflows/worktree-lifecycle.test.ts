@@ -384,9 +384,9 @@ describe('cancelling a continuation still awaiting its lifecycle gate', { timeou
     if (deferred) void (p.manager as unknown as {pump(): Promise<void>}).pump();
     await wait(() => expect(openGate).toBeDefined());
     expect(p.manager.isActive(run.id)).toBe(true);
-    // A follow-up rides the starting continuation instead of a 409 (77117b95) — and dies with its
-    // cancel. A dequeued one still reads `queued`, which the cockpit messages rather than continues.
-    expect(p.manager.continueRun(run.id, {text: 'twice'})).toEqual(deferred ? {ok: false, error: 'run is still active'} : {ok: true});
+    // Both read `queued` while preparing (#2216), which the cockpit messages rather than continues,
+    // so a second Continue is refused instead of starting another continuation.
+    expect(p.manager.continueRun(run.id, {text: 'twice'})).toEqual({ok: false, error: 'run is still active'});
 
     const cancelled = p.manager.cancelAndWait(run.id);
     expect(p.store.getRun(run.id)?.status).toBe('cancelled');
@@ -397,6 +397,5 @@ describe('cancelling a continuation still awaiting its lifecycle gate', { timeou
     await new Promise(resolve => setTimeout(resolve, 100));
     expect(launched.length).toBe(launchedBefore);
     expect(p.store.getRun(run.id)?.status).toBe('cancelled');
-    if (!deferred) expect(p.store.readEvents(run.id).some((e) => String(e.message).includes('could not be delivered — the run was cancelled'))).toBe(true);
   });
 });
