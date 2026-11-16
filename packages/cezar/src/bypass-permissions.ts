@@ -5,6 +5,8 @@
 import type { CezConfig } from './config.ts';
 import { isLifecycleConfigTracked } from './worktree-lifecycle/config.ts';
 
+export const BYPASS_PERMISSIONS_HOSTED =
+  'skipping permission prompts is local-only: a hosted cockpit cannot turn approvals off';
 export const BYPASS_PERMISSIONS_TRACKED =
   'skipping permission prompts is off: .ai/cezar/config.json is tracked by git, and only local configuration can grant it';
 export const BYPASS_PERMISSIONS_ROOT =
@@ -14,9 +16,11 @@ export const BYPASS_PERMISSIONS_ROOT =
 export async function bypassPermissionsBlocked(
   repoRoot: string,
   config: Pick<CezConfig, 'bypassPermissions'>,
-  uid: number | undefined = process.getuid?.(),
+  { hosted = false, uid = process.getuid?.() }: { hosted?: boolean; uid?: number } = {},
 ): Promise<string | null> {
   if (config.bypassPermissions !== true) return null;
+  // Like agent-config writes: a hosted operator may rely on Claude's own sandbox to contain agents.
+  if (hosted) return BYPASS_PERMISSIONS_HOSTED;
   // Claude exits on bypass mode as root, so every task would fail instead of asking.
   if (uid === 0) return BYPASS_PERMISSIONS_ROOT;
   if (await isLifecycleConfigTracked(repoRoot).catch(() => true)) return BYPASS_PERMISSIONS_TRACKED;

@@ -90,6 +90,16 @@ describe('bypassPermissions project setting', { timeout: 20_000 }, () => {
     expect(captured.specs[0]!.bypassPermissions).toBeUndefined();
   });
 
+  it('a hosted cockpit ignores a value already in the file, and the run says why', async () => {
+    enable();
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, { hosted: () => true });
+    const id = await start();
+    expect(captured.specs[0]!.bypassPermissions).toBeUndefined();
+    const notes = store.readEvents(id).filter((event) => (event as { type?: string }).type === 'note');
+    expect(JSON.stringify(notes)).toMatch(/local-only/);
+  });
+
   it('a git-tracked config.json cannot grant it, and the run says why', async () => {
     enable();
     await run('git', ['add', '-f', '.ai/cezar/config.json'], { cwd: repoRoot });

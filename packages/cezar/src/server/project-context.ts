@@ -65,6 +65,8 @@ export interface ProjectContextDeps {
    *  When omitted, the map still shares one private instance across the
    *  managers it builds (workspace defaults, never refreshed). */
   semaphore?: WorkspaceSemaphore;
+  /** A hosted cockpit: each project's RunManager keeps `bypassPermissions` off. */
+  hosted?: () => boolean;
 }
 
 export type ProjectContextFailure = 'unknown-project' | 'missing-root';
@@ -251,7 +253,7 @@ export class ProjectContexts {
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
     this.notifyStoreCreated(store);
-    const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id });
+    const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, ...(this.deps.hosted ? { hosted: this.deps.hosted } : {}) });
     let context: ProjectContext | undefined;
     try {
       const launchKey = ensureLaunchKey(dataDir);

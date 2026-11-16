@@ -1598,6 +1598,7 @@ export class RunManager {
 
   /** See the constructor option of the same name. */
   private readonly prWatchProbe: PrWatchProbe;
+  private readonly hosted: () => boolean;
 
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
@@ -1628,9 +1629,12 @@ export class RunManager {
       branchNameWaitMs?: number;
       /** Reads a monitored PR's fingerprint (#2040); tests inject a fake forge. */
       prWatchProbe?: PrWatchProbe;
+      /** A hosted cockpit (`capabilities().localHandoff` false): `bypassPermissions` stays off. */
+      hosted?: () => boolean;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.hosted = options.hosted ?? (() => false);
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
     this.projectId = options.projectId;
@@ -8920,7 +8924,7 @@ export class RunManager {
    *  configuration can grant it: a cloned repository must not turn approvals off. */
   private async bypassPolicy(readOnly: boolean | undefined, config: CezConfig, note?: (message: string) => void): Promise<boolean> {
     if (readOnly || config.bypassPermissions !== true) return false;
-    const blocked = await bypassPermissionsBlocked(this.repoRoot, config);
+    const blocked = await bypassPermissionsBlocked(this.repoRoot, config, { hosted: this.hosted() });
     if (blocked) note?.(blocked);
     return blocked === null;
   }

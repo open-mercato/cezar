@@ -515,6 +515,26 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     expect('bypassPermissions' in rawFile()).toBe(false);
   });
 
+  // #2259 review: a hosted operator may rely on Claude's own sandbox to contain agents.
+  it('a hosted cockpit cannot turn bypassPermissions on, can turn it off, and says why', async () => {
+    const prevRemote = process.env.CEZ_REMOTE;
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ bypassPermissions: true }));
+    process.env.CEZ_REMOTE = '1';
+    try {
+      const refused = await put({ bypassPermissions: true });
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: string }).error).toMatch(/local-only/);
+      const shown = (await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>;
+      expect(shown.bypassPermissionsBlocked).toMatch(/local-only/);
+      const off = await put({ bypassPermissions: null });
+      expect(off.status).toBe(200);
+      expect('bypassPermissions' in rawFile()).toBe(false);
+    } finally {
+      if (prevRemote === undefined) delete process.env.CEZ_REMOTE;
+      else process.env.CEZ_REMOTE = prevRemote;
+    }
+  });
+
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {
     // Default (no config key) is null — the CEZ_REVIEW_GATE env (OFF) decides.
     expect(((await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>).reviewGate).toBeNull();

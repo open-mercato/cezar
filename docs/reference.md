@@ -518,8 +518,9 @@ in `.ai/cezar/config.json`): its Claude tasks then run with
 `--permission-mode bypassPermissions`, so every tool call — including commands
 outside the Claude Code Bash sandbox and tools a step did not list — is approved
 without asking. It is off by default, never applies to read-only tasks or a manager's
-own turns, and is ignored while `config.json` is tracked by git or cezar runs as root
-(Claude Code refuses bypass mode for root). Codex, Junie and OpenCode are driven through their own
+own turns, and is ignored on a hosted cockpit (which also refuses to turn it on), while
+`config.json` is tracked by git, or when cezar runs as root (Claude Code refuses
+bypass mode for root). Codex, Junie and OpenCode are driven through their own
 native protocols and don't honor `allowedTools` at all — see
 [Coding agent backends](#coding-agent-backends) for what each one actually
 locks down. Nothing runs on a server you don't own.

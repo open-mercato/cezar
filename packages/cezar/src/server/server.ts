@@ -301,7 +301,7 @@ import {
   repoIndexContains,
 } from './git-changes.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
-import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
+import { BYPASS_PERMISSIONS_HOSTED, bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
 import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
@@ -1685,6 +1685,7 @@ export function createApp(deps: ServerDeps) {
       return listProjects(selector);
     },
     semaphore: deps.semaphore,
+    hosted: () => !capabilities().localHandoff,
   });
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
@@ -7866,7 +7867,7 @@ export function createApp(deps: ServerDeps) {
       askSkill: config.askSkill ?? null,
       teamSkills: config.skillsRepos.length > 0,
       bypassPermissions: config.bypassPermissions === true,
-      bypassPermissionsBlocked: await bypassPermissionsBlocked(repoRoot, config),
+      bypassPermissionsBlocked: await bypassPermissionsBlocked(repoRoot, config, { hosted: !capabilities().localHandoff }),
     };
   };
   // ---- chained family: per-repo config (project-scoped) ----
@@ -7887,6 +7888,10 @@ export function createApp(deps: ServerDeps) {
         (parsed.data.defaultModels !== undefined || parsed.data.defaultModelsAuto !== undefined)
       ) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
+      // Turning approvals off widens what an agent may do on the host; turning them back on is always allowed.
+      if (parsed.data.bypassPermissions === true && !capabilities().localHandoff) {
+        return c.json({ error: BYPASS_PERMISSIONS_HOSTED }, 409);
       }
       try {
         const configPath = join(dataDir, 'config.json');
@@ -9008,6 +9013,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
     semaphore: deps.semaphore,
+    hosted: () => !resolveCapabilities(process.env, deps.bindHost).localHandoff,
     automationStore: (projectId, root) => {
       const store = automationCoordinator.store(projectId, root)!;
       // A project registered out of process with automations already enabled has no other
