@@ -256,10 +256,10 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let proxyOrigin = ProxyOrigin(port: opened.port())
         origin = proxyOrigin
         if opened.port() != saved { connector.saveRelayPort(id: server.id, port: opened.port()) }
-        opened.setOnListenerLost { [weak self] in
+        opened.setOnListenerLost { [weak self, weak opened] in
             DispatchQueue.main.async {
                 // In the background `becameVisible` binds again; on screen nothing else would.
-                guard let self, LoopbackProxy.shouldRebind(opened, current: self.proxy, started: self.started, leaving: self.leaving) else { return }
+                guard let self, let opened, LoopbackProxy.shouldRebind(opened, current: self.proxy, started: self.started, leaving: self.leaving) else { return }
                 self.rebindProxy("listener failed")
             }
         }

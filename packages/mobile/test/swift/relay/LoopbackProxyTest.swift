@@ -372,6 +372,21 @@ func loopbackProxyTests() {
         expect(lost.value == 1, "once, and close() after it adds nothing: \(lost.value)")
     }
 
+    test("a closed proxy keeps none of the page's callbacks") {
+        weak var gone: LoopbackProxy?
+        do {
+            let proxy = LoopbackProxy(tunnel: { nil }, userAgent: "ua")
+            // The cycle the page made: the proxy holds a closure that holds the proxy.
+            proxy.setOnListenerLost { _ = proxy.port() }
+            proxy.setOnShellChanged { _ = proxy.port() }
+            proxy.setUnreachable { _ = proxy.port(); return (.peerOffline, nil) }
+            _ = try proxy.open(preferredPort: 0)
+            gone = proxy
+            proxy.close()
+        }
+        expect(eventually { gone == nil }, "released after close()")
+    }
+
     test("only the page's current proxy, on screen and staying, is bound again") {
         let mine = LoopbackProxy(tunnel: { nil }, userAgent: "ua")
         let other = LoopbackProxy(tunnel: { nil }, userAgent: "ua")

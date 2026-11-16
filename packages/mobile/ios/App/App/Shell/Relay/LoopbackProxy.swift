@@ -268,6 +268,10 @@ final class LoopbackProxy {
         closed.value = true
         if let listener { Self.cancelAndWait(listener) }
         closeConnections()
+        // The page's closures may hold this proxy: a closed one keeps none of them.
+        onListenerLost.value = nil
+        onShellChanged.value = nil
+        why.value = nil
     }
 
     /// On the listener's queue. Java's accept loop; Network.framework backs off on its own when out of descriptors.
