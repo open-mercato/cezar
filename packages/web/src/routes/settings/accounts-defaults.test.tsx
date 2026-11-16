@@ -81,6 +81,7 @@ function serve({
   requests = []
   const state: WorkspaceConfigResponse = {
     branding: { name: 'cezar', logoUrl: null },
+    computerName: 'Test Mac',
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,

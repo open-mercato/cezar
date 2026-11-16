@@ -360,6 +360,15 @@
   /* A QR code stays black on white in both themes: a scanner needs the contrast and the quiet zone. */
   --color-qr-ground: #fff;
   --color-qr-module: #000;
+  /* A computer's automatic avatar colour, the same six on web, Android and iOS (CezarBot switcher),
+   * so it stays put across themes; white initials on every one. */
+  --color-device-1: #7c6cf0;
+  --color-device-2: #e0912a;
+  --color-device-3: #2fb862;
+  --color-device-4: #2a9fd8;
+  --color-device-5: #e05a73;
+  --color-device-6: #22b3a0;
+  --color-device-ink: #fff;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

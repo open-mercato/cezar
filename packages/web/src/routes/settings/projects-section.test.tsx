@@ -105,6 +105,7 @@ function serve(answers: Answers = {}) {
   }
   const config: WorkspaceConfigResponse = {
     branding: { name: 'cezar', logoUrl: null },
+    computerName: 'Test Mac',
     agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',

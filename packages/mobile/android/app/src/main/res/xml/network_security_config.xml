@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release config. The debug copy in src/debug/res/xml/ replaces it and adds user CAs; test/release.test.mjs keeps them in step. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

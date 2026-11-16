@@ -163,6 +163,7 @@ const CONFIG: ConfigResponse = {
 
 const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   branding: { name: 'cezar', logoUrl: null },
+  computerName: 'Test Mac',
   agentDefaults: {},
   browseRoot: '~/',
   projectsDir: '~/cezar/projects',

@@ -1,7 +1,7 @@
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { AppShell, routeOwnsScrollArrival, useShellManagerMode, type AppShellProps } from './app-shell'
 import { NAV_ITEMS, visibleNavItems } from './nav-items'
@@ -867,6 +867,75 @@ describe('AppShell', () => {
       const header = document.querySelector('[data-slot="project-header"]') as HTMLElement
       expect(within(header).getByText('solo')).toBeTruthy()
       expect(within(header).queryByRole('button')).toBeNull()
+    })
+
+    // Switcher spec (parent task 2fb255e3): the computer's avatar replaces the old Devices row.
+    it('puts the computer avatar at the top of the CezarBot rail, keeping Show sidebar at the foot', () => {
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (ios)' })
+      onTestFinished(() => {
+        vi.unstubAllGlobals()
+      })
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git', { computerName: 'Studio iMac' })
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(rail.querySelector('[data-slot="rail-brand"]')).toBeNull()
+      const avatar = within(rail).getByRole('link', { name: 'Switch computer: Studio iMac' })
+      expect(avatar.getAttribute('href')).toBe('cezar://servers')
+      expect(avatar.getAttribute('data-slot')).toBe('rail-device-avatar')
+      expect(avatar.textContent).toBe('SI')
+      expect(rail.firstElementChild).toBe(avatar)
+      expect(within(rail).getByRole('button', { name: 'Show sidebar' }).className).toContain('mt-auto')
+    })
+
+    it('swaps the CezarBot sidebar brand for the computer chip, and drops the Devices row', () => {
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (android)' })
+      onTestFinished(() => {
+        vi.unstubAllGlobals()
+      })
+      renderShell('/git', { computerName: "Patryk's MacBook Pro" })
+      expect(sidebar().querySelector('[data-slot="brand-lockup"]')).toBeNull()
+      expect(sidebar().querySelector('[data-slot="servers-link"]')).toBeNull()
+      const chip = within(sidebar()).getByRole('link', { name: "Switch computer: Patryk's MacBook Pro" })
+      expect(chip.getAttribute('href')).toBe('cezar://servers')
+      expect(chip.querySelector('[data-slot="device-name"]')?.textContent).toBe("Patryk's MacBook Pro")
+      expect(chip.querySelector<HTMLElement>('[data-slot="device-avatar"]')?.textContent).toBe('PM')
+      // The fold action stays beside it.
+      expect(within(sidebar()).getByRole('button', { name: 'Hide sidebar' })).toBeTruthy()
+    })
+
+    it('shows a laptop glyph while the computer has no name yet', () => {
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (ios)' })
+      onTestFinished(() => {
+        vi.unstubAllGlobals()
+      })
+      renderShell('/git')
+      const bar = document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement
+      const avatar = within(bar).getByRole('link', { name: 'Switch computer' })
+      expect(avatar.getAttribute('data-slot')).toBe('mobile-device-avatar')
+      expect(avatar.querySelector('svg')).toBeTruthy()
+    })
+
+    it('puts the 32px avatar in the CezarBot phone top bar', () => {
+      vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (ios)' })
+      onTestFinished(() => {
+        vi.unstubAllGlobals()
+      })
+      renderShell('/git', { computerName: 'Build box' })
+      const status = document.querySelector('[data-slot="mobile-top-bar"] [data-slot="mobile-status"]') as HTMLElement
+      const avatar = within(status).getByRole('link', { name: 'Switch computer: Build box' })
+      expect(avatar.getAttribute('href')).toBe('cezar://servers')
+      const circle = avatar.querySelector<HTMLElement>('[data-slot="device-avatar"]')!
+      expect(circle.style.width).toBe('32px')
+      expect(circle.style.background).toBe('var(--color-device-6)')
+    })
+
+    it('shows no avatar or chip in a browser', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git', { computerName: 'Build box' })
+      expect(document.querySelector('a[href="cezar://servers"]')).toBeNull()
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(rail.querySelector('[data-slot="rail-brand"]')).toBeTruthy()
+      expect(within(rail).getByRole('button', { name: 'Show sidebar' }).className).toContain('mt-auto')
     })
 
     it('loads folded without stealing focus', () => {

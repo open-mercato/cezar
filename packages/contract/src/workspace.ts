@@ -33,6 +33,8 @@ export const workspaceConfigResponseSchema = z.object({
     name: z.string(),
     logoUrl: z.string().nullable(),
   }),
+  /** This computer's name, as phones pair with it (the relay account's label): what CezarBot's Devices row shows. */
+  computerName: z.string(),
   /** Root exposed by the Add-project directory browser — stored as written (`~` kept). */
   browseRoot: z.string(),
   /** Checkout root for GUI-cloned projects — stored as written (`~` kept). */

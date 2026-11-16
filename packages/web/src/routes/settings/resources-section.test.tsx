@@ -27,6 +27,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
   requests = []
   const state: WorkspaceConfigResponse = {
     branding: { name: 'cezar', logoUrl: null },
+    computerName: 'Test Mac',
     agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',

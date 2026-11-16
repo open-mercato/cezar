@@ -22,6 +22,7 @@ import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { AddProjectMenu } from '@/components/add-project-menu'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
+import { DeviceAvatarLink, DeviceChip } from '@/components/device-avatar'
 import { ModeRailSwitch, ModeSwitch, type ModeSwitchProps } from '@/components/mode-switch'
 import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
@@ -145,6 +146,8 @@ export type AppShellProps = {
   footerBanner?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
+  /** This computer's name (`workspace/config`): CezarBot's header avatar and sidebar chip. */
+  computerName?: string
   /** Managers gating (spec 2026-10-31-managers): the Projects | Manager switch exists only when
    *  health says so. Defaults off, unlike the nav gates: it is new chrome, not a nav item. */
   managersAvailable?: boolean
@@ -278,6 +281,7 @@ export const AppShell = React.memo(function AppShell({
   footerBanner,
   brandName = 'cezar',
   brandLogoUrl = null,
+  computerName,
   managersAvailable = false,
   managerAttention = null,
   managerTo = '/manager',
@@ -402,6 +406,7 @@ export const AppShell = React.memo(function AppShell({
     singleProject,
     brandName,
     brandLogoUrl,
+    computerName,
     managersAvailable,
     managerMode,
     managerAttention,
@@ -478,6 +483,9 @@ export const AppShell = React.memo(function AppShell({
               <MobileTopBar
                 title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
                 attention={managersAvailable && !managerMode ? managerAttention : null}
+                // Where neither the sidebar nor the bottom bar is (a thread on a tablet), the menu is.
+                everyWidth={phoneNav && !bottomBar}
+                computerName={computerName}
               />
             )}
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
@@ -592,6 +600,7 @@ type NavProps = {
   phonesRail?: ReactNode
   brandName: string
   brandLogoUrl: string | null
+  computerName?: string
   singleProject: boolean
   managersAvailable: boolean
   managerMode: boolean
@@ -726,9 +735,13 @@ function SidebarIconRail({
         desktop === 'macos' && 'pt-[36px]',
       )}
     >
-      <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
-        {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
-      </span>
+      {isCezarShell() ? (
+        <DeviceAvatarLink name={props.computerName} size={28} slot="rail-device-avatar" className="my-0.5" />
+      ) : (
+        <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
+          {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
+        </span>
+      )}
       {/* The folded Projects | Manager switch: two stacked icons above the nav, each with its dot. */}
       {managersAvailable ? <ModeRailSwitch {...modeSwitchProps(props)} /> : null}
       {managerMode ? (
@@ -947,6 +960,7 @@ function SidebarContent({
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
     newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
     offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
+    computerName,
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
   const workspace = items.filter((item) => item.group === 'workspace')
@@ -957,7 +971,8 @@ function SidebarContent({
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className={cn('flex items-center gap-[9px] px-3.5 pb-2', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
-        <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
+        {/* In CezarBot the computer's chip takes the brand's place (switcher spec, p1Ipad). */}
+        {isCezarShell() ? <DeviceChip name={computerName} onNavigate={onNavigate} /> : <BrandLockup name={brandName} logoUrl={brandLogoUrl} />}
         {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
       </div>
 
@@ -1236,7 +1251,7 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title, attention = null }: { title: string; attention?: ManagerAttention | null }) {
+function MobileTopBar({ title, attention = null, everyWidth = false, computerName }: { title: string; attention?: ManagerAttention | null; everyWidth?: boolean; computerName?: string }) {
   return (
     <header
       data-slot="mobile-top-bar"
@@ -1266,7 +1281,10 @@ function MobileTopBar({ title, attention = null }: { title: string; attention?: 
         </SheetTrigger>
         <span className="truncate text-body font-semibold">{title}</span>
         {/* SLOT — the run status dot / kebab land with the thread view (Step R3). */}
-        <div data-slot="mobile-status" className="ml-auto flex items-center gap-2" />
+        <div data-slot="mobile-status" className="ml-auto flex items-center gap-2">
+          {/* CezarBot's account switcher: this computer's avatar opens the native list. */}
+          {isCezarShell() ? <DeviceAvatarLink name={computerName} size={32} slot="mobile-device-avatar" /> : null}
+        </div>
       </div>
     </header>
   )
