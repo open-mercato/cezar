@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { agentAccountRouteId } from './agent-profiles.ts';
 import { runLiveUsageSchema } from './runs.ts';
 
 /** One agent account's last observed plan windows for the cockpit sidebar (#1625 extension). */
@@ -19,9 +18,3 @@ export const accountUsageResponseSchema = z.object({
   accounts: z.array(accountUsageEntrySchema),
 });
 export type AccountUsageResponse = z.infer<typeof accountUsageResponseSchema>;
-
-export function accountUsageRouteId(
-  profile: Pick<AccountUsageEntry, 'id' | 'provider' | 'isDefault'>,
-): string {
-  return agentAccountRouteId(profile);
-}

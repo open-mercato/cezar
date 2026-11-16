@@ -61,7 +61,7 @@ export function accountPart(details: AgentAccountDetailsResponse | undefined): L
 
 /** The header's gauge parts, e.g. `5h 81% left 2h19m`, `CTX 416k 41%`. A window that has
  *  already reset is dropped: its reading is stale and the next event replaces it. */
-export function formatUsageSeenAgo(ms: number): string {
+function formatUsageSeenAgo(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000))
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
@@ -99,7 +99,7 @@ export function liveUsageParts(
 }
 
 /** `inline`: run footer; `bracketed`: cockpit chips like `[ACCOUNT] [5h … · 7d …]`. */
-export type LiveUsageLayout = 'inline' | 'bracketed'
+type LiveUsageLayout = 'inline' | 'bracketed'
 
 /** The account, then plan usage windows and context fill: what Claude Code's own status line shows. */
 export function LiveUsage({

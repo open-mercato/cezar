@@ -1,30 +1,27 @@
-import { useContext, useMemo } from 'react'
+import { useMemo } from 'react'
 
 import { getAgentAccountDetails } from '@/api/client'
 import { useHostTransport } from '@/api/host-usage'
 import { useAccountUsage, useAgentProfiles, useHealth, workspaceQueryKeys } from '@/api/queries'
 import { accountPart, COCKPIT_USAGE_STALE_MS, LiveUsage, liveUsageParts, type LiveUsageFraction } from '@/components/live-usage'
 import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
-import { mergeAccountUsageEntries } from '@/lib/account-usage-selection'
+import { sortAccountUsageEntries } from '@/lib/account-usage-selection'
 import { cn } from '@/lib/utils'
 import { agentAccountRouteId, type AccountUsageEntry } from '@open-mercato/cezar-api-client'
-import { QueryClientContext, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 
-export interface AccountUsageWidgetProps {
-  runner?: string
-  agentProfile?: string
-  className?: string
-  fraction?: LiveUsageFraction
-}
-
+/** Needs a QueryClient: callers outside one (the shell's tests) guard at the call site. */
 export function AccountUsageWidget({
   runner,
   agentProfile,
   className,
   fraction = 'used',
-}: AccountUsageWidgetProps = {}) {
-  const queryClient = useContext(QueryClientContext)
-  if (!queryClient) return null
+}: {
+  runner?: string
+  agentProfile?: string
+  className?: string
+  fraction?: LiveUsageFraction
+} = {}) {
   const transport = useHostTransport()
   const enabled = useLiveUsageEnabled()
   if (transport !== 'local' || !enabled) return null
@@ -52,7 +49,7 @@ function AccountUsageWidgetBody({
   const usage = useAccountUsage()
   const profiles = useAgentProfiles()
   const rows = useMemo(
-    () => mergeAccountUsageEntries(usage.data?.accounts ?? []),
+    () => sortAccountUsageEntries(usage.data?.accounts ?? []),
     [usage.data?.accounts],
   )
   const isFiltered = Boolean(runner || agentProfile)
@@ -106,7 +103,7 @@ function AccountUsageWidgetBody({
   )
 }
 
-export function AccountUsageChip({
+function AccountUsageChip({
   entry,
   fraction = 'used',
 }: {
