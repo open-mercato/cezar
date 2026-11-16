@@ -198,17 +198,22 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         String pendingOrigin = intent.getStringExtra(EXTRA_PENDING_ORIGIN);
         pendingLogin = pendingOrigin != null;
         pendingLabel = intent.getStringExtra(EXTRA_PENDING_LABEL);
+        ServerRecord saved = pendingLogin ? null : connector.server(serverId);
+        // Before openProxy: the relay link and listener it wires log from their first step (rc.4 NPE on every relay open).
+        startLog = ShellServices.startupLog(this);
+        startLog.begin("open " + (saved != null && saved.relay != null ? "relay " + relayHost(saved) : "direct") + (savedInstanceState != null ? " (restored)" : "")
+                + ", app " + ShellServices.installStamp(this) + ", webview " + webViewVersion());
         try {
             if (pendingLogin) {
                 origin = ServerOrigin.parse(pendingOrigin);
             } else {
-                ServerRecord server = connector.server(serverId);
+                ServerRecord server = saved;
                 if (server == null) {
                     leave(ShellConnector.LIST);
                     return;
                 }
                 if (server.relay != null) {
-                    if (!openProxy(server)) return;
+                    if (!openProxy(server, startLog)) return;
                 } else {
                     origin = server.origin();
                     responder = new BasicChallengeResponder(server, connector::password);
@@ -224,9 +229,6 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         insetForSystemBars();
         ServerRecord record = pendingLogin ? null : connector.server(serverId);
         watchdog = new StartupWatchdog(record != null ? record.label : pendingLabel, link != null);
-        startLog = ShellServices.startupLog(this);
-        startLog.begin("open " + (link != null ? "relay " + relayHost(record) : "direct") + (savedInstanceState != null ? " (restored)" : "")
-                + ", app " + ShellServices.installStamp(this) + ", webview " + webViewVersion());
         addCover();
         if (savedInstanceState != null) restoreUrl = savedInstanceState.getString(STATE_URL);
         startUrl = proxy == null ? intent.getStringExtra(EXTRA_URL) : origin.url(intent.getStringExtra(EXTRA_URL));
@@ -243,7 +245,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     }
 
     /** One listener, its port saved. A taken port is hostile: its origin's storage goes, and the page loads anew (spec). */
-    private boolean openProxy(ServerRecord server) {
+    private boolean openProxy(ServerRecord server, StartupLog log) {
         relayConnections = ShellServices.relay(this);
         try {
             proxy = relayConnections.openProxy(server);
@@ -279,7 +281,6 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             opened.stop();
         });
         signals = signalStream(server, opened, mine);
-        StartupLog log = startLog;
         opened.setDiagnostics(log::step);
         NetworkChange change = watchNetwork(opened, log);
         String computer = server.label;
