@@ -158,8 +158,16 @@ function useTasksScroll(rootRef: React.RefObject<HTMLElement | null>, ready: boo
     restore.current = false
     const top = tasksScroll.get(search)
     const main = rootRef.current?.closest<HTMLElement>('[data-slot="main"]')
-    // A passive effect: it lands after the shell's layout-time reset to the top.
-    if (main && top !== undefined) main.scrollTop = top
+    if (!main || top === undefined) return
+    // A passive effect lands after the shell's layout-time reset; the frames cover rows still painting.
+    let frames = 0
+    let handle = 0
+    const apply = () => {
+      main.scrollTop = top
+      if (Math.abs(main.scrollTop - top) > 1 && ++frames < 10) handle = requestAnimationFrame(apply)
+    }
+    apply()
+    return () => cancelAnimationFrame(handle)
   }, [ready, rootRef, search])
 }
 

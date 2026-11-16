@@ -509,10 +509,23 @@ export const RESTORE_SCROLL_STATE = { restoreScroll: true } as const
 export const wantsScrollRestore = (state: unknown): boolean =>
   (state as { restoreScroll?: unknown } | null | undefined)?.restoreScroll === true
 
-const scrollOffsets = new Map<string, number>()
+const SCROLL_KEY = 'cez-tasks-scroll:'
 
-/** Where each filtered list was scrolled to, per tab: keyed by its query string. */
+/** Where each list was scrolled to, per tab and across a reload: keyed by its query string. */
 export const tasksScroll = {
-  save: (search: string, top: number): void => void scrollOffsets.set(search, top),
-  get: (search: string): number | undefined => scrollOffsets.get(search),
+  save(search: string, top: number): void {
+    try {
+      sessionStorage.setItem(SCROLL_KEY + search, String(Math.round(top)))
+    } catch {
+      // Storage off or full: the list just opens at the top.
+    }
+  },
+  get(search: string): number | undefined {
+    try {
+      const value = Number(sessionStorage.getItem(SCROLL_KEY + search) ?? Number.NaN)
+      return Number.isFinite(value) ? value : undefined
+    } catch {
+      return undefined
+    }
+  },
 }
