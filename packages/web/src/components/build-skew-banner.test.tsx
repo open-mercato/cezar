@@ -6,6 +6,7 @@ import type { SelfUpdateStatus } from '@open-mercato/cezar-api-client'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { BuildSkewBanner } from '@/components/build-skew-banner'
 import { noteServerBuild, resetBuildIdentityForTest } from '@/lib/build-identity'
+import * as buildIdentity from '@/lib/build-identity'
 
 const scheduleSelfUpdate = vi.hoisted(() => vi.fn())
 const getSelfUpdate = vi.hoisted(() => vi.fn())
@@ -57,6 +58,9 @@ describe('BuildSkewBanner', () => {
     resetBuildIdentityForTest(null)
     vi.unstubAllGlobals()
     vi.clearAllMocks()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    sessionStorage.clear()
   })
 
   it('renders nothing while the builds agree', () => {
@@ -93,5 +97,33 @@ describe('BuildSkewBanner', () => {
     renderBanner(status)
     await skew('new', 'old', 'new')
     expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy()
+  })
+
+  it('ignores repeated taps and offers retry after an offline error', async () => {
+    renderBanner(status)
+    await skew('new', 'old', 'new')
+    let rejectAttempt: ((reason: Error) => void) | undefined
+    const reload = vi.spyOn(buildIdentity, 'reloadUpdatedPage').mockImplementation(() => new Promise((_resolve, reject) => { rejectAttempt = reject }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reloading…' }))
+    expect(reload).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button').hasAttribute('disabled')).toBe(true)
+    await act(async () => rejectAttempt?.(new TypeError('offline')))
+    expect(screen.getByRole('alert').textContent).toContain('Cannot reach cezar')
+    reload.mockResolvedValueOnce()
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    expect(reload).toHaveBeenCalledTimes(2)
+  })
+
+  it('recovers the button if navigation never finishes, without automatically reloading', async () => {
+    renderBanner(status)
+    await skew('new', 'old', 'new')
+    vi.useFakeTimers()
+    const reload = vi.spyOn(buildIdentity, 'reloadUpdatedPage').mockResolvedValue()
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    await act(() => vi.advanceTimersByTimeAsync(30_000))
+    expect(screen.getByRole('alert').textContent).toContain('Reload did not finish')
+    expect(screen.getByRole('button', { name: 'Reload' }).hasAttribute('disabled')).toBe(false)
+    expect(reload).toHaveBeenCalledOnce()
   })
 })

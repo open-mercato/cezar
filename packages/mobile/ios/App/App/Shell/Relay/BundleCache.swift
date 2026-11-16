@@ -54,6 +54,17 @@ final class BundleCache {
         return type?.hasPrefix("text/html") == true
     }
 
+    /// Reload must reach cezar even after this listener's one cold-start revalidation.
+    static func mayReuse(_ headers: [TunnelFrame.Header]) -> Bool {
+        !headers.contains { header in
+            guard header.name == "cache-control" || header.name == "pragma" else { return false }
+            return header.value.lowercased().split(separator: ",").contains { part in
+                let directive = part.filter { !$0.isWhitespace }
+                return directive == "no-cache" || directive == "no-store" || directive == "max-age=0"
+            }
+        }
+    }
+
     func get(_ kind: Kind, _ target: String) -> Entry? {
         lock.lock()
         defer { lock.unlock() }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runManagerCommand, type ManagerCliIo } from './manager-cli.ts';
+import { runManagerCommand, SANDBOX_BLOCKED_HINT, type ManagerCliIo } from './manager-cli.ts';
 
 const snapshot = {
   generatedAt: '',
@@ -354,6 +354,22 @@ describe('cez manager', () => {
       io.log.mockClear();
       await runManagerCommand(['task', 'cancel', '--help'], {}, io);
       expect(String(io.log.mock.calls[0]?.[0])).toContain('--reason');
+    });
+
+    // #2258: a sandboxed connect is EPERM, not ECONNREFUSED; the agent needs the way out.
+    it('says a sandbox blocked the call, and only then', async () => {
+      const failing = (code: string) => ({
+        fetch: vi.fn(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code } }); }) as unknown as typeof fetch,
+        log: vi.fn(),
+        error: vi.fn(),
+      });
+      const env = { CEZ_API_URL: 'http://127.0.0.1:4321', CEZ_MANAGER_ID: 'm1' };
+      const blocked = failing('EPERM');
+      expect(await runManagerCommand(['status'], env, blocked)).toBe(1);
+      expect(String(blocked.error.mock.calls[0]?.[0])).toBe(`cez manager: fetch failed\n${SANDBOX_BLOCKED_HINT}`);
+      const down = failing('ECONNREFUSED');
+      expect(await runManagerCommand(['status'], env, down)).toBe(1);
+      expect(String(down.error.mock.calls[0]?.[0])).toBe('cez manager: fetch failed');
     });
 
     it('task create --help lists the workflows, and says so when it cannot', async () => {

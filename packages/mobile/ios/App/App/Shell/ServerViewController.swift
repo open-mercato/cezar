@@ -620,6 +620,16 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         // WebKit marks a redirect only as `.other`, so a provisional load tells it from `location = …`.
         let redirect = action.navigationType == .other && provisional
         let mainFrame = action.targetFrame?.isMainFrame ?? true
+        // Bypass both WebKit's HTTP cache and the proxy's separate cached HTML on Reload.
+        if mainFrame, action.navigationType == .reload, origin.sameOrigin(url.absoluteString),
+           action.request.value(forHTTPHeaderField: "Cache-Control") != "no-cache" {
+            var fresh = action.request
+            fresh.cachePolicy = .reloadIgnoringLocalCacheData
+            fresh.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            decisionHandler(.cancel)
+            webView.load(fresh)
+            return
+        }
         switch NavigationPolicy.decide(origin: origin, url: url.absoluteString, pageUrl: webView.url?.absoluteString, mainFrame: mainFrame, redirect: redirect) {
         case .allow:
             decisionHandler(.allow)

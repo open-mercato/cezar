@@ -260,6 +260,28 @@ your iPhone, and press Run.
 
 ## Checks
 
+### Cockpit updates and Reload
+
+The relay keeps one HTML shell per server in `BundleCache`, in addition to WebKit's per-server
+`WKWebsiteDataStore`. A cold open paints the cached shell and revalidates once per proxy listener.
+In iOS 0.1.1 (10104), Reload could serve that shell again after the computer updated: the listener
+had already used its revalidation attempt. Query-string cache busting and WebKit cache clearing
+alone do not invalidate the separate native cache.
+
+Reload navigations now request fresh HTML, and the proxy honors request cache directives before
+reading its cache. Successful whole responses replace the cached shell. Failed attempts keep the
+last good shell. Pairing keys, the proxy port and gate, cookies and website storage are preserved;
+hashed assets keep their normal immutable caching. The cockpit checks connectivity before leaving
+the working page and gives retry feedback. It never automatically reloads the stale banner.
+
+This requires a new iOS binary for existing relay installs. A cockpit update supplies the button's
+feedback but cannot change an already-installed native proxy. Until then, closing and reopening
+the server starts a new listener and cache check; forgetting/re-pairing is unnecessary.
+
+Focused browser coverage: `npx e2e run --config e2e.build-reload.config.ts --target webkit-phone`
+and `--target desktop`. These browser runs complement Swift proxy tests; neither proves the last
+distributed iOS binary in WKWebView. Record the installed build and device separately for that gate.
+
 ```bash
 npm test                # connect-screen logic, node:test
 npm run check           # plain classes must not name the framework; --selftest proves the check bites
