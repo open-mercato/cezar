@@ -284,7 +284,8 @@ describe('update when idle', () => {
     scoped.scheduleWhenIdle('0.12.2+main');
     hosted = false; // The timer fires outside the request's relay scope.
     idle = true;
-    await vi.waitFor(async () => expect((await scoped.status()).job?.status).toBe('failed'), { timeout: 3_000 });
+    // Refused the link, so it went to the registry; npm's retries for an unseen version (#2249) may still be running.
+    await vi.waitFor(async () => expect((await scoped.status()).job?.log.some((line) => line.startsWith('npm install '))).toBe(true), { timeout: 3_000 });
     expect(buildCheckout).not.toHaveBeenCalled();
     expect(activeId(env)).toBe('0.12.0');
   });
