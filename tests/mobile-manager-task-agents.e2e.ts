@@ -56,7 +56,6 @@ test('phone task-agent choices persist and control newly spawned task metadata a
       if (choice === 'codex') {
         await app.open(`/p/${projectId}/tasks/${created.runId}/chat`);
         await expect(screen.getByRole('button', /^Agent: codex,/)).toBeVisible({ timeout: 20_000 });
-        await app.screenshot('phone-created-task-agent');
         await app.open(`/manager/${manager.id}`);
       }
     }
@@ -66,10 +65,6 @@ test('phone task-agent choices persist and control newly spawned task metadata a
     }));
     runIds.push(created.runId);
     await expect.poll(async () => apiRunSchema.parse(await call(`/p/${projectId}/runs/${created.runId}`)).runner).toBe('claude');
-    await app.screenshot('phone-automatic-task-agent');
-  } catch (error) {
-    await app.screenshot('task-agent-failure');
-    throw error;
   } finally {
     for (const id of runIds) await call(`/p/${projectId}/runs/${id}/cancel`, 'POST', {}).catch(() => undefined);
     await call(path, 'DELETE');
