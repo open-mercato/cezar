@@ -10,7 +10,7 @@ import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { MANAGER_QUIET } from './prompts.ts';
+import { MANAGER_QUIET, managerSystemPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
@@ -2156,6 +2156,33 @@ describe('ManagerEngine', () => {
   });
 
   describe('task agent selection', () => {
+    it('selects only allowed runner/account pairs, validates at launch and tells the manager their CLI arguments', async () => {
+      let removed = false;
+      const engine = makeEngine({ accountError: async (_runner, account) => removed && account === 'first' ? 'account removed' : null });
+      const taskAgents = [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'claude' as const, agentProfile: 'second' }, { runner: 'codex' as const, agentProfile: 'work' }];
+      const created = await engine.create({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents, cronMinutes: 0 });
+      if ('error' in created) throw created;
+      const prompt = managerSystemPrompt(created, []);
+      for (const agent of taskAgents) expect(prompt).toContain(`--runner ${agent.runner} --account ${agent.agentProfile}`);
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'No explicit pair' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'Second Claude', runner: 'claude', agentProfile: 'second' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+      removed = true;
+      expect(await engine.createTask(created.id, { projectId: 'alpha', task: 'Deleted account', runner: 'claude', agentProfile: 'first' })).toMatchObject({ status: 400 });
+      expect(await engine.createTask(created.id, { projectId: 'alpha', task: 'Unselected account', runner: 'claude', agentProfile: 'default' })).toMatchObject({ status: 403 });
+      expect(new ManagerStore().get(created.id)?.taskAgents).toEqual(taskAgents);
+    });
+
+    it('a retry follows the current task account set after its original account was deselected', async () => {
+      const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'old-account', steps: [] } as unknown as RunRecord;
+      const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [old] }] });
+      const id = await create(engine, 0);
+      await engine.update(id, { taskAgents: [{ runner: 'codex', agentProfile: 'new-account' }] });
+      expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'old' })).toMatchObject({ runId: 'new-run' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'new-account' });
+    });
+
     it('automatically uses the manager backend instead of the project default', async () => {
       const engine = makeEngine({ defaultRunner: async () => 'codex' });
       const id = await create(engine, 0);

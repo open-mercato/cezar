@@ -15,6 +15,7 @@ vi.mock('@/api/queries', () => ({
     { provider: 'codex', id: 'default', label: 'Default' },
     { provider: 'codex', id: 'work', label: 'Work' },
     { provider: 'claude', id: 'personal', label: 'Personal' },
+    { provider: 'claude', id: 'second', label: 'Second' },
   ] } }),
 }))
 
@@ -55,22 +56,36 @@ describe('manager agent and account selection', () => {
 })
 
 describe('manager task agent selection', () => {
-  it('offers Automatic and usable task backends, including Pi', async () => {
+  it('offers Automatic and account checkboxes for usable backends, including Pi', async () => {
     const onChange = vi.fn()
     render(<TaskRunnerPicker onChange={onChange} />)
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Agent for new tasks' }))
-    expect((await screen.findByRole('menuitemradio', { name: 'Automatic' })).getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByRole('menuitemradio', { name: 'pi' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('menuitemradio', { name: 'codex' }))
-    expect(onChange).toHaveBeenCalledWith({ taskRunner: 'codex' })
+    expect((await screen.findByRole('menuitemcheckbox', { name: 'Automatic' })).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('menuitemcheckbox', { name: 'pi · Default' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'codex · Work' }))
+    expect(onChange).toHaveBeenCalledWith({ taskRunner: null, taskAgents: [{ runner: 'codex', agentProfile: 'work' }] })
   })
 
-  it('can clear a pinned backend back to Automatic', async () => {
+  it('keeps two Claude accounts and one Codex account selected even before saves return', async () => {
+    const onChange = vi.fn()
+    render(<TaskRunnerPicker onChange={onChange} />)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Agent for new tasks' }))
+    for (const name of ['claude · Personal', 'claude · Second', 'codex · Work']) {
+      fireEvent.click(await screen.findByRole('menuitemcheckbox', { name }))
+    }
+    expect(onChange.mock.calls.at(-1)?.[0]).toEqual({ taskRunner: null, taskAgents: [
+      { runner: 'claude', agentProfile: 'personal' }, { runner: 'claude', agentProfile: 'second' }, { runner: 'codex', agentProfile: 'work' },
+    ] })
+    expect(screen.getByRole('menuitemcheckbox', { name: 'claude · Personal' }).getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelector('[data-slot="manager-task-runner-picker"]')?.textContent).toContain('3 accounts')
+  })
+
+  it('can clear a legacy pinned backend back to Automatic', async () => {
     const onChange = vi.fn()
     render(<TaskRunnerPicker taskRunner="codex" onChange={onChange} />)
     expect(screen.getByRole('button', { name: 'Agent for new tasks' }).textContent).toContain('Tasks: codex')
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Agent for new tasks' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Automatic' }))
-    expect(onChange).toHaveBeenCalledWith({ taskRunner: null })
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Automatic' }))
+    expect(onChange).toHaveBeenCalledWith({ taskRunner: null, taskAgents: null })
   })
 })
