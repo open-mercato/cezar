@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createUsageStore, type UsageStore } from './events'
 import { connectionStatus } from './connection-status'
-import { GlobalEventsProvider, RECONCILE_TIMEOUT_MS, RETURN_SILENCE_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
+import { GlobalEventsProvider, POLL_WHILE_DOWN_MS, RECONCILE_TIMEOUT_MS, RETURN_SILENCE_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope, WORKSPACE_RUN_EVENT_OMITTED_KEYS } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
 import { queryKeys, useProviderStatus, useRuns, useTodos, workspaceQueryKeys } from './queries'
@@ -373,6 +373,24 @@ describe('useGlobalEvents — liveness watchdog', () => {
     act(() => vi.advanceTimersByTime(60_000))
 
     expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
+describe('useGlobalEvents — polling while the stream is down', () => {
+  it('reconciles on a timer while a visible stream stays down, and not while it is live', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    for (let i = 0; i < 6; i++) {
+      act(() => vi.advanceTimersByTime(15_000))
+      source.emit('ping', '')
+    }
+    expect(invalidate).not.toHaveBeenCalled()
+
+    source.fail() // a proxy that drops SSE: plain HTTP may still work
+    act(() => vi.advanceTimersByTime(POLL_WHILE_DOWN_MS + 10_000))
+    expect(invalidate).toHaveBeenCalled()
   })
 })
 

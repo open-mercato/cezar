@@ -86,6 +86,10 @@ const REOPEN_DELAY_MS = 3_000
  *  once: an iOS WebView resumed from the background keeps a dead socket reporting OPEN. */
 export const RETURN_SILENCE_MS = 20_000
 
+/** While the stream is down on a visible page, ask for everything this often instead: plain HTTP
+ *  can work where the stream does not (a proxy that drops SSE), and the reader still sees changes. */
+export const POLL_WHILE_DOWN_MS = 30_000
+
 /** Everything the stream is allowed to say. An unknown name never reaches `parseGlobalEvent`,
  *  because SSE only delivers named events to a matching listener in the first place. */
 const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
@@ -716,7 +720,9 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       refetchUncachedProviderStatus()
     }
 
+    let lastReconcileAt = Date.now()
     const reconcileNow = (): void => {
+      lastReconcileAt = Date.now()
       reconciliationDepth += 1
       runEventBatcher.beginReconcile()
       void reconcile(queryClient).finally(() => {
@@ -1053,6 +1059,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     // that cannot — a socket still reported OPEN that has silently stopped delivering.
     livenessTimer = setInterval(() => {
       if (disposed || document.visibilityState !== 'visible') return
+      if (!dashboardLive.isConnected() && reconciliationDepth === 0 && Date.now() - lastReconcileAt >= POLL_WHILE_DOWN_MS) reconcileNow()
       if (Date.now() - lastFrameAt <= STALE_MS) return
       connectionStatus.failedAttempt()
       clearTimeout(reopenTimer)
