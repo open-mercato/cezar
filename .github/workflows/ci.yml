@@ -122,7 +122,8 @@ jobs:
 
       - name: Run the webhook suite
         if: runner.os != 'Windows'
-        run: npm test -- packages/cezar/src/webhooks
+        # Real fsync'd writes: a loaded shared runner overran 5 s on random cases (#2226).
+        run: npm test -- packages/cezar/src/webhooks --testTimeout=30000
 
       # A cold Windows PowerShell probe is intentionally fail-closed and expensive. Serial files
       # avoid a worker-start stampede while the first successful probe populates its process cache.

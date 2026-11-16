@@ -20,6 +20,10 @@ vi.mock('../runs/run-index.ts', async original => {
   return { ...actual, readRunIndexDiagnostic: vi.fn(actual.readRunIndexDiagnostic) };
 });
 
+// Every case does real fsync'd writes (storage.ts atomicWrite); a loaded ubuntu runner took 5.5 s
+// for one tick of 20 deliveries (#2226). The assertions count sends, never time, so only the limit moves.
+vi.setConfig({ testTimeout: 30_000 });
+
 const roots: string[] = [];
 const services: WebhookService[] = [];
 const stores: RunStore[] = [];
