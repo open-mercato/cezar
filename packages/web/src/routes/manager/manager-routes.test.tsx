@@ -122,6 +122,8 @@ function renderAt(entry: string | string[], seed?: (client: QueryClient) => void
   return client
 }
 
+/** Every manager send carries one (relay incident 2026-11-15). */
+const SEND_KEY = expect.stringMatching(/^[0-9a-f-]{36}$/)
 const posted = (suffix: string) => calls.filter((call) => call.method === 'POST' && call.path.endsWith(suffix))
 const composer = () => screen.getByRole('textbox') as HTMLTextAreaElement
 function send(text: string) {
@@ -217,7 +219,7 @@ describe('/manager/new', () => {
       effort: 'medium',
       mascot: 'base',
     })
-    expect(posted('/made/messages')[0]?.body).toEqual({ text: MANAGER_PRESETS[0].prompt })
+    expect(posted('/made/messages')[0]?.body).toEqual({ text: MANAGER_PRESETS[0].prompt, idempotencyKey: SEND_KEY })
   })
 
   it('sends the chosen mascot when creating a manager', async () => {
@@ -593,7 +595,7 @@ describe('/manager/:id', () => {
     const chip = screen.getByRole('button', { name: /^attention/ })
     fireEvent.click(chip)
     fireEvent.click(chip)
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'What needs my attention right now?' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'What needs my attention right now?', idempotencyKey: SEND_KEY }))
     expect(posted('/global/messages')).toHaveLength(1)
   })
 
@@ -783,14 +785,14 @@ describe('/manager/:id', () => {
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     send('hello there')
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'hello there' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'hello there', idempotencyKey: SEND_KEY }))
   })
 
   it('expands a prompt command and routes /check and /stop', async () => {
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     send('/status')
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Give me a short status of my connected projects.' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Give me a short status of my connected projects.', idempotencyKey: SEND_KEY }))
     await waitFor(() => expect(composer().value).toBe(''))
     send('/check')
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))

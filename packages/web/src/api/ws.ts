@@ -50,6 +50,8 @@ const OPEN = 1
 export interface TopicSocket {
   /** Deliver every `event` frame for `topic` to `listener`. Returns the unsubscribe. */
   subscribe(topic: string, listener: TopicListener, onUnavailable?: () => void): () => void
+  /** Skip the reconnect backoff while a topic is held and the socket is down. */
+  reconnectNow(): void
 }
 
 export function createTopicSocket(url?: string): TopicSocket {
@@ -139,6 +141,12 @@ export function createTopicSocket(url?: string): TopicSocket {
   }
 
   return {
+    reconnectNow() {
+      if (listeners.size === 0 || socket) return
+      clearTimeout(reconnectTimer)
+      reconnectTimer = undefined
+      connect()
+    },
     subscribe(topic, listener, onUnavailable) {
       const onError = () => onUnavailable?.()
       if (onUnavailable) {
@@ -204,4 +212,9 @@ let shared: TopicSocket | null = null
 export function subscribeTopic(topic: string, listener: TopicListener, onUnavailable?: () => void): () => void {
   shared ??= createTopicSocket()
   return shared.subscribe(topic, listener, onUnavailable)
+}
+
+/** The connection banner's Retry now: no socket is opened that nothing holds. */
+export function reconnectTopics(): void {
+  shared?.reconnectNow()
 }

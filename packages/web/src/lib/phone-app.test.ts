@@ -1,7 +1,7 @@
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isCezarShell, isPhone, lastProjectIndex, phoneLanding, showsBottomBar, type PhoneLandingInput } from './phone-app'
+import { isCezarShell, isPhone, shellRequest, lastProjectIndex, phoneLanding, showsBottomBar, type PhoneLandingInput } from './phone-app'
 
 const REGISTRY = {
   projects: [
@@ -66,6 +66,19 @@ describe('isCezarShell', () => {
     expect(isCezarShell()).toBe(true)
     device({ userAgent: 'Mozilla/5.0 CezarMobileish' })
     expect(isCezarShell()).toBe(false)
+  })
+})
+
+describe('shellRequest', () => {
+  it('navigates to cezar:// only inside the shell, where a browser would try to open an app', () => {
+    const assign = vi.fn()
+    vi.stubGlobal('window', { location: { assign } })
+    device({ userAgent: 'Mozilla/5.0 Safari/605' })
+    shellRequest.open('cezar://reconnect')
+    expect(assign).not.toHaveBeenCalled()
+    device({ userAgent: 'Mozilla/5.0 CezarMobile/0.1 (ios)' })
+    shellRequest.open('cezar://reconnect')
+    expect(assign).toHaveBeenCalledWith('cezar://reconnect')
   })
 })
 
