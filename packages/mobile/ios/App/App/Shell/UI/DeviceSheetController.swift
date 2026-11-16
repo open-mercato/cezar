@@ -87,6 +87,8 @@ final class DeviceSheetController: UITableViewController {
         super.viewDidDisappear(animated)
         // Closed without a switch: the warm links go. Never the current server's, which the pool does not own.
         if navigationController?.isBeingDismissed ?? isBeingDismissed || navigationController?.presentingViewController == nil {
+            // Swiped away mid-switch: the user stayed on this page, so the switch's answer opens nothing.
+            chosen = true
             probes?.stop()
         }
     }
