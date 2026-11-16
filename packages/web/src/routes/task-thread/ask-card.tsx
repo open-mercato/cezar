@@ -13,6 +13,7 @@ import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
 import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
+import { ASK_MORE_INFO_ANSWER, AskAnswerSummary, askAnswerLines } from './ask-answer-summary'
 import {
   type AskQuestionAnswer,
   type AskSelections,
@@ -23,10 +24,7 @@ import {
 import type { ThreadAsk } from './thread-state'
 import type { UiAskQuestion } from '@open-mercato/cezar-api-client'
 
-/** What "Need more info" sends; the CEZ:ASK instructions (`handoff.ts`) tell the agent to
- *  explain the question and ask it again. */
-export const ASK_MORE_INFO_ANSWER =
-  'I need more information to answer this — please explain the context and ask again.'
+export { ASK_MORE_INFO_ANSWER }
 
 const EMPTY_ANSWER: AskQuestionAnswer = { labels: [] }
 
@@ -74,6 +72,23 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   // provider-status subscription) only mounts for a question that can still be answered.
   // Threads accumulate asks; every resolved one would otherwise carry live machinery for a
   // question nobody can answer again.
+  const lines = ask.resolved && ask.answer ? askAnswerLines(ask, ask.answer) : null
+  if (lines) {
+    return (
+      <div
+        data-slot="ask-card"
+        data-resolved="true"
+        className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3.5 py-2.5 text-label text-muted-foreground"
+      >
+        <span className="flex items-center gap-1 text-soft-foreground">
+          <CheckIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          Answered
+        </span>
+        <AskAnswerSummary questions={ask.questions} lines={lines} slot="ask-answers" />
+      </div>
+    )
+  }
+  // A reply in the user's own words: read back as they typed it.
   if (ask.resolved) {
     return (
       <div
