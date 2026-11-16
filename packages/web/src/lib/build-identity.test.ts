@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiBaseUrl } from '@open-mercato/cezar-api-client'
 
-import { buildSkew, noteServerBuild, resetBuildIdentityForTest, subscribeBuildSkew } from '@/lib/build-identity'
+import { buildReloadWarning, buildSkew, noteServerBuild, reloadUpdatedPage, resetBuildIdentityForTest, subscribeBuildSkew } from '@/lib/build-identity'
 
 const shell = (id: string | null) =>
   new Response(`<!doctype html><head>${id ? `<meta name="cezar-build" content="${id}">` : ''}</head>`, { status: 200 })
@@ -22,6 +22,8 @@ describe('build skew between the cockpit and its server', () => {
     setApiBaseUrl('')
     resetBuildIdentityForTest(null)
     vi.unstubAllGlobals()
+    sessionStorage.clear()
+    vi.useRealTimers()
   })
 
   it('stays silent without a page build (dev server, tests) or a server header', async () => {
@@ -95,5 +97,50 @@ describe('build skew between the cockpit and its server', () => {
     await settled()
     expect(buildSkew()).toBe('server')
     expect(fetchMock).toHaveBeenCalledWith('/cezar/', expect.objectContaining({ cache: 'no-store' }))
+  })
+
+  it('checks the current shell through the relay before reloading, preserving credentials and prefixes', async () => {
+    const fetchMock = stubDisk('new')
+    const reload = vi.fn()
+    resetBuildIdentityForTest('old')
+    setApiBaseUrl('/cezar')
+    await reloadUpdatedPage(reload)
+    expect(fetchMock).toHaveBeenCalledWith('/cezar/', expect.objectContaining({ cache: 'no-store', credentials: 'include', signal: expect.any(AbortSignal) }))
+    expect(reload).toHaveBeenCalledOnce()
+    expect(buildReloadWarning()).toContain('previous reload returned this old page')
+    resetBuildIdentityForTest('new')
+    expect(buildReloadWarning()).toBeNull()
+  })
+
+  it.each([null, 'old'])('keeps the page when the shell is missing or still old (%s)', async (id) => {
+    stubDisk(id)
+    resetBuildIdentityForTest('old')
+    const reload = vi.fn()
+    await expect(reloadUpdatedPage(reload)).rejects.toThrow('not ready')
+    expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('keeps the page when the paired computer is offline, then retries on the same origin', async () => {
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError('offline')).mockResolvedValueOnce(shell('new'))
+    vi.stubGlobal('fetch', fetchMock)
+    resetBuildIdentityForTest('old')
+    const reload = vi.fn()
+    await expect(reloadUpdatedPage(reload)).rejects.toThrow('offline')
+    expect(reload).not.toHaveBeenCalled()
+    await reloadUpdatedPage(reload)
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('bounds a hung relay request', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    })))
+    resetBuildIdentityForTest('old')
+    const reload = vi.fn()
+    const result = expect(reloadUpdatedPage(reload)).rejects.toThrow('Aborted')
+    await vi.advanceTimersByTimeAsync(15_000)
+    await result
+    expect(reload).not.toHaveBeenCalled()
   })
 })
