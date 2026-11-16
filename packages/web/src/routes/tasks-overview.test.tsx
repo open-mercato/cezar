@@ -1162,6 +1162,11 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(location()).toBe('/tasks/c1')
   })
 
+  it('lets Manager own mobile task creation while retaining the capability fallback', () => {
+    renderOverview({ runs: [run()], managersAvailable: true })
+    expect(document.querySelector('[data-slot="new-task-fab"]')).toBeNull()
+  })
+
   it('floats the New task FAB, linking to /new', () => {
     // A non-empty list, so the FAB is the only "New task" link (the empty state carries its own).
     renderOverview({ runs: [run()] })

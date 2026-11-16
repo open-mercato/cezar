@@ -195,6 +195,7 @@ describe('pageTitleContext', () => {
     ['/manager', 'Manager'],
     ['/manager/m-1', 'Manager'],
     ['/manager/new', 'New manager'],
+    ['/manager/approvals', 'Approvals'],
   ])('labels %s as %s', (pathname, pageLabel) => {
     expect(pageTitleContext(pathname)).toEqual({ pageLabel, taskId: null })
   })
@@ -869,16 +870,46 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
     ['no project is a git repository', {
       registry: { ...REGISTRY, projects: REGISTRY.projects.map((row) => ({ ...row, status: 'not-git' as const })) },
     }],
-  ])('leaves an unfinished first run on the overview when %s', (_case, options) => {
+  ])('opens the Manager entry without requiring a project when %s', (_case, options) => {
     device()
     load('/', options)
-    expect(currentPathname()).toBe('/p/other/git')
+    expect(currentPathname()).toBe('/manager')
+  })
+
+  it.each(['ios', 'android'])('a %s shell keeps agent setup until a usable account connects', async (platform) => {
+    device({ width: 834, height: 1194 })
+    vi.stubGlobal('navigator', { userAgent: `CezarMobile/0.1 (${platform})` })
+    const client = load('/manager', { providers: { providers: [{ provider: 'claude', status: 'connected', enabled: false }] } })
+    act(() => { client.setQueryData(workspaceQueryKeys.agentSetup, { available: false }) })
+    await waitFor(() => expect(document.querySelector('[data-first-run="sign-in"]')).not.toBeNull())
+    expect(currentPathname()).toBe('/manager')
+    act(() => { client.setQueryData(workspaceQueryKeys.providerStatus, SIGNED_IN) })
+    await waitFor(() => expect(document.querySelector('[data-first-run="sign-in"]')).toBeNull())
+    expect(currentPathname()).toBe('/manager')
+  })
+
+  it('does not interrupt a native task deep link with agent setup', () => {
+    device()
+    vi.stubGlobal('navigator', { userAgent: 'CezarMobile/0.1 (ios)' })
+    load('/p/other/tasks/t1?view=files#kept', { providers: SIGNED_OUT })
+    expect(currentPathname()).toBe('/p/other/tasks/t1')
+    expect(currentSearch()).toBe('?view=files')
+    expect(currentHash()).toBe('#kept')
   })
 
   it('counts a skipped sign-in page as finished', () => {
     device()
     load('/', { providers: SIGNED_OUT, uiState: { onboarding: { agentCheckSkipped: true } } })
     expect(currentPathname()).toBe('/manager')
+  })
+
+  it('a skipped sign-in page opens Manager without waiting on provider detection', async () => {
+    device()
+    preloadManagerRoutes()
+    await import('./routes/manager/manager-index')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    load('/manager?all=1', { providers: null, managers: [managerFixture()], uiState: { onboarding: { agentCheckSkipped: true } } })
+    expect(routeName()).toBe('manager-list')
   })
 
   it('waits for the agent answer: the overview must not flash on the way to Manager', () => {
@@ -922,6 +953,13 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
 describe('the Manager routes', () => {
   const MANAGERS_ON = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } }
 
+  it('a cold approvals link resolves to the workspace page instead of a manager id', async () => {
+    renderAt('/manager/approvals', { health: MANAGERS_ON, managers: [managerFixture()] })
+    expect(await screen.findByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
+    expect(routeName()).toBe('manager-approvals')
+    expect(currentPathname()).toBe('/manager/approvals')
+  })
+
   it('a cold chat waits behind its own skeleton, never the list’s', () => {
     renderAt('/manager/m-1', { health: MANAGERS_ON })
     expect(screen.queryByText('Loading managers…')).toBeNull()
@@ -939,6 +977,9 @@ describe('the Manager routes', () => {
   it('with managers off, /manager lands on the cockpit and its settings link on Settings', () => {
     const off = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } }
     renderAt('/manager/m-1', { health: off })
+    expect(currentPathname()).toBe(`/p/${BOOT}/`)
+    cleanup()
+    renderAt('/manager/approvals', { health: off })
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
     cleanup()
     renderAt('/settings/global/manager', { health: off })

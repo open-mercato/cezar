@@ -831,7 +831,7 @@ export function SetupPill() {
 
 /** Set the agent up here when this cockpit can open a terminal on the user's machine; otherwise the
  *  commands to run elsewhere. Blank until the answer is in, like the rest of the first run. */
-function AgentStep() {
+export function AgentStep() {
   const setup = useAgentSetup()
   if (setup.isPending) return null
   return setup.data?.available ? <SetUpAgentHere setup={setup.data} /> : <SignInToAgent />

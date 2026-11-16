@@ -1,6 +1,7 @@
-import { EllipsisIcon, MonitorIcon, MoonIcon, SearchIcon, StarIcon, SunIcon, WrenchIcon } from 'lucide-react'
+import { EllipsisIcon, MonitorIcon, MoonIcon, SearchIcon, SettingsIcon, StarIcon, SunIcon, WrenchIcon } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
+import { NavLink } from 'react-router'
 
 import { openCommandPalette } from '@/components/command-palette'
 import { Kbd } from '@/components/kbd'
@@ -43,6 +44,10 @@ export interface SidebarStatusLineProps {
   hostWidget?: ReactNode
   /** `ToolsMenuItems` — the Tools submenu's body. */
   toolsMenu?: ReactNode
+  /** `ConnectPhoneLink`: a row above search; gates itself. */
+  connectPhone?: ReactNode
+  /** `PhonesLink`: an icon left of the version chip once a phone is paired; gates itself. */
+  phonesLink?: ReactNode
   /** The What's new menu item. */
   whatsNew?: ReactNode
   /** What's new has items the user has not opened — the ⋯ button's only dot. */
@@ -68,7 +73,7 @@ const FOCUS_RING = 'outline-none focus-visible:ring-[3px] focus-visible:ring-rin
 /**
  * The sidebar's footer, two rows: a search launcher, then health and running count beside the
  * version chip (main's footer placement, #368) and a "⋯" panel for the machine glance, Tools,
- * What's new, the ⭐ ask and the theme.
+ * Global Settings, What's new, the ⭐ ask and the theme.
  */
 export function SidebarStatusLine({
   health,
@@ -79,6 +84,8 @@ export function SidebarStatusLine({
   starCount,
   hostWidget,
   toolsMenu,
+  connectPhone,
+  phonesLink,
   whatsNew,
   whatsNewUnseen = false,
   healthReason = null,
@@ -97,6 +104,8 @@ export function SidebarStatusLine({
   )
   return (
     <div data-slot="sidebar-footer" className="flex shrink-0 flex-col gap-1.5 border-t border-border px-3 py-2.5">
+      {/* Its own row: the controls row has no width left for another control (#702). */}
+      {connectPhone}
       <button
         type="button"
         data-slot="command-palette-hint"
@@ -125,6 +134,7 @@ export function SidebarStatusLine({
           </>
         )}
         <div className="ml-auto flex min-w-0 items-center gap-1">
+          {phonesLink}
           {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} onOpen={() => setUpdater(true)} /> : null}
           <MoreMenu
             health={health}
@@ -232,6 +242,13 @@ function MoreMenu({
             <DropdownMenuSeparator />
           </>
         ) : null}
+        <DropdownMenuItem asChild className="min-h-11 text-ui aria-[current=page]:bg-muted aria-[current=page]:font-semibold aria-[current=page]:text-foreground md:min-h-0 no-hover:min-h-11">
+          {/* Global settings live outside the active project's URL scope. */}
+          <NavLink to="/settings/global">
+            <SettingsIcon aria-hidden="true" />
+            Global Settings
+          </NavLink>
+        </DropdownMenuItem>
         {toolsMenu ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger data-slot="tools-menu" className="text-ui">

@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
+import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
+import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { MANAGER_QUIET } from './prompts.ts';
+import { MANAGER_QUIET, managerSystemPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
@@ -202,6 +204,10 @@ describe('ManagerEngine', () => {
       expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash', `Write(/${files}/**)`, `Edit(/${files}/**)`]);
       expect(spec?.bashAllowlist).toContain('cez-manager');
       expect(spec?.bashAllowlist?.some((entry) => /gh pr merge|^gh$|^git$/.test(entry))).toBe(false);
+      // Only cez-manager leaves the user's sandbox, which blocks its loopback fetch to the cockpit.
+      expect(spec?.sandboxExcludedCommands).toEqual(['cez-manager *']);
+      // ...but only as a plain command, so its text goes through --file (#2258).
+      expect(spec?.systemPrompt).toContain(MANAGER_TEXT_IN_FILES);
       expect(spec?.env).toMatchObject({ CEZ_MANAGER_ID: id, CEZ_MANAGER_TURN: 'chat' });
       expect(spec?.env?.PATH?.startsWith(join(home, 'managers', 'bin'))).toBe(true);
       expect(spec?.additionalDirectories).toEqual(['/alpha']);
@@ -264,6 +270,9 @@ describe('ManagerEngine', () => {
       engine.send(id, 'again');
       await settled(engine);
       expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      // Claude's sandbox setting means nothing to another backend.
+      expect(backend.specs.at(-1)?.sandboxExcludedCommands).toBeUndefined();
+      expect(backend.specs.at(-1)?.systemPrompt).not.toContain(MANAGER_TEXT_IN_FILES);
     });
 
     it('spells a Windows drive the way Claude rules do', () => {
@@ -1428,6 +1437,22 @@ describe('ManagerEngine', () => {
       expect(raised).toEqual([[store.get(id)!.name, 'Task blocked on you']]);
     });
 
+    it('a turn started from a relay request reads the unscoped value, and its alert still fires', async () => {
+      let scoped: boolean | undefined;
+      let turnScoped: boolean | undefined;
+      const engine = makeEngine({
+        notifySystem: () => { scoped = inRelayScope(); },
+        runnerFor: () => { turnScoped = inRelayScope(); return backend.runner; },
+      });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you\nIt asks which branch to use.'));
+      runInRelayScope({ deviceId: 'phone' }, () => engine.send(id, 'hi'));
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(scoped).toBe(false);
+      expect(turnScoped).toBe(false);
+    });
+
     it('stays quiet for routine replies', async () => {
       const engine = noisy();
       const id = await create(engine, 0);
@@ -1509,6 +1534,79 @@ describe('ManagerEngine', () => {
       await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
       vi.advanceTimersByTime(3_000);
       expect(raised[0]?.[1]).toContain('Needs your approval');
+    });
+
+    // Spec relay R5: the push sink hears the same alerts, by manager id only.
+    it('signals push for an approval, an important reply and a question, with no OS notifier', async () => {
+      const pushed: string[] = [];
+      const engine = makeEngine({ pushSignal: (managerId) => pushed.push(managerId) });
+      const id = await create(engine, 0);
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say(`CEZ:ASK ${JSON.stringify({ questions: [{ header: 'H', question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })}`));
+      engine.send(id, 'again');
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(pushed).toEqual([id, id, id]);
+    });
+
+    it('signals no push for a routine reply, a read chat, or a manager told to hush', async () => {
+      const pushed: string[] = [];
+      const engine = makeEngine({ pushSignal: (managerId) => pushed.push(managerId) });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('All fine.'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say('MANAGER:IMPORTANT Read me'));
+      engine.send(id, 'again');
+      await settled(engine);
+      engine.read(id);
+      vi.advanceTimersByTime(3_000);
+      await engine.update(id, { notify: false });
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      vi.advanceTimersByTime(3_000);
+      expect(pushed).toEqual([]);
+    });
+  });
+
+  describe('push for a task waiting on the user', () => {
+    const waiting = { id: 'run-1', title: 'Fix it', status: 'waiting', waitingSince: '2026-10-31T11:00:00.000Z', startedAt: '2026-10-31T10:00:00.000Z' } as unknown as RunRecord;
+    let now = Date.parse('2026-10-31T12:00:00.000Z');
+    const watching = (pushed: string[]) => makeEngine({
+      now: () => now,
+      projects: async () => [{ ...connected, runs: () => [waiting] }],
+      pushSignal: (managerId) => pushed.push(managerId),
+    });
+    const watch = async (engine: ManagerEngine) => {
+      now += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+    };
+
+    it('wakes the phone once per waiting task, even when the model stays quiet or fails', async () => {
+      const pushed: string[] = [];
+      const engine = watching(pushed);
+      const id = await create(engine);
+      backend.scripts.push({ fail: 'logged out' }, say(MANAGER_QUIET));
+      await watch(engine);
+      expect(pushed).toEqual([id]);
+      // The failed turn left the key fresh; the next watch must not push it again.
+      now += 16 * 60_000;
+      await watch(engine);
+      expect(backend.specs.length).toBeGreaterThanOrEqual(2);
+      expect(pushed).toEqual([id]);
+    });
+
+    it('respects a manager told to hush', async () => {
+      const pushed: string[] = [];
+      const engine = watching(pushed);
+      const id = await create(engine);
+      await engine.update(id, { notify: false });
+      backend.scripts.push(say(MANAGER_QUIET));
+      await watch(engine);
+      expect(pushed).toEqual([]);
     });
   });
 
@@ -2049,6 +2147,7 @@ describe('ManagerEngine', () => {
       const id = await create(engine);
       expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', title: 'Fix' })).toEqual({ projectId: 'alpha', runId: 'new-run' });
       expect(requests[0]).toMatchObject({ path: '/api/v1/p/alpha/runs', method: 'POST', body: { workflow: 'quick-task', task: 'Fix it' } });
+      expect(requests[0]?.body).not.toHaveProperty('systemPrompt');
       expect(requests[1]).toMatchObject({ path: '/api/v1/p/alpha/runs/new-run', method: 'PATCH', body: { title: 'Fix' } });
     });
 
@@ -2066,6 +2165,33 @@ describe('ManagerEngine', () => {
   });
 
   describe('task agent selection', () => {
+    it('selects only allowed runner/account pairs, validates at launch and tells the manager their CLI arguments', async () => {
+      let removed = false;
+      const engine = makeEngine({ accountError: async (_runner, account) => removed && account === 'first' ? 'account removed' : null });
+      const taskAgents = [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'claude' as const, agentProfile: 'second' }, { runner: 'codex' as const, agentProfile: 'work' }];
+      const created = await engine.create({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents, cronMinutes: 0 });
+      if ('error' in created) throw created;
+      const prompt = managerSystemPrompt(created, []);
+      for (const agent of taskAgents) expect(prompt).toContain(`--runner ${agent.runner} --account ${agent.agentProfile}`);
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'No explicit pair' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'Second Claude', runner: 'claude', agentProfile: 'second' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+      removed = true;
+      expect(await engine.createTask(created.id, { projectId: 'alpha', task: 'Deleted account', runner: 'claude', agentProfile: 'first' })).toMatchObject({ status: 400 });
+      expect(await engine.createTask(created.id, { projectId: 'alpha', task: 'Unselected account', runner: 'claude', agentProfile: 'default' })).toMatchObject({ status: 403 });
+      expect(new ManagerStore().get(created.id)?.taskAgents).toEqual(taskAgents);
+    });
+
+    it('a retry follows the current task account set after its original account was deselected', async () => {
+      const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'old-account', steps: [] } as unknown as RunRecord;
+      const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [old] }] });
+      const id = await create(engine, 0);
+      await engine.update(id, { taskAgents: [{ runner: 'codex', agentProfile: 'new-account' }] });
+      expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'old' })).toMatchObject({ runId: 'new-run' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'new-account' });
+    });
+
     it('automatically uses the manager backend instead of the project default', async () => {
       const engine = makeEngine({ defaultRunner: async () => 'codex' });
       const id = await create(engine, 0);
@@ -2738,9 +2864,39 @@ describe('ManagerEngine', () => {
       expect(fence).toBeTruthy();
       expect(prompt.split(`\n${fence}\n`)[1]).toContain('Alina and Maciek: give me their surnames.');
       expect(prompt).toContain('end your reply with the CEZ:ASK line');
-      expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The notes are filed.', ask });
+      expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The notes are filed.', ask, sourceTasks: [{ projectId: 'alpha', runId: 'new-run' }] });
       // The chat note stays short: the excerpt rides only the follow-up.
       expect(store.state(id).notes).toEqual([]);
+    });
+
+    it('keeps the source when Need more info causes a terse reasked decision', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const ask = { questions: [{ header: 'Approve', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+      const text = `Here is the decision.\nCEZ:ASK ${JSON.stringify(ask)}`;
+      backend.scripts.push(say(text));
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      const first = assistants(id)[1]!;
+      backend.scripts.push(say(text));
+      engine.send(id, 'Approve: Need more info', [], first.id);
+      await settled(engine);
+      expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'new-run' }] });
+    });
+
+    it('tracks a task discovered by a detail tool during an ordinary chat', async () => {
+      runs.push(run({ id: 'read-task' }));
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      const ask = { questions: [{ header: 'Approve', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+      backend.scripts.push({ ...say(`Ready.\nCEZ:ASK ${JSON.stringify(ask)}`), hold: true });
+      engine.send(id, 'What should we do?');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(await engine.taskDetail(id, 'alpha', 'read-task')).toMatchObject({ task: { runId: 'read-task' } });
+      backend.open[0]!.finish();
+      await settled(engine);
+      expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'read-task' }] });
     });
 
     it('marks a failure and a wait on the user important, and raises the notification', async () => {
@@ -2928,6 +3084,8 @@ describe('ManagerEngine', () => {
       const done = run({ id: 'new-run', status: 'done', finishedAt: later(1) });
       first.taskChanged('alpha', dataDir(), done, () => undefined);
       await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      // The reply exists from the turn's first delta; under load a shutdown here interrupted it.
+      await settled(first);
       await first.shutdown();
 
       // cezar was down while the task was continued and failed.

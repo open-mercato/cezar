@@ -26,6 +26,15 @@ describe('ManagerBackLink', () => {
     expect(screen.getByRole('link', { name: 'Back to Global' }).getAttribute('href')).toBe('/manager/g')
   })
 
+  it('returns to the exact decision from a task or its assets', () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/p/a/tasks/r1/assets', state: { manager: { id: 'g', name: 'Global', decision: 'm:2' } } }]}>
+        <ManagerBackLink runId="r1" />
+      </MemoryRouter>,
+    )
+    expect(screen.getByRole('link', { name: 'Back to Global' }).getAttribute('href')).toBe('/manager/g#decision-m%3A2')
+  })
+
   it('from a manager\'s Tasks table, offers both the filtered list and the manager', () => {
     function Probe() {
       const location = useLocation()

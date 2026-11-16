@@ -23,6 +23,17 @@ const boundedId = z.string().min(1).max(200);
 const runnerInput = z.string().max(64);
 const modelInput = z.string().max(200);
 
+export const managerTaskAgentSchema = z.object({
+  runner: runnerSchema,
+  /** Absent follows the task's account default; an id pins that exact account. */
+  agentProfile: z.string().min(1).max(64).optional(),
+});
+export type ManagerTaskAgent = z.infer<typeof managerTaskAgentSchema>;
+export const managerTaskAgentsSchema = z.array(managerTaskAgentSchema).min(1).max(64).refine(
+  (agents) => new Set(agents.map((agent) => JSON.stringify([agent.runner, agent.agentProfile]))).size === agents.length,
+  'choose each agent account only once',
+);
+
 /** `all` follows the registry: a project added later is connected without touching the manager. */
 export const managerProjectsSchema = z.union([z.literal('all'), z.array(z.string().min(1).max(200)).min(1).max(200)]);
 export type ManagerProjects = z.infer<typeof managerProjectsSchema>;
@@ -197,6 +208,7 @@ export const managerSchema = z.object({
   projectAccess: managerProjectAccessSchema.optional(),
   runner: z.string().optional(),
   taskRunner: runnerSchema.optional(),
+  taskAgents: managerTaskAgentsSchema.optional(),
   model: z.string().optional(),
   effort: managerEffortSchema.optional(),
   /** Agent account id ("Account" in the design); absent = the runner's default. */
@@ -262,6 +274,7 @@ export const createManagerInputSchema = z.object({
   projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.optional(),
   taskRunner: runnerSchema.optional(),
+  taskAgents: managerTaskAgentsSchema.optional(),
   model: modelInput.optional(),
   effort: managerEffortSchema.optional(),
   agentProfile: z.string().max(64).optional(),
@@ -282,6 +295,7 @@ export const updateManagerInputSchema = z.object({
   projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.nullable().optional(),
   taskRunner: runnerSchema.nullable().optional(),
+  taskAgents: managerTaskAgentsSchema.nullable().optional(),
   model: modelInput.nullable().optional(),
   effort: managerEffortSchema.nullable().optional(),
   agentProfile: z.string().max(64).nullable().optional(),
@@ -395,7 +409,17 @@ export type ManagerAttachment = z.infer<typeof managerAttachmentSchema>;
 export const managerTaskReportStateSchema = z.enum(['done', 'review', 'failed', 'needs-you', 'cancelled']);
 export type ManagerTaskReportState = z.infer<typeof managerTaskReportStateSchema>;
 
-const managerMessageBase = { id: z.string(), seq: z.number().int().min(0), at: z.string() };
+export const managerTaskSourceSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+});
+export type ManagerTaskSource = z.infer<typeof managerTaskSourceSchema>;
+
+const managerMessageBase = {
+  id: z.string(), seq: z.number().int().min(0), at: z.string(),
+  /** Task context carried by the turn, independent of the model's wording. */
+  sourceTasks: z.array(managerTaskSourceSchema).optional(),
+};
 
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
 export const managerMessageSchema = z.discriminatedUnion('kind', [
@@ -616,6 +640,7 @@ export const managerCreateTaskInputSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   workflow: boundedId.optional(),
   runner: runnerInput.optional(),
+  agentProfile: z.string().min(1).max(64).optional(),
   model: modelInput.optional(),
   effort: managerTaskEffortSchema.optional(),
   dispatch: z.boolean().optional(),

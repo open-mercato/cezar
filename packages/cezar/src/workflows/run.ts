@@ -76,6 +76,7 @@ import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
@@ -171,6 +172,7 @@ import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
 import { track } from '../telemetry.ts';
 import { skillLabel, taskOriginOf, workflowLabel, type TaskOrigin } from '../feature-telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
   chainStepNote,
@@ -724,6 +726,9 @@ interface ActiveRun {
   /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
    *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
   autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
+  /** The project's opt-in `bypassPermissions` (Claude skips every prompt). Set at BOTH
+   *  construction sites through `bypassPolicy`. */
+  bypassPermissions?: boolean;
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
   /** A manager's read-only task: the backend enforces it too (`AgentRunSpec.enforceReadOnly`). */
@@ -1053,6 +1058,8 @@ export interface StartRunInput {
    *  Replaces the `config.json` default for this run — see
    *  `resolveExtraSystemPrompt` for the precedence contract. */
   systemPrompt?: string;
+  /** Manager provenance also carries the task's restrictions to descendants and continuations. */
+  startedByManager?: RunRecord['startedByManager'];
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -1111,8 +1118,8 @@ export interface StartRunInput {
  * `config.json` default — they are the same knob at two scopes, so the more
  * specific one wins outright; they never concatenate. The global instructions
  * (`~/.cezar/config.json` `systemPrompt`) are a different knob: they always
- * ride along, placed FIRST and labelled as yielding to the project's. Whichever
- * wins is ADDITIVE to the skill body and the handoff contract (see
+ * ride along, placed FIRST and take precedence over repository and workflow guidance.
+ * The result is ADDITIVE to the skill body and the handoff contract (see
  * `composeSystemPrompt`). Blank strings count as unset.
  */
 export function resolveExtraSystemPrompt(
@@ -1122,7 +1129,8 @@ export function resolveExtraSystemPrompt(
 ): string | undefined {
   const project = override?.trim() || configDefault?.trim() || undefined;
   const global = globalDefault?.trim() || undefined;
-  if (!global || !project) return project ?? global;
+  if (!global) return project;
+  if (!project) return `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}`;
   return [
     `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}`,
     `${PROJECT_INSTRUCTIONS_HEADING}\n\n${project}`,
@@ -1130,9 +1138,11 @@ export function resolveExtraSystemPrompt(
 }
 
 export const GLOBAL_INSTRUCTIONS_HEADING =
-  '## Global instructions\n\nThese apply to every project. Where they conflict with the project instructions below, the project instructions win.';
+  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict.';
 export const PROJECT_INSTRUCTIONS_HEADING =
-  '## Project instructions\n\nThese are specific to this project and take precedence over the global instructions above.';
+  '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
+
+const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -1153,10 +1163,8 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
  * BOTH session sites, so a task knows how to dispatch and report on its first step, on every
  * Continue, and after a restart.
  *
- * De-duplicated against the run's extra system prompt, and that is not a micro-optimisation:
- * `dispatch()` seeds a child's extra prompt with the very same text, so composing both would
- * hand the backend the same instructions twice. Containment, not equality: with global
- * instructions set, `resolveExtraSystemPrompt` wraps that seed under its own heading.
+ * Older dispatched runs stored this text in their extra prompt. Keep those snapshots from
+ * repeating it on Continue; new children receive it only from `prepareDispatchSession`.
  */
 export function dispatchPromptPart(prompt: string | undefined, extra: string | undefined): string | undefined {
   const part = prompt?.trim();
@@ -1594,6 +1602,7 @@ export class RunManager {
 
   /** See the constructor option of the same name. */
   private readonly prWatchProbe: PrWatchProbe;
+  private readonly hosted: () => boolean;
 
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
@@ -1624,9 +1633,12 @@ export class RunManager {
       branchNameWaitMs?: number;
       /** Reads a monitored PR's fingerprint (#2040); tests inject a fake forge. */
       prWatchProbe?: PrWatchProbe;
+      /** A hosted cockpit (`capabilities().localHandoff` false): `bypassPermissions` stays off. */
+      hosted?: () => boolean;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.hosted = options.hosted ?? (() => false);
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
     this.projectId = options.projectId;
@@ -2058,7 +2070,10 @@ export class RunManager {
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
-    this.store.updateRun(run.id, { workflowDef: workflow });
+    this.store.updateRun(run.id, {
+      workflowDef: workflow,
+      ...(input.startedByManager ? { startedByManager: input.startedByManager } : {}),
+    });
     // On the record, not only the input: restart recovery rebuilds the run from it.
     if (run.worktree === false && input.newBranch) {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
@@ -2411,7 +2426,7 @@ export class RunManager {
           if (continuation) {
             const hydrated = this.hydrateQueuedContinuation(runId, continuation);
             const ownerToken = Symbol('run-owner');
-            void this.runContinuation(
+            void outsideRelayScope(() => this.runContinuation(
               runId,
               hydrated.stepId,
               hydrated.sessionId,
@@ -2421,7 +2436,7 @@ export class RunManager {
               hydrated.persistedImages,
               hydrated.persistedAttachments,
               ownerToken,
-            ).catch((err: unknown) => {
+            )).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
               // A cancel that landed before the throw still owes the parent its report.
@@ -2439,7 +2454,7 @@ export class RunManager {
           // it is now, exactly as a run started now would be.
           const workflow = catalog ? this.refreshQueuedWorkflow(runId, job.workflow, catalog) : job.workflow;
           const ownerToken = Symbol('run-owner');
-          void this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
+          void outsideRelayScope(() => this.execute(runId, workflow, input, ownerToken)).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
             if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -3073,8 +3088,9 @@ export class RunManager {
    * gets no dispatch prompt and behaves exactly as it did before this feature existed.
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
-    if (!this.dispatchReachable()) return;
     const dispatch = this.store.getRun(runId)?.dispatch;
+    // A child keeps its reporting instructions even if transport disappears before it starts.
+    if (!dispatch?.parentRunId && !this.dispatchReachable()) return;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
   }
@@ -3442,7 +3458,7 @@ export class RunManager {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
-      systemPrompt: composeDispatchPrompt(input.kind),
+      ...(parent.startedByManager ? { startedByManager: parent.startedByManager } : {}),
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
@@ -5483,7 +5499,7 @@ export class RunManager {
     // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
     // registers it in `active`.
     this.starting.add(runId);
-    void this.runContinuation(
+    void outsideRelayScope(() => this.runContinuation(
       runId,
       stepId,
       resume ? sessionStep?.sessionId : undefined,
@@ -5493,7 +5509,7 @@ export class RunManager {
       undefined,
       undefined,
       ownerToken,
-    ).catch(
+    )).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
@@ -5606,8 +5622,12 @@ export class RunManager {
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
     state.enforceReadOnly = state.readOnly && record?.enforceReadOnly === true;
+    const continueConfig = await loadConfig(this.repoRoot);
+    state.bypassPermissions = await this.bypassPolicy(state.readOnly, continueConfig, (message) =>
+      this.store.appendEvent(runId, { type: 'note', message }),
+    );
     if (state.cwd === this.repoRoot) {
-      state.autoLand = await this.landingPolicy(record, await loadConfig(this.repoRoot));
+      state.autoLand = await this.landingPolicy(record, continueConfig);
     }
     if (state.cwd === this.repoRoot && !state.readOnly) {
       if (repositoryRootLockDisabled()) {
@@ -6099,6 +6119,7 @@ export class RunManager {
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
           bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
@@ -6303,6 +6324,9 @@ export class RunManager {
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
+    state.bypassPermissions = await this.bypassPolicy(state.readOnly, config, (message) =>
+      this.store.appendEvent(runId, { type: 'note', message }),
+    );
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
     // the record so the UI/API can show what the run actually used. The landing permission or the
     // read-only rule rides along, so a Continue (which reads the record) keeps it.
@@ -6312,6 +6336,7 @@ export class RunManager {
       ? original.systemPrompt
       : composeSystemPrompt(
         resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt),
+        this.store.getRun(runId)?.startedByManager ? MANAGER_TASK_SYSTEM_PROMPT : undefined,
         state.autoLand ? landingPromptPart(state.autoLand.baseLabel, state.autoLand.checks, state.autonomous === true) : undefined,
         state.readOnly ? READ_ONLY_PROMPT : undefined,
       ) || undefined;
@@ -8322,6 +8347,7 @@ export class RunManager {
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
           bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
@@ -8901,6 +8927,15 @@ export class RunManager {
       return undefined;
     }
     return { checks: config.requiredChecks ?? [], baseBranch: config.baseBranch, baseLabel: config.baseBranch ?? repo.branch, attempts: 0 };
+  }
+
+  /** Whether Claude skips permission prompts for this run. Like auto-land, only local
+   *  configuration can grant it: a cloned repository must not turn approvals off. */
+  private async bypassPolicy(readOnly: boolean | undefined, config: CezConfig, note?: (message: string) => void): Promise<boolean> {
+    if (readOnly || config.bypassPermissions !== true) return false;
+    const blocked = await bypassPermissionsBlocked(this.repoRoot, config, { hosted: this.hosted() });
+    if (blocked) note?.(blocked);
+    return blocked === null;
   }
 
   /** The most recent thing the user asked this task for — context for a commit message. */

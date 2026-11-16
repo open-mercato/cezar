@@ -73,7 +73,9 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
 });
 
-describe('worktree lifecycle coordinator with real Git and command fixtures', () => {
+// A flow can prepare, fail, retry and remove real worktrees. Its overall budget must cover
+// several operations; `settled` and the individual liveness checks keep their own deadlines.
+describe('worktree lifecycle coordinator with real Git and command fixtures', { timeout: 20_000 }, () => {
   it.skipIf(process.platform === 'win32')('shutdown drains the script process group before persisting stopped recovery state', async () => {
     const p = await project();
     await p.config([entry('sleep 120 & child=$!; printf "%s" "$child" > child.pid; wait')]);

@@ -369,7 +369,7 @@ function countOnly(program: string, args: string[], valueFlags: string[]): BashV
 }
 
 /** The system prompt's account of this policy, built from the same tables so the two cannot drift. */
-export function managerBashPromptSection(allowed: readonly string[] = []): string {
+export function managerBashPromptSection(allowed: readonly string[] = [], options: { textInFiles?: boolean } = {}): string {
   const reads = Object.entries(GH_READ).map(([group, verbs]) => `gh ${group} ${[...verbs].join('|')}`).join(', ');
   const own = allowed.filter((pattern) => managerBashPatternIssue(pattern) === undefined);
   return `Bash runs only these, one command per call (no ;, &&, ||, $(…), backticks, redirects or loops):
@@ -379,8 +379,13 @@ export function managerBashPromptSection(allowed: readonly string[] = []): strin
   gh api <endpoint>                                   GET only: no -X/--method but GET, no -f/-F/--field/--raw-field/--input, no graphql${own.length > 0 ? `\n  ${own.join(', ')}    (the user allowed these)` : ''}
   any of them may pipe into ${MANAGER_BASH_FILTERS.join(', ')} (reading the pipe, never a file); --jq and --template work too
   never: ${MANAGER_BASH_DENIED.join(', ')}, gh api writes, --web, or any other program; a refused command is shown to the user
-  long or multi-line text: put it in single quotes, or end the command with --stdin <<'EOF', the text, and EOF on its own line`;
+  ${options.textInFiles ? MANAGER_TEXT_IN_FILES : "long or multi-line text: put it in single quotes, or end the command with --stdin <<'EOF', the text, and EOF on its own line"}`;
 }
+
+/** Claude Code's Bash sandbox lets `cez-manager` out only for a plain command (#2258): a heredoc,
+ *  `?`, `*`, `[`, `~` or a newline keeps it sandboxed, and the call fails. */
+export const MANAGER_TEXT_IN_FILES =
+  'any text you write for a task (an objective, a message): never inline it or use a heredoc; write it with Write to files/<name>.md, then pass --file files/<name>.md. Keep every other argument (titles, reasons) to plain words, without ? * [ ~ or line breaks: anything else can make the call fail';
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
