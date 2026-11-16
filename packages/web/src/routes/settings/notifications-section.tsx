@@ -51,6 +51,8 @@ export function NotificationsSection() {
   const save = React.useCallback(
     (next: boolean) => {
       setEnabled(next)
+      // A first load still in flight would land after the answer below and flip the switch back.
+      void queryClient.cancelQueries({ queryKey: workspaceQueryKeys.uiState })
       putWorkspaceUiState({ notifications: { enabled: next } })
         .then((merged) => {
           queryClient.setQueryData(workspaceQueryKeys.uiState, merged)
