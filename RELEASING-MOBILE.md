@@ -192,31 +192,25 @@ the store's privacy declarations.
 
 ### Production 0.1.1 submission blockers
 
-The version bump prepares a production build; it does not approve publication. Keep the PR a draft
-until the following evidence is available:
+For PR #2261, the user explicitly approved legal/provider coverage under the existing Open Mercato
+privacy policy on 2026-11-16: **"Legal: I confirm coverage"**. Coverage is no longer a release blocker.
+The externally hosted legal text stays unchanged, and the internal draft's placeholders remain
+internal review notes rather than additional release gates.
 
-- **Unconfirmed legal facts:** the internal draft's entity/controller and address, privacy contact,
-  effective date, lawful bases, rights/request process and authority, children's wording, governing
-  law, transfers, change notices and no-sale/no-marketing commitments remain unconfirmed. The owner
-  must confirm the applicable mobile/relay privacy disclosures and store answers; do not infer
-  these from a source-code default or rewrite the existing hosted policy to fill the gaps.
-- **Production providers:** Cloudflare account holder, DPA, processing regions and provider retention;
-  actual email provider; confirmation that deployed relay retention/logging matches the policy and
-  that its IP hashing uses a secret salt. The relay source is maintained in a separate repository;
-  the historic audit in `.ai/specs/drafts/mobile-privacy-policy.md` is not deployment evidence.
-- **Store declarations:** resolve the open questions in `store/data-safety.md`, including how the
-  relay account links device identifiers to email. Do not infer "not linked" solely from a random
-  device ID or treat `PrivacyInfo.xcprivacy` as approval of the App Privacy answers. Apple requires
-  accurate app and third-party collection declarations:
-  https://developer.apple.com/app-store/app-privacy-details/.
-- **iOS distribution:** confirm signing/provisioning and a successful signed archive/TestFlight
-  upload, production APNs configuration and real-device delivery, the encryption/export-compliance
-  determination, and a build number above earlier uploads. No export-compliance answer is inferred
-  from this PR. Confirm Firebase/FCM inclusion and delivery separately for Android.
-- **Review access and metadata:** real demo hostname with a working reset/demo flow, reviewer
-  credentials entered privately in each console, App Review contact, public support email in
-  `store/listing.md`, current screenshots, age-rating answers and the real-device checklist below.
-  The demo hostname and password placeholders are intentional until the operator supplies them.
+Keep the PR a draft for these **three remaining items only**:
+
+- **Export-compliance guidance — pending:** obtain the applicable encryption/export determination
+  and App Store Connect answers. No classification, exemption or reporting answer is inferred here.
+- **Signing/TestFlight evidence — not yet:** confirm Apple signing/provisioning and a successful
+  signed archive/TestFlight upload; verify that build `10199` is above earlier uploads. Enter signing
+  credentials privately through the release setup, never in the repository or review notes.
+- **Store QA — not ready:** complete the real-device checklist below, including production APNs
+  delivery and the privacy link; confirm Firebase/FCM separately for an Android submission. Validate
+  the proposed store declarations in `store/data-safety.md` against the submitted build, resolve its
+  field questions and align the privacy manifest. Verify demo access/reset, enter reviewer
+  credentials privately in the consoles, and supply the App Review contact, public support email,
+  current screenshots and age-rating answers. Coverage approval does not assign collection or
+  identity-linkage field values; these remain Store QA tasks.
 
 ## 6. Reviewer demo
 

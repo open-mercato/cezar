@@ -7,9 +7,9 @@ Appendix A). Re-check this file whenever the app gains an SDK, a permission or a
 
 For `0.1.1`, the iOS storage and push descriptions also follow `KeychainCredentialStore`,
 `KeychainDeviceKeyStore`, `WebsiteData`, `ApnsTokenSource`, `PushStore`, `DeviceBookKeychain`, the
-notification extension and `RELAY_PROTOCOL.md` §§ 7 and 18. These are proposed store answers, not
-approved legal declarations or verification of the deployed relay. Resolve the marked questions
-and the identifier/account linkage below before submission.
+notification extension and `RELAY_PROTOCOL.md` §§ 7 and 18. The user approved existing-policy/provider
+coverage for PR #2261. Validate the proposed store answers against the submitted build during Store QA,
+including the marked field questions and identifier/account linkage below.
 
 **What leaves the phone, and to whom:**
 
