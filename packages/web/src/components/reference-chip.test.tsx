@@ -68,13 +68,13 @@ describe('ReferenceChip with a status', () => {
     ['review-required', 'text-info', 'lucide-git-pull-request'],
     ['ready', 'text-success-strong', 'lucide-circle-check'],
     ['merged', 'text-merged', 'lucide-git-merge'],
-    ['closed', 'text-muted-foreground', 'lucide-git-pull-request-closed'],
+    ['closed', 'text-closed', 'lucide-git-pull-request-closed'],
     ['draft', 'text-muted-foreground', 'lucide-git-pull-request-draft'],
     ['checks-failing', 'text-danger-strong', 'lucide-circle-x'],
     ['changes-requested', 'text-danger-strong', 'lucide-message-square-warning'],
-    ['open', 'text-muted-foreground', 'lucide-circle-dot'],
+    ['open', 'text-info', 'lucide-circle-dot'],
     ['completed', 'text-merged', 'lucide-circle-check'],
-    ['not-planned', 'text-muted-foreground', 'lucide-circle-slash'],
+    ['not-planned', 'text-closed', 'lucide-circle-slash'],
   ] as const)('paints %s with %s and the %s glyph', (status, tone, icon) => {
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />)
     expect(chip.className).toContain(tone)
@@ -82,11 +82,13 @@ describe('ReferenceChip with a status', () => {
   })
 
   // Pairs that once shared a colour and were reported for it: a merged PR read as a ready one
-  // (#2171), ready read as waiting for review, and closed read as changes requested.
+  // (#2171), ready read as waiting for review, closed read as changes requested, then as a draft.
   it.each([
     ['merged', 'ready'],
     ['ready', 'review-required'],
     ['closed', 'changes-requested'],
+    ['closed', 'draft'],
+    ['completed', 'open'],
   ] as const)('never paints %s in the colour of %s', (a, b) => {
     const toneOf = (status: ReferenceStatus) =>
       chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />).className

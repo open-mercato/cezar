@@ -10,7 +10,7 @@ import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
  *
  * `tone` names a role, never a color: blue = waiting on a reviewer, green = ready to act on,
  * purple (`merged`) = landed (a merged PR, a completed issue), red = something to fix (checks, requested changes),
- * grey = parked or finished without landing, amber = checks running, orange = conflicts. The
+ * grey = a draft, dark grey (`closed`) = finished without landing, amber = checks running, orange = conflicts. The
  * accent violet stays absent — it is the running pulse, never a chip at rest.
  */
 export interface ReferenceStatusPresentation {
@@ -25,6 +25,7 @@ export type ReferenceStatusTone =
   | 'success'
   | 'danger'
   | 'merged'
+  | 'closed'
   | 'neutral'
   | 'pending'
   | 'info'
@@ -74,16 +75,16 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   closed: {
     label: 'Closed',
     hint: 'closed without merging — the work did not land',
-    // Grey, not red: red is "something to fix" (checks, requested changes), and a closed PR is
-    // nobody's move. Its closed glyph keeps it apart from a grey draft.
-    tone: 'neutral',
+    // Not red: red is "something to fix" (checks, requested changes), and a closed PR is nobody's
+    // move. A darker grey than the draft's, plus its closed glyph, keeps the two apart.
+    tone: 'closed',
   },
   // ---- issues ---------------------------------------------------------------------------
   open: {
     label: 'Open',
     hint: 'still open on the tracker',
-    // An open issue is a fact, not an outcome: quiet.
-    tone: 'neutral',
+    // Blue like `review-required`: waiting on someone, not green's "act on it now".
+    tone: 'info',
   },
   completed: {
     label: 'Closed as completed',
@@ -94,7 +95,8 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   'not-planned': {
     label: 'Closed as not planned',
     hint: 'the issue was declined — nothing shipped for it',
-    tone: 'neutral',
+    // The closed PR's dark grey: finished without landing.
+    tone: 'closed',
   },
 }
 

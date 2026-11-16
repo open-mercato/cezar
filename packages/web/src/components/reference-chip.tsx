@@ -34,6 +34,7 @@ const TONE_TEXT: Record<ReferenceStatusTone, string> = {
   success: 'text-success-strong',
   danger: 'text-danger-strong',
   merged: 'text-merged',
+  closed: 'text-closed',
   neutral: 'text-muted-foreground',
   info: 'text-info',
   pending: 'text-pending-strong',
@@ -47,6 +48,7 @@ const TONE_CLASS: Record<ReferenceStatusTone, string> = {
   success: 'border-success/40 text-success-strong',
   danger: 'border-danger/40 text-danger-strong',
   merged: 'border-merged/45 text-merged',
+  closed: 'border-closed/45 text-closed',
   neutral: 'border-border text-muted-foreground',
   info: 'border-info/40 text-info',
   // The WHOLE chip goes amber while checks run, not just its dot: "something is happening to this
@@ -66,6 +68,7 @@ const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   success: 'hover:bg-success/10',
   danger: 'hover:bg-danger/10',
   merged: 'hover:bg-merged/10',
+  closed: 'hover:bg-closed/10',
   info: 'hover:bg-info/10',
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
