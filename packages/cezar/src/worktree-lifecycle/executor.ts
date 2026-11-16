@@ -22,6 +22,8 @@ export interface LifecycleExecutorOptions {
   /** A durable start checkpoint. The child waits at a pipe gate until this resolves. */
   onStart?: (identity: LifecycleProcessIdentity) => Promise<void>;
   onOutput?: (frame: LifecycleExecutorOutput) => Promise<void> | void;
+  /** Extra environment for a trusted local hook. Never replaces the host environment. */
+  env?: NodeJS.ProcessEnv;
   /** Dependency injection for runtime-unavailable tests; production uses bash. */
   bashPath?: string;
   /** Platform seam for process-supervision fixtures; defaults to the host. */
@@ -141,7 +143,7 @@ export async function executeLifecycleCommand(options: LifecycleExecutorOptions)
     ? `IFS= read -r _cezar_launch || exit 125; "$0" -c "$1" </dev/null; _cezar_status=$?; printf '\\n%s:%s\\n' "$2" "$_cezar_status" >&2; IFS= read -r _cezar_shutdown`
     : 'IFS= read -r _cezar_launch || exit 125; exec "$0" -c "$1"';
   const child = spawn(bash, ['-c', wrapper, bash, options.command, completionMarker], {
-    cwd: options.cwd, env: process.env, detached: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+    cwd: options.cwd, env: { ...process.env, ...options.env }, detached: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
   const closed = new Promise<void>(resolve => child.once('close', () => { childClosed = true; resolve(); }));
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
