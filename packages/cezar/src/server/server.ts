@@ -3859,7 +3859,7 @@ export function createApp(deps: ServerDeps) {
 
     // Last plan-window readings per claude/codex account (#1625 cockpit extension).
     .get('/workspace/account-usage', async (c) => {
-      if (!agentAccountsEnabled(process.env, bindHost)) return c.json({ accounts: [] });
+      if (!accountsEnabled()) return c.json({ accounts: [] });
       return c.json({ accounts: await listAccountUsage() });
     })
 
