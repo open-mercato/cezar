@@ -31,6 +31,22 @@ function toneFor(usedFraction: number): LiveUsageTone {
   return 'success'
 }
 
+/** The most loaded plan window still running: the phone header's one-glance reading. */
+export function peakUsage(
+  usage: RunLiveUsage | undefined,
+  now = Date.now(),
+): { label: string; percent: number; tone: LiveUsageTone } | undefined {
+  let peak: { label: string; percent: number; tone: LiveUsageTone } | undefined
+  for (const limit of usage?.limits ?? []) {
+    if (!(Date.parse(limit.resetsAt) > now)) continue
+    const percent = Math.round(limit.utilization * 100)
+    if (peak && percent <= peak.percent) continue
+    const label = WINDOW_LABELS[limit.window] ?? limit.window.replace(/_/g, ' ')
+    peak = { label, percent, tone: toneFor(limit.utilization) }
+  }
+  return peak
+}
+
 /** `2h19m`, `3d11h`, `42m`: the remaining time in Claude Code's status line style. */
 export function timeLeft(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000))

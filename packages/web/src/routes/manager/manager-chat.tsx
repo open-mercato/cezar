@@ -617,6 +617,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
         </div>
         <AccountUsageWidget runner={manager.runner} agentProfile={manager.agentProfile} className="max-md:hidden" />
+        <AccountUsageWidget runner={manager.runner} agentProfile={manager.agentProfile} compact className="md:hidden" />
         <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" onClick={checkNow}>
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now

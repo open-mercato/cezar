@@ -8,10 +8,32 @@ import {
   LIVE_USAGE_STALE_MS,
   LiveUsage,
   liveUsageParts,
+  peakUsage,
   timeLeft,
 } from './live-usage'
 
 const NOW = Date.parse('2026-10-23T08:00:00.000Z')
+
+describe('peakUsage', () => {
+  const at = (ms: number) => new Date(NOW + ms).toISOString()
+
+  it('picks the busiest window that has not reset yet', () => {
+    const usage = {
+      at: at(0),
+      limits: [
+        { window: 'five_hour', utilization: 0.62, resetsAt: at(3_600_000) },
+        { window: 'seven_day', utilization: 0.84, resetsAt: at(86_400_000) },
+        { window: 'seven_day_opus', utilization: 0.99, resetsAt: at(-1) },
+      ],
+    }
+    expect(peakUsage(usage, NOW)).toEqual({ label: '7d', percent: 84, tone: 'danger' })
+  })
+
+  it('is undefined with no running window', () => {
+    expect(peakUsage(undefined, NOW)).toBeUndefined()
+    expect(peakUsage({ at: at(0), limits: [] }, NOW)).toBeUndefined()
+  })
+})
 
 describe('liveUsageParts', () => {
   it('renders plan windows and context fill like the Claude status line', () => {

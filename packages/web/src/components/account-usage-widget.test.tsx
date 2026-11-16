@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
@@ -153,5 +153,38 @@ describe('AccountUsageWidget', () => {
       </QueryClientProvider>,
     )
     expect(document.querySelector('[data-slot="account-usage-widget"]')).toBeNull()
+  })
+
+  describe('compact (phone header)', () => {
+    const renderCompact = (props: { runner?: string; agentProfile?: string }) =>
+      render(
+        <QueryClientProvider client={createTestClient()}>
+          <AccountUsageWidget {...props} compact />
+        </QueryClientProvider>,
+      )
+
+    it('shows one button with the busiest window, labelled for screen readers', () => {
+      renderCompact({ runner: 'claude', agentProfile: 'work' })
+      const button = screen.getByRole('button', { name: 'Plan usage: 7d at 90%. Show details' })
+      expect(button.getAttribute('data-tone')).toBe('danger')
+      expect(button.textContent).toBe('90%')
+      expect(document.querySelector('[data-slot="account-usage-chip"]')).toBeNull()
+    })
+
+    it('opens the same chip the desktop header shows on tap', () => {
+      renderCompact({ runner: 'claude' })
+      const button = screen.getByRole('button', { name: 'Plan usage: 7d at 60%. Show details' })
+      expect(button.getAttribute('data-tone')).toBe('warning')
+      fireEvent.click(button)
+      const chip = document.querySelector('[data-slot="account-usage-chip"]')
+      expect(chip?.textContent).toContain('[Default]')
+      expect(chip?.textContent).toContain('5h 25%')
+      expect(chip?.textContent).toContain('7d 60%')
+    })
+
+    it('renders nothing for an account with no live windows', () => {
+      renderCompact({ runner: 'gemini' })
+      expect(document.querySelector('[data-slot="account-usage-compact"]')).toBeNull()
+    })
   })
 })

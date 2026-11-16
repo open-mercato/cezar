@@ -3,7 +3,8 @@ import { useMemo } from 'react'
 import { getAgentAccountDetails } from '@/api/client'
 import { useHostTransport } from '@/api/host-usage'
 import { useAccountUsage, useAgentProfiles, useHealth, workspaceQueryKeys } from '@/api/queries'
-import { accountPart, COCKPIT_USAGE_STALE_MS, LiveUsage, liveUsageParts, type LiveUsageFraction } from '@/components/live-usage'
+import { accountPart, COCKPIT_USAGE_STALE_MS, LiveUsage, liveUsageParts, peakUsage, type LiveUsageFraction, type LiveUsageTone } from '@/components/live-usage'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { sortAccountUsageEntries } from '@/lib/account-usage-selection'
 import { cn } from '@/lib/utils'
@@ -16,11 +17,14 @@ export function AccountUsageWidget({
   agentProfile,
   className,
   fraction = 'used',
+  compact = false,
 }: {
   runner?: string
   agentProfile?: string
   className?: string
   fraction?: LiveUsageFraction
+  /** Phone header: a dot and the busiest window's percent; a tap shows the full chip. */
+  compact?: boolean
 } = {}) {
   const transport = useHostTransport()
   const enabled = useLiveUsageEnabled()
@@ -31,6 +35,7 @@ export function AccountUsageWidget({
       agentProfile={agentProfile}
       className={className}
       fraction={fraction}
+      compact={compact}
     />
   )
 }
@@ -40,11 +45,13 @@ function AccountUsageWidgetBody({
   agentProfile,
   className,
   fraction,
+  compact,
 }: {
   runner?: string
   agentProfile?: string
   className?: string
   fraction: LiveUsageFraction
+  compact: boolean
 }) {
   const usage = useAccountUsage()
   const profiles = useAgentProfiles()
@@ -86,6 +93,7 @@ function AccountUsageWidgetBody({
   }, [rows, runner, agentProfile, isFiltered, profiles.data?.profiles, fraction])
 
   if (!visible.length) return null
+  if (compact && visible[0]) return <CompactUsage entry={visible[0]} fraction={fraction} className={className} />
   return (
     <div
       data-slot="account-usage-widget"
@@ -100,6 +108,40 @@ function AccountUsageWidgetBody({
         <AccountUsageChip key={entry.routeId} entry={entry} fraction={fraction} />
       ))}
     </div>
+  )
+}
+
+const DOT_CLASS: Record<LiveUsageTone, string> = {
+  neutral: 'bg-muted-foreground',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+}
+
+function CompactUsage({ entry, fraction, className }: { entry: AccountUsageEntry; fraction: LiveUsageFraction; className?: string }) {
+  const peak = peakUsage(entry.usage)
+  if (!peak) return null
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-slot="account-usage-compact"
+          data-tone={peak.tone}
+          aria-label={`Plan usage: ${peak.label} at ${peak.percent}%. Show details`}
+          className={cn(
+            'inline-flex h-9 shrink-0 items-center gap-1 rounded-md px-1.5 font-mono text-meta tabular-nums text-muted-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+            className,
+          )}
+        >
+          <span aria-hidden="true" className={cn('size-2 rounded-full', DOT_CLASS[peak.tone])} />
+          {peak.percent}%
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" collisionPadding={8} className="w-auto max-w-[calc(100vw-1rem)] p-2">
+        <AccountUsageChip entry={entry} fraction={fraction} />
+      </PopoverContent>
+    </Popover>
   )
 }
 
