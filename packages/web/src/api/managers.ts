@@ -407,12 +407,16 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
       else remember(message)
     }
     queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
-    if (message.kind === 'action') void refreshManagerApprovals(queryClient, managerId)
+    if (message.kind === 'action') {
+      refreshInFlightManagerList(queryClient)
+      void refreshManagerApprovals(queryClient, managerId)
+    }
     return
   }
   const parsed = managerChangeEventSchema.safeParse(payload)
   if (!parsed.success) return
   const { id, manager, deleted = false } = parsed.data
+  refreshInFlightManagerList(queryClient)
   const before = queryClient.getQueryData<ManagerListResponse>(managerKeys.list)?.managers.find((row) => row.id === id)
   queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, deleted))
   if (deleted) {
@@ -458,6 +462,21 @@ function fetchIdle(queryClient: QueryClient, key: readonly unknown[]): Promise<v
       stop()
       resolve()
     })
+  })
+}
+
+const managerListCatchups = new WeakSet<QueryClient>()
+
+/** The full list is also an approvals gate. Keep its completeness guarantee (never seed it from
+ * one frame), but repair a cold/refetch snapshot that predates a live action, summary or deletion.
+ * Coalesce frames during one read; events during the follow-up can schedule another catch-up. */
+function refreshInFlightManagerList(queryClient: QueryClient): void {
+  const query = queryClient.getQueryCache().find({ queryKey: managerKeys.list, exact: true })
+  if (query?.state.fetchStatus !== 'fetching' || managerListCatchups.has(queryClient)) return
+  managerListCatchups.add(queryClient)
+  void fetchIdle(queryClient, managerKeys.list).then(() => {
+    managerListCatchups.delete(queryClient)
+    return queryClient.invalidateQueries({ queryKey: managerKeys.list, exact: true })
   })
 }
 

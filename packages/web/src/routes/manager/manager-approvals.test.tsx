@@ -17,6 +17,7 @@ let messages: Record<string, ManagerMessage[]>
 let failed: string | undefined
 let onDecision: (() => void | Promise<void>) | undefined
 let beforeReadReturns: (() => Promise<void>) | undefined
+let beforeListReturns: (() => Promise<void>) | undefined
 const requests: string[] = []
 const decisions: Array<{ manager: string; action: string; decision: string }> = []
 
@@ -28,10 +29,15 @@ beforeEach(() => {
   failed = undefined
   onDecision = undefined
   beforeReadReturns = undefined
+  beforeListReturns = undefined
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input, 'http://localhost')
     requests.push(url.pathname + url.search)
-    if (url.pathname.endsWith('/managers')) return failed === 'list' ? Response.json({ error: 'Connection failed' }, { status: 503 }) : Response.json({ managers })
+    if (url.pathname.endsWith('/managers')) {
+      const response = failed === 'list' ? Response.json({ error: 'Connection failed' }, { status: 503 }) : Response.json({ managers })
+      await beforeListReturns?.()
+      return response
+    }
     const parts = /\/managers\/([^/]+)\/(messages|actions\/([^/]+)\/decision)/.exec(url.pathname)
     if (!parts) return Response.json({})
     const id = parts[1]!
@@ -234,4 +240,83 @@ it('keeps a refused decision pending with its guard error visible', async () => 
   expect(document.querySelector('[data-slot="manager-action"][data-status="pending"]')).not.toBeNull()
   expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
   expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Approvals' }))
+})
+
+it.each(['action', 'summary', 'both'])('reconciles a %s frame racing an unseeded first manager list without inventing a partial list', async (event) => {
+  managers = [managerFixture()]
+  messages = { global: [], shop: [job(1)] }
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  let started = false
+  beforeListReturns = async () => {
+    if (started) return
+    started = true
+    await held
+  }
+  const client = renderApprovals('/manager/approvals', false)
+  await waitFor(() => expect(started).toBe(true))
+  const added = managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1 })
+  managers = [...managers, added]
+  act(() => {
+    if (event !== 'summary') applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'shop', message: job(1) }))
+    if (event !== 'action') applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'shop', manager: added }))
+  })
+  expect(client.getQueryData(managerKeys.list)).toBeUndefined()
+  await act(async () => { release(); await held })
+  expect(await screen.findByText('Job 1')).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Managers · 2' })).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Approvals, 1 pending approval' })).toBeTruthy()
+  expect(client.getQueryData(managerKeys.list)).toMatchObject({ managers: [{ id: 'global' }, { id: 'shop', pendingActions: 1 }] })
+  expect(requests.filter((path) => path.endsWith('/managers'))).toHaveLength(2)
+})
+
+it('does not let a manager-list refresh resurrect a manager deleted by a racing frame', async () => {
+  const client = renderApprovals()
+  await screen.findByText('Job 2')
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  let started = false
+  beforeListReturns = async () => {
+    if (started) return
+    started = true
+    await held
+  }
+  let refreshing!: Promise<void>
+  act(() => { refreshing = client.refetchQueries({ queryKey: managerKeys.list }) })
+  await waitFor(() => expect(started).toBe(true))
+  managers = managers.filter((manager) => manager.id !== 'shop')
+  act(() => applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'shop', deleted: true })))
+  await act(async () => { release(); await refreshing })
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Managers · 1' })).toBeTruthy())
+  expect(screen.queryByRole('region', { name: 'Shop' })).toBeNull()
+  expect(requests.filter((path) => path.endsWith('/managers'))).toHaveLength(2)
+})
+
+it('also reconciles a summary received during the follow-up manager-list read', async () => {
+  managers = [managerFixture()]
+  messages = { global: [] }
+  let releaseFirst!: () => void
+  let releaseSecond!: () => void
+  const first = new Promise<void>((resolve) => { releaseFirst = resolve })
+  const second = new Promise<void>((resolve) => { releaseSecond = resolve })
+  let reads = 0
+  beforeListReturns = async () => {
+    reads += 1
+    if (reads === 1) await first
+    if (reads === 2) await second
+  }
+  const client = renderApprovals('/manager/approvals', false)
+  await waitFor(() => expect(reads).toBe(1))
+  managers = [managerFixture({ pendingActions: 1 })]
+  messages.global = [job(1)]
+  act(() => applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managers[0] })))
+  await act(async () => { releaseFirst(); await first })
+  await waitFor(() => expect(reads).toBe(2))
+  managers = [managerFixture({ pendingActions: 2 })]
+  messages.global = [job(1), job(2)]
+  act(() => applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managers[0] })))
+  await act(async () => { releaseSecond(); await second })
+  await waitFor(() => expect(reads).toBe(3))
+  expect(await screen.findByRole('link', { name: 'Approvals, 2 pending approvals' })).toBeTruthy()
+  expect(await screen.findByText('Job 2')).toBeTruthy()
 })
