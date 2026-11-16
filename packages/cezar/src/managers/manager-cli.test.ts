@@ -46,6 +46,12 @@ describe('cez manager', () => {
     expect(error.mock.calls[1]?.[0]).toContain('CEZ_MANAGER_ID');
   });
 
+  it('passes the selected task runner and account together', async () => {
+    const { run, calls } = harness();
+    expect(await run('task', 'create', '--project', 'alpha', '--runner', 'claude', '--account', 'claude-second', 'Review it')).toBe(0);
+    expect(calls.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'claude-second', task: 'Review it' });
+  });
+
   it('prints attention and tasks', async () => {
     const { run, logs } = harness();
     expect(await run('status')).toBe(0);

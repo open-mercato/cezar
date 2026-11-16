@@ -77,11 +77,12 @@ type WatchingProps = {
  */
 export function WatchingPanel({ id, ...props }: WatchingProps & { id: string }) {
   return (
+    // `relative`: its `sr-only` text scrolls with it instead of stretching the page.
     <aside
       id={id}
       data-slot="manager-watching"
       aria-label="Watching"
-      className="group/watching flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
+      className="group/watching relative flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
     >
       <WatchingSections {...props} />
     </aside>
