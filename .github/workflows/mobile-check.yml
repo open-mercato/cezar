@@ -1,8 +1,9 @@
 name: Mobile check
 
-# Tests and builds the mobile shell (packages/mobile) on every change to it. The package sits
-# OUTSIDE the npm workspaces, so the main CI job never sees it, and mobile-release.yml only runs
-# on a mobile-v* tag. No signing and no secrets: release builds are mobile-release.yml's.
+# Tests and builds the mobile shell (packages/mobile) on every change to it, and runs the iOS job only
+# when the change can reach iOS. The package sits OUTSIDE the npm workspaces, so the main CI job never
+# sees it, and mobile-release.yml only runs on a mobile-v* tag. No signing and no secrets: release
+# builds are mobile-release.yml's.
 
 on:
   # Every base branch: the mobile PRs are stacked on each other's branches, not on main.
@@ -32,6 +33,40 @@ defaults:
     working-directory: packages/mobile
 
 jobs:
+  # The macOS iOS job is the expensive one, so it runs only when a change can reach iOS
+  # (packages/mobile/scripts/ios-needed.mjs). Anything it cannot read runs it.
+  changes:
+    name: Decide which mobile jobs run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ios: ${{ steps.decide.outputs.ios }}
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] \
+            || ! changed=$(git diff --name-only "$BASE...$HEAD"); then
+            echo ios=true >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' "$changed"
+            printf '%s\n' "$changed" | node packages/mobile/scripts/ios-needed.mjs >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
   checks:
     name: Connect screen and plain-class checks
     runs-on: ubuntu-latest
@@ -106,6 +141,8 @@ jobs:
 
   ios:
     name: iOS plain classes and simulator build
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
