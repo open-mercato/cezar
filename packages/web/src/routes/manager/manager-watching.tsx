@@ -1,5 +1,5 @@
 import { ArrowRightIcon, ClockIcon, PlusIcon } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router'
 
 import { rememberReferenceStatuses, useProjects, useRunsIndex } from '@/api/queries'
@@ -104,6 +104,7 @@ export function WatchingSheet({
   const managerHistoryBack = (location.state as Record<string, unknown> | null)?.managerWatchingPushed === true
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight, top: 0 })
   const [expanded, setExpanded] = useState(false)
+  const [sheetNode, setSheetNode] = useState<HTMLDivElement | null>(null)
   const drag = useRef<{ x: number; y: number; at: number; id: number } | null>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const compact = viewport.width < 600
@@ -126,12 +127,42 @@ export function WatchingSheet({
       window.visualViewport?.removeEventListener('scroll', resize)
     }
   }, [open])
+  useLayoutEffect(() => {
+    if (!open || !compact || expanded || viewport.height < 600 || !sheetNode) return
+    const header = sheetNode.querySelector<HTMLElement>('[data-slot="sheet-header"]')
+    const body = sheetNode.querySelector<HTMLElement>('[data-touch]')
+    const footer = sheetNode.querySelector<HTMLElement>('[data-slot="manager-watching-sheet-all-tasks"]')
+    if (!header || !body || !footer) return
+    const measure = () => {
+      // offsetHeight excludes the opening animation's translation. Reserve two readable task
+      // rows as well as the pinned controls; text scaling must not collapse the scroll area.
+      const rows = [...body.querySelectorAll<HTMLElement>('[data-slot="manager-watching-task-row"]')].slice(0, 2)
+      const rowHeight = rows.reduce((sum, row) => sum + row.offsetHeight, 0)
+      const headingHeight = body.querySelector<HTMLElement>('h3')?.offsetHeight ?? 0
+      const bodyStyle = getComputedStyle(body)
+      const sheetStyle = getComputedStyle(sheetNode)
+      const bodyPadding = parseFloat(bodyStyle.paddingTop) + parseFloat(bodyStyle.paddingBottom)
+      const sheetPadding = parseFloat(sheetStyle.paddingTop) + parseFloat(sheetStyle.paddingBottom)
+      const minimumBody = Math.min(body.scrollHeight, Math.max(128, rowHeight + headingHeight) + bodyPadding)
+      if (header.offsetHeight + footer.offsetHeight + sheetPadding + minimumBody > viewport.height * .6) {
+        // Stay expanded for this opening even if content later shrinks.
+        setExpanded(true)
+      }
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    for (const element of [header, footer, body, ...body.children]) observer.observe(element)
+    return () => observer.disconnect()
+  }, [open, compact, expanded, viewport.height, sheetNode])
+
   const height = compact
     ? (expanded || viewport.height < 600 ? viewport.height - 12 : viewport.height * .6)
     : Math.min(720, viewport.height - 48)
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
+        ref={setSheetNode}
         side="bottom"
         showCloseButton={false}
         aria-modal="true"
@@ -179,7 +210,7 @@ export function WatchingSheet({
           <WatchingSections {...props} tasksFirst />
         </div>
         <Button asChild variant="ghost" className="min-h-12 shrink-0 whitespace-normal">
-          <Link to={managerTasksPath(props.manager.id)} replace state={{ manager: { id: props.manager.id, name: props.manager.name }, managerHistoryBack }}>View all tasks</Link>
+          <Link data-slot="manager-watching-sheet-all-tasks" to={managerTasksPath(props.manager.id)} replace state={{ manager: { id: props.manager.id, name: props.manager.name }, managerHistoryBack }}>View all tasks</Link>
         </Button>
       </SheetContent>
     </Sheet>

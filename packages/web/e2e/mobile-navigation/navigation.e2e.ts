@@ -58,12 +58,8 @@ test('responsive Manager directory and modal controls', { timeout: 120000 }, asy
   await browser.mouse.move(handle.x, handle.y + 100)
   await browser.mouse.up()
   await expect(screen.getByRole('dialog')).toHaveCount(0)
-  // Text enlargement and a simulated visual viewport check web geometry; native IME remains hardware QA.
-  await browser.evaluate(() => { document.documentElement.style.fontSize = '32px'; return true })
+  // A simulated visual viewport checks web geometry; native IME remains hardware QA.
   await screen.getByRole('button', 'Tasks', { exact: true }).tap()
-  await expect(screen.getByRole('button', 'Close', { exact: true })).toBeVisible()
-  const largeText = await app.screenshot('tasks-large-text')
-  copyFileSync(largeText, resolve(artifacts, 'tasks-large-text.png'))
   await browser.evaluate(() => {
     const viewport = Object.assign(new EventTarget(), { width: 375, height: 300, offsetTop: 0 })
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
@@ -74,3 +70,58 @@ test('responsive Manager directory and modal controls', { timeout: 120000 }, asy
   expect(await browser.evaluate(() => document.querySelector('[data-slot="manager-watching-sheet"]')!.getBoundingClientRect().height)).toBeLessThanOrEqual(300)
   writeFileSync(resolve(artifacts, 'viewport-results.json'), JSON.stringify(results, null, 2))
 })
+
+
+// Content can grow before opening (OS text size) or while open (browser text scaling).
+for (const timing of ['before opening', 'while open'] as const) {
+  test(`enlarged Tasks fits controls and task rows when text grows ${timing}`, async ({ app, browser, screen }) => {
+    mkdirSync(artifacts, { recursive: true })
+    await browser.setViewport({ width: 375, height: 640 })
+    await app.open('/e2e/mobile-navigation/index.html')
+    if (timing === 'before opening') {
+      await browser.evaluate(() => { document.documentElement.style.fontSize = '32px'; return true })
+    }
+    await screen.getByRole('button', 'Tasks', { exact: true }).tap()
+    await expect(screen.getByRole('dialog', 'Tasks · Global Manager')).toBeVisible()
+    if (timing === 'while open') {
+      await browser.evaluate(async () => { await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))); return true })
+      expect(await browser.evaluate(() => document.querySelector('[role="dialog"]')!.getBoundingClientRect().height)).toBe(384)
+      await browser.evaluate(() => { document.documentElement.style.fontSize = '32px'; return true })
+    }
+    // Let content measurement and the opening animation settle before reading actual bounds.
+    await browser.evaluate(async () => {
+      await document.fonts.ready
+      await new Promise(requestAnimationFrame)
+      await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {})))
+      await new Promise(requestAnimationFrame)
+      return true
+    })
+    const geometry = await browser.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"]')!
+      const body = dialog.querySelector<HTMLElement>('[data-touch]')!
+      const rect = (element: Element) => {
+        const r = element.getBoundingClientRect()
+        return { top: r.top, bottom: r.bottom, height: r.height }
+      }
+      const padding = getComputedStyle(body)
+      return {
+        dialog: rect(dialog),
+        close: rect([...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Close')!),
+        footer: rect(dialog.querySelector(':scope > a')!),
+        task: rect(body.querySelector('[data-slot="manager-watching-task"]')!),
+        body: rect(body),
+        usableBody: body.clientHeight - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom),
+      }
+    })
+    const suffix = timing === 'before opening' ? 'initial' : 'resize'
+    writeFileSync(resolve(artifacts, `large-text-${suffix}-geometry.json`), JSON.stringify(geometry, null, 2))
+    copyFileSync(await app.screenshot(`large-text-${suffix}-settled`), resolve(artifacts, `large-text-${suffix}-settled.png`))
+    expect(geometry.close.top).toBeGreaterThanOrEqual(0)
+    expect(geometry.close.bottom).toBeLessThanOrEqual(640)
+    expect(geometry.footer.bottom).toBeLessThanOrEqual(640)
+    expect(geometry.dialog.height).toBeGreaterThan(384)
+    expect(geometry.usableBody).toBeGreaterThanOrEqual(128)
+    expect(geometry.task.top).toBeGreaterThanOrEqual(geometry.body.top)
+    expect(geometry.task.bottom).toBeLessThanOrEqual(geometry.body.bottom)
+  })
+}
