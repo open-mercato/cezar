@@ -86,6 +86,12 @@ describe('impact report in a DOM', () => {
     ['Not mergeable', 'bad', '✕'],
     ['Don’t merge', 'bad', '✕'],
     ['Changes requested', 'bad', '✕'],
+    ['Needs changes', 'bad', '✕'],
+    ['Reject', 'bad', '✕'],
+    ['Blocked on the migration', 'bad', '✕'],
+    ['Approve — no blockers', 'good', '✓'],
+    ['Approve, non-blocking nits', 'good', '✓'],
+    ['Approve the rejected alternative', 'good', '✓'],
   ])('reads the verdict tone of %j as %s, with a glyph', (label, tone, glyph) => {
     const model = demo();
     model.decision.label = label;

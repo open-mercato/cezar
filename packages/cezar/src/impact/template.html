@@ -475,7 +475,7 @@ const T=v=>E(v).replace(/`([^`\n]+)`/g,"<code>$1</code>");
 const shortSha=s=>/^[0-9a-f]{12,40}$/i.test(s)?s.slice(0,7):s;
 // The decision label is free text; until the model carries a tone, read it from the words.
 // Negation is checked first, so "Do not approve" or "Not mergeable" never reads as ✓.
-function tone(label){const l=String(label).toLowerCase();if(/request(ed)? changes|changes (are )?requested|reject|block|(\bnot|n['’]t|cannot|never)\s+(yet\s+)?(be\s+)?(approv|merg|ready|accept)|unmergeable|needs work/.test(l))return "bad";if(/comment|condition|direction|follow|but |once |after /.test(l))return "warn";if(/approve|merge|ready|accept|lgtm/.test(l))return "good";return "neutral";}
+function tone(label){const l=String(label).toLowerCase().replace(/\bno blockers?\b|non-blocking|nothing blocks/g,"");if(/request(ed)? changes|changes (are )?requested|needs (work|changes)|^reject|\breject (it|this|the)\b|\bblock(s|ed)?\b|(\bnot|n['’]t|cannot|never)\s+(yet\s+)?(be\s+)?(approv|merg|ready|accept)|unmergeable/.test(l))return "bad";if(/comment|condition|direction|follow|but |once |after /.test(l))return "warn";if(/approve|merge|ready|accept|lgtm/.test(l))return "good";return "neutral";}
 const toneGlyph={good:"✓",warn:"!",bad:"✕",neutral:"·"};
 // Ask and correct (R4): the ref bridge speaks only when framed, and only outward.
 const framed=window.parent!==window;
@@ -508,7 +508,7 @@ const undecided=review.api_changes.filter(a=>a.breaking==="unknown");
 const condsByApi=new Map();review.decision.conditions.forEach((c,i)=>(c.api_changes||[]).forEach(id=>{if(!condsByApi.has(id))condsByApi.set(id,[]);condsByApi.get(id).push({c,i});}));
 
 function showEvidence(ids){
-  $("evidence-body").innerHTML=ids.map(id=>{const ev=evidenceById.get(id);if(!ev)return "";return '<article class="ev"><div class="ev-kind '+E(ev.kind)+'">'+E(id)+' · '+E(evidenceText[ev.kind])+'</div><h3>'+E(ev.title)+'</h3><div class="loc">'+E(ev.source)+'</div><p>'+T(ev.detail)+'</p>'+(ev.url?'<p><a href="'+E(ev.url)+'" target="_blank" rel="noopener noreferrer">Open the source ↗</a></p>':"")+'</article>';}).join("");
+  $("evidence-body").innerHTML=ids.map(id=>{const ev=evidenceById.get(id);if(!ev)return "";return '<article class="ev"><div class="ev-kind '+E(ev.kind)+'">'+E(id)+' · '+E(evidenceText[ev.kind])+'</div><h3>'+T(ev.title)+'</h3><div class="loc">'+E(ev.source)+'</div><p>'+T(ev.detail)+'</p>'+(ev.url?'<p><a href="'+E(ev.url)+'" target="_blank" rel="noopener noreferrer">Open the source ↗</a></p>':"")+'</article>';}).join("");
   $("evidence-dialog").showModal();
 }
 $("all-evidence").addEventListener("click",()=>showEvidence(review.evidence.map(e=>e.id)));
