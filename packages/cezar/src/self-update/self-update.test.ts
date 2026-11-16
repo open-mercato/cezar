@@ -281,11 +281,19 @@ describe('update when idle', () => {
       trimPaths: () => hosted,
       buildCheckout,
     });
-    scoped.scheduleWhenIdle('0.12.2+main');
-    hosted = false; // The timer fires outside the request's relay scope.
-    idle = true;
-    // Refused the link, so it went to the registry; npm's retries for an unseen version (#2249) may still be running.
-    await vi.waitFor(async () => expect((await scoped.status()).job?.log.some((line) => line.startsWith('npm install '))).toBe(true), { timeout: 3_000 });
+    // Refusing the link falls through to the registry: a closed port makes that npm fail at once, with no
+    // network and no retry (#2249 retries only a version npm cannot see), so nothing outlives the test.
+    vi.stubEnv('npm_config_registry', 'http://127.0.0.1:9/');
+    vi.stubEnv('npm_config_fetch_retries', '0');
+    try {
+      scoped.scheduleWhenIdle('0.12.2+main');
+      hosted = false; // The timer fires outside the request's relay scope.
+      idle = true;
+      await vi.waitFor(async () => expect((await scoped.status()).job?.status).toBe('failed'), { timeout: 10_000 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect((await scoped.status()).job?.log.some((line) => line.startsWith('npm install '))).toBe(true);
     expect(buildCheckout).not.toHaveBeenCalled();
     expect(activeId(env)).toBe('0.12.0');
   });
