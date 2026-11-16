@@ -6,12 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
 import { __clearRememberedStatusesForTests, queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
+import { runnerSchema } from '@open-mercato/cezar-api-client'
 import { LIVE_USAGE_STORAGE_KEY } from '@/lib/live-usage-pref'
 
 import { AppShell } from '@/components/app-shell'
 import { ThemeProvider } from '@/components/theme-provider'
 
-import { ManagerChatRoute } from './manager-chat'
+import { ManagerChatRoute, forgetChatPlaces } from './manager-chat'
 import { actionMessage, assistantMessage, managerFixture, userMessage } from './manager-fixtures'
 import { ManagerIndexRoute } from './manager-index'
 import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS, managerNameFrom } from './manager-new'
@@ -86,6 +87,7 @@ function Location() {
       <span data-testid="url" hidden>{pathname + search}</span>
       {/* The system Back, out of the accessibility tree so role queries never see it. */}
       <button type="button" hidden data-testid="history-back" onClick={() => void navigate(-1)} />
+      <button type="button" hidden data-testid="history-forward" onClick={() => void navigate(1)} />
     </>
   )
 }
@@ -144,6 +146,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  forgetChatPlaces()
   vi.unstubAllGlobals()
 })
 
@@ -279,6 +282,56 @@ describe('/manager/new', () => {
   it('folds picker patches, null meaning back to the default', () => {
     const setup = { projects: 'all' as const, model: 'm', effort: 'high' as const }
     expect(applySetupPatch(setup, { model: null, effort: 'low', projects: ['a'] })).toEqual({ projects: ['a'], effort: 'low' })
+    expect(applySetupPatch(setup, { taskRunner: 'codex' })).toMatchObject({ taskRunner: 'codex' })
+    expect(applySetupPatch({ ...setup, taskRunner: 'codex' }, { taskRunner: null })).not.toHaveProperty('taskRunner')
+  })
+
+  it.each(runnerSchema.options)('includes the selected task agent %s when creating a manager from setup', async (runner) => {
+    renderAt('/manager/new', (client) => {
+      client.setQueryData(workspaceQueryKeys.providerStatus, { providers: runnerSchema.options.map((provider) => (
+        { provider, status: 'connected', enabled: true }
+      )) })
+    })
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: `${runner} · Default` }))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate my tasks' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ taskAgents: [{ runner, agentProfile: 'default' }] }))
+  })
+
+  it('creates a manager with two Claude accounts and one Codex account from setup', async () => {
+    renderAt('/manager/new', (client) => {
+      client.setQueryData(workspaceQueryKeys.providerStatus, { providers: ['claude', 'codex'].map((provider) => ({ provider, status: 'connected', enabled: true })) })
+      client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [
+        { provider: 'claude', id: 'one', label: 'One' }, { provider: 'claude', id: 'two', label: 'Two' }, { provider: 'codex', id: 'work', label: 'Work' },
+      ] })
+    })
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
+    for (const name of ['claude · One', 'claude · Two', 'codex · Work']) fireEvent.click(await screen.findByRole('menuitemcheckbox', { name }))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate the selected accounts' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ taskAgents: [
+      { runner: 'claude', agentProfile: 'one' }, { runner: 'claude', agentProfile: 'two' }, { runner: 'codex', agentProfile: 'work' },
+    ] }))
+  })
+
+  it('omits the task agent from creation after returning to Automatic', async () => {
+    renderAt('/manager/new', (client) => {
+      client.setQueryData(workspaceQueryKeys.providerStatus, { providers: [
+        { provider: 'codex', status: 'connected', enabled: true },
+      ] })
+    })
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Agent for new tasks' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'codex · Default' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Automatic' }))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should this manager do?' }), { target: { value: 'Coordinate automatically' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(posted('/workspace/managers')).toHaveLength(1))
+    expect(posted('/workspace/managers')[0]?.body).not.toHaveProperty('taskRunner')
+    expect(posted('/workspace/managers')[0]?.body).not.toHaveProperty('taskAgents')
   })
 })
 
@@ -331,6 +384,26 @@ describe('/manager/:id', () => {
     const sidebar = document.querySelector('[data-slot="sidebar"]')!
     expect([...sidebar.querySelectorAll('[data-slot="manager-row"]')].map((row) => row.getAttribute('href'))).toEqual(['/manager/global', '/manager/shop'])
     expect(document.querySelectorAll('[data-slot="manager-row"]')).toHaveLength(2)
+  })
+
+  // An `sr-only` row positioned against the chat, not the scroller, sat at the transcript's
+  // unscrolled tail and let the shell's <main> scroll far below the composer.
+  it('positions what its scrollers hold inside them, so the page never scrolls past the composer', async () => {
+    seedChat()
+    server.messages = [...server.messages, assistantMessage(3, { text: 'Later', commands: [{ id: 'd', tool: 'Bash', summary: 'gh pr view' }] })]
+    renderAt('/manager/global')
+    await screen.findByText('Later')
+    const positioned = /(^|\s)(relative|absolute|fixed|sticky)(\s|$)/
+    for (const slot of ['manager-transcript', 'manager-watching']) {
+      const scroller = document.querySelector<HTMLElement>(`[data-slot="${slot}"]`)!
+      expect(scroller.className).toMatch(/overflow-y-auto/)
+      expect(scroller.className, slot).toMatch(positioned)
+      for (const hidden of scroller.querySelectorAll<HTMLElement>('.sr-only')) {
+        let block = hidden.parentElement
+        while (block && !positioned.test(block.className)) block = block.parentElement
+        expect(scroller.contains(block), `${slot}: ${hidden.textContent}`).toBe(true)
+      }
+    }
   })
 
   it('checks now from the header', async () => {
@@ -425,6 +498,28 @@ describe('/manager/:id', () => {
       const task = section('Tasks it started')!.querySelector<HTMLAnchorElement>('[data-slot="manager-watching-task"]')!
       expect(task.textContent).toContain('Fix CI')
       expect(task.getAttribute('href')).toBe('/p/alpha/tasks/r1')
+    })
+
+    it('links every task it started or follows to the Tasks table, counted as the table opens', async () => {
+      seedChat({ followedTasks: ['alpha/r1', 'beta/r2', 'alpha/r3', 'alpha/gone'] })
+      const run = (projectId: string, id: string, extra: object = {}) => ({
+        projectId, id, title: id, status: 'done', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', ...extra,
+      })
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+          run('alpha', 'r1'),
+          run('beta', 'r2', { status: 'failed' }),
+          // Archived: behind the table's Archived view, so not in the count it opens on.
+          run('alpha', 'r3', { archived: true }),
+          run('alpha', 'other'),
+        ] })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      // No reply carded a task: the followed ones alone bring the section and its link.
+      await waitFor(() => expect(section('Tasks it started')).not.toBeNull())
+      const all = section('Tasks it started')!.querySelector<HTMLAnchorElement>('[data-slot="manager-watching-all-tasks"]')!
+      expect(all.textContent).toBe('View all (2)')
+      expect(all.getAttribute('href')).toBe('/tasks?manager=global')
     })
 
     it('lists each started task\'s pull requests on a line below it, with their statuses', async () => {
@@ -983,6 +1078,29 @@ describe('/manager/:id', () => {
     expect(box.scrollTop).toBe(720)
   })
 
+  it('comes back to where the reader left it, with its older pages, after a task opened from it', async () => {
+    seedChat()
+    const client = renderAt(['/start', '/manager/global'])
+    await screen.findByText('Reply body')
+    const box = () => document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    Object.defineProperty(box(), 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(box(), 'clientHeight', { value: 500, configurable: true })
+    box().scrollTop = 1500
+    fireEvent.scroll(box())
+    box().scrollTop = 600
+    fireEvent.scroll(box())
+    const pages = client.getQueryData<{ pages: unknown[] }>(managerKeys.messages('global'))!
+    client.setQueryData(managerKeys.messages('global'), { pages: [...pages.pages, pages.pages[0]], pageParams: [undefined, 'older'] })
+    // Away to another page (`/start` stands in for a task) and back.
+    fireEvent.click(screen.getByTestId('history-back'))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/start'))
+    expect(client.getQueryData<{ pages: unknown[] }>(managerKeys.messages('global'))!.pages).toHaveLength(2)
+    fireEvent.click(screen.getByTestId('history-forward'))
+    await screen.findAllByText('Reply body')
+    expect(box().scrollTop).toBe(600)
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
+  })
+
   it('keeps a reader at the tail pinned when the composer grows, even if a scroll lands first', async () => {
     seedChat()
     renderAt('/manager/global')
@@ -1171,7 +1289,7 @@ describe('/manager/:id', () => {
     const bubbles = [...document.querySelectorAll('[data-slot="manager-user"]')].map((row) => row.textContent)
     expect(bubbles).toEqual(['questions please', 'cheapest one'])
     const cards = [...document.querySelectorAll('[data-slot="manager-ask"][data-resolved="true"]')].map((card) => card.textContent)
-    expect(cards).toEqual(['AnsweredShell:TauriDefault:No', 'Answered:Shell · Default'])
+    expect(cards).toEqual(['AnsweredShell:CapacitorTauri (chosen)Default:No (chosen)Yes', 'Answered:ShellDefault'])
   })
 
   it('approves through the decision route, never as a chat message', async () => {

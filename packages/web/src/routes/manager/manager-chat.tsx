@@ -50,11 +50,12 @@ import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOp
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import { managerAccessOf, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { ModelPicker, type ManagerPatch } from './manager-pickers'
+import { ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
@@ -101,9 +102,17 @@ function rowAtTop(box: HTMLElement): { row: Element; offset: number } | null {
   return null
 }
 
-function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void) {
+/** A reader's place in each chat they left scrolled up, so a task opened from it comes back to it. */
+const leftAt = new Map<string, number>()
+
+export function forgetChatPlaces(): void {
+  leftAt.clear()
+}
+
+function useChatScroll(id: string, messages: readonly ManagerMessage[], onNearTop: () => void) {
   const ref = useRef<HTMLElement>(null)
   const pinned = useRef(true)
+  const restored = useRef(false)
   const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
   const [away, setAway] = useState(false)
   // A reader away from the tail keeps this row where it was. Older pages land above it and rows
@@ -126,10 +135,23 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (!box) return
     const first = messages[0]?.id
     const { first: lastFirst, height } = previous.current
+    const saved = leftAt.get(id)
+    if (!restored.current && messages.length > 0) {
+      restored.current = true
+      if (saved !== undefined) {
+        pinned.current = false
+        box.scrollTop = saved
+        lastTop.current = box.scrollTop
+        anchor.current = rowAtTop(box)
+        setAway(true)
+        previous.current = { first, height: box.scrollHeight }
+        return
+      }
+    }
     if (pinned.current) box.scrollTop = box.scrollHeight
     else if (!keepPlace(box) && lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
     previous.current = { first, height: box.scrollHeight }
-  }, [messages, keepPlace])
+  }, [id, messages, keepPlace])
 
   // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the
   // tail, any other keeps its row.
@@ -180,18 +202,21 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     lastTop.current = box.scrollTop
     pinned.current = isNearBottom(box, 80)
     anchor.current = pinned.current ? null : rowAtTop(box)
+    if (pinned.current) leftAt.delete(id)
+    else leftAt.set(id, box.scrollTop)
     setAway(!pinned.current)
     if (box.scrollTop < HISTORY_SLACK_PX) onNearTop()
-  }, [onNearTop])
+  }, [id, onNearTop])
 
   const jump = useCallback(() => {
     const box = ref.current
     if (!box) return
     pinned.current = true
     anchor.current = null
+    leftAt.delete(id)
     setAway(false)
     box.scrollTop = box.scrollHeight
-  }, [])
+  }, [id])
 
   // The keyboard shrinks the box, which the content's ResizeObserver cannot see.
   const restick = useCallback(() => {
@@ -461,8 +486,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   useHideShellTopBar()
   useManagerChatOpened(id)
   const queryClient = useQueryClient()
-  // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll.
-  useEffect(() => () => trimManagerChat(queryClient, id), [id, queryClient])
+  // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll. A
+  // reader left scrolled up keeps them, or their place would not be there to come back to.
+  useEffect(() => () => { if (!leftAt.has(id)) trimManagerChat(queryClient, id) }, [id, queryClient])
   const keyboardOpen = useKeyboardOpen()
   const location = useLocation()
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
@@ -472,7 +498,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const loadOlder = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
-  const scroll = useChatScroll(chat.messages, loadOlder)
+  const scroll = useChatScroll(id, chat.messages, loadOlder)
   useKeyboardInsetVar(scroll.restick)
   // Recovery unmounts Retry: a keyboard user who was on it lands in the transcript, not on <body>.
   const retryFocused = useRef(false)
@@ -520,7 +546,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
   }, [update])
 
-  const onDecide = useCallback((actionId: string, decision: 'approve' | 'reject') => decideManagerAction(id, actionId, decision), [id])
+  const onDecide = useCallback<DecideAction>((actionId, decision, opts) => decideManagerAction(id, actionId, decision, opts), [id])
+  useDismissStaleMerges(chat.messages, onDecide)
   const needsYou = useNeedsYouJump(manager, chat, scroll)
   const floating = useFloatingOverlap()
   const waiting = needsYouCount(manager)
@@ -645,14 +672,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         </div>
       ) : null}
 
-      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame. */}
+      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame.
+          `relative`: a row's `sr-only` text is positioned in here, or it stretches the shell's
+          scroller below the composer. */}
       <section
         ref={scroll.ref}
         data-slot="manager-transcript"
         aria-label={`Conversation with ${manager.name}`}
         tabIndex={0}
         onScroll={scroll.onScroll}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
         {/* The floating jump button sits over the tail: room for exactly it, at any width. */}
         <div
@@ -768,7 +797,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           key={id}
           compact
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 pointer-coarse:max-md:[&>button]:h-11"><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
+          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -786,6 +815,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           // Phones: the interval lives in the gear and the spinner beside the name.
           <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
             <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
+            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
             {working ? (
               <>
                 <span aria-hidden="true">·</span>

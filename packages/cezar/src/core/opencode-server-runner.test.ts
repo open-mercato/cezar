@@ -250,6 +250,9 @@ describe('opencode serve startup', () => {
   });
 
   it.each([0, 0.5, 0.99999])('passes a random port in 40000–59999 and exposes the PID synchronously (random=%s)', (random) => {
+    // An absent fixture binary keeps host-installed CLIs and desktop/Windows wrappers out of this argv check.
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-port-'));
+    const bin = join(dir, 'opencode');
     let argv: unknown;
     spawnHook.override = (_bin, args) => {
       argv = args;
@@ -258,7 +261,7 @@ describe('opencode serve startup', () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(random);
     try {
-      const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession({ userPrompt: 'do it', cwd: process.cwd() });
+      const session = new OpencodeServerRunner({ bin, timeoutMs: 0 }).startSession({ userPrompt: 'do it', cwd: process.cwd() });
       void session.result.catch(() => undefined);
       const port = 40000 + Math.floor(random * 20000);
       expect(argv).toEqual(['serve', '--hostname', '127.0.0.1', '--port', String(port)]);
@@ -268,6 +271,7 @@ describe('opencode serve startup', () => {
       expect(session.pid).toBe(5151);
     } finally {
       randomSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

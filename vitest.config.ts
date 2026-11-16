@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os'
 import { defineConfig } from 'vitest/config'
 
 // Package suites, one `npm test`. Each owns its own vitest config — this file only names
@@ -8,6 +9,8 @@ import { defineConfig } from 'vitest/config'
 //   - packages/desktop    desktop release helpers, without making it an npm workspace
 export default defineConfig({
   test: {
+    // Git/process fixtures and filesystem watches starve under a worker per CPU on busy hosts.
+    maxWorkers: Math.min(4, availableParallelism()),
     // The suites are still being grown; a project that currently matches no file must not
     // fail the validation gate. Root-level only — vitest rejects this inside a project.
     passWithNoTests: true,

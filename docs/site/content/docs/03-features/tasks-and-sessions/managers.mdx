@@ -44,6 +44,10 @@ sources:
     path: packages/cezar/src/core/pi-runner.ts
     line: 293
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
+  - label: "Agent, account and task agent pickers"
+    path: packages/web/src/routes/manager/manager-pickers.tsx
+    line: 308
+    commit: f2f0ea8aeae718382c7bb6720401639711150192
 ---
 A manager is a global, long-lived agent you chat with instead of visiting each repository. It watches the projects connected to it, tells you what needs you, starts and steers tasks, sets up automations, and proposes merges. Tasks stay where they are, and the manager is your point of contact above them. No project owns a manager, and you can create several.
 
@@ -64,7 +68,7 @@ A dot on **Manager** and on each manager's row means it wants you: amber when an
 
 1. Open **Manager**. With no manager yet, Cezar shows **Set up your first manager**.
 2. Describe the job in **What should this manager do?**, or pick a preset: **Watch my repositories**, **Keep PRs moving**, or **Run big tasks**.
-3. Choose the projects, model, effort, and account, then select **Create**.
+3. Choose the projects, manager agent, model, account, and agent for new tasks, then select **Create**.
 
 Your text becomes the manager's standing instructions and its first message, so it starts working right away. Each manager gets its own character in the sidebar. To change its character, name or instructions later, open the gear and select **Persona…**.
 
@@ -105,7 +109,9 @@ On a phone, Refresh lives in the gear menu, and a spinner beside the manager's n
 
 The desktop's **Watching** panel is a sheet on a phone and a narrow window: the tasks the manager started come first, then the projects it watches, its last check and its jobs. Open it from the list icon beside the gear or, once a reply has started tasks, the **Tasks** chip above the composer. Back, or the edge swipe on iOS, closes it.
 
-In the CezarBot app the phone navigation holds at every size, an iPad included: the bottom bar replaces the sidebar, **More** opens what the sidebar held, and inside a manager **Tasks** opens the tasks it started, with their count. A desktop browser keeps the sidebar.
+The tasks list shows the most recent few. **View all (N)** below it opens the global Tasks table filtered to every task the manager started or follows, across its projects, as a **Started by** facet you can share by URL or clear like any other. Archived ones are behind the table's **Archived** view.
+
+In the CezarBot app the phone navigation holds at every size, an iPad included: the bottom bar replaces the sidebar, **More** opens what the sidebar held, and inside a manager **Tasks** opens the tasks it started, with their count. A task thread keeps the bottom bar too: a task opened from a manager keeps **Manager** highlighted, a tap goes back to that chat where you left it, and another tap opens the managers list. A desktop browser keeps the sidebar.
 
 ## Connect repositories
 
@@ -192,6 +198,10 @@ When a card is out of view, an **N approvals waiting** pill sits above the compo
 
 To skip the summary, open **Settings → Manager**, pick the manager, and turn off **Merges**, **Automations**, **Jobs** or **Connector calls**. All four are on by default, each manager keeps its own choice, and it applies to every device on that server. With a switch off, **Approve** sends the decision straight away. The card still appears and still needs your tap, so a manager never acts on its own.
 
+**Dismiss** closes a card without deciding, for a proposal that no longer applies. A merge card whose pull request was already merged or closed is dismissed on its own: when you open the chat, at the manager's next watch check, or when you approve it.
+
+A merge card also lists the tasks behind its pull request, the one that opened it first, then tasks that review or mention it, up to three plus a count. Select one to open that task.
+
 Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
 
 ## Connectors
@@ -220,13 +230,21 @@ A write produces an approval card, like a merge. The card shows the connector, t
 > - Connectors disconnect and reconnect on their own. When one is down, the manager tells you it is temporarily unavailable, and a write card for it fails with the same message.
 > - Cezar does not pass connector grants to tasks the manager starts.
 
-## Model, effort and cancelling
+## Agents, accounts, model and cancelling
+
+Open **Model and effort** in the chat or settings to change the manager's agent, model and account. The **Account** section lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. The separate **Agent account** picker has the same choices.
+
+Use **Agent for new tasks** during setup, in settings or beside the composer to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
+
+**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Codex manager's task runs on Codex even when the project's default is Claude. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
+
+The manager passes an account with `cez-manager task create --runner claude --account <id>`. The task records the requested account and the account that actually ran; open its agent badge to see the account label. If a selected account was deleted, task creation is refused instead of using another account.
 
 A manager can pick the model and reasoning effort of a task it starts, for example `cez-manager task create --model opus --effort max`, and of a finished task it continues with `task say`. Cezar checks the choice against the task's agent and the models it discovered on this machine. An unknown model, another agent's model, or an effort the model lacks is refused with the valid choices, instead of quietly running on the default. `cez-manager task <run>` and `tasks --json` show each task's agent, model and effort.
 
 `cez-manager task cancel <run> --reason "…"` stops a task and every task it dispatched. They become **cancelled**, the task thread shows who cancelled it and why, and the worktree and branch stay for you to inspect. A manager may cancel only the tasks it started. To let it cancel other tasks in its write repositories, yours included, turn on **Cancel any task** in its settings menu. A read-only repository never allows it.
 
-`cez-manager task retry <run>` starts a failed or cancelled task again as a new task, with the same objective, workflow, agent, model and effort.
+`cez-manager task retry <run>` starts a failed or cancelled task again as a new task, with the same objective, workflow, model and effort. With **Automatic**, it keeps the original agent. A selected **Agent for new tasks** also applies to retries; an incompatible model or effort is refused.
 
 Tasks you start yourself also appear in the manager's task list and attention, marked as started by the user, and each task lists the pull request it opened. So a manager can see work that already exists before it starts more. `cez-manager workflows` marks what each workflow can do (push, open a pull request, post to GitHub, or read-only), and the manager is told to use a read-only workflow when you ask only for a review.
 
@@ -298,11 +316,18 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 A Claude manager's `Bash` call runs only when it is one of these commands:
 
 - `cez-manager …`, whose server enforces every approval.
-- `gh pr view|list|diff|checks`, `gh issue view|list`, `gh run view|list`, `gh repo view` and `gh search code|commits|issues|prs|repos`, without `--web`, with `--repo` only as `OWNER/REPO`, with no URL or host path to a server other than github.com, and with no `--jq` filter that reads the environment or files.
+- `gh pr view|list|diff|checks|status`, `gh issue view|list`, `gh run view|list`, `gh release view|list`, `gh repo view` and `gh search code|commits|issues|prs|repos`, without `--web`, with `--repo` only as `OWNER/REPO`, with no URL or host path to a server other than github.com, and with no `--jq` filter that reads the environment or files.
 - `gh api <path>` as a GET: `-X GET`, `--paginate`, `--jq`, `--template`, `--cache` and `Accept` or `X-GitHub-Api-Version` headers only. `-f`, `-F`, `--field`, `--input`, any other method, `graphql`, `--hostname` and full URLs are refused.
-- Any of those piped into `jq`, `grep`, `head` or `wc`, which read the pipe only: no file arguments, and no jq filter that reads the environment or files.
+- Any of those piped into `jq`, `grep`, `head`, `tail`, `wc`, `sort`, `uniq` or `cut`, which read the pipe only: no file arguments, and no jq filter that reads the environment or files.
+- A `gh <group> <verb>` pattern you allowed in the manager's **Shell access** settings (below).
 
-Everything else is refused: `gh pr merge` and every other `gh` write, `;`, `&&`, `||`, `&`, `$(…)`, backticks, `$VAR`, redirects, subshells, globs, newlines, and a pipe into any other program, such as `sh` or `xargs`. A `cez-manager` command the policy cannot read, such as one with a `--stdin` heredoc, falls back to Claude's own `cez-manager` allow rule, as before. Where the hook cannot run (on Windows), only the fixed `cez-manager` and `gh` prefixes are allowed, with no `gh api` and no pipes.
+Always refused, even if you allow a pattern: `gh pr merge|review|comment|edit|close|ready`, `gh issue comment|edit|close`, `gh workflow run`, `gh run rerun`, `git push` and every `gh api` write. Also refused: `;`, `&&`, `||`, `&`, `$(…)`, backticks, `$VAR`, redirects, subshells, loops, globs, unquoted newlines, and a pipe into any other program, such as `sh` or `xargs`. Newlines inside quotes are fine, so a long multi-line objective passes as one argument, and so does a `cez-manager … --stdin <<'EOF'` heredoc with a quoted delimiter, which expands nothing. A `cez-manager` command the policy still cannot read falls back to Claude's own `cez-manager` allow rule. Where the hook cannot run (on Windows), only the fixed `cez-manager` and `gh` prefixes are allowed, with no `gh api` and no pipes.
+
+The manager's system prompt lists exactly these rules: Cezar builds that part of the prompt from the same tables the hook checks.
+
+### Shell access
+
+Open the manager's settings menu and choose **Shell access** to see the commands it was refused lately, with the reason for each. When a refused command is a read-only `gh <group> <verb>` (`view`, `list`, `status`, `diff` or `checks`), the row offers **Allow … (read-only)**: one click lets the manager run that pattern from its next turn, with the same `--web`, `--repo`, host and `--jq` checks as the built-in reads. Only gh's own command groups qualify: a write, a `gh auth`, `config`, `secret` or `variable` command, a gh extension or alias, and anything that is not `gh` cannot be allowed. Remove a pattern or clear the log from the same dialog.
 
 > **Good to know**:
 >

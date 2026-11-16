@@ -1,12 +1,12 @@
 import { CheckIcon, ChevronDownIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
-import { useAgentAccounts } from '@/api/agent-accounts'
-import { useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { useAgentProfiles, useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -25,6 +25,7 @@ import {
   managerEffortSchema,
   type ManagerEffort,
   type ManagerProjects,
+  type ManagerTaskAgent,
   type Runner,
   type UpdateManagerInput,
   managerAccessOf,
@@ -34,7 +35,7 @@ import {
 /** What a picker edits. `null` clears, as in the update route; the setup screen maps it to absent. */
 export type ManagerPatch = Pick<
   UpdateManagerInput,
-  'projects' | 'access' | 'projectAccess' | 'runner' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
+  'projects' | 'access' | 'projectAccess' | 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
 >
 
 export const PICKER_TRIGGER =
@@ -171,6 +172,7 @@ export function ModelPicker({
   runner: pinnedRunner,
   model,
   effort,
+  agentProfile,
   onChange,
   pill = false,
   chip = false,
@@ -178,6 +180,7 @@ export function ModelPicker({
   runner?: string
   model?: string
   effort?: ManagerEffort
+  agentProfile?: string
   onChange: (patch: ManagerPatch) => void
   /** The phone composer's round control. */
   pill?: boolean
@@ -214,7 +217,7 @@ export function ModelPicker({
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto">
+      <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-2rem)] overflow-y-auto">
         {runners.length > 1 ? (
           <>
             <DropdownMenuLabel className="text-xs text-muted-foreground">Agent</DropdownMenuLabel>
@@ -230,6 +233,9 @@ export function ModelPicker({
             <DropdownMenuSeparator />
           </>
         ) : null}
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Account</DropdownMenuLabel>
+        <AccountOptions runner={runner} {...(agentProfile !== undefined ? { agentProfile } : {})} onChange={onChange} />
+        <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-xs text-muted-foreground">Model</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(next) => onChange({ model: next === '' ? null : next })}>
           {models.map((entry) => (
@@ -266,26 +272,107 @@ export function AccountPicker({
   onChange: (patch: ManagerPatch) => void
 }) {
   const runner = useManagerRunner(pinnedRunner)
-  const logins = useAgentAccounts().accounts.filter((account) => account.provider === runner)
-  const current = logins.find((account) => account.id === agentProfile)
-  const named = logins.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID)
+  const profiles = useAgentProfiles().data
+  const selected = agentProfile ?? profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const current = profiles?.profiles.find((account) => account.provider === runner && account.id === selected)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" data-slot="manager-account-picker" aria-label="Agent account" className={PICKER_TRIGGER}>
-          <TriggerLabel>{current ? `Account ${current.label}` : 'Account'}</TriggerLabel>
+          <TriggerLabel>Account {current?.label ?? (selected === DEFAULT_AGENT_ACCOUNT_ID ? 'Default' : selected)}</TriggerLabel>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        <DropdownMenuRadioGroup
-          value={agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}
-          onValueChange={(next) => onChange({ agentProfile: next === DEFAULT_AGENT_ACCOUNT_ID ? null : next })}
+      <DropdownMenuContent align="start" className="max-w-[calc(100vw-2rem)]">
+        <AccountOptions runner={runner} {...(agentProfile !== undefined ? { agentProfile } : {})} onChange={onChange} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function AccountOptions({ runner, agentProfile, onChange }: { runner: Runner; agentProfile?: string; onChange: (patch: ManagerPatch) => void }) {
+  const profiles = useAgentProfiles().data
+  const accounts = profiles?.profiles.filter((account) => account.provider === runner) ?? []
+  const defaultId = profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const defaultLabel = accounts.find((account) => account.id === defaultId)?.label ?? 'Default'
+  return (
+    <DropdownMenuRadioGroup value={agentProfile ?? ''} onValueChange={(next) => onChange({ agentProfile: next === '' ? null : next })}>
+      <DropdownMenuRadioItem value=""><span className="min-w-0 break-words whitespace-normal">Use workspace default ({defaultLabel})</span></DropdownMenuRadioItem>
+      <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
+      {accounts.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID).map((account) => (
+        <DropdownMenuRadioItem key={account.id} value={account.id}><span className="min-w-0 break-words whitespace-normal">{account.label}</span></DropdownMenuRadioItem>
+      ))}
+    </DropdownMenuRadioGroup>
+  )
+}
+
+export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, pill = false, chip = false }: {
+  taskRunner?: Runner
+  taskAgents?: ManagerTaskAgent[] | undefined
+  onChange: (patch: ManagerPatch) => void
+  pill?: boolean
+  chip?: boolean
+}) {
+  const status = useProviderStatus().data
+  const profiles = useAgentProfiles().data?.profiles ?? []
+  const selected = taskAgents ?? (taskRunner ? [{ runner: taskRunner }] : [])
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState<ManagerTaskAgent[]>(selected)
+  const value = open ? draft : selected
+  const same = (a: ManagerTaskAgent, b: ManagerTaskAgent) => a.runner === b.runner && a.agentProfile === b.agentProfile
+  const runners = [...new Set([
+    ...usableRunners(status),
+    ...profiles.filter((profile) => profile.id !== DEFAULT_AGENT_ACCOUNT_ID
+      && status?.providers.find((row) => row.provider === profile.provider)?.enabled !== false
+      && status?.providers.find((row) => row.provider === profile.provider)?.status !== 'not-installed').map((profile) => profile.provider),
+    ...value.map((agent) => agent.runner),
+  ])]
+  const accountLabel = (agent: ManagerTaskAgent) => agent.agentProfile === undefined ? 'Automatic account'
+    : profiles.find((profile) => profile.provider === agent.runner && profile.id === agent.agentProfile)?.label
+      ?? (agent.agentProfile === DEFAULT_AGENT_ACCOUNT_ID ? 'Default' : `Unavailable account (${agent.agentProfile})`)
+  const change = (next: ManagerTaskAgent[]) => {
+    setDraft(next)
+    onChange({ taskRunner: null, taskAgents: next.length ? next : null })
+  }
+  const label = value.length === 0 ? 'Automatic' : value.length === 1
+    ? value[0]!.runner : `${value.length} accounts`
+  return (
+    <DropdownMenu open={open} onOpenChange={(next) => { if (next) setDraft(selected); setOpen(next) }}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="manager-task-runner-picker"
+          aria-label="Agent for new tasks"
+          title="Choose the accounts the manager may use for new tasks. Automatic lets it choose freely."
+          className={cn(PICKER_TRIGGER, pill && 'h-10 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 rounded-full border border-border px-2.5 text-xs')}
         >
-          <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
-          {named.map((account) => (
-            <DropdownMenuRadioItem key={account.id} value={account.id}>{account.label}</DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+          <TriggerLabel>Tasks: {label}</TriggerLabel>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-w-[calc(100vw-2rem)]">
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Accounts for new tasks</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem checked={value.length === 0} onSelect={(event) => event.preventDefault()} onCheckedChange={() => change([])} className="pointer-coarse:min-h-11">
+          Automatic
+        </DropdownMenuCheckboxItem>
+        {runners.map((runner) => {
+          const choices: ManagerTaskAgent[] = [{ runner, agentProfile: DEFAULT_AGENT_ACCOUNT_ID },
+            ...profiles.filter((profile) => profile.provider === runner && profile.id !== DEFAULT_AGENT_ACCOUNT_ID).map((profile) => ({ runner, agentProfile: profile.id })),
+          ]
+          for (const agent of value.filter((agent) => agent.runner === runner)) if (!choices.some((choice) => same(choice, agent))) choices.push(agent)
+          return <div key={runner}>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs text-muted-foreground">{runner}</DropdownMenuLabel>
+            {choices.map((agent) => {
+              const checked = value.some((choice) => same(choice, agent))
+              return <DropdownMenuCheckboxItem
+                key={JSON.stringify(agent)}
+                checked={checked}
+                className="pointer-coarse:min-h-11"
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={() => change(checked ? value.filter((choice) => !same(choice, agent)) : [...value, agent])}
+              ><span className="min-w-0 break-words whitespace-normal">{runner} · {accountLabel(agent)}</span></DropdownMenuCheckboxItem>
+            })}
+          </div>
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   )

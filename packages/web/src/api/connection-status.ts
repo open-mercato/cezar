@@ -14,6 +14,7 @@ import {
 export function createConnectionStatus() {
   const listeners = new Set<() => void>()
   let attempt = 0
+  let answering = false
   let reconnect: (() => void) | undefined
   const emit = () => listeners.forEach((fn) => fn())
   return {
@@ -24,6 +25,14 @@ export function createConnectionStatus() {
       }
     },
     attempt: () => attempt,
+    /** Whether the last plain request got cezar's own answer: the stream can be down while it does. */
+    answering: () => answering,
+    /** Every request's outcome: an answer, or none (unreachable, or a gateway's 502/503/504). */
+    requestSettled(answered: boolean) {
+      if (answered === answering) return
+      answering = answered
+      emit()
+    },
     /** One more try that has not (yet) opened the stream. */
     failedAttempt() {
       attempt += 1
@@ -52,6 +61,12 @@ export const connectionStatus = createConnectionStatus()
 
 export const useReconnectAttempt = (): number =>
   useSyncExternalStore(connectionStatus.subscribe, connectionStatus.attempt, () => 0)
+
+export const useRequestsAnswered = (): boolean =>
+  useSyncExternalStore(connectionStatus.subscribe, connectionStatus.answering, () => false)
+
+/** A 502/503/504 is a gateway's (the CezarBot proxy's, a reverse proxy's), not cezar's. */
+export const answeredByCezar = (status: number): boolean => status !== 502 && status !== 503 && status !== 504
 
 function decodeName(value: string | null): string | undefined {
   if (!value) return undefined

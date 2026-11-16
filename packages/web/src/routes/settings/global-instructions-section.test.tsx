@@ -9,6 +9,7 @@ import { GlobalInstructionsCard } from './global-instructions-section'
 
 const CONFIG: WorkspaceConfigResponse = {
   branding: { name: 'cezar', logoUrl: null },
+  computerName: 'Test Mac',
   browseRoot: '~/',
   projectsDir: '~/cezar/projects',
   skillsAutoUpdate: null,

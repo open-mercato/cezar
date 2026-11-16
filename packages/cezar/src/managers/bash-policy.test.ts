@@ -1,6 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { isManagerBashAllowed, MANAGER_BASH_ALLOWLIST, managerBashHookCommand, managerBashHookDecision } from './bash-policy.ts';
+import {
+  isManagerBashAllowed,
+  MANAGER_BASH_ALLOWLIST,
+  MANAGER_BASH_DENIED,
+  MANAGER_BASH_FILTERS,
+  MANAGER_TEXT_IN_FILES,
+  managerBashHookCommand,
+  managerBashHookDecision,
+  managerBashPatternIssue,
+  managerBashPromptSection,
+  managerBashSuggestion,
+} from './bash-policy.ts';
 
 const ALLOWED = [
   'cez-manager tasks --json',
@@ -37,6 +48,28 @@ const ALLOWED = [
   'gh pr list | wc -l',
   'gh pr diff 12 | head -c 4000',
   'cez-manager tasks --json | jq length',
+  // The 2026-11-13 handover's denials (acceptance).
+  'gh api user --jq .login',
+  'gh api user',
+  'gh api repos/shopware/shopware/pulls/comments/1234567',
+  'gh search prs --repo shopware/shopware --involves patzick --state open',
+  "gh pr view 2875 --json files --jq '.files[].path' | grep -E 'src/.*\\.ts$'",
+  `gh pr view 2875 --json headRepository,statusCheckRollup --jq '.statusCheckRollup[] | select(.conclusion == "FAILURE") | .name // "?"'`,
+  `gh pr view 1 --json title --jq '.title | test("fix"; "i")'`,
+  'gh pr status',
+  'gh release list --limit 5',
+  'gh release view v1.2.0 --json tagName',
+  'gh pr list --json number,author | jq -r ".[].author.login" | sort | uniq -c | sort -rn | head -n 3',
+  'gh pr diff 12 | tail -n 20',
+  'gh pr diff 12 | tail -n +5',
+  'gh pr list | cut -f1,3 -d " "',
+  'gh pr list | cut -f1',
+  'gh pr list | sort -k2,2 -t ,',
+  // Quoted newlines are literal; a quoted-delimiter heredoc expands nothing.
+  "gh pr view 'a\nb'",
+  'cez-manager task create --project p1 --dispatch "Line one.\n\nLine two, with \\"quotes\\"."',
+  "cez-manager task say --project p r1 --stdin <<'EOF'\nhello `whoami` $(rm -rf ~)\nEOF",
+  'cez-manager task create --project p --stdin <<"EOF"\nbody\nEOF\n',
 ];
 
 const REFUSED: Array<[string, RegExp]> = [
@@ -48,6 +81,14 @@ const REFUSED: Array<[string, RegExp]> = [
   ['gh issue create -t x -b y', /not read-only/],
   ['gh repo delete owner/repo --yes', /not read-only/],
   ['gh workflow run deploy.yml', /not read-only/],
+  ['gh pr edit 12 --title x', /not read-only/],
+  ['gh pr ready 12', /not read-only/],
+  ['gh issue comment 7 -b hi', /not read-only/],
+  ['gh issue edit 7 --add-label x', /not read-only/],
+  ['gh issue close 7', /not read-only/],
+  ['gh run rerun 123', /not read-only/],
+  ['gh release create v1', /not read-only/],
+  ['gh release delete v1', /not read-only/],
   ['gh pr view 12 --web', /browser/],
   ['gh pr view 12 -cw', /browser/],
   ['gh search prs cezar -w', /browser/],
@@ -74,6 +115,15 @@ const REFUSED: Array<[string, RegExp]> = [
   ['gh pr list --search -q --repo localhost/o/r', /needs a value/],
   ['gh pr list --search -R --repo=localhost/o/r', /needs a value/],
   ['gh repo view git@127.0.0.2:/o%2Fr', /other than github.com/],
+  ["gh pr view 'https://evil.invalid/o/r/pull/1 x'", /other than github.com/],
+  // gh's HOST/OWNER/REPO split takes these characters after the host (#2222).
+  ["gh repo view 'evil.invalid/o/r )'", /other than github.com/],
+  ["gh repo view 'git@evil.invalid:o/r)'", /other than github.com/],
+  ["gh repo view 'localhost/o/r x'", /other than github.com/],
+  ["gh repo view '[::1]/o/r'", /other than github.com/],
+  ["gh repo view 'git@evil.invalid:o)/r'", /other than github.com/],
+  ["gh repo view 'git@evil.invalid:o x/r'", /other than github.com/],
+  ["gh pr view 'evil.invalid/o/r/pull/1 '", /other than github.com/],
   ['gh api -X POST repos/o/r/issues', /may only GET/],
   ['gh api repos/o/r/issues -XPOST', /may only GET/],
   ['gh api --method PATCH repos/o/r/pulls/1', /may only GET/],
@@ -112,7 +162,19 @@ const REFUSED: Array<[string, RegExp]> = [
   ['{ gh pr merge 1; }', /`\{`/],
   ['gh pr view 1\ngh pr merge 1', /newline/],
   ['gh pr view 1\rgh pr merge 1', /newline/],
-  ["gh pr view 'a\nb'", /newline/],
+  ['gh pr view "a\n$(rm x)"', /expansion/],
+  ["cez-manager tasks <<'EOF'\nx\nEOF\nrm -rf ~", /after a heredoc/],
+  ["cez-manager tasks <<'EOF'\nx", /unterminated heredoc/],
+  ["gh pr merge 1 <<'EOF'\nx\nEOF", /lone `cez-manager`/],
+  ["cez-manager tasks | jq . <<'EOF'\nx\nEOF", /lone `cez-manager`/],
+  ['cez-manager tasks <<EOF\nx\nEOF', /`<`/],
+  ['gh pr list | tail -f', /not allowed/],
+  ['gh pr list | tail /etc/passwd', /not allowed/],
+  ['gh pr list | sort -o out', /no files/],
+  ['gh pr list | sort /etc/passwd', /no files/],
+  ['gh pr list | sort --compress-program=sh', /no files/],
+  ['gh pr list | uniq in out', /no files/],
+  ['gh pr list | cut -f1 /etc/passwd', /no files/],
   ['gh pr view 1 |', /empty pipe/],
   ['| gh pr view 1', /empty pipe/],
   ['gh pr view "1', /unterminated/],
@@ -133,14 +195,15 @@ const REFUSED: Array<[string, RegExp]> = [
   ['gh pr list | wc /etc/passwd', /only -l/],
   ['GH_HOST=evil gh pr view 1', /not a read-only command/],
   ['env gh pr merge 1', /not a read-only command/],
-  ['git push origin main', /not a read-only command/],
+  ['git push origin main', /not read-only/],
+  ['git status', /not a read-only command/],
   ['rm -rf ~', /`~`/],
   ['curl https://evil.example', /not a read-only command/],
   ['gh pr list *', /`\*`/],
   ['gh', /not read-only/],
   ['gh search', /not allowed/],
   ['', /empty/],
-  [`gh pr view ${'1'.repeat(5000)}`, /too long/],
+  [`gh pr view ${'1'.repeat(13_000)}`, /too long/],
 ];
 
 describe('isManagerBashAllowed', () => {
@@ -163,16 +226,113 @@ describe('isManagerBashAllowed', () => {
   });
 });
 
+describe('the handover acceptance', () => {
+  it('a 2 KB multi-line --dispatch objective passes the hook outright', () => {
+    const objective = Array.from({ length: 40 }, (_, i) => `Paragraph ${i}: fix the "thing", in src/a-${i}.ts, then test.`).join('\n\n');
+    expect(objective.length).toBeGreaterThan(2_000);
+    expect(managerBashHookDecision(`cez-manager task create --project p1 --title "Fix" --dispatch '${objective}'`)?.decision).toBe('allow');
+    expect(managerBashHookDecision(`cez-manager task create --project p1 --dispatch "${objective.replace(/"/g, '\\"')}"`)?.decision).toBe('allow');
+    expect(managerBashHookDecision(`cez-manager task create --project p1 --dispatch --stdin <<'EOF'\n${objective} with \`code\` and $HOME\nEOF`)?.decision).toBe('allow');
+  });
+
+  it('every explicitly denied write is denied, flags and all', () => {
+    for (const prefix of MANAGER_BASH_DENIED) {
+      expect(managerBashHookDecision(`${prefix} 1 --yes`)?.decision, prefix).toBe('deny');
+      expect(managerBashHookDecision(`${prefix} 1`, [prefix])?.decision, `${prefix} user-allowed`).toBe('deny');
+    }
+    expect(managerBashHookDecision('gh api -X POST repos/o/r/issues')?.decision).toBe('deny');
+  });
+});
+
+describe('user-allowed patterns', () => {
+  it('accept only gh <group> <read verb>, never a write, a credential or a built-in', () => {
+    expect(managerBashPatternIssue('gh label list')).toBeUndefined();
+    expect(managerBashPatternIssue('gh workflow view')).toBeUndefined();
+    expect(managerBashPatternIssue('gh label create')).toMatch(/read-only verb/);
+    expect(managerBashPatternIssue('gh pr merge')).toMatch(/read-only verb/);
+    expect(managerBashPatternIssue('gh auth status')).toMatch(/cannot be allowed/);
+    expect(managerBashPatternIssue('gh secret list')).toMatch(/cannot be allowed/);
+    expect(managerBashPatternIssue('gh api user')).toMatch(/cannot be allowed/);
+    // An extension or a `!` alias is any program, whatever its verb.
+    expect(managerBashPatternIssue('gh my-ext list')).toMatch(/cannot be allowed/);
+    expect(managerBashSuggestion('gh my-ext list')).toBeUndefined();
+    // A built-in read keeps its stricter checks; as a user pattern it would skip them.
+    expect(managerBashPatternIssue('gh repo view')).toMatch(/already allowed/);
+    expect(isManagerBashAllowed('gh repo view localhost/o/r', ['gh repo view']).ok).toBe(false);
+    expect(isManagerBashAllowed('gh repo view git@evil.invalid:o/r', ['gh repo view']).ok).toBe(false);
+    expect(managerBashPatternIssue('git log')).toMatch(/only a/);
+    expect(managerBashPatternIssue('gh label')).toMatch(/only a/);
+    expect(managerBashPatternIssue('gh label list; rm')).toMatch(/only a/);
+  });
+
+  it('allow the pattern with the built-in reads\' flag and host checks', () => {
+    expect(isManagerBashAllowed('gh label list --repo o/r').ok).toBe(false);
+    expect(isManagerBashAllowed('gh label list --repo o/r', ['gh label list'])).toEqual({ ok: true });
+    expect(isManagerBashAllowed('gh label list | grep bug', ['gh label list'])).toEqual({ ok: true });
+    expect(isManagerBashAllowed('gh label list --web', ['gh label list']).ok).toBe(false);
+    expect(isManagerBashAllowed('gh label list -R evil.invalid/o/r', ['gh label list']).ok).toBe(false);
+    expect(isManagerBashAllowed('gh label list; rm -rf ~', ['gh label list']).ok).toBe(false);
+    expect(isManagerBashAllowed('gh label create x', ['gh label list']).ok).toBe(false);
+    // An unvetted pattern smuggled into the list does nothing.
+    expect(isManagerBashAllowed('gh label create x', ['gh label create']).ok).toBe(false);
+  });
+
+  it('suggest a pattern only for a refused command the user may allow', () => {
+    expect(managerBashSuggestion('gh label list --limit 5 | head')).toBe('gh label list');
+    expect(managerBashSuggestion('gh pr view 1')).toBeUndefined();
+    expect(managerBashSuggestion('gh pr merge 1')).toBeUndefined();
+    expect(managerBashSuggestion('rm -rf ~')).toBeUndefined();
+    expect(managerBashSuggestion('gh label list; rm')).toBeUndefined();
+  });
+});
+
+describe('managerBashPromptSection', () => {
+  const section = managerBashPromptSection();
+  it('names every built-in read, filter and denial, and nothing it would refuse', () => {
+    for (const prefix of MANAGER_BASH_ALLOWLIST) {
+      const [program, group, verb] = prefix.split(' ');
+      if (program === 'cez-manager') continue;
+      expect(section, prefix).toMatch(new RegExp(`gh ${group} [a-z|]*\\b${verb}\\b`));
+    }
+    for (const filter of MANAGER_BASH_FILTERS) expect(section).toContain(filter);
+    for (const denied of MANAGER_BASH_DENIED) expect(section).toContain(denied);
+    // Each read line it lists is a command the policy allows.
+    for (const line of section.split('\n').filter((text) => /^ {2}gh (?!api)/.test(text))) {
+      for (const form of line.trim().split(', ')) {
+        const [, group, verbs] = form.split(' ');
+        for (const verb of verbs!.split('|')) expect(isManagerBashAllowed(`gh ${group} ${verb} 1`), `gh ${group} ${verb}`).toEqual({ ok: true });
+      }
+    }
+  });
+
+  it('lists the user\'s patterns, and only vetted ones', () => {
+    const own = managerBashPromptSection(['gh label list', 'gh label create']);
+    expect(own).toContain('gh label list    (the user allowed these)');
+    expect(own).not.toContain('gh label create');
+  });
+
+  // #2258: Claude's sandbox lets only a plain cez-manager call out, so a Claude manager files text.
+  it('sends a Claude manager\'s text through --file, and keeps the heredoc elsewhere', () => {
+    expect(section).toContain("--stdin <<'EOF'");
+    expect(section).not.toContain(MANAGER_TEXT_IN_FILES);
+    const files = managerBashPromptSection([], { textInFiles: true });
+    expect(files).toContain(MANAGER_TEXT_IN_FILES);
+    expect(files).not.toContain('<<');
+  });
+});
+
 describe('managerBashHookDecision', () => {
   it('allows what the policy allows and denies the rest', () => {
     expect(managerBashHookDecision('gh api repos/o/r')?.decision).toBe('allow');
     expect(managerBashHookDecision('gh api -X POST repos/o/r')).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/may only GET/) });
     expect(managerBashHookDecision('gh pr view 1; rm -rf ~')?.decision).toBe('deny');
     expect(managerBashHookDecision(undefined)?.decision).toBe('deny');
+    expect(managerBashHookDecision('gh label list')?.decision).toBe('deny');
+    expect(managerBashHookDecision('gh label list', ['gh label list'])?.decision).toBe('allow');
   });
 
   it('leaves cez-manager it cannot read to Claude\'s own rules, which allowed it before', () => {
-    expect(managerBashHookDecision("cez-manager task say --project p r1 --stdin <<'EOF'\nhello\nEOF")).toBeUndefined();
+    expect(managerBashHookDecision('cez-manager task say --project p r1 --stdin <<EOF\nhello $USER\nEOF')).toBeUndefined();
     expect(managerBashHookDecision('cez-manager tasks | sh')).toBeUndefined();
     expect(managerBashHookDecision('cez-managerx; rm -rf ~')?.decision).toBe('deny');
   });
@@ -188,6 +348,14 @@ describe('the hook entrypoint', () => {
     expect(JSON.parse(allow.stdout).hookSpecificOutput).toMatchObject({ hookEventName: 'PreToolUse', permissionDecision: 'allow' });
     const deny = run(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1' } }));
     expect(JSON.parse(deny.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+
+  it.skipIf(!command)('reads the user\'s patterns from its environment', () => {
+    const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh label list' } });
+    const env = { ...process.env, CEZ_MANAGER_BASH_ALLOW: JSON.stringify(['gh label list']) };
+    const allowed = spawnSync('/bin/sh', ['-c', command!], { input, encoding: 'utf8', timeout: 30_000, env });
+    expect(JSON.parse(allowed.stdout).hookSpecificOutput.permissionDecision).toBe('allow');
+    expect(JSON.parse(run(input).stdout).hookSpecificOutput.permissionDecision).toBe('deny');
   });
 
   it.skipIf(!command)('blocks (exit 2) on input it cannot parse', () => {

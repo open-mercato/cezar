@@ -105,6 +105,19 @@ describe('buildClaudeArgs bashHookCommand', () => {
     expect(buildClaudeArgs(spec)).not.toContain('--settings');
     expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], bashHookCommand: 'x' })).not.toContain('--settings');
   });
+
+  // The Seatbelt sandbox denies the loopback connect, so `cez-manager` failed with `fetch failed`.
+  it('excludes sandboxExcludedCommands from the sandbox in the same settings as the hook', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: 'h', sandboxExcludedCommands: ['cez-manager *'] });
+    expect(args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'h' }] }] },
+      sandbox: { excludedCommands: ['cez-manager *'] },
+    });
+    const alone = buildClaudeArgs({ ...spec, sandboxExcludedCommands: ['cez-manager *'] });
+    expect(JSON.parse(alone[alone.indexOf('--settings') + 1]!)).toEqual({ sandbox: { excludedCommands: ['cez-manager *'] } });
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], sandboxExcludedCommands: ['cez-manager *'] })).not.toContain('--settings');
+  });
 });
 
 describe('buildClaudeArgs output mode', () => {

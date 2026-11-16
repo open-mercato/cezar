@@ -3,12 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
+import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
+import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { MANAGER_QUIET } from './prompts.ts';
+import { MANAGER_QUIET, managerSystemPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
@@ -106,6 +109,7 @@ describe('ManagerEngine', () => {
           return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha, defaultMethod: 'squash', methods: ['squash'] } });
         }
         if (path.endsWith('/merge')) return Response.json({ merged: true });
+        if (path.startsWith('/api/v1/models?')) return Response.json({ models: [] });
         if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
         if (/\/automations\/[^/]+$/.test(path)) return Response.json({ automation: { id: 'a1', revision: automationRevision, name: 'Nightly', enabled: false } });
         return Response.json({ ok: true });
@@ -200,10 +204,49 @@ describe('ManagerEngine', () => {
       expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash', `Write(/${files}/**)`, `Edit(/${files}/**)`]);
       expect(spec?.bashAllowlist).toContain('cez-manager');
       expect(spec?.bashAllowlist?.some((entry) => /gh pr merge|^gh$|^git$/.test(entry))).toBe(false);
+      // Only cez-manager leaves the user's sandbox, which blocks its loopback fetch to the cockpit.
+      expect(spec?.sandboxExcludedCommands).toEqual(['cez-manager *']);
+      // ...but only as a plain command, so its text goes through --file (#2258).
+      expect(spec?.systemPrompt).toContain(MANAGER_TEXT_IN_FILES);
       expect(spec?.env).toMatchObject({ CEZ_MANAGER_ID: id, CEZ_MANAGER_TURN: 'chat' });
       expect(spec?.env?.PATH?.startsWith(join(home, 'managers', 'bin'))).toBe(true);
       expect(spec?.additionalDirectories).toEqual(['/alpha']);
       expect(spec?.cwd).toBe(join(home, 'managers', id, 'workdir'));
+    });
+
+    it('logs refused Bash calls and lets the user allow a read-only pattern from them', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push({ play: (emit) => {
+        emit({ type: 'tool-call', id: 'b1', tool: 'Bash', input: { command: 'gh label list --limit 5' } });
+        emit({ type: 'tool-result', toolCallId: 'b1', result: 'cezar manager policy: `gh label list` is not read-only', isError: true });
+        emit({ type: 'tool-call', id: 'b2', tool: 'Bash', input: { command: 'gh pr merge 1' } });
+        emit({ type: 'tool-result', toolCallId: 'b2', result: 'Permission to use Bash has been denied because Claude Code is running in don\'t ask mode.', isError: true });
+        emit({ type: 'tool-call', id: 'b3', tool: 'Bash', input: { command: 'gh pr view 1' } });
+        emit({ type: 'tool-result', toolCallId: 'b3', result: 'no such PR', isError: true });
+        emit({ type: 'text', text: 'Done.' });
+      } });
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect((await engine.summary(id))?.bashDenials).toEqual([
+        { command: 'gh pr merge 1', reason: '`gh pr merge` is not read-only', at: expect.any(String), count: 1 },
+        { command: 'gh label list --limit 5', reason: expect.stringMatching(/not read-only/), at: expect.any(String), count: 1, suggestion: 'gh label list' },
+      ]);
+
+      expect(await engine.update(id, { bashAllow: ['gh pr merge'] })).toMatchObject({ status: 400 });
+      expect(await engine.update(id, { bashAllow: ['gh label create'] })).toMatchObject({ status: 400 });
+      const allowed = await engine.update(id, { bashAllow: ['gh label list'] });
+      expect(allowed).toMatchObject({ bashAllow: ['gh label list'], bashDenials: [{ command: 'gh pr merge 1' }] });
+
+      engine.send(id, 'again');
+      await settled(engine);
+      const spec = backend.specs.at(-1)!;
+      expect(spec.env?.CEZ_MANAGER_BASH_ALLOW).toBe('["gh label list"]');
+      expect(spec.bashAllowlist).toContain('gh label list');
+      expect(spec.systemPrompt).toContain('gh label list    (the user allowed these)');
+
+      expect(await engine.update(id, { clearBashDenials: true })).not.toHaveProperty('bashDenials');
+      expect(await engine.update(id, { bashAllow: [] })).not.toHaveProperty('bashAllow');
     });
 
     it('lets Claude write only under files/: never .claude/ in its cwd, never a bare Write, Edit or Bash', async () => {
@@ -227,6 +270,9 @@ describe('ManagerEngine', () => {
       engine.send(id, 'again');
       await settled(engine);
       expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      // Claude's sandbox setting means nothing to another backend.
+      expect(backend.specs.at(-1)?.sandboxExcludedCommands).toBeUndefined();
+      expect(backend.specs.at(-1)?.systemPrompt).not.toContain(MANAGER_TEXT_IN_FILES);
     });
 
     it('spells a Windows drive the way Claude rules do', () => {
@@ -303,6 +349,26 @@ describe('ManagerEngine', () => {
       engine.send(id, 'two');
       await settled(engine);
       expect(backend.specs[1]?.resume).toBeUndefined();
+    });
+
+    it('uses the selected account environment after switching agent and account', async () => {
+      const configDir = join(home, 'codex-work');
+      mkdirSync(configDir);
+      await mergeWriteAgentAccounts((accounts) => ({
+        ...accounts,
+        accounts: [{ id: 'work', provider: 'codex', label: 'Work', configDir, addedAt: '' }],
+      }));
+      const runnerFor = vi.fn(() => backend.runner);
+      const engine = makeEngine({ runnerFor });
+      const id = await create(engine, 0);
+      engine.send(id, 'one');
+      await settled(engine);
+      await engine.update(id, { runner: 'codex', agentProfile: 'work' });
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(runnerFor).toHaveBeenLastCalledWith('codex');
+      expect(backend.specs.at(-1)?.env?.CODEX_HOME).toBe(configDir);
+      expect(backend.specs.at(-1)?.resume).toBeUndefined();
     });
 
     it('a turn that throws before its agent starts closes its message', async () => {
@@ -1371,6 +1437,22 @@ describe('ManagerEngine', () => {
       expect(raised).toEqual([[store.get(id)!.name, 'Task blocked on you']]);
     });
 
+    it('a turn started from a relay request reads the unscoped value, and its alert still fires', async () => {
+      let scoped: boolean | undefined;
+      let turnScoped: boolean | undefined;
+      const engine = makeEngine({
+        notifySystem: () => { scoped = inRelayScope(); },
+        runnerFor: () => { turnScoped = inRelayScope(); return backend.runner; },
+      });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you\nIt asks which branch to use.'));
+      runInRelayScope({ deviceId: 'phone' }, () => engine.send(id, 'hi'));
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(scoped).toBe(false);
+      expect(turnScoped).toBe(false);
+    });
+
     it('stays quiet for routine replies', async () => {
       const engine = noisy();
       const id = await create(engine, 0);
@@ -1452,6 +1534,79 @@ describe('ManagerEngine', () => {
       await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
       vi.advanceTimersByTime(3_000);
       expect(raised[0]?.[1]).toContain('Needs your approval');
+    });
+
+    // Spec relay R5: the push sink hears the same alerts, by manager id only.
+    it('signals push for an approval, an important reply and a question, with no OS notifier', async () => {
+      const pushed: string[] = [];
+      const engine = makeEngine({ pushSignal: (managerId) => pushed.push(managerId) });
+      const id = await create(engine, 0);
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say(`CEZ:ASK ${JSON.stringify({ questions: [{ header: 'H', question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })}`));
+      engine.send(id, 'again');
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(pushed).toEqual([id, id, id]);
+    });
+
+    it('signals no push for a routine reply, a read chat, or a manager told to hush', async () => {
+      const pushed: string[] = [];
+      const engine = makeEngine({ pushSignal: (managerId) => pushed.push(managerId) });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('All fine.'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say('MANAGER:IMPORTANT Read me'));
+      engine.send(id, 'again');
+      await settled(engine);
+      engine.read(id);
+      vi.advanceTimersByTime(3_000);
+      await engine.update(id, { notify: false });
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      vi.advanceTimersByTime(3_000);
+      expect(pushed).toEqual([]);
+    });
+  });
+
+  describe('push for a task waiting on the user', () => {
+    const waiting = { id: 'run-1', title: 'Fix it', status: 'waiting', waitingSince: '2026-10-31T11:00:00.000Z', startedAt: '2026-10-31T10:00:00.000Z' } as unknown as RunRecord;
+    let now = Date.parse('2026-10-31T12:00:00.000Z');
+    const watching = (pushed: string[]) => makeEngine({
+      now: () => now,
+      projects: async () => [{ ...connected, runs: () => [waiting] }],
+      pushSignal: (managerId) => pushed.push(managerId),
+    });
+    const watch = async (engine: ManagerEngine) => {
+      now += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+    };
+
+    it('wakes the phone once per waiting task, even when the model stays quiet or fails', async () => {
+      const pushed: string[] = [];
+      const engine = watching(pushed);
+      const id = await create(engine);
+      backend.scripts.push({ fail: 'logged out' }, say(MANAGER_QUIET));
+      await watch(engine);
+      expect(pushed).toEqual([id]);
+      // The failed turn left the key fresh; the next watch must not push it again.
+      now += 16 * 60_000;
+      await watch(engine);
+      expect(backend.specs.length).toBeGreaterThanOrEqual(2);
+      expect(pushed).toEqual([id]);
+    });
+
+    it('respects a manager told to hush', async () => {
+      const pushed: string[] = [];
+      const engine = watching(pushed);
+      const id = await create(engine);
+      await engine.update(id, { notify: false });
+      backend.scripts.push(say(MANAGER_QUIET));
+      await watch(engine);
+      expect(pushed).toEqual([]);
     });
   });
 
@@ -1802,6 +1957,86 @@ describe('ManagerEngine', () => {
       expect(await engine.decide(id, proposed.actionId, 'approve')).toMatchObject({ status: 409 });
     });
 
+    describe('dismissing', () => {
+      /** The PR is open at the proposal; `prState` is what GitHub says afterwards. */
+      const forge = (prState: () => string): ManagerEngineDeps['request'] => async (path, init) => {
+        requests.push({ path, method: init?.method ?? 'GET' });
+        if (path.includes('/merge-state')) {
+          const state = path.endsWith('?refresh=1') ? prState() : 'open';
+          return Response.json({ available: true, mergeState: { title: 'Ship', state, headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+        }
+        return Response.json({ merged: true });
+      };
+
+      it('closes a card without merging, and tells the manager', async () => {
+        const engine = makeEngine({ request: forge(() => 'open') });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'dismiss')).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: 'Dismissed' });
+        expect(requests.some((request) => request.path.endsWith('/merge'))).toBe(false);
+        expect(store.state(id).notes.at(-1)).toContain('Dismissed');
+        expect(await engine.decide(id, proposed.actionId, 'approve')).toMatchObject({ status: 409 });
+      });
+
+      it('onlyIfStale leaves a card whose PR is still open', async () => {
+        let state = 'open';
+        const engine = makeEngine({ request: forge(() => state) });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toMatchObject({ status: 409 });
+        expect(actions(id)[0]?.status).toBe('pending');
+        state = 'merged';
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+      });
+
+      it('approving a PR merged meanwhile dismisses the card instead of failing it', async () => {
+        const engine = makeEngine({ request: forge(() => 'merged') });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        await engine.decide(id, proposed.actionId, 'approve');
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(requests.some((request) => request.path.endsWith('/merge'))).toBe(false);
+      });
+
+      it('a watch check dismisses a card whose PR left the open list, and only after GitHub confirms', async () => {
+        let state = 'open';
+        const engine = makeEngine({ request: forge(() => state) });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        const watch = async () => {
+          store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+          engine.tick();
+          await settled(engine);
+        };
+        // Missing from a capped list proves nothing on its own.
+        await watch();
+        expect(actions(id)[0]?.status).toBe('pending');
+        state = 'closed';
+        await watch();
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already closed' });
+      });
+
+      it('a watch check asks GitHub about no card whose PR is still listed open', async () => {
+        const engine = makeEngine({ request: forge(() => 'merged'), github: readyPrGithub });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        requests = [];
+        backend.scripts.push(say(MANAGER_QUIET));
+        store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        engine.tick();
+        await settled(engine);
+        expect(requests.some((request) => request.path.includes('/merge-state'))).toBe(false);
+        expect(actions(id)[0]?.status).toBe('pending');
+      });
+    });
+
     it('a repeated proposal reuses the pending card', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -1912,6 +2147,7 @@ describe('ManagerEngine', () => {
       const id = await create(engine);
       expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', title: 'Fix' })).toEqual({ projectId: 'alpha', runId: 'new-run' });
       expect(requests[0]).toMatchObject({ path: '/api/v1/p/alpha/runs', method: 'POST', body: { workflow: 'quick-task', task: 'Fix it' } });
+      expect(requests[0]?.body).not.toHaveProperty('systemPrompt');
       expect(requests[1]).toMatchObject({ path: '/api/v1/p/alpha/runs/new-run', method: 'PATCH', body: { title: 'Fix' } });
     });
 
@@ -1925,6 +2161,75 @@ describe('ManagerEngine', () => {
       const id = await create(engine);
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', text: 'more' })).toEqual({ ok: true });
       expect(requests.at(-1)?.path).toBe('/api/v1/p/alpha/runs/r/continue');
+    });
+  });
+
+  describe('task agent selection', () => {
+    it('selects only allowed runner/account pairs, validates at launch and tells the manager their CLI arguments', async () => {
+      let removed = false;
+      const engine = makeEngine({ accountError: async (_runner, account) => removed && account === 'first' ? 'account removed' : null });
+      const taskAgents = [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'claude' as const, agentProfile: 'second' }, { runner: 'codex' as const, agentProfile: 'work' }];
+      const created = await engine.create({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents, cronMinutes: 0 });
+      if ('error' in created) throw created;
+      const prompt = managerSystemPrompt(created, []);
+      for (const agent of taskAgents) expect(prompt).toContain(`--runner ${agent.runner} --account ${agent.agentProfile}`);
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'No explicit pair' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'Second Claude', runner: 'claude', agentProfile: 'second' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+      removed = true;
+      expect(await engine.createTask(created.id, { projectId: 'alpha', task: 'Deleted account', runner: 'claude', agentProfile: 'first' })).toMatchObject({ status: 400 });
+      expect(await engine.createTask(created.id, { projectId: 'alpha', task: 'Unselected account', runner: 'claude', agentProfile: 'default' })).toMatchObject({ status: 403 });
+      expect(new ManagerStore().get(created.id)?.taskAgents).toEqual(taskAgents);
+    });
+
+    it('a retry follows the current task account set after its original account was deselected', async () => {
+      const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'old-account', steps: [] } as unknown as RunRecord;
+      const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [old] }] });
+      const id = await create(engine, 0);
+      await engine.update(id, { taskAgents: [{ runner: 'codex', agentProfile: 'new-account' }] });
+      expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'old' })).toMatchObject({ runId: 'new-run' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'new-account' });
+    });
+
+    it('automatically uses the manager backend instead of the project default', async () => {
+      const engine = makeEngine({ defaultRunner: async () => 'codex' });
+      const id = await create(engine, 0);
+      await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+    });
+
+    it('lets Automatic select a different agent for each task', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      await engine.update(id, { runner: 'codex' });
+      await engine.createTask(id, { projectId: 'alpha', task: 'Review it', runner: 'claude' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+      await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+    });
+
+    it('enforces the saved task agent even if the manager requests another', async () => {
+      const engine = makeEngine();
+      const created = await engine.create({ instructions: '', projects: 'all', cronMinutes: 0, taskRunner: 'codex' });
+      if ('error' in created) throw created;
+      expect(new ManagerStore().get(created.id)?.taskRunner).toBe('codex');
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'Fix it', runner: 'claude' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+      await engine.update(created.id, { name: 'Renamed' });
+      expect(store.get(created.id)?.taskRunner).toBe('codex');
+      await engine.update(created.id, { taskRunner: null });
+      expect(new ManagerStore().get(created.id)).not.toHaveProperty('taskRunner');
+      await engine.createTask(created.id, { projectId: 'alpha', task: 'Next', runner: 'claude' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+    });
+
+    it('validates a model against the enforced task agent', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      await engine.update(id, { taskRunner: 'codex' });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude', model: 'opus' })).toMatchObject({ status: 400 });
+      expect(requests.some((request) => request.method === 'POST')).toBe(false);
     });
   });
 
@@ -2589,6 +2894,8 @@ describe('ManagerEngine', () => {
       await engine.followTask(id, { projectId: 'alpha', runId: 'other' }).then((answer) => expect(answer).toMatchObject({ error: 'task not found' }));
       runs = [run({ id: 'other', title: 'Docs pass' })];
       expect(await engine.followTask(id, { projectId: 'alpha', runId: 'other' })).toEqual({ projectId: 'alpha', runId: 'other', following: true });
+      // Started and followed alike: what the Tasks table's manager facet filters on.
+      expect([...(await engine.summary(id))!.followedTasks].sort()).toEqual(['alpha/new-run', 'alpha/other']);
       backend.scripts.push({ ...say('On it.'), hold: true }, say('Both are done; next I review the docs.'));
       engine.send(id, 'what is going on?');
       await vi.waitFor(() => expect(backend.open).toHaveLength(1));
@@ -2717,6 +3024,29 @@ describe('ManagerEngine', () => {
       expect(cards(id)).toHaveLength(1);
     });
 
+    it('keeps a task it created in its task list after unfollowing it; a merely followed one leaves', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      runs = [...runs, run({ id: 'other' })];
+      await engine.followTask(id, { projectId: 'alpha', runId: 'other' });
+      expect([...(await engine.summary(id))!.followedTasks].sort()).toEqual(['alpha/new-run', 'alpha/other']);
+      await engine.followTask(id, { projectId: 'alpha', runId: 'new-run', follow: false });
+      await engine.followTask(id, { projectId: 'alpha', runId: 'other', follow: false });
+      expect(store.state(id).follows).toEqual({});
+      expect((await engine.summary(id))!.followedTasks).toEqual(['alpha/new-run']);
+      // Unfollowing stops the cards: the created task is no longer heard about.
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'done', finishedAt: later(1) }), () => undefined);
+      expect(cards(id)).toEqual([]);
+    });
+
+    it('moves a created follow written before the created record into it on unfollow', async () => {
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      store.updateState(id, (state) => ({ ...state, follows: { 'alpha/legacy': { at: new Date().toISOString(), created: true } } }));
+      await engine.followTask(id, { projectId: 'alpha', runId: 'legacy', follow: false });
+      expect((await engine.summary(id))!.followedTasks).toEqual(['alpha/legacy']);
+    });
+
     it('posts nothing twice across a restart, and delivers what happened while it was down', async () => {
       const first = followedEngine();
       const id = await started(first);
@@ -2724,6 +3054,8 @@ describe('ManagerEngine', () => {
       const done = run({ id: 'new-run', status: 'done', finishedAt: later(1) });
       first.taskChanged('alpha', dataDir(), done, () => undefined);
       await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      // The reply exists from the turn's first delta; under load a shutdown here interrupted it.
+      await settled(first);
       await first.shutdown();
 
       // cezar was down while the task was continued and failed.

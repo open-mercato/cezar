@@ -184,11 +184,11 @@ export async function markManagerRead(id: string) {
   return unwrap(await managers()[':id'].read.$post({ param: managerParam(id) }), managerPath(id, '/read'))
 }
 
-export async function decideManagerAction(id: string, actionId: string, decision: ManagerActionDecisionInput['decision']) {
+export async function decideManagerAction(id: string, actionId: string, decision: ManagerActionDecisionInput['decision'], opts?: { onlyIfStale?: boolean }) {
   return unwrap(
     await managers()[':id'].actions[':actionId'].decision.$post({
       param: { ...managerParam(id), actionId: encodeURIComponent(actionId) },
-      json: { decision },
+      json: { decision, ...(opts?.onlyIfStale ? { onlyIfStale: true } : {}) },
     }),
     managerPath(id, `/actions/${encodeURIComponent(actionId)}/decision`),
   )
@@ -499,6 +499,7 @@ export function useManagerChat(id: string) {
 export function useUpdateManager(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
+    scope: { id: `manager-settings:${id}` },
     mutationFn: (patch: UpdateManagerInput) => updateManager(id, patch),
     onSuccess: (manager) => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, false))

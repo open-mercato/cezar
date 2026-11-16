@@ -220,7 +220,7 @@ import type { AppType } from '@open-mercato/cezar/app-type'
 import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
 import { BUILD_HEADER, noteServerBuild } from '@/lib/build-identity'
-import { nativeConnectionStatus } from './connection-status'
+import { answeredByCezar, connectionStatus, nativeConnectionStatus } from './connection-status'
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -491,10 +491,12 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     const res = await fetch(url, { ...init, headers, credentials: 'include' })
     noteServerBuild(res.headers?.get(BUILD_HEADER) ?? null)
     nativeConnectionStatus.fromResponse(res)
+    connectionStatus.requestSettled(answeredByCezar(res.status))
     if (!res.ok) noteFailedRequest(url, init?.method, res.status, init?.body)
     return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    connectionStatus.requestSettled(false)
     noteFailedRequest(url, init?.method, 0, init?.body, cause)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
@@ -1492,10 +1494,11 @@ export async function getGroup(groupId: string, opts?: ReadOptions): Promise<Gro
 export async function connectProvider(
   provider: ProviderId,
   profileId?: string,
+  reconnect?: boolean,
 ): Promise<ProviderConnectResponse> {
   return unwrap(
     await cez.api.v1.providers.connect.$post({
-      json: { provider, ...(profileId ? { profileId } : {}) },
+      json: { provider, ...(profileId ? { profileId } : {}), ...(reconnect ? { reconnect } : {}) },
     }),
     '/providers/connect',
   )
