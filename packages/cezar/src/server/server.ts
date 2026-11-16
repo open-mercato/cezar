@@ -5280,6 +5280,7 @@ export function createApp(deps: ServerDeps) {
         agentProfile: parsed.data.agentProfile,
         images,
         systemPrompt: parsed.data.systemPrompt,
+        ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
         worktree: parsed.data.worktree,
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,
@@ -5303,7 +5304,6 @@ export function createApp(deps: ServerDeps) {
         return c.json({ runs }, 201);
       }
       const run = manager.startRun(workflow, input);
-      if (parsed.data.startedByManager) store.updateRun(run.id, { startedByManager: parsed.data.startedByManager });
       if (parsed.data.todoId) await noteTodoStarted(dataDir, parsed.data.todoId, run.id);
       return c.json(store.getRun(run.id) ?? run, 201);
     })
