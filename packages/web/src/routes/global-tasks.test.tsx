@@ -41,6 +41,8 @@ afterEach(() => {
   // must not blank the chips) — which in vitest means one case's statuses would otherwise be
   // remembered by the next one in this file.
   __clearRememberedStatusesForTests()
+  // Saved list scroll offsets live in sessionStorage.
+  sessionStorage.clear()
 })
 
 const PROJECTS: ProjectListEntry[] = [
@@ -447,7 +449,7 @@ describe('global tasks page', () => {
     await waitFor(() => expect(document.querySelector<HTMLElement>('[data-slot="main"]')!.scrollTop).toBe(240))
   })
 
-    it('offers no way back to a manager on an unfiltered list', async () => {
+  it('offers no way back to a manager on an unfiltered list', async () => {
     stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1'] }] })
     renderPage()
     await screen.findByText('Checkout page')
