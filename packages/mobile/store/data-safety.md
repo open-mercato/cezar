@@ -85,10 +85,11 @@ Before the first iOS submission:
   `UserDefaults` for the app's own flags and APNs-token digest (reason `CA92.1`). The current
   not-linked flag is not evidence that the account linkage is exempt from disclosure. Confirm the
   answer above and align the manifest and store form before submission; also review SDK manifests.
-- **Export compliance** (asked for every build, or set `ITSAppUsesNonExemptEncryption` in
-  `Info.plist`): the app implements end-to-end encryption with standard algorithms (Noise with
-  X25519 and ChaCha20-Poly1305), beyond HTTPS transport. [OPEN MERCATO TO CONFIRM: the applicable
-  encryption/export classification, exemptions, reporting obligations and App Store Connect answers
-  for the release and its distribution territories]. The code alone does not establish a
-  mass-market classification or reporting obligation. Set the `Info.plist` key only after the person
-  responsible for compliance has approved the answer.
+- **Export compliance:** use the [release-specific answer worksheet](export-compliance.md).
+  The user selected **worldwide except France** on 2026-11-16. Recommended answers disclose the
+  app-owned published Noise implementation beyond HTTPS; the proposed plist value is Boolean
+  `ITSAppUsesNonExemptEncryption = false` after the responsible publisher approves the documented
+  rationale and final-build checks. It does not mean the app has no encryption. The plist remains
+  unset; no declaration was submitted and no store availability changed. US public-source versus
+  mass-market treatment and any filing steps are recorded separately in that worksheet, not
+  inferred merely from excluding France.

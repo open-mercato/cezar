@@ -199,8 +199,13 @@ internal review notes rather than additional release gates.
 
 Keep the PR a draft for these **three remaining items only**:
 
-- **Export-compliance guidance — pending:** obtain the applicable encryption/export determination
-  and App Store Connect answers. No classification, exemption or reporting answer is inferred here.
+- **Export sign-off and execution — pending:** the user selected **worldwide except France** on
+  2026-11-16. The [release recommendation](packages/mobile/store/export-compliance.md) supplies the
+  proposed App Store answers, US routes/evidence and a recommended Boolean
+  `ITSAppUsesNonExemptEncryption = false` after sign-off. Verify the final archive/public-source
+  correspondence, publisher and any existing filings; approve the applicable rationale before
+  declaring it. Guidance is prepared, not a submitted classification. No plist declaration or
+  territory availability was changed; applying the country selection requires explicit approval.
 - **Signing/TestFlight evidence — not yet:** confirm Apple signing/provisioning and a successful
   signed archive/TestFlight upload; verify that build `10199` is above earlier uploads. Enter signing
   credentials privately through the release setup, never in the repository or review notes.
@@ -239,7 +244,11 @@ Before every submission, on a real phone with the store build (internal testing 
       permission, network call).
 - [ ] Demo server is up (`curl -fsS https://<demo-host>/api/v1/health` with the credentials) and was
       reset in the last 24 hours; credentials in both consoles are current.
-- [ ] Content rating and target audience answered; export compliance answered (iOS).
+- [ ] Content rating and target audience answered; iOS export rationale approved and answers recorded
+      using `packages/mobile/store/export-compliance.md`; final archive matches its inventory.
+- [ ] After explicit approval, verify App Store availability implements the launch plan **worldwide
+      except France** (within Apple's supported/lawful markets); retain the selection evidence. Do
+      not declare France unavailable while it remains selected. Reassess before adding France.
 - [ ] Version code and build number higher than every earlier upload (`release-version.mjs` does this
       as long as the version in `package.json` went up).
 - [ ] Reviewer notes mention the relay, both pairing methods and the demo access.
