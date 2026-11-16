@@ -58,38 +58,47 @@ describe('ReferenceChip with a status', () => {
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="Add checkout" status="checks-failing" />)
 
     expect(chip.getAttribute('data-status')).toBe('checks-failing')
-    expect(chip.className).toContain('text-danger')
+    expect(chip.className).toContain('text-danger-strong')
     expect(chip.querySelector('svg')).not.toBeNull()
     expect(chip.getAttribute('aria-label')).toContain('Checks failing')
   })
 
+  // One colour per meaning, and a glyph beside it so colour is never the only channel.
   it.each([
-    ['merged', 'text-success'],
-    ['ready', 'text-info'],
-    ['review-required', 'text-info'],
-    ['changes-requested', 'text-danger'],
-    ['closed', 'text-danger'],
-    ['draft', 'text-muted-foreground'],
-    ['open', 'text-muted-foreground'],
-    ['completed', 'text-success'],
-    ['not-planned', 'text-muted-foreground'],
-  ] as const)('paints %s with the %s tone', (status, tone) => {
+    ['review-required', 'text-info', 'lucide-git-pull-request'],
+    ['ready', 'text-success-strong', 'lucide-circle-check'],
+    ['merged', 'text-merged', 'lucide-git-merge'],
+    ['closed', 'text-closed', 'lucide-git-pull-request-closed'],
+    ['draft', 'text-muted-foreground', 'lucide-git-pull-request-draft'],
+    ['checks-failing', 'text-danger-strong', 'lucide-circle-x'],
+    ['changes-requested', 'text-danger-strong', 'lucide-message-square-warning'],
+    ['open', 'text-info', 'lucide-circle-dot'],
+    ['completed', 'text-merged', 'lucide-circle-check'],
+    ['not-planned', 'text-closed', 'lucide-circle-slash'],
+  ] as const)('paints %s with %s and the %s glyph', (status, tone, icon) => {
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />)
     expect(chip.className).toContain(tone)
+    expect(chip.querySelector('svg')?.getAttribute('class')).toContain(icon)
   })
 
-  it('does not paint "waiting for review" the same as "merged"', () => {
-    // They were both violet once, which read as two shades of done — where one of them is the
-    // opposite of done: it is waiting on a person. And neither may be violet now: that hue is the
-    // running pulse.
-    const toneOf = (status: 'review-required' | 'merged') =>
+  // Pairs that once shared a colour and were reported for it: a merged PR read as a ready one
+  // (#2171), ready read as waiting for review, closed read as changes requested, then as a draft.
+  it.each([
+    ['merged', 'ready'],
+    ['ready', 'review-required'],
+    ['closed', 'changes-requested'],
+    ['closed', 'draft'],
+    ['completed', 'open'],
+  ] as const)('never paints %s in the colour of %s', (a, b) => {
+    const toneOf = (status: ReferenceStatus) =>
       chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />).className
-    const waiting = toneOf('review-required')
+    const first = toneOf(a)
     cleanup()
-    const merged = toneOf('merged')
-    expect(waiting).not.toBe(merged)
-    expect(waiting).not.toContain('text-violet')
-    expect(merged).not.toContain('text-violet')
+    const second = toneOf(b)
+    expect(first).not.toBe(second)
+    // Nor the accent violet: that hue is the running pulse.
+    expect(first).not.toContain('text-violet')
+    expect(second).not.toContain('text-violet')
   })
 
   it('turns the WHOLE chip amber while checks run, and keeps the pulsing dot', () => {
@@ -158,6 +167,22 @@ describe('ReferenceChip with a status', () => {
   })
 })
 
+describe('the status card', () => {
+  it('writes the status in the chip’s own ink and glyph — merged reads purple there too', async () => {
+    chipOf(<ReferenceChip reference={PR} taskTitle="t" status="merged" />)
+    fireEvent.focus(screen.getByRole('link'))
+    const headline = await waitFor(() => {
+      const node = document.querySelector('[data-slot="reference-status-headline"]')
+      expect(node).not.toBeNull()
+      return node!
+    })
+    expect(headline.textContent).toBe('Merged')
+    expect(headline.className).toContain('text-merged')
+    expect(headline.querySelector('svg')?.getAttribute('class')).toContain('lucide-git-merge')
+    expect(panelText()).toContain(REFERENCE_STATUS.merged.hint)
+  })
+})
+
 describe('ReferenceChip on a pull request that will not merge', () => {
   it('takes the chip over — its own colour, not a second chip and not a shade of red', () => {
     // The reported case: `ready` is still the honest answer to "whose move is it on the review",
@@ -201,7 +226,7 @@ describe('ReferenceChip on a pull request that will not merge', () => {
     // axis must never invent.
     for (const conflicting of [undefined, false]) {
       const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting={conflicting} />)
-      expect(chip.className).toContain('text-info')
+      expect(chip.className).toContain('text-success-strong')
       expect(chip.getAttribute('data-conflicting')).toBeNull()
       cleanup()
     }
