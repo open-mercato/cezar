@@ -54,8 +54,8 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { AccountPicker, ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
-import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
+import type { ManagerPatch } from './manager-pickers'
+import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
 
@@ -795,11 +795,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           key={id}
           dictation={false}
           autoFocus={focusComposer}
-          footerStart={<>
-            <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
-            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
-          </>}
-          options={{ rows: [{ id: 'account', label: 'Agent account', control: <AccountPicker {...pickModel(manager)} onChange={onPatch} /> }] }}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -814,7 +809,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
         {keyboardOpen || !working ? null : (
-          // The pickers live in the composer; the status line keeps what the turn is doing.
+          // Configuration lives in the header gear; this line keeps what the turn is doing.
           // Phones: the interval lives in the gear and the spinner beside the name.
           <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
             <span role="status" aria-label="Working" data-slot="manager-working" className="flex min-w-0 items-center gap-1.5">

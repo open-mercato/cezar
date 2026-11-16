@@ -4,7 +4,7 @@ import { test } from '@e2e-dev/web';
 import { expect } from 'e2e';
 import { managerSummarySchema } from '@open-mercato/cezar-contract';
 
-test('Manager composer keeps its controls inside the prompt surface at every width without dictation', { trace: 'on', timeout: 120_000 }, async ({ app, screen, browser }) => {
+test('Manager keeps message actions in the composer and configuration in the header gear at every width', { trace: 'on', timeout: 120_000 }, async ({ app, screen, browser }) => {
   const base = app.baseUrl;
   if (!base) throw new Error('The cockpit URL is required');
   const response = await fetch(new URL('/api/v1/workspace/managers', base), {
@@ -32,6 +32,9 @@ test('Manager composer keeps its controls inside the prompt surface at every wid
       await expect(field).toHaveAttribute('placeholder', `Message ${manager.name}, or / for commands`);
       await expect(screen.getByRole('button', 'Send', { exact: true })).toBeDisabled();
       await expect(screen.getByRole('button', 'Start dictation')).toHaveCount(0);
+      for (const name of ['Options', 'Model and effort', 'Agent for new tasks', 'Agent account']) {
+        await expect(screen.getByRole('button', name, { exact: true })).toHaveCount(0);
+      }
       await expect.poll(() => browser.evaluate(() => {
         const surface = document.querySelector('[data-slot="composer"]');
         const field = surface?.querySelector('textarea');
@@ -43,7 +46,7 @@ test('Manager composer keeps its controls inside the prompt surface at every wid
         const buttons = [...toolbar.querySelectorAll('button')].filter((el) => el.getClientRects().length > 0);
         return fieldRect.bottom <= toolbarRect.top && surfaceRect.bottom <= innerHeight
           && surfaceRect.left >= 0 && surfaceRect.right <= innerWidth
-          && ['Attach files', 'Model and effort', 'Agent for new tasks', 'Options', 'Send'].every((name) => buttons.some((el) => el.getAttribute('aria-label') === name))
+          && ['Attach files', 'Send'].every((name) => buttons.some((el) => el.getAttribute('aria-label') === name))
           && buttons.every((el) => {
             const rect = el.getBoundingClientRect();
             return rect.left >= surfaceRect.left && rect.right <= surfaceRect.right && rect.bottom <= surfaceRect.bottom;
@@ -52,15 +55,14 @@ test('Manager composer keeps its controls inside the prompt surface at every wid
       await screenshot(`manager-composer-${size.width}x${size.height}`);
       await field.fill('Keep the Manager wording and behavior');
       await expect(screen.getByRole('button', 'Send', { exact: true })).toBeEnabled();
-      await screen.getByRole('button', 'Options', { exact: true }).tap();
+      await screen.getByRole('button', 'Manager settings', { exact: true }).tap();
       await expect(screen.getByRole('button', 'Agent account')).toBeVisible();
       await expect(screen.getByRole('combobox', 'Dictation language')).toHaveCount(0);
       await browser.evaluate(async () => {
-        const panel = document.querySelector('[data-slot="composer-options"]');
+        const panel = document.querySelector('[data-slot="manager-settings-menu"]');
         await Promise.all(panel?.getAnimations({ subtree: true }).map((animation) => animation.finished) ?? []);
       });
-      await screenshot(`manager-options-${size.width}x${size.height}`);
-      await browser.keyboard.press('Escape');
+      await screenshot(`manager-settings-${size.width}x${size.height}`);
       await expect(field).toHaveValue('Keep the Manager wording and behavior');
       await screen.getByRole('button', 'Agent for new tasks').tap();
       await expect(screen.getByRole('menuitemcheckbox', 'antigravity · Automatic account')).toHaveAttribute('aria-checked', 'true');
@@ -68,6 +70,7 @@ test('Manager composer keeps its controls inside the prompt surface at every wid
       await screen.getByRole('button', 'Model and effort').tap();
       await expect(screen.getByRole('menuitemradio', 'pi', { exact: true })).toHaveCount(0);
       await expect(screen.getByRole('menuitemradio', 'Use workspace default (Default)', { exact: true })).toBeVisible();
+      await browser.keyboard.press('Escape');
       await browser.keyboard.press('Escape');
     }
     await app.open('/manager/new');

@@ -351,7 +351,7 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('button', { name: 'Connected projects' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy()
     expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Model and effort' }).closest('[data-slot="composer-controls"]')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Model and effort' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Watch check cadence' })).toBeNull()
     expect(screen.queryByRole('status', { name: 'Working' })).toBeNull()
     expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull()
@@ -678,7 +678,7 @@ describe('/manager/:id', () => {
     })
   })
 
-  it('puts the prompt above a shared toolbar with one set of Manager controls', async () => {
+  it('keeps the prompt and message actions together, with configuration only in the header gear', async () => {
     seedChat()
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
@@ -688,8 +688,11 @@ describe('/manager/:id', () => {
     expect(toolbar).not.toBeNull()
     expect(toolbar.contains(composer())).toBe(false)
     expect(composer().compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    for (const name of ['Attach files', 'Model and effort', 'Agent for new tasks', 'Options', 'Send']) {
+    for (const name of ['Attach files', 'Send']) {
       expect(toolbar.contains(screen.getByRole('button', { name }))).toBe(true)
+    }
+    for (const name of ['Model and effort', 'Agent for new tasks', 'Agent account', 'Options', 'Start dictation']) {
+      expect(screen.queryByRole('button', { name })).toBeNull()
     }
     expect(toolbar.querySelector('[data-slot="composer-send-hint"]')?.textContent).toBe('↵')
     expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
@@ -698,7 +701,7 @@ describe('/manager/:id', () => {
     expect(document.querySelector('[data-slot="composer-compact-row"]')).toBeNull()
   })
 
-  it('offers account options without dictation even in a speech-capable browser', async () => {
+  it('keeps account choices in header settings without composer options or dictation', async () => {
     const recognition = vi.fn()
     vi.stubGlobal('SpeechRecognition', recognition)
     seedChat({ runner: 'codex' })
@@ -708,8 +711,13 @@ describe('/manager/:id', () => {
         { provider: 'claude', id: 'personal', label: 'Personal' },
       ] })
     })
-    fireEvent.click(await screen.findByRole('button', { name: 'Options' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+    const settings = document.querySelector('[data-slot="manager-settings-menu"]')!
+    for (const name of ['Model and effort', 'Agent for new tasks', 'Agent account']) {
+      expect(settings.contains(screen.getByRole('button', { name }))).toBe(true)
+    }
     expect(screen.getByRole('button', { name: 'Agent account' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Options' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start dictation' })).toBeNull()
     expect(screen.queryByRole('combobox', { name: 'Dictation language' })).toBeNull()
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Agent account' }))
@@ -960,7 +968,7 @@ describe('/manager/:id', () => {
       window.dispatchEvent(new Event('resize'))
     })
     expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Model and effort' }).closest('[data-slot="composer"]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Manager settings' }).closest('header')).not.toBeNull()
     act(() => {
       Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
       window.dispatchEvent(new Event('resize'))
@@ -1206,14 +1214,17 @@ describe('/manager/:id', () => {
     await waitFor(() => expect(posted('/global/stop')).toHaveLength(1))
   })
 
-  it('keeps the interval in the gear, and the model chip inside the composer', async () => {
+  it('keeps model, account, task agents and interval in the header gear', async () => {
     seedChat()
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Model and effort' }).closest('[data-slot="composer"]')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Model and effort' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
     const menu = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)
+    for (const name of ['Model and effort', 'Agent account', 'Agent for new tasks']) {
+      expect(menu.contains(screen.getByRole('button', { name }))).toBe(true)
+    }
     expect(menu.querySelector('[data-slot="manager-chron-picker"]')?.textContent).toContain('Refresh: 15 min')
   })
 
