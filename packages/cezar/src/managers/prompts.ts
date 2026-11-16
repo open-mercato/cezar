@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { managerBashPromptSection } from './bash-policy.ts';
 import type { Manager, ManagerAccess, ManagerAttentionItem, ManagerMessage, ManagerSnapshot } from '@open-mercato/cezar-contract';
 
 /** A watch reply meaning "nothing deserves the user"; that turn leaves no message. */
@@ -18,7 +19,10 @@ export function managerSystemPrompt(manager: Manager, projects: Array<{ id: stri
 Connected projects:
 ${connected}
 
-Your tools are the \`cez-manager\` command (run it through Bash), read-only \`gh\` (view, list, diff, checks, search, and \`gh api\` GET; one command at a time, piped only into jq, grep, head or wc), and Read/Grep/Glob over the connected projects:
+Your tools are the \`cez-manager\` command and read-only \`gh\`, both through Bash, and Read/Grep/Glob over the connected projects.
+${managerBashPromptSection(manager.bashAllow)}
+
+The cez-manager commands:
   cez-manager status | attention | tasks | prs        what is going on (add --json for data)
   cez-manager task <run> [--project <id>]             one task: who started it, model, effort, PR, last message, children
   cez-manager task create --project <id> [--title t] [--workflow w] [--model m] [--effort low|medium|high|max] [--dispatch] "<objective>"
