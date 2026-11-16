@@ -17,7 +17,7 @@ import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, type ManagerAttention } from '@/lib/managers'
 import { rememberTasksLocation, tasksHref } from '@/lib/manager-location'
-import { isCezarShell, showsBottomBar } from '@/lib/phone-app'
+import { isCezarShell } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { AddProjectMenu } from '@/components/add-project-menu'
@@ -43,10 +43,7 @@ import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
-/** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
- *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
- *  for CSS and once for the state machine. */
-const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
+import { useCompactNavigation } from '@/lib/use-compact-navigation'
 
 export type RepoChip = {
   name: string
@@ -312,12 +309,11 @@ export const AppShell = React.memo(function AppShell({
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const openMenu = React.useCallback(() => setMenuOpen(true), [])
-  const [phoneApp] = React.useState(showsBottomBar)
-  // CezarBot keeps the phone navigation at every width (an iPad): no sidebar, the drawer behind
-  // More. A phone PWA keeps the breakpoints, so a landscape phone still gets the sidebar.
+  const shellRef = React.useRef<HTMLDivElement>(null)
+  const compact = useCompactNavigation(shellRef)
   const [shellApp] = React.useState(isCezarShell)
-  const phoneNav = shellApp && phoneApp && managersAvailable
-  const bottomBar = phoneApp && managersAvailable && !chromeless
+  const phoneNav = compact || (shellApp && managersAvailable)
+  const bottomBar = phoneNav && managersAvailable && !chromeless
   // A thread keeps the bar, as a manager chat does, and its own header is the top row.
   const threadBar = bottomBar && inTaskThread
   const [managerTasks, setManagerTasks] = React.useState<ManagerTasksTab | null>(null)
@@ -351,18 +347,9 @@ export const AppShell = React.memo(function AppShell({
     setMenuOpen(false)
   }, [pathname])
 
-  // The drawer must not outlive its breakpoint: widening past `md` reveals the real sidebar, and
-  // an open drawer would leave a focus-trapping modal over an already-visible nav. The phone
-  // navigation has no sidebar to reveal, so its drawer opens at any width.
+  // A wider shell reveals the sidebar: close its modal drawer and release the focus trap.
   React.useEffect(() => {
-    const query = phoneNav ? undefined : window.matchMedia?.(DESKTOP_MEDIA_QUERY)
-    if (!query) return
-    if (query.matches) setMenuOpen(false)
-    const onChange = (event: MediaQueryListEvent) => {
-      if (event.matches) setMenuOpen(false)
-    }
-    query.addEventListener('change', onChange)
-    return () => query.removeEventListener('change', onChange)
+    if (!phoneNav) setMenuOpen(false)
   }, [phoneNav])
 
   const items = React.useMemo(
@@ -430,6 +417,7 @@ export const AppShell = React.memo(function AppShell({
 
   return (
     <div
+      ref={shellRef}
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
       data-chromeless={chromeless ? '' : undefined}
@@ -470,7 +458,7 @@ export const AppShell = React.memo(function AppShell({
           desktop === 'macos' && 'pt-[28px]',
           // An iPad is `md+`, where no phone header pads the status bar: the column does. Settings
           // pads its own. A thread on the bar has no shell header at any width.
-          desktop !== 'macos' && !chromeless && (threadBar ? 'pt-[env(safe-area-inset-top)]' : 'md:pt-[env(safe-area-inset-top)]'),
+          desktop !== 'macos' && !chromeless && (threadBar ? 'pt-[env(safe-area-inset-top)]' : !phoneNav && 'md:pt-[env(safe-area-inset-top)]'),
         )}
       >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
@@ -484,7 +472,7 @@ export const AppShell = React.memo(function AppShell({
                 title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
                 attention={managersAvailable && !managerMode ? managerAttention : null}
                 // Where neither the sidebar nor the bottom bar is (a thread on a tablet), the menu is.
-                everyWidth={phoneNav && !bottomBar}
+                everyWidth={phoneNav}
                 computerName={computerName}
               />
             )}
@@ -1255,7 +1243,7 @@ function MobileTopBar({ title, attention = null, everyWidth = false, computerNam
   return (
     <header
       data-slot="mobile-top-bar"
-      className="row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)] md:hidden"
+      className={cn('row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)]', !everyWidth && 'md:hidden')}
     >
       <div className="flex h-11 items-center gap-2.5 px-3">
         {/* A real SheetTrigger rather than an onClick that flips our state: it is what registers
