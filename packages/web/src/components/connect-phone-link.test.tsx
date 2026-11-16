@@ -190,7 +190,7 @@ describe('the Phones summary popover', () => {
     expect(within(menu).getByRole('menuitemcheckbox', { name: /Keep awake for your phone/ }).getAttribute('aria-checked')).toBe('true')
     expect(menu.textContent).toContain('j•••@example.com')
     expect(menu.textContent).not.toContain('jane@')
-    expect(slot('account-status')?.textContent).toBe('Added')
+    expect(slot('account-status')?.textContent).toBe('Email added')
     expect(menu.textContent).toContain('Paired phones · 4')
     const rows = menu.querySelectorAll('[data-slot="paired-phone"]')
     expect([...rows].map((row) => row.textContent)).toEqual(['Pixel 9online · push on', 'iPadseen 3 h ago · no push', 'iPhonenever seen · no push'])

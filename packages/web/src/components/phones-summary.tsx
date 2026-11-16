@@ -49,7 +49,7 @@ const ACCOUNT_LABEL: Record<AccountWord, string> = {
   handover: 'Moving to a new email',
   suspended: 'Suspended',
   'no email': 'No email yet',
-  added: 'Added',
+  added: 'Email added',
 }
 
 const host = (origin: string) => {
@@ -85,7 +85,7 @@ function Row({ label, children, slot }: { label: string; children: ReactNode; sl
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd data-slot={slot} className="min-w-0 truncate text-right text-foreground">{children}</dd>
+      <dd data-slot={slot} className="min-w-0 text-right break-words text-foreground">{children}</dd>
     </>
   )
 }
