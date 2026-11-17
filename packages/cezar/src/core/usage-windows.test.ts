@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
+import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows, normalizeCodexUsageWindows, normalizeOpencodeUsageWindows } from './usage-windows.ts';
 import { usageWindowsObservationSchema } from '@open-mercato/cezar-contract';
 
 // The parent owns the contract barrel export; keep this component independently testable.
@@ -116,5 +116,28 @@ describe('Claude terminal usage limits', () => {
     const autoResumeAt = parseUsageLimit(text, now)!.resetAt.getTime() + AUTO_RESUME_GRACE_MS;
     expect(normalizeClaudeTerminalUsageLimit(frame(text), now)!.windows[0]!.resetsAt! + AUTO_RESUME_GRACE_MS).toBe(autoResumeAt);
     expect(autoResumeAt).toBe(resetAt + 30_000);
+  });
+});
+
+describe('OpenCode session.status retry (#1655)', () => {
+  const now = 1_000_000;
+  const quota = { type: 'retry', attempt: 1, message: 'Free usage exceeded', next: now + 3 * 3_600_000, action: { reason: 'free_tier_limit', provider: 'opencode' } };
+  it('records a quota retry as a blocked all-model window keyed on `next`', () => {
+    const o = usageWindowsObservationSchema.parse(normalizeOpencodeUsageWindows(quota, now));
+    expect(o).toMatchObject({ provider: 'opencode', source: 'opencode-status' });
+    expect(o.windows).toEqual([expect.objectContaining({
+      id: 'retry:free_tier_limit', limitId: 'free_tier_limit', applicability: 'all', status: 'blocked', resetsAt: quota.next,
+    })]);
+  });
+  it('records a far retry with no action from `next`, not from the message prose', () => {
+    const o = normalizeOpencodeUsageWindows({ type: 'retry', message: 'Provider is overloaded', next: now + 3_600_000 }, now)!;
+    expect(o.windows[0]).toMatchObject({ id: 'retry', resetsAt: now + 3_600_000, status: 'blocked' });
+  });
+  it('records nothing for a non-quota action, a missing/past `next`, or another status type', () => {
+    expect(normalizeOpencodeUsageWindows({ ...quota, action: { reason: 'auth_required' } }, now)).toBeNull();
+    expect(normalizeOpencodeUsageWindows({ type: 'retry', message: 'x', action: { reason: 'account_rate_limit' } }, now)).toBeNull();
+    expect(normalizeOpencodeUsageWindows({ ...quota, next: now - 1 }, now)).toBeNull();
+    expect(normalizeOpencodeUsageWindows({ type: 'busy' }, now)).toBeNull();
+    expect(normalizeOpencodeUsageWindows(null, now)).toBeNull();
   });
 });

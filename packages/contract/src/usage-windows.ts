@@ -16,15 +16,15 @@ export const usageWindowSchema = z.object({
 export type UsageWindow = z.infer<typeof usageWindowSchema>;
 
 export const usageWindowsObservationSchema = z.object({
-  provider: z.enum(['claude', 'codex']),
-  source: z.enum(['claude-stream', 'codex-notification', 'codex-read']),
+  provider: z.enum(['claude', 'codex', 'opencode']),
+  source: z.enum(['claude-stream', 'codex-notification', 'codex-read', 'opencode-status']),
   observedAt: z.number().int().nonnegative(),
   windows: z.array(usageWindowSchema).max(128),
 });
 export type UsageWindowsObservation = z.infer<typeof usageWindowsObservationSchema>;
 
 export const usageAccountBindingSchema = z.object({
-  provider: z.enum(['claude', 'codex']),
+  provider: z.enum(['claude', 'codex', 'opencode']),
   accountId: z.string().min(1).max(256),
   profilePath: z.string().min(1).max(4096),
   /** SHA-256 of provider identity metadata, never an auth token. */

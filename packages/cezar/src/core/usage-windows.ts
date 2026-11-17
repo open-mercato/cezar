@@ -113,6 +113,25 @@ export function normalizeCodexUsageWindows(
   return { provider: 'codex', source, observedAt, windows };
 }
 
+/** OpenCode's `session.status` retry that the runner gave up on (#1655). The window is keyed on
+ *  the frame's own `next` instant, never on message prose. A non-quota `action` is a refusal a
+ *  later start would meet again, and a retry with no `next` has no reset, so neither records one. */
+export function normalizeOpencodeUsageWindows(status: unknown, observedAt = Date.now()): UsageWindowsObservation | null {
+  const s = record(status);
+  if (s.type !== 'retry') return null;
+  const resetsAt = typeof s.next === 'number' && Number.isFinite(s.next) ? Math.floor(s.next) : 0;
+  if (resetsAt <= observedAt || resetsAt > 8_640_000_000_000) return null;
+  const action = s.action === undefined ? undefined : record(s.action);
+  const reason = typeof action?.reason === 'string' && action.reason.length > 0 ? action.reason.slice(0, 128) : undefined;
+  if (action && !/limit|quota/i.test(reason ?? '')) return null;
+  return { provider: 'opencode', source: 'opencode-status', observedAt, windows: [{
+    id: reason ? `retry:${reason}` : 'retry', kind: 'other', ...(reason ? { limitId: reason } : {}),
+    // Scope needs captured free_tier_limit / opencode-go frames; too broad only delays a start.
+    applicability: 'all', models: [], resetsAt, durationMinutes: null, usedPercent: null,
+    status: 'blocked', observedAt,
+  }] };
+}
+
 /** Metadata callbacks must never break a healthy agent stream, including async store failures. */
 export function emitUsageWindows(
   callback: ((observation: UsageWindowsObservation) => void) | undefined,

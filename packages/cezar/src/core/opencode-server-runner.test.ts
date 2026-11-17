@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
+import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { parseUsageLimit } from './usage-limit.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { provisionSkills } from '../skills-provision.ts';
@@ -1056,6 +1057,24 @@ describe('a session.status retry the turn cannot outwait', () => {
     expect(error).toBe(`opencode: Provider is overloaded — retry at ${new Date(next).toISOString()}`);
     expect(parseUsageLimit(error)).toBeNull();
   }, 30_000);
+
+  it('#1655 forwards a usage window for a quota retry and for a far retry with no action', async () => {
+    const seen: UsageWindowsObservation[] = [];
+    const run = async (status: Record<string, unknown>) => {
+      const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+        { userPrompt: 'do it #retry-limit', cwd: process.cwd(), env: { MOCK_RETRY_STATUS: JSON.stringify(status) },
+          onUsageWindows: (o) => { seen.push(o); } },
+        () => undefined, {},
+      );
+      await session.result;
+    };
+    const next = Date.now() + 3 * 60 * 60_000;
+    await run({ message: 'Free usage exceeded', action: { reason: 'free_tier_limit' }, next });
+    await run({ message: 'Provider is overloaded', next });
+    await run({ message: 'Sign in', action: { reason: 'auth_required' }, next });
+    expect(seen.map((o) => o.windows[0]?.resetsAt)).toEqual([next, next]);
+    expect(seen.every((o) => o.provider === 'opencode')).toBe(true);
+  }, 60_000);
 
   it('never books a resume for an action that is not a quota', async () => {
     const next = Date.now() + 60 * 60_000;
