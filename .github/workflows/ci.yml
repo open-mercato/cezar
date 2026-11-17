@@ -141,6 +141,26 @@ jobs:
         if: runner.os != 'Linux'
         run: npm run test:package
 
+  # Single required status check (#1641): rulesets require only `CI ok`, so resharding or
+  # renaming a job above never strands every PR on a context that no longer reports.
+  # `publish-snapshot` is left out on purpose — it is conditional and `skipped` on most events.
+  ci-ok:
+    name: CI ok
+    needs: [verify, vitest]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every needed job to have succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS"
+          if echo "$NEEDS" | grep -Eq '"result": "(failure|cancelled|skipped)"'; then
+            echo "A required job did not succeed." >&2
+            exit 1
+          fi
+
   # npm preview publishing (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
   # Publishes a snapshot of both packages after fully green verify, vitest and
   # webhooks-cross-platform runs:
