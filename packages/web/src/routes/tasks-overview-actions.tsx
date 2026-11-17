@@ -5,26 +5,38 @@ import { Button } from '@/components/ui/button'
 import { canBeUnread, isDoneItem, isUnread } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 
-export type TasksOverviewAction = 'archive' | 'restore' | 'read' | 'unread'
+export type TasksOverviewAction = 'archive' | 'restore' | 'read' | 'unread' | 'cancel'
 export type TasksOverviewActionHandler = (run: RunRecord, action: TasksOverviewAction) => Promise<void>
 
-const labels = { archive: 'Archive', restore: 'Restore', read: 'Mark read', unread: 'Mark unread' }
+const labels = { archive: 'Archive', restore: 'Restore', read: 'Mark read', unread: 'Mark unread', cancel: 'Cancel queued' }
 
 /** Same eligibility as All Tasks and the shared read-state decider (#1599). */
 export function taskActionEligible(run: RunRecord, action: TasksOverviewAction): boolean {
+  if (action === 'cancel') return run.status === 'queued' && !run.archived
   if (action === 'restore') return Boolean(run.archived)
   if (action === 'archive') return !run.archived && isDoneItem(run.status)
   return canBeUnread(run) && isUnread(run) === (action === 'read')
 }
 
+/** Queued selections that are safe to cancel in bulk: a queued run that already dispatched
+ *  children is skipped, since cancelling it cascades to (possibly running) descendants (#1960). */
+export function cancellableQueued(selected: readonly RunRecord[], all: readonly RunRecord[]): RunRecord[] {
+  const parents = new Set(all.map((r) => r.dispatch?.parentRunId).filter(Boolean))
+  return selected.filter((run) => taskActionEligible(run, 'cancel') && !parents.has(run.id))
+}
+
 export function useTasksOverviewSelection(
   displayed: readonly RunRecord[],
   onAction?: TasksOverviewActionHandler,
+  allRuns: readonly RunRecord[] = displayed,
 ) {
   const [ids, setIds] = React.useState<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = React.useState(false)
   const [message, setMessage] = React.useState('')
   const locked = React.useRef(false)
+  // A ref keeps `apply` stable so memoized rows do not re-render on every list change.
+  const displayedRef = React.useRef(allRuns)
+  displayedRef.current = allRuns
   const selected = displayed.filter((run) => ids.has(run.id))
   React.useEffect(() => {
     const visible = new Set(displayed.map((run) => run.id))
@@ -51,7 +63,7 @@ export function useTasksOverviewSelection(
     locked.current = true
     setBusy(true)
     setMessage(`${labels[action]} in progress…`)
-    const eligible = targets.filter((run) => taskActionEligible(run, action))
+    const eligible = action === 'cancel' ? cancellableQueued(targets, displayedRef.current) : targets.filter((run) => taskActionEligible(run, action))
     const succeeded = new Set<string>()
     const failures: string[] = []
     // Sequential requests bound load and keep partial success visible; never retry successful rows.
@@ -87,8 +99,10 @@ export function TaskSelectionCheckbox({ checked, mixed = false, label, disabled,
 /** The compact selection toolbar (spec: attention-first cockpit (2026-11-11), Proposal 9): a
  *  Select toggle that keeps every row's controls visible, the select-all box, and — once rows are
  *  picked — the bulk actions. No full-width bar until there is something to act on. */
-export function TasksSelectionToolbar({ displayed, selection, archived, selecting = false, onToggleSelecting }: {
+export function TasksSelectionToolbar({ displayed, allRuns = displayed, selection, archived, selecting = false, onToggleSelecting }: {
   displayed: readonly RunRecord[]
+  /** Every run (nested children are not in `displayed`): the descendant check reads it. */
+  allRuns?: readonly RunRecord[]
   selection: ReturnType<typeof useTasksOverviewSelection>
   archived: boolean
   /** Selection mode is on: the rows show their controls without a hover. */
@@ -96,6 +110,9 @@ export function TasksSelectionToolbar({ displayed, selection, archived, selectin
   onToggleSelecting?: () => void
 }) {
   const { selected, busy } = selection
+  const [confirming, setConfirming] = React.useState(false)
+  const cancellable = cancellableQueued(selected, allRuns)
+  React.useEffect(() => { if (busy || cancellable.length === 0) setConfirming(false) }, [busy, cancellable.length])
   const actions: TasksOverviewAction[] = [archived ? 'restore' : 'archive', 'read', 'unread']
   return <div data-slot="tasks-selection" data-selecting={selecting || selected.length > 0 || undefined}
     className="mb-3 flex flex-wrap items-center gap-2 text-sm">
@@ -113,6 +130,13 @@ export function TasksSelectionToolbar({ displayed, selection, archived, selectin
         return <Button key={action} type="button" size="sm" variant="outline" disabled={busy || count === 0}
           onClick={() => void selection.apply(action, selected)}>{labels[action]} ({count})</Button>
       })}
+      {cancellable.length > 0 ? confirming ? <span role="group" aria-label="Confirm cancel queued" className="inline-flex items-center gap-1">
+        <span>{`Cancel ${cancellable.length} queued ${cancellable.length === 1 ? 'task' : 'tasks'}? They will never start.`}</span>
+        <Button type="button" size="sm" variant="destructive" disabled={busy}
+          onClick={() => { setConfirming(false); void selection.apply('cancel', selected) }}>Confirm cancel</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)}>Keep</Button>
+      </span> : <Button type="button" size="sm" variant="outline" disabled={busy}
+        onClick={() => setConfirming(true)}>Cancel queued ({cancellable.length})</Button> : null}
       <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={selection.clear}>Clear selection</Button>
       <span className="text-xs text-muted-foreground">Only eligible selected tasks are changed; others are skipped.</span>
     </> : null}
@@ -126,10 +150,10 @@ export function TaskQuickActions({ run, busy, onAction }: {
   onAction: (action: TasksOverviewAction, targets: readonly RunRecord[]) => Promise<void>
 }) {
   const actions: TasksOverviewAction[] = [run.archived ? 'restore' : 'archive', isUnread(run) ? 'read' : 'unread']
-  const icons = { archive: ArchiveIcon, restore: ArchiveRestoreIcon, read: EyeIcon, unread: EyeOffIcon }
+  const icons: Partial<Record<TasksOverviewAction, typeof ArchiveIcon>> = { archive: ArchiveIcon, restore: ArchiveRestoreIcon, read: EyeIcon, unread: EyeOffIcon }
   return <span className="inline-flex shrink-0 items-center gap-1">
     {actions.filter((action) => taskActionEligible(run, action)).map((action) => {
-      const Icon = icons[action]
+      const Icon = icons[action] ?? ArchiveIcon
       const label = `${labels[action]}: ${runTitle(run)}`
       return <Button key={action} type="button" variant="ghost" size="icon-sm" title={label} aria-label={label}
         disabled={busy} onClick={() => void onAction(action, [run])}><Icon className="size-3.5" aria-hidden="true" /></Button>

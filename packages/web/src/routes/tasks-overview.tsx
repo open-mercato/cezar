@@ -29,7 +29,7 @@ import { useLocation } from 'react-router'
 import { Virtualizer } from 'virtua'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
+import { archiveFinished, cancelRun, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
 import { CacheStatusChip } from '@/components/cache-status'
 import { isCezarShell } from '@/lib/phone-app'
@@ -286,7 +286,7 @@ export function TasksOverview({
     [sections],
   )
   const displayed = React.useMemo(() => sections.flatMap((section) => section.rows.map((node) => node.run)), [sections])
-  const selection = useTasksOverviewSelection(displayed, onTaskAction)
+  const selection = useTasksOverviewSelection(displayed, onTaskAction, runs)
   // Selection mode (spec: attention-first cockpit (2026-11-11), Proposal 9): the row controls
   // stay out of the way until a row is hovered or the toolbar's Select is on — or a row is picked.
   const [selecting, setSelecting] = React.useState(false)
@@ -410,6 +410,7 @@ export function TasksOverview({
         {onTaskAction ? (
           <TasksSelectionToolbar
             displayed={displayed}
+            allRuns={runs}
             selection={selection}
             archived={view === 'archived'}
             selecting={selecting}
@@ -1814,6 +1815,14 @@ export function TasksOverviewRoute() {
   const actionScope = queryScope()
   const onTaskAction = React.useCallback<TasksOverviewActionHandler>(async (run, action) => {
     // Explicit scope stays pinned across project navigation during a selected-row batch (#1599).
+    if (action === 'cancel') {
+      // Reuses the per-run cancel; `cancelled:false` means it was admitted meanwhile — a failure row, not a success.
+      const result = await cancelRun(run.id, actionScope)
+      if (!result.cancelled) throw new Error('No longer queued')
+      void queryClient.invalidateQueries({ queryKey: [actionScope, 'runs'] })
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.runsIndex })
+      return
+    }
     const updated = action === 'archive' || action === 'restore'
       ? await archiveProjectRun(actionScope, run.id, action === 'archive', 'tasks_table')
       : await setProjectRunRead(actionScope, run.id, action === 'read')
