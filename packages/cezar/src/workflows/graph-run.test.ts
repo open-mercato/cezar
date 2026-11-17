@@ -180,8 +180,18 @@ describe('graph workflows run through RunManager', () => {
       if (Date.now() > deadline) throw new Error('run did not park');
       await new Promise((r) => setTimeout(r, 100));
     }
-    const notes = store.readEvents(id).filter((e) => e.type === 'note' && e.stepId === 'writer');
-    expect(notes.map((e) => (e as { message?: string }).message)).toContain(TERMINAL_AGENT_WAIT_NOTE);
+    const noted = () => store.readEvents(id)
+      .filter((e) => e.type === 'note' && e.stepId === 'writer' && (e as { message?: string }).message === TERMINAL_AGENT_WAIT_NOTE).length;
+    expect(noted()).toBe(1);
+    // A follow-up turn re-parks without repeating the note.
+    const turns = () => store.readEvents(id).filter((e) => e.type === 'turn-end').length;
+    const before = turns();
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'one more thing' }])).toBe(true);
+    while (turns() === before || store.getRun(id)?.status !== 'waiting') {
+      if (Date.now() > deadline) throw new Error('follow-up did not re-park');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(noted()).toBe(1);
   }, 30_000);
 
   it('nudges once for a missing verdict, and session.continue resumes the named node', async () => {

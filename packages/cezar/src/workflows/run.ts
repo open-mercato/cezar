@@ -7896,6 +7896,8 @@ export class RunManager {
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
+    // The #2183 terminal-agent note is said once per step, not on every follow-up park.
+    let terminalWaitNoted = false;
     let systemPrompt: string | undefined;
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
@@ -8182,7 +8184,8 @@ export class RunManager {
           // above still wins over either.
           const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
           // A graph's terminal agent parks by design (D13, #2183) — say so, or it reads as a hang.
-          if (graphHooks && interactive && !ask && !monitoring) {
+          if (graphHooks && interactive && !ask && !monitoring && !terminalWaitNoted) {
+            terminalWaitNoted = true;
             emit({ type: 'note', stepId: step.id, message: TERMINAL_AGENT_WAIT_NOTE });
           }
           // The final interactive step already parks at `waiting` by its own
