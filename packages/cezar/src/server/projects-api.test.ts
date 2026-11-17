@@ -798,9 +798,10 @@ describe('workspace projects API', () => {
       expect((await getProjects()).projects.map((p) => p.id)).toContain(other.id);
       expect(contexts.peek(other.id)).toBeDefined();
 
-      // Settle the run and the same call succeeds — the 409 is about live work, not about the
-      // project having history.
-      ctx!.store.updateRun(run.id, { status: 'done' });
+      // An idle park has no process to strand (spec 2026-11-04-idle-closed-attention-state § Revision).
+      ctx!.store.updateRun(run.id, { status: 'waiting' });
+      ctx!.store.updateRun(run.id, { status: 'waiting', idleClosedAt: new Date().toISOString() });
+      expect(ctx!.store.getRun(run.id)?.idleClosedAt).toBeDefined();
       const allowed = await del(other.id, { contexts });
       expect(allowed.status).toBe(200);
       // The store/manager handles are dropped with the entry (step 2.1's dispose).
