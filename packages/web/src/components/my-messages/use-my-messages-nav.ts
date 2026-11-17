@@ -86,7 +86,11 @@ export function useMyMessagesNav(adapter: MyMessagesAdapter, active: boolean): M
     busy.current = true
     try {
       const target = await adapterRef.current.reveal(item)
-      beforeHighlight?.()
+      if (beforeHighlight) {
+        beforeHighlight()
+        // Let the list's close commit first: a sheet still open traps focus inside itself.
+        await untilFrame(() => false, 2)
+      }
       if (target) highlightJumpTarget(target)
     } finally {
       busy.current = false

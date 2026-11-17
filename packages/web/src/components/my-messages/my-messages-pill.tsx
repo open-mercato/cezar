@@ -30,6 +30,9 @@ export function MyMessagesPill({
   const canHover = useMediaQuery('(hover: hover)')
   const [open, setOpen] = useState(false)
   const [pinned, setPinned] = useState(false)
+  const pinnedRef = useRef(false)
+  const jumped = useRef(false)
+  pinnedRef.current = pinned
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -39,8 +42,11 @@ export function MyMessagesPill({
   const show = (pin: boolean) => {
     clearTimeout(timer.current)
     refresh()
+    if (pin) {
+      pinnedRef.current = true
+      setPinned(true)
+    }
     setOpen(true)
-    if (pin) setPinned(true)
   }
   const hide = (refocus = false) => {
     clearTimeout(timer.current)
@@ -67,7 +73,12 @@ export function MyMessagesPill({
       ref={listRef}
       items={nav.items}
       onScreen={targets.onScreen}
-      onPick={(id, done) => nav.jumpTo(id, () => { hide(); done() })}
+      onPick={(id, done) => nav.jumpTo(id, () => {
+        // The jump hands focus to the message: the closing sheet must not take it back.
+        jumped.current = true
+        hide()
+        done()
+      })}
       onEscape={() => hide(true)}
     />
   )
@@ -113,7 +124,10 @@ export function MyMessagesPill({
             side="top"
             sideOffset={8}
             data-slot="my-messages-popover"
-            onOpenAutoFocus={(event) => event.preventDefault()}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault()
+              if (pinnedRef.current) listRef.current?.focus({ preventScroll: true })
+            }}
             onCloseAutoFocus={(event) => event.preventDefault()}
             onPointerEnter={() => clearTimeout(timer.current)}
             onPointerLeave={leave}
@@ -140,7 +154,14 @@ export function MyMessagesPill({
             <MessageSquareTextIcon aria-hidden="true" className="size-4" />
           </button>
           <Sheet open={open} onOpenChange={(next) => (next ? show(true) : hide())}>
-            <SheetContent side="bottom" data-slot="my-messages-sheet" className="max-h-[72dvh] gap-0 rounded-t-2xl pb-[env(safe-area-inset-bottom)]">
+            <SheetContent
+              side="bottom"
+              onCloseAutoFocus={(event) => {
+                if (!jumped.current) return
+                jumped.current = false
+                event.preventDefault()
+              }}
+              data-slot="my-messages-sheet" className="max-h-[72dvh] gap-0 rounded-t-2xl pb-[env(safe-area-inset-bottom)]">
               <SheetHeader className="border-b border-border px-4 py-3">
                 <SheetTitle>Your messages</SheetTitle>
                 <SheetDescription className="sr-only">Pick a message to jump to it.</SheetDescription>
@@ -199,7 +220,7 @@ export function MyMessagesList({
   }, [items])
   useEffect(() => {
     if (active === undefined) return
-    document.getElementById(optionId(active))?.scrollIntoView({ block: 'nearest' })
+    document.getElementById(optionId(active))?.scrollIntoView?.({ block: "nearest" })
     // Only on a move: re-running per render would fight the reader's own scroll.
   }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
 
