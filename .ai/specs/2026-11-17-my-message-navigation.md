@@ -33,9 +33,9 @@ A segmented pill, `▲ · 💬 · ▼`, with **no numbers** (revision 3). In a l
   attachment icon with a count. Every message of yours that is on screen gets a violet bar
   and `aria-current`. It is a `listbox` with `aria-activedescendant`: ↑/↓/Home/End move,
   Enter jumps, Esc closes and returns focus.
-- Shortcuts: ⌥↑ / ⌥↓ while focus is in the transcript, never in the composer, registered in
-  `keybindings.ts` so they can be rebound. At the tail ⌥↑ is the keyboard way in: it jumps to
-  the last message, which brings the pill in.
+- No keyboard shortcut (implementation note): ⌥↑ / ⌥↓ is already the global task switcher
+  (`use-task-switch-shortcut.ts`). Keyboard users reach the pill by Tab once the transcript is
+  scrolled up; the list itself is fully keyboard-driven.
 
 Alternatives rejected: the chat header (far from the reading position, and the phone task
 header is full) and scrollbar ticks (positions are unknown for unloaded ranges and virtua
@@ -57,9 +57,12 @@ only estimates sizes, they can't be tapped, and iOS hides the scrollbar).
   "Queued"). It never moves the active row or focus. A jump un-pins the tail exactly as a
   scroll-up does.
 
-## Reduced motion
+## Motion
 
-No smooth scroll and no wash; the ring alone marks the target.
+The jump is an instant scroll (implementation note): both transcripts hold the reader's row
+through resizes (`useChatScroll`'s anchor, the thread's WebKit anchoring polyfill), and a smooth
+scroll racing those corrections lands short. The wash marks the landing; with reduced motion it
+is off and the ring alone marks the target.
 
 ## Phase 2 plan (after approval)
 
