@@ -643,6 +643,21 @@ describe('classifyReference', () => {
     expect(classifyReference('/etc/passwd')).toBeNull()
     expect(classifyReference('e.g')).toBeNull()
   })
+
+  it('resolves link destinations inside the worktree, gitignored ones included (#1927)', () => {
+    const wt = '/tmp/wt/r1'
+    expect(classifyReference('temp/summary.txt', wt, true)).toEqual({ view: 'files', value: 'temp/summary.txt' })
+    expect(classifyReference('./temp/my%20file.txt', wt, true)).toEqual({ view: 'files', value: 'temp/my file.txt' })
+    expect(classifyReference(`${wt}/temp/summary.txt`, wt, true)).toEqual({ view: 'files', value: 'temp/summary.txt' })
+    expect(classifyReference('Makefile', wt, true)).toEqual({ view: 'files', value: 'Makefile' })
+  })
+
+  it('keeps links outside the worktree blocked: traversal, other roots, home, schemes (#923)', () => {
+    const wt = '/tmp/wt/r1'
+    for (const href of ['../secret.txt', 'a/../../secret.txt', 'a/%2e%2e/%2e%2e/x', '/etc/passwd', '/tmp/wt/r10/a.txt',
+      `${wt}/../r2/a.txt`, '~/x.txt', 'file:///etc/passwd', 'https://x.io/a.txt', 'a\\b.txt', 'a%00.txt', 'dir/'])
+      expect(classifyReference(href, wt, true), href).toBeNull()
+  })
 })
 
 describe('the task workspace — Assets (spec 2026-10-22-html-artifacts-and-impact)', () => {

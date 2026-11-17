@@ -983,6 +983,13 @@ export function ConversationColumn({
   // Inline code naming a task file or commit opens beside the chat; classified on first hover and
   // marked `data-open`, so only spans that do open something look like a link.
   const target = (event: { target: EventTarget | null }) => {
+    // A markdown link to a path (#1927) is a stronger signal than inline code; it opens only when it
+    // resolves inside the worktree, everything else stays the non-navigating text of #923.
+    const linkNode = event.target instanceof Element ? event.target.closest('[data-local-path]') : null
+    if (linkNode instanceof HTMLElement && !linkNode.closest('[data-slot="user-message"]')) {
+      const reference = classifyReference(linkNode.dataset.localPath ?? '', run.worktreePath ?? undefined, true)
+      return reference ? { node: linkNode, reference } : null
+    }
     const node = event.target instanceof Element ? event.target.closest('[data-streamdown="inline-code"]') : null
     if (!(node instanceof HTMLElement) || node.closest('[data-slot="user-message"]')) return null
     const reference = classifyReference(node.textContent ?? '', run.worktreePath ?? undefined)
@@ -997,6 +1004,7 @@ export function ConversationColumn({
         if (hit && !hit.node.dataset.open) {
           hit.node.dataset.open = hit.reference.view
           hit.node.title = hit.reference.view === 'files' ? 'Open in Files' : 'Open in Commits'
+          if (hit.node.hasAttribute('data-local-path')) hit.node.style.cursor = 'pointer'
         }
       }}
       onClick={(event) => {
@@ -1025,15 +1033,21 @@ interface ThreadReference {
 
 /** Is this inline code a file of the task or one of its commits? Deliberately narrow — a miss costs
  *  nothing, a false hit makes plain code look like a link. */
-export function classifyReference(raw: string, worktree?: string): ThreadReference | null {
-  const text = raw.trim()
-  if (text.length < 3 || text.length > 260 || /\s/.test(text)) return null
-  if (/^[0-9a-f]{7,40}$/.test(text) && /[a-f]/.test(text) && /[0-9]/.test(text)) return { view: 'commits', value: text }
+export function classifyReference(raw: string, worktree?: string, link = false): ThreadReference | null {
+  let text = raw.trim()
+  // An explicit link may carry URL escapes (spaces), but never a query or fragment we would misread.
+  if (link) {
+    try { text = decodeURIComponent(text) } catch { return null }
+    text = text.replace(/#.*$/, '')
+  }
+  if (text.length < 3 || text.length > 260 || (!link && /\s/.test(text)) || text.includes('\0')) return null
+  if (!link && /^[0-9a-f]{7,40}$/.test(text) && /[a-f]/.test(text) && /[0-9]/.test(text)) return { view: 'commits', value: text }
   let path = text.replace(/:\d+(?::\d+)?$/, '')
   if (worktree && path.startsWith(`${worktree}/`)) path = path.slice(worktree.length + 1)
   if (path.startsWith('/') || path.startsWith('~') || /^[a-z]+:\/\//i.test(path)) return null
   path = path.replace(/^\.\//, '')
-  if (path.startsWith('..')) return null
+  if (path.startsWith('..') || path.split('/').includes('..')) return null
+  if (link) return /^[^\\]+$/.test(path) && !path.endsWith('/') ? { view: 'files', value: path } : null
   if (!/^[\w@.+\-()[\]]+(?:\/[\w@.+\-()[\]]+)*\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(path)) return null
   if (!path.includes('/') && !/\.(?:tsx?|jsx?|mjs|cjs|json|md|mdx|css|scss|html|ya?ml|toml|py|rs|go|rb|java|kt|swift|sh|sql|lock|txt|env|svg|png|jpe?g)$/i.test(path)) return null
   return { view: 'files', value: path }
