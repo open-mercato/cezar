@@ -69,27 +69,25 @@ App Store Connect > the app > **App Privacy**. Data collection: **Yes, we collec
 
 | Data type | Collected | Linked to the user's identity | Used for tracking | Purposes |
 | --- | --- | --- | --- | --- |
-| Identifiers > Device ID | Yes | [OPEN MERCATO TO CONFIRM: the relay account associates computers and phone device IDs with an email address; confirm the linked-to-identity answer] | No | App Functionality |
+| Identifiers > Device ID | Yes | **Yes**: the relay account associates computers and phone device IDs with an email address | No | App Functionality |
+| Contact Info > Email Address | Yes | **Yes** | No | App Functionality |
 
-Everything else: **not collected**, for the reasons in the Play table. That includes **Contact Info >
-Email Address**: the relay account's email is collected by cezar on the computer, not by the app, which
-only displays it on the Confirm your email screen. [OPEN MERCATO TO CONFIRM: Apple's reading of that] Tracking: **No**; no data is
-used to track across apps or websites, and the app never shows the App Tracking Transparency prompt.
+Everything else: **not collected**, for the reasons in the Play table. **Email Address** is declared
+conservatively: cezar on the computer sends it, but the relay account ties it to this phone and the app
+displays it on the Confirm your email screen. Owner decision for 0.1.1 (2026-11-17): both rows
+**linked**. Tracking: **No**; no data is used to track across apps or websites, and the app never shows
+the App Tracking Transparency prompt.
 
 Before the first iOS submission:
 
 - On iOS the Device ID row is the relay device ID, public keys and the APNs token; there is no
   Firebase. Re-read the iOS code against this table for the build you submit.
 - Apple's privacy manifest is `ios/App/App/PrivacyInfo.xcprivacy`: no tracking, no tracking domains,
-  Device ID collected for app functionality, currently marked not linked and not tracking, and
-  `UserDefaults` for the app's own flags and APNs-token digest (reason `CA92.1`). The current
-  not-linked flag is not evidence that the account linkage is exempt from disclosure. Confirm the
-  answer above and align the manifest and store form before submission; also review SDK manifests.
+  and `UserDefaults` for the app's own flags and APNs-token digest (reason `CA92.1`). Device ID and
+  Email Address are both declared collected, **linked**, not tracking, for app functionality, matching
+  the table above; also review SDK manifests.
 - **Export compliance:** use the [release-specific answer worksheet](export-compliance.md).
-  The user selected **worldwide except France** on 2026-11-16. Recommended answers disclose the
-  app-owned published Noise implementation beyond HTTPS; the proposed plist value is Boolean
-  `ITSAppUsesNonExemptEncryption = false` after the responsible publisher approves the documented
-  rationale and final-build checks. It does not mean the app has no encryption. The plist remains
-  unset; no declaration was submitted and no store availability changed. US public-source versus
-  mass-market treatment and any filing steps are recorded separately in that worksheet, not
-  inferred merely from excluding France.
+  The owner signed off on 2026-11-17: **worldwide except France**, published standard encryption
+  (the app-owned Noise implementation beyond HTTPS), and Boolean `ITSAppUsesNonExemptEncryption =
+  false` in `ios/App/App/Info.plist`. It does not mean the app has no encryption. US public-source
+  versus mass-market treatment and any filing steps are recorded separately in that worksheet.

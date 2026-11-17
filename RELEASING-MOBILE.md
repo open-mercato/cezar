@@ -197,25 +197,22 @@ privacy policy on 2026-11-16: **"Legal: I confirm coverage"**. Coverage is no lo
 The externally hosted legal text stays unchanged, and the internal draft's placeholders remain
 internal review notes rather than additional release gates.
 
-Keep the PR a draft for these **three remaining items only**:
+Status on 2026-11-17:
 
-- **Export sign-off and execution — pending:** the user selected **worldwide except France** on
-  2026-11-16. The [release recommendation](packages/mobile/store/export-compliance.md) supplies the
-  proposed App Store answers, US routes/evidence and a recommended Boolean
-  `ITSAppUsesNonExemptEncryption = false` after sign-off. Verify the final archive/public-source
-  correspondence, publisher and any existing filings; approve the applicable rationale before
-  declaring it. Guidance is prepared, not a submitted classification. No plist declaration or
-  territory availability was changed; applying the country selection requires explicit approval.
-- **Signing/TestFlight evidence — not yet:** confirm Apple signing/provisioning and a successful
-  signed archive/TestFlight upload; verify that build `10199` is above earlier uploads. Enter signing
-  credentials privately through the release setup, never in the repository or review notes.
-- **Store QA — not ready:** complete the real-device checklist below, including production APNs
-  delivery and the privacy link; confirm Firebase/FCM separately for an Android submission. Validate
-  the proposed store declarations in `store/data-safety.md` against the submitted build, resolve its
-  field questions and align the privacy manifest. Verify demo access/reset, enter reviewer
-  credentials privately in the consoles, and supply the App Review contact, public support email,
-  current screenshots and age-rating answers. Coverage approval does not assign collection or
-  identity-linkage field values; these remain Store QA tasks.
+- **Export sign-off — done:** the owner approved **worldwide except France**, the published
+  standard-encryption route and `ITSAppUsesNonExemptEncryption = false`, now set in
+  `packages/mobile/ios/App/App/Info.plist`
+  ([worksheet](packages/mobile/store/export-compliance.md)). The owner applies the no-France
+  availability in App Store Connect.
+- **Signing/TestFlight — proven:** `Mobile release` signed and uploaded builds 10099 and 10101–10104
+  (latest run 43825027385, 2026-11-16). `0.1.1` is build `10199`, above all of them.
+- **App Privacy — decided:** Device ID and Email Address are declared collected, **linked**, not
+  tracking, for app functionality, in both `store/data-safety.md` and `PrivacyInfo.xcprivacy`.
+- **Store QA — before submission, not before merge:** deploy the reviewer demo (§ 6) and put its
+  domain in the review notes; run the real-device checklist below on the 0.1.1 TestFlight build,
+  including production APNs delivery and the privacy link; enter reviewer credentials, App Review
+  contact and copyright in App Store Connect. Android forms and Firebase apply only to an Android
+  submission (not this round).
 
 ## 6. Reviewer demo
 

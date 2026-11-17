@@ -1,9 +1,8 @@
 # CezarBot 0.1.1: proposed export answers
 
 Prepared 2026-11-16 for PR #2261, native-source inventory at `05934ef62`.
-The user chose **worldwide except France**. This records a launch plan, not an applied App Store
-availability setting or permission to submit a declaration. The final signed archive, publisher
-identity/country and any existing app-specific filings have not been verified.
+The user chose **worldwide except France** and, on 2026-11-17, signed off this route and the plist
+value below. The App Store availability setting is still applied by the owner in App Store Connect.
 
 ## Recommendation and its limits
 
@@ -16,8 +15,8 @@ For this route, Apple lists no encryption-document upload when France is exclude
 the recommended release plist declaration is Boolean **`ITSAppUsesNonExemptEncryption = false`**
 after publisher sign-off and final-build/availability verification. Apple's documentation ties
 this value to exemption from encryption-documentation requirements, not absence of encryption.
-Do not add an export-compliance approval code without one actually issued by Apple. The plist is
-deliberately unchanged by this documentation update; a declaration needs separate approval.
+Do not add an export-compliance approval code without one actually issued by Apple. Signed off on
+2026-11-17; `ios/App/App/Info.plist` now declares the key `false`.
 
 Sources: [Apple documentation table](https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption),
 [plist submission guidance](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations),
@@ -26,7 +25,7 @@ Sources: [Apple documentation table](https://developer.apple.com/help/app-store-
 If the final product has unpublished crypto, additional SDKs or restricted/private components,
 reassess first. `true` is appropriate only if the approved determination identifies non-exempt
 encryption; it is not required merely because the app encrypts content. Until sign-off, leaving
-the key absent preserves Apple's questionnaire rather than asserting an unapproved answer.
+the key absent preserved Apple's questionnaire; it was added only after sign-off.
 
 ## Proposed App Store Connect answers
 
@@ -44,7 +43,7 @@ Apple document uploads is separate from the US EAR jurisdiction/classification b
 | Both standard and proprietary algorithms | **No** |
 | Available on the App Store in France | **No**, once an authorized operator has actually excluded France; the plan alone does not establish the live setting |
 | Requires an Apple encryption-document upload for that standard/no-France route | **No** |
-| `ITSAppUsesNonExemptEncryption` | **false**, after sign-off; currently absent |
+| `ITSAppUsesNonExemptEncryption` | **false** (signed off 2026-11-17, set in `Info.plist`) |
 
 If a prompt asks for a specific Category 5 exclusion, do not answer it using the document-upload
 row. Use the approved US rationale below; do not manufacture a banking, medical, authentication-only
@@ -119,11 +118,13 @@ document exemption does not establish US jurisdiction, an ECCN or permission in 
       and any existing app-specific Apple/BIS paperwork. These facts remain unanswered.
 - [ ] Engineering verifies the signed archive/source correspondence and dependency inventory;
       responsible reviewer approves and records the US route/reporting rationale.
-- [ ] Obtain explicit approval before submitting declarations, changing the plist export declaration
-      or applying territory settings. Then retain the live no-France setting and questionnaire
-      evidence. No French App Store declaration upload is expected for this plan under Apple's
+- [x] Owner signed off the route and `ITSAppUsesNonExemptEncryption = false` (2026-11-17); plist set.
+- [ ] Owner applies the no-France availability in App Store Connect and retains the live setting and
+      questionnaire evidence. No French App Store declaration upload is expected for this plan under Apple's
       table; this is not a conclusion about every French supply/import scenario.
-- [ ] Signing/TestFlight evidence and Store QA remain incomplete. Keep PR #2261 draft.
+- [x] Signing/TestFlight proven: `Mobile release` uploaded builds 10099 and 10101–10104 (latest run
+      43825027385, 2026-11-16); 0.1.1 is build 10199.
+- [ ] Store QA on the 0.1.1 TestFlight build before submission.
 
 Adding France, changing crypto/dependencies or shipping a different private build requires a fresh
 review. “Worldwide” means supported and lawfully available markets, not authorization to bypass
