@@ -38,8 +38,8 @@ Stop the cockpit from claiming the user is offline when cezar's plain HTTP API i
 
 ### Phase 1: Correct the reachability decision
 
-- [ ] 1.1 Make successful cezar responses override the browser's offline hint
-- [ ] 1.2 Add regression coverage for false and genuine offline states
+- [x] 1.1 Make successful cezar responses override the browser's offline hint — d7a72f81
+- [x] 1.2 Add regression coverage for false and genuine offline states — d7a72f81
 
 ### Phase 2: Validate and review
 
