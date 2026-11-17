@@ -123,6 +123,18 @@ describe('ConnectionBanner', () => {
     expect(banner()?.getAttribute('data-state')).toBe('online')
   })
 
+  it("trusts cezar's answer over a false browser offline hint", () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    act(() => connectionStatus.requestSettled(true))
+    render(<ConnectionBanner />)
+
+    act(() => vi.advanceTimersByTime(CONNECTION_BANNER_DELAY_MS))
+
+    expect(banner()?.getAttribute('data-state')).toBe('paused')
+    expect(banner()?.textContent).toBe('Live updates paused — refreshing periodically.')
+    expect(banner()?.textContent).not.toContain("You're offline")
+  })
+
   it('waits out a short drop, then says it is reconnecting', () => {
     render(<ConnectionBanner />)
     act(() => dashboardLive.connected(true))
