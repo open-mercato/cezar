@@ -29,7 +29,8 @@ async function makeFixture(version: string, tags: string[]): Promise<string> {
     await writeFile(join(root, dir, 'package.json'), json(manifest));
   };
   await pkg('.', { name: 'fake-monorepo', private: true });
-  await pkg('packages/contract', { name: '@scope/contract', version, private: true });
+  await pkg('packages/extension-sdk', { name: '@scope/sdk', version });
+  await pkg('packages/contract', { name: '@scope/contract', version, private: true, dependencies: { '@scope/sdk': version } });
   await pkg('packages/api-client', { name: '@scope/client', version, private: true, dependencies: { '@scope/contract': `^${version}` } });
   await pkg('packages/cezar', { name: '@scope/impl', version, devDependencies: { '@scope/client': `^${version}` } });
   await pkg('packages/web', { name: '@scope/web', version, private: true, dependencies: { '@scope/client': `^${version}`, react: '^19.0.0' } });
@@ -176,7 +177,7 @@ test('prepare bumps a released line to its next patch, everywhere', { timeout: 1
     await setRegistry(root, { '@scope/impl': { latest: '0.15.2', versions: ['0.15.2'] } });
     const { stdout } = await run(root, ['prepare', '--dry-run', '--branch', 'release/v0.15.x', '--notes-file', join(root, 'notes.md')]);
     assert.match(stdout, /releasing 0\.15\.3 \(patch bump from 0\.15\.2\) under "latest"/);
-    for (const dir of ['packages/contract', 'packages/api-client', 'packages/cezar', 'packages/web', 'alias-cezar', 'alias-cezar-run']) {
+    for (const dir of ['packages/extension-sdk', 'packages/contract', 'packages/api-client', 'packages/cezar', 'packages/web', 'alias-cezar', 'alias-cezar-run']) {
       assert.equal(await version(root, dir), '0.15.3', dir);
     }
     assert.deepEqual(JSON.parse(await read(root, 'packages/web/package.json')).dependencies, { '@scope/client': '^0.15.3', react: '^19.0.0' });

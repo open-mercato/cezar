@@ -77,3 +77,9 @@ describe('newTaskPrefillHref', () => {
     })
   })
 })
+
+it('keeps extension task proposals inert while preserving the suggested workflow', () => {
+  const href = newTaskPrefillHref({ ref: 'Review this task', workflow: 'review' })
+  expect(parseNewTaskParams(href.split('?')[1]!)).toMatchObject({ ref: 'Review this task', workflow: 'review', auto: false, key: '' })
+  expect(href).not.toMatch(/auto=|key=/)
+})

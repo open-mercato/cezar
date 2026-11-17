@@ -23,10 +23,12 @@ in `verify` instead of being duplicated in the matrix. A failing matrix leg bloc
 preview publication; blocking merges additionally requires branch protection.
 Developers keep using the existing local commands on their own operating system.
 
-Four packages are in the release, always at the same version; three of them ship:
+Six packages are in the release, always at the same version; four of them ship:
 
 | Package | Ships? | What it is |
 |---|---|---|
+| `@open-mercato/cezar-extension-sdk` | yes | the public extension author SDK (`packages/extension-sdk`); the contract re-exports its schemas |
+| `@open-mercato/cezar-contract` | **no — `private`** | the HTTP contract (`packages/contract`); the service folds it into its own `dist` |
 | `@open-mercato/cezar-api-client` | **no — `private`** | the typed client and shared contract types (`packages/api-client`) |
 | `@open-mercato/cezar` | yes | the service + CLI, ships the built cockpit (`packages/cezar`) |
 | `cezar-cli` | yes | the original unscoped bin alias, so `npx cezar-cli` works (`alias-cezar`) |

@@ -30,6 +30,8 @@ interface HealthBody {
     automations: boolean;
     tokenMetrics: boolean;
     webhooks: boolean;
+    extensions: boolean;
+    extensionsUnavailableReason?: 'flag_off' | 'hosted';
     tokenUsageMetrics: boolean;
     costMetrics: boolean;
   };
@@ -123,6 +125,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       dispatch: true,
       tokenMetrics: true,
       webhooks: false,
+      extensions: true,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -184,6 +187,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       dispatch: true,
       tokenMetrics: true,
       webhooks: false,
+      extensions: false,
+      extensionsUnavailableReason: 'hosted',
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -219,6 +224,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       dispatch: true,
       tokenMetrics: true,
       webhooks: false,
+      extensions: false,
+      extensionsUnavailableReason: 'hosted',
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -239,6 +246,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       dispatch: true,
       tokenMetrics: true,
       webhooks: false,
+      extensions: true,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -264,6 +272,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       dispatch: true,
       tokenMetrics: true,
       webhooks: false,
+      extensions: true,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -295,6 +304,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       dispatch: true,
       tokenMetrics: true,
       webhooks: false,
+      extensions: true,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -315,6 +325,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       dispatch: true,
       tokenMetrics: false,
       webhooks: false,
+      extensions: true,
       tokenUsageMetrics: false,
       costMetrics: false,
     });
@@ -325,6 +336,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect((await health()).capabilities).toMatchObject({
       tokenMetrics: false,
       webhooks: false,
+      extensions: true,
       tokenUsageMetrics: false,
       costMetrics: true,
     });
@@ -333,6 +345,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect((await health()).capabilities).toMatchObject({
       tokenMetrics: false,
       webhooks: false,
+      extensions: true,
       tokenUsageMetrics: true,
       costMetrics: false,
     });

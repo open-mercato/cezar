@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
 import { delimiter, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagerMessage } from '@open-mercato/cezar-contract';
@@ -457,9 +458,9 @@ describe('filing a long paste, end to end', () => {
     delete process.env.CEZ_MANAGERS;
     // The shim runs `node "$CEZ_BIN" manager …`: point it at the source CLI through tsx.
     const entry = join(dir, 'cez.mjs');
-    writeFileSync(entry, `const { register } = await import(${JSON.stringify(join(root, 'node_modules', 'tsx', 'dist', 'esm', 'api', 'index.mjs'))});
+    writeFileSync(entry, `const { register } = await import(${JSON.stringify(pathToFileURL(join(root, 'node_modules', 'tsx', 'dist', 'esm', 'api', 'index.mjs')).href)});
 register();
-await import(${JSON.stringify(join(root, 'packages', 'cezar', 'src', 'index.ts'))});
+await import(${JSON.stringify(pathToFileURL(join(root, 'packages', 'cezar', 'src', 'index.ts')).href)});
 `);
     process.env.CEZ_BIN = entry;
     store = RunStore.open(join(dir, 'repo', '.ai/cezar'));

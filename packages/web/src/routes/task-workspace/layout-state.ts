@@ -27,14 +27,20 @@ import { drawerStorageKey } from './drawer-state'
  *  `graph` is the task's live workflow graph. It is offered on every task, like `browser` and for
  *  the same reason: a task with no stored definition gets the view's own honest empty state
  *  ("No workflow graph") rather than a tile that silently is not there. */
-export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'assets' | 'terminal'
+// `extensions` (spec 2026-11-07-extension-placements) is the ONE built-in view for extension
+// task panels — a closed literal, offered only while an enabled extension contributes to it.
+export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'assets' | 'terminal' | 'extensions'
 
-export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']
+export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'extensions', 'terminal']
+
+/** Views minted on first use rather than seeded into every task: the Terminal (a drawer first),
+ *  Assets (most tasks never publish one) and Extensions (most projects have none). */
+const UNSEEDED_VIEWS: readonly ViewId[] = ['terminal', 'assets', 'extensions']
 
 /** The view tabs, left to right — main's order, so the 1–9 keys open what they always did: Chat;
  *  the review — Changes, Commits, Files; the run — Graph, Notes (its own page), Preview, Assets,
- *  Terminal (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal']
+ *  Extensions, Terminal (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'extensions', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
@@ -46,6 +52,7 @@ export const VIEW_PATHS: Record<ViewId, string> = {
   graph: 'graph',
   assets: 'assets',
   terminal: 'terminal',
+  extensions: 'extensions',
 }
 
 /** What the layout cards and column headers read, and what an automatic layout name is derived
@@ -61,6 +68,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   // What the run's agent published (spec 2026-10-22-html-artifacts-and-impact).
   assets: 'Assets',
   terminal: 'Terminal',
+  extensions: 'Extensions',
 }
 
 /** The automatic names earlier builds minted in Polish. They are saved on the host as the
@@ -223,9 +231,7 @@ export const DEFAULT_LAYOUT_NAME = VIEW_LABELS.session
  *  default for everyone else. */
 export function defaultState(): WorkspaceState {
   return {
-    // Terminal and Assets are not pre-seeded: their cards are minted on first use, like any deep
-    // link — most tasks never publish an asset.
-    layouts: VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'assets').map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
+    layouts: VIEW_IDS.filter((view) => !UNSEEDED_VIEWS.includes(view)).map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
     active: DEFAULT_LAYOUT_NAME,
   }
 }

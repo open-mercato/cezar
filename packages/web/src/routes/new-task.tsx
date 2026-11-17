@@ -207,6 +207,7 @@ export function NewTaskRoute() {
       ...stored,
       ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, reasoningEffort: null } : {}),
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
+      ...(deepLink.workflow ? { source: { source: 'workflow', ref: deepLink.workflow } as TaskSource } : {}),
       ...(deepLink.skill !== ''
         ? { source: { source: 'skill', ref: deepLink.skill } as TaskSource }
         : {}),

@@ -5,7 +5,7 @@ import { stripEntries, stripGroups, stripTabs } from './strip'
 
 describe('stripTabs — where Notes lands', () => {
   it("keeps main's order — Chat, Changes, Commits, Files, Graph, Notes, Preview — so 5/6/7 open what they did", () => {
-    expect(stripTabs(FIXED_VIEW_ORDER)).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'notes', 'browser', 'assets', 'terminal'])
+    expect(stripTabs(FIXED_VIEW_ORDER)).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'notes', 'browser', 'assets', 'extensions', 'terminal'])
   })
 
   it('before Preview, Assets or Terminal, else last', () => {
@@ -29,7 +29,7 @@ describe('stripGroups — Chat | the review | the run', () => {
     expect(stripGroups(stripTabs(FIXED_VIEW_ORDER))).toEqual([
       ['session'],
       ['changes', 'commits', 'files'],
-      ['graph', 'notes', 'browser', 'assets', 'terminal'],
+      ['graph', 'notes', 'browser', 'assets', 'extensions', 'terminal'],
     ])
   })
 

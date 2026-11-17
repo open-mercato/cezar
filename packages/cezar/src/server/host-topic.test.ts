@@ -109,10 +109,11 @@ describe('host topic + sampler (live-server path)', () => {
       version: '0.0.0-test',
       socketHub: hub,
     });
-    expect([...topics.keys()].sort()).toEqual(['health', 'host']);
+    expect([...topics.keys()].sort()).toEqual(['extensions', 'health', 'host']);
     // Not a discovery payload: the loopback-origin fallback admits foreign local pages at the
     // handshake, so only an explicitly `loopbackReadable` topic may be read by one.
     expect(topics.get('host')?.options?.loopbackReadable ?? false).toBe(false);
+    expect(topics.get('extensions')?.options?.loopbackReadable ?? false).toBe(false);
   });
 
   it('answers the snapshot-before-first-tick frame without cpuPct', async () => {

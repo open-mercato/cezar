@@ -9,7 +9,7 @@
 // with `existing` after scripts/release-line.mts has committed the version bump to
 // the release branch; the other bumps remain for local use. It stamps every manifest in the release set (intra-release
 // dependencies kept as caret ranges so a stable cezar-cli follows compatible impl
-// releases), then publishes them in DEPENDENCY ORDER — api-client, then the
+// releases), then publishes them in DEPENDENCY ORDER — extension SDK, api-client, then the
 // service, then the aliases — under `--tag latest` unless told otherwise. Publishing a dependent
 // before its dependency would briefly advertise a version that is not on the
 // registry yet.
@@ -52,13 +52,14 @@ import {
 } from '../packages/cezar/src/release/stable.ts';
 
 type SetKey = keyof ReleaseManifests;
-const KEYS: readonly SetKey[] = ['contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
+const KEYS: readonly SetKey[] = ['extensionSdk', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 
 const repoRoot = process.env.CEZ_RELEASE_ROOT
   ? path.resolve(process.env.CEZ_RELEASE_ROOT)
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The workspace root publishes nothing; every publishable manifest is named here explicitly.
 const dirs: Record<SetKey, string> = {
+  extensionSdk: path.join(repoRoot, 'packages/extension-sdk'),
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
@@ -85,6 +86,7 @@ if (!isReleaseBump(bump)) {
 }
 
 const manifests: ReleaseManifests = {
+  extensionSdk: readManifest(dirs.extensionSdk),
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
