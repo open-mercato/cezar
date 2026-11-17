@@ -60,7 +60,7 @@ let dataRoot: string
 let baseUrl: string
 let bootProject: string
 
-const MAIN = `document.querySelector('[data-slot="main"]')`
+const MAIN = `document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]')`
 const PILL = '[data-slot="my-messages"]'
 /** The message a jump landed on: focused and ringed. */
 const LANDED = `(() => { const el = document.activeElement; return el && el.matches('[data-slot="user-bubble"][data-jump-highlight]') ? el.textContent : '' })()`
@@ -116,7 +116,7 @@ describe('jumping between your own messages', () => {
     browser.goto(`${baseUrl}/p/${bootProject}/tasks/${RUN_ID}`)
     browser.waitForFunction(`document.body.textContent.includes('goal achieved — session closed')`)
     expect(browser.count(PILL)).toBe(0)
-    parkAt('m.scrollHeight - m.clientHeight - 1500')
+    parkAt('m.scrollHeight - m.clientHeight - 700')
     browser.waitForFunction(`document.querySelector('${PILL}') !== null`)
     // No numbers on the pill.
     expect(browser.text(PILL)).not.toMatch(/\d/)
@@ -144,7 +144,7 @@ describe('jumping between your own messages', () => {
     browser.press('Home')
     browser.press('Enter')
     browser.waitForFunction(`${LANDED}.includes('Walk the whole git history in passes.')`)
-    expect(browser.count('[data-slot="my-messages-list"]')).toBe(0)
+    browser.waitForFunction(`document.querySelector('[data-slot="my-messages-list"]') === null`)
   }, 90_000)
 
   it('Latest returns to the tail, where the pill goes away', () => {
