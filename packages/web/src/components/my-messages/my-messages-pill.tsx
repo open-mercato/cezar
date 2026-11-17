@@ -156,12 +156,17 @@ export function MyMessagesPill({
           <Sheet open={open} onOpenChange={(next) => (next ? show(true) : hide())}>
             <SheetContent
               side="bottom"
+              // The list takes focus, as the popover's does: the close button stays a tap target.
+              onOpenAutoFocus={(event) => {
+                event.preventDefault()
+                listRef.current?.focus({ preventScroll: true })
+              }}
               onCloseAutoFocus={(event) => {
                 if (!jumped.current) return
                 jumped.current = false
                 event.preventDefault()
               }}
-              data-slot="my-messages-sheet" className="max-h-[72dvh] gap-0 rounded-t-2xl pb-[env(safe-area-inset-bottom)]">
+              data-slot="my-messages-sheet" className="max-h-[72dvh] gap-0 rounded-t-2xl pb-[env(safe-area-inset-bottom)] [&_[data-slot=my-messages-day]]:bg-background">
               <SheetHeader className="border-b border-border px-4 py-3">
                 <SheetTitle>Your messages</SheetTitle>
                 <SheetDescription className="sr-only">Pick a message to jump to it.</SheetDescription>
@@ -264,7 +269,7 @@ export function MyMessagesList({
     >
       {groups.map((group) => (
         <div key={group.day} role="presentation">
-          <div role="presentation" className="sticky top-0 z-[1] bg-popover px-2 pt-2 pb-1 text-meta font-medium text-soft-foreground">
+          <div role="presentation" data-slot="my-messages-day" className="sticky top-0 z-[1] bg-popover px-2 pt-2 pb-1 text-meta font-medium text-soft-foreground">
             {group.day}
           </div>
           {group.items.map((item) => {
