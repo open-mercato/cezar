@@ -34,6 +34,8 @@ Stop the cockpit from claiming the user is offline when cezar's plain HTTP API i
 
 ## Progress
 
+PR: #2285
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Correct the reachability decision
@@ -44,4 +46,4 @@ Stop the cockpit from claiming the user is offline when cezar's plain HTTP API i
 ### Phase 2: Validate and review
 
 - [x] 2.1 Run targeted and full validation — d7a72f81
-- [ ] 2.2 Complete the authoritative automated review pass
+- [x] 2.2 Complete the authoritative automated review pass — 2873e7d4
