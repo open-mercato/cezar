@@ -1114,6 +1114,7 @@ export class ManagerEngine {
       // Deleted meanwhile: writing the gate's state would bring the directory back.
       if (!snapshot || !store.get(id)) return;
       await this.dismissStaleMerges(id, snapshot);
+      await this.dismissStaleEnables(id, snapshot);
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
       this.pushWaitingTasks(id, fresh);
       // Keys a failed turn could not report stay fresh, so none left means the failure is over.
@@ -2354,6 +2355,14 @@ export class ManagerEngine {
     const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
     if (pending) return { actionId: pending.id, status: 'pending' };
+    if (action.type === 'enable-automation') {
+      // An edit bumps the revision: the older card can never be approved, so it must not wait on the user.
+      for (const older of this.deps.store.messages(id)) {
+        if (older.kind !== 'action' || older.status !== 'pending' || older.action.type !== 'enable-automation') continue;
+        if (older.action.projectId !== action.projectId || older.action.automationId !== action.automationId) continue;
+        this.settleAction(id, older, 'dismissed', `Replaced by a newer proposal (revision ${action.revision})`);
+      }
+    }
     const message: ManagerMessage = {
       id: randomUUID(),
       seq: this.deps.store.nextSeq(id),
@@ -2386,7 +2395,9 @@ export class ManagerEngine {
     if (message?.kind !== 'action') return { error: 'action not found', status: 404 };
     if (message.status !== 'pending') return { error: `this action is already ${message.status}`, status: 409 };
     if (decision === 'dismiss') {
-      const stale = message.action.type === 'merge-pr' ? await this.closedPr(message.action) : undefined;
+      const stale = message.action.type === 'merge-pr'
+        ? await this.closedPr(message.action)
+        : message.action.type === 'enable-automation' ? await this.outdatedEnable(message.action) : undefined;
       if (onlyIfStale && !stale) return { error: 'this proposal is still current', status: 409 };
       // Re-read after the forge call: another tab may have decided meanwhile.
       const current = this.deps.store.message(id, actionId);
@@ -2455,6 +2466,34 @@ export class ManagerEngine {
     for (const message of suspects) {
       if (message.action.type !== 'merge-pr') continue;
       const stale = await this.closedPr(message.action);
+      const current = this.deps.store.message(id, message.id);
+      if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale);
+    }
+  }
+
+  /** Why an enable card is moot (edited, deleted, already on), or `undefined` while current or unknown. */
+  private async outdatedEnable(action: Extract<ManagerActionRequest, { type: 'enable-automation' }>): Promise<string | undefined> {
+    try {
+      const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/automations/${encodeURIComponent(action.automationId)}`);
+      if (response.status === 404) return 'Automation was deleted since the proposal';
+      if (!response.ok) return undefined;
+      const { automation } = (await response.json()) as { automation?: { revision?: number; enabled?: boolean } };
+      if (!automation) return undefined;
+      if (automation.enabled) return 'Automation is already enabled';
+      return automation.revision !== action.revision ? `Automation changed since the proposal (rev ${action.revision} -> ${automation.revision})` : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Watch checks close enable cards whose automation was edited, deleted or enabled meanwhile. */
+  private async dismissStaleEnables(id: string, snapshot: ManagerSnapshot): Promise<void> {
+    const available = new Set(snapshot.projects.filter((project) => project.available).map((project) => project.projectId));
+    const suspects = this.deps.store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'action' }> =>
+      message.kind === 'action' && message.status === 'pending' && message.action.type === 'enable-automation' && available.has(message.action.projectId));
+    for (const message of suspects) {
+      if (message.action.type !== 'enable-automation') continue;
+      const stale = await this.outdatedEnable(message.action);
       const current = this.deps.store.message(id, message.id);
       if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale);
     }

@@ -297,17 +297,17 @@ function ActionSheet({
   )
 }
 
-/** Merge cards already asked about this page session, so a re-render never asks again. */
+/** Merge and enable cards already asked about this page session, so a re-render never asks again. */
 const staleChecked = new Set<string>()
 
 /**
- * Asks the server once per pending merge card whether its PR is still open; one that is not is
- * closed as `dismissed`. The chip's colour cannot decide this: it can be a cached 'ready'.
+ * Asks the server once per pending merge card whether its PR is still open, and once per enable
+ * card whether its automation is unchanged; an outdated one is closed as `dismissed`. The chip's colour cannot decide this: it can be a cached 'ready'.
  */
 export function useDismissStaleMerges(messages: readonly ManagerMessage[], onDecide: DecideAction): void {
   useEffect(() => {
     for (const message of messages) {
-      if (message.kind !== 'action' || message.status !== 'pending' || message.action.type !== 'merge-pr' || staleChecked.has(message.id)) continue
+      if (message.kind !== 'action' || message.status !== 'pending' || (message.action.type !== 'merge-pr' && message.action.type !== 'enable-automation') || staleChecked.has(message.id)) continue
       staleChecked.add(message.id)
       // A 409 is the answer "still open"; nothing to show.
       onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})

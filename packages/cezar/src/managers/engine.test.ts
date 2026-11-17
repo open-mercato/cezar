@@ -1874,6 +1874,79 @@ describe('ManagerEngine', () => {
       expect(requests.some((request) => request.path.endsWith('/enable'))).toBe(false);
     });
 
+    describe('outdated enable cards', () => {
+      const enable = { type: 'enable-automation', projectId: 'alpha', automationId: 'a1' } as const;
+      const watch = async (engine: ManagerEngine, id: string) => {
+        store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        engine.tick();
+        await settled(engine);
+      };
+
+      it('re-proposing after an edit dismisses the older card', async () => {
+        const engine = makeEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: enable });
+        if ('error' in first) throw first;
+        automationRevision = 2;
+        const second = await engine.propose(id, { action: enable });
+        if ('error' in second) throw second;
+        expect(second.actionId).not.toBe(first.actionId);
+        expect(store.message(id, first.actionId)).toMatchObject({ status: 'dismissed', result: 'Replaced by a newer proposal (revision 2)' });
+        expect(store.message(id, second.actionId)).toMatchObject({ status: 'pending' });
+        expect((await engine.summary(id))?.pendingActions).toBe(1);
+      });
+
+      it('a watch check dismisses a card whose automation was edited', async () => {
+        const engine = makeEngine();
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: enable });
+        if ('error' in proposed) throw proposed;
+        automationRevision = 2;
+        await watch(engine, id);
+        expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'dismissed', result: 'Automation changed since the proposal (rev 1 -> 2)' });
+        expect(requests.some((request) => request.path.endsWith('/enable'))).toBe(false);
+      });
+
+      it('a watch check leaves a current card, and one it cannot check', async () => {
+        let failing = false;
+        const engine = makeEngine({
+          request: async (path) => {
+            if (failing) throw new Error('offline');
+            if (/\/automations\/[^/]+$/.test(path)) return Response.json({ automation: { id: 'a1', revision: automationRevision, name: 'Nightly', enabled: false } });
+            return Response.json({ ok: true });
+          },
+        });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: enable });
+        if ('error' in proposed) throw proposed;
+        await watch(engine, id);
+        expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'pending' });
+        automationRevision = 2;
+        failing = true;
+        await watch(engine, id);
+        expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'pending' });
+      });
+
+      it('onlyIfStale dismisses a card whose automation was deleted or enabled', async () => {
+        let answer: () => Response = () => Response.json({ automation: { id: 'a1', revision: 1, name: 'Nightly', enabled: false } });
+        const engine = makeEngine({ request: async () => answer() });
+        const id = await create(engine);
+        const deleted = await engine.propose(id, { action: enable });
+        if ('error' in deleted) throw deleted;
+        expect(await engine.decide(id, deleted.actionId, 'dismiss', {}, true)).toMatchObject({ status: 409 });
+        answer = () => Response.json({ error: 'automation not found' }, { status: 404 });
+        expect(await engine.decide(id, deleted.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(store.message(id, deleted.actionId)).toMatchObject({ status: 'dismissed', result: 'Automation was deleted since the proposal' });
+
+        answer = () => Response.json({ automation: { id: 'a1', revision: 1, name: 'Nightly', enabled: false } });
+        const enabled = await engine.propose(id, { action: enable });
+        if ('error' in enabled) throw enabled;
+        answer = () => Response.json({ automation: { id: 'a1', revision: 1, name: 'Nightly', enabled: true } });
+        expect(await engine.decide(id, enabled.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(store.message(id, enabled.actionId)).toMatchObject({ status: 'dismissed', result: 'Automation is already enabled' });
+      });
+    });
+
     it('a watch never resumes the chat session, and the reverse', async () => {
       const engine = makeEngine({ github: readyPrGithub });
       const id = await create(engine);
