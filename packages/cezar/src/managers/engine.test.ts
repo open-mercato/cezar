@@ -3038,6 +3038,54 @@ describe('ManagerEngine', () => {
       expect(cards(id).map((message) => message.taskReport?.state)).toEqual(['needs-you', 'done']);
     });
 
+    // An idle close is housekeeping, not news (spec 2026-11-04-idle-closed-attention-state § Revision).
+    it('an idle close posts no card, buys no follow-up turn and raises no notification', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const waiting = run({ id: 'new-run', status: 'waiting', waitingSince: later(1) });
+      runs = [waiting];
+      backend.scripts.push(say('It is waiting on your answer.'));
+      engine.taskChanged('alpha', dataDir(), waiting, () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      const before = { messages: assistants(id).length, turns: backend.specs.length, raised: raised.length };
+
+      // The idle park keeps the wait; an older cezar (or a dispatched child) settled it `failed`.
+      const parked = { ...waiting, idleClosedAt: later(2) };
+      runs = [parked];
+      engine.taskChanged('alpha', dataDir(), parked, () => undefined);
+      const legacy = run({ id: 'new-run', status: 'failed', finishedAt: later(3), idleClosedAt: later(3), error: 'the session closed after inactivity' });
+      runs = [legacy];
+      engine.taskChanged('alpha', dataDir(), legacy, () => undefined);
+      await settled(engine);
+      expect({ messages: assistants(id).length, turns: backend.specs.length, raised: raised.length }).toEqual(before);
+      expect(store.state(id).followups).toEqual([]);
+    });
+
+    it('the watch check is not woken by an idle close', async () => {
+      let clock = Date.now();
+      const waiting = run({ id: 'r', status: 'waiting', waitingSince: new Date(clock).toISOString() });
+      runs = [waiting];
+      const engine = makeEngine({ now: () => clock, projects: async () => [{ ...connected, root, runs: () => runs }] });
+      const id = await create(engine, 15);
+      backend.scripts.push(say('One task waits on you.'));
+      clock += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+
+      runs = [{ ...waiting, idleClosedAt: new Date(clock).toISOString() }];
+      clock += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      runs = [run({ id: 'r', status: 'failed', finishedAt: new Date(clock).toISOString(), idleClosedAt: new Date(clock).toISOString() })];
+      clock += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id)).toHaveLength(1);
+    });
+
     it('ignores tasks it neither started nor follows, and history before a follow', async () => {
       const engine = followedEngine();
       const id = await create(engine, 0);

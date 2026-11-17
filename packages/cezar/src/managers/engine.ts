@@ -43,6 +43,7 @@ import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } fr
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
+import { isIdleParked } from '../runs/store.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
@@ -2220,7 +2221,8 @@ export class ManagerEngine {
       // A live session cannot change engine mid-turn: only a Continue takes a model.
       const run = scope.source?.runs().find((candidate) => candidate.id === input.runId);
       if (!run) return { error: 'task not found', status: 404 };
-      if (LIVE_STATUSES.has(run.status)) {
+      // An idle park has no live session, so a Continue may change its engine like a finished task's.
+      if (LIVE_STATUSES.has(run.status) && !isIdleParked(run)) {
         return { error: `task ${input.runId} is ${run.status}: --model and --effort apply only when continuing a finished task. Send the message without them, or wait for it to finish`, status: 409 };
       }
       const issue = await this.modelIssue(run.runner ?? 'claude', input.model, input.effort);

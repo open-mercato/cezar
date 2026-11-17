@@ -102,7 +102,7 @@ import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
-import { artifactsDir } from '../runs/store.ts';
+import { artifactsDir, isIdleParked } from '../runs/store.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -1651,7 +1651,7 @@ export class RunManager {
       newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
-      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status)).length,
+      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -2576,7 +2576,8 @@ export class RunManager {
     this.noteDeferredLostInRestart();
     const live = this.store
       .listRuns()
-      .filter((r) => ['queued', 'waiting', 'running'].includes(r.status))
+      // An idle park has no process to recover: it rests as it is until a message reopens it.
+      .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     // A crash never reaches `dropActive`, so its temp directory (#785) outlived the run.
     // Startup is the one moment we know which runs are still live, so sweep every other
@@ -4676,6 +4677,15 @@ export class RunManager {
         this.reportSettledChildToParent(runId);
         return true;
       }
+      if (run && isIdleParked(run) && !this.starting.has(runId)) {
+        const finishedAt = new Date().toISOString();
+        for (const step of run.steps) {
+          if (step.status === 'running' || step.status === 'waiting') this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt });
+        }
+        this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+        return true;
+      }
       // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
       // Refusing here let the run start right after the user cancelled it.
       if (!this.starting.has(runId)) {
@@ -5091,7 +5101,7 @@ export class RunManager {
    * then offers "Continue" instead.
    */
   sendMessage(runId: string, content: PastedContent[]): boolean {
-    const delivered = this.deliverMessage(runId, content, true);
+    const delivered = this.deliverMessage(runId, content, true) || this.reopenIdleParked(runId, content);
     if (delivered) {
       const state = this.active.get(runId);
       if (state) {
@@ -5104,6 +5114,18 @@ export class RunManager {
       this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
     }
     return delivered;
+  }
+
+  /**
+   * A message to an idle park reopens its session exactly as Continue does: to the user the
+   * session never closed (spec 2026-11-04-idle-closed-attention-state § Revision).
+   */
+  private reopenIdleParked(runId: string, content: PastedContent[]): boolean {
+    const run = this.store.getRun(runId);
+    if (!run || !isIdleParked(run) || this.active.has(runId) || this.starting.has(runId)) return false;
+    const text = messageText(content);
+    if (continuePromptRefusal(text, content)) return false;
+    return this.continueRun(runId, { text, images: content.filter((block) => block.type !== 'text') }).ok;
   }
 
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
@@ -5291,6 +5313,16 @@ export class RunManager {
       if (!state.finishRequested) state.acceptReviewOnDrop = true;
       return true;
     }
+    if (run && isIdleParked(run) && !this.isActive(runId)) {
+      const at = new Date().toISOString();
+      for (const step of run.steps) {
+        if (step.status === 'waiting' || step.status === 'running') this.store.updateStep(runId, step.id, { status: 'done', finishedAt: at });
+      }
+      this.clearPendingAsk(runId);
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user' });
+      void this.settleSuccess(runId);
+      return true;
+    }
     if (run?.status === 'review' && !this.isActive(runId) && run.worktree === false && !run.readOnly) {
       void this.finishReview(runId);
       return true;
@@ -5352,7 +5384,7 @@ export class RunManager {
     }
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!CONTINUABLE_STATUSES.includes(run.status)
+    if (!CONTINUABLE_STATUSES.includes(run.status) && !isIdleParked(run)
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
@@ -5456,6 +5488,14 @@ export class RunManager {
     // A human turn resets attempted candidates; the policy snapshot and account holds remain.
     if (!deferForCapacity && run.fallbackEpisode) this.store.updateRun(runId, { fallbackEpisode: undefined });
 
+    if (isIdleParked(run)) {
+      // The parked turn is over; the reopen is a new step, like any Continue.
+      const at = new Date().toISOString();
+      for (const step of run.steps) {
+        if (step.status === 'waiting' || step.status === 'running') this.store.updateStep(runId, step.id, { status: 'done', finishedAt: at });
+      }
+      this.clearPendingAsk(runId);
+    }
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
@@ -6194,6 +6234,9 @@ export class RunManager {
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=cancelled`);
+      } else if (this.active.get(runId) === state && this.idleParks(runId, state)) {
+        state.askPark = undefined;
+        this.parkIdleClosed(runId, finishedAt());
       } else if (state.askPark === 'waiting' && this.active.get(runId) === state) {
         state.askPark = undefined;
         this.settleUnansweredPark(runId, finishedAt(), state.monitorHandoff === true);
@@ -6680,6 +6723,8 @@ export class RunManager {
         ...(idleClosed ? { idleClosedAt: finishedAt } : {}),
       });
       emit({ type: 'lifecycle', message: idleClosed ? IDLE_CLOSED_LIFECYCLE : `run failed — ${runError}` });
+    } else if (this.idleParks(runId, state)) {
+      this.parkIdleClosed(runId, finishedAt);
     } else if (askPark === 'waiting') {
       this.settleUnansweredPark(runId, finishedAt, monitorHandoff);
     } else {
@@ -6919,9 +6964,10 @@ export class RunManager {
           if (state.askPark === 'abandoned') this.finishStep(runId, node.id, 'done', undefined, emit);
           return null;
         }
-        // Preserve the v1 safety bound on an ordinary terminal wait: session closure caused by
-        // inactivity is not evidence that the task completed. The review-gate path remains a
-        // needs-you state with its changes available to the user.
+        // Inactivity is not evidence that the task completed: the park stays as it was, and
+        // `execute` settles it as an idle park. A dispatched child still settles below.
+        if (this.idleParks(runId, state)) return null;
+        // The review-gate path remains a needs-you state with its changes available to the user.
         if (await this.idleClosedFails(runId, state)) {
           const error = this.inactivityFailureMessage();
           // Flagged so the thread does not render the idle close as a red step failure.
@@ -9247,6 +9293,20 @@ export class RunManager {
   }
 
   /**
+   * Whether an idle close leaves the run parked as it was (spec 2026-11-04-idle-closed-attention-state
+   * § Revision): housekeeping, not a state change. A dispatched child still settles, because its
+   * parent waits for a report that only a settled child sends.
+   */
+  private idleParks(runId: string, state: ActiveRun): boolean {
+    return state.idleClosed === true && !state.cancelled && this.store.getRun(runId)?.dispatch?.parentRunId === undefined;
+  }
+
+  /** The record keeps its status, steps and question; only the "no process" fact is stamped. */
+  private parkIdleClosed(runId: string, at: string): void {
+    this.store.updateRun(runId, { idleClosedAt: at });
+  }
+
+  /**
    * Inactivity is bounded local evidence that the last turn did not explicitly
    * settle the task. DONE/ASK/MONITORING branches run first; this conservative
    * fallback keeps an ordinary unfinished wait from wearing a success badge
@@ -9657,10 +9717,14 @@ export class RunManager {
     state.idleTimer = setTimeout(() => {
       if (state.session?.open && !state.cancelled) {
         state.idleClosed = true;
-        this.store.appendEvent(runId, {
-          type: 'lifecycle',
-          message: `session closed after ${Math.round(timeoutMs / 60_000)}m of inactivity`,
-        });
+        // No transcript notice: the thread ends on its last real message (idle park). A child's
+        // settle still records why it stopped.
+        if (this.store.getRun(runId)?.dispatch?.parentRunId !== undefined) {
+          this.store.appendEvent(runId, {
+            type: 'lifecycle',
+            message: `session closed after ${Math.round(timeoutMs / 60_000)}m of inactivity`,
+          });
+        }
         state.session.end();
       }
     }, timeoutMs);
