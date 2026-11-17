@@ -146,7 +146,7 @@ jobs:
   # `publish-snapshot` is left out on purpose — it is conditional and `skipped` on most events.
   ci-ok:
     name: CI ok
-    needs: [verify, vitest]
+    needs: [verify, vitest, webhooks-cross-platform]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
