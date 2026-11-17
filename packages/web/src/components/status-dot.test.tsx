@@ -22,7 +22,6 @@ describe('StatusDot', () => {
       { tone: 'violet', expected: 'bg-violet' },
       { tone: 'info', expected: 'bg-info' },
       { tone: 'neutral', expected: 'bg-soft-foreground' },
-      { tone: 'idle', expected: 'bg-conflict' },
     ] as const satisfies readonly { tone: StatusDotTone; expected: string }[])(
       '$tone',
       ({ tone, expected }) => {

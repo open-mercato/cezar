@@ -330,9 +330,9 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
-  /** ISO-8601 instant the inactivity timer closed a session nobody replied to, settling the run
-   *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
-   *  failure (spec 2026-11-04-idle-closed-attention-state). */
+  /** ISO-8601 instant the inactivity timer closed the session (spec 2026-11-04-idle-closed-attention-state).
+   *  On a `waiting` run: housekeeping, no live process, and a message reopens it. On a `failed` run
+   *  (older records, dispatched children): it settled the run, and the cockpit shows a quiet "idle". */
   idleClosedAt: z.string().optional(),
   /** The manager that started the task (spec 2026-10-31-managers). */
   startedByManager: z.object({ id: z.string(), name: z.string() }).optional(),
@@ -539,7 +539,7 @@ export const runIndexEntrySchema = z.object({
   /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
    *  so a cross-project row says "needs you" like every other surface rather than "failed". */
   awaitingAnswerSince: z.string().optional(),
-  /** A `failed` run the inactivity timer closed — `deriveAttention` paints it "closed · idle". */
+  /** The inactivity timer closed the run's session: housekeeping on `waiting`, a quiet "idle" on legacy `failed`. */
   idleClosedAt: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display

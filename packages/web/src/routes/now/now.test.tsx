@@ -206,7 +206,7 @@ describe('NowView — the three sections', () => {
     expect(onArchiveFinished).toHaveBeenCalledTimes(1)
   })
 
-  it('tells done, cancelled and closed · idle apart by shape, not by colour alone (WCAG 1.4.1)', () => {
+  it('tells done, cancelled and idle apart by shape, not by colour alone (WCAG 1.4.1)', () => {
     renderNow({
       runs: [
         run({ id: 'ok', title: 'Shipped it', status: 'done', finishedAt: ago(60_000) }),
@@ -219,7 +219,7 @@ describe('NowView — the three sections', () => {
     expect(mark('ok').getAttribute('data-tone')).toBe('success')
     expect(mark('stop').getAttribute('data-state')).toBe('cancelled')
     expect(mark('idle').getAttribute('data-state')).toBe('idle')
-    expect(within(row('idle')).getByRole('img', { name: 'closed · idle' })).toBe(mark('idle'))
+    expect(within(row('idle')).getByRole('img', { name: 'idle' })).toBe(mark('idle'))
     const shapes = new Set(['ok', 'stop', 'idle'].map((id) => mark(id).querySelector('svg')?.getAttribute('class')))
     expect(shapes.size).toBe(3)
     // The title link is described by the state, so a keyboard user hears it with the task.

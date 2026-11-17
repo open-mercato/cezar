@@ -218,7 +218,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
-import { artifactsDir } from '../runs/store.ts';
+import { artifactsDir, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
@@ -3635,7 +3635,8 @@ export function createApp(deps: ServerDeps) {
   const activeRunCount = (projectId: string): number => {
     const ctx = contexts.peek(projectId);
     if (!ctx) return 0;
-    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length;
+    // An idle park has no agent process to strand.
+    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status) && !isIdleParked(run)).length;
   };
 
   // Workspace-level by design: update state spans project and global installs,
@@ -5803,7 +5804,7 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
-        const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
+        const engineOwnsSession = (run.status === 'running' || run.status === 'queued' || run.status === 'waiting') && !isIdleParked(run);
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
@@ -7631,7 +7632,7 @@ export function createApp(deps: ServerDeps) {
     if (action === pullRepo || action === syncRepo) {
       const live = project.store
         .listRuns()
-        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting'));
+        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting') && !isIdleParked(r));
       if (live) return { error: 'an in-place task is running in this checkout — wait for it to finish' };
     }
     const result = await action(info.root);

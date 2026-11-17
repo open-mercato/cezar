@@ -17,7 +17,7 @@ export function statusMarkState(attention: Pick<Attention, 'bucket' | 'label'>):
   if (attention.bucket !== 'none') return undefined
   if (attention.label === 'done') return 'done'
   if (attention.label === 'cancelled') return 'cancelled'
-  if (attention.label === 'closed · idle') return 'idle'
+  if (attention.label === 'idle') return 'idle'
   return undefined
 }
 
@@ -25,7 +25,7 @@ const GLYPH: Record<StatusMarkState, LucideIcon> = {
   done: CircleCheckIcon,
   failed: CircleXIcon,
   cancelled: CircleSlashIcon,
-  // Paused, not broken: Continue still picks an idle-closed run up.
+  // Paused, not broken: a message still picks an idle-closed run up.
   idle: CirclePauseIcon,
 }
 
@@ -35,7 +35,7 @@ const INK: Record<StatusMarkState, string> = {
   done: 'text-success-strong',
   failed: 'text-danger',
   cancelled: 'text-soft-foreground',
-  idle: 'text-conflict',
+  idle: 'text-soft-foreground',
 }
 
 /**

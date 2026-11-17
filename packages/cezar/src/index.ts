@@ -22,7 +22,7 @@ import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
-import { RunStore } from './runs/store.ts';
+import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
@@ -477,7 +477,7 @@ async function serveCommand(
   }
   const recovered = store
     .listRuns()
-    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
+    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r)).length;
   await recoverWithProviderRuntimeAuthObservation(
     store,
     () => manager.recover(),

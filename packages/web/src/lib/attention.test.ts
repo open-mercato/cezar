@@ -209,11 +209,20 @@ describe('a run the inactivity timer closed (spec 2026-11-04-idle-closed-attenti
   const AT = '2026-11-04T10:00:00.000Z'
   const idle = run({ status: 'failed', idleClosedAt: AT })
 
-  it('is "closed · idle" in orange: not an error, not "needs you", no notification', () => {
-    expect(deriveAttention(idle)).toEqual({ bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' })
+  it('a legacy failed record is a quiet neutral "idle": not an error, not "needs you", no notification', () => {
+    expect(deriveAttention(idle)).toEqual({ bucket: 'none', tone: 'neutral', pulse: false, label: 'idle' })
     expect(wantsAttention(idle)).toBe(false)
     expect(isNeedsYouStatus(idle)).toBe(false)
     expect(isIdleClosed(idle)).toBe(true)
+  })
+
+  it('a waiting run the timer closed stays plain "needs you" — no idle special case', () => {
+    const parked = run({ status: 'waiting', idleClosedAt: AT })
+    expect(deriveAttention(parked)).toEqual(deriveAttention(run({ status: 'waiting' })))
+    expect(deriveAttention(parked)).toMatchObject({ bucket: 'waiting', label: 'needs you' })
+    expect(isIdleClosed(parked)).toBe(false)
+    expect(runClosure(parked)).toBeUndefined()
+    expect(isNeedsYouStatus(parked)).toBe(true)
   })
 
   it('an unanswered question stays yellow "needs you"', () => {

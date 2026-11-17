@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { GithubData, ManagerSnapshot } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
-import { buildSnapshot, findRun, gateAttention, prAttention, readColdRuns, snapshotTasks, taskAttention, taskDetailRows, type ManagerProjectSource } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, prAttention, readColdRuns, snapshotTasks, taskAttention, taskDetailRows, taskEventOf, type ManagerProjectSource } from './snapshot.ts';
 
 const NOW = Date.parse('2026-10-31T12:00:00.000Z');
 const NOW_ISO = new Date(NOW).toISOString();
@@ -154,6 +154,21 @@ describe('task-needs-you', () => {
     const closed = run({ id: 'r', status: 'failed', finishedAt: '2026-10-31T11:30:00.000Z', awaitingAnswerSince: '2026-10-31T11:30:00.000Z', waitingSince: at });
     expect(needsYou(closed)[0]?.key).toBe(key);
     expect(needsYou({ ...live, waitingSince: '2026-10-31T11:45:00.000Z' })[0]?.key).not.toBe(key);
+  });
+
+  // spec 2026-11-04-idle-closed-attention-state § Revision: an idle close is not news.
+  it('an idle close neither adds attention nor changes the wait it already reported', () => {
+    const live = run({ id: 'r', status: 'waiting', waitingSince: at, askParked: true });
+    const parked = { ...live, idleClosedAt: '2026-10-31T11:30:00.000Z' };
+    expect(taskAttention('p', [parked], NOW)).toEqual(taskAttention('p', [live], NOW));
+    expect(taskEventOf('p', parked)).toEqual(taskEventOf('p', live));
+  });
+
+  it('an idle close settled `failed` (older records, dispatched children) is never a failure to report', () => {
+    const legacy = run({ id: 'r', status: 'failed', finishedAt: at, idleClosedAt: at, error: 'the session closed after inactivity' });
+    expect(taskAttention('p', [legacy], NOW)).toEqual([]);
+    expect(taskEventOf('p', legacy)).toBeUndefined();
+    expect(taskEventOf('p', { ...legacy, idleClosedAt: undefined })?.state).toBe('failed');
   });
 
   it('a record with no stamp still has a stable key', () => {

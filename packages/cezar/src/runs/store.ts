@@ -324,9 +324,10 @@ export const runRecordSchema = z.object({
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
   /**
-   * When the inactivity timer closed a session nobody replied to and the run settled `failed`
-   * (spec 2026-11-04-idle-closed-attention-state). The cockpit paints it "closed · idle" instead
-   * of red. Same invariant as `awaitingAnswerSince`: only a `failed` run carries it.
+   * When the inactivity timer closed the session of a run parked on the user. Housekeeping, not a
+   * state change (spec 2026-11-04-idle-closed-attention-state § Revision): the run stays `waiting`
+   * with no process, and the next message reopens it. Older records and dispatched children carry
+   * it on a `failed` run. Only a `waiting` or `failed` run carries it.
    */
   idleClosedAt: z.string().datetime().optional().catch(undefined),
   /** The manager whose `task create` started this run (spec 2026-10-31-managers). */
@@ -982,6 +983,14 @@ function createdPrUrl(haystack: string): string | undefined {
 }
 
 /**
+ * A `waiting` run whose session the inactivity timer closed: no process and no slot, but the same
+ * state to the user, and a message reopens it (spec 2026-11-04-idle-closed-attention-state).
+ */
+export function isIdleParked(run: Pick<RunRecord, 'status' | 'idleClosedAt'>): boolean {
+  return run.status === 'waiting' && run.idleClosedAt !== undefined;
+}
+
+/**
  * Reconcile one record just read off disk with the fact that whichever process wrote it is gone.
  *
  * Mutates and returns `run`. Extracted from `RunStore.open` so the read-only index reader
@@ -1002,7 +1011,9 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // all still work.
   if (
     !opts?.keepLive &&
-    (run.status === 'running' || run.status === 'queued' || run.status === 'waiting')
+    (run.status === 'running' || run.status === 'queued' || run.status === 'waiting') &&
+    // An idle-parked run has no process to lose: it is a rest state, not a ghost.
+    !isIdleParked(run)
   ) {
     // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
@@ -1030,7 +1041,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   if (run.status !== 'failed') run.autoResumeAt = undefined;
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
-  if (run.status !== 'failed') run.idleClosedAt = undefined;
+  if (run.status !== 'failed' && run.status !== 'waiting') run.idleClosedAt = undefined;
   if (run.status !== 'waiting' && run.awaitingAnswerSince === undefined) run.waitingSince = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
@@ -1552,7 +1563,8 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
-      normalized.idleClosedAt = undefined;
+      // An idle park keeps its marker through its own `waiting` writes; a reopen retires it.
+      if (normalized.status !== 'waiting' || run.status !== 'waiting') normalized.idleClosedAt = undefined;
     }
     // Stamped here so no park site can forget it; every wait reaches the record through this line.
     if (resultingStatus === 'waiting') {

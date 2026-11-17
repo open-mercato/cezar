@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import quotaFailure from './__fixtures__/codex-usage-limit.json'
 
 import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
+import { isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiMessageItem, UiToolItem } from '@open-mercato/cezar-api-client'
 
@@ -828,19 +829,21 @@ describe('threadFooter', () => {
     expect(threadFooter('cancelled', undefined, false, false, undefined, {})).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
   })
 
-  it('an idle-closed run reads as closed, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
+  it('a legacy idle-closed run reads like done, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
     const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
-    expect(threadFooter('failed', IDLE, false, true)).toEqual({
-      state: 'closed',
-      tone: 'dim',
-      label: 'Closed after inactivity — Continue to pick it up',
-    })
+    expect(threadFooter('failed', IDLE, false, true)).toEqual(threadFooter('done'))
+    expect(threadFooter('failed', IDLE, false, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
     // Without the marker (an old record) it is still the red failure it always was.
     expect(threadFooter('failed', IDLE)).toMatchObject({ tone: 'danger' })
     // An unanswered question wins: the answer, not Continue, is the way forward.
     expect(threadFooter('failed', IDLE, true, true)).toMatchObject({
       label: 'Session closed — waiting for your answer, which reopens it',
     })
+  })
+
+  it('a waiting run the timer closed keeps the plain waiting footer — no idle special case', () => {
+    const parked = { status: 'waiting', idleClosedAt: '2026-11-04T10:00:00.000Z' } as const
+    expect(threadFooter(parked.status, undefined, isAwaitingAnswer(parked), isIdleClosed(parked))).toEqual({ state: 'waiting' })
   })
 })
 
