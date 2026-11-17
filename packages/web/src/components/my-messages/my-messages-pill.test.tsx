@@ -38,6 +38,22 @@ afterEach(() => {
 })
 
 describe('MyMessagesPill', () => {
+  it('keeps every row when a day label recurs (a queued message sits between same-day turns)', async () => {
+    const earlier = '2020-01-02T10:00:00.000Z'
+    const recurring: MyMessage[] = [
+      { id: 'task', order: 0, ts: earlier, text: 'Opening task', images: 0, files: 0 },
+      { id: 'queued:q1', order: 0.5, ts: today, text: 'Queued later', images: 0, files: 0, pending: 'queued' },
+      { id: 'turn-seq-4:user', order: 4, ts: earlier, text: 'Same day as the task', images: 0, files: 0 },
+    ]
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(<MyMessagesPill nav={fakeNav({ items: recurring, targets: { onScreen: [] } })} onLatest={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Your messages' }))
+    await screen.findByRole('dialog')
+    expect(screen.getAllByRole('option').map((option) => option.getAttribute('data-message-id'))).toEqual(['task', 'queued:q1', 'turn-seq-4:user'])
+    expect(error.mock.calls.flat().join(' ')).not.toMatch(/same key/)
+    error.mockRestore()
+  })
+
   it('steps with ▲ / ▼, disables a side with nowhere to go, and keeps Jump to latest', () => {
     const nav = fakeNav()
     const onLatest = vi.fn()

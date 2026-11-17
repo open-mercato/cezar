@@ -267,8 +267,9 @@ export function MyMessagesList({
       onKeyDown={onKeyDown}
       className="max-h-[328px] overflow-y-auto overscroll-contain p-1 outline-none [scrollbar-width:thin] max-md:max-h-none max-md:flex-1"
     >
-      {groups.map((group) => (
-        <div key={group.day} role="presentation">
+      {groups.map((group, index) => (
+        // A queued message is stamped later than the turns below it, so a day label can recur.
+        <div key={`${index}:${group.day}`} role="presentation">
           <div role="presentation" data-slot="my-messages-day" className="sticky top-0 z-[1] bg-popover px-2 pt-2 pb-1 text-meta font-medium text-soft-foreground">
             {group.day}
           </div>
