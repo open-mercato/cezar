@@ -55,7 +55,7 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
   return <div data-slot="editor-tracker" className="flex flex-col gap-3 text-sm">
     {metadata.isPending ? <p>Loading tracker events…</p> : null}
     {metadata.isError || (first && !first.available) ? <div role="alert">
-      <p>{first && !first.available ? first.reason : 'Could not load tracker events.'} Check the project’s Issue tracker settings.</p>
+      <p>{first && !first.available ? first.reason : 'Could not load tracker events.'} Check the project’s issue tracker in Settings → Integrations.</p>
       <Button variant="outline" size="sm" onClick={() => void metadata.refetch()}>Retry</Button>
     </div> : null}
     {ready ? <>

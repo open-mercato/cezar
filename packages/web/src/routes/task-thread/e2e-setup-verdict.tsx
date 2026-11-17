@@ -26,7 +26,7 @@ function Verdict({ run }: { run: ApiRun }) {
   const failedStep = run.steps.find((step) => step.status === 'failed' && step.id !== 'pr')
   // The setup's own draft PR (its `github.draft-pr` node), http(s) only (#431).
   const prUrl = run.pullRequestUrl && /^https?:\/\//.test(run.pullRequestUrl) ? run.pullRequestUrl : undefined
-  const settings = <Link className="font-medium underline underline-offset-2" to="/settings/integrations">Settings → External integrations</Link>
+  const settings = <Link className="font-medium underline underline-offset-2" to="/settings/integrations?integration=e2e">Settings → Integrations</Link>
 
   return (
     <div

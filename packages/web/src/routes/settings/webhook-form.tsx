@@ -12,6 +12,8 @@ export type WebhookDraft = { format: CreateWebhook['format']; name: string; url:
 export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
   return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false }
 }
+const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.v1': 'Discord' } as const
+const serviceName = (format: string) => serviceNames[format as keyof typeof serviceNames] ?? format
 function Field({ id, label, children }: { id?: string; label: string; children: ReactNode }) {
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-ui font-medium">{label}</label> : <span className="text-ui font-medium">{label}</span>}{children}</div>
 }
@@ -22,56 +24,51 @@ function Choice<T extends string>({ id, slot, value, options, onChange }: { id: 
     <SelectContent position="popper">{options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
   </Select>
 }
-export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
+/** Custom, Slack and Discord receivers, each configured from its own Settings → Integrations tile. */
+export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, format, compact = false, guideHref, save, submitLabel }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; format: WebhookDraft['format']; /** The connect wizard explains the URL itself and tucks event selection under Advanced. */ compact?: boolean; guideHref: string; submitLabel?: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
   const prefix = useId()
-  const { format, name, url, profile, preset, events, scope, graceSeconds, local, scheduled } = draft
+  const { name, url, profile, preset, events, scope, graceSeconds, local, scheduled } = draft
   const change = <K extends keyof WebhookDraft>(key: K, value: WebhookDraft[K]) => setDraft({ ...draft, [key]: value })
   const [error, setError] = useState('')
   const chat = format !== 'cezar.json.v1'
-  const destinationName = format === 'slack.v1' ? 'Slack' : 'Discord'
+  const destinationName = serviceName(format)
   let suggestedFormat: WebhookDraft['format'] | undefined
   try {
     const host = new URL(url).hostname
     if (host === 'hooks.slack.com') suggestedFormat = 'slack.v1'
     if (['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com'].includes(host)) suggestedFormat = 'discord.v1'
   } catch { /* Incomplete input. */ }
-  const changeFormat = (value: WebhookDraft['format']) => setDraft({ ...draft, format: value, local: value === 'cezar.json.v1' && local })
+  const eventsFields = <>
+    <Field id={`${prefix}-events`} label="Events">
+      <Choice id={`${prefix}-events`} slot="webhook-preset" value={preset} onChange={value => change('preset', value)} options={(['attention', 'all', 'custom'] as const).map(value => ({ value, label: presetLabels[value] }))} />
+    </Field>
+    {preset === 'custom' && <fieldset className="flex flex-col gap-2"><legend className="mb-1 text-ui font-medium">Choose events</legend>{Object.entries(eventLabels).filter(([type]) => type !== 'webhook.test').map(([type, label]) => <label key={type} className="flex items-center gap-2 text-ui"><input type="checkbox" checked={events.includes(type as WebhookTaskEventType)} onChange={event => change('events', event.target.checked ? [...events, type as WebhookTaskEventType] : events.filter(value => value !== type))} />{label}</label>)}</fieldset>}
+  </>
   return <form className="flex flex-col gap-4" onSubmit={event => {
     event.preventDefault()
     if (pending || blocked) return
+    if (suggestedFormat && suggestedFormat !== format) { setError(`Configure this webhook in Integrations → ${serviceName(suggestedFormat)}.`); return }
     const settings = { format, name, ...(url || !receiver ? { url } : {}), profile, preset, events, scope, graceSeconds, allowLocalNetwork: chat ? false : local, includeScheduledFailures: scheduled }
     const parsed = receiver ? updateWebhookSchema.safeParse({ ...settings, expectedRevision: receiver.revision }) : createWebhookSchema.safeParse(settings)
     if (!parsed.success) { setError([...new Set(parsed.error.issues.map(issue => issue.message.replace(/\.?$/, '.')))].join(' ')); return }
     setError(''); save(parsed.data)
   }}>
-    <Field id={`${prefix}-destination`} label="Destination">
-      <Choice id={`${prefix}-destination`} slot="webhook-destination" value={format} onChange={changeFormat} options={[
-        { value: 'cezar.json.v1', label: 'Custom receiver (signed cezar JSON)' },
-        { value: 'slack.v1', label: 'Slack channel (Incoming Webhook)' },
-        { value: 'discord.v1', label: 'Discord channel (Webhook URL)' },
-      ]} />
-    </Field>
+    <Field label="Destination"><p className="text-ui">{format === 'cezar.json.v1' ? 'Your own HTTPS endpoint (signed JSON)' : format === 'slack.v1' ? 'Slack channel (Incoming Webhook)' : 'Discord channel (Webhook URL)'}</p></Field>
     <Field id={`${prefix}-name`} label="Name"><Input id={`${prefix}-name`} value={name} onChange={event => change('name', event.target.value)} maxLength={100} required autoComplete="off" /></Field>
     <Field id={`${prefix}-url`} label={chat ? 'Webhook URL' : 'Receiver URL'}>
       <Input id={`${prefix}-url`} type="url" value={url} onChange={event => change('url', event.target.value)} required={!receiver} autoComplete="off" placeholder={receiver ? 'Leave blank to keep the current URL' : format === 'slack.v1' ? 'https://hooks.slack.com/services/…' : format === 'discord.v1' ? 'https://discord.com/api/webhooks/…' : 'https://your-receiver.example/webhook'} />
       {receiver && <p className={hintStyle}>Current: {receiver.destination} (path hidden)</p>}
       {url.startsWith('http:') && <p className="text-label text-warning">Plain HTTP is not encrypted. Use HTTPS outside a trusted local network.</p>}
-      {!chat && suggestedFormat && <div role="status" className="flex flex-wrap items-center gap-2 text-label text-warning">
-        <span>This is a {suggestedFormat === 'slack.v1' ? 'Slack' : 'Discord'} webhook. Switch the destination to post channel messages.</span>
-        <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => changeFormat(suggestedFormat!)}>Use {suggestedFormat === 'slack.v1' ? 'Slack' : 'Discord'}</Button>
-      </div>}
-      {format === 'slack.v1' && <p className={hintStyle}>In Slack, create an app with an Incoming Webhook, install it in your channel and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/" target="_blank" rel="noreferrer">Slack setup guide</a></p>}
-      {format === 'discord.v1' && <p className={hintStyle}>In Discord, open Server Settings → Integrations → Webhooks, create one and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord setup guide</a></p>}
+      {suggestedFormat && suggestedFormat !== format && <p role="status" className="text-label text-warning">Configure this webhook in Integrations → {serviceName(suggestedFormat)}.</p>}
+      {!compact && format === 'slack.v1' && <p className={hintStyle}>In Slack, create an app with an Incoming Webhook, install it in your channel and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/" target="_blank" rel="noreferrer">Slack setup guide</a></p>}
+      {!compact && format === 'discord.v1' && <p className={hintStyle}>In Discord, open Server Settings → Integrations → Webhooks, create one and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord setup guide</a></p>}
       {chat ? <p className={hintStyle}>Keep this URL secret — anyone who has it can post to the channel. {destinationName} receivers need no signing key.</p> : <>
         <label className="flex items-start gap-2 text-ui"><input type="checkbox" className="mt-0.5" checked={local} onChange={event => change('local', event.target.checked)} />Allow a receiver on this computer or private network</label>
         {local && <p className={hintStyle}>Tests will contact this private address. Hosted cezar sends to public HTTPS receivers only.</p>}
         <a className="text-label text-muted-foreground underline underline-offset-2 hover:text-foreground" href={`${guideHref}#external-automation-receivers`} target="_blank" rel="noreferrer">How to build a receiver</a>
       </>}
     </Field>
-    <Field id={`${prefix}-events`} label="Events">
-      <Choice id={`${prefix}-events`} slot="webhook-preset" value={preset} onChange={value => change('preset', value)} options={(['attention', 'all', 'custom'] as const).map(value => ({ value, label: presetLabels[value] }))} />
-    </Field>
-    {preset === 'custom' && <fieldset className="flex flex-col gap-2"><legend className="mb-1 text-ui font-medium">Choose events</legend>{Object.entries(eventLabels).filter(([type]) => type !== 'webhook.test').map(([type, label]) => <label key={type} className="flex items-center gap-2 text-ui"><input type="checkbox" checked={events.includes(type as WebhookTaskEventType)} onChange={event => change('events', event.target.checked ? [...events, type as WebhookTaskEventType] : events.filter(value => value !== type))} />{label}</label>)}</fieldset>}
+    {!compact && eventsFields}
     <Field id={`${prefix}-profile`} label="Message content">
       <Choice id={`${prefix}-profile`} slot="webhook-profile" value={profile} onChange={value => change('profile', value)} options={[
         { value: 'minimal', label: 'Minimal — IDs, status and your own title' },
@@ -91,6 +88,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       }, null, 2)}</pre>
     </details>}
     <details><summary className="cursor-pointer text-ui font-medium">Advanced</summary><div className="mt-3 flex flex-col gap-4">
+      {compact && eventsFields}
       <Field id={`${prefix}-scope`} label="Tasks">
         <Choice id={`${prefix}-scope`} slot="webhook-scope" value={scope} onChange={value => change('scope', value)} options={(['main_and_questions', 'every_task'] as const).map(value => ({ value, label: scopeLabels[value] }))} />
       </Field>
@@ -101,12 +99,12 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       <label className="flex items-start gap-2 text-ui"><input type="checkbox" className="mt-0.5" checked={scheduled} onChange={event => change('scheduled', event.target.checked)} />Include failures that will resume automatically (always included in All results)</label>
     </div></details>
     {error && <p role="alert" className="text-ui text-danger">{error}</p>}
-    <div><Button type="submit" disabled={pending || blocked}>{pending ? 'Saving…' : receiver ? 'Review changes' : 'Save receiver'}</Button></div>
+    <div><Button type="submit" disabled={pending || blocked}>{pending ? 'Saving…' : receiver ? 'Review changes' : submitLabel ?? 'Save receiver'}</Button></div>
   </form>
 }
 
 function ChatPreview({ format, profile }: { format: WebhookDraft['format']; profile: WebhookDraft['profile'] }) {
-  const service = format === 'slack.v1' ? 'Slack' : 'Discord'
+  const service = serviceName(format)
   return <details>
     <summary className="cursor-pointer text-ui font-medium">Preview {service} message · {profile === 'minimal' ? 'Minimal' : 'Standard'}</summary>
     <p className={`mt-2 ${hintStyle}`}>Example data only — nothing is sent.</p>

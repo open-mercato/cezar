@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({ list: vi.fn(), deliveries: vi.fn(), activity: vi
 vi.mock('@/api/client', () => ({ webhookApi: api, getSelfUpdate: async () => ({ version: 'dev', installKind: 'checkout' }) }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
 const receiver = { kind: 'live', id: 'r', name: 'Alerts', format: 'cezar.json.v1', destination: 'https://example.com/', state: 'active', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'every_task', graceSeconds: 180, allowLocalNetwork: false, includeScheduledFailures: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }
-function mount(search: string) { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
+function mount(search: string, format: 'cezar.json.v1' | 'slack.v1' | 'discord.v1' = 'cezar.json.v1') { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection format={format} /></MemoryRouter></QueryClientProvider>) }
 beforeEach(() => {
  vi.stubGlobal('EventSource', undefined)
  api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
@@ -50,11 +50,11 @@ it('editing delivery settings warns an in-flight request may still arrive', asyn
  expect(dialog.textContent).toMatch(/already sending|in.flight|may still arrive/i)
 })
 
-it.each(['slack.v1', 'discord.v1'].flatMap(format => ['http_401', 'http_403'].map(reason => ({ format, reason }))))('native $format $reason gives URL repair advice', async({format, reason})=>{
+it.each((['slack.v1', 'discord.v1'] as const).flatMap(format => ['http_401', 'http_403'].map(reason => ({ format, reason }))))('native $format $reason gives URL repair advice', async({format, reason})=>{
  api.list.mockResolvedValue({receivers:[{...receiver,format}],history:[],historyCount:0,changeSequence:0,webhookHealth:{status:'ready'}})
  api.test.mockResolvedValue({deliveryId:'test-auth'})
  api.deliveries.mockResolvedValue({receiver:{...receiver,format,state:'disabled'},items:[{deliveryId:'test-auth',status:'failed',reason}],total:1,timezone:'UTC'})
- mount('');fireEvent.click(await screen.findByRole('button',{name:'Send test'}))
+ mount('', format);fireEvent.click(await screen.findByRole('button',{name:'Send test'}))
  expect(await screen.findByText(/Check.*webhook URL/)).toBeTruthy()
  expect(screen.queryByText(/signing key in its verifier/)).toBeNull()
 })
@@ -70,7 +70,7 @@ it('retains native URL advice after the tested receiver is deleted', async()=>{
  api.list.mockResolvedValue({receivers:[{...receiver,format:'discord.v1'}],history:[],historyCount:0,changeSequence:0,webhookHealth:{status:'ready'}})
  api.test.mockResolvedValue({deliveryId:'test-auth'})
  api.deliveries.mockResolvedValue({receiver:{kind:'history',id:'r',name:'Alerts',deletedAt:'2026-10-01T00:00:00Z'},items:[{deliveryId:'test-auth',status:'failed',reason:'http_403'}],total:1,timezone:'UTC'})
- mount('');fireEvent.click(await screen.findByRole('button',{name:'Send test'}))
+ mount('', 'discord.v1');fireEvent.click(await screen.findByRole('button',{name:'Send test'}))
  expect(await screen.findByText(/Check.*webhook URL/)).toBeTruthy()
  expect(screen.queryByText(/signing key in its verifier/)).toBeNull()
 })
