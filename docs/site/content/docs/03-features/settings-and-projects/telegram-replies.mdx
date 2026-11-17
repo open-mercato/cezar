@@ -23,7 +23,7 @@ related:
     - features/settings-and-projects/send-to-telegram
 ---
 
-A local Cezar server can take answers, follow-ups and confirmed new tasks from Telegram people you approve for task control.
+A Cezar server can take answers, follow-ups and confirmed new tasks from Telegram people you approve for task control.
 Telegram notifications need `CEZ_WEBHOOKS=1`; task control also needs `CEZ_CHAT_INBOUND=1`. Both are set up in the same Telegram wizard.
 
 > **Good to know**: An approved person can instruct a coding agent that runs shell commands on this machine. Approve only people you trust.
@@ -39,7 +39,7 @@ Settings → **Integrations** → **Telegram**. The button reads **Connect Teleg
 3. Tick **Enable task control for this private chat**, read the shell-access warning, and choose what else the person may do: **Start tasks**, **Cancel tasks** and **Continue tasks**. All three are off by default; answering a task's questions and checking status are always allowed. A note under the permissions says that answering, starting and continuing tasks runs the agent and may incur provider costs.
 4. Activate. A private chat goes straight to the final step, which says whether notifications only, or notifications and task control, are active.
 
-With only `CEZ_WEBHOOKS=1` the wizard sets up notifications and shows task control as unavailable until Cezar is started with `CEZ_CHAT_INBOUND=1`. A hosted cockpit offers no Telegram at all, notifications included.
+With only `CEZ_WEBHOOKS=1` the wizard sets up notifications and shows task control as unavailable until Cezar is started with `CEZ_CHAT_INBOUND=1`. In hosted mode, the operator must also set `CEZ_REMOTE_EXTENSIONS=1` and restart Cezar; without that opt-in no Telegram adapter runs. With the opt-in, the same wizard configures Telegram on the server and the bot continues working while the browser is closed.
 
 Leaving the wizard before activation (**Cancel setup**, closing the dialog) cancels the pending link, so abandoned attempts never use up pairing slots. When it was the bot's first setup, the bot is released too, so it is not left listed and another project can connect it. A link expires after five minutes, and restarting Cezar expires it too.
 

@@ -34,9 +34,9 @@ related:
     - features/setup-and-integrations/project-integrations
 ---
 
-A local Cezar server can connect a dedicated Slack app or Discord bot to a project. The bot sends task notifications to the chats you connect, and people you approve can answer questions, check status, and, with extra permissions, start, cancel and continue tasks. Task control works the same way as [Telegram task control](/docs/features/settings-and-projects/telegram-replies); only the setup and the command syntax differ.
+A Cezar server can connect a dedicated Slack app or Discord bot to a project. The bot sends task notifications to the chats you connect, and people you approve can answer questions, check status, and, with extra permissions, start, cancel and continue tasks. Task control works the same way as [Telegram task control](/docs/features/settings-and-projects/telegram-replies); only the setup and the command syntax differ.
 
-Bot notifications need `CEZ_WEBHOOKS=1`. Task control also needs `CEZ_CHAT_INBOUND=1`. Both work only in a local cockpit.
+Bot notifications need `CEZ_WEBHOOKS=1`. Task control also needs `CEZ_CHAT_INBOUND=1`. Both work in a local cockpit; a [hosted cockpit](/docs/features/settings-and-projects/remote) also needs `CEZ_REMOTE_EXTENSIONS=1` and a restart, because chat adapters run as extension workers.
 
 > **Good to know**: An approved person can instruct a coding agent that runs shell commands on this machine. Approve only people you trust.
 

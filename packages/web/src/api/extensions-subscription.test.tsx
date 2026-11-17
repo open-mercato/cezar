@@ -10,7 +10,7 @@ import { subscribeTopic } from './ws'
 vi.mock('./ws', () => ({ subscribeTopic: vi.fn(() => () => {}) }))
 afterEach(() => { cleanup(); vi.mocked(subscribeTopic).mockClear() })
 
-/** The topic is local-only: a hosted cockpit (extensions capability off) opens no browser socket. */
+/** The topic is local-only: a hosted cockpit opens no browser socket, even with CEZ_REMOTE_EXTENSIONS=1. */
 function mount(extensions: boolean | undefined) {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
   client.setQueryData(queryKeys.health, { capabilities: { localHandoff: extensions === true, extensions } } as never)
@@ -38,6 +38,12 @@ describe('useExtensionSubscription', () => {
     expect(subscribeTopic).toHaveBeenCalledTimes(1)
     act(() => { client.setQueryData(queryKeys.health, { capabilities: { localHandoff: true, extensions: false } } as never) })
     expect(release).toHaveBeenCalledTimes(1)
+  })
+  it('opens no topic on a hosted cockpit even when it opted into extensions', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
+    client.setQueryData(queryKeys.health, { capabilities: { localHandoff: false, extensions: true } } as never)
+    renderHook(() => useExtensionSubscription(), { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
+    expect(subscribeTopic).not.toHaveBeenCalled()
   })
   it('ignores cache events of every query but health', () => {
     const { client } = mount(true)

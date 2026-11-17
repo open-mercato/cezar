@@ -5,7 +5,7 @@ export function chatUnavailableMessages(name: string): Readonly<Record<'flag_off
   return {
     flag_off: 'Task control needs CEZ_CHAT_INBOUND=1. Restart cezar with it to turn task control on.',
     webhooks_off: `${name} needs CEZ_WEBHOOKS=1. Restart cezar with it, then reload this page.`,
-    hosted: `${name} is not available on a hosted cockpit. Run cezar locally to connect a bot.`,
+    hosted: `${name} is off on this hosted cockpit. Set CEZ_REMOTE_EXTENSIONS=1 on the server and restart cezar to connect a bot.`,
     unavailable: `${name} is unavailable right now. Try again in a moment.`,
   }
 }

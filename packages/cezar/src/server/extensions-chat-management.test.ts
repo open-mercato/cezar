@@ -13,7 +13,7 @@ import {RunStore} from '../runs/store.ts';
 import {WebhookService} from '../webhooks/service.ts';
 import {WebhookScheduler} from '../webhooks/scheduler.ts';
 import type {ProjectContext} from './project-context.ts';
-import {extensionRoutes,globalExtensionRoutes,closeProjectExtensions} from './extensions.ts';
+import {extensionRoutes,globalExtensionRoutes,closeProjectExtensions,localExtensionHost} from './extensions.ts';
 const spawned=vi.hoisted(()=>vi.fn());
 vi.mock('../extensions/worker-process.ts',async original=>{
  const actual=await original<typeof import('../extensions/worker-process.ts')>();
@@ -25,7 +25,7 @@ it('allows only verified shipped enable/disable through the flag-off HTTP policy
  vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_EXTENSIONS','0');vi.stubEnv('CEZ_WEBHOOKS','1');
  const store=RunStore.open(dataDir),project={id:'project',root,dataDir,store} as ProjectContext;
  const service=await WebhookService.open({root,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler()});
- const app=new Hono<{Variables:{project:ProjectContext}}>().use('*',async(c,next)=>{c.set('project',project);await next()}).route('/api/v1',extensionRoutes(()=> 'flag disabled',()=>true)).route('/api/v1',globalExtensionRoutes(project,()=> 'flag disabled'));
+ const app=new Hono<{Variables:{project:ProjectContext}}>().use('*',async(c,next)=>{c.set('project',project);await next()}).route('/api/v1',extensionRoutes(()=> 'flag disabled',localExtensionHost)).route('/api/v1',globalExtensionRoutes(project,()=> 'flag disabled'));
  const post=(path:string,body:unknown={})=>app.request('/api/v1/extensions/'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
  try {
   const inventory=extensionInventoryResponseSchema.parse(await (await app.request('/api/v1/extensions/inventory')).json());

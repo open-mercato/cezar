@@ -76,6 +76,22 @@ it('lists no bindings while hosted or webhooks are off, even when one exists', a
     expect((await service.scan()).bindings.some(row => row.botId === botId)).toBe(true);
   } finally { await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 });
+// Spec 2026-11-12-hosted-extensions: hosted lists bindings only when the runtime is allowed there.
+it('lists bindings on a hosted cockpit only when the runtime is allowed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'telegram-binding-')), botId = String(randomInt(100000, 99999999));
+  const lease = await BotLease.acquire(botId); await lease.bind({ projectId: 'project', root, installationId: 'installation' }); await lease.release();
+  let allowed: boolean | undefined;
+  const service = new ChatBindings({ mode: () => 'hosted', runtimeAllowed: () => allowed!, projects: async () => [] });
+  const listed = async () => (await service.list()).bindings.some(row => row.botId === botId);
+  try {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
+    allowed = true; expect(await listed()).toBe(true);
+    allowed = false; vi.stubEnv('CEZ_REMOTE_EXTENSIONS', '1'); expect(await listed()).toBe(false);
+    // Without the host's decision the environment decides.
+    allowed = undefined; expect(await listed()).toBe(true);
+    vi.stubEnv('CEZ_REMOTE_EXTENSIONS', '0'); expect(await listed()).toBe(false);
+  } finally { await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
+});
 
 it.skipIf(process.platform === 'win32')('skips a FIFO binding without stalling discovery of healthy bots', async () => {
   const { execFileSync, spawnSync } = await import('node:child_process');

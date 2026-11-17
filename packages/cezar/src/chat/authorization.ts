@@ -47,7 +47,7 @@ export const grantAllows = (grant: Pick<InboundGrant, 'permissions'>, permission
 export class GroupMembership {
   private readonly cache = new Map<string, { member: boolean; until: number }>();
   constructor(private readonly check: (chatId: string, userId: string) => Promise<boolean | undefined>, private readonly now: () => number = Date.now, private readonly ttlMs = 60_000, private readonly max = 1000) {}
-  /** True for a member, false for someone gone, undefined when Telegram could not say. */
+  /** True for a member, false for someone gone, undefined when the platform could not say. */
   async member(chatId: string, userId: string): Promise<boolean | undefined> {
     const key = JSON.stringify([chatId, userId]), now = this.now(), cached = this.cache.get(key);
     if (cached && cached.until > now) return cached.member;

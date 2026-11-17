@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -658,6 +658,15 @@ it('keeps the row of a project whose chat selection or webhook receiver still na
   expect(await new ExtensionStore(join(root,dataDir,'extensions','registry.json')).list()).toEqual([expect.objectContaining({manifest:expect.objectContaining({id:'hello.test'}),enabled:false})])
  }
  expect((await second.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'missing'})])
+})
+it('stages exactly the folder a source policy vetted, and refuses one that resolves elsewhere by staging time', async () => {
+ const {root,source,manager}=await fixture()
+ const vetted=await manager.prepare('ignored', async () => source)
+ expect(vetted.manifest.id).toBe('hello.test')
+ // The policy checked one path; by staging it resolves somewhere else (a swapped-in link).
+ await symlink(source, join(root,'swapped'))
+ await expect(manager.prepare('ignored', async () => join(root,'swapped'))).rejects.toThrow('extension folder changed while it was being inspected')
+ await expect(manager.prepare('ignored', async () => { throw new Error('refused by policy') })).rejects.toThrow('refused by policy')
 })
 it('reads webhook receiver formats defensively: a malformed state keeps the row, a malformed receiver is skipped', async () => {
  const {root,source,manager}=await fixture()

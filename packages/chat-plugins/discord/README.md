@@ -21,7 +21,8 @@ and installation updates; disable/uninstall never silently falls back to shipped
 This package has its own version, independent of the host release. Cezar pins its shipped version
 and digest; updating that shipped copy requires a host update. With local `CEZ_EXTENSIONS=0`, only
 the verified shipped artifact runs through the trusted in-process facade; installed selections
-stay unavailable. A hosted cockpit runs no chat adapter. A missing or invalid artifact is reported
-as unavailable; nothing else runs in its place.
+stay unavailable. A hosted cockpit runs no chat adapter unless started with
+`CEZ_REMOTE_EXTENSIONS=1`. A missing or invalid artifact is reported as unavailable; nothing
+else runs in its place.
 
 Direct tarball installation through the cockpit UI is not supported.

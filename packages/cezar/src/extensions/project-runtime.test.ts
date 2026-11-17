@@ -8,7 +8,7 @@ import {ExtensionManager} from './manager.ts'
 import {retainProjectExtensions} from './project-runtime.ts'
 const roots:string[]=[],releases:Array<()=>Promise<void>>=[]
 afterEach(async()=>{for(const release of releases.splice(0))await release();vi.restoreAllMocks();for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
-async function fixture(){const root=await mkdtemp(join(tmpdir(),'shared-extensions-'));roots.push(root);execFileSync('git',['init','-q'],{cwd:root,timeout:5000});return{root,dataDir:join(root,'.ai/cezar'),projectId:'project'}}
+async function fixture(){const root=await mkdtemp(join(tmpdir(),'shared-extensions-'));roots.push(root);execFileSync('git',['init','-q'],{cwd:root,timeout:5000});return{root,dataDir:join(root,'.ai/cezar'),projectId:'project',mode:'local' as const,runtimeAllowed:true}}
 it('shares one manager across boot service and HTTP owners, including a symlink root',async()=>{
  const project=await fixture(),link=project.root+'-link';await symlink(project.root,link);roots.push(link)
  const service=await retainProjectExtensions(project);releases.push(service.release)
@@ -55,7 +55,7 @@ it('hosted chat neither declares artifacts nor starts a worker',async()=>{
  const {projectChatExtensions}=await import('../chat/registry.ts'),{ExtensionHost}=await import('./host.ts')
  const activate=vi.spyOn(ExtensionHost.prototype,'activate')
  let service:Awaited<ReturnType<typeof WebhookService.open>>
- try{service=await WebhookService.open({...project,mode:'hosted',serverPorts:()=>[],scheduler:new WebhookScheduler()});await service!.startChat();expect(projectChatExtensions(project.root)).toEqual([]);expect(activate).not.toHaveBeenCalled()}
+ try{service=await WebhookService.open({...project,mode:'hosted',runtimeAllowed:undefined,serverPorts:()=>[],scheduler:new WebhookScheduler()});await service!.startChat();expect(projectChatExtensions(project.root)).toEqual([]);expect(activate).not.toHaveBeenCalled()}
  finally{await service?.dispose();vi.unstubAllEnvs()}
 })
 it('does not admit a replacement after ownership drain fails',async()=>{

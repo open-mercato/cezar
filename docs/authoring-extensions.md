@@ -64,7 +64,8 @@ a compatible installed replacement needs explicit project selection and approval
 package alone cannot take over a configured bot. Selected installed artifacts pin an exact version
 independently of host updates; disable/uninstall never falls back to shipped code. Shipped versions
 update with Cezar. Local `CEZ_EXTENSIONS=0` permits only verified shipped artifacts through the
-trusted in-process facade; hosted mode runs no chat adapter. See [extensions](extensions.md).
+trusted in-process facade; hosted mode runs no chat adapter unless
+`CEZ_REMOTE_EXTENSIONS=1`. See [extensions](extensions.md).
 
 Direct cockpit tarball installation is unsupported; use a built folder with runtime dependencies
 or an available npm package version.
@@ -138,7 +139,8 @@ on a declared panel or command moves it to where the user works:
   project starts or changes status (both about a second after the change settles). A worker
   cannot ask for a refresh, so render what is true at call time.
 - Everything else is the same declarative renderer, the same permissions and the same
-  worker. Nothing here grants new trust, and a hosted cockpit shows none of these surfaces.
+  worker. Nothing here grants new trust, and a hosted cockpit shows none of these surfaces
+  unless it was started with `CEZ_REMOTE_EXTENSIONS=1`.
 - Chat providers have no `location`; they appear under Settings → Integrations only.
 
 The [project-summary example](../examples/extensions/project-summary) uses every placement
