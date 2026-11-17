@@ -310,6 +310,22 @@ describe('the managers routes', () => {
     expect(older.hasMore).toBe(false);
   });
 
+  describe('kind=user', () => {
+    it('returns only the user\'s messages and keeps before/limit', async () => {
+      const { id } = await createManager();
+      const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+      const kinds = ['user', 'notice', 'user', 'notice', 'user'] as const;
+      kinds.forEach((kind, seq) =>
+        log.persistMessage(id, kind === 'user' ? { id: `m${seq}`, seq, at: 't', kind, text: 'q' } : { id: `m${seq}`, seq, at: 't', kind, text: 'x' }));
+      const page = async (query: string) =>
+        (await (await request(`${BASE}/${id}/messages?${query}`)).json()) as { messages: Array<{ seq: number }>; hasMore: boolean };
+      expect((await page('kind=user&limit=2')).messages.map((m) => m.seq)).toEqual([2, 4]);
+      const older = await page('kind=user&limit=2&before=4');
+      expect(older.messages.map((m) => m.seq)).toEqual([0, 2]);
+      expect(older.hasMore).toBe(false);
+    });
+  });
+
   describe('pending=1', () => {
     const page = async (query: string) =>
       (await (await request(`${query}`)).json()) as { messages: Array<{ id: string; seq: number }>; hasMore: boolean };

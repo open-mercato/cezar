@@ -701,10 +701,11 @@ export class ManagerEngine {
     return manager ? this.summarize(manager) : undefined;
   }
 
-  messages(id: string, query: { before?: number; limit?: number; pending?: '1' }): ManagerMessagesResponse {
+  messages(id: string, query: { before?: number; limit?: number; pending?: '1'; kind?: 'user' }): ManagerMessagesResponse {
     const limit = query.limit ?? 100;
     const all = this.deps.store.messages(id).filter((message) =>
-      (query.before === undefined || message.seq < query.before) && (query.pending === undefined || pendingAction(message)));
+      (query.before === undefined || message.seq < query.before) && (query.pending === undefined || pendingAction(message))
+      && (query.kind === undefined || message.kind === query.kind));
     return { messages: all.slice(-limit), hasMore: all.length > limit };
   }
 
