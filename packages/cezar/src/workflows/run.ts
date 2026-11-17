@@ -3652,7 +3652,8 @@ export class RunManager {
       if (this.deferMessage(parentId, blocks)) return;
       // `cancelled` is deliberately NOT continuable from a child's report: nothing a child says may
       // restart a task a human cancelled.
-      if (['done', 'failed', 'review'].includes(parent.status)) {
+      // An idle park has no session to deliver into; a report reopens it like a message would.
+      if (['done', 'failed', 'review'].includes(parent.status) || isIdleParked(parent)) {
         this.continueRun(parentId, { text }, true);
       }
     } catch {
@@ -9956,7 +9957,7 @@ export class RunManager {
   /**
    * Turn a monitoring park into a `waiting` park: attention raised, idle timer armed if enabled,
    * session left open so a reply still lands in it. Parked like a `CEZ:ASK` (`askPark`), so a
-   * hand-off nobody answers settles `failed` with Continue when the idle timer closes it.
+   * hand-off nobody answers stays an idle park when the idle timer closes it (spec 2026-11-04 § Revision).
    */
   private parkMonitorAsWaiting(runId: string, state: ActiveRun, message: string): void {
     if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
