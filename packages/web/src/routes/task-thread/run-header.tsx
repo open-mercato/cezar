@@ -198,7 +198,7 @@ function RunHeaderView({
               {/* The status word, open states only (Proposal 7). On phones it leads line 2. */}
               {statusLabel ? <StatusChip label={statusLabel} className="max-md:hidden" /> : null}
               {/* A closed task keeps a word too — quiet text, not a pill (calm when done). */}
-              {quietWord ? <QuietStatusWord word={quietWord} className="max-md:hidden" /> : null}
+              {quietWord ? <QuietStatusWord word={quietWord} title={idleClosedDetail(run)} className="max-md:hidden" /> : null}
               {/* In the title row so a folded header still shows it (main had it here). */}
               <ImpactChip run={run} />
             </span>
@@ -327,15 +327,20 @@ const sentence = (label: string) => label.charAt(0).toUpperCase() + label.slice(
  *  header still says how the task ended without a pill (calm when done). */
 export function closedStatusWord(run: ApiRun): string | null {
   if (statusChipLabel(run) !== null) return null
-  if (isIdleClosed(run)) return 'Idle'
+  // A legacy idle close reads like the calm outcome; the close itself is only a tooltip (spec 2026-11-04-idle-closed-attention-state).
+  if (isIdleClosed(run)) return 'Done'
   if (run.status === 'done') return 'Done'
   if (run.status === 'cancelled') return 'Cancelled'
   return null
 }
 
-function QuietStatusWord({ word, className }: { word: string; className?: string }) {
+/** The subtle, neutral detail an idle close may carry: a tooltip, never a status. */
+export const idleClosedDetail = (run: ApiRun): string | undefined =>
+  isIdleClosed(run) ? 'The session closed after inactivity. Write to the task to reopen it.' : undefined
+
+function QuietStatusWord({ word, className, title }: { word: string; className?: string; title?: string }) {
   return (
-    <span data-slot="run-status-word" className={cn('shrink-0 text-label text-muted-foreground', className)}>
+    <span data-slot="run-status-word" title={title} className={cn('shrink-0 text-label text-muted-foreground', className)}>
       {word}
     </span>
   )
@@ -814,7 +819,7 @@ function MetaRow({
   const desktopOnly = detailsOpen ? undefined : 'max-md:hidden'
   const parts: ReactNode[] = []
   if (statusLabel) parts.push(<StatusChip key="status" label={statusLabel} className={phoneOnly} />)
-  else if (quietWord) parts.push(<QuietStatusWord key="status" word={quietWord} className={phoneOnly} />)
+  else if (quietWord) parts.push(<QuietStatusWord key="status" word={quietWord} title={idleClosedDetail(run)} className={phoneOnly} />)
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status chip.
   parts.push(

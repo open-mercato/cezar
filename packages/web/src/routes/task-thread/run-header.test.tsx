@@ -611,10 +611,21 @@ describe('the status word (Proposal 7): open states only', () => {
     expect(words[1]?.className).toContain('md:hidden')
   })
 
+  it('an idle-closed task reads "Done", the close only a neutral tooltip', () => {
+    stubFetch()
+    renderHeader(run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }))
+    expect(document.querySelector('[data-slot="pill"]')).toBeNull()
+    const words = [...document.querySelectorAll('[data-slot="run-status-word"]')]
+    expect(words.map((word) => word.textContent)).toEqual(['Done', 'Done'])
+    expect(words[0]?.getAttribute('title')).toContain('closed after inactivity')
+    expect(document.body.textContent).not.toMatch(/\bIdle\b|closed · idle/i)
+  })
+
   it.each([
     ['done', run('done'), 'Done'],
     ['cancelled', run('cancelled'), 'Cancelled'],
-    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), 'Idle'],
+    // An idle close is not a status: the calm outcome, the close only as a tooltip.
+    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), 'Done'],
     ['an open state has its chip instead', run('review'), null],
     ['failed has its chip instead', run('failed'), null],
   ] as const)('closed status word: %s', (_name, record, word) => {

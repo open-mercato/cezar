@@ -185,7 +185,7 @@ afterAll(async () => {
 describe('the step rail on a run that closed without failing', () => {
   it('a run closed on an unanswered question: a still amber dot and question mark, never the danger X (#2025)', () => {
     openThread(ANSWER.id)
-    expect(headerPill()).toContain('needs you')
+    expect(headerPill()).toContain('Asked')
 
     const [done, failed, answer] = dots()
     expect([done!.visual, failed!.visual, answer!.visual]).toEqual(['done', 'failed', 'answer'])
@@ -207,7 +207,7 @@ describe('the step rail on a run that closed without failing', () => {
 
   it('a legacy idle-closed run: a neutral dot and pause, no pill (#2022)', () => {
     openThread(IDLE.id)
-    expect(browser.text('[data-slot="run-header"] [data-slot="run-status-word"]').trim()).toBe('Idle')
+    expect(browser.text('[data-slot="run-header"] [data-slot="run-status-word"]').trim()).toBe('Done')
 
     const [, failed, idle] = dots()
     expect(idle!.visual).toBe('idle')
@@ -223,7 +223,7 @@ describe('the step rail on a run that closed without failing', () => {
 
   it('a plain failure keeps both red Xs', () => {
     openThread(FAILED.id)
-    expect(headerPill()).toContain('failed')
+    expect(headerPill()).toContain('Failed')
     expect(dots().map((d) => d.visual)).toEqual(['done', 'failed', 'failed'])
     expandRail()
     expect(rows().map((r) => r.cls.includes('lucide-circle-x'))).toEqual([false, true, true])
