@@ -2114,6 +2114,21 @@ describe('ManagerEngine', () => {
         expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toMatchObject({ status: 409 });
       });
 
+      it('an automation poll signal is checked against the card\'s own repo before it closes anything', async () => {
+        // The poll reads `origin`: in a fork clone its #7 is not the card's #7.
+        let state = 'open';
+        const engine = makeEngine({ request: forge(() => state) });
+        const id = await create(engine);
+        await engine.propose(id, { action: merge });
+        requests = [];
+        await engine.pullRequestClosed('/alpha', 7, 'merged', true);
+        expect(actions(id)[0]?.status).toBe('pending');
+        expect(requests.map((request) => request.path)).toEqual(['/api/v1/p/alpha/github/prs/7/merge-state?refresh=1']);
+        state = 'merged';
+        await engine.pullRequestClosed('/alpha', 7, 'merged', true);
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+      });
+
       it('a PR read as closed unmerged closes its card as closed', async () => {
         const engine = makeEngine({ request: forge(() => 'open') });
         const id = await create(engine);

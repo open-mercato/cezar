@@ -2480,8 +2480,10 @@ export class ManagerEngine {
    * cezar just read from GitHub that a PR left the open state (a chip's status, a merge-state read,
    * a poll): close every pending merge card for it, without asking GitHub again. Only a pending
    * card settles, so a second signal for the same PR changes nothing and tells the manager nothing.
+   * `verify`: an automation poll reads `origin`, which in a fork clone is not the repo the card's
+   * number belongs to, so its signal only triggers the card's own stale check.
    */
-  async pullRequestClosed(root: string, number: number, state: 'merged' | 'closed'): Promise<void> {
+  async pullRequestClosed(root: string, number: number, state: 'merged' | 'closed', verify = false): Promise<void> {
     const pending = this.deps.store.list().flatMap((manager) => this.deps.store.messages(manager.id)
       .filter((message) => message.kind === 'action' && message.status === 'pending' && message.action.type === 'merge-pr' && message.action.number === number)
       .map((message) => ({ id: manager.id, message })));
@@ -2491,7 +2493,9 @@ export class ManagerEngine {
     for (const { id, message } of pending) {
       if (message.kind !== 'action' || message.action.type !== 'merge-pr' || !projects.has(message.action.projectId)) continue;
       const current = this.deps.store.message(id, message.id);
-      if (current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', `#${number} was already ${state}`);
+      if (current?.kind !== 'action' || current.status !== 'pending') continue;
+      if (verify) await this.decide(id, current.id, 'dismiss', {}, true);
+      else this.settleAction(id, current, 'dismissed', `#${number} was already ${state}`);
     }
   }
 

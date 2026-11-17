@@ -5,7 +5,8 @@
  */
 export type ClosedPrState = 'merged' | 'closed';
 
-type Listener = (root: string, number: number, state: ClosedPrState) => void;
+/** `verify`: the read named its repo by remote, not as the card's reads do, so confirm first. */
+type Listener = (root: string, number: number, state: ClosedPrState, verify: boolean) => void;
 
 const listeners = new Set<Listener>();
 
@@ -14,10 +15,10 @@ export function onPrClosed(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-export function reportPrClosed(root: string, number: number, state: ClosedPrState): void {
+export function reportPrClosed(root: string, number: number, state: ClosedPrState, { verify = false }: { verify?: boolean } = {}): void {
   for (const listener of listeners) {
     try {
-      listener(root, number, state);
+      listener(root, number, state, verify);
     } catch {
       // A listener's failure is its own; the read that reported it must not fail.
     }

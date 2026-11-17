@@ -3793,12 +3793,10 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
       try {
         const out = await gh(repoRoot, ['pr', 'view', branch, '--json', 'number,url,state,isDraft,statusCheckRollup']);
         const pr = ghPrViewSchema.parse(JSON.parse(out));
-        const state = GH_PR_STATES[pr.state.toUpperCase()] ?? 'open';
-        if (state !== 'open') reportPrClosed(repoRoot, pr.number, state);
         return {
           number: pr.number,
           url: pr.url,
-          state,
+          state: GH_PR_STATES[pr.state.toUpperCase()] ?? 'open',
           isDraft: pr.isDraft,
           checks: rollupToChecks(pr.statusCheckRollup) ?? null,
         };
