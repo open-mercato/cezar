@@ -726,7 +726,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
   })
 
-  it('an idle-closed run says so without a failure, and its Continue is still the action', async () => {
+  it('a legacy idle-closed run reads as a quiet closed session, not a failure', () => {
     renderView(
       <ThreadView
         run={run('failed', {
@@ -740,9 +740,10 @@ describe('ThreadView', () => {
       />,
     )
     const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
-    expect(footer.textContent).toContain('Closed after inactivity — Continue to pick it up')
+    expect(footer.textContent).toContain('Session closed')
     expect(footer.textContent).not.toContain('Session failed')
-    await waitFor(() => expect(document.querySelector('[data-slot="footer-continue"]')).not.toBeNull())
+    expect(footer.textContent).not.toContain('inactivity')
+    expect(document.querySelector('[data-slot="outcome-card"]')?.getAttribute('data-kind')).toBe('idle')
   })
 
   it('the same advice stays plain text when there is no session to continue', () => {

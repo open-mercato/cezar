@@ -1056,7 +1056,7 @@ const TD_BASE = 'h-11 overflow-hidden border-b border-border px-2.5 whitespace-n
 /**
  * The status grammar (spec: attention-first cockpit (2026-11-11), Proposal 7): a word only where
  * the state is still open. A finished, cancelled, idle-closed or archived row shows its mark and no
- * pill — the mark keeps the state's colour (green done, grey queued/cancelled, orange idle: owner
+ * pill — the mark keeps the state's colour (green done, grey queued/cancelled/idle: owner
  * review, 2026-11-12), the news is elsewhere.
  */
 function isQuietStatus(run: RunRecord): boolean {

@@ -614,7 +614,7 @@ describe('the status word (Proposal 7): open states only', () => {
   it.each([
     ['done', run('done'), 'Done'],
     ['cancelled', run('cancelled'), 'Cancelled'],
-    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), 'Closed · idle'],
+    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), 'Idle'],
     ['an open state has its chip instead', run('review'), null],
     ['failed has its chip instead', run('failed'), null],
   ] as const)('closed status word: %s', (_name, record, word) => {

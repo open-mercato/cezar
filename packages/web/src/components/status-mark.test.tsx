@@ -39,7 +39,7 @@ describe('StatusMark', () => {
       [done, 'done', 'success', 'lucide-circle-check'],
       [failed, 'failed', 'danger', 'lucide-circle-x'],
       [cancelled, 'cancelled', 'neutral', 'lucide-circle-slash'],
-      [idle, 'idle', 'idle', 'lucide-circle-pause'],
+      [idle, 'idle', 'neutral', 'lucide-circle-pause'],
     ] as const
     for (const [attention, state, tone, glyph] of cases) {
       const container = markOf(attention)
@@ -57,7 +57,7 @@ describe('StatusMark', () => {
 
   it('is a named image and adds no tab stop', () => {
     const container = markOf(idle)
-    expect(screen.getByRole('img', { name: 'closed · idle' })).toBe(container.querySelector('[data-slot="status-mark"]'))
+    expect(screen.getByRole('img', { name: 'idle' })).toBe(container.querySelector('[data-slot="status-mark"]'))
     expect(container.querySelector('[tabindex], button, a')).toBeNull()
   })
 
@@ -66,7 +66,7 @@ describe('StatusMark', () => {
     cleanup()
     expect(markOf(failed).querySelector('[data-slot="status-mark"]')?.className).toContain('text-danger')
     cleanup()
-    expect(markOf(idle).querySelector('[data-slot="status-mark"]')?.className).toContain('text-conflict')
+    expect(markOf(idle).querySelector('[data-slot="status-mark"]')?.className).toContain('text-soft-foreground')
     cleanup()
     expect(markOf(cancelled).querySelector('[data-slot="status-mark"]')?.className).toContain('text-soft-foreground')
   })
