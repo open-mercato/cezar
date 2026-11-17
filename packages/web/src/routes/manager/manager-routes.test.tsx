@@ -1157,6 +1157,42 @@ describe('/manager/:id', () => {
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
   })
 
+  it('away from the tail, the jump button grows into "your messages", whose list pages back to an older one', async () => {
+    server.pages = (path) => {
+      const url = new URL(path, 'http://x')
+      if (url.searchParams.get('kind') === 'user') {
+        return { messages: [userMessage(20, 'Keep an eye on the release'), userMessage(100, 'What needs me?')], hasMore: false }
+      }
+      if (url.searchParams.get('before') === '100') return { messages: [userMessage(20, 'Keep an eye on the release'), assistantMessage(30, { text: 'Watching it' })], hasMore: false }
+      return { messages: [userMessage(100, 'What needs me?'), assistantMessage(120, { text: 'Reply body' })], hasMore: true }
+    }
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    // At the tail: no control at all.
+    expect(screen.queryByRole('group', { name: 'Your messages' })).toBeNull()
+    const box = document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    Object.defineProperty(box, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(box, 'clientHeight', { value: 500, configurable: true })
+    box.scrollTop = 1500
+    fireEvent.scroll(box)
+    box.scrollTop = 600
+    fireEvent.scroll(box)
+    const group = await screen.findByRole('group', { name: 'Your messages' })
+    // It replaced the round button and kept its name.
+    expect(within(group).getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
+    fireEvent.click(within(group).getByRole('button', { name: 'Your messages' }))
+    // The list holds the whole history from `kind=user`, the unloaded message included.
+    const older = await screen.findByRole('option', { name: /Keep an eye on the release/ })
+    expect(calls.some((call) => call.path.includes('kind=user'))).toBe(true)
+    fireEvent.click(older)
+    await waitFor(() => expect(calls.some((call) => call.path.includes('before=100') && !call.path.includes('kind=user'))).toBe(true))
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('Keep an eye on the release'))
+    const bubble = document.activeElement as HTMLElement
+    expect(bubble.getAttribute('data-slot')).toBe('manager-user-bubble')
+    expect(bubble.hasAttribute('data-jump-highlight')).toBe(true)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('keeps a reader at the tail pinned when the composer grows, even if a scroll lands first', async () => {
     seedChat()
     renderAt('/manager/global')

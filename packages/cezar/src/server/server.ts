@@ -234,6 +234,7 @@ import {
   readEventsTail,
   validateLiveCursor,
 } from '../runs/event-history.ts';
+import { readRunUserMessages } from '../runs/user-messages.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
@@ -5380,6 +5381,26 @@ export function createApp(deps: ServerDeps) {
           if (error instanceof HistoryCursorError) return c.json({ error: error.message }, error.status);
           throw error;
         }
+      },
+    )
+
+    // Spec 2026-11-17-my-message-navigation: the opening task plus every persisted user message.
+    .get(
+      '/runs/:id/user-messages',
+      paramZodValidator(runIdParamSchema),
+      async (c) => {
+        const { store, dataDir } = c.get('project');
+        const { id } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const ts = run.createdAt ?? run.startedAt;
+        return c.json({
+          messages: await readRunUserMessages(join(dataDir, 'runs', `${id}.ndjson`), {
+            task: run.task,
+            ...(ts ? { ts } : {}),
+            ...(run.taskImages ? { images: run.taskImages } : {}),
+          }),
+        });
       },
     )
 

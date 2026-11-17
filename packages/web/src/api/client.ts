@@ -208,11 +208,12 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  runUserMessagesSchema,
   artifactsBySubjectResponseSchema,
   githubOwnersResponseSchema,
   projectAssetsResponseSchema,
 } from '@open-mercato/cezar-api-client'
-import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
+import type { Ok, OkJson, RunUserMessages } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
@@ -775,6 +776,18 @@ export async function getRunHistory(
     ),
     `${runPath(id)}/history`,
     runHistoryPageSchema,
+  )
+}
+
+/** The user's own messages in a run, for the "your messages" list (spec 2026-11-17-my-message-navigation). */
+export async function getRunUserMessages(id: string, opts?: ReadOptions): Promise<RunUserMessages> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].runs[':id']['user-messages'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `${runPath(id)}/user-messages`,
+    runUserMessagesSchema,
   )
 }
 
