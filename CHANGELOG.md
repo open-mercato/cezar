@@ -10,6 +10,7 @@
 - ✨ A manager can stop and steer the tasks it starts: `cez-manager task cancel <run> --reason "…"` cancels a task and everything it dispatched, keeps the worktree and branch, and the task shows who cancelled it and why. It cancels only its own tasks unless you turn on **Cancel any task** in its settings. `task create --model opus --effort max` (and `task say` on a finished task) picks the model and effort, refusing an unknown one with the valid choices; `task retry` restarts a failed task. Its task list now marks tasks you started yourself and the pull request each task opened, `workflows` marks what each workflow can do, and every `cez-manager` command takes `--help` and names the valid subcommands on a typo. *(@patzick)*
 
 ## 🐛 Fixes
+- 🐛 A session closed for inactivity no longer changes the task: it keeps its state (usually **needs you**), its thread ends on the agent's last message, and writing to it reopens the session. No failure, no "closed · idle" mark, no notification, and managers are not woken or told about it. Dispatched child tasks still settle so their parent gets a report. *(@patzick)*
 - 🐛 `review-council` asks you before opening a draft PR, also when the judge says ship, and a Draft PR node on a branch with no new commits opens nothing and ends the run as a success instead of failing. A saved copy of `review-council` keeps its old graph; the Draft PR change protects it too. *(@patzick)*
 
 ## 👥 Contributors
