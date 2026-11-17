@@ -27,8 +27,8 @@ Delete the "Optional: pairing" part if the demo runs with `DEMO_RELAY=0`.
 WHAT THE APP IS
 cezar is a free, open-source tool that people run on their own computer or server to supervise AI
 coding agents. CezarBot is its companion: it connects to the user's own cezar and shows that
-server's Manager and tasks, sized for a phone. The app has no account system and no server of ours
-that holds user data.
+server's Manager and tasks, sized for a phone. The app itself has no account sign-up. The relay asks
+for an email and terms acceptance in cezar on the computer, and stores connection/account metadata.
 
 HOW IT CONNECTS
 1. Pairing through a relay (the default). On their computer the user opens cezar, Settings, Connect
@@ -61,7 +61,7 @@ Optional: pairing the way users do, without a password
    page. The demo allows 5 codes per hour; if the page says so, use the steps above.
 
 Camera: used only to scan the pairing QR code, decoded on the device, never stored or sent.
-Notifications: optional, off until turned on per device; they say only "Cezar needs you".
+Notifications: optional, off until turned on per device; generic text, badge count, locally saved name.
 The text in the Manager is written by the user's own coding agents about the user's own code.
 ```
 <!-- /reviewer-notes -->

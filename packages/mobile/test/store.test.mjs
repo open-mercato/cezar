@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { page } from '../store/scripts/render-privacy.mjs';
+import { RELAY_TERMS } from '../connect/screens.js';
 
 const read = (p) => readFileSync(new URL(`../store/${p}`, import.meta.url), 'utf8');
 const block = (text, name) => {
@@ -9,6 +10,14 @@ const block = (text, name) => {
   assert.ok(m, `store text has a ${name} block`);
   return m[1].replace(/^```text\n|\n```$/g, '').trim();
 };
+
+test('the app footer and store listing use the existing relay privacy policy', () => {
+  const connect = readFileSync(new URL('../connect/index.html', import.meta.url), 'utf8');
+  const privacyUrl = /<a class="policy" href="([^"]+)">/.exec(connect)?.[1];
+  assert.equal(privacyUrl, RELAY_TERMS.privacyUrl);
+  assert.ok(read('listing.md').includes(`| Privacy policy URL | ${RELAY_TERMS.privacyUrl} |`));
+  assert.match(page(read('privacy-policy.md'), { final: false }), /Internal draft:/);
+});
 
 test('listing text fits each store field', () => {
   const listing = read('listing.md');
