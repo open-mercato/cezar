@@ -483,6 +483,8 @@ export const managerMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
   /** `1` keeps only `action` messages still waiting for the user; `before` and `limit` still apply. */
   pending: z.literal('1').optional(),
+  /** `user` keeps only the user's own messages (the "your messages" list); `before` and `limit` still apply. */
+  kind: z.literal('user').optional(),
 });
 export const managerMessagesResponseSchema = z.object({
   messages: z.array(managerMessageSchema),
