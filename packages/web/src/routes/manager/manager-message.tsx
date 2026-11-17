@@ -145,6 +145,7 @@ function ManagerQuestions({
   answer,
   answerOnCard,
   source,
+  superseded = false,
 }: {
   managerId: string
   messageId: string
@@ -153,22 +154,26 @@ function ManagerQuestions({
   answer: string | undefined
   /** The next row is this answer and is not drawn: the card says it instead. */
   answerOnCard: boolean
+  superseded?: boolean
 }) {
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
+  const [localAnswer, setLocalAnswer] = useState<string | undefined>()
+  const effectiveAnswer = answer ?? localAnswer
+  const effectiveAnswerOnCard = answerOnCard || localAnswer !== undefined
   const card = useMemo(() => ({ id: messageId, questions: ask.questions }), [messageId, ask])
   const answered = useRef<HTMLDivElement>(null)
   // Answered from this card: its chips unmount, so focus lands on what replaced them.
   const sentHere = useRef(false)
   useEffect(() => {
-    if (answer === undefined) return
+    if (effectiveAnswer === undefined) return
     forgetAskSelections(managerId, card)
     if (!sentHere.current) return
     sentHere.current = false
     const active = document.activeElement
     if (!active || active === document.body || !active.isConnected) answered.current?.focus({ preventScroll: true })
-  }, [answer, card, managerId])
-  const lines = answer !== undefined && answerOnCard ? askAnswerLines(ask, answer) : null
+  }, [effectiveAnswer, card, managerId])
+  const lines = effectiveAnswer !== undefined && effectiveAnswerOnCard ? askAnswerLines(ask, effectiveAnswer) : null
   if (lines) {
     return (
       <div
@@ -187,7 +192,7 @@ function ManagerQuestions({
       </div>
     )
   }
-  if (answer !== undefined) {
+  if (effectiveAnswer !== undefined) {
     return (
       <div
         ref={answered}
@@ -206,12 +211,31 @@ function ManagerQuestions({
       </div>
     )
   }
+  if (superseded) {
+    return (
+      <div
+        id={`decision-${messageId}`}
+        tabIndex={-1}
+        data-slot="manager-ask"
+        data-resolved="true"
+        data-superseded="true"
+        className="inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
+        <StatusDot tone="neutral" />
+        <span>Superseded<span className="sr-only">:</span></span>
+        <ul data-slot="manager-ask-topics" className="flex min-w-0 flex-wrap gap-1.5">
+          {ask.questions.map((question, index) => <li key={index} className="flex min-w-0 max-w-full"><StaticChip>{question.header}</StaticChip></li>)}
+        </ul>
+      </div>
+    )
+  }
   const send = async (text: string) => {
     sentHere.current = true
     setPending(true)
     setError(undefined)
     try {
       await sendManagerMessage(managerId, text, undefined, messageId)
+      setLocalAnswer(text)
       trackManagerMessageSent('question_card', false)
       trackManagerQuestionAnswered('card')
       return undefined
@@ -271,12 +295,14 @@ function AssistantMessage({
   origin,
   projects,
   answerOnCard,
+  superseded = false,
   onRetry,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
+  superseded?: boolean
   onRetry?: (() => void) | undefined
 }) {
   const segments = useMemo(
@@ -314,7 +340,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
+          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} superseded={superseded} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
@@ -459,6 +485,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   onDecide,
   projects = NO_PROJECTS,
   answerOnCard = false,
+  superseded = false,
   onRetry,
 }: {
   message: ManagerMessage
@@ -469,6 +496,8 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   answerOnCard?: boolean
   /** Connected projects: what a bare `#12` or a GitHub URL resolves against. */
   projects?: readonly ManagerReferenceProject[]
+  /** Whether this question card is superseded by a newer card with the same header. */
+  superseded?: boolean
   onDecide: DecideAction
 }) {
   switch (message.kind) {
@@ -482,7 +511,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} onRetry={onRetry} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
     case 'action':
       return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':

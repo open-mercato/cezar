@@ -38,6 +38,7 @@ import {
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
   type UpdateManagerInput,
+  supersededAskIds,
 } from '@open-mercato/cezar-contract';
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -668,6 +669,7 @@ export class ManagerEngine {
     const dueAt = this.checkDueAt(manager, state);
     const important = messages.flatMap((message) =>
       message.kind === 'assistant' && message.important && !message.streaming && unseen(state, message) ? [message] : []);
+    const superseded = supersededAskIds(messages);
     return {
       ...manager,
       status: working ? 'working' : lastAssistant?.kind === 'assistant' && lastAssistant.error ? 'error' : 'idle',
@@ -678,7 +680,7 @@ export class ManagerEngine {
       important: important.length,
       ...(important.at(-1)?.headline ? { headline: important.at(-1)!.headline } : {}),
       pendingActions: messages.filter(pendingAction).length,
-      pendingQuestions: messages.filter(openAsk).length,
+      pendingQuestions: messages.filter((message) => openAsk(message) && !superseded.has(message.id)).length,
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
@@ -900,8 +902,21 @@ export class ManagerEngine {
 
   send(id: string, text: string, attachments: AttachmentInput[] = [], askId?: string): boolean {
     if (!this.deps.store.get(id)) return false;
+    const messages = this.deps.store.messages(id);
+    const superseded = supersededAskIds(messages);
+
+    // An answer targeting an already answered or superseded card is dropped: never wake the manager again.
+    if (askId !== undefined) {
+      const target = messages.find((message) => message.id === askId);
+      if (!target || target.kind !== 'assistant' || !target.ask || target.askAnswer !== undefined || superseded.has(target.id)) {
+        return true;
+      }
+    }
+
     // A card answers itself alone; the composer closes every open card, their one sure exit.
-    const answered = this.deps.store.messages(id).filter(openAsk).filter((message) => askId === undefined || message.id === askId);
+    const answered = messages
+      .filter((message): message is Extract<ManagerMessage, { kind: 'assistant' }> => openAsk(message) && !superseded.has(message.id))
+      .filter((message) => askId === undefined || message.id === askId);
     for (const message of answered) {
       this.publish(id, { ...message, askAnswer: text || 'Sent attachments' }, true);
       // Asked from a session the chat never saw: `Header: choice` alone answers nothing.

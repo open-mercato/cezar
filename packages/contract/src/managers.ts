@@ -477,6 +477,49 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
 ]);
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;
 
+/**
+ * IDs of question cards (`kind: 'assistant'`, `ask !== undefined`, `askAnswer === undefined`)
+ * that have been superseded by a newer assistant message with an ask sharing at least one question header.
+ */
+export function supersededAskIds(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const superseded = new Set<string>();
+  const seenHeaders = new Set<string>();
+
+  // Ensure chronological order by seq
+  const sorted = [...messages].sort((a, b) => a.seq - b.seq);
+
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const msg = sorted[i]!;
+    if (msg.kind !== 'assistant' || !msg.ask || !msg.ask.questions.length) continue;
+
+    const headers = msg.ask.questions.map((q) => q.header.trim()).filter(Boolean);
+
+    if (msg.askAnswer === undefined) {
+      if (headers.some((h) => seenHeaders.has(h))) {
+        superseded.add(msg.id);
+      }
+    }
+
+    for (const h of headers) {
+      seenHeaders.add(h);
+    }
+  }
+
+  return superseded;
+}
+
+export function isAskSuperseded(message: ManagerMessage, allMessages: readonly ManagerMessage[]): boolean {
+  if (message.kind !== 'assistant' || !message.ask || message.askAnswer !== undefined) return false;
+  return supersededAskIds(allMessages).has(message.id);
+}
+
+export function isAskOpen(message: ManagerMessage, allMessages?: readonly ManagerMessage[]): boolean {
+  if (message.kind !== 'assistant' || !message.ask || message.askAnswer !== undefined) return false;
+  if (!allMessages) return true;
+  return !supersededAskIds(allMessages).has(message.id);
+}
+
+
 export const managerMessagesQuerySchema = z.object({
   /** Page older history: only messages with a lower `seq`. */
   before: z.coerce.number().int().min(0).optional(),

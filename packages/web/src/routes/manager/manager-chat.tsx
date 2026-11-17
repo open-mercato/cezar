@@ -48,7 +48,7 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
-import { managerAccessOf, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
+import { isAskOpen, managerAccessOf, supersededAskIds, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
@@ -534,6 +534,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  const superseded = useMemo(() => supersededAskIds(chat.messages), [chat.messages])
   // "Your messages" (spec 2026-11-17-my-message-navigation): the ↓ button grows into ▲ · 💬 · ▼ | ↓.
   const myMessages = useManagerMyMessages({
     id,
@@ -546,7 +547,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     revealAt: scroll.revealAt,
   })
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
-  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
+  const questionOpen = chat.messages.some((message) => isAskOpen(message, chat.messages))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
   const subline = watchingLine({
@@ -767,6 +768,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   origin={origin}
                   onDecide={onDecide}
                   projects={connected}
+                  superseded={superseded.has(message.id)}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
                 />
