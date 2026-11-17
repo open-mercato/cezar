@@ -17,7 +17,7 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
   answered inline with the existing `AskForm` (one-tap, multi-select, Other…, Need more info). Each row also has
   **Open in context** (`#decision-<id>`) and **Dismiss** (6 s undo).
 - **Closed** (collapsed, last 7 days) lists answered, dismissed, replaced, withdrawn and task-ended questions, each
-  with its reason. **Older** (toggle, N days, off by default) moves stale open questions out of the badges without
+  with its reason. **Older** (toggle, on at 7 days by default) moves stale open questions out of the badges without
   closing them.
 - In a chat, a closed card renders as one quiet line: the reason, the struck-through question, and a link to the
   card that replaced it.
@@ -42,7 +42,7 @@ every open card. Instead, the card offers "Mark answered / Dismiss".
   UiEvent in the run NDJSON so replays draw the quiet card (AGENT_PROTOCOL.md updated).
 - Read: `GET /api/v1/workspace/questions` → `{ open[], closed[] }`, keys `m:<managerId>:<messageId>` /
   `r:<projectId>:<runId>:<requestId>`, zod in `packages/contract`, chained single-mount route.
-- Older: ui-state `questionsOlderAfterDays` (absent = off), computed, never stored.
+- Older: ui-state `questionsOlderAfterDays` (absent = 7, `0` = off), computed, never stored.
 
 ## Telling the agent on dismiss
 
