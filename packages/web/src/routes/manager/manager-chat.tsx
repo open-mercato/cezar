@@ -20,6 +20,7 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
+import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
 import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
 import { CacheStatusChip } from '@/components/cache-status'
@@ -54,6 +55,7 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
+import { useManagerMyMessages } from './use-manager-my-messages'
 import type { ManagerPatch } from './manager-pickers'
 import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
@@ -236,7 +238,20 @@ function useChatScroll(id: string, messages: readonly ManagerMessage[], onNearTo
     return true
   }, [])
 
-  return { ref, onScroll, jump, restick, reveal, away }
+  /** Unpin and park one row `inset` px below the top — a "your messages" jump. */
+  const revealAt = useCallback((row: HTMLElement, inset: number) => {
+    const box = ref.current
+    if (!box) return
+    pinned.current = false
+    box.scrollTop += row.getBoundingClientRect().top - box.getBoundingClientRect().top - inset
+    lastTop.current = box.scrollTop
+    // Before its scroll event: a row growing meanwhile must not pull the reader back.
+    anchor.current = rowAtTop(box)
+    leftAt.set(id, box.scrollTop)
+    setAway(true)
+  }, [id])
+
+  return { ref, onScroll, jump, restick, reveal, revealAt, away }
 }
 
 /**
@@ -519,6 +534,17 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  // "Your messages" (spec 2026-11-17-my-message-navigation): the ↓ button grows into ▲ · 💬 · ▼ | ↓.
+  const myMessages = useManagerMyMessages({
+    id,
+    messages: chat.messages,
+    onCard,
+    hasNextPage: Boolean(hasNextPage),
+    fetchNextPage,
+    scrollRef: scroll.ref,
+    away: scroll.away,
+    revealAt: scroll.revealAt,
+  })
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
   const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
   const asking = manager.pendingActions > 0 || questionOpen
@@ -753,7 +779,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
 
       <div className="relative mx-auto w-full max-w-[860px] px-3 pb-2 md:px-6">
         <div ref={floating.ref} data-slot="manager-floating" className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2 *:pointer-events-auto empty:hidden">
-          {scroll.away ? (
+          {scroll.away && myMessages.items.length > 0 ? <MyMessagesPill nav={myMessages} onLatest={scroll.jump} latestLabel="Scroll to bottom" latestSlot="manager-scroll-bottom" /> : null}
+          {scroll.away && myMessages.items.length === 0 ? (
             <button
               type="button"
               aria-label="Scroll to bottom"

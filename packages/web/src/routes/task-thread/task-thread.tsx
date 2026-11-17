@@ -18,6 +18,7 @@ import {
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
 import { CenteredState } from '@/components/centered-state'
 import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
@@ -54,6 +55,7 @@ import { useRunRecordReconcile } from './run-reconcile'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
 import { JumpToLatestPill, useThreadScroll } from './thread-scroller'
+import { useThreadMyMessages } from './use-thread-my-messages'
 import {
   SessionTranscript,
   buildTranscriptRows,
@@ -355,6 +357,8 @@ export function ThreadView({
     startAtLatest: hash === '#latest' || (hash === '#ask' && !hasAskTarget),
     rowKeys: rows.map(({ key }) => key),
   })
+  // "Your messages" (spec 2026-11-17-my-message-navigation): the jump pill grows into ▲ · 💬 · ▼.
+  const myMessages = useThreadMyMessages({ runId: run.id, sections, rowKeys: rows.map(({ key }) => key), history, scroll })
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
@@ -488,7 +492,9 @@ export function ThreadView({
         overlay={
           scroll.pillVisible ? (
             <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center">
-              <JumpToLatestPill onJump={scroll.jumpToLatest} />
+              {myMessages.items.length > 0
+                ? <MyMessagesPill nav={myMessages} onLatest={scroll.jumpToLatest} />
+                : <JumpToLatestPill onJump={scroll.jumpToLatest} />}
             </div>
           ) : null
         }

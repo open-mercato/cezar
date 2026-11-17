@@ -60,12 +60,13 @@ export const MANAGER_PAGE_SIZE = 50
 export async function getManagerMessages(
   id: string,
   before: number | undefined,
-  opts?: { signal?: AbortSignal; pending?: boolean },
+  opts?: { signal?: AbortSignal; pending?: boolean; kind?: 'user'; limit?: number },
 ): Promise<ManagerMessagesResponse> {
   const query = {
-    limit: String(MANAGER_PAGE_SIZE),
+    limit: String(opts?.limit ?? MANAGER_PAGE_SIZE),
     ...(before === undefined ? {} : { before: String(before) }),
     ...(opts?.pending ? { pending: '1' as const } : {}),
+    ...(opts?.kind ? { kind: opts.kind } : {}),
   }
   const since = streamClock
   const page = await unwrap(
@@ -546,6 +547,30 @@ export function useManagerMessages(id: string) {
     // The stream keeps it current; a refetch per focus would re-read every loaded page.
     // Catching up goes through `refreshManagerChat`, which reads only the newest.
     staleTime: Infinity,
+  })
+}
+
+/**
+ * Every message the user sent, oldest first, for the "your messages" list
+ * (spec 2026-11-17-my-message-navigation). Pages back with `before` until the start.
+ */
+export function useManagerUserMessages(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['workspace', 'managers', 'user-messages', id] as const,
+    queryFn: async ({ signal }) => {
+      const out: ManagerMessage[] = []
+      let before: number | undefined
+      // 20 × 500 messages; a chat longer than that lists its newest 10,000.
+      for (let page = 0; page < 20; page += 1) {
+        const { messages, hasMore } = await getManagerMessages(id, before, { signal, kind: 'user', limit: 500 })
+        out.unshift(...messages)
+        if (!hasMore || messages.length === 0) break
+        before = messages[0]!.seq
+      }
+      return out
+    },
+    enabled,
+    staleTime: 15_000,
   })
 }
 

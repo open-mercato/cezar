@@ -285,7 +285,7 @@ function AssistantMessage({
   )
   const references = useMemo(() => managerReferences(segments), [segments])
   return (
-    <article data-slot="manager-assistant" className="min-w-0">
+    <article data-slot="manager-assistant" data-message-id={message.id} className="min-w-0">
       <p data-slot="manager-message-meta" className="mb-1 flex items-baseline gap-2 text-xs text-muted-foreground">
         {message.turn === 'job' && message.jobName ? <span className="font-medium">{message.automationReport ? 'Automation' : 'Job'}: {message.jobName}</span> : null}
         {message.taskReport ? <span className="font-medium">Task update</span> : message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
@@ -474,9 +474,9 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   switch (message.kind) {
     case 'user':
       return (
-        <div data-slot="manager-user" className="flex flex-col items-end gap-2">
+        <div data-slot="manager-user" data-message-id={message.id} className="flex flex-col items-end gap-2">
           {message.text ? (
-            <p className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
+            <p data-slot="manager-user-bubble" className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
           ) : null}
           {message.attachments ? <UserAttachments managerId={origin.id} attachments={message.attachments} /> : null}
         </div>
