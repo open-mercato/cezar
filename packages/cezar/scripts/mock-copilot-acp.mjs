@@ -74,7 +74,16 @@ async function handle(frame) {
 
   if (method === 'session/new') {
     if (unauthenticated) fail(id, -32000, 'Authentication required');
-    else answer(id, { sessionId: SESSION_ID });
+    else answer(id, {
+      sessionId: SESSION_ID,
+      models: {
+        currentModelId: 'auto',
+        availableModels: [
+          { modelId: 'auto', name: 'Auto', description: 'Let Copilot pick the best model' },
+          { modelId: 'mock-sonnet', name: 'Mock Sonnet', description: 'Mock Sonnet', _meta: { copilotUsage: '1x', copilotEnablement: 'enabled' } },
+        ],
+      },
+    });
     return;
   }
 

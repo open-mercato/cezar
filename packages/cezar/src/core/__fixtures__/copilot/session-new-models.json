@@ -1,0 +1,21 @@
+{
+  "sessionId": "00000000-0000-4000-8000-000000000001",
+  "models": {
+    "currentModelId": "claude-sonnet-5.5",
+    "availableModels": [
+      { "modelId": "auto", "name": "Auto", "description": "Let Copilot pick the best model" },
+      { "modelId": "claude-sonnet-5.5", "name": "Claude Sonnet 5.5", "description": "Claude Sonnet 5.5", "_meta": { "copilotUsage": "1x", "copilotEnablement": "enabled", "copilotPriceCategory": "medium" } },
+      { "modelId": "claude-opus-4.8-fast", "name": "Claude Opus 4.8 (fast)", "description": "Claude Opus 4.8 fast", "_meta": { "copilotUsage": "30x", "copilotEnablement": "enabled", "copilotPriceCategory": "very_high" } },
+      { "modelId": "gpt-6-sol", "name": "GPT-6 Sol", "description": "GPT-6 Sol", "_meta": { "copilotUsage": "1x", "copilotEnablement": "disabled", "copilotPriceCategory": "medium" } },
+      { "modelId": "claude-sonnet-5.5", "name": "dup", "description": "dup" }
+    ]
+  },
+  "configOptions": [
+    { "id": "mode", "type": "select", "currentValue": "agent", "options": [{ "value": "agent", "name": "Agent" }] },
+    { "id": "model", "type": "select", "currentValue": "claude-sonnet-5.5", "options": [
+      { "value": "auto", "name": "Auto" },
+      { "value": "claude-sonnet-5.5", "name": "Claude Sonnet 5.5", "description": "Claude Sonnet 5.5" }
+    ] }
+  ],
+  "modes": { "currentModeId": "agent", "availableModes": [] }
+}

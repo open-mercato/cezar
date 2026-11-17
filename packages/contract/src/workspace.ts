@@ -642,12 +642,12 @@ export type ReasoningEffortOption = z.infer<typeof reasoningEffortOptionSchema>;
 /**
  * The runners whose model list is discovered from the host rather than hard-coded: Codex through
  * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
- * CLI's `list_models` control request (#784), Cursor through its CLI model listing, Junie through ACP session config options, Antigravity through `agy models`, and Kimi from the `[models.*]` tables of its own
+ * CLI's `list_models` control request (#784), Cursor through its CLI model listing, Junie through ACP session config options, Copilot through its ACP `session/new` model list (#1903), Antigravity through `agy models`, and Kimi from the `[models.*]` tables of its own
  * config.toml. A runner absent here has no discovery path and
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity', 'kimi']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'copilot', 'antigravity', 'kimi']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;
@@ -668,7 +668,7 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie|kimi` — the models discovered from that runner's
+/** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie|copilot|antigravity|kimi` — the models discovered from that runner's
  *  own host installation, plus how fresh the answer is. Never an error: an unavailable CLI
  *  degrades to `source: 'unavailable'` with a `reason`. */
 export const runnerModelCatalogResponseSchema = z.object({

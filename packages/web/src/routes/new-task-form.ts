@@ -107,10 +107,8 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
     { id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', desc: 'via Anthropic' },
     { id: 'openai/gpt-5.1', label: 'gpt-5.1', desc: 'via OpenAI' },
   ],
-  // Copilot has no host catalog here (it stays out of `MODEL_DISCOVERY_RUNNERS`), and its own
-  // catalog is fetched from GitHub per account, so nothing dated can be listed truthfully. `auto`
-  // is Copilot's own documented value for "let Copilot pick" (`copilot --help`), and the field
-  // stays free text for anything the account is entitled to.
+  // Copilot's models are discovered from its ACP `session/new` answer (#1903), so nothing dated is
+  // listed here. `auto` is Copilot's own documented value for "let Copilot pick" (`copilot --help`).
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
   ],
@@ -237,6 +235,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   junie: 'Junie',
+  copilot: 'Copilot',
   cursor: 'Cursor',
   antigravity: 'Antigravity',
   kimi: 'Kimi',
