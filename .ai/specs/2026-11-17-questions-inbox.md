@@ -36,16 +36,15 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
 ## Relevance: the main list holds only what still needs an answer
 
 - **Proved stale → closed** (above: expired, replaced, ended, retracted). No model call.
-- **Suspected → "Probably handled"**: `probablyHandled: { why, since }`, computed from data the server already has. The
-  triggers: the user replied in that chat after the card, the task had more turns or commits without an answer, or the
-  manager acted on the same thing since. The card leaves the main list, the badges and push, and stays answerable.
-  "Still needs me" puts it back.
-- **Agent confirms**: each manager check and each task turn lists the agent's open and probably-handled cards and asks it
-  to close what no longer needs the user (`CEZ:ASK-CLOSE <id> <reason>`), or to ask again.
-- **Late-answer guard**: answering a probably-handled or Older card first asks for confirmation. The answer that goes out
-  says how old the question was and what changed since. Answering a closed card returns 409.
+- **Suspected → flagged "may be out of date"**: `mayBeStale: { why, since }`, computed from data the server already
+  has. The triggers: the user replied in that chat after the card, the task had more turns or commits without an
+  answer, or the manager acted on the same thing since. The card **still counts**, sorts last in its group with an
+  amber note, and offers one-click "Dismiss as out of date".
+- **Agent confirms**: each manager check and each task turn lists the agent's open cards and asks it
+  to close what no longer needs the user (`CEZ:ASK-CLOSE <id> <reason>`), or to ask again. The list shows any out-of-date flag.
+- Answering a card that closed in the meantime (stale tab) returns 409. No confirm step, no age stamp (not chosen).
 
-A free-text chat reply does **not** close a card (cezar can't know what it answered). It marks the card probably handled
+A free-text chat reply does **not** close a card (cezar can't know what it answered). It flags the card may-be-out-of-date
 instead. This changes current behavior: today the manager composer closes every open card.
 
 ## Data model
@@ -66,7 +65,7 @@ instead. This changes current behavior: today the manager composer closes every 
 
 ## Counts
 
-One `liveQuestions()` (open, not probably handled, not Older) feeds `pendingQuestions`, the Questions badge, needs-you, the notch,
+One `liveQuestions()` (open and not Older; flagged cards count) feeds `pendingQuestions`, the Questions badge, needs-you, the notch,
 native notifications and the push badge. One `questions` WebSocket topic publishes `{ live, older }` on change.
 Remote mode reconciles over SSE.
 
@@ -74,5 +73,5 @@ Remote mode reconciles over SSE.
 
 One test for each close rule (replaced by id / by covered headers / partial overlap stays open; retracted; expired by
 time, by `until` and by a linked PR merging; ended for done, cancelled and archived; idle-closed stays open). Each
-probably-handled trigger, and the agent confirming one; the late-answer 409. Dismiss for each delivery path, undo, and count parity across
+out-of-date flag trigger, and the agent closing a flagged card; the stale-tab 409. Dismiss for each delivery path, undo, and count parity across
 summary, badge and push. Before/after screenshots on desktop and mobile.
