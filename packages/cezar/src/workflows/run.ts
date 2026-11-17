@@ -261,6 +261,9 @@ const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; C
 
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
+/** The graph tail agent waits by design (spec 2026-09-30-workflow-node-editor D13, #2183). */
+export const TERMINAL_AGENT_WAIT_NOTE =
+  "this is the workflow's last agent step — it waits for your reply; send a message, or Finish to complete the run (the agent can also end with CEZ:DONE)";
 import { freshContinuationContext } from './continuation-context.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
@@ -8178,6 +8181,10 @@ export class RunManager {
           // run frees its slot; only plain waiting keeps the idle timer. The autonomous nudge
           // above still wins over either.
           const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
+          // A graph's terminal agent parks by design (D13, #2183) — say so, or it reads as a hang.
+          if (graphHooks && interactive && !ask && !monitoring) {
+            emit({ type: 'note', stepId: step.id, message: TERMINAL_AGENT_WAIT_NOTE });
+          }
           // The final interactive step already parks at `waiting` by its own
           // lifecycle; only a non-final step needs the workflow held back, so
           // `execute` does not mark it done and run the next check (#917).

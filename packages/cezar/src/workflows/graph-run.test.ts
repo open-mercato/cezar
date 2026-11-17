@@ -8,7 +8,7 @@ import { RunStore } from '../runs/store.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { loadWorkflows } from './load.ts';
 import { MISSING_SESSION_NOTE } from './resume-fallback.ts';
-import { RunManager } from './run.ts';
+import { RunManager, TERMINAL_AGENT_WAIT_NOTE } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 import { track } from '../telemetry.ts';
 
@@ -158,6 +158,30 @@ describe('graph workflows run through RunManager', () => {
       ['fix', 'pending'],
     ]);
     expect(readFileSync(join(repoRoot, 'verdicts.txt'), 'utf8')).toBe('approve\n');
+  }, 30_000);
+
+  it('a terminal agent parks waiting with an explanatory note (#2183)', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'check', type: 'check', command: 'echo ok' },
+        { id: 'writer', type: 'agent', prompt: '{{task}}' },
+        { id: 'end', type: 'end', status: 'success' },
+      ],
+      edges: [
+        { from: 'start', to: 'check' },
+        { from: 'check.pass', to: 'writer' },
+        { from: 'writer', to: 'end' },
+      ],
+    };
+    const id = manager.startRun(def(graph), { task: 'x', worktree: false }).id;
+    const deadline = Date.now() + 20_000;
+    while (store.getRun(id)?.status !== 'waiting') {
+      if (Date.now() > deadline) throw new Error('run did not park');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const notes = store.readEvents(id).filter((e) => e.type === 'note' && e.stepId === 'writer');
+    expect(notes.map((e) => (e as { message?: string }).message)).toContain(TERMINAL_AGENT_WAIT_NOTE);
   }, 30_000);
 
   it('nudges once for a missing verdict, and session.continue resumes the named node', async () => {
