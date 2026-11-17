@@ -327,7 +327,7 @@ const sentence = (label: string) => label.charAt(0).toUpperCase() + label.slice(
  *  header still says how the task ended without a pill (calm when done). */
 export function closedStatusWord(run: ApiRun): string | null {
   if (statusChipLabel(run) !== null) return null
-  if (isIdleClosed(run)) return 'Closed · idle'
+  if (isIdleClosed(run)) return 'Idle'
   if (run.status === 'done') return 'Done'
   if (run.status === 'cancelled') return 'Cancelled'
   return null

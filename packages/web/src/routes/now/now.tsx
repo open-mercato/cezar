@@ -439,7 +439,7 @@ function FinishedRowView({ run }: { run: RunRecord }) {
       data-kind="finished"
       className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-1.5 md:grid-cols-[16px_minmax(0,1fr)_auto_auto] md:gap-x-3.5"
     >
-      {/* Done, cancelled and closed · idle all land here: the shape tells them apart (WCAG 1.4.1). */}
+      {/* Done, cancelled and idle all land here: the shape tells them apart (WCAG 1.4.1). */}
       <StatusMark attention={attention} />
       {/* Unread is weight, plus the word for a screen reader (#unread-done-items) — the table's rule. */}
       <Link

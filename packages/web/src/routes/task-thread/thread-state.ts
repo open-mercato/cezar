@@ -204,9 +204,9 @@ export function threadFooter(
       if (awaitingAnswer) {
         return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
       }
-      // Nobody replied, so the idle timer freed the process: nothing failed.
+      // Legacy idle close: housekeeping, so it reads like `done` (spec 2026-11-04-idle-closed-attention-state).
       if (idleClosed) {
-        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
+        return { state: 'closed', tone: 'dim', label: 'Session closed' }
       }
       const alreadyShown = error && thread?.turns.at(-1)?.items.some((item) =>
         item.kind === 'note' && (item.tone === 'danger' || FAILURE_PREFIX.test(item.text)) &&

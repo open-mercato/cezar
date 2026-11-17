@@ -66,7 +66,7 @@ const ANSWER = run('c105ed00-0000-4000-8000-000000002025', 'Closed on an unanswe
   idleClosedAt: T2,
   error: 'the session closed before the question was answered — continue to answer it',
 })
-const IDLE = run('c105ed00-0000-4000-8000-000000002022', 'Closed after inactivity', {
+const IDLE = run('c105ed00-0000-4000-8000-000000002022', 'A legacy idle close', {
   idleClosedAt: T2,
   error: 'closed after inactivity',
 })
@@ -205,9 +205,9 @@ describe('the step rail on a run that closed without failing', () => {
     browser.screenshot(`${artifactsDir}/closed-steps-answer-rail.png`, { viewport: true })
   })
 
-  it('an idle-closed run: an orange dot and pause (#2022)', () => {
+  it('a legacy idle-closed run: a neutral dot and pause, no pill (#2022)', () => {
     openThread(IDLE.id)
-    expect(headerPill()).toContain('closed · idle')
+    expect(browser.text('[data-slot="run-header"] [data-slot="run-status-word"]').trim()).toBe('Idle')
 
     const [, failed, idle] = dots()
     expect(idle!.visual).toBe('idle')
@@ -244,14 +244,14 @@ describe('the Graph tab on a run that closed without failing', () => {
     expect(details).not.toContain('failed')
   })
 
-  it('an idle-closed run: an orange "closed · idle" node (#2024)', () => {
+  it('a legacy idle-closed run: a neutral "idle" node (#2024)', () => {
     openGraph(IDLE.id)
     const { tests, fix } = graphNodes()
-    expect(fix).toMatchObject({ status: 'idle', label: 'closed · idle' })
+    expect(fix).toMatchObject({ status: 'idle', label: 'idle' })
     expect(tests!.status).toBe('failed')
     expect(fix!.dotBg).not.toBe(tests!.dotBg)
     browser.screenshot(`${artifactsDir}/closed-steps-idle-graph.png`, { viewport: true })
-    expect(nodeDetails('fix')).toContain('closed · idle')
+    expect(nodeDetails('fix')).toContain('idle')
   })
 
   it('a plain failure keeps its red "failed" node', () => {
