@@ -1,3 +1,4 @@
+import { threadHygieneSchema, threadDecisionSchema } from './thread-hygiene.ts';
 import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
@@ -182,6 +183,7 @@ export type RunLiveUsage = z.infer<typeof runLiveUsageSchema>;
  * there — these are additive fields, and an absent one means "this run predates it".
  */
 export const runRecordSchema = z.object({
+  threadHygiene: threadHygieneSchema.optional(),
   id: z.string(),
   title: z.string(),
   /** Display title (#389): auto-derived from the first agent turn, or the user's inline edit
@@ -513,6 +515,7 @@ export type ApiRun = z.infer<typeof apiRunSchema>;
  * different labels in one palette.
  */
 export const runIndexEntrySchema = z.object({
+  threadHygiene: threadHygieneSchema.optional(),
   worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   /** The registered project this run belongs to. Joins against `GET /projects`. */
   projectId: z.string(),
@@ -1332,6 +1335,7 @@ export type CreateRunInput = z.input<typeof createRunInputSchema>;
  */
 export const messageInputSchema = z
   .object({
+    threadDecision: threadDecisionSchema.optional(),
     text: z.string().max(100_000).default(''),
     images: attachmentListSchema.default([]),
     /** One per message, reused by its retries: a key that already landed is not delivered again. */
@@ -1348,6 +1352,7 @@ export type MessageInput = z.input<typeof messageInputSchema>;
  * override picks the engine for the continuation; `text`/`images` bound like a live message's.
  */
 export const continueInputSchema = z.object({
+  threadDecision: threadDecisionSchema.optional(),
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: attachmentListSchema.optional(),
   runner: runnerSchema.optional(),

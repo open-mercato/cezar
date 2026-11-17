@@ -145,6 +145,7 @@ function userWait(projectId: string, run: RunRecord): { key: string; since: stri
     const operation = gate.activeOperationId ? `${gate.activeOperationId}:${gate.revision ?? 0}` : `${gate.worktreeId}:${gate.generation}`;
     return { key: `task-needs-you:${projectId}:${run.id}:worktree:${operation}`, since: run.waitingSince ?? lastActivityAt(run), detail: WORKTREE_RECOVERY, worktree: true };
   }
+  if (run.threadHygiene?.pending && !run.attentionRequest && !run.dispatch?.overBudget) return undefined;
   if ((run.status === 'waiting' && !lifecycleBusy(gate)) || (run.status === 'failed' && run.awaitingAnswerSince !== undefined)) {
     const since = run.waitingSince ?? run.awaitingAnswerSince ?? lastActivityAt(run);
     const detail = waitDetail(run);
@@ -179,7 +180,7 @@ export function taskAttention(projectId: string, runs: RunRecord[], now: number)
       items.push({ ...base, key: settledKey('task-review', projectId, run), kind: 'task-review', since: finished });
     } else if (run.status === 'done' && unseenSince(run, finished) && now - Date.parse(finished ?? '') < RECENT_FAILURE_MS) {
       items.push({ ...base, key: settledKey('task-finished', projectId, run), kind: 'task-finished', since: finished });
-    } else if (run.status === 'running' && now - Date.parse(lastActivityAt(run)) > STALLED_MS) {
+    } else if (run.status === 'running' && !run.threadHygiene?.pending && now - Date.parse(lastActivityAt(run)) > STALLED_MS) {
       const since = lastActivityAt(run);
       items.push({ ...base, key: `task-stalled:${projectId}:${run.id}:${since}`, kind: 'task-stalled', since });
     }

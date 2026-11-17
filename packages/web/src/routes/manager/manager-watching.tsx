@@ -330,6 +330,13 @@ function WatchingSections({
   ) : null
   return (
     <>
+      {(runs ?? []).some(run => connected.some(project => project.id === run.projectId) && run.threadHygiene?.pending && !run.archived) ? (
+        <Section title="Continuation decisions">
+          {(runs ?? []).filter(run => connected.some(project => project.id === run.projectId) && run.threadHygiene?.pending && !run.archived).map(run => (
+            <Row key={`${run.projectId}/${run.id}`}><Link to={taskPath(run.projectId, run.id)} className="min-w-0 break-words">{run.titleSummary ?? run.title} — choose work or handoff</Link></Row>
+          ))}
+        </Section>
+      ) : null}
       {tasksFirst ? tasks : null}
       <Section
         title="Watching"

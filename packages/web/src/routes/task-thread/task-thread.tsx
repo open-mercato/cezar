@@ -1,3 +1,4 @@
+import { ThreadHygienePanel } from './thread-hygiene'
 import { queueWaitLabel } from '@/lib/queue-wait-label'
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -371,6 +372,7 @@ export function ThreadView({
           this gap only separates the sections — rows, empty state, footer, review panel. */}
       <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-2.5 px-3 py-3 md:gap-3.5 md:px-6 md:py-5">
         {run.worktreeLifecycle ? <TaskLifecycleCard worktreeId={run.worktreeLifecycle.worktreeId} operationId={run.worktreeLifecycle.activeOperationId} worktreePath={run.worktreePath} taskTitle={run.title ?? run.task} /> : null}
+        <ThreadHygienePanel run={run} />
         {history ? (
           <HistoryBoundary
             hasOlder={history.hasOlder}

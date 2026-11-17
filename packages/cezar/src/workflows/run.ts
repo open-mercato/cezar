@@ -1,3 +1,6 @@
+import { randomUUID as hygieneOperationId } from 'node:crypto';
+import { threadAdmission } from '../runs/thread-hygiene.ts';
+import { THREAD_HYGIENE_REQUIRED, THREAD_CONTINUATION_LIMIT, PREPARE_HANDOFF_PROMPT, type ThreadDecision } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
@@ -558,6 +561,8 @@ const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
 const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
 
 interface ContinueRunOptions {
+  threadDecision?: ThreadDecision;
+  operationId?: string;
   text?: string;
   images?: PastedContent[];
   runner?: RunnerId;
@@ -592,7 +597,7 @@ interface ActiveRun {
    *  and a settling dispatch child resolves its entry in `graphChildWaits`. */
   graphAnswer?: (text: string) => void;
   graphFinish?: () => void;
-  graphChildWaits?: Map<string, (child: { status: string; summary: string }) => void>;
+  graphChildWaits?: Map<string, (child: { status: string; summary: string }, decision?: ThreadDecision) => boolean>;
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
@@ -2592,6 +2597,11 @@ export class RunManager {
       'left running by a settled task (found at startup)',
     );
     for (const run of live) {
+      if (run.threadHygiene?.pending) {
+        this.store.updateRun(run.id, { status: 'waiting', activity: undefined, askParked: true,
+          idleClosedAt: run.threadHygiene.pending.since, monitoringWakeAt: undefined, autoResumeAt: undefined });
+        continue;
+      }
       if (this.lifecycle.isBlocked(run.id)) {
         this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
         continue;
@@ -2726,6 +2736,7 @@ export class RunManager {
           text: RESTART_CONTINUATION_PROMPT,
         },
         true,
+        { hygieneRecovery: true },
       );
       this.store.appendEvent(run.id, {
         type: 'lifecycle',
@@ -3215,8 +3226,14 @@ export class RunManager {
     // unattended one.
     const supervising = this.supervisedChildCount(runId) > 0;
     if (!this.hasContinueBudget(state, supervising)) return false;
+    const dispatch = this.dispatchOf(runId);
+    if (!dispatch || listInbox(this.dataDir, dispatch.rootRunId, inboxName(runId, dispatch.rootRunId), dispatch.inboxSeenAt).length === 0) return false;
+    if (!threadAdmission(this.store.getRun(runId)?.threadHygiene, 'inbox', 'preflight').accepted) {
+      this.threadWork(runId, 'inbox', () => false);
+      return false;
+    }
     const digest = this.flushInbox(runId);
-    if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
+    if (!digest || !this.threadWork(runId, 'inbox', () => state.session!.sendMessage([{ type: 'text', text: digest }]))) return false;
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
@@ -3626,12 +3643,21 @@ export class RunManager {
         message: `report received from task "${child.title}" (${child.id}) — status ${report.status}`,
       });
 
+      const parentState = this.active.get(parentId);
+      if (parentState) parentState.supervisedContinues = 0;
+      if (parent.status === 'cancelled') return;
+      const wouldResume = parent.status === 'waiting' || parent.activity === 'monitoring'
+        || (!parentState && ['done', 'failed', 'review'].includes(parent.status));
       // A graph `dispatch` node is awaiting exactly this child (1c): hand it the outcome directly —
       // cancelled included, so the node takes its `failed` port instead of waiting forever.
       const waiter = this.active.get(parentId)?.graphChildWaits?.get(child.id);
       if (waiter) {
-        this.ackPendingReport(parentId, child.id, at);
-        waiter({ status: child.status, summary: text });
+        if (waiter({ status: child.status, summary: text })) this.ackPendingReport(parentId, child.id, at);
+        return;
+      }
+
+      if (child.status !== 'cancelled' && wouldResume && (parent.threadHygiene?.continuations ?? 0) >= THREAD_CONTINUATION_LIMIT) {
+        this.threadWork(parentId, 'child-report', () => false);
         return;
       }
 
@@ -3641,9 +3667,6 @@ export class RunManager {
 
       // A settled child is progress: the supervised stretch starts over (A15). The monitoring
       // wake-up cap is a lifetime budget a report no longer refills (#1183).
-      const parentState = this.active.get(parentId);
-      if (parentState) parentState.supervisedContinues = 0;
-
       const blocks: PastedContent[] = [{ type: 'text', text }];
       if (this.deliverMessage(parentId, blocks, false) || this.enqueueMessage(parentId, blocks)) {
         this.ackPendingReport(parentId, child.id, at);
@@ -4060,7 +4083,7 @@ export class RunManager {
     } else {
       // Legacy records without a recoverable definition and standalone continuations retain
       // their existing session recovery. Manual Continue also keeps its existing semantics.
-      resumed = this.continueRun(runId, { text: reason === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT }, true);
+      resumed = this.continueRun(runId, { text: reason === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT }, true, { hygieneRecovery: true });
     }
     if (!resumed.ok) {
       // Refusals happen before `continueRun` retires anything, so the deadline is still on the
@@ -5063,6 +5086,7 @@ export class RunManager {
    * `ActiveRun` does not exist yet for part of this window.
    */
   deferMessage(runId: string, content: PastedContent[]): boolean {
+    if (this.store.getRun(runId)?.threadHygiene?.pending) return false;
     // The window spans two sub-states: `starting` (no `ActiveRun` yet) and the
     // longer stretch where the `ActiveRun` exists but the backend is still being
     // spawned. `execute()` deletes the run from `starting` as soon as it builds
@@ -5101,8 +5125,56 @@ export class RunManager {
    * while `waiting`). Returns false when there is no open session — the GUI
    * then offers "Continue" instead.
    */
-  sendMessage(runId: string, content: PastedContent[]): boolean {
-    const delivered = this.deliverMessage(runId, content, true) || this.reopenIdleParked(runId, content);
+  resumeThreadHygiene(runId: string, decision: ThreadDecision, content: PastedContent[], opts: ContinueRunOptions = {}): { ok: boolean; error?: string } {
+    const run = this.store.getRun(runId);
+    if (!run || !run.threadHygiene?.pending || decision.expectedCount !== run.threadHygiene.continuations) return { ok: false, error: 'Thread decision is stale; refresh status.' };
+    const state = this.active.get(runId);
+    if (state?.graphChildWaits?.size) {
+      if (decision.action === 'handoff') return { ok: false, error: 'Resolve the graph child wait before preparing a handoff.' };
+      const pending = run.dispatch?.pendingReports?.find(report => state.graphChildWaits?.has(report.fromRunId));
+      const waiter = pending ? state.graphChildWaits.get(pending.fromRunId) : undefined;
+      const child = pending ? this.store.getRun(pending.fromRunId) : undefined;
+      if (!waiter || !pending || !child) return { ok: false, error: 'Still waiting for the child report.' };
+      const accepted = waiter({ status: child.status, summary: childSettleReport(child, { resumeNotes: handoffSectionExcerpt(readHandoff(this.dataDir, child.id), '## Resume notes') }).text }, decision);
+      if (accepted) this.ackPendingReport(runId, pending.fromRunId, pending.at);
+      return { ok: accepted, ...(accepted ? {} : { error: THREAD_HYGIENE_REQUIRED }) };
+    }
+    const reports = run.dispatch?.pendingReports;
+    const reportText = reports?.length ? pendingReportsBlock(reports) : '';
+    const blocks = [...content, ...(reportText ? [{ type: 'text' as const, text: reportText }] : [])];
+    if (state?.session?.open) {
+      if ((opts.runner !== undefined && opts.runner !== run.runner) || (opts.model !== undefined && opts.model !== run.model)
+        || (opts.reasoningEffort !== undefined && opts.reasoningEffort !== run.reasoningEffort)
+        || (opts.agentProfile !== undefined && opts.agentProfile !== run.agentProfile)) return { ok: false, error: 'End the active session before changing its agent, model or account.' };
+      const ok = this.sendMessage(runId, blocks, decision, opts.operationId);
+      if (ok && reports) for (const report of reports) this.ackPendingReport(runId, report.fromRunId, report.at);
+      return { ok, ...(ok ? {} : { error: THREAD_HYGIENE_REQUIRED }) };
+    }
+    return this.continueRun(runId, { ...opts, text: messageText(content), images: content.filter(b => b.type !== 'text'), threadDecision: decision });
+  }
+
+  private threadWork(runId: string, reason: string, send: () => boolean, decision?: ThreadDecision, operationId: string = hygieneOperationId()): boolean {
+    const run = this.store.getRun(runId);
+    if (!run) return false;
+    const admission = threadAdmission(run.threadHygiene, reason, operationId, decision);
+    if (!admission.accepted) {
+      this.store.updateRun(runId, { threadHygiene: admission.state });
+      const state = this.active.get(runId);
+      if (state) {
+        this.clearMonitoringWakeTimer(state, runId);
+        this.clearMonitoringLivenessTimer(state);
+      }
+      return false;
+    }
+    if (admission.replayed) return true;
+    if (!send()) return false;
+    this.store.updateRun(runId, { threadHygiene: admission.state });
+    return true;
+  }
+
+  sendMessage(runId: string, content: PastedContent[], decision?: ThreadDecision, operationId?: string): boolean {
+    if (operationId && this.store.getRun(runId)?.threadHygiene?.operationIds?.includes(operationId)) return true;
+    const delivered = this.deliverMessage(runId, content, true, undefined, decision, operationId) || ((decision !== undefined || !this.store.getRun(runId)?.threadHygiene?.pending) && this.reopenIdleParked(runId, content, decision));
     if (delivered) {
       const state = this.active.get(runId);
       if (state) {
@@ -5121,12 +5193,12 @@ export class RunManager {
    * A message to an idle park reopens its session exactly as Continue does: to the user the
    * session never closed (spec 2026-11-04-idle-closed-attention-state § Revision).
    */
-  private reopenIdleParked(runId: string, content: PastedContent[]): boolean {
+  private reopenIdleParked(runId: string, content: PastedContent[], threadDecision?: ThreadDecision): boolean {
     const run = this.store.getRun(runId);
     if (!run || !isIdleParked(run) || this.active.has(runId) || this.starting.has(runId)) return false;
     const text = messageText(content);
     if (continuePromptRefusal(text, content)) return false;
-    return this.continueRun(runId, { text, images: content.filter((block) => block.type !== 'text') }).ok;
+    return this.continueRun(runId, { text, threadDecision, images: content.filter((block) => block.type !== 'text') }).ok;
   }
 
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
@@ -5136,6 +5208,9 @@ export class RunManager {
     content: PastedContent[],
     userAuthored: boolean,
     preparedUserMessage?: PreparedUserMessage,
+    decision?: ThreadDecision,
+    operationId?: string,
+    acceptedResumption = false,
   ): boolean {
     if (this.lifecycle.isBlocked(runId)) return false;
     const state = this.active.get(runId);
@@ -5154,6 +5229,12 @@ export class RunManager {
       return true;
     }
     if (!state?.session?.open || state.cancelled) return false;
+    const hygieneRun = this.store.getRun(runId);
+    const isResumption = messageText(content) !== REPO_ROOT_RESUMED_NOTE && (this.waiting.has(runId) || this.monitoring.has(runId) || hygieneRun?.threadHygiene?.pending !== undefined);
+    if (isResumption && !acceptedResumption && !preparedUserMessage && !threadAdmission(hygieneRun?.threadHygiene, userAuthored ? 'user-message' : 'automatic-message', 'preflight', decision).accepted) {
+      this.threadWork(runId, userAuthored ? 'user-message' : 'automatic-message', () => false, decision);
+      return false;
+    }
     // Acceptance and execution are separate when an in-place task has yielded the repository
     // lease. Persist the user's message at acceptance time so the thread acknowledges it at once,
     // even if another task holds the tree for minutes. The prepared payload travels through the
@@ -5181,14 +5262,16 @@ export class RunManager {
     // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
     // delivered once the tree is ours. Every wake-up that lands meanwhile rides the same wait.
     if (state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state))) {
+      const counted = acceptedResumption || (isResumption && this.threadWork(runId, userAuthored ? 'user-message' : 'automatic-message', () => true, decision, operationId));
+      if (isResumption && !counted) return false;
       const resume = (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
       void resume.then((acquired) => {
         if (!acquired) return;
         // Another in-place task held the tree while we waited, so this session's picture of it may
         // be stale. Delivered as its own engine message, ahead of the one the run woke for, so a
         // user-authored wake-up stays verbatim in the transcript.
-        this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
-        if (this.deliverMessage(runId, content, userAuthored, prepared)) return;
+        const resumedContent: PastedContent[] = [...content, { type: 'text', text: REPO_ROOT_RESUMED_NOTE }];
+        if (this.deliverMessage(runId, resumedContent, userAuthored, prepared, decision, operationId, counted)) return;
         // The session closed while we waited: keep the message the way the ladder would.
         if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
       });
@@ -5220,7 +5303,9 @@ export class RunManager {
       ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
           (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
       : expanded;
-    const delivered = state.session.sendMessage(deliverable);
+    const delivered = isResumption && !acceptedResumption
+      ? this.threadWork(runId, userAuthored ? 'user-message' : 'automatic-message', () => state.session!.sendMessage(deliverable), decision, operationId)
+      : state.session.sendMessage(deliverable);
     if (delivered) {
       for (const write of imageLibraryWrites) write();
       this.clearPendingAsk(runId);
@@ -5350,13 +5435,14 @@ export class RunManager {
     deferForCapacity = false,
     /** Engine-only: the agent fallback may open a fresh session on a task whose agent ran out
      *  before it ever produced one. Never reachable from the HTTP route. */
-    internal: { freshSessionAllowed?: boolean } = {},
+    internal: { freshSessionAllowed?: boolean; hygieneRecovery?: boolean } = {},
   ): { ok: boolean; error?: string } {
     if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
     if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.reasoningEffort?.trim())) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     const run = this.store.getRun(runId);
+    if (opts.operationId && run?.threadHygiene?.operationIds?.includes(opts.operationId)) return { ok: true };
     if (this.active.has(runId) || this.starting.has(runId)) {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
       // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
@@ -5427,6 +5513,10 @@ export class RunManager {
     // run's current backend — `runContinuation` reads it off the record, later continuations
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
+    if (opts.model && modelConflictsWithRunner(opts.model, targetRunner)) return { ok: false, error: `model '${opts.model}' is not a ${targetRunner} model` };
+    if (!internal.hygieneRecovery && !this.threadWork(runId, deferForCapacity ? 'automatic-continue' : 'continue', () => true, opts.threadDecision, opts.operationId)) {
+      return { ok: false, error: THREAD_HYGIENE_REQUIRED };
+    }
     const runnerChanged = opts.runner !== undefined && opts.runner !== (run.runner ?? 'claude');
     const engineChanged = runnerChanged || opts.model !== undefined;
     if (opts.runner !== undefined || opts.model !== undefined || opts.reasoningEffort !== undefined || opts.agentProfile !== undefined) {
@@ -5904,7 +5994,7 @@ export class RunManager {
         // every marker, the dispatch rules and the autonomous nudge keep their precedence —
         // the twin of `runAgentStep`'s call, through the one helper both sites share.
         const compactionContinued =
-          !nudged && compacted && Boolean(sessionOpen)
+          !nudged && !this.store.getRun(runId)?.threadHygiene?.pending && compacted && Boolean(sessionOpen)
             ? this.tryCompactionContinue(runId, state, stepId, { markerless, dispatchTurn })
             : false;
         const autoContinued = nudged || compactionContinued;
@@ -5916,7 +6006,7 @@ export class RunManager {
             // lifecycle (free the slot), while only plain waiting keeps the idle timer. Monitoring is
             // checked before the autonomous nudge, so it remains non-attention.
             const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
-            if (ask) {
+            if (ask || this.store.getRun(runId)?.threadHygiene?.pending) {
               state.askPark = 'waiting';
               state.monitorHandoff = false;
             }
@@ -5929,7 +6019,7 @@ export class RunManager {
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
-              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask ? true : undefined, attentionRequest });
+              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask || this.store.getRun(runId)?.threadHygiene?.pending ? true : undefined, attentionRequest });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
               this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
@@ -7661,13 +7751,17 @@ export class RunManager {
         : settled.size === childIds.length;
     if (!done()) {
       const outcome = await this.parkGraphNode(runId, state, nodeId, { activity: 'monitoring' }, (resolve) => {
-        const waits = (state.graphChildWaits ??= new Map<string, (child: { status: string; summary: string }) => void>());
+        const waits = (state.graphChildWaits ??= new Map<string, (child: { status: string; summary: string }, decision?: ThreadDecision) => boolean>());
         for (const id of childIds) {
           if (settled.has(id)) continue;
-          waits.set(id, (c: { status: string; summary: string }) => {
+          waits.set(id, (c: { status: string; summary: string }, decision?: ThreadDecision) => {
             settled.set(id, c);
-            waits.delete(id);
-            if (done()) resolve({ kind: 'answer', text: 'settled' });
+            if (!done()) { waits.delete(id); return true; }
+            return this.threadWork(runId, 'child-report', () => {
+              waits.delete(id);
+              resolve({ kind: 'answer', text: 'settled' });
+              return true;
+            }, decision);
           });
         }
         return () => {
@@ -8211,7 +8305,7 @@ export class RunManager {
         // therefore be closed with its work half done, which is the same defect wearing a
         // different status. `sessionOpen` is the only precondition that actually matters here.
         const compactionContinued =
-          !autoContinued && compacted && Boolean(sessionOpen)
+          !autoContinued && !this.store.getRun(runId)?.threadHygiene?.pending && compacted && Boolean(sessionOpen)
             ? this.tryCompactionContinue(runId, state, step.id, { markerless, dispatchTurn })
             : false;
         const continued = autoContinued || compactionContinued;
@@ -8231,7 +8325,7 @@ export class RunManager {
           // Inside the `!autoContinued` branch on purpose: a nudged autonomous
           // turn did not park, so it must not leave a park behind for `execute`
           // to settle.
-          if (ask) {
+          if (ask || this.store.getRun(runId)?.threadHygiene?.pending) {
             state.askPark = 'waiting';
             state.monitorHandoff = false;
           }
@@ -8250,7 +8344,7 @@ export class RunManager {
               // The durable half of the park, and the only thing a restart can
               // read: without it `recover()` cannot tell this `waiting` from a
               // finished interactive session and settles it as a success.
-              askParked: ask ? true : undefined,
+              askParked: ask || this.store.getRun(runId)?.threadHygiene?.pending ? true : undefined,
               attentionRequest,
             });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
@@ -9620,7 +9714,7 @@ export class RunManager {
       });
       return false;
     }
-    if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
+    if (!this.threadWork(runId, 'autonomous', () => state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }]) ?? false)) return false;
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
@@ -9747,6 +9841,11 @@ export class RunManager {
   }
 
   private armMonitoringWakeTimer(runId: string, state: ActiveRun): void {
+    if (this.store.getRun(runId)?.threadHygiene?.pending) {
+      this.clearMonitoringWakeTimer(state, runId);
+      this.clearMonitoringLivenessTimer(state);
+      return;
+    }
     const minutes = this.semaphore.monitoringWakeIntervalMinutes();
     if (minutes === null) {
       this.clearMonitoringWakeTimer(state, runId);

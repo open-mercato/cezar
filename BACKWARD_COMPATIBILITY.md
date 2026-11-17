@@ -39,6 +39,8 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (packages/cezar/src/server/server.ts)
 
+- `GET /api/v1/runs/:id/thread-status` reads saved state and handoff content with its file timestamp. Cold project reads do not build a context or recover tasks.
+
 Issue ownership metadata (#1620, additive): `GET /api/v1/github` and
 `GET /api/v1/github/search`, including their project aliases, may add issue-only
 `assignees: string[]`, `assigneesTruncated: boolean`,
@@ -841,3 +843,9 @@ the current revision may dismiss it (ledger outcome `cancelled`, listing the rec
 exist). DELETE of a composer start that already launched answers 409 instead of 404. A Codex login
 that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
 transient failure, not an invalid binding.
+
+## Long-thread hygiene (2026-11-17)
+
+`threadHygiene?` is additive in `runs.json`, run records, workspace events and index rows. New runs start at zero with known history; absent old data stays unknown and only subsequent observed work resumptions are counted. The optional fields record accepted operation ids and the pending decision; no migration or token/age estimate is required. Message and Continue inputs accept optional `threadDecision {action, expectedCount}`. Before a fourth work continuation the engine returns 409 with a choice-required explanation; automatic work waits for the same explicit decision. A decision covers one resumption and leaves existing budgets and approval gates in force.
+
+The status read and UI-only manager exception do not create model turns. Existing genuine questions, failures and PR exceptions remain in the manager watch. `cez handoff retain` writes a new retained copy and hash manifest in Assets without changing originals; missing dependencies remain explicit.

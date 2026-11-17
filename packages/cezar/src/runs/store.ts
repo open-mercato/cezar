@@ -1,3 +1,4 @@
+import { threadHygieneSchema } from '@open-mercato/cezar-contract';
 import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
@@ -156,6 +157,7 @@ export type RunPrRef = z.infer<typeof prRefSchema>;
 /** Exported for `./run-index.ts`, the read-only reader of the same file. Nothing else should
  *  parse `runs.json` — see `reconcileLoadedRun` for why a second parser is a correctness risk. */
 export const runRecordSchema = z.object({
+  threadHygiene: threadHygieneSchema.optional(),
   id: z.string(),
   title: z.string(),
   /** Display title (#389): the auto-derived summary of the first agent turn,
@@ -1004,6 +1006,14 @@ export function isIdleParked(run: Pick<RunRecord, 'status' | 'idleClosedAt'>): b
  * are marked failed so no ghost stays behind.
  */
 export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }): RunRecord {
+  if (!opts?.keepLive && run.threadHygiene?.pending && ['running', 'waiting'].includes(run.status)) {
+    const lastStepAt = run.steps.flatMap(step => step.finishedAt ?? step.startedAt ?? []).sort().at(-1);
+    run.status = 'waiting';
+    run.activity = undefined;
+    run.askParked = true;
+    run.idleClosedAt = run.idleClosedAt ?? lastStepAt ?? run.threadHygiene.pending.since;
+    run.monitoringWakeAt = undefined;
+  }
   // A run that was live when the previous process exited can never finish —
   // surface that instead of a forever-"running" ghost. `review` survives
   // restarts on purpose: the gate is pure data (worktree + branch + record)
@@ -1503,6 +1513,7 @@ export class RunStore extends EventEmitter {
       groupId: input.groupId,
       variant: input.variant,
       status: 'queued',
+      threadHygiene: { continuations: 0, historyKnown: true },
       createdAt: new Date().toISOString(),
       tokensUsed: 0,
       archived: false,

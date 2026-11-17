@@ -1,3 +1,5 @@
+import { threadDecisionSchema, threadStatusSchema, THREAD_HYGIENE_REQUIRED, PREPARE_HANDOFF_PROMPT } from '@open-mercato/cezar-contract';
+import { savedThreadStatus } from '../runs/thread-status.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
@@ -1064,7 +1066,8 @@ const openInSchema = z.object({
 // than mirrored here, so the wire cannot drift from what the cockpit compiles against.
 const messageSchema = z
   .object({
-    text: z.string().max(100_000).default(''),
+    threadDecision: threadDecisionSchema.optional(),
+  text: z.string().max(100_000).default(''),
     images: attachmentListSchema.default([]),
     idempotencyKey: z.string().uuid().optional(),
   })
@@ -1898,6 +1901,17 @@ export function createApp(deps: ServerDeps) {
     // alone must not allow a direct URL to recover or mutate another project.
     if (capabilities().singleProject) {
       return c.json({ error: `unknown project: ${raw}` }, 404);
+    }
+    const statusPath = /^.*\/runs\/([^/]+)\/thread-status$/.exec(c.req.path);
+    if (c.req.method === 'GET' && statusPath) {
+      const project = (await listProjects()).find(project => project.id === raw);
+      if (!project || project.status === 'missing') return c.json({ error: 'project not available' }, 404);
+      const owned = contexts.peek(raw);
+      const dataDir = join(project.root, '.ai/cezar');
+      const runId = decodeURIComponent(statusPath[1]!);
+      const run = owned?.store.getRun(runId) ?? readRunIndexFromDisk(dataDir).find(run => run.id === runId);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      return c.json(savedThreadStatus(dataDir, run));
     }
     try {
       c.set('project', await contexts.context(raw));
@@ -5527,8 +5541,9 @@ export function createApp(deps: ServerDeps) {
         // (the record is written a tick later), the engine can.
         //   live session → delivered · still queued → folded into the prompt
         //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
-        if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
+        if (manager.sendMessage(id, content, parsed.data.threadDecision, parsed.data.idempotencyKey)) return c.json((answered = { delivered: true as const }));
 
+        if (store.getRun(id)?.threadHygiene?.pending) return c.json({ error: THREAD_HYGIENE_REQUIRED }, 409);
         const currentRun = store.getRun(id);
         // Bounds apply only to a message that is actually about to be stacked. Without this
         // gate an over-long message posted to a *finished* run would answer `400 prompt too
@@ -5676,9 +5691,19 @@ export function createApp(deps: ServerDeps) {
         }
         const images = resolveAttachments(parsed.data.images);
         if (typeof images === 'string') return c.json({ error: images }, 400);
-        const result = manager.continueRun(id, {
-          text: parsed.data.text,
-          images,
+        const choice = parsed.data.threadDecision;
+        const choiceText = choice?.action === 'handoff' ? PREPARE_HANDOFF_PROMPT + (parsed.data.text?.trim() ? '\nPreserve this unsent next-step request as context, without executing it:\n' + parsed.data.text : '') : parsed.data.text?.trim() || 'Continue.';
+        const result = choice && run.threadHygiene?.pending
+          ? manager.resumeThreadHygiene(id, choice, [
+              ...(choice.action === 'handoff' ? [] : images ?? []),
+              { type: 'text', text: choiceText },
+            ], { runner: parsed.data.runner, model: parsed.data.model, reasoningEffort: parsed.data.reasoningEffort, agentProfile: parsed.data.agentProfile, operationId: parsed.data.idempotencyKey })
+          : manager.continueRun(id, {
+          threadDecision: choice,
+          operationId: parsed.data.idempotencyKey,
+
+          text: choice ? choiceText : parsed.data.text,
+          images: choice?.action === 'handoff' ? [] : images,
           runner: parsed.data.runner,
           model: parsed.data.model,
           reasoningEffort: parsed.data.reasoningEffort,
@@ -5869,6 +5894,12 @@ export function createApp(deps: ServerDeps) {
 
     // Handoff journal (spec 007): the per-task handoff.md as markdown. 404 only
     // when the task is unknown; a task without a (yet) seeded file returns ''.
+    .get('/runs/:id/thread-status', paramZodValidator(runIdParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      return c.json(savedThreadStatus(dataDir, run));
+    })
     .get('/runs/:id/handoff', (c) => {
       const { dataDir, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
@@ -8553,6 +8584,7 @@ export function createApp(deps: ServerDeps) {
     projectId,
     id: run.id,
     title: run.title,
+    ...(run.threadHygiene !== undefined ? { threadHygiene: run.threadHygiene } : {}),
     ...(run.worktreeLifecycle !== undefined ? { worktreeLifecycle: run.worktreeLifecycle } : {}),
     ...(run.titleSummary !== undefined ? { titleSummary: run.titleSummary } : {}),
     ...(run.titleOrigin !== undefined ? { titleOrigin: run.titleOrigin } : {}),

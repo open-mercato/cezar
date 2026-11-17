@@ -16,6 +16,12 @@ import {
 } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
+// Keep coverage of the lower-level wake-cap/liveness fuse; default admission has its own engine suite.
+vi.mock('@open-mercato/cezar-contract', async (original) => ({
+  ...await original<typeof import('@open-mercato/cezar-contract')>(),
+  THREAD_CONTINUATION_LIMIT: Number.MAX_SAFE_INTEGER,
+}));
+
 const run = promisify(execFile);
 const IDLE_TIMEOUT_MS = DEFAULT_IDLE_TIMEOUT_MINUTES * 60_000;
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

@@ -51,3 +51,5 @@ export * from './transfer.ts';
 export * from './managers.ts';
 export * from './native-shell.ts';
 export * from './phones.ts';
+
+export * from './thread-hygiene.ts';

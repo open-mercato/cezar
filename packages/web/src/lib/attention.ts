@@ -87,6 +87,7 @@ export type AttentionInput = Pick<
   | 'dispatch'
   | 'costUsd'
   | 'worktreeLifecycle'
+  | 'threadHygiene'
 >
 
 export type BudgetStop = {
@@ -150,8 +151,8 @@ export function closingStepId(
 }
 
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
-export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle'>): boolean {
-  return !!run.worktreeLifecycle?.needsAttention || run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle' | 'threadHygiene'>): boolean {
+  return !!run.worktreeLifecycle?.needsAttention || (run.status === 'waiting' && !run.threadHygiene?.pending) || run.status === 'review' || isAwaitingAnswer(run)
 }
 
 /**
@@ -171,6 +172,7 @@ export function deriveAttention(run: AttentionInput): Attention {
   const lifecycle = run.worktreeLifecycle
   if (lifecycle?.needsAttention) return {bucket: 'waiting', tone: 'pending', pulse: false, label: lifecycle.phase === 'setup' ? 'setup needs attention' : 'cleanup needs attention'}
   if (lifecycle?.activeOperationId) return {bucket: 'running', tone: 'pending', pulse: true, label: lifecycle.phase === 'setup' ? 'preparing worktree' : 'cleaning up worktree'}
+  if (run.threadHygiene?.pending) return { bucket: 'none', tone: 'neutral', pulse: false, label: 'continuation decision' }
   if (hasPendingPermission(run)) {
     return { bucket: 'permission', tone: 'info', pulse: true, label: 'needs permission' }
   }

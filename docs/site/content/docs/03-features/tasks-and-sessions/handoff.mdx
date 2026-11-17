@@ -26,3 +26,23 @@ Task → Continue
 3. Use terminal handoff if you want to work directly in the CLI.
 
 > **Good to know**: Opening a local terminal depends on the machine's capabilities and the agent's session support.
+
+## Long threads
+
+Use **Status — no agent call** in a task to read its saved state and handoff notes. The date describes the saved notes, rather than claiming a fresh investigation. Missing information appears as **no data**. Sending a message in the chat still contacts the agent.
+
+Before a fourth work continuation, choose **Continue work** or **Prepare handoff**. Automatic work waits for the same decision. Each decision permits one resumption; existing budgets and approvals still apply. The manager shows the pending decision in **Continuation decisions**, without buying a watch turn for the length warning. A dormant long thread alone creates no alert. Active subtasks keep running and their reports remain available while the parent waits.
+
+The counter records work resumptions, including automated resumptions and a message to a parked session. The first launch, an in-progress steering message, retries, recovery, compaction and checks without a model turn are excluded. Earlier history without reliable records is shown as unknown. There is no token or age threshold.
+
+**Prepare handoff** runs the agent to save the current state, next concrete step, blockers, approval limits, budget and recovery instructions. The agent selects useful predecessor outputs, including early mockups, and explains why the successor should open each. Creating a successor remains a separate user action.
+
+Preserve a selected artifact version and its local dependencies from inside the task:
+
+```bash title="Terminal"
+node "$CEZ_BIN" handoff retain "mockup.html" "Accepted starting layout for the next UI change"
+```
+
+The command returns a manifest with retained paths, hashes and missing dependencies. Link that manifest from Resume notes. The retained files stay outside the worktree and the originals remain untouched. Open the retained entry to check it before passing responsibility to a successor.
+
+> **Good to know**: Retention accepts regular files inside Assets, up to 100 files and 25 MiB per selected artifact. Missing dependencies are recorded as unverified. Copy a selected output from elsewhere into Assets with its dependencies before retaining it.

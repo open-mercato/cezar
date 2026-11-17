@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import {
@@ -16,6 +16,13 @@ import {
   RunManager,
 } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+
+// These tests exercise the existing per-epoch safety brakes beyond the thread decision.
+// The default three-continuation gate and its ordering are tested unmocked in thread-hygiene.test.ts.
+vi.mock('@open-mercato/cezar-contract', async (original) => ({
+  ...await original<typeof import('@open-mercato/cezar-contract')>(),
+  THREAD_CONTINUATION_LIMIT: Number.MAX_SAFE_INTEGER,
+}));
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

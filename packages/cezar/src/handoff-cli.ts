@@ -1,3 +1,4 @@
+import { retainHandoffArtifact } from './handoff-retain.ts';
 /**
  * `cez handoff …` — the CLI a running agent uses to keep its handoff journal (spec 007) current,
  * instead of hand-typing a python heredoc for every Progress-log line (agents-master I049: the
@@ -10,6 +11,7 @@ import { insertProgressLine, progressLine, replaceResumeNotes } from './handoff.
 
 export interface HandoffCliEnv {
   CEZ_HANDOFF_FILE?: string;
+  CEZ_ARTIFACTS_DIR?: string;
 }
 
 export interface HandoffCliIo {
@@ -22,6 +24,7 @@ export interface HandoffCliIo {
 
 const USAGE = `cez handoff — update this task's handoff file ($CEZ_HANDOFF_FILE)
 
+  cez handoff retain "<Assets-relative file>" "<why open it>"  preserve this version and local dependencies
   cez handoff log "<text>"     insert "- <timestamp> — <text>" under ## Progress log (newest at the top)
   cez handoff resume "<text>"  replace the ## Resume notes section with <text>
   cez handoff resume <<'EOF'   … or with stdin (multi-line notes)
@@ -44,7 +47,7 @@ export async function runHandoffCommand(
     io.log(USAGE);
     return command ? 0 : 2;
   }
-  if (command !== 'log' && command !== 'resume') {
+  if (command !== 'log' && command !== 'resume' && command !== 'retain') {
     io.error(`cez handoff: unknown command "${command}"\n\n${USAGE}`);
     return 2;
   }
@@ -52,6 +55,14 @@ export async function runHandoffCommand(
   if (!file) {
     io.error('cez handoff: CEZ_HANDOFF_FILE is not set — this command only works inside a cezar task.');
     return 2;
+  }
+  if (command === 'retain') {
+    if (!env.CEZ_ARTIFACTS_DIR || !rest[0] || !rest[1]) {
+      io.error('cez handoff retain: give an Assets-relative file and a reason; CEZ_ARTIFACTS_DIR must be set.');
+      return 2;
+    }
+    try { io.log(retainHandoffArtifact(env.CEZ_ARTIFACTS_DIR, rest[0], rest.slice(1).join(' '))); return 0; }
+    catch (error) { io.error(`cez handoff retain: ${(error as Error).message}`); return 1; }
   }
   let text: string;
   try {

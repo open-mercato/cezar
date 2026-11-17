@@ -1,3 +1,5 @@
+import { THREAD_HYGIENE_REQUIRED, type ThreadDecision, type ThreadStatus } from '@open-mercato/cezar-api-client'
+import { askThreadDecision } from '@/lib/thread-decision'
 import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
@@ -1869,6 +1871,7 @@ export async function finishRun(id: string): Promise<FinishResponse> {
  *  backend/model/account. `text`/`images` are the prompt the reopened session starts on — omitted,
  *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
+  threadDecision?: ThreadDecision
   text?: string
   images?: AttachmentEntry[]
   runner?: Runner
@@ -1886,6 +1889,7 @@ export interface ContinueOptions {
  *  runner/model/effort override lets the follow-up choose the engine; omission preserves continuity. */
 export async function continueRun(id: string, opts: ContinueOptions = {}): Promise<ContinueResponse> {
   const body = {
+    ...(opts.threadDecision ? { threadDecision: opts.threadDecision } : {}),
     ...(opts.text !== undefined ? { text: opts.text } : {}),
     ...(opts.images !== undefined ? { images: opts.images } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
@@ -1894,13 +1898,22 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
   }
-  return unwrap(
+  try { return await unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
       json: body,
     }),
     runPath(id, '/continue'),
   )
+  } catch (error) {
+    if (opts.threadDecision || !(error instanceof ApiError) || error.message !== THREAD_HYGIENE_REQUIRED) throw error
+    const record = await getRun(id)
+    const choice = await askThreadDecision(record.threadHygiene?.continuations ?? 0)
+    if (!choice) throw error
+    const result = await continueRun(id, { ...opts, threadDecision: choice })
+    if (choice.action === 'handoff' && (opts.text?.trim() || opts.images?.length)) throw new ApiError(409, 'Handoff preparation started; your continuation draft is retained for review.')
+    return result
+  }
 }
 
 /** The same reopen by EXPLICIT project — see `archiveProjectRun`. */
@@ -2178,7 +2191,7 @@ export async function postMessageWithRetry(
 
 /** Deliver text and/or pasted screenshots into a run's live session. 409 once it has closed. */
 export async function sendMessage(id: string, message: MessageInput): Promise<MessageResponse> {
-  return postMessageWithRetry(async (json) =>
+  try { return await postMessageWithRetry(async (json) =>
     unwrap(
       await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
         param: { projectId: queryScope(), id: encodeURIComponent(id) },
@@ -2188,6 +2201,17 @@ export async function sendMessage(id: string, message: MessageInput): Promise<Me
     ),
     message,
   )
+  } catch (error) {
+    if (message.threadDecision || !(error instanceof ApiError) || error.message !== THREAD_HYGIENE_REQUIRED) throw error
+    const record = await getRun(id)
+    const choice = await askThreadDecision(record.threadHygiene?.continuations ?? 0)
+    if (!choice) throw error
+    if (choice.action === 'handoff') {
+      await continueRun(id, { threadDecision: choice, text: message.text })
+      throw new ApiError(409, 'Handoff preparation started; your continuation draft is retained for review.')
+    }
+    return sendMessage(id, { ...message, threadDecision: choice })
+  }
 }
 
 /** The same delivery by EXPLICIT project — see `archiveProjectRun`. What lets a chip on the
@@ -3340,4 +3364,10 @@ export async function getGithubAsset(url: string, opts?: ReadOptions, projectSco
   return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
     param: { projectId: projectScope }, json: { url },
   }, init(opts)), '/github/asset')
+}
+
+export async function getThreadStatus(id: string): Promise<ThreadStatus> {
+  return unwrap(await cez.api.v1.p[':projectId'].runs[':id']['thread-status'].$get({
+    param: { projectId: queryScope(), id: encodeURIComponent(id) },
+  }), runPath(id, '/thread-status'))
 }
