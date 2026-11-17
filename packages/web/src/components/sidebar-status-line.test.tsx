@@ -175,4 +175,11 @@ describe('SidebarStatusLine', () => {
     expect(footer().querySelector('[data-slot="sidebar-status"]')?.className).toContain('truncate')
     expect(within(footer().querySelector('[data-slot="command-palette-hint"]') as HTMLElement).getByText('Search tasks, pages, commands…').className).toContain('truncate')
   })
+
+  it('sizes the search row for a finger and drops the ⌘K hint a touch screen cannot press', () => {
+    renderLine({})
+    const hint = footer().querySelector('[data-slot="command-palette-hint"]') as HTMLElement
+    expect(hint.className).toContain('pointer-coarse:h-11')
+    expect(hint.querySelector('[data-slot="kbd"]')?.className).toContain('pointer-coarse:hidden')
+  })
 })

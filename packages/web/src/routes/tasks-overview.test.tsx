@@ -184,6 +184,19 @@ describe('TasksOverview — the table', () => {
     expect(document.querySelector('th[data-column-id="status"] button')).toBeNull()
     expect(document.querySelector('th[data-column-id="task"] button')).toBeNull()
     expect(document.querySelector('[data-slot="tasks-table"] table')?.className).not.toContain('min-w-[1040px]')
+    // The floor follows the folded state: Branch folded (42px) is what the default already has.
+    expect(document.querySelector<HTMLElement>('[data-slot="tasks-table"] table')?.style.minWidth).toMatch(/^\d+px$/)
+  })
+
+  it('floors the fixed table at the Task column minimum instead of collapsing titles to 0px', () => {
+    renderOverview({ runs: [run({ id: 'narrow' })] })
+    const table = document.querySelector<HTMLElement>('[data-slot="tasks-table"] table')!
+    const fixed = [...table.querySelectorAll<HTMLElement>('col')]
+      .filter((col) => col.dataset.columnId !== 'task')
+      .reduce((sum, col) => sum + Number.parseFloat(col.style.width), 0)
+    expect(Number.parseFloat(table.style.minWidth)).toBe(fixed + 220)
+    // The wrapper scrolls the table sideways rather than squeezing it.
+    expect(table.parentElement?.closest('[data-slot="tasks-table"]')?.className).toContain('overflow-x-auto')
   })
 
   it('disables optional headers while workspace column state is loading', () => {
@@ -1165,6 +1178,31 @@ describe('TasksOverview — mobile cards and FAB', () => {
   it('lets Manager own mobile task creation while retaining the capability fallback', () => {
     renderOverview({ runs: [run()], managersAvailable: true })
     expect(document.querySelector('[data-slot="new-task-fab"]')).toBeNull()
+  })
+
+  it('gives a phone card title its own full-width line under the status pill and age', () => {
+    renderOverview({ runs: [run({ id: 'wide-title', status: 'running', title: 'Rework the relay pairing flow' })] })
+    const head = card('wide-title')!.querySelector('[data-slot="task-card-head"]')!
+    const title = head.querySelector('[data-slot="task-card-title"]')!
+    expect(head.className).toContain('flex-wrap')
+    expect(title.className).toContain('basis-full')
+    // No CSS reordering: the title is the head's last child, so DOM and focus order match the
+    // visual one (pin, then title).
+    expect(title.className).not.toContain('order-')
+    expect(head.lastElementChild).toBe(title)
+    const focusable = [...head.querySelectorAll('a, button')]
+    expect(focusable.at(-1)).toBe(title)
+    // ...and it comes after the status pill in the DOM, where it is drawn.
+    const pill = head.querySelector('[data-slot="pill"]')!
+    expect(pill.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps a quiet (finished) card title inline beside its small status dot', () => {
+    renderOverview({ runs: [run({ id: 'quiet-title', status: 'done', title: 'Shipped' })] })
+    const title = card('quiet-title')!.querySelector('[data-slot="task-card-title"]')!
+    expect(title.className).not.toContain('basis-full')
+    // Inline: the title still follows the status dot, before the age and pin.
+    expect(card('quiet-title')!.querySelector('[data-slot="task-card-head"]')!.lastElementChild).not.toBe(title)
   })
 
   it('floats the New task FAB, linking to /new', () => {

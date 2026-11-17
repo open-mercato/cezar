@@ -277,6 +277,11 @@ describe('ThreadView', () => {
     const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="paused-hint"]')
     expect(hint?.textContent).toContain('The agent is paused, waiting for your reply')
     expect(hint?.querySelector('[data-slot="status-dot"]')).not.toBeNull()
+    // A phone wraps the hint text in its own column; End session stays one line and finger-sized.
+    const end = hint?.querySelector('[data-slot="end-session"]')
+    expect(end?.className).toContain('whitespace-nowrap')
+    expect(end?.className).toContain('pointer-coarse:max-md:min-h-11')
+    expect(hint?.querySelector('[aria-hidden="true"].max-sm\\:hidden')?.textContent).toBe('·')
     // No body footer for waiting — the dock owns that state now.
     expect(document.querySelector('[data-slot="thread-footer"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement

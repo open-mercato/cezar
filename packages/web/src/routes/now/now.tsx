@@ -63,7 +63,10 @@ export function NowView({
   hasScheduledTasks = false,
   setupPill,
   welcomeBack,
+  managersAvailable = false,
 }: {
+  /** Manager owns task creation on mobile when available, as on the Tasks page (#2272). */
+  managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body waits. */
   runs: RunRecord[] | undefined
   projectName?: string
@@ -197,14 +200,14 @@ export function NowView({
         </div>
 
         {/* The mobile New-task FAB — the desktop CTA lives in the sidebar. */}
-        <Link
+        {managersAvailable ? null : <Link
           to="/new"
           data-slot="new-task-fab"
           aria-label="New task"
           className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
         >
           <PlusIcon className="size-[22px]" aria-hidden="true" />
-        </Link>
+        </Link>}
       </div>
     </LiveNowProvider>
   )
@@ -523,6 +526,7 @@ export function NowRoute() {
         hasScheduledTasks={hasScheduledTasks}
         setupPill={<SetupPill />}
         welcomeBack={<WelcomeBack runs={runs.data ?? NO_RUNS} />}
+        managersAvailable={health.data?.capabilities?.managers === true}
 
       />
     </ReferenceStatusProvider>

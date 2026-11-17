@@ -112,14 +112,15 @@ export function SidebarStatusLine({
         title="Search tasks, pages, commands (⌘K / Ctrl+K)"
         onClick={() => openCommandPalette()}
         className={cn(
-          'flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-ui text-soft-foreground transition-colors hover:bg-muted hover:text-muted-foreground',
+          'flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-ui text-soft-foreground transition-colors hover:bg-muted hover:text-muted-foreground pointer-coarse:h-11',
           FOCUS_RING,
         )}
       >
         <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
         {/* A visible phrase: a touch drawer has no other way into search. */}
         <span className="min-w-0 flex-1 truncate text-left">Search tasks, pages, commands…</span>
-        <Kbd className="shrink-0">{commandShortcutHint('k')}</Kbd>
+        {/* A touch screen has no ⌘K to press. */}
+        <Kbd className="shrink-0 pointer-coarse:hidden">{commandShortcutHint('k')}</Kbd>
       </button>
 
       <div data-slot="sidebar-footer-controls" className="flex h-6 min-w-0 items-center gap-2 text-meta text-muted-foreground">

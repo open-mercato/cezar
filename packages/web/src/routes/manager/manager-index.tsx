@@ -60,8 +60,11 @@ function ManagerListScreen({ managers, isFetching, isError }: { managers: readon
       <div className="flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">Managers</h1>{isCezarShell() ? <DeviceChip name={deviceLabel} /> : <span className="text-sm text-muted-foreground">{deviceLabel}</span>}</div>
       <CacheStatusChip queryKey={managerKeys.list} isFetching={isFetching} isError={isError} className="mx-1 mb-1 self-start" />
       <div className="flex flex-wrap items-center gap-3">
-        <Input aria-label="Search managers or device" placeholder="Search managers or device" value={search} onChange={(event) => setSearch(event.target.value)} className="min-h-12 min-w-0 flex-1" />
-        <label className="flex min-h-12 items-center gap-2 text-sm"><input type="checkbox" checked={needsYou} onChange={(event) => setNeedsYou(event.target.checked)} />Needs you</label>
+        {/* A 12rem basis wraps the filter below rather than squeezing the search to a few letters at large text. */}
+        <Input aria-label="Search managers or device" placeholder="Search managers" value={search} onChange={(event) => setSearch(event.target.value)} className="min-h-12 min-w-0 flex-[1_1_12rem]" />
+        <label data-slot="manager-needs-you-filter" className="flex min-h-12 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-sm has-checked:border-info/60 has-checked:bg-info/10 has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50">
+          <input type="checkbox" className="size-4" checked={needsYou} onChange={(event) => setNeedsYou(event.target.checked)} />Needs you
+        </label>
       </div>
       {entries.length === 0 ? <p role="status" className="p-3 text-muted-foreground">No matching managers</p> : null}
       <div className="grid grid-cols-1 gap-3 @min-[576px]/directory:grid-cols-2 @min-[936px]/directory:grid-cols-3">

@@ -797,6 +797,15 @@ describe('/manager/:id', () => {
       fireEvent.change(screen.getByRole('textbox', { name: 'Search managers or device' }), { target: { value: '' } })
       fireEvent.click(screen.getByRole('checkbox', { name: 'Needs you' }))
       expect(document.querySelectorAll('[data-slot="manager-directory-card"]')).toHaveLength(1)
+      // Layout at large text: the search keeps a 12rem basis (the filter wraps instead of squeezing
+      // it), Needs you is a bordered chip, and a name grows to its own width before the time wraps.
+      expect(screen.getByRole('textbox', { name: 'Search managers or device' }).className).toContain('flex-[1_1_12rem]')
+      const chip = document.querySelector('[data-slot="manager-needs-you-filter"]')!
+      expect(chip.className).toContain('min-h-12')
+      expect(chip.className.split(' ')).toEqual(expect.arrayContaining(['border', 'border-border', 'rounded-md', 'px-3']))
+      const name = [...cards[0]!.querySelectorAll('span')].find((span) => span.textContent === 'Global Manager' && span.children.length === 0)!
+      expect(name.className.split(' ')).toContain('flex-auto')
+      expect(name.className.split(' ')).not.toContain('flex-1')
       expect(screen.getByRole('link', { name: /^Switch computer/ }).getAttribute('href')).toBe('cezar://servers')
       expect(calls.filter((call) => call.method === 'GET').every((call) => call.path.startsWith('/api/v1/workspace/managers'))).toBe(true)
     })
