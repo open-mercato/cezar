@@ -7,13 +7,11 @@ symbolic link is refused). Never import Cezar's private contract,
 API client, server or React components. The SDK tarball includes its own runtime and types.
 
 Add `cezar-extension.json` with `id`, `name`, exact `version`, `apiVersion: "0.1"`, `entry`,
-`capabilities`, `permissions` and `contributes`. See the [example](../examples/extensions/project-summary).
+`capabilities`, `permissions` and `contributes`. See the two [examples](../examples/extensions).
 `capabilities` is required; list what the extension contributes and use `[]` if it contributes
 nothing. Unknown capabilities and permissions fail validation. Supported capabilities are
 `commands`, `panels`, `taskEvents`, `forms`, `settings`, and `chatProviders`. Capabilities are
-declarations shown on the consent card; `permissions` are the boundary the host enforces. The SDK
-already defines the chat adapter interface (`contributes.chatProviders`, `context.chat`), but this
-host does not run chat providers yet.
+declarations shown on the consent card; `permissions` are the boundary the host enforces.
 
 Export `defineExtension({ activate(context) { … } })`. Return a disposable which releases
 subscriptions and resources. Register only declared contribution IDs:
@@ -50,12 +48,53 @@ optional `required`, and `options` for selects. Register an optional dynamic pro
 Submission validates the manifest's fields before invoking the declared command; save settings
 through storage/secrets from that handler. No executable validator, HTML or React crosses IPC.
 
+For chat, declare `contributes.chatProviders` (see Mattermost) and register a factory with
+`context.chat.register(id, credentials => adapter)`. The adapter implements identify, inspect,
+send, clearButtons, acknowledge, isMember, receiveSession and optional dispose. Credential fields are
+secret by default; mark a public server URL `secret: false`. The provider's required HTTPS
+`discoveryUrl` is the cockpit's setup help link, and the base of the pairing link when
+`identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
+bot's page on a self-hosted server), which wins. The host adds the one-time pairing code.
+
+An extension cannot claim the canonical Telegram ID on its own: `telegram` and `telegram.v1` are
+reserved. Use a qualified provider ID such as `mattermost/chat` for an external provider. Cezar
+ships the same public SDK artifact as the standalone Telegram package. Verified delivery metadata
+grants the canonical ID;
+a compatible installed replacement needs explicit project selection and approval. Installing a
+package alone cannot take over a configured bot. Selected installed artifacts pin an exact version
+independently of host updates; disable/uninstall never falls back to shipped code. Shipped versions
+update with Cezar. Local `CEZ_EXTENSIONS=0` permits only verified shipped artifacts through the
+trusted in-process facade; hosted mode runs no chat adapter. See [extensions](extensions.md).
+
 Direct cockpit tarball installation is unsupported; use a built folder with runtime dependencies
 or an available npm package version.
 
+With `receiveModel: "ordered"`, read `session.checkpoint()` and accept deliveries in ascending
+`sequence` order from its `nextSequence`; `sequence` is a nonnegative safe integer, and event IDs
+must remain stable. A platform timestamp is not necessarily a sufficient cursor: if many events
+share it, returning the same first page forever prevents progress. Use durable pagination and,
+where necessary, synthetic increasing sequences (the Mattermost example does both). The host
+advances the checkpoint only after `ChatInbound` durably accepts each delivery; core event-ID
+claims prevent duplicate effects on replay. Event timestamps are Unix **milliseconds**. Abort
+outstanding network requests in dispose. Do not implement task authorization or
+launching in the adapter: pairing, grants, deduplication and task confirmation belong to Cezar.
+
+Chat adapter methods also accept an optional final `ExtensionChatOperationContext`
+(`dispose` is unchanged). After asynchronous preparation, await
+`operation?.assertActive()` immediately before each external effect, then call
+`operation?.signal.throwIfAborted()`. Forward the signal's abort event to the
+`AbortController` used for your HTTP request, and remove the listener in `finally`.
+The SDK exposes a structural signal type so authors do not need Node or DOM types.
+
+This is cooperative cancellation: an adapter that ignores the context cannot stop its
+pending sends after revocation. A request already sent to a remote service cannot be
+undone by aborting locally; its result may be uncertain. This context is neither a sandbox
+nor permission for unsolicited requests.
+
 RPC limits: activation 10 seconds, shutdown 5 seconds, ordinary calls 30 seconds, frames 1 MiB,
 100 pending calls. A worker receives minimal environment and cannot select its host project.
-Every request is generation-fenced.
+Every request is generation-fenced. `ExtensionChatError` carries a bounded transport failure
+when authentication, rate limiting or provider availability needs specific handling.
 
 Registry installs are resolved by cezar itself, not by `npm install`: npm only supplies your
 `registry` and `@scope:registry` settings, and a scoped package is fetched only from its scope's
@@ -66,7 +105,7 @@ native build) are refused, and so is any scope whose registry URL embeds credent
 without them; that scope is never fetched from the default registry. Updates are explicit. Keep activation idempotent,
 and limit migrations to local extension-owned state so rollback can restore it.
 
-Task proposals must be awaited inside a command invocation. Each invocation returns only its own proposals; a failed command discards them. Calls from activation, task events or work continuing after the command returns are rejected. The user still reviews the normal new-task form before launching anything.
+Task proposals must be awaited inside a command invocation. Each invocation returns only its own proposals; a failed command discards them. Calls from activation, task events, chat callbacks or work continuing after the command returns are rejected. The user still reviews the normal new-task form before launching anything.
 
 ## Where contributions appear
 
@@ -100,6 +139,7 @@ on a declared panel or command moves it to where the user works:
   cannot ask for a refresh, so render what is true at call time.
 - Everything else is the same declarative renderer, the same permissions and the same
   worker. Nothing here grants new trust, and a hosted cockpit shows none of these surfaces.
+- Chat providers have no `location`; they appear under Settings → Integrations only.
 
 The [project-summary example](../examples/extensions/project-summary) uses every placement
 (its `test/` drives each one through a fake host), and the snippets above are checked against
@@ -125,5 +165,33 @@ the npm versions of the SDK or your package. The SDK exports the accepted list a
   registry until a reinstall replaces it. Reinstall the extension from its source after
   upgrading again; its storage and secrets are kept unless you uninstalled with data removal.
 - Uninstalling and keeping data leaves the extension listed as **Missing**, without actions, in
-  every project that had approved it; uninstalling with data removal also drops that entry.
-  Reinstalling brings it back disabled, pending approval.
+  every project that had approved it; uninstalling with data removal also drops that entry unless
+  a chat selection or webhook receiver still names the extension. Reinstalling brings it back
+  disabled, pending approval.
+
+### Long-lived chat receivers
+
+Every chat declaration selects `receiveModel: "ordered"` or `"opaque"`, and the host calls
+`receiveSession(session)`. The session survives the ordinary 30-second RPC deadline.
+Stop aborts it and waits for drain; an unresponsive worker is terminated before
+replacement. Each individual host service request remains bounded.
+
+Ordered deliveries use the host's epoch and next sequence. An omitted event is a
+checkpointable no-op. Acceptance resolves after journal persistence; a rejected
+or uncertain response must never be treated as an acknowledgement. Telegram uses
+its native update offset and a six-day idle reset. Opaque deliveries use the core
+inbox's bounded received claims; this does not promise replay of lost socket frames
+or exactly-once effects. Explicit command classification, pairing eligibility,
+chat titles and membership destinations are carried by the session mapper.
+
+The SDK's optional `slack-oauth-v1` credential profile is not served by this host yet: a
+declaration using it receives no access token.
+
+Receive sessions can open short-lived, single-query interaction handles for native task
+choices. The host applies the same person, chat and project authorization as for messages and
+checks it again after asynchronous work. Choices are limited to 25, queries to
+128 characters, and lookup to one second. Transport plugins assert platform actor
+identity; these handles are not a sandbox against malicious approved code.
+
+A declaration can supply an HTTPS `pairingLink` template with `{username}` and
+`{code}` placeholders. The host URL-encodes both values.

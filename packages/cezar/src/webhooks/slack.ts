@@ -40,6 +40,7 @@ export function renderSlackMessage(eventJson: string, ctx: { receiverName?: stri
     }
     blocks.push(section(questions));
   }
+  if (event.type === 'task.attention_required' && event.data.agentExcerpt) blocks.push(section(`*Agent:* ${escape(event.data.agentExcerpt)}`));
   if (event.type === 'task.failed' && event.data.message) blocks.push(section(escape(event.data.message)));
   const links = Object.entries(event.links ?? {}).filter(([kind]) => kind !== 'cockpit' || event.source.mode === 'hosted')
     .map(([kind, url]) => {

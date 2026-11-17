@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { hashKey, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { HealthResponse, ExtensionPlacementLocation } from '@open-mercato/cezar-api-client'
+import type { HealthResponse, ExtensionPlacementLocation, ExtensionChatSelectionInput, ExtensionChatSelectionPreview } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 import { cez, unwrap } from './client'
 import { queryKeys } from './queries'
@@ -99,4 +99,12 @@ export function useExtensionPlacements(projectId: string, location: ExtensionPla
     queryFn: () => listExtensionPlacements(projectId, location),
     enabled,
   })
+}
+
+/** A preview is read-only and abortable; a commit always carries its reviewed revision. */
+export async function previewChatSelection(projectId: string, provider: ExtensionChatSelectionPreview['provider'], input: ExtensionChatSelectionInput, signal?: AbortSignal) {
+  return unwrap(await extensions['chat-selections'][':provider'].preview.$post({ param: { projectId, provider }, json: input }, { init: { signal } }), '/extensions/chat-selections/preview')
+}
+export async function selectChatImplementation(projectId: string, provider: ExtensionChatSelectionPreview['provider'], input: Parameters<typeof extensions['chat-selections'][':provider']['select']['$post']>[0]['json']) {
+  return unwrap(await extensions['chat-selections'][':provider'].select.$post({ param: { projectId, provider }, json: input }), '/extensions/chat-selections/select')
 }

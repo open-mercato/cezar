@@ -314,6 +314,50 @@ it('refuses an installed artifact modified after approval', async () => {
  expect((await manager.list())[0]).toMatchObject({ enabled: false, status: 'failed' })
 })
 
+it('waits for failed-worker chat teardown before retrying the same provider', async () => {
+ const { root, source, manager, manifest } = await fixture()
+ const { watchChatExtensions, chatProvider } = await import('../chat/registry.ts')
+ await writeFile(
+  join(source, 'cezar-extension.json'),
+  JSON.stringify({
+   ...manifest,
+   contributes: {
+    ...manifest.contributes,
+    chatProviders: [
+     {
+      id: 'chat',
+      label: 'Chat',
+      credentials: [{ name: 'token', label: 'Token' }],
+      discoveryUrl: 'https://chat.example.com',
+      limits: { maxText: 4000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
+     }
+    ]
+   }
+  })
+ )
+ await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say',()=>process.exit(5)); c.chat.register('chat',()=>({})); }`)
+ await manager.install(source); await manager.setEnabled('hello.test', true)
+ // An independent cockpit whose worker activation paces the absence check below.
+ const pacer = await fixture(); await pacer.manager.install(pacer.source)
+ let release!: () => void, entered!: () => void
+ const teardown = new Promise<void>(resolve => { entered = resolve })
+ const off = watchChatExtensions(root, async () => {
+   if (!chatProvider('hello.test/chat', root)) { entered(); await new Promise<void>(resolve => { release = resolve }) }
+ })
+ try {
+   await expect(manager.invoke('hello.test', 'say')).rejects.toThrow(/exit/)
+   await teardown
+   let retried = false
+   const retry = manager.setEnabled('hello.test', true).then(() => { retried = true })
+   // A whole worker activation started after the retry finishes while the retry is still held.
+   await pacer.manager.setEnabled('hello.test', true)
+   expect((await pacer.manager.list())[0]?.status).toBe('running')
+   expect(retried).toBe(false)
+   release(); await retry
+   expect(chatProvider('hello.test/chat', root)).toBeDefined()
+ } finally { off(); release?.() }
+})
 it('isolates concurrent proposals, discards failed proposals and rejects background proposals', async () => {
  const { source, manager, manifest } = await fixture()
  manifest.permissions.push('task.create')
@@ -415,6 +459,39 @@ it('previews every consent-relevant change of a same-source update', async () =>
  expect(fresh.addedCapabilities).toEqual(['commands', 'panels', 'taskEvents'])
 })
 
+it('treats a malformed stored chat credential as a permanent auth failure, not a transient retry', async () => {
+ const { root, source, manager, manifest } = await fixture()
+ const { chatTransport } = await import('../chat/registry.ts')
+ await writeFile(
+  join(source, 'cezar-extension.json'),
+  JSON.stringify({
+   ...manifest,
+   contributes: {
+    ...manifest.contributes,
+    chatProviders: [
+     {
+      id: 'chat',
+      label: 'Chat',
+      credentials: [{ name: 'token', label: 'Token', secret: true }],
+      discoveryUrl: 'https://chat.example.com',
+      limits: { maxText: 4000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
+     }
+    ]
+   }
+  })
+ )
+ await writeFile(
+  join(source, 'index.mjs'),
+  `export function activate(c) { c.chat.register('chat', () => ({ identify: async () => ({ id: 'bot', username: 'Bot' }) })); }`
+ )
+ await manager.install(source); await manager.setEnabled('hello.test', true)
+ await expect(chatTransport(root, 'hello.test/chat', '{"token":"ok"}')!.identify()).resolves.toEqual({ id: 'bot', username: 'Bot' })
+ for (const credential of ['not json', '{"token":5}', '[]']) {
+  await expect(chatTransport(root, 'hello.test/chat', credential)!.identify()).rejects.toMatchObject({ failure: { kind: 'auth' } })
+ }
+})
+
 it('lists and restores an empty readonly home without creating state', async () => {
  const { chmod, readdir } = await import('node:fs/promises')
  const root = await mkdtemp(join(tmpdir(), 'extension-readonly-')); roots.push(root)
@@ -492,6 +569,39 @@ it('keeps saved provider inventory after removal without starting workers on a m
   })
  ])
 })
+it('binds adapters to stable bot revisions, reuses them across calls and retires the replaced binding', async () => {
+ const {root,source,manager,manifest}=await fixture()
+ const {chatTransport}=await import('../chat/registry.ts')
+ await writeFile(
+  join(source, 'cezar-extension.json'),
+  JSON.stringify({
+   ...manifest,
+   contributes: {
+    ...manifest.contributes,
+    chatProviders: [
+     {
+      id: 'chat',
+      label: 'Chat',
+      credentials: [{ name: 'token', label: 'Token' }],
+      discoveryUrl: 'https://example.com',
+      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
+     }
+    ]
+   }
+  })
+ )
+ await writeFile(
+  join(source, 'index.mjs'),
+  `let count=0;export function activate(c){c.chat.register('chat',()=>{const id=String(++count);return {identify:async()=>({id,username:'Bot'}),dispose:async()=>{}}})}`
+ )
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ const binding={id:'bot',revision:'binding-1'}, credential=JSON.stringify({token:'synthetic'})
+ const old=chatTransport(root,'hello.test/chat',credential,undefined,binding)!
+ for(let i=0;i<25;i++) expect(await chatTransport(root,'hello.test/chat',credential,undefined,binding)!.identify()).toEqual({id:'1',username:'Bot'})
+ expect(await chatTransport(root,'hello.test/chat',credential,undefined,{...binding,revision:'binding-2'})!.identify()).toEqual({id:'2',username:'Bot'})
+ await expect(old.identify()).rejects.toMatchObject({failure:{kind:'blocked'}})
+})
 it('reports all-project uninstall impact and retains disabled metadata after actual uninstall', async () => {
  const {root,source,manager}=await fixture()
  await manager.install(source);await manager.setEnabled('hello.test',true)
@@ -519,6 +629,7 @@ it('removes the Missing row everywhere when uninstall deletes data, and a reinst
  await manager.install(source);await manager.setEnabled('hello.test',true)
  const second=new ExtensionManager(join(root,'other-data'),'other',join(root,'other-root'),{home:join(root,'home')});managers.push(second)
  await second.setEnabled('hello.test',true)
+ expect((await manager.uninstallImpact('hello.test')).projects.map(project=>project.referencedBy)).toEqual([undefined,undefined])
  await manager.uninstall('hello.test',true)
  for (const peer of [manager,second]) {
   expect((await peer.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([])
@@ -528,6 +639,36 @@ it('removes the Missing row everywhere when uninstall deletes data, and a reinst
  for (const peer of [manager,second]) {
   expect((await peer.inventory()).find(row=>row.record.manifest.id==='hello.test')).toMatchObject({availability:'disabled',record:{enabled:false}})
  }
+})
+it('keeps the row of a project whose chat selection or webhook receiver still names the extension', async () => {
+ const {root,source,manager}=await fixture()
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ const second=new ExtensionManager(join(root,'other-data'),'other',join(root,'other-root'),{home:join(root,'home')});managers.push(second)
+ const third=new ExtensionManager(join(root,'third-data'),'third',join(root,'third-root'),{home:join(root,'home')});managers.push(third)
+ await second.setEnabled('hello.test',true);await third.setEnabled('hello.test',true)
+ await mkdir(join(root,'other-data','webhooks'),{recursive:true})
+ await writeFile(join(root,'other-data','webhooks','endpoints.json'),JSON.stringify({version:1,receivers:[{format:'cezar.json.v1'},{format:'hello.test/chat.v1'}],history:[],changeSequence:1}))
+ await mkdir(join(root,'third-data','extensions','chat-selections'),{recursive:true})
+ await writeFile(join(root,'third-data','extensions','chat-selections','telegram.json'),JSON.stringify({target:{record:{manifest:{id:'hello.test'}}}}))
+ const impact=await manager.uninstallImpact('hello.test')
+ expect(Object.fromEntries(impact.projects.map(project=>[project.projectId,project.referencedBy]))).toEqual({demo:undefined,other:['webhook-receiver'],third:['chat-selection']})
+ await manager.uninstall('hello.test',true,impact.revision)
+ expect((await manager.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([])
+ for (const dataDir of ['other-data','third-data']) {
+  expect(await new ExtensionStore(join(root,dataDir,'extensions','registry.json')).list()).toEqual([expect.objectContaining({manifest:expect.objectContaining({id:'hello.test'}),enabled:false})])
+ }
+ expect((await second.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'missing'})])
+})
+it('reads webhook receiver formats defensively: a malformed state keeps the row, a malformed receiver is skipped', async () => {
+ const {root,source,manager}=await fixture()
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ const peers=['bad-envelope','bad-receiver','no-receivers'].map(name=>{const peer=new ExtensionManager(join(root,name),name,join(root,`${name}-root`),{home:join(root,'home')});managers.push(peer);return peer})
+ for (const peer of peers) { await peer.setEnabled('hello.test',true);await mkdir(join(peer.dataDir,'webhooks'),{recursive:true}) }
+ await writeFile(join(root,'bad-envelope','webhooks','endpoints.json'),JSON.stringify({receivers:'hello.test/chat.v1'}))
+ await writeFile(join(root,'bad-receiver','webhooks','endpoints.json'),JSON.stringify({receivers:[null,{format:7},{format:'cezar.json.v1'}]}))
+ await writeFile(join(root,'no-receivers','webhooks','endpoints.json'),'{}')
+ const impact=await manager.uninstallImpact('hello.test')
+ expect(Object.fromEntries(impact.projects.map(project=>[project.projectId,project.referencedBy]))).toEqual({demo:undefined,'bad-envelope':['webhook-receiver'],'bad-receiver':undefined,'no-receivers':undefined})
 })
 it('rejects a stale uninstall preview before stopping any worker or removing the artifact', async () => {
  const {root,source,manager}=await fixture()
@@ -554,6 +695,36 @@ it('binds uninstall previews to approval identity even when visible project acce
  expect(after.projects).toEqual(before.projects)
  expect(after.revision).not.toBe(before.revision)
  await expect(manager.uninstall('hello.test',false,before.revision)).rejects.toThrow('uninstall impact changed')
+})
+it('retires temporary setup adapters after each operation without exhausting the worker',async()=>{
+ const {root,source,manager,manifest}=await fixture()
+ const {chatTransport}=await import('../chat/registry.ts')
+ await writeFile(
+  join(source, 'cezar-extension.json'),
+  JSON.stringify({
+   ...manifest,
+   capabilities: ['commands', 'panels', 'chatProviders'],
+   contributes: {
+    ...manifest.contributes,
+    chatProviders: [
+     {
+      id: 'chat',
+      label: 'Chat',
+      credentials: [{ name: 'token', label: 'Token' }],
+      discoveryUrl: 'https://example.com',
+      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
+     }
+    ]
+   }
+  })
+ )
+ await writeFile(
+  join(source, 'index.mjs'),
+  `let live=0;export function activate(c){c.chat.register('chat',()=>{live++;return {identify:async()=>({id:String(live),username:'Bot'}),dispose:async()=>{live--}}})}`
+ )
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ for(let i=0;i<25;i++) expect(await chatTransport(root,'hello.test/chat','{}')!.identify()).toEqual({id:'1',username:'Bot'})
 })
 it('polls without the mutation lock until a watched file or live state changes', async () => {
  const { root, source, manager } = await fixture()

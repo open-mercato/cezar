@@ -4,17 +4,22 @@ import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import * as storage from './storage.ts';
 import { acquireOwnership } from './ownership.ts';
 import { WebhookService } from './service.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { WebhookCoordinator } from './coordinator.ts';
+import { canonicalPath } from '../canonical-path.ts';
+import { installShortName } from '../test-support/short-name.testkit.ts';
+
+// Windows' 8.3 tmpdir spelling, simulated on every platform (see the testkit).
+const spelling = installShortName(); afterAll(() => spelling.uninstall());
 const cleanups: (() => Promise<unknown> | void)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1');
-  const root = fs.mkdtempSync(join(fs.realpathSync(tmpdir()), 'webhook-owner-recovery-'));
+  const root = fs.mkdtempSync(join(canonicalPath(tmpdir()), 'webhook-owner-recovery-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   execFileSync('git', ['init', '-q'], { cwd: root });
   const directory = join(root, '.ai/cezar/webhooks'), lock = join(directory, 'owner.lock');

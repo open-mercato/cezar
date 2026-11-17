@@ -11,8 +11,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import * as os from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AgentTempDirError,
@@ -24,6 +25,27 @@ import {
   sweepAgentTmpDirs,
 } from './agent-tmpdir.ts';
 import { execFile } from 'node:child_process';
+
+vi.mock('node:os', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:os')>(),
+}));
+
+function withPlatformTemp(check: (root: string) => void): void {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'cez-platform-fallback-'));
+  const spy = vi.spyOn(os, 'tmpdir').mockImplementation(() => {
+    expect(process.env.TMPDIR).toBeUndefined();
+    expect(process.env.TMP).toBeUndefined();
+    expect(process.env.TEMP).toBeUndefined();
+    return root;
+  });
+  try {
+    check(root);
+    expect(spy).toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 function gitInsideWorktree(path: string): Promise<string> {
   return new Promise((resolve) => {
@@ -71,11 +93,14 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
   });
 
   it('falls back outside the checkout when CEZ_HOME is inside it', () => {
-    const inside = join(dataDir, 'state');
-    const env = { CEZ_HOME: inside };
-    const path = agentTmpDir(dataDir, 'inside-home', env);
-    expect(path.startsWith(`${dataDir}/`)).toBe(false);
-    expect(agentTmpEnv(dataDir, 'inside-home', env).TMPDIR).toBe(path);
+    withPlatformTemp((root) => {
+      const inside = join(dataDir, 'state');
+      const env = { CEZ_HOME: inside };
+      const path = agentTmpDir(dataDir, 'inside-home', env);
+      expect(path.startsWith(`${dataDir}/`)).toBe(false);
+      expect(agentTmpEnv(dataDir, 'inside-home', env).TMPDIR).toBe(path);
+      expect(dirname(dirname(path))).toBe(join(root, 'cez-agent'));
+    });
   });
 
   // A tool that reads TMP (or TEMP) would otherwise follow the host value straight
@@ -213,11 +238,14 @@ describe('agent scratch is private to its owner (#999)', () => {
   // The fallback is reached only through CEZ_HOME-inside-the-checkout, so this is
   // also the end-to-end proof that agentTmpEnv vets the shared root before use.
   it.skipIf(process.platform === 'win32')('mints the platform-temp fallback root owner-only', () => {
-    const env = { CEZ_HOME: join(dataDir, 'state') };
-    const dir = agentTmpEnv(dataDir, 'run-fallback', env).TMPDIR as string;
-    expect(dir.startsWith(`${dataDir}/`)).toBe(false);
-    // <platform tmp>/cez-agent/<hashed project>/<runId>
-    expect(statSync(dirname(dirname(dir))).mode & 0o777).toBe(0o700);
+    withPlatformTemp((root) => {
+      const env = { CEZ_HOME: join(dataDir, 'state') };
+      const dir = agentTmpEnv(dataDir, 'run-fallback', env).TMPDIR as string;
+      expect(dir.startsWith(`${dataDir}/`)).toBe(false);
+      // <platform tmp>/cez-agent/<hashed project>/<runId>
+      expect(statSync(dirname(dirname(dir))).mode & 0o777).toBe(0o700);
+      expect(dirname(dirname(dir))).toBe(join(root, 'cez-agent'));
+    });
   });
 
   describe('securePrivateDir', () => {

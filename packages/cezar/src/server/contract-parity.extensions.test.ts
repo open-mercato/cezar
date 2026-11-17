@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { z } from 'zod'
 import {
   extensionActionResponseSchema,
+  extensionChatSelectionInputSchema, extensionChatSelectionPreviewSchema, extensionChatSelectionCommitSchema,
   extensionInventoryResponseSchema,
   extensionUninstallImpactSchema,
   extensionInvokeInputSchema,
@@ -30,7 +31,12 @@ const extensionPlacements = extensions.placements
 const globalExtensions = client.api.v1.extensions
 const extensionDelete = globalExtensions[':extensionId']
 
+const selection=extensions['chat-selections'][':provider']
 type Checks = [
+  Assert<Mutual<z.infer<typeof extensionChatSelectionInputSchema>, InferRequestType<typeof selection.preview.$post>['json']>>,
+  Assert<Mutual<z.infer<typeof extensionChatSelectionCommitSchema>, InferRequestType<typeof selection.select.$post>['json']>>,
+  Assert<Mutual<z.infer<typeof extensionChatSelectionPreviewSchema>, InferResponseType<typeof selection.preview.$post,200>>>,
+  Assert<Mutual<z.infer<typeof extensionChatSelectionPreviewSchema>, InferResponseType<typeof selection.select.$post,200>>>,
   Assert<Mutual<z.infer<typeof extensionInventoryResponseSchema>, InferResponseType<typeof extensions.inventory.$get, 200>>>,
   Assert<Mutual<z.infer<typeof extensionUninstallImpactSchema>, InferResponseType<typeof globalExtensions[':extensionId']['uninstall-impact']['$get'], 200>>>,
   Assert<Mutual<z.infer<typeof extensionPanelSchema>, InferResponseType<typeof extensionPanel.$get, 200>>>,

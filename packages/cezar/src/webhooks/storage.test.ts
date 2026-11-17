@@ -1,16 +1,21 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import * as storage from './storage.ts';
+import { canonicalPath } from '../canonical-path.ts';
+import { installShortName } from '../test-support/short-name.testkit.ts';
+
+// Windows' 8.3 tmpdir spelling, simulated on every platform (see the testkit).
+const spelling = installShortName(); afterAll(() => spelling.uninstall());
 const roots: string[] = [];
-function project() { const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-storage-')); roots.push(root); execFileSync('git', ['init', '-q'], { cwd: root }); return { root, dataDir: join(root, '.ai/cezar') }; }
+function project() { const root = mkdtempSync(join(canonicalPath(tmpdir()), 'webhook-storage-')); roots.push(root); execFileSync('git', ['init', '-q'], { cwd: root }); return { root, dataDir: join(root, '.ai/cezar') }; }
 // Creating a symlink needs a privilege Windows only grants an elevated (or developer-mode)
 // process, so the symlink assertions run where the platform can actually make one.
 const symlinksSupported = (() => {
-  const probe = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-symlink-'));
+  const probe = mkdtempSync(join(canonicalPath(tmpdir()), 'webhook-symlink-'));
   try { symlinkSync(probe, join(probe, 'link'), 'dir'); return true; }
   catch { return false; }
   finally { rmSync(probe, { recursive: true, force: true }); }
@@ -65,6 +70,18 @@ describe('private webhook storage', () => {
     await expect(storage.atomicWrite(directory, 'endpoints.json', {})).rejects.toThrow('symlink');
     await expect(storage.atomicWrite(directory, '../victim', {})).rejects.toThrow('path');
     expect(readFileSync(victim, 'utf8')).toBe('untouched');
+  });
+  // macOS tmpdir lives under /var → /private/var: a link ABOVE the project is not planted state.
+  it.skipIf(!symlinksSupported)('accepts a project reached through a symlinked ancestor, still refusing links inside it', async () => {
+    const { root } = project(); const real = join(root, 'real'); mkdirSync(real);
+    const linked = join(root, 'var'); symlinkSync(real, linked, 'dir');
+    const target = join(linked, 'repo'); mkdirSync(target); execFileSync('git', ['init', '-q'], { cwd: target });
+    const directory = await storage.prepareStorage(target, join(target, '.ai/cezar'), false);
+    expect(directory).toBe(join(real, 'repo/.ai/cezar/webhooks'));
+    await storage.atomicWrite(directory, 'endpoints.json', { receivers: [] });
+    const other = join(linked, 'other'); mkdirSync(other); execFileSync('git', ['init', '-q'], { cwd: other });
+    const outside = join(root, 'outside'); mkdirSync(outside); symlinkSync(outside, join(other, '.ai'), 'dir');
+    await expect(storage.prepareStorage(other, join(other, '.ai/cezar'), false)).rejects.toThrow('symlink');
   });
   it('keeps dry-run writes separate and refuses corrupt state without overwriting it', async () => {
     const { root, dataDir } = project(); const directory = await storage.prepareStorage(root, dataDir, true);

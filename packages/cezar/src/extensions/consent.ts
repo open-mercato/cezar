@@ -9,6 +9,13 @@ export function approved(approval: ExtensionRecord | undefined, record: Extensio
   return same || keepsConsent(approval, record)
 }
 
+/** Displayed `source` of a shipped adapter. An npm package can share the name, so `origin` says what it is. */
+export const SHIPPED_SOURCE = 'bundled'
+export const isShippedApproval = (record: ExtensionRecord): boolean => record.origin === 'shipped'
+/** A shipped artifact has no install time; its integrity keeps the record stable across reads. */
+export const shippedRecord = (artifact: { manifest: ExtensionRecord['manifest']; integrity: string }, enabled: boolean): ExtensionRecord =>
+  ({ manifest: artifact.manifest, source: SHIPPED_SOURCE, origin: 'shipped', installedAt: artifact.integrity, integrity: artifact.integrity, enabled })
+
 type ConsentInput = Pick<ExtensionRecord, 'manifest' | 'source'>
 
 export const addedPermissions = (old: ConsentInput | undefined, next: ConsentInput) =>

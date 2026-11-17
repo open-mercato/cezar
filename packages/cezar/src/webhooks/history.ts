@@ -1,11 +1,12 @@
 import { constants } from 'node:fs';
-import { open, rename } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { webhookActivitySchema, webhookDeliverySchema, type WebhookActivity, type WebhookDelivery } from '@open-mercato/cezar-contract';
 import { redactDeep, collectSecretValues } from '../core/secret-redaction.ts';
 import { prepareText, statePath } from './storage.ts';
 import { WebhookStateError } from './endpoints.ts';
+import { renameWithRetry } from '../fs-rename.ts';
 const cursorSchema = z.strictObject({ scope: z.string().max(2048), upper: z.tuple([z.string(), z.string()]), after: z.tuple([z.string(), z.string()]) });
 const compare = (a: readonly string[], b: readonly string[]) => a[0]!.localeCompare(b[0]!) || a[1]!.localeCompare(b[1]!);
 export function pageRecords<T extends { id: string; at: string }>(rows: T[], scope: string, query: { limit: number; cursor?: string }) {
@@ -71,7 +72,7 @@ export class WebhookHistory {
       // must not disable a project's webhooks forever with no repair path (spec §"Storage,
       // privacy and degradation"). Preserve the bytes for inspection and start clean.
       const quarantine = statePath(this.directory, `${name}.corrupt-${randomUUID()}`);
-      try { await rename(statePath(this.directory, name), quarantine); }
+      try { await renameWithRetry(statePath(this.directory, name), quarantine); }
       catch { throw error; }
       this.reset = true;
       console.warn(`Webhook ${name} was unreadable and has been quarantined as ${quarantine}; earlier history is unavailable.`, error);

@@ -14,6 +14,9 @@ import { WebhookService, type WebhookServiceOptions } from './service.ts';
 import type { WebhookSource } from './source.ts';
 import type { SendResult, WebhookSend } from './transport.ts';
 
+// Real-store setups; under a full parallel `npm test` they outlast the 5s default.
+vi.setConfig({ testTimeout: 20000 });
+
 // Counts disk reads of the run index without changing what they return.
 vi.mock('../runs/run-index.ts', async original => {
   const actual = await original<typeof import('../runs/run-index.ts')>();

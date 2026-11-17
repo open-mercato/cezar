@@ -102,7 +102,8 @@ it.each([true, false])('retains a terminal Claude reset through the real manager
   const root = mkdtempSync(join(tmpdir(), 'terminal-preview-'));
   const profile = join(root, 'profile'); mkdirSync(profile);
   const calls = join(root, 'calls.ndjson');
-  vi.stubEnv('CEZ_HOME', join(root, 'home'));
+  const home = mkdtempSync(join(tmpdir(), 'terminal-home-'));
+  vi.stubEnv('CEZ_HOME', home);
   vi.stubEnv('CLAUDE_CONFIG_DIR', profile);
   vi.stubEnv('CEZ_DRY_RUN', '1'); vi.stubEnv('CEZ_MOCK_PACE', '0');
   vi.stubEnv('CEZ_CLAUDE_BIN', ''); vi.stubEnv('CEZ_MOCK_ARGS_FILE', calls);
@@ -159,6 +160,6 @@ it.each([true, false])('retains a terminal Claude reset through the real manager
       await expect.poll(() => store!.listRuns().some(run => manager!.isActive(run.id)), { timeout: 10_000 }).toBe(false);
       manager.dispose(); store.flush();
     }
-    vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true });
+    vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
 }, 30_000);

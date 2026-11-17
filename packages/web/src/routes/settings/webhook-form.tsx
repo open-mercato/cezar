@@ -8,11 +8,11 @@ export const eventLabels: Record<WebhookTaskEventType | 'webhook.test', string> 
   'task.attention_required': 'Needs your input', 'task.review_ready': 'Ready for review', 'task.finished': 'Task finished', 'task.failed': 'Task failed', 'task.cancelled': 'Task cancelled', 'webhook.test': 'Test message',
 }
 const hintStyle = 'text-label text-muted-foreground'
-export type WebhookDraft = { format: CreateWebhook['format']; name: string; url: string; profile: CreateWebhook['profile']; preset: CreateWebhook['preset']; events: WebhookTaskEventType[]; scope: CreateWebhook['scope']; graceSeconds: CreateWebhook['graceSeconds']; local: boolean; scheduled: boolean }
+export type WebhookDraft = { format: CreateWebhook['format']; name: string; url: string; profile: CreateWebhook['profile']; preset: CreateWebhook['preset']; events: WebhookTaskEventType[]; scope: CreateWebhook['scope']; graceSeconds: CreateWebhook['graceSeconds']; local: boolean; scheduled: boolean; excerpt: boolean }
 export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
-  return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false }
+  return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false, excerpt: receiver?.includeAgentExcerpt === true }
 }
-const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.v1': 'Discord' } as const
+const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.v1': 'Discord', 'telegram.v1': 'Telegram' } as const
 const serviceName = (format: string) => serviceNames[format as keyof typeof serviceNames] ?? format
 function Field({ id, label, children }: { id?: string; label: string; children: ReactNode }) {
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-ui font-medium">{label}</label> : <span className="text-ui font-medium">{label}</span>}{children}</div>
@@ -24,10 +24,10 @@ function Choice<T extends string>({ id, slot, value, options, onChange }: { id: 
     <SelectContent position="popper">{options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
   </Select>
 }
-/** Custom, Slack and Discord receivers, each configured from its own Settings → Integrations tile. */
+/** Custom, Slack and Discord receivers; Telegram chats are set up in Settings → Integrations → Telegram. */
 export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, format, compact = false, guideHref, save, submitLabel }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; format: WebhookDraft['format']; /** The connect wizard explains the URL itself and tucks event selection under Advanced. */ compact?: boolean; guideHref: string; submitLabel?: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
   const prefix = useId()
-  const { name, url, profile, preset, events, scope, graceSeconds, local, scheduled } = draft
+  const { name, url, profile, preset, events, scope, graceSeconds, local, scheduled, excerpt } = draft
   const change = <K extends keyof WebhookDraft>(key: K, value: WebhookDraft[K]) => setDraft({ ...draft, [key]: value })
   const [error, setError] = useState('')
   const chat = format !== 'cezar.json.v1'
@@ -48,7 +48,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     event.preventDefault()
     if (pending || blocked) return
     if (suggestedFormat && suggestedFormat !== format) { setError(`Configure this webhook in Integrations → ${serviceName(suggestedFormat)}.`); return }
-    const settings = { format, name, ...(url || !receiver ? { url } : {}), profile, preset, events, scope, graceSeconds, allowLocalNetwork: chat ? false : local, includeScheduledFailures: scheduled }
+    const settings = { format, name, ...(url || !receiver ? { url } : {}), profile, preset, events, scope, graceSeconds, allowLocalNetwork: chat ? false : local, includeScheduledFailures: scheduled, ...(profile === 'standard' && excerpt ? { includeAgentExcerpt: true } : {}) }
     const parsed = receiver ? updateWebhookSchema.safeParse({ ...settings, expectedRevision: receiver.revision }) : createWebhookSchema.safeParse(settings)
     if (!parsed.success) { setError([...new Set(parsed.error.issues.map(issue => issue.message.replace(/\.?$/, '.')))].join(' ')); return }
     setError(''); save(parsed.data)
@@ -70,12 +70,14 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     </Field>
     {!compact && eventsFields}
     <Field id={`${prefix}-profile`} label="Message content">
-      <Choice id={`${prefix}-profile`} slot="webhook-profile" value={profile} onChange={value => change('profile', value)} options={[
+      <Choice id={`${prefix}-profile`} slot="webhook-profile" value={profile} onChange={value => setDraft({ ...draft, profile: value, excerpt: false })} options={[
         { value: 'minimal', label: 'Minimal — IDs, status and your own title' },
         { value: 'standard', label: 'Standard — task titles, questions and errors' },
       ]} />
       <p className={hintStyle}>Prompts and transcripts are never sent. Redaction of other text is best effort.</p>
       {chat && profile === 'standard' && <p className="text-label text-warning">Standard posts task titles, questions and error text to your {destinationName} channel.</p>}
+      {profile === 'standard' && <label className="flex items-start gap-2 text-ui"><input type="checkbox" className="mt-0.5" checked={excerpt} onChange={event => change('excerpt', event.target.checked)} />Include an excerpt of the agent’s last message when it asks in plain text</label>}
+      {profile === 'standard' && excerpt && <p role="note" className="text-label text-warning">Up to 600 characters of what the agent wrote are sent to {chat ? `your ${destinationName} channel` : 'this receiver'}. Agent text can quote code, logs or data from this machine; known secrets and file paths are removed on a best-effort basis.</p>}
     </Field>
     {chat ? <ChatPreview format={format} profile={profile} /> : <details><summary className="cursor-pointer text-ui font-medium">Preview JSON · {profile === 'minimal' ? 'Minimal' : 'Standard'}</summary>
       <p className={`mt-2 ${hintStyle}`}>Example data only — nothing is sent.</p>

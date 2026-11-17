@@ -79,6 +79,8 @@ type SecretFile = z.infer<typeof secretFileSchema>;
  * to inspect and compare. The caller turns this into one note on the run.
  */
 export interface SecretsRead {
+  /** A reused project slug belongs to a different root; a new write may start its own store. */
+  foreignRoot?: true;
   values: Record<string, { value: string; audiences: SecretAudience[] }>;
   skipped?: string;
 }
@@ -204,7 +206,7 @@ export class SecretStore {
     if (scope.kind === 'project') {
       const owner = await canonicalRoot(scope.root);
       if (file.root !== owner) {
-        return { values: {}, skipped: `the store belongs to another project root (${file.root ?? 'none recorded'}), not ${owner}` };
+        return { values: {}, foreignRoot: true, skipped: `the store belongs to another project root (${file.root ?? 'none recorded'}), not ${owner}` };
       }
     }
     if (Object.keys(file.secrets).length === 0) return { values: {} };
