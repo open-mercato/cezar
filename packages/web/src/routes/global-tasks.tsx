@@ -33,6 +33,7 @@ import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceLabels } from '@/components/reference-labels'
 import { ReferenceOverflow } from '@/components/reference-overflow'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
@@ -1309,8 +1310,8 @@ function ReferenceChips({
     // A reference is one atom — it either fits on the row or it moves into the `+N` popover.
     <span className="flex flex-nowrap items-center gap-1">
       {shown.map((reference) => (
+        <React.Fragment key={`${reference.kind}#${reference.number}`}>
         <ReferenceChip
-          key={`${reference.kind}#${reference.number}`}
           reference={reference}
           taskTitle={title}
           // Named per chip HERE and nowhere else: this page's rows come from different projects,
@@ -1328,6 +1329,15 @@ function ReferenceChips({
           }
           className="shrink-0"
         />
+        {/* One label and a `+N` (#2032); the chip's hover card lists them all. */}
+        <ReferenceLabels
+          kind={reference.kind}
+          number={reference.number}
+          projectId={run.projectId}
+          max={1}
+          className="hidden xl:inline-flex"
+        />
+        </React.Fragment>
       ))}
       {hidden > 0 ? (
         <ReferenceOverflow

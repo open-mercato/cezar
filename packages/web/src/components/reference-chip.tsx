@@ -16,6 +16,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type * as React from 'react'
 import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
 
+import { ReferenceLabelList } from '@/components/reference-labels'
 import { useReferenceStatus } from '@/components/reference-status'
 import type { ReferenceStatusEntry } from '@/api/queries'
 import { StatusDot } from '@/components/status-dot'
@@ -255,6 +256,8 @@ export function ReferenceChip({
       {/* The status the conflict painted over. It is still true — a conflicting PR can also be
           green and approved — and burying it would trade one hidden fact for another. */}
       {tooltip.also ? <span className="block opacity-70">{tooltip.also}</span> : null}
+      {/* Every label the forge sent (#2032) — the chip row only has room for a few. */}
+      {entry.labels ? <ReferenceLabelList labels={entry.labels} /> : null}
       {/* The URL the native `title` used to carry. Worth keeping: a reference can name a
           DIFFERENT repository than the project on screen (#526), and the host is the only
           thing that says so. */}

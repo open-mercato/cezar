@@ -151,6 +151,8 @@ import type {
   ProviderConnectInput,
   ProviderStatusResponse,
   ReferenceStatus,
+  ReferenceLabels,
+  ReferenceLabelSet,
   RunRecord,
   AgentFallbackCandidate,
   SelectAgentProfileInput,
@@ -2454,6 +2456,9 @@ export interface ReferenceStatusEntry {
   /** What the forge says this number IS, when it is not what the chip asked for: `#2104` asked as
    *  an issue that is really a pull request. Absent = the asked kind, or nothing known. */
   kind?: 'PR' | 'Issue'
+  /** Labels of the reference (#2032), remembered like `status`. Absent = none known (an older
+   *  server, another forge, or a reference without labels) and must paint nothing. */
+  labels?: ReferenceLabelSet
 }
 
 export type ReferenceStatusLookup = (ref: ReferenceStatusRequest) => ReferenceStatusEntry
@@ -2523,6 +2528,22 @@ function rememberKind(key: string, kind: 'PR' | 'Issue' | undefined): void {
   }
   scheduleRememberedSave()
 }
+
+/** Labels (#2032), in memory only: they are cosmetic, cheap to refetch, and not worth another
+ *  `sessionStorage` slot. An empty set is remembered too, so a removed label stops painting. */
+const rememberedLabels = new Map<string, ReferenceLabelSet>()
+
+function rememberLabels(key: string, labels: ReferenceLabelSet): void {
+  rememberedLabels.delete(key)
+  rememberedLabels.set(key, labels)
+  while (rememberedLabels.size > REMEMBERED_MAX) {
+    const oldest = rememberedLabels.keys().next().value
+    if (oldest === undefined) break
+    rememberedLabels.delete(oldest)
+  }
+}
+
+const NO_LABELS: ReferenceLabelSet = { items: [] }
 
 function rememberConflict(key: string, conflicting: boolean): void {
   if (rememberedConflicts.has(key) === conflicting) return
@@ -2670,9 +2691,27 @@ export function useReferenceProjectId(): string | undefined {
  * seeded one exactly as it overwrites any other.
  */
 export function rememberReferenceStatuses(
-  byProject: Record<string, { prs: Record<number, ReferenceStatus>; issues: Record<number, ReferenceStatus> }>,
+  byProject: Record<
+    string,
+    { prs: Record<number, ReferenceStatus>; issues: Record<number, ReferenceStatus>; labels?: ReferenceLabels }
+  >,
 ): void {
   for (const [projectId, buckets] of Object.entries(byProject)) {
+    if (buckets.labels) {
+      // Warm labels only for references the same payload carries a status for: those are the
+      // ones whose absence from `labels` genuinely means "none".
+      for (const [kind, statuses, sets] of [
+        ['PR', buckets.prs, buckets.labels.prs],
+        ['Issue', buckets.issues, buckets.labels.issues],
+      ] as const) {
+        for (const number of Object.keys(statuses)) {
+          rememberLabels(
+            refStatusKey({ projectId, kind, number: Number(number) }),
+            sets[Number(number)] ?? NO_LABELS,
+          )
+        }
+      }
+    }
     for (const [number, status] of Object.entries(buckets.prs)) {
       rememberStatus(refStatusKey({ projectId, kind: 'PR', number: Number(number) }), status)
     }
@@ -2688,6 +2727,7 @@ export function __clearRememberedStatusesForTests(): void {
   rememberedStatuses.clear()
   rememberedConflicts.clear()
   rememberedKinds.clear()
+  rememberedLabels.clear()
   clearTimeout(rememberedSave)
   rememberedSave = undefined
   try {
@@ -2784,7 +2824,7 @@ export function useReferenceStatuses(
 
   const { byRef, learned } = useMemo(() => {
     const map = new Map<string, ReferenceStatusEntry>()
-    const learned: Array<{ key: string; status: ReferenceStatus; conflicting: boolean | undefined; kind: 'PR' | 'Issue' | undefined }> = []
+    const learned: Array<{ key: string; status: ReferenceStatus; conflicting: boolean | undefined; kind: 'PR' | 'Issue' | undefined; labels: ReferenceLabelSet | undefined }> = []
     results.forEach((result, index) => {
       const group = groups[index]
       if (!group) return
@@ -2819,7 +2859,11 @@ export function useReferenceStatuses(
             // The bucket it came back in is the forge's word on what it is.
             const real = data.prs[ref.number] ? 'PR' : 'Issue'
             const kind = real === ref.kind ? undefined : real
-            learned.push({ key, status, conflicting, kind })
+            // `data.labels` absent = an older server: nothing learned, nothing cleared.
+            const labels = data.labels
+              ? (data.labels.prs[ref.number] ?? data.labels.issues[ref.number] ?? NO_LABELS)
+              : undefined
+            learned.push({ key, status, conflicting, kind, labels })
             map.set(key, {
               state: 'ready',
               status,
@@ -2854,6 +2898,14 @@ export function useReferenceStatuses(
             ...kindOf,
           })
         }
+        // Labels ride every state the same way the remembered status does, so a chip does not lose
+        // them while a refetch is in flight.
+        const labels =
+          (data?.available && data.labels
+            ? (data.labels.prs[ref.number] ?? data.labels.issues[ref.number])
+            : undefined) ?? rememberedLabels.get(key)
+        const built = map.get(key)
+        if (built && labels?.items.length) map.set(key, { ...built, labels })
       }
     })
     return { byRef: map, learned }
@@ -2862,9 +2914,10 @@ export function useReferenceStatuses(
 
   // Committed answers only: a render React throws away must not teach the shared memory.
   useEffect(() => {
-    for (const { key, status, conflicting, kind } of learned) {
+    for (const { key, status, conflicting, kind, labels } of learned) {
       rememberStatus(key, status)
       rememberKind(key, kind)
+      if (labels) rememberLabels(key, labels)
       if (conflicting !== undefined) rememberConflict(key, conflicting)
     }
   }, [learned])
@@ -2878,8 +2931,10 @@ export function useReferenceStatuses(
       // that has since unmounted. Whatever was learned then is still the best answer there is.
       const remembered = rememberedStatuses.get(key)
       const kind = rememberedKinds.get(key)
+      const labels = rememberedLabels.get(key)
       return {
         state: 'idle',
+        ...(labels?.items.length ? { labels } : {}),
         ...(remembered ? { status: remembered } : {}),
         ...(rememberedConflicts.has(key) ? { conflicting: true } : {}),
         ...(kind ? { kind } : {}),

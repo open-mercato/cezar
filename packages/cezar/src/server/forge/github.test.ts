@@ -2537,6 +2537,26 @@ describe('fetchRefStatuses', () => {
     expect(out[774]).toEqual({ kind: 'issue', status: 'open' });
   });
 
+  it('asks for labels and carries them, bounded, on PRs and issues (#2032)', async () => {
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({ labels: { totalCount: 25, nodes: [{ name: 'bug', color: 'D73A4A' }, { name: 'odd', color: 'zz' }] } }),
+        r1: issueNode({ labels: { totalCount: 1, nodes: [{ name: 'needs-qa', color: null }] } }),
+        r2: issueNode(),
+      });
+    });
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 8, 9]);
+    expect(sent).toContain('labels(first: 20)');
+    expect(out[7]?.labels).toEqual([{ name: 'bug', color: 'd73a4a' }, { name: 'odd' }]);
+    expect(out[7]?.labelsMore).toBe(23);
+    expect(out[8]?.labels).toEqual([{ name: 'needs-qa' }]);
+    expect(out[8]?.labelsMore).toBeUndefined();
+    // A node GitHub sent no labels for stays "not known", not "none".
+    expect(out[9]).toEqual({ kind: 'issue', status: 'open' });
+  });
+
   it('leaves an unknown number absent rather than guessing at it', async () => {
     const runGraphql = vi.fn(async () => reply({ r0: prNode(), r1: null }));
     const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 8]);

@@ -3,6 +3,7 @@ import { ghEnv } from '../../core/gh-env.ts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
+import type { ReferenceLabel, ReferenceLabels } from '@open-mercato/cezar-contract';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
@@ -1698,6 +1699,8 @@ export type GithubRefStatusData =
        *  never folded into a status. Optional on the wire, and absent means "nothing is known"
        *  rather than "no conflicts"; see `conflicts` in the contract. */
       conflicts?: number[];
+      /** Labels per reference (#2032); absent = not known. See the contract. */
+      labels?: ReferenceLabels;
       /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
        *  contract for why the SERVER answers this. */
       recheckAfterMs: number | null;
@@ -1727,9 +1730,30 @@ function reviewerKey(ref: z.infer<typeof reviewerRefSchema>): string | null {
   return name ? `${ref?.__typename ?? '?'}:${name}` : null;
 }
 
+/** Labels on a ref-status node (#2032): bounded connection, tolerant of absence. */
+const ghRefLabelsSchema = z
+  .object({
+    totalCount: z.number().nullish(),
+    nodes: z.array(z.object({ name: z.string(), color: z.string().nullish() }).nullish()).nullish(),
+  })
+  .nullish();
+/** Labels requested per reference — bounded so the batch query stays cheap. */
+const REF_LABELS_FIRST = 20;
+
+function resolvedLabels(conn: z.infer<typeof ghRefLabelsSchema>): Pick<ResolvedReference, 'labels' | 'labelsMore'> {
+  if (!conn) return {};
+  const labels = (conn.nodes ?? [])
+    .filter((n): n is { name: string; color?: string | null } => !!n?.name)
+    .slice(0, REF_LABELS_FIRST)
+    .map((n) => ({ name: n.name, ...(n.color && /^[0-9a-fA-F]{6}$/.test(n.color) ? { color: n.color.toLowerCase() } : {}) }));
+  const more = Math.max(0, (conn.totalCount ?? labels.length) - labels.length);
+  return { labels, ...(more > 0 ? { labelsMore: more } : {}) };
+}
+
 const ghRefStatusPrSchema = z
   .object({
     state: z.string(),
+    labels: ghRefLabelsSchema,
     isDraft: z.boolean().nullish(),
     reviewDecision: z.string().nullish(),
     /** `MERGEABLE` | `CONFLICTING` | `UNKNOWN` — GitHub computes it in the background, so
@@ -1809,7 +1833,9 @@ function standingReviewRequestedAt(
   return newest;
 }
 
-const ghRefStatusIssueSchema = z.object({ state: z.string(), stateReason: z.string().nullish() }).nullish();
+const ghRefStatusIssueSchema = z
+  .object({ state: z.string(), stateReason: z.string().nullish(), labels: ghRefLabelsSchema })
+  .nullish();
 
 // The aliases hold two DIFFERENT shapes, so the record stays unvalidated here and each alias is
 // parsed by its own schema below. A union at this level would be wrong, not merely loose: zod
@@ -1847,7 +1873,7 @@ function refStatusQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state labels(first: 20) { totalCount nodes { name color } } isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason labels(first: 20) { totalCount nodes { name color } } } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -2037,6 +2063,10 @@ export interface ResolvedReference {
    *  collapsed into "not conflicting", because it is the difference between an answer and a
    *  question GitHub has not finished answering. */
   mergeable?: Mergeability;
+  /** Labels (#2032), capped at `REF_LABELS_FIRST`; absent = the forge did not say. */
+  labels?: ReferenceLabel[];
+  /** How many more labels the forge has beyond `labels`. */
+  labelsMore?: number;
 }
 
 /**
@@ -2117,11 +2147,16 @@ export async function fetchRefStatuses(
             // The tri-state, not a boolean: `unknown` has to survive as far as the cache, which
             // is what decides to ask again in seconds rather than in a minute.
             ...(mergeability ? { mergeable: mergeability } : {}),
+            ...resolvedLabels(pr.labels),
           };
         } else if (node.__typename === 'Issue') {
           const issue = ghRefStatusIssueSchema.parse(node);
           if (!issue) return;
-          out.resolved[number] = { kind: 'issue', status: deriveIssueReferenceStatus(issue) };
+          out.resolved[number] = {
+            kind: 'issue',
+            status: deriveIssueReferenceStatus(issue),
+            ...resolvedLabels(issue.labels),
+          };
         }
       });
     } catch (err) {
@@ -2199,15 +2234,28 @@ export function forgetRefStatus(repoRoot: string, number: number): void {
 export function readCachedRefStatuses(
   repoRoot: string,
   numbers: Iterable<number>,
-): { prs: Record<number, ReferenceStatus>; issues: Record<number, ReferenceStatus> } {
-  const out = { prs: {} as Record<number, ReferenceStatus>, issues: {} as Record<number, ReferenceStatus> };
+): { prs: Record<number, ReferenceStatus>; issues: Record<number, ReferenceStatus>; labels?: ReferenceLabels } {
+  const out = {
+    prs: {} as Record<number, ReferenceStatus>,
+    issues: {} as Record<number, ReferenceStatus>,
+    labels: { prs: {}, issues: {} } as ReferenceLabels,
+  };
   const now = Date.now();
   for (const number of new Set(numbers)) {
     const hit = refStatusCache.get(refStatusKey(repoRoot, number));
     if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) continue;
     out[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = hit.resolved.status;
+    if (hit.resolved.labels?.length) {
+      out.labels[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = {
+        items: hit.resolved.labels,
+        ...(hit.resolved.labelsMore ? { more: hit.resolved.labelsMore } : {}),
+      };
+    }
   }
-  return out;
+  // Omitted when nothing is labelled: absent already reads as "none to show", and it keeps the
+  // warm payload as small as it was before labels.
+  const { labels, ...rest } = out;
+  return Object.keys(labels.prs).length + Object.keys(labels.issues).length > 0 ? { ...rest, labels } : rest;
 }
 
 /** The `#N` in a forge URL — `…/pull/774` → 774. Null when the tail is not a number, so a URL
@@ -2394,11 +2442,18 @@ export async function fetchGithubRefStatus(
   // The second axis, and a list rather than a map because it is nearly always empty: only the
   // pull requests the forge actively called CONFLICTING are named (see `mergeabilityOf`).
   const conflicts: number[] = [];
+  const labels: ReferenceLabels = { prs: {}, issues: {} };
   const file = (number: number, entry: ResolvedReference | null, unknownSince?: number) => {
     rechecks.push(refStatusRecheckAfter(entry, unknownSince));
     if (!entry) return;
     resolved[entry.kind === 'pr' ? 'prs' : 'issues'][number] = entry.status;
     if (entry.mergeable === 'conflicting') conflicts.push(number);
+    if (entry.labels?.length) {
+      labels[entry.kind === 'pr' ? 'prs' : 'issues'][number] = {
+        items: entry.labels,
+        ...(entry.labelsMore ? { more: entry.labelsMore } : {}),
+      };
+    }
   };
   const misses: number[] = [];
   const now = Date.now();
@@ -2413,6 +2468,7 @@ export async function fetchGithubRefStatus(
       prs: resolved.prs,
       issues: resolved.issues,
       conflicts,
+      labels,
       recheckAfterMs: batchRecheckAfter(rechecks),
     };
   }
@@ -2468,6 +2524,7 @@ export async function fetchGithubRefStatus(
       prs: resolved.prs,
       issues: resolved.issues,
       conflicts,
+      labels,
       recheckAfterMs: batchRecheckAfter(rechecks),
     };
   } catch (err) {
