@@ -161,7 +161,7 @@ textarea.other{width:100%;min-height:56px;resize:vertical;border:1px solid var(-
 .fold-btn[aria-expanded="true"] .chev{transform:rotate(90deg)}
 .fold-btn .why{font-weight:400;font-size:12px;color:var(--soft-foreground)}
 .closed-list{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:var(--card)}
-.crow{display:grid;grid-template-columns:118px minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px}
+.crow{display:grid;grid-template-columns:140px minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px}
 .crow:last-child{border-bottom:0}
 .crow .ctext{min-width:0}
 .crow .ctext .l1{display:flex;gap:6px;align-items:center;min-width:0}
@@ -293,7 +293,7 @@ textarea.other{width:100%;min-height:56px;resize:vertical;border:1px solid var(-
         <button type="button" data-state="empty" aria-pressed="false">Empty</button>
       </span>
       <button type="button" class="btn btn-outline btn-sm" id="reset">Reset demo</button>
-      <span class="hint">Try: click an option on “Design”, tick two platforms and add Other on “Platforms”, dismiss a card, expand Closed.</span>
+      <span class="hint">Try: click an option on “Design”, tick two platforms and add Other on “Platforms”, dismiss a card, use “Still needs me” under Probably handled, expand Closed.</span>
     </div>
     <div class="frame" style="position:relative">
       <div class="app">
@@ -409,16 +409,18 @@ textarea.other{width:100%;min-height:56px;resize:vertical;border:1px solid var(-
           <div class="top"><svg class="i s14 " style="color:var(--success-strong)"><use href="#i-check"/></svg><b>Answered</b><span>· 3h ago</span><span class="hdr static">Shell</span></div>
           <div>Shell: <span style="color:var(--foreground)">zsh</span></div>
         </div>
-        <div class="eyebrow" style="margin-top:8px">A free-text reply does not close the card</div>
-        <section class="mcard info">
-          <div class="mcard-h"><svg class="i muted"><use href="#i-q"/></svg>Your decision<span class="st"><span class="dot dot-info"></span>Open</span></div>
-          <div class="mcard-b">
-            <div><span class="hdr">Base</span></div>
-            <div class="qtext" style="margin:2px 0 4px">Branch the mobile work off main or release/v0.12.x?</div>
-            <div class="hint" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px">You replied in chat after this card was asked. <button class="btn btn-ghost btn-sm" type="button">Mark answered</button><button class="btn btn-ghost btn-sm" type="button">Dismiss</button></div>
-          </div>
-        </section>
-        <p class="caption" style="margin-top:0">The card stays open, as the brief asks, but it offers a one-click close. This is a <b>behaviour change</b>: today a composer reply closes every open card in that manager chat (<code>engine.test.ts</code> “the composer closes every open card”).</p>
+        <div class="quiet">
+          <div class="top"><svg class="i s14"><use href="#i-hour"/></svg><b>Closed: expired</b><span>· 20m ago</span><span class="hdr static">Merge</span></div>
+          <div class="qline">Merge #2290 now or wait for the QA run?</div>
+          <div>PR #2290 was merged, and the card was waiting on it.</div>
+        </div>
+        <div class="eyebrow" style="margin-top:8px">After a free-text reply: probably handled</div>
+        <div class="quiet" style="border-style:dashed">
+          <div class="top"><svg class="i s14"><use href="#i-hour"/></svg><b>Probably handled</b><span>· you replied 4m later</span><span class="hdr static">Base</span></div>
+          <div style="color:var(--foreground)">Branch the mobile work off main or release/v0.12.x?</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">Waiting for the manager to confirm on its next turn. <button class="btn btn-ghost btn-sm" type="button">Still needs me</button><button class="btn btn-ghost btn-sm" type="button">Dismiss</button></div>
+        </div>
+        <p class="caption" style="margin-top:0">A reply does not close the card, because cezar cannot know what the reply answered. It does take the card out of the counts at once. The agent then closes it as answered or asks again. <b>Still needs me</b> puts the card back in the list. This changes today’s behaviour, where a composer reply closes every open card in that chat (<code>engine.test.ts</code>).</p>
       </div>
     </div>
   </section>
@@ -426,7 +428,7 @@ textarea.other{width:100%;min-height:56px;resize:vertical;border:1px solid var(-
   <!-- ================= RULES ================= -->
   <section class="doc-s" id="rules">
     <h2><span class="num">04</span> How a question closes</h2>
-    <p class="sub">Each row is a reason shown in the Closed section and on the quiet card. The server decides every reason except Older, so every surface agrees on what is live.</p>
+    <p class="sub">The goal: <b>the main list holds only questions that still need you.</b> Proven-stale cards close themselves. Suspected-stale cards leave the main list and the counts but stay reachable. The agent confirms which ones are really handled. The server decides every state except Older, so every surface agrees on what is live.</p>
     <table class="notes">
       <thead><tr><th>Reason</th><th>Trigger</th><th>What the agent sees</th><th>Closed label</th></tr></thead>
       <tbody>
@@ -435,6 +437,8 @@ textarea.other{width:100%;min-height:56px;resize:vertical;border:1px solid var(-
         <tr><td>Replaced</td><td>A newer <code>CEZ:ASK</code> in the <b>same chat or run</b> with the same card <code>id</code>, or one whose headers cover <b>every</b> header of the older card. A card that only partly overlaps stays open.</td><td>Nothing. The agent asked again.</td><td><span class="reason replaced">Replaced</span> → link to the newer card</td></tr>
         <tr><td>Retracted</td><td>The agent prints <code>CEZ:ASK-CLOSE &lt;id&gt; [reason]</code> (proposal below).</td><td>Nothing. The agent asked for it.</td><td><span class="reason retracted">Withdrawn</span> plus the agent’s reason</td></tr>
         <tr><td>Task ended</td><td>The run reaches <code>done</code> or <code>review</code>, is cancelled, archived or deleted. A run closed as <code>failed</code> with <code>idleClosedAt</code> or <code>awaitingAnswerSince</code> is <b>not</b> ended (#2286), because Continue still answers it. A run with any other <code>failed</code> status also stays open, since Continue can pick it up.</td><td>Nothing. There is no session to tell.</td><td><span class="reason ended">Task ended</span> plus how it ended</td></tr>
+        <tr><td>Expired</td><td>Something the server can <b>prove</b>. (a) The agent gave an expiry in the card: <code>"expires": "2026-11-17T18:00Z"</code> or <code>{"until": {"pr": 2280, "state": "merged"}}</code> (task, issue or branch work too) and it was reached. (b) The card links a PR, task or issue that has since reached a final state (merged, closed or finished). This is the same check Approvals already uses to drop a merge whose PR is no longer open.</td><td>Nothing. The agent named the condition, or the work it asked about is finished.</td><td><span class="reason ended">Expired</span> plus what happened (“PR #2280 merged”)</td></tr>
+        <tr><td>Probably handled <span class="soft">(not closed)</span></td><td>Something the server can only <b>suspect</b>. The user replied in that chat after the card was asked. Or the task carried on without an answer (it had more turns, or is no longer waiting on this question). Or the task’s branch got new commits since. Or the manager started tasks or asked for approvals on the same thing since.</td><td>On its next turn the agent gets its open cards and the reason each one looks handled, and is asked to confirm. It closes the card (<code>CEZ:ASK-CLOSE &lt;id&gt; answered in chat</code>) or asks again. The card then becomes Answered, Withdrawn or Replaced.</td><td>Not closed. It leaves the main list for the “Probably handled” section, stops counting toward badges and push, and stays answerable.</td></tr>
         <tr><td>Older <span class="soft">(toggle)</span></td><td>Unanswered for longer than N days. The toggle is on at 7 days by default. Computed from <code>askedAt</code> and never stored, so turning the toggle off restores the counts.</td><td>Nothing. The question is still open and still answerable.</td><td>Not closed. It moves to the “Older” group and stops counting toward badges.</td></tr>
       </tbody>
     </table>
@@ -536,6 +540,15 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
         </ul>
       </div>
       <div class="note">
+        <h3>G. Relevance: proved, suspected, confirmed</h3>
+        <ul>
+          <li><b>Proved</b> means the server closes the card itself, with no model call. That covers an expiry the agent gave (<code>expires</code> in <code>CEZ:ASK</code>), and linked work (PR, task or issue) reaching a final state, checked with the reference-state polling cezar already does for its chips.</li>
+          <li><b>Suspected</b> means a <code>probablyHandled: { why, since }</code> mark on the question. It is computed from data the server already has: a later user message in that chat, later turns or commits on the task, later manager actions. It leaves the main list and the counts, and the card stays answerable.</li>
+          <li><b>Confirmed</b> is the agent’s job. On each manager check and each task turn, cezar lists the agent’s open and probably-handled cards: “close what no longer needs the user: <code>CEZ:ASK-CLOSE &lt;id&gt; &lt;reason&gt;</code>”. Managers already get a snapshot at each check, so this adds a few lines, not a model call.</li>
+          <li><b>Late answers are guarded.</b> Answering a probably-handled or Older card first asks “This may be out of date: &lt;why&gt;. Send anyway?” The answer that goes out says how old the question was and what changed since. Answering a closed card returns 409, as for an outdated merge, and the card redraws as closed.</li>
+        </ul>
+      </div>
+      <div class="note">
         <h3>F. Gating and scope</h3>
         <ul>
           <li>Task questions exist even when managers are off (<code>CEZ_MANAGERS=0</code>). In that case the Questions entry moves into the project sidebar’s Workspace group, and the route stays <code>/questions</code> (workspace-level).</li>
@@ -555,6 +568,7 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
     rel: { kind: 'manager', name: 'Release captain', av: '🦉', avc: 'av-b', meta: 'manager' },
     qa:  { kind: 'manager', name: 'Nightly QA', av: '🐝', avc: 'av-c', meta: 'manager' },
     t1:  { kind: 'task', name: 'Fix relay reconnect loop', project: 'cezar', meta: 'task · waiting' },
+    t2:  { kind: 'task', name: 'Migrate push tokens', project: 'cezar-mobile', meta: 'task · running' },
   }
   const seed = () => [
     { id: 'q1', src: 'mob', age: 14 * MIN, qs: [{ header: 'Design', question: 'Which onboarding layout should ship in 0.2?', options: [
@@ -569,7 +583,11 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
       { header: 'Notes', question: 'Include the managers redesign in the highlights?', options: [{ label: 'Yes, lead with it' }, { label: 'Mention it briefly' }, { label: 'Leave it out' }] } ] },
     { id: 'q5', src: 'qa', age: 9 * DAY, qs: [{ header: 'Flaky', question: 'Quarantine the three flaky e2e specs until someone owns them?', options: [{ label: 'Quarantine' }, { label: 'Keep them running' }] }] },
     { id: 'q6', src: 'rel', age: 12 * DAY, qs: [{ header: 'Cadence', question: 'Move release cuts from weekly to every two weeks?', options: [{ label: 'Every two weeks' }, { label: 'Keep weekly' }] }] },
+    // probably handled: out of the main list and the counts, still answerable
+    { id: 'p1', src: 'mob', age: 40 * MIN, suspect: 'You replied in this chat 4m after it was asked', qs: [{ header: 'Base', question: 'Branch the mobile work off main or release/v0.12.x?', options: [{ label: 'main' }, { label: 'release/v0.12.x' }] }] },
+    { id: 'p2', src: 't2', age: 2 * 60 * MIN, suspect: 'The task carried on: 3 more turns and 2 commits since', qs: [{ header: 'Storage', question: 'Keep push tokens in the relay KV or move them to D1?', options: [{ label: 'Relay KV' }, { label: 'D1' }] }] },
     // already closed
+    { id: 'c0', src: 'rel', age: 2 * 60 * MIN, closed: { reason: 'expired', at: 20 * MIN, detail: 'PR #2290 merged, and the card was waiting on it' }, qs: [{ header: 'Merge', question: 'Merge #2290 now or wait for the QA run?', options: [] }] },
     { id: 'c1', src: 'mob', age: 3 * 60 * MIN, closed: { reason: 'replaced', at: 31 * MIN, detail: 'Replaced by the newer “Design” card (v3)' }, qs: [{ header: 'Design', question: 'Approve onboarding layout v2?', options: [] }] },
     { id: 'c2', src: 'mob', age: 5 * 60 * MIN, closed: { reason: 'replaced', at: 2 * 60 * MIN, detail: 'Replaced by the newer “Design” card (v2)' }, qs: [{ header: 'Design', question: 'Approve onboarding layout v1?', options: [] }] },
     { id: 'c3', src: 'rel', age: 6 * 60 * MIN, closed: { reason: 'retracted', at: 35 * MIN, detail: 'Withdrawn: “#2280 merged, so the question is moot.”' }, qs: [{ header: 'Release', question: 'Cut 0.13.0 today or wait for #2280?', options: [] }] },
@@ -580,7 +598,7 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
   ]
   let S
   const reset = () => {
-    S = { items: seed(), answers: {}, filter: 'all', older: true, days: 7, showClosed: false, showOlder: false, empty: false, pendingDismiss: {}, sending: {} }
+    S = { items: seed(), answers: {}, filter: 'all', older: true, days: 7, showClosed: false, showOlder: false, showSuspect: true, empty: false, pendingDismiss: {}, sending: {} }
   }
   reset()
 
@@ -588,9 +606,10 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
   const ago = (ms) => ms < MIN ? 'now' : ms < 60 * MIN ? `${Math.round(ms / MIN)}m` : ms < DAY ? `${Math.round(ms / 60 / MIN)}h` : `${Math.round(ms / DAY)}d`
   const icon = (id, cls = '') => `<svg class="i ${cls}"><use href="#i-${id}"/></svg>`
   const items = () => S.empty ? [] : S.items
-  const isOpen = (q) => !q.closed && !S.pendingDismiss[q.id]
+  const isOpen = (q) => !q.closed && !S.pendingDismiss[q.id] && !q.suspect
   const isOlder = (q) => S.older && q.age > S.days * DAY
   const live = () => items().filter((q) => isOpen(q) && !isOlder(q))
+  const suspectList = () => items().filter((q) => !q.closed && !S.pendingDismiss[q.id] && q.suspect)
   const olderList = () => items().filter((q) => isOpen(q) && isOlder(q))
   const closedList = () => items().filter((q) => q.closed).sort((a, b) => a.closed.at - b.closed.at)
   const passes = (q) => S.filter === 'all' || (S.filter === 'managers') === (SOURCES[q.src].kind === 'manager')
@@ -651,14 +670,25 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
   function closedSection() {
     const c = closedList().filter(passes)
     if (!c.length) return ''
-    const label = { answered: 'Answered', dismissed: 'Dismissed', replaced: 'Replaced', retracted: 'Withdrawn', ended: 'Task ended' }
-    const ic = { answered: 'check', dismissed: 'skip', replaced: 'swap', retracted: 'undo', ended: 'stop' }
+    const label = { answered: 'Answered', dismissed: 'Dismissed', replaced: 'Replaced', retracted: 'Withdrawn', ended: 'Task ended', expired: 'Expired' }
+    const ic = { answered: 'check', dismissed: 'skip', replaced: 'swap', retracted: 'undo', ended: 'stop', expired: 'hour' }
     const rows = c.map((q) => `<div class="crow"><span class="reason ${q.closed.reason}">${icon(ic[q.closed.reason], 's14')}${label[q.closed.reason]}</span>
       <div class="ctext"><div class="l1"><span class="hdr static">${esc(q.qs[0].header)}</span><span class="qq">${esc(q.qs[0].question)}</span></div>
       <div class="l2">${esc(q.closed.srcName ?? SOURCES[q.src].name)} · ${esc(q.closed.detail)} · ${ago(q.closed.at)} ago</div></div>
       <a class="btn btn-ghost btn-sm" href="#chat" aria-label="Open in context">${icon('out', 's14')}</a></div>`).join('')
-    return `<div class="fold"><button class="fold-btn" data-act="toggle-closed" aria-expanded="${S.showClosed}">${icon('chev', 's14 chev')}Closed · ${c.length}<span class="why">answered, dismissed, replaced, withdrawn or task ended · last 7 days</span></button>
+    return `<div class="fold"><button class="fold-btn" data-act="toggle-closed" aria-expanded="${S.showClosed}">${icon('chev', 's14 chev')}Closed · ${c.length}<span class="why">answered, dismissed, replaced, withdrawn, expired or task ended · last 7 days</span></button>
       ${S.showClosed ? `<div class="closed-list">${rows}</div>` : ''}</div>`
+  }
+
+  function suspectSection(mobile) {
+    const o = suspectList().filter(passes)
+    if (!o.length) return ''
+    const rows = o.map((q) => `<div class="crow"><span class="reason retracted">${icon('hour', 's14')}Probably handled</span>
+      <div class="ctext"><div class="l1"><span class="hdr static">${esc(q.qs[0].header)}</span><span class="qq">${esc(q.qs[0].question)}</span></div>
+      <div class="l2">${esc(SOURCES[q.src].name)} · ${esc(q.suspect)} · waiting for the agent to confirm</div></div>
+      <span style="display:flex;gap:2px"><button class="btn btn-ghost btn-sm" data-act="restore" data-q="${q.id}">Still needs me</button><button class="btn btn-ghost btn-sm" data-act="dismiss" data-q="${q.id}" aria-label="Dismiss ${esc(q.qs[0].header)}">${icon('x', 's14')}</button></span></div>`).join('')
+    return `<div class="fold"><button class="fold-btn" data-act="toggle-suspect" aria-expanded="${S.showSuspect}">${icon('chev', 's14 chev')}${icon('hour', 's14')}Probably handled · ${o.length}<span class="why">not counted · the agent confirms on its next turn</span></button>
+      ${S.showSuspect ? `<div class="closed-list">${rows}</div>` : ''}</div>`
   }
 
   function olderSection(mobile) {
@@ -683,8 +713,8 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
         ${['all', 'managers', 'tasks'].map((f) => `<button class="chip-f" data-act="filter" data-f="${f}" aria-pressed="${S.filter === f}">${f[0].toUpperCase() + f.slice(1)}</button>`).join('')}
         ${mobile ? '' : `<span class="switch" role="switch" tabindex="0" aria-checked="${S.older}" data-act="older"><span class="track" aria-hidden="true"></span>Move to Older after</span><span class="days" aria-label="Days before Older"><button data-act="days" data-d="-1" aria-label="Fewer days">−</button><span>${S.days}</span><button data-act="days" data-d="1" aria-label="More days">+</button></span><span class="t-meta muted">days</span>`}
       </div>`
-    if (!open.length && !olderList().length) return header + (S.empty ? '' : toolbar) + emptyState() + (S.showClosed && !S.empty ? closedSection() : '')
-    return header + toolbar + groups(open, mobile) + olderSection(mobile) + closedSection()
+    if (!open.length && !olderList().length) return header + (S.empty ? '' : toolbar) + emptyState() + (S.empty ? '' : suspectSection(mobile) + (S.showClosed ? closedSection() : ''))
+    return header + toolbar + groups(open, mobile) + suspectSection(mobile) + olderSection(mobile) + closedSection()
   }
 
   function mgrRows(el, phone) {
@@ -790,6 +820,7 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
       case 'more': { const a = ans(q, i); a.more = !a.more; if (a.more) { a.labels = []; a.other = undefined } if (a.more && oneTap(q)) return send(qid); return render() }
       case 'send': return send(qid)
       case 'dismiss': {
+        if (q.suspect) delete q.suspect
         S.pendingDismiss[qid] = true
         render()
         toast(`Dismissed «${esc(q.qs[0].header)}». ${SOURCES[q.src].kind === 'manager' ? 'The manager' : 'The task'} will be told you skipped it.`, qid)
@@ -811,6 +842,8 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
         return
       }
       case 'toggle-closed': S.showClosed = !S.showClosed; return render()
+      case 'toggle-suspect': S.showSuspect = !S.showSuspect; return render()
+      case 'restore': delete q.suspect; render(); toast(`«${esc(q.qs[0].header)}» is back in the list.`); return
       case 'toggle-older': S.showOlder = !S.showOlder; return render()
       case 'filter': S.filter = el.dataset.f; return render()
       case 'older': S.older = !S.older; return render()
