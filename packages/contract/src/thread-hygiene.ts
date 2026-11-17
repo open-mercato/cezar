@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const THREAD_CONTINUATION_LIMIT = 3;
 export const THREAD_HYGIENE_REQUIRED = 'Long thread: choose Continue work or Prepare handoff before another continuation.';
 export const threadHygieneSchema = z.object({
+  graphPaused: z.boolean().optional(),
+  preparingHandoff: z.boolean().optional(),
   continuations: z.number().int().nonnegative(),
   historyKnown: z.boolean(),
   lastOperationId: z.string().optional(),

@@ -575,6 +575,8 @@ interface ContinueRunOptions {
 }
 
 interface ActiveRun {
+  graphFollowup?: boolean;
+  graphHygieneHandoff?: { prompt: string; opts: ContinueRunOptions };
   /** Skills this session already counted as `skill_used` (telemetry); lazily created, so neither
    *  construction site (`execute`, `runContinuation`) has to know about it. */
   trackedSkills?: Set<string>;
@@ -2597,10 +2599,11 @@ export class RunManager {
       'left running by a settled task (found at startup)',
     );
     for (const run of live) {
-      if (run.threadHygiene?.pending) {
+      if (run.threadHygiene?.pending || run.threadHygiene?.graphPaused) {
+        if (run.threadHygiene.graphPaused) this.parkGraphHygiene(run.id, 'graph-restart');
         this.store.updateRun(run.id, { status: 'waiting', activity: undefined, askParked: true, monitoringWakeAt: undefined, autoResumeAt: undefined });
         // updateRun retires an old idle marker on a transition into waiting; stamp the new park afterwards.
-        this.store.updateRun(run.id, { idleClosedAt: run.threadHygiene.pending.since });
+        this.store.updateRun(run.id, { idleClosedAt: run.threadHygiene.pending?.since ?? new Date().toISOString() });
         continue;
       }
       if (this.lifecycle.isBlocked(run.id)) {
@@ -3644,6 +3647,7 @@ export class RunManager {
         message: `report received from task "${child.title}" (${child.id}) — status ${report.status}`,
       });
 
+      if (parent.threadHygiene?.graphPaused) return;
       const parentState = this.active.get(parentId);
       if (parentState) parentState.supervisedContinues = 0;
       if (parent.status === 'cancelled') return;
@@ -3713,6 +3717,7 @@ export class RunManager {
   private scheduleAutoResumeIfLimited(runId: string): void {
     if (this.autoResumeTimers.has(runId)) return; // already promised
     const run = this.store.getRun(runId);
+    if (run?.threadHygiene?.graphPaused) { this.clearAutoResume(runId); return; }
     if (!run || (run.status !== 'failed' && !(run.status === 'queued' && run.fallbackEpisode?.pending))) return;
     // Archiving IS resigning from a task. Reviving one because a window happened to reopen would
     // be the feature working against the clearest signal the user can give it.
@@ -3815,6 +3820,7 @@ export class RunManager {
    * still ahead keep the main behaviour, because a continuation would silently skip that work.
    */
   private fallbackFailure(run: RunRecord) {
+    if (run.threadHygiene?.graphPaused) return undefined;
     const snapshot = run.fallbackPolicy;
     if (!snapshot?.enabled || run.workflowDef?.graph) return undefined;
     const failed = [...run.steps].reverse().find((step) => step.status === 'failed');
@@ -3841,6 +3847,11 @@ export class RunManager {
   private publishRunFailure(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): void {
     const run = this.store.getRun(runId);
     if (!run) return;
+    if (run.threadHygiene?.preparingHandoff) {
+      this.store.updateRun(runId, { error: patch.error, finishedAt: undefined });
+      this.parkGraphHygiene(runId, 'handoff-failed');
+      return;
+    }
     if (!this.disposed && !run.archived && this.fallbackFailure({ ...run, ...patch })) {
       this.store.updateRun(runId, {
         ...patch, status: 'queued', finishedAt: undefined, currentStepId: undefined,
@@ -5121,23 +5132,108 @@ export class RunManager {
     this.setDeferred(runId, unsent);
   }
 
-  /**
-   * Deliver a user message into the run's live claude session (mid-turn or
-   * while `waiting`). Returns false when there is no open session — the GUI
-   * then offers "Continue" instead.
-   */
+  private parkGraphHygiene(runId: string, reason: string): void {
+    const run = this.store.getRun(runId);
+    if (!run?.threadHygiene) return;
+    const since = new Date().toISOString();
+    if (run.graphState?.cursor) this.store.updateStep(runId, run.graphState.cursor, { status: 'waiting' });
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: true, currentStepId: undefined,
+      threadHygiene: { ...run.threadHygiene, graphPaused: true, preparingHandoff: false, pending: { reason, since } } });
+    this.store.updateRun(runId, { idleClosedAt: since });
+  }
+
+  private graphContinuationOverrides(run: RunRecord, opts: ContinueRunOptions): Partial<RunRecord> {
+    const runner = opts.runner ?? run.runner ?? 'claude';
+    const runnerChanged = runner !== (run.runner ?? 'claude');
+    return {
+      ...(opts.runner !== undefined ? { runner } : {}),
+      ...(opts.model !== undefined ? { model: opts.model || undefined }
+        : run.model && !pinSurvivesRunnerSwitch(run.model, run.runner ?? 'claude', runner) ? { model: undefined } : {}),
+      ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : runnerChanged ? { agentProfile: undefined } : {}),
+      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort || undefined }
+        : runnerChanged || opts.model !== undefined ? { reasoningEffort: undefined } : {}),
+    };
+  }
+
+  private queueGraphHandoff(runId: string, prompt: string, opts: ContinueRunOptions): void {
+    const run = this.store.getRun(runId)!;
+    const stepId = `continue-${run.steps.filter(step => step.id.startsWith('continue-')).length + 1}`;
+    this.store.addStep(runId, { id: stepId, name: 'Prepare handoff', kind: 'agent',
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(!agentModelsLocked(this.repoRoot) && opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+    });
+    this.store.updateRun(runId, {
+      ...this.graphContinuationOverrides(run, opts),
+      status: 'queued', error: undefined, finishedAt: undefined,
+      threadHygiene: { ...run.threadHygiene!, graphPaused: true, preparingHandoff: true },
+    });
+    this.pendingContinuations.set(runId, { stepId, sessionId: undefined, backend: opts.runner ?? run.runner ?? 'claude', prompt, images: [] });
+    this.queue.push(runId);
+    this.releaseSlot();
+  }
+
+  private saveGraphInstruction(runId: string, content: PastedContent[]): void {
+    if (content.every(block => block.type === 'text' && /^continue\.?$/i.test(block.text.trim()))) return;
+    const queued = this.toQueuedMessage(runId, content);
+    const run = this.store.getRun(runId)!;
+    this.store.updateRun(runId, { queuedMessages: [...(run.queuedMessages ?? []), queued] });
+    const state = this.active.get(runId);
+    if (state) state.graphFollowup = true;
+  }
+
+  private resumeGraphWorkflow(runId: string, decision: ThreadDecision, content: PastedContent[], opts: ContinueRunOptions): { ok: boolean; error?: string } {
+    const run = this.store.getRun(runId)!;
+    if (!run.workflowDef || !run.graphState?.cursor) return { ok: false, error: 'No saved workflow checkpoint to resume.' };
+    const runner = opts.runner ?? run.runner ?? 'claude';
+    if (opts.model && modelConflictsWithRunner(opts.model, runner)) return { ok: false, error: 'Model does not match the selected agent.' };
+    const ok = this.threadWork(runId, 'graph-continue', () => true, decision, opts.operationId);
+    if (!ok) return { ok: false, error: THREAD_HYGIENE_REQUIRED };
+    this.saveGraphInstruction(runId, content);
+    this.store.updateRun(runId, { status: 'queued', error: undefined, finishedAt: undefined, currentStepId: undefined,
+      ...this.graphContinuationOverrides(run, opts),
+      threadHygiene: { ...run.threadHygiene!, graphPaused: false, preparingHandoff: false },
+    });
+    this.pendingJobs.set(runId, { workflow: run.workflowDef, input: this.workflowInput(run) });
+    this.queue.push(runId); this.releaseSlot();
+    return { ok: true };
+  }
+
   resumeThreadHygiene(runId: string, decision: ThreadDecision, content: PastedContent[], opts: ContinueRunOptions = {}): { ok: boolean; error?: string } {
     const run = this.store.getRun(runId);
     if (!run || !run.threadHygiene?.pending || decision.expectedCount !== run.threadHygiene.continuations) return { ok: false, error: 'Thread decision is stale; refresh status.' };
     const state = this.active.get(runId);
+    const graph = run.workflowDef ? run.workflowDef.graph ?? compileV1(run.workflowDef.steps) : undefined;
+    const graphCheckpoint = graph?.nodes.some(node => node.id === run.graphState?.cursor && node.type !== 'agent');
+    if (run.threadHygiene.preparingHandoff) {
+      if (state || this.starting.has(runId) || this.queue.includes(runId)) return { ok: false, error: 'Handoff preparation is already running; wait for the saved result.' };
+      this.parkGraphHygiene(runId, 'handoff-interrupted');
+    }
+    if (decision.action === 'handoff' && (state?.graphChildWaits?.size || run.threadHygiene.graphPaused || (!state && graphCheckpoint))) {
+      if (!graphCheckpoint) return { ok: false, error: 'No saved workflow checkpoint for handoff.' };
+      if (state && !state.graphFinish) return { ok: false, error: 'Wait for the workflow to finish parking.' };
+      const runner = opts.runner ?? run.runner ?? 'claude';
+      if (opts.model && modelConflictsWithRunner(opts.model, runner)) return { ok: false, error: 'Model does not match the selected agent.' };
+      if (!this.threadWork(runId, 'graph-handoff', () => true, decision, opts.operationId)) return { ok: false, error: THREAD_HYGIENE_REQUIRED };
+      this.store.updateRun(runId, { threadHygiene: { ...run.threadHygiene, graphPaused: true, preparingHandoff: true,
+        pending: { reason: 'preparing-handoff', since: new Date().toISOString() } } });
+      const prompt = messageText(content);
+      if (state) {
+        state.graphHygieneHandoff = { prompt, opts };
+        state.graphFinish?.();
+      } else this.queueGraphHandoff(runId, prompt, opts);
+      return { ok: true };
+    }
+    if (!state && (run.threadHygiene.graphPaused || graphCheckpoint)) return this.resumeGraphWorkflow(runId, decision, content, opts);
     if (state?.graphChildWaits?.size) {
-      if (decision.action === 'handoff') return { ok: false, error: 'Resolve the graph child wait before preparing a handoff.' };
+      if ((opts.runner !== undefined && opts.runner !== run.runner) || (opts.model !== undefined && opts.model !== run.model)
+        || (opts.reasoningEffort !== undefined && opts.reasoningEffort !== run.reasoningEffort)
+        || (opts.agentProfile !== undefined && opts.agentProfile !== run.agentProfile)) return { ok: false, error: 'Prepare and review the handoff before changing the active workflow agent, model or account.' };
       const pending = run.dispatch?.pendingReports?.find(report => state.graphChildWaits?.has(report.fromRunId));
       const waiter = pending ? state.graphChildWaits.get(pending.fromRunId) : undefined;
       const child = pending ? this.store.getRun(pending.fromRunId) : undefined;
       if (!waiter || !pending || !child) return { ok: false, error: 'Still waiting for the child report.' };
       const accepted = waiter({ status: child.status, summary: childSettleReport(child, { resumeNotes: handoffSectionExcerpt(readHandoff(this.dataDir, child.id), '## Resume notes') }).text }, decision);
-      if (accepted) this.ackPendingReport(runId, pending.fromRunId, pending.at);
+      if (accepted) { this.saveGraphInstruction(runId, content); this.ackPendingReport(runId, pending.fromRunId, pending.at); }
       return { ok: accepted, ...(accepted ? {} : { error: THREAD_HYGIENE_REQUIRED }) };
     }
     const reports = run.dispatch?.pendingReports;
@@ -5173,7 +5269,13 @@ export class RunManager {
     return true;
   }
 
+  /**
+   * Deliver a user message into the run's live claude session (mid-turn or
+   * while `waiting`). Returns false when there is no open session — the GUI
+   * then offers "Continue" instead.
+   */
   sendMessage(runId: string, content: PastedContent[], decision?: ThreadDecision, operationId?: string): boolean {
+    if (this.store.getRun(runId)?.threadHygiene?.graphPaused) return false;
     if (operationId && this.store.getRun(runId)?.threadHygiene?.operationIds?.includes(operationId)) return true;
     const delivered = this.deliverMessage(runId, content, true, undefined, decision, operationId) || ((decision !== undefined || !this.store.getRun(runId)?.threadHygiene?.pending) && this.reopenIdleParked(runId, content, decision));
     if (delivered) {
@@ -5443,6 +5545,7 @@ export class RunManager {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     const run = this.store.getRun(runId);
+    if (run?.threadHygiene?.graphPaused) return { ok: false, error: THREAD_HYGIENE_REQUIRED };
     if (opts.operationId && run?.threadHygiene?.operationIds?.includes(opts.operationId)) return { ok: true };
     if (this.active.has(runId) || this.starting.has(runId)) {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
@@ -5915,6 +6018,11 @@ export class RunManager {
         // buffered delta can outlive its turn.
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
+        if (this.store.getRun(runId)?.threadHygiene?.preparingHandoff && !state.cancelled && event.reason !== 'context-compaction') {
+          void this.rescanArtifacts(runId, { render: true });
+          state.session?.end();
+          return;
+        }
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
         const sessionOpen = !state.cancelled && state.session?.open;
@@ -6219,8 +6327,9 @@ export class RunManager {
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
-    const treeReports = this.flushPendingReports(runId);
-    const treeInbox = this.flushInbox(runId);
+    const utility = this.store.getRun(runId)?.threadHygiene?.preparingHandoff;
+    const treeReports = utility ? pendingReportsBlock(this.store.getRun(runId)?.dispatch?.pendingReports ?? []) : this.flushPendingReports(runId);
+    const treeInbox = utility ? undefined : this.flushInbox(runId);
     const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
@@ -6326,6 +6435,9 @@ export class RunManager {
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=cancelled`);
+      } else if (this.store.getRun(runId)?.threadHygiene?.preparingHandoff) {
+        this.store.updateStep(runId, stepId, { status: 'done', finishedAt: finishedAt() });
+        this.parkGraphHygiene(runId, 'handoff-review');
       } else if (this.active.get(runId) === state && this.idleParks(runId, state)) {
         state.askPark = undefined;
         this.parkIdleClosed(runId, finishedAt());
@@ -6370,6 +6482,7 @@ export class RunManager {
           // A session that crashed while parked on a question leaves that question unanswered.
           ...(state.askPark === 'waiting' ? { awaitingAnswerSince: failedAt } : {}),
         });
+        if (this.store.getRun(runId)?.threadHygiene?.preparingHandoff) this.parkGraphHygiene(runId, 'handoff-failed');
         this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
     } finally {
@@ -6757,6 +6870,14 @@ export class RunManager {
       usageLimitResume: resumeStep,
     });
 
+    if (state.graphHygieneHandoff && !state.cancelled && this.active.get(runId) === state) {
+      const intent = state.graphHygieneHandoff;
+      this.parkGraphHygiene(runId, 'preparing-handoff');
+      this.clearIdleTimer(state);
+      this.dropActive(runId, state);
+      this.queueGraphHandoff(runId, intent.prompt, intent.opts);
+      return;
+    }
     // How a mid-workflow ask park (#917) ended, read once before the settlement
     // below clears it. A LIVE park never reaches this line: the parked session
     // stays open, so `execute` is still awaiting `runAgentStep` and the answer
@@ -6962,6 +7083,15 @@ export class RunManager {
     else record(step.transitions);
     while (step.kind === 'node') {
       if (state.cancelled) return null;
+      if (state.graphFollowup) {
+        const amended = this.workflowInput(this.store.getRun(runId)!);
+        input.task = amended.task;
+        const attachments = this.readPersistedAttachments(runId,
+          (this.store.getRun(runId)?.queuedMessages ?? []).flatMap(message => message.images ?? []), 'queued');
+        startImages = [...(startImages ?? []), ...attachments.blocks];
+        startAttachments.push(...attachments.attachments);
+        state.graphFollowup = false;
+      }
       const node = step.node;
       const resuming = resumeNode?.id === node.id && cursor === undefined;
       cursor = node.id;
@@ -6987,6 +7117,7 @@ export class RunManager {
           typeof shape === 'string' ? shape : await this.runFork(graph, runId, state, node, shape, outputs, input.task, emit, persistWalk, resuming);
         if (state.cancelled) return null;
         if (outcome === 'finished') {
+          if (state.graphHygieneHandoff) return null;
           this.finishStep(runId, node.id, 'done', undefined, emit);
           return null;
         }
@@ -7011,6 +7142,7 @@ export class RunManager {
         // Finish on a parked gate/question is "stop here and accept" — the same settlement a
         // Finish on a parked agent step gets (`askPark === 'abandoned'`).
         if (outcome === 'finished') {
+          if (state.graphHygieneHandoff) return null;
           this.finishStep(runId, node.id, 'done', undefined, emit);
           return null;
         }

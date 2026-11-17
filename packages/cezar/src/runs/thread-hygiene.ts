@@ -9,6 +9,7 @@ export function threadAdmission(current: ThreadHygiene | undefined, reason: stri
     return { accepted: false, state: { ...state, pending: state.pending ?? { reason, since: new Date().toISOString() } } };
   }
   return { accepted: true, state: {
+    ...state, pending: undefined,
     continuations: state.continuations + 1, historyKnown: state.historyKnown,
     operationIds: [...(state.operationIds ?? []), operationId],
     lastOperationId: operationId, lastReason: decision?.action === 'handoff' ? 'prepare-handoff' : reason,

@@ -9,3 +9,5 @@ Evidence: commit e78fc0a650e5a3db266571de21d3c158ec4ee6cb, `packages/cezar/src/w
 ## 2026-11-17 — Apply store transition rules before recovery markers
 
 RunStore.updateRun retires an old idle marker when a record enters waiting. Recovery must first transition into waiting and then stamp the new idle park; combining both writes removes the marker and prevents explicit Continue after restart. Evidence: the real startup-recovery regression in `packages/cezar/src/workflows/thread-hygiene.test.ts` fails before this ordering repair and passes after it. The owning recovery code and hygiene specification document the ordering.
+
+- 2026-11-17: Sessionless workflow handoff must preserve the original graph cursor, child IDs and reports. Run a one-turn utility on the same task, then park; never settle the workflow from the utility’s completion marker or trigger provider fallback after utility failure. Evidence: workflows/graph-hygiene.test.ts (live/restart/resume/failure/interrupted preparation).

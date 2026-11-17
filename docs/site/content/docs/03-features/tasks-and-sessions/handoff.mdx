@@ -55,4 +55,4 @@ The command returns a manifest with retained paths, hashes and missing dependenc
 
 > **Good to know**: Retention accepts regular files inside Assets, up to 100 files and 25 MiB per selected artifact. Missing dependencies are recorded as unverified. Copy a selected output from elsewhere into Assets with its dependencies before retaining it.
 
-> **Good to know**: Preparing a handoff is refused during a graph child wait without a parent agent session. The live graph can continue after a decision. A restored graph with no agent session also needs manual recovery before further work. Reports remain saved. These limits require acceptance before installation.
+> **Good to know**: A workflow waiting for subtasks can prepare a handoff even when it has no earlier agent conversation. The original workflow stays paused while a single preparation turn runs in the same task. It returns to your decision, without creating a successor or advancing the workflow. **Continue work** resumes the saved step and reuses existing subtasks, including after a restart. Reports stay saved. Interrupted or failed preparation waits for your decision instead of retrying automatically.

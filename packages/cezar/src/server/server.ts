@@ -5541,6 +5541,11 @@ export function createApp(deps: ServerDeps) {
         // (the record is written a tick later), the engine can.
         //   live session → delivered · still queued → folded into the prompt
         //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
+        if (parsed.data.threadDecision && (run.threadHygiene?.graphPaused || (run.threadHygiene?.pending && run.graphState && !run.steps.some(step => step.sessionId)))) {
+          const resumed = manager.resumeThreadHygiene(id, parsed.data.threadDecision, content, { operationId: parsed.data.idempotencyKey });
+          if (!resumed.ok) return c.json({ error: resumed.error }, 409);
+          return c.json((answered = { delivered: true as const }));
+        }
         if (manager.sendMessage(id, content, parsed.data.threadDecision, parsed.data.idempotencyKey)) return c.json((answered = { delivered: true as const }));
 
         if (store.getRun(id)?.threadHygiene?.pending) return c.json({ error: THREAD_HYGIENE_REQUIRED }, 409);

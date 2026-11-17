@@ -32,4 +32,13 @@ describe('thread hygiene controls', () => {
     expect(screen.queryByRole('button', { name: 'Continue work' })).toBeNull()
     expect(continueRun).not.toHaveBeenCalled()
   })
+  it('shows a paused workflow during preparation and prevents a second work decision', () => {
+    show({ ...RUN, status: 'running', threadHygiene: { ...RUN.threadHygiene!, graphPaused: true, preparingHandoff: true } })
+    expect(screen.getByText(/Preparing handoff; the original workflow remains paused/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Continue work' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Prepare handoff' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Status — no agent call' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(continueRun).not.toHaveBeenCalled()
+  })
+
 })

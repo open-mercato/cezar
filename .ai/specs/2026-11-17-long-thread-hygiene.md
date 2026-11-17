@@ -1,6 +1,6 @@
 # Karta zadania — higiena długich wątków cezara
 
-Status: do zatwierdzenia przez Kamila; po niezależnej kontroli fe01e743 i uzupełnieniu ustaleń.
+Status: zatwierdzona przez Kamila 2026-11-17 („Karta: Tak, zatwierdzam kartę”); pełny zakres procedur potwierdzony („Zakres: Dokończ również procedury”).
 
 **Po co:** ograniczyć koszt rozrośniętych wątków i ułatwić dalszą pracę w świeżym wątku, zachowując dostęp do wartościowych efektów poprzednika.
 
@@ -27,9 +27,9 @@ Status: do zatwierdzenia przez Kamila; po niezależnej kontroli fe01e743 i uzupe
 Rozpoznanie: działający pakiet 0.20.0; upstream main odczytany jako 75d643737ba1801317cf5942484e6d0a1b2d4609. Kontrola niezależna: artifacts/fe01e743-fb21-4500-883c-c22d1c4fb7ec/challenge-karty.md. Powiązane upstream PR-y 1180, 1820, 1954, 2225 wymagają szczegółowego sprawdzenia nakładania przed zmianami. Nie zmieniono źródeł ani działania cockpitu.
 
 
-## Implementation limitation (pending owner acceptance)
+## Procedure handoff and recovery
 
-Preparing a handoff is safely refused while a graph child-wait node has no parent agent session. Reports remain retained; explicit Continue is available while the graph wait is active. After restart, a graph with no agent session also refuses Continue and needs manual recovery or further implementation. The UI returns a clear refusal; it does not create another task or silently continue work. This exception must be accepted by the owner before treating the complete card as delivered or installing the patch.
+A workflow waiting for subtasks can prepare its handoff even if no parent agent session exists. The original checkpoint remains paused; a fresh, single-turn preparation session runs under the same task, without creating a successor, consuming pending child reports or advancing the workflow. Completed preparation returns to a saved decision. Explicit Continue resumes the original checkpoint and reuses existing children. Recovery and preparation failure park the task without automatic model work. Custom follow-up instructions and attachments are retained for workflow context. A second decision during preparation is refused; status remains read-only.
 
 
 Recovery contract: a pending decision never buys a provider turn at startup. Transition the stored run to waiting before stamping its idle-park marker; RunStore.updateRun deliberately retires the previous marker on a status transition. A stored agent session can then be resumed only by an explicit counted decision.
