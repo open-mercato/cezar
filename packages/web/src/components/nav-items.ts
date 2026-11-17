@@ -2,7 +2,7 @@ import {
   CircleDotIcon,
   GitBranchIcon,
   InboxIcon,
-  LayersIcon,
+  ImagesIcon,
   ListChecksIcon,
   SettingsIcon,
   SparklesIcon,
@@ -62,7 +62,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/tracker', label: 'Tracker', icon: TicketIcon, match: ['/tracker'], tracker: true },
   // After the repo group, before Automations — the approved mockup's order (spec 2026-10-22, Phase 3).
-  { to: '/assets', label: 'Assets', icon: LayersIcon, match: ['/assets'] },
+  { to: '/assets', label: 'Assets', icon: ImagesIcon, match: ['/assets'] },
   { to: '/terminal', label: 'Terminal', icon: TerminalIcon, match: ['/terminal'], terminal: true },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },

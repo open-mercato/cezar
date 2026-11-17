@@ -805,6 +805,44 @@ describe('AppShell', () => {
       expect(screen.getByRole('menuitem', { name: 'cezar' }).getAttribute('aria-current')).toBe('true')
     })
 
+    it('puts the Dashboard and All tasks doors under the + and above the project areas (#2031)', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/p/shop/tasks')
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      const dashboard = within(rail).getByRole('link', { name: 'Dashboard' })
+      const all = within(rail).getByRole('link', { name: 'All tasks' })
+      expect(dashboard.getAttribute('href')).toBe('/dashboard')
+      expect(all.getAttribute('href')).toBe('/tasks')
+      expect(dashboard.getAttribute('title')).toBe('Dashboard')
+      expect(all.getAttribute('title')).toBe('All tasks')
+      expect(dashboard.getAttribute('data-slot')).toBe('rail-dashboard')
+      expect(all.getAttribute('data-slot')).toBe('rail-all-tasks')
+      const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+      const plus = within(rail).getByRole('link', { name: 'New task' })
+      const tasks = within(rail).getByRole('link', { name: 'Tasks' })
+      expect(follows(plus, dashboard)).toBe(true)
+      expect(follows(dashboard, all)).toBe(true)
+      expect(follows(all, tasks)).toBe(true)
+      // A project's Tasks area keeps its own light; neither door is lit.
+      expect(tasks.getAttribute('aria-current')).toBe('page')
+      expect(dashboard.getAttribute('aria-current')).toBeNull()
+      expect(all.getAttribute('aria-current')).toBeNull()
+    })
+
+    it('lights only All tasks on the global /tasks, and only Dashboard on /dashboard?view=costs (#2031)', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/tasks')
+      let rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(within(rail).getByRole('link', { name: 'All tasks' }).getAttribute('aria-current')).toBe('page')
+      expect(within(rail).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBeNull()
+      expect(within(rail).getByRole('link', { name: 'Dashboard' }).getAttribute('aria-current')).toBeNull()
+      cleanup()
+      renderShell('/dashboard?view=costs')
+      rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(within(rail).getByRole('link', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page')
+      expect(within(rail).getByRole('link', { name: 'All tasks' }).getAttribute('aria-current')).toBeNull()
+    })
+
     it('keeps the Phones entry in the rail, above the expand button', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       renderShell('/git', { phonesRail: <button type="button" data-slot="rail-phones">Phones</button> })
