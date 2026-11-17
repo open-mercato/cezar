@@ -1,6 +1,6 @@
 # Jump between your own messages (task thread + manager chat)
 
-Status: **design — awaiting approval** (phase 1). Design page: [`assets/2026-11-17-my-message-navigation/design.html`](assets/2026-11-17-my-message-navigation/design.html).
+Status: **design, revision 2: awaiting approval** (phase 1). Design page: [`assets/2026-11-17-my-message-navigation/design.html`](assets/2026-11-17-my-message-navigation/design.html).
 
 ## Problem
 
@@ -9,9 +9,20 @@ rows and cards. There is no way to step back to "what did I ask" except scrollin
 
 ## Design
 
-A floating segmented pill, `▲ · 💬 3 / 7 · ▼`, in the overlay row above the composer. In the
-task thread that row is `TaskDock`'s `overlay`, beside `JumpToLatestPill`. In the manager chat
-it is `manager-floating`, beside the round scroll-to-bottom button.
+A segmented pill, `▲ · 💬 4 / 7 · ▼`. Placement, revised after the first review:
+
+- **Desktop / tablet**: flat, 28 px, at the right end of the dock's status line, directly
+  above the composer. In a task that is the hint row (`HINT_ROW`: "The agent is paused… · End
+  session", budget hint), in a manager chat the quick-prompt chips row (`manager-chips`, the
+  chips scroll and the pill stays pinned). With nothing else on the line, the line holds only
+  the pill. It lives in the dock, so it never covers the transcript; "Jump to latest" and the
+  manager's ↓ button keep floating as today.
+- **Phone (`no-hover:` and below md), option M2**: no permanent control. While the reader is
+  away from the tail (the existing `pillVisible` / `scroll.away` signal), the floating
+  "Latest" button becomes one combined pill, `▲ · 💬 4/7 · ▼ | ↓`, 40 px tall with 44 px hit
+  areas. At the tail it is gone. Rejected for phones: M1 (the desktop status-line chip,
+  which costs a permanent 32 px line when no hint is showing) and M3 (a composer-toolbar
+  button that opens the sheet, with no one-tap stepping, and the task toolbar is full).
 
 - **▲ / ▼** go to the previous or next message of yours, relative to the top of the viewport.
   The jump scrolls the message to 24 px below the top, focuses it (`tabIndex=-1`) and draws
@@ -26,9 +37,8 @@ it is `manager-floating`, beside the round scroll-to-bottom button.
   attachment icon with a count. The message in view gets a violet bar and
   `aria-current`. It is a `listbox` with `aria-activedescendant`: ↑/↓/Home/End move,
   Enter jumps, Esc closes and returns focus.
-- **Hidden** when the chat has no message from the user, and then no room is reserved.
-  Otherwise the transcript reserves the row's height at the bottom (the manager's
-  `floating.overlap` already does this), so the pill never covers content.
+- **Hidden** when the chat has no message from the user. If the pill was the only thing on
+  the status line, the line goes too.
 - Shortcuts: ⌥↑ / ⌥↓ while focus is in the transcript, never in the composer, registered in
   `keybindings.ts` so they can be rebound.
 

@@ -137,7 +137,27 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 /* One floating row above the composer — the same overlay row the jump-to-latest pill uses. */
 .floating{position:absolute;left:0;right:0;bottom:8px;display:flex;align-items:center;justify-content:center;padding:0 24px;pointer-events:none;z-index:5}
 .floating>*{pointer-events:auto}
-.floating .end{position:absolute;right:24px;bottom:0}
+/* v2 — desktop: the pill lives IN the dock, on the status line right above the composer. */
+.mmslot{margin-left:auto;position:relative;flex:none}
+.mmslot .mm{height:28px;box-shadow:none;background:transparent}
+.mmslot .mm .arr{width:28px}
+.mmslot .mm .list-b{min-width:56px;padding:0 8px}
+.statusline{min-height:28px}
+.qchip{border:1px solid var(--border);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--foreground);white-space:nowrap}
+/* v2 — phone (option M2): one combined pill that exists only while you are away from the tail. */
+.mmslot.float{margin:0;animation:fade .15s}
+.mmslot.float[hidden]{display:none}
+.mmslot.float .mm{height:40px;background:var(--background);box-shadow:var(--shadow-modal)}
+.mmslot.float .mm .arr{width:42px}
+.mmslot.float .mm .list-b{min-width:62px}
+.mm .sep{width:1px;align-self:stretch;background:var(--border)}
+.phone.mini{zoom:.78}
+.phone .mmslot:not(.float) .mm{height:32px}
+.phone .mmslot:not(.float) .mm .arr{width:34px}
+.opt{display:flex;flex-direction:column;align-items:center;gap:14px;max-width:320px}
+.opt .lab2{font-size:12.5px;color:#c9c9c9}
+.opt .lab2 b{display:flex;align-items:center;gap:8px;color:var(--foreground);font-size:14px;margin-bottom:4px}
+.badge{position:absolute;top:2px;right:-2px;font-size:9.5px;font-weight:600;background:var(--muted);border:1px solid var(--border);border-radius:999px;padding:0 4px;color:var(--foreground);font-variant-numeric:tabular-nums}
 .latest{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--border);background:var(--background);border-radius:999px;padding:0 14px;font-size:12px;font-weight:500;color:var(--muted-foreground);box-shadow:var(--shadow-modal)}
 .latest:hover{color:var(--foreground)}
 .latest.round{width:36px;min-height:36px;padding:0;justify-content:center}
@@ -202,7 +222,6 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 .phone .tb{max-width:82%;font-size:14px}
 .phone .ai{font-size:14.5px}
 .phone .floating{padding:0 12px}
-.phone .floating .end{right:12px}
 .phone .mm{height:44px}
 .phone .mm .arr{width:44px}
 .phone .mm .list-b{min-width:64px}
@@ -295,19 +314,21 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 <div class="doc">
   <div class="eyebrow">cezar · design · 2026-11-17 · phase 1</div>
   <h1>Jump between your own messages</h1>
-  <p class="lede">A small segmented pill — <b>older ▲ · your messages · ▼ newer</b> — that floats in the transcript's existing overlay row above the composer, in both the task thread and the manager chat. The arrows step through the messages you sent; the middle button opens the list of all of them. On phones the list is a bottom sheet.</p>
+  <p class="lede">A small segmented pill — <b>older ▲ · your messages · ▼ newer</b> — that sits on the status line right above the composer (desktop) and appears as a floating pill only while you scroll back through history (phone), in both the task thread and the manager chat. The arrows step through the messages you sent; the middle button opens the list of all of them. On phones the list is a bottom sheet.</p>
   <div class="toc">
     <a href="#rec">Recommendation</a><a href="#desk-task">Desktop · task</a><a href="#desk-mgr">Desktop · manager</a><a href="#mobile">Mobile</a><a href="#states">States</a><a href="#placement">Placement options</a><a href="#notes">Behavior notes</a>
   </div>
 
   <div class="callout" id="rec">
     <span class="tag rec">Recommendation</span>
-    <p style="margin:10px 0 0"><b>Put a floating pill at the right end of the overlay row above the composer, on every screen size.</b> The row already exists in both views (the task's “Jump to latest” and the manager's round ↓ button sit in it). The pill is always shown once you have sent at least one message; it disappears when you haven't sent any. Its middle segment shows <b>where you are</b> (<code>3 / 7</code>) and opens the list: a popover on desktop, which opens on hover or click, and a bottom sheet on touch screens. The transcript keeps space for the row at the bottom, so the pill never sits on top of the last message.</p>
+    <p style="margin:10px 0 0"><b>Desktop:</b> a compact, flat pill (28 px) at the right end of the dock's status line, the line that holds “The agent is paused… · End session” in a task and the quick-prompt chips in a manager chat. It sits right on top of the textarea, outside the transcript, so it covers nothing. With no hint or chips on that line, the line holds only the pill.</p>
+    <p style="margin:8px 0 0"><b>Phone (revised, option M2):</b> no permanent control. When you scroll up, the existing “Latest” button grows into one combined pill, <code>▲ · 💬 4/7 · ▼ | ↓</code>, and it leaves again when you return to the tail. It takes no space at rest and only appears when you are looking back through history. Two other phone options are shown below in case you prefer one.</p>
+    <p style="margin:8px 0 0">Everywhere, the middle segment shows <b>where you are</b> (<code>4 / 7</code>) and opens the list: a popover on desktop (hover or click) and a bottom sheet on touch screens. With no message from you, nothing is rendered.</p>
   </div>
 
   <!-- ============ DESKTOP TASK ============ -->
   <h2 id="desk-task">Desktop · task transcript</h2>
-  <p>Try it: <b>▲ / ▼</b> scroll the transcript and highlight the message they land on. <b>Hover</b> the middle button to peek at the list, or <b>click</b> it to keep the list open. Inside the list, <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>Enter</kbd> jumps and <kbd>Esc</kbd> closes. The first two messages are in an older range that isn't loaded yet. Jumping to one loads that range first, as #1909 does today.</p>
+  <p>The pill now sits on the “agent paused” line, right above the textarea. Try it: <b>▲ / ▼</b> scroll the transcript and highlight the message they land on. <b>Hover</b> the middle button to peek at the list, or <b>click</b> it to keep the list open. Inside the list, <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>Enter</kbd> jumps and <kbd>Esc</kbd> closes. The first two messages are in an older range that isn't loaded yet. Jumping to one loads that range first, as #1909 does today.</p>
   <div class="toolbar">
     <label><input type="checkbox" id="rmToggle"> Simulate reduced motion</label>
     <button class="btn" id="streamBtn">Simulate: send a new message</button>
@@ -337,21 +358,20 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
         <div class="scroller"><div class="col" data-thread="task"></div></div>
         <div class="floating">
           <button class="latest" hidden><svg class="i s14"><use href="#arrow-down"/></svg>Jump to latest</button>
-          <div class="end"></div>
         </div>
       </div>
       <div class="dock">
-        <div class="hint"><i class="dot pend"></i>The agent is paused, waiting for your reply · <b>End session</b></div>
+        <div class="hint statusline"><i class="dot pend"></i>The agent is paused, waiting for your reply · <b>End session</b><div class="mmslot" data-mm></div></div>
         <div class="composer"><div class="ph">Reply — / for skills, @ for files…</div>
           <div class="row"><svg class="i"><use href="#clip"/></svg><svg class="i"><use href="#mic"/></svg><span class="pill">claude · auto</span><span>Options ▾</span><span class="send"><svg class="i"><use href="#send"/></svg></span></div></div>
       </div>
     </section>
   </div></div>
-  <div class="caption">Matches <code>task-thread.tsx</code>: the run header, the Chat tab, <code>UserBubble</code> (rounded-2xl with a small bottom-right corner, bg-muted, 13px) and the dock. The pill sits in <code>TaskDock</code>'s <code>overlay</code> slot, beside <code>JumpToLatestPill</code>.</div>
+  <div class="caption">Matches <code>task-thread.tsx</code>: the run header, the Chat tab, <code>UserBubble</code> (rounded-2xl with a small bottom-right corner, bg-muted, 13px) and the dock. The pill is the last item of the dock's hint row (<code>HINT_ROW</code>, <code>ml-auto</code>). When neither the paused nor the budget hint is showing, the row renders with only the pill. “Jump to latest” keeps floating over the thread as it does today.</div>
 
   <!-- ============ DESKTOP MANAGER ============ -->
   <h2 id="desk-mgr">Desktop · manager chat</h2>
-  <p>Same control and same behavior. The manager column is centred at a maximum of 860px, so the pill sits at that column's right edge, beside the existing round “Scroll to bottom” button in <code>manager-floating</code>. The bubbles are the manager's own style: rounded-xl, 14px, no timestamp. The list still shows the time from the message record.</p>
+  <p>Same control and same behavior. The pill takes the right end of the quick-prompt chips row (<code>manager-chips</code>), right above the composer. Chips scroll sideways and the pill stays pinned. With no chips, the row holds only the pill. The round “Scroll to bottom” button keeps floating as today. The bubbles are the manager's own style: rounded-xl, 14px, no timestamp. The list still shows the time from the message record.</p>
   <div class="screen"><div class="desk" id="deskMgr">
     <aside class="side">
       <div class="logo"><span class="mk"></span>cezar</div>
@@ -377,10 +397,10 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
             <div class="scroller"><div class="col" data-thread="mgr" style="max-width:720px;margin:0 auto;gap:20px;padding-top:24px"></div></div>
             <div class="floating" style="max-width:720px;margin:0 auto">
               <button class="latest round" hidden aria-label="Scroll to bottom"><svg class="i"><use href="#arrow-down"/></svg></button>
-              <div class="end"></div>
             </div>
           </div>
           <div class="dock" style="max-width:720px;margin:0 auto;width:100%">
+            <div class="hint statusline"><span class="qchip">What needs me?</span><span class="qchip">PR status</span><div class="mmslot" data-mm></div></div>
             <div class="composer"><div class="ph">Message Ops, or / for commands</div><div class="row"><svg class="i"><use href="#clip"/></svg><span class="send"><svg class="i"><use href="#send"/></svg></span></div></div>
           </div>
         </div>
@@ -394,11 +414,15 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
       </div>
     </section>
   </div></div>
-  <div class="caption">Matches <code>manager-chat.tsx</code>: the header with its companion, the transcript column, <code>manager-floating</code> and the watching panel. The manager reserves room for the floating row already (<code>floating.overlap</code>), and the pill uses that same measurement.</div>
+  <div class="caption">Matches <code>manager-chat.tsx</code>: the header with its companion, the transcript column, <code>manager-floating</code> and the watching panel. The pill is part of the dock, so <code>floating.overlap</code> doesn't change.</div>
 
   <!-- ============ MOBILE ============ -->
-  <h2 id="mobile">Mobile · task view and manager chat</h2>
-  <p>Same pill, sized up to the 44 px touch target the cockpit uses on coarse pointers. The ↑ and ↓ arrows still work with one tap each. <b>Tapping the middle button opens a bottom sheet</b>, the same idiom as the manager's Tasks sheet, because a popover anchored to a 375 px screen covers the content and makes a poor thumb target. The pill stays above the composer and the iOS keyboard lift (<code>--kb</code>), and in the CezarBot app shell it stays above the bottom tab bar.</p>
+  <h2 id="mobile">Mobile · three options</h2>
+  <p>The first version's always-on 44 px pill took too much of a 375 px screen. Three leaner options follow, all shown mid-transcript. In each one, the list is a <b>bottom sheet</b>, the same idiom as the manager's Tasks sheet.</p>
+  <div class="phones" id="mobileOptions" style="align-items:flex-start"></div>
+
+  <h3 style="margin-top:48px">M2, interactive · task view and manager chat</h3>
+  <p>Scroll either transcript up and the “Latest” button becomes the combined pill. ▲ / ▼ step through your messages, the middle button opens the sheet, and ↓ returns to the tail, where the pill goes away. Segments are 40 px tall with a 44 px hit area. The pill stays above the composer and the iOS keyboard lift (<code>--kb</code>), and in the CezarBot app shell it stays above the tab bar.</p>
   <div class="phones">
     <div class="phone" id="phTask">
       <div class="sb"><span>9:41</span><span class="isl"></span><span>●●●</span></div>
@@ -409,7 +433,7 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
       </div>
       <div class="stage">
         <div class="scroller"><div class="col" data-thread="task-m"></div></div>
-        <div class="floating"><button class="latest" hidden><svg class="i s14"><use href="#arrow-down"/></svg>Latest</button><div class="end"></div></div>
+        <div class="floating"><div class="mmslot float" data-mm hidden></div></div>
       </div>
       <div class="dock"><div class="composer" style="padding:10px 12px 8px"><div class="ph" style="margin-bottom:10px">Reply — / for skills…</div><div class="row"><svg class="i"><use href="#clip"/></svg><svg class="i"><use href="#mic"/></svg><span class="pill">claude · auto</span><span class="send" style="width:40px;height:40px"><svg class="i"><use href="#send"/></svg></span></div></div></div>
       <div class="tabbar"><span><svg class="i s18"><use href="#circle"/></svg>Now</span><span class="on"><svg class="i s18"><use href="#list"/></svg>Tasks</span><span><svg class="i s18"><use href="#bot"/></svg>Manager</span><span><svg class="i s18"><use href="#more"/></svg>More</span></div>
@@ -420,14 +444,14 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
       <div class="mh"><span class="ib"><svg class="i"><use href="#back"/></svg></span><span class="ava"></span><b style="flex:1;font-size:15px;margin-left:6px">Ops</b><span class="ib"><svg class="i"><use href="#list"/></svg></span><span class="ib"><svg class="i"><use href="#gear"/></svg></span></div>
       <div class="stage">
         <div class="scroller"><div class="col" data-thread="mgr-m" style="gap:18px"></div></div>
-        <div class="floating"><button class="latest round" hidden aria-label="Scroll to bottom"><svg class="i"><use href="#arrow-down"/></svg></button><div class="end"></div></div>
+        <div class="floating"><div class="mmslot float" data-mm hidden></div></div>
       </div>
       <div class="dock"><div class="composer" style="padding:10px 12px 8px"><div class="ph" style="margin-bottom:10px">Message Ops, or / for commands</div><div class="row"><svg class="i"><use href="#clip"/></svg><span class="send" style="width:40px;height:40px"><svg class="i"><use href="#send"/></svg></span></div></div></div>
       <div class="tabbar"><span><svg class="i s18"><use href="#circle"/></svg>Now</span><span><svg class="i s18"><use href="#list"/></svg>Tasks</span><span class="on"><svg class="i s18"><use href="#bot"/></svg>Manager</span><span><svg class="i s18"><use href="#more"/></svg>More</span></div>
       <div class="scrim" hidden></div><div class="sheet" hidden role="dialog" aria-label="Your messages"></div>
     </div>
   </div>
-  <div class="caption" style="text-align:center">Both phones work: tap ▲ / ▼, or tap the middle button to open the sheet. On narrow screens, Jump to latest shortens to “Latest” and moves left of centre when the pill is visible, so the two never overlap. Tablets (≥ md with a coarse pointer) use the desktop layout with 44 px targets and the bottom sheet.</div>
+  <div class="caption" style="text-align:center">Both phones open at the tail, so no pill is showing yet. Scroll up to bring it in. Tablets (≥ md with a coarse pointer) use the desktop status-line placement with 44 px targets and the bottom sheet.</div>
 
   <!-- ============ STATES ============ -->
   <h2 id="states">The control, state by state</h2>
@@ -446,14 +470,14 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
       <li><b class="con">−</b> The task header on a phone has no room left (title, ⋯, expand, tabs), and it folds away on scroll.</li></ul>
     </div>
     <div class="alt rec">
-      <h4>B · Floating pill above the composer <span class="tag rec">Recommended</span></h4>
+      <h4>B · On the dock's status line <span class="tag rec">Recommended</span></h4>
       <div class="sk"><div class="h"></div>
         <div class="l" style="left:12px;top:46px;width:60%"></div><div class="u" style="top:66px;width:38%"></div><div class="l" style="left:12px;top:96px;width:70%"></div><div class="u" style="top:116px;width:30%"></div>
-        <div class="ctl" style="right:14px;bottom:52px;width:76px;height:18px"></div><div style="position:absolute;left:50%;transform:translateX(-50%);bottom:52px;width:56px;height:18px;border-radius:9px;border:1px solid #3a3a3a"></div><div class="c"></div></div>
+        <div style="position:absolute;left:50%;transform:translateX(-50%);bottom:74px;width:56px;height:16px;border-radius:9px;border:1px solid #3a3a3a"></div><div class="l" style="left:14px;bottom:52px;width:42%;height:6px;background:#3a3020"></div><div class="ctl" style="right:14px;bottom:48px;width:70px;height:14px"></div><div class="c"></div></div>
       <ul><li><b class="pro">+</b> Next to the thumb and pointer, and next to “Jump to latest”, which does the same kind of job (moving through the transcript).</li>
-      <li><b class="pro">+</b> Reuses an overlay row both views already have, with its room reserved, so nothing is covered.</li>
-      <li><b class="pro">+</b> One design for desktop, tablet, phone and the app shell.</li>
-      <li><b class="con">−</b> It is always visible, so it has to stay quiet: a neutral pill, no accent colour until you use it.</li></ul>
+      <li><b class="pro">+</b> Lives in the dock, on a line both views already have (the hint line, the chips row), so it never covers the transcript.</li>
+      <li><b class="pro">+</b> Right on top of the textarea: one short move from typing to stepping back.</li>
+      <li><b class="con">−</b> It is always visible, so it has to stay quiet: flat, borderless shadow, no accent colour until you use it. On phones the line costs too much, hence M2 there.</li></ul>
     </div>
     <div class="alt">
       <h4>C · Ticks beside the scrollbar</h4>
@@ -499,7 +523,8 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
     <div class="note"><h4>Hover vs click, desktop vs touch</h4>
       <ul><li>With a pointer that can hover, hovering for 150 ms opens a <i>peek</i>, which closes 250 ms after the pointer leaves. A click <i>pins</i> it open until Esc, an outside click or a jump. Keyboard focus never opens it, but Enter does.</li>
       <li>On <code>no-hover:</code> devices, a tap opens the bottom sheet. Arrows react to the tap itself, never to a long press.</li>
-      <li>With no message of yours in the chat, the pill isn't rendered at all and no room is reserved.</li></ul></div>
+      <li>With no message of yours in the chat, the pill isn't rendered at all. If it was the only thing on the status line, the line goes too.</li>
+      <li>Phone (M2): the pill shows and hides with the existing away-from-tail signal (<code>pillVisible</code> / <code>scroll.away</code>), so it adds no new scroll listener.</li></ul></div>
   </div>
   <p class="caption" style="margin-top:28px">Fonts fall back to the system stack when Inter isn't installed, because this page loads no external assets. Every colour, radius and shadow is copied from <code>packages/web/src/styles/index.css</code>.</p>
 </div>
@@ -584,11 +609,12 @@ function renderThread(col, data, kind) {
 }
 
 /* ---------- the control ---------- */
-function pillHTML({ up = true, down = true, cur = '3', total = '7', cls = '', open = false } = {}) {
+function pillHTML({ up = true, down = true, cur = '3', total = '7', cls = '', open = false, latest = false } = {}) {
   return `<div class="mm" role="group" aria-label="Your messages">
     <button type="button" class="seg-b arr ${cls.includes('hu') ? 'hov' : ''} ${cls.includes('fu') ? 'fv' : ''}" data-prev aria-label="Previous message of yours" ${up ? '' : 'disabled'}>${ic('up')}</button>
     <button type="button" class="seg-b list-b ${cls.includes('hl') ? 'hov' : ''} ${cls.includes('fl') ? 'fv' : ''}" data-list aria-haspopup="listbox" aria-expanded="${open}"><span class="cnt" aria-hidden="true">${ic('msg')} <b>${cur}</b> / ${total}</span><span class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Your messages, ${cur} of ${total}</span></button>
     <button type="button" class="seg-b arr" data-next aria-label="Next message of yours" ${down ? '' : 'disabled'}>${ic('down')}</button>
+    ${latest ? `<span class="sep" aria-hidden="true"></span><button type="button" class="seg-b arr" data-latest aria-label="Jump to latest">${ic('arrow-down')}</button>` : ''}
   </div>`
 }
 
@@ -614,7 +640,7 @@ class MyNav {
     this.root = root; this.mobile = mobile
     this.scroller = root.querySelector('.scroller')
     this.col = root.querySelector('.col')
-    this.end = root.querySelector('.floating .end')
+    this.end = root.querySelector('[data-mm]')
     this.latest = root.querySelector('.latest')
     this.sheet = root.querySelector('.sheet'); this.scrim = root.querySelector('.scrim')
     this.act = 0; this.pinned = false; this.loading = 0
@@ -647,13 +673,14 @@ class MyNav {
   }
   render() {
     if (this.mines().length === 0) { this.end.innerHTML = ''; return }
-    this.end.innerHTML = pillHTML() + (this.mobile ? '' : `<div class="pop" hidden><div class="ph2"><span class="eyebrow">Your messages · <span data-total></span></span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst" role="listbox" tabindex="-1" aria-label="Your messages"></div></div>`)
+    this.end.innerHTML = pillHTML({ latest: this.mobile }) + (this.mobile ? '' : `<div class="pop" hidden><div class="ph2"><span class="eyebrow">Your messages · <span data-total></span></span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst" role="listbox" tabindex="-1" aria-label="Your messages"></div></div>`)
     const $ = (s) => this.end.querySelector(s)
     this.btnPrev = $('[data-prev]'); this.btnNext = $('[data-next]'); this.btnList = $('[data-list]'); this.pop = $('.pop')
     this.btnPrev.onclick = () => { const s = this.state(); if (s.prev) this.jump(s.prev) }
     this.btnNext.onclick = () => { const s = this.state(); if (s.next) this.jump(s.next) }
     if (this.mobile) {
       this.btnList.onclick = () => this.openSheet()
+      $('[data-latest]').onclick = () => this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: 'smooth' })
       this.scrim.onclick = () => this.closeSheet()
     } else {
       let t
@@ -677,7 +704,7 @@ class MyNav {
     this.btnList.querySelector('.cnt').innerHTML = `${ic('msg')} <b>${s.cur || '–'}</b> / ${s.total}`
     this.btnList.querySelector('.sr').textContent = `Your messages, ${s.cur || 'none'} of ${s.total}`
     if (this.latest) this.latest.hidden = this.atBottom()
-    if (this.latest && this.mobile) this.latest.style.marginRight = this.latest.hidden ? '' : '120px'
+    if (this.mobile) this.end.hidden = this.atBottom()
     if (this.pop && !this.pop.hidden) this.fillList(false)
     this.curN = s.cur
   }
@@ -781,9 +808,34 @@ document.getElementById('streamBtn').onclick = () => {
   nav.sync()
 }
 
+/* ---------- mobile options (static) ---------- */
+const OPTS = [
+  ['M1', 'Status-line chip', false, 'The desktop placement, shrunk: a 32 px pill at the end of the hint line. Costs nothing while a hint is showing; otherwise it adds a 32 px line above the composer for good.',
+    `<div class="dock"><div class="hint statusline" style="font-size:12px"><i class="dot pend"></i>Paused · <b>End session</b><div class="mmslot">${pillHTML({ cur: '4' })}</div></div>`],
+  ['M2', 'Grows out of “Latest”', true, 'Nothing at the tail. Scroll up and the Latest button becomes ▲ · 4/7 · ▼ | ↓. It takes no space at rest and appears exactly when you are reading back. Cost: at the tail you flick up once to reach it.',
+    `<div class="dock">`],
+  ['M3', 'Composer button', false, 'One 💬 icon in the composer toolbar, beside attach and mic, with a small counter. A tap opens the sheet, and stepping happens there. No pill at all, but no one-tap ▲ / ▼ either, and the task toolbar is already full.',
+    `<div class="dock">`],
+]
+document.getElementById('mobileOptions').innerHTML = OPTS.map(([id, name, rec, desc, dock], i) => `<div class="opt">
+  <div class="phone mini" data-opt="${i}">
+    <div class="sb"><span>9:41</span><span class="isl"></span><span>●●●</span></div>
+    <div class="ph-h"><div class="t"><i class="dot info"></i><h5>Add a retry with backoff to…</h5></div><div class="tabs"><span class="on">Chat</span><span>Changes</span><span>Commits</span></div></div>
+    <div class="stage"><div class="scroller"><div class="col"></div></div>
+      ${id === 'M2' ? `<div class="floating"><div class="mmslot float">${pillHTML({ cur: '4', latest: true })}</div></div>` : ''}</div>
+    ${dock}<div class="composer" style="padding:10px 12px 8px"><div class="ph" style="margin-bottom:10px">Reply — / for skills…</div><div class="row">${ic('clip','')}${ic('mic','')}${id === 'M3' ? `<span style="position:relative;color:var(--foreground);margin:0 14px 0 2px">${ic('msg','')}<span class="badge" style="right:-20px">4/7</span></span>` : ''}<span class="pill">claude · auto</span><span class="send" style="width:40px;height:40px">${ic('send','')}</span></div></div></div>
+    <div class="tabbar"><span>${ic('circle','s18')}Now</span><span class="on">${ic('list','s18')}Tasks</span><span>${ic('bot','s18')}Manager</span><span>${ic('more','s18')}More</span></div>
+  </div>
+  <div class="lab2"><b>${id} · ${name}${rec ? ' <span class="tag rec">Recommended</span>' : ''}</b>${desc}</div></div>`).join('')
+document.querySelectorAll('[data-opt]').forEach((ph) => {
+  renderThread(ph.querySelector('.col'), TASK.filter((x) => !x.older && !x.boundary), 'task-m')
+  ph.querySelector('.scroller').scrollTop = 900
+})
+
 /* ---------- state gallery ---------- */
 const STATES = [
-  ['Idle', 'Always visible once you have sent a message. Neutral pill with muted icons; it stays quiet until you need it.', pillHTML()],
+  ['Idle (desktop)', 'Always on the status line once you have sent a message. Flat and muted; it stays quiet until you need it.', pillHTML()],
+  ['Phone, scrolled up (M2)', 'The “Latest” button grows into the combined pill. At the tail it is gone.', `<div class="mmslot float">${pillHTML({ cur: '4', latest: true })}</div>`],
   ['Hovered (middle)', 'The segment lifts to bg-muted. The tooltip names the action and shortcut; on desktop a 150 ms hover opens the peek.', pillHTML({ cls: 'hl' }) + `<div class="tip" style="right:20px;left:auto;transform:none">Your messages<kbd>⌥↑ ⌥↓</kbd></div>`],
   ['Focused (keyboard)', 'Each segment has its own inset focus ring in --ring. Tab moves ▲ → list → ▼.', pillHTML({ cls: 'fu' })],
   ['At your first message', '▲ is disabled (35 % opacity, still announced as “dimmed”): nothing of yours exists above, in any range.', pillHTML({ up: false, cur: '1' })],
@@ -792,17 +844,17 @@ const STATES = [
   ['No messages from you', 'Not rendered at all, and no room is reserved. For example, a manager that has only spoken on its own.', `<div class="ghost-box">hidden</div>`],
 ]
 const box = document.getElementById("stateGrid")
-box.innerHTML = STATES.map(([t, d, h]) => `<div class="st-card"><div class="vis"><div style="position:relative">${h}</div></div><div class="lab"><b>${t}</b>${d}</div></div>`).join('')
+box.innerHTML = STATES.map(([t, d, h]) => `<div class="st-card"><div class="vis"><div class="mmslot">${h}</div></div><div class="lab"><b>${t}</b>${d}</div></div>`).join('')
   + `<div class="st-card wide"><div class="vis tall" id="stOpen"></div><div class="lab"><b>List open</b>The current message (in view) has the violet bar; the keyboard-active row has a ring. Older days have sticky headers. Unloaded ranges are marked and load when you jump to them.</div></div>`
   + `<div class="st-card wide"><div class="vis tall" style="align-items:center;justify-content:center;display:flex"><div style="width:100%;max-width:420px;margin:0 auto;display:flex;flex-direction:column;gap:10px">
       <div class="ai" style="font-size:12.5px">Capped at 30 s. The cap is a named constant…</div>
       <div class="tb mine hl" style="max-width:85%;animation:none">${'<div class="acts">' + ic('copy') + '</div>'}Here's the log from the failing run — it retries forever on a 401<div class="att"><div class="img" style="width:110px;height:60px"></div></div><div class="tm"><span class="meta">09:34</span></div></div>
       <div class="ai" style="font-size:12.5px;opacity:.8">Right: a 401 is not transient…</div>
-      <div style="display:flex;justify-content:flex-end">${pillHTML({ cur: '4' })}</div></div></div>
+      <div style="display:flex;justify-content:flex-end"><div class="mmslot">${pillHTML({ cur: '4' })}</div></div></div></div>
     <div class="lab"><b>After a jump</b>The target is aligned 24 px below the top, focused and ringed (ring-[3px] ring-ring/50), with a 1.8 s violet wash. The counter updates to the message you landed on.</div></div>`
 // A frozen, open list built from the real task data.
 const tmp = document.createElement('div'); renderThread(tmp, TASK, 'task')
-document.getElementById('stOpen').innerHTML = `<div style="position:relative">${pillHTML({ cur: '4', open: true, cls: 'hl' })}<div class="pop" style="animation:none"><div class="ph2"><span class="eyebrow">Your messages · 7</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst">${listItems([...tmp.querySelectorAll('.mine')], 4, 5, 0)}</div></div></div>`
+document.getElementById('stOpen').innerHTML = `<div class="mmslot">${pillHTML({ cur: '4', open: true, cls: 'hl' })}<div class="pop" style="animation:none"><div class="ph2"><span class="eyebrow">Your messages · 7</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst">${listItems([...tmp.querySelectorAll('.mine')], 4, 5, 0)}</div></div></div>`
 </script>
 </body>
 </html>
