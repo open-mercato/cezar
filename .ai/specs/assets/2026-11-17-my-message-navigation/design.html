@@ -141,7 +141,7 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 .mmslot{margin-left:auto;position:relative;flex:none}
 .mmslot .mm{height:28px;box-shadow:none;background:transparent}
 .mmslot .mm .arr{width:28px}
-.mmslot .mm .list-b{min-width:56px;padding:0 8px}
+.mmslot .mm .list-b{width:32px}
 .statusline{min-height:28px}
 .qchip{border:1px solid var(--border);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--foreground);white-space:nowrap}
 /* v2 — phone (option M2): one combined pill that exists only while you are away from the tail. */
@@ -149,7 +149,7 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 .mmslot.float[hidden]{display:none}
 .mmslot.float .mm{height:40px;background:var(--background);box-shadow:var(--shadow-modal)}
 .mmslot.float .mm .arr{width:42px}
-.mmslot.float .mm .list-b{min-width:62px}
+.mmslot.float .mm .list-b{width:46px}
 .mm .sep{width:1px;align-self:stretch;background:var(--border)}
 .phone.mini{zoom:.78}
 .phone .mmslot:not(.float) .mm{height:32px}
@@ -169,7 +169,7 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 .mm .arr{width:30px}
 .mm .arr:first-child{border-radius:999px 0 0 999px;padding-left:2px}
 .mm .arr:last-child{border-radius:0 999px 999px 0;padding-right:2px}
-.mm .list-b{padding:0 9px;border-left:1px solid var(--border);border-right:1px solid var(--border);font-variant-numeric:tabular-nums;min-width:62px}
+.mm .list-b{width:36px;border-left:1px solid var(--border);border-right:1px solid var(--border)}
 .mm .seg-b:hover:not(:disabled),.mm .seg-b.hov,.mm .list-b[aria-expanded=true]{background:var(--muted);color:var(--foreground)}
 .mm .seg-b:focus-visible,.mm .seg-b.fv{box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--ring) 70%,transparent);color:var(--foreground)}
 .mm .seg-b:disabled{opacity:.35;cursor:default}
@@ -224,7 +224,7 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 .phone .floating{padding:0 12px}
 .phone .mm{height:44px}
 .phone .mm .arr{width:44px}
-.phone .mm .list-b{min-width:64px}
+.phone .mm .list-b{width:44px}
 .phone .latest{min-height:44px}
 .phone .latest.round{width:44px}
 .phone .dock{padding:0 12px 8px}
@@ -314,7 +314,7 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
 <div class="doc">
   <div class="eyebrow">cezar · design · 2026-11-17 · phase 1</div>
   <h1>Jump between your own messages</h1>
-  <p class="lede">A small segmented pill — <b>older ▲ · your messages · ▼ newer</b> — that sits on the status line right above the composer (desktop) and appears as a floating pill only while you scroll back through history (phone), in both the task thread and the manager chat. The arrows step through the messages you sent; the middle button opens the list of all of them. On phones the list is a bottom sheet.</p>
+  <p class="lede">A small segmented pill — <b>older ▲ · 💬 your messages · ▼ newer</b>, with no numbers — that sits on the status line right above the composer (desktop) and appears as a floating pill only while you scroll back through history (phone), in both the task thread and the manager chat. The arrows step through the messages you sent; the middle button opens the list of all of them. On phones the list is a bottom sheet.</p>
   <div class="toc">
     <a href="#rec">Recommendation</a><a href="#desk-task">Desktop · task</a><a href="#desk-mgr">Desktop · manager</a><a href="#mobile">Mobile</a><a href="#states">States</a><a href="#placement">Placement options</a><a href="#notes">Behavior notes</a>
   </div>
@@ -322,8 +322,8 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
   <div class="callout" id="rec">
     <span class="tag rec">Recommendation</span>
     <p style="margin:10px 0 0"><b>Desktop:</b> a compact, flat pill (28 px) at the right end of the dock's status line, the line that holds “The agent is paused… · End session” in a task and the quick-prompt chips in a manager chat. It sits right on top of the textarea, outside the transcript, so it covers nothing. With no hint or chips on that line, the line holds only the pill.</p>
-    <p style="margin:8px 0 0"><b>Phone (revised, option M2):</b> no permanent control. When you scroll up, the existing “Latest” button grows into one combined pill, <code>▲ · 💬 4/7 · ▼ | ↓</code>, and it leaves again when you return to the tail. It takes no space at rest and only appears when you are looking back through history. Two other phone options are shown below in case you prefer one.</p>
-    <p style="margin:8px 0 0">Everywhere, the middle segment shows <b>where you are</b> (<code>4 / 7</code>) and opens the list: a popover on desktop (hover or click) and a bottom sheet on touch screens. With no message from you, nothing is rendered.</p>
+    <p style="margin:8px 0 0"><b>Phone (revised, option M2):</b> no permanent control. When you scroll up, the existing “Latest” button grows into one combined pill, <code>▲ · 💬 · ▼ | ↓</code>, and it leaves again when you return to the tail. It takes no space at rest and only appears when you are looking back through history. Two other phone options are shown below in case you prefer one.</p>
+    <p style="margin:8px 0 0"><b>No numbers, revision 3.</b> The pill shows no counter: in a long chat the loaded range may not hold every message, and with several of your messages on one screen no single number is right. The middle 💬 segment just opens the list: a popover on desktop (hover or click) and a bottom sheet on touch screens. With no message from you, nothing is rendered.</p>
   </div>
 
   <!-- ============ DESKTOP TASK ============ -->
@@ -496,7 +496,7 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
     <div class="note"><h4>What ▲ / ▼ do</h4>
       <ul><li>▲ goes to the nearest message of yours whose top is <b>above</b> the top of the viewport; ▼ goes to the nearest one below it. A jump aligns the message to the top with 24 px of breathing room, so pressing it repeatedly walks back steadily.</li>
       <li>▲ is disabled only when no message of yours exists above the viewport in <i>any</i> range, loaded or not. ▼ is disabled when every message below is already fully on screen.</li>
-      <li>The counter <code>3 / 7</code> is the topmost message of yours on screen. With none on screen, it is the last one you scrolled past. Above your first message it reads <code>– / 7</code>.</li></ul></div>
+      <li><b>No counter.</b> In a long chat the loaded range may not hold every message, and when several of yours share the screen no single index is right. Where you are shows in the list instead: every message of yours that is on screen gets the violet bar.</li></ul></div>
     <div class="note"><h4>The highlight</h4>
       <p>This is the #2218 pattern: <code>scrollIntoView</code>, then <code>focus({preventScroll})</code> on the bubble (<code>tabIndex=-1</code>), drawn with the cockpit's <code>ring-[3px] ring-ring/50</code>. A short violet wash (1.8 s) helps the eye find it after a long scroll. The ring stays until focus moves on.</p>
       <p>With reduced motion: no smooth scroll (<code>behavior:'auto'</code>) and no wash. The ring alone marks the message. Tick the checkbox above to try it.</p></div>
@@ -515,9 +515,9 @@ body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
     <div class="note"><h4>While new messages stream in</h4>
       <ul><li>A message you send is added to the list at once, as “Sending…”. A task's queued messages (<code>queuedMessages</code>) appear with a “Queued” label. Neither one moves the keyboard-active row or steals focus.</li>
       <li>The count goes up live. If you are pinned to the tail, the stick-to-bottom behavior is unchanged. A jump un-pins you, exactly as a scroll up does, and “Jump to latest” appears.</li>
-      <li>Agent output streaming in only changes the counter if the message in view changes.</li></ul></div>
+      <li>Agent output streaming in changes nothing in the pill. If the list is open, the on-screen bars follow the scroll.</li></ul></div>
     <div class="note"><h4>Accessibility</h4>
-      <ul><li>A <code>role="group"</code> labelled “Your messages”. The buttons are “Previous message of yours”, “Next message of yours” and “Your messages, 3 of 7” (<code>aria-haspopup="listbox"</code>, <code>aria-expanded</code>).</li>
+      <ul><li>A <code>role="group"</code> labelled “Your messages”. The buttons are “Previous message of yours”, “Next message of yours” and “Your messages” (<code>aria-haspopup="listbox"</code>, <code>aria-expanded</code>).</li>
       <li>The list is a <code>listbox</code> with <code>aria-activedescendant</code>: <kbd>↑</kbd><kbd>↓</kbd> <kbd>Home</kbd><kbd>End</kbd> move, <kbd>Enter</kbd> jumps, <kbd>Esc</kbd> closes and returns focus to the button. A polite live region announces “Jumped to your message from 9:41”.</li>
       <li>Shortcuts: <kbd>⌥↑</kbd> / <kbd>⌥↓</kbd> while focus is in the transcript (never in the composer), registered in <code>keybindings.ts</code> so they can be rebound.</li></ul></div>
     <div class="note"><h4>Hover vs click, desktop vs touch</h4>
@@ -612,13 +612,13 @@ function renderThread(col, data, kind) {
 function pillHTML({ up = true, down = true, cur = '3', total = '7', cls = '', open = false, latest = false } = {}) {
   return `<div class="mm" role="group" aria-label="Your messages">
     <button type="button" class="seg-b arr ${cls.includes('hu') ? 'hov' : ''} ${cls.includes('fu') ? 'fv' : ''}" data-prev aria-label="Previous message of yours" ${up ? '' : 'disabled'}>${ic('up')}</button>
-    <button type="button" class="seg-b list-b ${cls.includes('hl') ? 'hov' : ''} ${cls.includes('fl') ? 'fv' : ''}" data-list aria-haspopup="listbox" aria-expanded="${open}"><span class="cnt" aria-hidden="true">${ic('msg')} <b>${cur}</b> / ${total}</span><span class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Your messages, ${cur} of ${total}</span></button>
+    <button type="button" class="seg-b list-b ${cls.includes('hl') ? 'hov' : ''} ${cls.includes('fl') ? 'fv' : ''}" data-list title="Your messages" aria-haspopup="listbox" aria-expanded="${open}">${ic('msg')}<span class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Your messages</span></button>
     <button type="button" class="seg-b arr" data-next aria-label="Next message of yours" ${down ? '' : 'disabled'}>${ic('down')}</button>
     ${latest ? `<span class="sep" aria-hidden="true"></span><button type="button" class="seg-b arr" data-latest aria-label="Jump to latest">${ic('arrow-down')}</button>` : ''}
   </div>`
 }
 
-function listItems(mines, curN, actN, loading) {
+function listItems(mines, onScreen, actN, loading) {
   let html = '', day = '', unloadedShown = false
   mines.forEach((m) => {
     const unloaded = m.closest('.older[hidden]') !== null
@@ -627,7 +627,8 @@ function listItems(mines, curN, actN, loading) {
     const n = +m.dataset.n
     const at = m.dataset.att === 'img' ? `${ic('img','s12')}1` : m.dataset.att === 'file' ? `${ic('clip','s12')}1` : ''
     const preview = m.dataset.text.replace(/\n+/g, ' · ')
-    html += `<div class="it ${n === curN ? 'cur' : ''} ${n === actN ? 'act' : ''}" role="option" id="opt-${n}-${Math.random().toString(36).slice(2,6)}" data-n="${n}" aria-current="${n === curN}" aria-selected="${n === actN}" title="${m.dataset.text}">
+    const cur = onScreen.includes(n)
+    html += `<div class="it ${cur ? 'cur' : ''} ${n === actN ? 'act' : ''}" role="option" id="opt-${n}-${Math.random().toString(36).slice(2,6)}" data-n="${n}" aria-current="${cur}" aria-selected="${n === actN}" title="${m.dataset.text}">
       <span class="tt">${m.dataset.t}</span><span class="tx">${preview}</span><span class="ic">${at}</span>
       ${loading === n ? `<span class="ld"><span class="spin"></span>Loading earlier messages…</span>` : ''}
     </div>`
@@ -655,13 +656,13 @@ class MyNav {
   atBottom() { const s = this.scroller; return s.scrollTop + s.clientHeight >= s.scrollHeight - 4 }
   state() {
     const v = this.view(), ms = this.mines()
-    let cur = 0, seen = false, prev = null, next = null
+    const onScreen = []
+    let prev = null, next = null
     for (const m of ms) {
       if (!this.loaded(m)) { prev = m; continue }
       const r = m.getBoundingClientRect()
-      // The topmost message of yours on screen; above all of them, the last one passed.
-      if (r.top < v.top + 4 || (!seen && r.top < v.bottom)) cur = +m.dataset.n
-      if (r.bottom > v.top + 4 && r.top < v.bottom) seen = true
+      // Every message of yours on screen is marked in the list; there is no single "current" one.
+      if (r.bottom > v.top + 4 && r.top < v.bottom) onScreen.push(+m.dataset.n)
       // A jump parks its target 24 px below the top; that band counts as neither side.
       if (r.top < v.top + 12) prev = m
       else if (!next && r.top > v.top + 32) {
@@ -669,11 +670,11 @@ class MyNav {
         if (!(this.atBottom() && fully)) next = m
       }
     }
-    return { cur, prev, next, total: ms.length }
+    return { onScreen, prev, next }
   }
   render() {
     if (this.mines().length === 0) { this.end.innerHTML = ''; return }
-    this.end.innerHTML = pillHTML({ latest: this.mobile }) + (this.mobile ? '' : `<div class="pop" hidden><div class="ph2"><span class="eyebrow">Your messages · <span data-total></span></span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst" role="listbox" tabindex="-1" aria-label="Your messages"></div></div>`)
+    this.end.innerHTML = pillHTML({ latest: this.mobile }) + (this.mobile ? '' : `<div class="pop" hidden><div class="ph2"><span class="eyebrow">Your messages</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst" role="listbox" tabindex="-1" aria-label="Your messages"></div></div>`)
     const $ = (s) => this.end.querySelector(s)
     this.btnPrev = $('[data-prev]'); this.btnNext = $('[data-next]'); this.btnList = $('[data-list]'); this.pop = $('.pop')
     this.btnPrev.onclick = () => { const s = this.state(); if (s.prev) this.jump(s.prev) }
@@ -701,19 +702,15 @@ class MyNav {
     if (!this.btnPrev) return
     const s = this.state()
     this.btnPrev.disabled = !s.prev; this.btnNext.disabled = !s.next
-    this.btnList.querySelector('.cnt').innerHTML = `${ic('msg')} <b>${s.cur || '–'}</b> / ${s.total}`
-    this.btnList.querySelector('.sr').textContent = `Your messages, ${s.cur || 'none'} of ${s.total}`
     if (this.latest) this.latest.hidden = this.atBottom()
     if (this.mobile) this.end.hidden = this.atBottom()
     if (this.pop && !this.pop.hidden) this.fillList(false)
-    this.curN = s.cur
   }
   fillList(scrollToCur) {
     const lst = (this.mobile ? this.sheet : this.pop).querySelector('.lst')
     const s = this.state()
-    if (!this.act) this.act = s.cur || this.mines().length
-    lst.innerHTML = listItems(this.mines(), s.cur, this.act, this.loading)
-    const total = this.root.querySelector('[data-total]'); if (total) total.textContent = this.mines().length
+    if (!this.act) this.act = s.onScreen[0] || this.mines().length
+    lst.innerHTML = listItems(this.mines(), s.onScreen, this.act, this.loading)
     const a = lst.querySelector('.it.act'); if (a) lst.setAttribute('aria-activedescendant', a.id)
     if (scrollToCur && a) a.scrollIntoView({ block: 'center' })
   }
@@ -739,7 +736,7 @@ class MyNav {
   }
   openSheet() {
     this.act = 0
-    this.sheet.innerHTML = `<div class="grab"></div><div class="ph2"><b>Your messages</b><span class="meta" style="margin-left:8px">${this.mines().length}</span><button class="ib x" aria-label="Close" data-x>${ic('x','s18')}</button></div><div class="lst" role="listbox" aria-label="Your messages"></div>`
+    this.sheet.innerHTML = `<div class="grab"></div><div class="ph2"><b>Your messages</b><button class="ib x" aria-label="Close" data-x>${ic('x','s18')}</button></div><div class="lst" role="listbox" aria-label="Your messages"></div>`
     this.sheet.hidden = false; this.scrim.hidden = false
     this.sheet.querySelector('[data-x]').onclick = () => this.closeSheet()
     this.sheet.querySelector('.lst').onclick = (e) => { const it = e.target.closest('.it'); if (it) this.pick(+it.dataset.n) }
@@ -811,10 +808,10 @@ document.getElementById('streamBtn').onclick = () => {
 /* ---------- mobile options (static) ---------- */
 const OPTS = [
   ['M1', 'Status-line chip', false, 'The desktop placement, shrunk: a 32 px pill at the end of the hint line. Costs nothing while a hint is showing; otherwise it adds a 32 px line above the composer for good.',
-    `<div class="dock"><div class="hint statusline" style="font-size:12px"><i class="dot pend"></i>Paused · <b>End session</b><div class="mmslot">${pillHTML({ cur: '4' })}</div></div>`],
-  ['M2', 'Grows out of “Latest”', true, 'Nothing at the tail. Scroll up and the Latest button becomes ▲ · 4/7 · ▼ | ↓. It takes no space at rest and appears exactly when you are reading back. Cost: at the tail you flick up once to reach it.',
+    `<div class="dock"><div class="hint statusline" style="font-size:12px"><i class="dot pend"></i>Paused · <b>End session</b><div class="mmslot">${pillHTML()}</div></div>`],
+  ['M2', 'Grows out of “Latest”', true, 'Nothing at the tail. Scroll up and the Latest button becomes ▲ · 💬 · ▼ | ↓. It takes no space at rest and appears exactly when you are reading back. Cost: at the tail you flick up once to reach it.',
     `<div class="dock">`],
-  ['M3', 'Composer button', false, 'One 💬 icon in the composer toolbar, beside attach and mic, with a small counter. A tap opens the sheet, and stepping happens there. No pill at all, but no one-tap ▲ / ▼ either, and the task toolbar is already full.',
+  ['M3', 'Composer button', false, 'One 💬 icon in the composer toolbar, beside attach and mic, A tap opens the sheet, and stepping happens there. No pill at all, but no one-tap ▲ / ▼ either, and the task toolbar is already full.',
     `<div class="dock">`],
 ]
 document.getElementById('mobileOptions').innerHTML = OPTS.map(([id, name, rec, desc, dock], i) => `<div class="opt">
@@ -822,8 +819,8 @@ document.getElementById('mobileOptions').innerHTML = OPTS.map(([id, name, rec, d
     <div class="sb"><span>9:41</span><span class="isl"></span><span>●●●</span></div>
     <div class="ph-h"><div class="t"><i class="dot info"></i><h5>Add a retry with backoff to…</h5></div><div class="tabs"><span class="on">Chat</span><span>Changes</span><span>Commits</span></div></div>
     <div class="stage"><div class="scroller"><div class="col"></div></div>
-      ${id === 'M2' ? `<div class="floating"><div class="mmslot float">${pillHTML({ cur: '4', latest: true })}</div></div>` : ''}</div>
-    ${dock}<div class="composer" style="padding:10px 12px 8px"><div class="ph" style="margin-bottom:10px">Reply — / for skills…</div><div class="row">${ic('clip','')}${ic('mic','')}${id === 'M3' ? `<span style="position:relative;color:var(--foreground);margin:0 14px 0 2px">${ic('msg','')}<span class="badge" style="right:-20px">4/7</span></span>` : ''}<span class="pill">claude · auto</span><span class="send" style="width:40px;height:40px">${ic('send','')}</span></div></div></div>
+      ${id === 'M2' ? `<div class="floating"><div class="mmslot float">${pillHTML({ latest: true })}</div></div>` : ''}</div>
+    ${dock}<div class="composer" style="padding:10px 12px 8px"><div class="ph" style="margin-bottom:10px">Reply — / for skills…</div><div class="row">${ic('clip','')}${ic('mic','')}${id === 'M3' ? `<span style="position:relative;color:var(--foreground);margin:0 14px 0 2px">${ic('msg','')}</span>` : ''}<span class="pill">claude · auto</span><span class="send" style="width:40px;height:40px">${ic('send','')}</span></div></div></div>
     <div class="tabbar"><span>${ic('circle','s18')}Now</span><span class="on">${ic('list','s18')}Tasks</span><span>${ic('bot','s18')}Manager</span><span>${ic('more','s18')}More</span></div>
   </div>
   <div class="lab2"><b>${id} · ${name}${rec ? ' <span class="tag rec">Recommended</span>' : ''}</b>${desc}</div></div>`).join('')
@@ -835,26 +832,25 @@ document.querySelectorAll('[data-opt]').forEach((ph) => {
 /* ---------- state gallery ---------- */
 const STATES = [
   ['Idle (desktop)', 'Always on the status line once you have sent a message. Flat and muted; it stays quiet until you need it.', pillHTML()],
-  ['Phone, scrolled up (M2)', 'The “Latest” button grows into the combined pill. At the tail it is gone.', `<div class="mmslot float">${pillHTML({ cur: '4', latest: true })}</div>`],
-  ['Hovered (middle)', 'The segment lifts to bg-muted. The tooltip names the action and shortcut; on desktop a 150 ms hover opens the peek.', pillHTML({ cls: 'hl' }) + `<div class="tip" style="right:20px;left:auto;transform:none">Your messages<kbd>⌥↑ ⌥↓</kbd></div>`],
+  ['Phone, scrolled up (M2)', 'The “Latest” button grows into the combined pill. At the tail it is gone.', `<div class="mmslot float">${pillHTML({ latest: true })}</div>`],
+  ['Hovered (middle)', 'The segment lifts to bg-muted and a 150 ms hover opens the list (the details). The tooltip names the action and shortcut.', pillHTML({ cls: 'hl' }) + `<div class="tip" style="right:20px;left:auto;transform:none">Your messages<kbd>⌥↑ ⌥↓</kbd></div>`],
   ['Focused (keyboard)', 'Each segment has its own inset focus ring in --ring. Tab moves ▲ → list → ▼.', pillHTML({ cls: 'fu' })],
-  ['At your first message', '▲ is disabled (35 % opacity, still announced as “dimmed”): nothing of yours exists above, in any range.', pillHTML({ up: false, cur: '1' })],
-  ['At your last message', '▼ is disabled: the newest message of yours is already fully on screen.', pillHTML({ down: false, cur: '7' })],
-  ['Above your first message', 'Counter reads “–”. Only ▼ makes sense here.', pillHTML({ up: false, cur: '–' })],
+  ['At your first message', '▲ is disabled (35 % opacity, still announced as “dimmed”): nothing of yours exists above, in any range.', pillHTML({ up: false })],
+  ['At your last message', '▼ is disabled: the newest message of yours is already fully on screen.', pillHTML({ down: false })],
   ['No messages from you', 'Not rendered at all, and no room is reserved. For example, a manager that has only spoken on its own.', `<div class="ghost-box">hidden</div>`],
 ]
 const box = document.getElementById("stateGrid")
 box.innerHTML = STATES.map(([t, d, h]) => `<div class="st-card"><div class="vis"><div class="mmslot">${h}</div></div><div class="lab"><b>${t}</b>${d}</div></div>`).join('')
-  + `<div class="st-card wide"><div class="vis tall" id="stOpen"></div><div class="lab"><b>List open</b>The current message (in view) has the violet bar; the keyboard-active row has a ring. Older days have sticky headers. Unloaded ranges are marked and load when you jump to them.</div></div>`
+  + `<div class="st-card wide"><div class="vis tall" id="stOpen"></div><div class="lab"><b>List open</b>Every message of yours that is on screen has the violet bar; the keyboard-active row has a ring. No numbers anywhere. Older days have sticky headers. Unloaded ranges are marked and load when you jump to them.</div></div>`
   + `<div class="st-card wide"><div class="vis tall" style="align-items:center;justify-content:center;display:flex"><div style="width:100%;max-width:420px;margin:0 auto;display:flex;flex-direction:column;gap:10px">
       <div class="ai" style="font-size:12.5px">Capped at 30 s. The cap is a named constant…</div>
       <div class="tb mine hl" style="max-width:85%;animation:none">${'<div class="acts">' + ic('copy') + '</div>'}Here's the log from the failing run — it retries forever on a 401<div class="att"><div class="img" style="width:110px;height:60px"></div></div><div class="tm"><span class="meta">09:34</span></div></div>
       <div class="ai" style="font-size:12.5px;opacity:.8">Right: a 401 is not transient…</div>
-      <div style="display:flex;justify-content:flex-end"><div class="mmslot">${pillHTML({ cur: '4' })}</div></div></div></div>
-    <div class="lab"><b>After a jump</b>The target is aligned 24 px below the top, focused and ringed (ring-[3px] ring-ring/50), with a 1.8 s violet wash. The counter updates to the message you landed on.</div></div>`
+      <div style="display:flex;justify-content:flex-end"><div class="mmslot">${pillHTML()}</div></div></div></div>
+    <div class="lab"><b>After a jump</b>The target is aligned 24 px below the top, focused and ringed (ring-[3px] ring-ring/50), with a 1.8 s violet wash. Its row in the list gets the on-screen bar.</div></div>`
 // A frozen, open list built from the real task data.
 const tmp = document.createElement('div'); renderThread(tmp, TASK, 'task')
-document.getElementById('stOpen').innerHTML = `<div class="mmslot">${pillHTML({ cur: '4', open: true, cls: 'hl' })}<div class="pop" style="animation:none"><div class="ph2"><span class="eyebrow">Your messages · 7</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst">${listItems([...tmp.querySelectorAll('.mine')], 4, 5, 0)}</div></div></div>`
+document.getElementById('stOpen').innerHTML = `<div class="mmslot">${pillHTML({ open: true, cls: 'hl' })}<div class="pop" style="animation:none"><div class="ph2"><span class="eyebrow">Your messages</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst">${listItems([...tmp.querySelectorAll('.mine')], [4, 5], 5, 0)}</div></div></div>`
 </script>
 </body>
 </html>
