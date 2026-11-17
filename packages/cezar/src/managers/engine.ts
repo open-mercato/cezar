@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
@@ -2404,6 +2404,8 @@ export class ManagerEngine {
       if (onlyIfStale && !stale) return { error: 'this proposal is still current', status: 409 };
       // Re-read after the forge call: another tab may have decided meanwhile.
       const current = this.deps.store.message(id, actionId);
+      // That read itself may have closed the card (`pullRequestClosed`): the dismissal asked for is done.
+      if (stale && current?.kind === 'action' && current.status === 'dismissed') return { ok: true as const };
       if (current?.kind !== 'action' || current.status !== 'pending') return { error: 'this action was already decided', status: 409 };
       message = current;
       if (!onlyIfStale) this.deps.telemetry?.track('manager_action_decided', `${managerActionLabel(message.action)}:dismiss`, ctx);
@@ -2471,6 +2473,29 @@ export class ManagerEngine {
       const stale = await this.closedPr(message.action);
       const current = this.deps.store.message(id, message.id);
       if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale);
+    }
+  }
+
+  /**
+   * cezar just read from GitHub that a PR left the open state (a chip's status, a merge-state read,
+   * a poll): close every pending merge card for it, without asking GitHub again. Only a pending
+   * card settles, so a second signal for the same PR changes nothing and tells the manager nothing.
+   * `verify`: an automation poll reads `origin`, which in a fork clone is not the repo the card's
+   * number belongs to, so its signal only triggers the card's own stale check.
+   */
+  async pullRequestClosed(root: string, number: number, state: 'merged' | 'closed', verify = false): Promise<void> {
+    const pending = this.deps.store.list().flatMap((manager) => this.deps.store.messages(manager.id)
+      .filter((message) => message.kind === 'action' && message.status === 'pending' && message.action.type === 'merge-pr' && message.action.number === number)
+      .map((message) => ({ id: manager.id, message })));
+    if (pending.length === 0) return;
+    const target = resolve(root);
+    const projects = new Set((await this.deps.projects()).filter((project) => resolve(project.root) === target).map((project) => project.id));
+    for (const { id, message } of pending) {
+      if (message.kind !== 'action' || message.action.type !== 'merge-pr' || !projects.has(message.action.projectId)) continue;
+      const current = this.deps.store.message(id, message.id);
+      if (current?.kind !== 'action' || current.status !== 'pending') continue;
+      if (verify) await this.decide(id, current.id, 'dismiss', {}, true);
+      else this.settleAction(id, current, 'dismissed', `#${number} was already ${state}`);
     }
   }
 

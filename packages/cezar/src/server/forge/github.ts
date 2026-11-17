@@ -9,6 +9,7 @@ import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
 import { baseDivergence, rewriteLeaseArg } from '../git-changes.ts';
 import { getRepoInfo } from '../git.ts';
 import { fetchIssueMetadata } from './github-issue-metadata.ts';
+import { reportPrClosed } from './pr-closed.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -2440,6 +2441,7 @@ export async function fetchGithubRefStatus(
           ? (refStatusCache.get(refStatusKey(repoRoot, n))?.unknownSince ?? storedAt)
           : undefined;
       file(n, entry, unknownSince);
+      if (entry?.kind === 'pr' && (entry.status === 'merged' || entry.status === 'closed')) reportPrClosed(repoRoot, n, entry.status);
       refStatusCache.set(refStatusKey(repoRoot, n), {
         at: storedAt,
         resolved: entry,
@@ -3606,6 +3608,8 @@ export async function fetchPrMergeState(
       ),
     };
     mergeStateCache.set(key, { at: Date.now(), value });
+    const closed = value.mergeState.state;
+    if (closed === 'merged' || closed === 'closed') reportPrClosed(repoRoot, number, closed);
     return value;
   } catch (error) {
     // `whyLine`, not `firstLine`: a reason of "Command failed: gh pr view 353 --json …" is the

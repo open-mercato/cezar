@@ -2095,6 +2095,86 @@ describe('ManagerEngine', () => {
         expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already closed' });
       });
 
+      it('a PR read as merged elsewhere closes its card at once, and tells the manager once', async () => {
+        const engine = makeEngine({ request: forge(() => 'open') });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        requests = [];
+        // Another repository's #7, and this one's #8, are not this card.
+        await engine.pullRequestClosed('/beta', 7, 'merged');
+        await engine.pullRequestClosed('/alpha', 8, 'merged');
+        expect(actions(id)[0]?.status).toBe('pending');
+        await engine.pullRequestClosed('/alpha/', 7, 'merged');
+        await engine.pullRequestClosed('/alpha', 7, 'merged');
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(store.state(id).notes.filter((note) => note.includes('#7 was already'))).toHaveLength(1);
+        // Trusted as read: no second GitHub call.
+        expect(requests).toEqual([]);
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toMatchObject({ status: 409 });
+      });
+
+      it('an automation poll signal is checked against the card\'s own repo before it closes anything', async () => {
+        // The poll reads `origin`: in a fork clone its #7 is not the card's #7.
+        let state = 'open';
+        const engine = makeEngine({ request: forge(() => state) });
+        const id = await create(engine);
+        await engine.propose(id, { action: merge });
+        requests = [];
+        await engine.pullRequestClosed('/alpha', 7, 'merged', true);
+        expect(actions(id)[0]?.status).toBe('pending');
+        expect(requests.map((request) => request.path)).toEqual(['/api/v1/p/alpha/github/prs/7/merge-state?refresh=1']);
+        state = 'merged';
+        await engine.pullRequestClosed('/alpha', 7, 'merged', true);
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+      });
+
+      it('a PR read as closed unmerged closes its card as closed', async () => {
+        const engine = makeEngine({ request: forge(() => 'open') });
+        const id = await create(engine);
+        await engine.propose(id, { action: merge });
+        await engine.pullRequestClosed('/alpha', 7, 'closed');
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already closed' });
+      });
+
+      it('a running merge is not closed by the read that found it merged', async () => {
+        let engine: ManagerEngine | undefined;
+        const engineRef = () => engine!;
+        engine = makeEngine({
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET' });
+            if (path.endsWith('?refresh=1')) await engineRef().pullRequestClosed('/alpha', 7, 'merged');
+            const state = path.endsWith('?refresh=1') ? 'merged' : 'open';
+            return Response.json({ available: true, mergeState: { title: 'Ship', state, headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+          },
+        });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'approve')).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(store.state(id).notes.filter((note) => note.includes('#7 was already'))).toHaveLength(1);
+      });
+
+      it('an onlyIfStale dismiss whose own read closed the card answers ok, with one note', async () => {
+        let engine: ManagerEngine | undefined;
+        const engineRef = () => engine!;
+        engine = makeEngine({
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET' });
+            const state = path.endsWith('?refresh=1') ? 'merged' : 'open';
+            if (state === 'merged') await engineRef().pullRequestClosed('/alpha', 7, 'merged');
+            return Response.json({ available: true, mergeState: { title: 'Ship', state, headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+          },
+        });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(store.state(id).notes.filter((note) => note.includes('#7 was already'))).toHaveLength(1);
+      });
+
       it('a watch check asks GitHub about no card whose PR is still listed open', async () => {
         const engine = makeEngine({ request: forge(() => 'merged'), github: readyPrGithub });
         const id = await create(engine);

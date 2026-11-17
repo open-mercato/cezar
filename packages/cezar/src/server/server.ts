@@ -385,6 +385,7 @@ import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resol
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
+import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -4949,7 +4950,7 @@ export function createApp(deps: ServerDeps) {
             projectId: project.id,
             timeZone: localTimeZone(),
             store,
-            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller({ host: remote.host }) },
+            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller({ host: remote.host }), onPullRequestClosed: (number, state) => reportPrClosed(project.root, number, state, { verify: true }) },
             launch: parsed.data.mode === 'execute'
               ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
@@ -8866,6 +8867,11 @@ export function createApp(deps: ServerDeps) {
     (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0);
   phonePairing.attachPush(waitingOnUser);
   deps.onDispose?.(() => managerEngine.dispose());
+  // A GitHub read that sees a PR merged or closed closes its waiting merge cards (#2241 follow-up).
+  const stopPrClosed = onPrClosed((root, number, state, verify) => {
+    void managerEngine.pullRequestClosed(root, number, state, verify).catch(() => {});
+  });
+  deps.onDispose?.(stopPrClosed);
 
   // A linked automation's finished run goes straight to its manager's chat (spec § Automation reports).
   const watchReports = (project: ProjectContext) => watchAutomationReports({
@@ -9348,7 +9354,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
         projectId,
         store,
         timeZone: localTimeZone(),
-        ...(project.github ? { github: { ...project.github, poller: new GithubPoller({ host: project.github.host }) } } : {}),
+        ...(project.github ? { github: { ...project.github, poller: new GithubPoller({ host: project.github.host }), onPullRequestClosed: (number, state) => reportPrClosed(project.root, number, state, { verify: true }) } } : {}),
         // Present unconditionally (unlike `github`, precomputed above from a sync remote parse):
         // whether the project actually has a tracker connection is resolved lazily, at poll time,
         // by `getDriver()` — a project with none simply fails that call and the scheduler backs off.

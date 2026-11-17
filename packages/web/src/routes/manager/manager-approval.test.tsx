@@ -413,6 +413,44 @@ describe('useDismissStaleMerges', () => {
   })
 })
 
+describe('ActionCard when its PR merges while the chat is open', () => {
+  afterEach(forgetStaleChecks)
+
+  /** The chip's own poll, on a short server cadence; `state` is what GitHub says at each ask. */
+  function stubRefStatus(state: () => string, number = 12) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (!url.includes('/github/ref-status')) return new Promise(() => {})
+      return Response.json({ available: true, prs: { [number]: state() }, issues: {}, conflicts: [], recheckAfterMs: 20 })
+    }))
+  }
+
+  it('re-sends the onlyIfStale dismiss once, when the chip reports the PR merged', async () => {
+    let state = 'ready'
+    stubRefStatus(() => state)
+    const { onDecide } = renderCard(actionMessage(1, { action: merge }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1))
+    expect(onDecide).not.toHaveBeenCalled()
+    state = 'merged'
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'dismiss', { onlyIfStale: true }))
+    const calls = vi.mocked(fetch).mock.calls.length
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(calls + 1))
+    expect(onDecide).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks for a closed PR too, and never for one still open', async () => {
+    stubRefStatus(() => 'closed')
+    const { onDecide } = renderCard(actionMessage(1, { action: merge }))
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'dismiss', { onlyIfStale: true }))
+    cleanup()
+    // Another PR: the tab remembers what it learned about #12.
+    stubRefStatus(() => 'checks-pending', 13)
+    const open = renderCard(actionMessage(2, { action: { ...merge, number: 13 } }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(2))
+    expect(open.onDecide).not.toHaveBeenCalled()
+  })
+})
+
 describe('ActionCard tasks behind the PR', () => {
   const task = (id: string, extra: Record<string, unknown> = {}) => ({
     projectId: 'alpha', id, title: `Task ${id}`, status: 'review', archived: false, workflow: 'quick-task',
@@ -434,7 +472,7 @@ describe('ActionCard tasks behind the PR', () => {
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/manager/m1']}>
           <Routes>
-            <Route path="/manager/:id" element={<ActionCard origin={{ id: 'm1', name: 'Mira' }} message={actionMessage(1, { action: merge, status })} onDecide={vi.fn()} />} />
+            <Route path="/manager/:id" element={<ActionCard origin={{ id: 'm1', name: 'Mira' }} message={actionMessage(1, { action: merge, status })} onDecide={vi.fn(async () => ({ ok: true }))} />} />
             <Route path="/p/:projectId/tasks/:runId" element={<TaskPage />} />
           </Routes>
         </MemoryRouter>
