@@ -43,5 +43,5 @@ Stop the cockpit from claiming the user is offline when cezar's plain HTTP API i
 
 ### Phase 2: Validate and review
 
-- [ ] 2.1 Run targeted and full validation
+- [x] 2.1 Run targeted and full validation — d7a72f81
 - [ ] 2.2 Complete the authoritative automated review pass
