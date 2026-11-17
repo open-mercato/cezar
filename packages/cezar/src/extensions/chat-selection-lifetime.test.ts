@@ -102,3 +102,12 @@ it('does not activate a globally approved candidate in place of missing selected
  expect((await reopened.inventory()).find(item=>item.record.manifest.id===record.manifest.id)).toMatchObject({availability:'missing',selectedVersion:record.manifest.version,installedCandidate:{selectedVersion:'0.1.901'}})
 })
 
+it('HTTP restore does not stop an already running default sibling when selected Telegram bytes are missing',async()=>{
+ const {root,home,data,manager}=await setup();const artifact=await new ChatSelectionStore(data,home).resolve('telegram');await manager.close();await rm(artifact!.root,{recursive:true})
+ vi.stubEnv('CEZ_HOME',home);vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_EXTENSIONS','1')
+ const {WebhookService}=await import('../webhooks/service.ts'),{WebhookScheduler}=await import('../webhooks/scheduler.ts'),{retainProjectExtensions}=await import('./project-runtime.ts'),{RunStore}=await import('../runs/store.ts'),{restoreProjectExtensions,closeProjectExtensions}=await import('../server/extensions.ts'),{chatTransportAvailable}=await import('../chat/registry.ts')
+ const service=await WebhookService.open({root,dataDir:data,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler()}),owner=await retainProjectExtensions({root,dataDir:data,projectId:'project'})
+ const store=RunStore.open(data),project={id:'project',root,dataDir:data,store} as ProjectContext
+ try{await owner.manager.startDeliveredChat('slack');expect(chatTransportAvailable(root,'slack')).toBe(true);await restoreProjectExtensions(project);expect(chatTransportAvailable(root,'slack')).toBe(true)}
+ finally{await service?.dispose();await closeProjectExtensions(project);await owner.release();store.flush();vi.unstubAllEnvs()}
+})

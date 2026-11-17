@@ -13,6 +13,7 @@ import { stampManifests } from '../../src/release/snapshot.ts';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const locations = {
   extensionSdk: 'packages/extension-sdk', telegram: 'packages/chat-plugins/telegram',
+  slack: 'packages/chat-plugins/slack', discord: 'packages/chat-plugins/discord',
   contract: 'packages/contract', apiClient: 'packages/api-client', cezar: 'packages/cezar',
   alias: 'alias-cezar', runAlias: 'alias-cezar-run',
 };

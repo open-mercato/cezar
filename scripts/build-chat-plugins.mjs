@@ -14,7 +14,7 @@ const sdk = spawnSync(npm, ['run', 'build', '-w', '@open-mercato/cezar-extension
 })
 if (sdk.error) throw sdk.error
 if (sdk.status !== 0) process.exit(sdk.status ?? 1)
-for (const plugin of ['telegram']) {
+for (const plugin of ['telegram', 'slack', 'discord']) {
   const result = spawnSync(npm, ['run', 'build'], {
     cwd: join(root, 'packages', 'chat-plugins', plugin),
     stdio: 'inherit',

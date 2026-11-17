@@ -121,7 +121,7 @@ export const extensionUninstallImpactSchema = z.object({
 }).strict()
 export type ExtensionUninstallImpact = z.infer<typeof extensionUninstallImpactSchema>
 
-export const extensionChatSelectionParamsSchema = z.object({provider:z.enum(['telegram'])})
+export const extensionChatSelectionParamsSchema = z.object({provider:z.enum(['telegram','slack','discord'])})
 export const extensionChatSelectionTargetSchema = z.discriminatedUnion('kind',[
   z.object({kind:z.literal('shipped')}).strict(),
   z.object({kind:z.literal('installed'),extensionId:extensionIdParamsSchema.shape.extensionId,localProviderId:z.string().min(1).max(100),integrity:z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/)}).strict(),

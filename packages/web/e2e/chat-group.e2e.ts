@@ -1,0 +1,38 @@
+import { test } from '@e2e-dev/web'
+import { expect } from 'e2e'
+import { chatFixture } from './chat-fixture'
+
+test('manual group webhook upgrade, visibility consent and saved group identity', async ({ app, screen, browser }) => {
+ const { fixture, receivers, initial, provider, profile } = await chatFixture(app.baseUrl)
+ await app.open('/p/default/settings/integrations?integration=' + provider)
+ await screen.getByRole('button', 'Enable task control for Existing webhook').tap()
+ for (const [label, value] of profile.credentials) await screen.getByLabel(label).fill(value)
+ await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
+ expect((await fixture()).calls).toBe(0)
+ await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
+ await screen.getByRole('button', 'Continue').tap()
+ await expect(screen.getByLabel(profile.groupCommand)).toBeVisible()
+ const command = await screen.getByLabel(profile.groupCommand).inputValue()
+ await fixture('/message', { text: command, group: true })
+ await expect(screen.getByRole('checkbox', /all members of this group can read project messages/)).toBeVisible()
+ await expect(screen.getByRole('button', 'Activate notifications')).toBeDisabled()
+ await screen.getByRole('checkbox', /all members of this group can read project messages/).check()
+ await screen.getByRole('button', 'Activate notifications').tap()
+ await expect(screen.getByRole('heading', profile.name + ' notifications are active')).toBeVisible()
+ await screen.getByRole('button', 'Skip task control').tap()
+ await screen.getByRole('button', 'Done').tap()
+ const rows = await receivers()
+ expect(rows).toHaveLength(1)
+ expect(rows[0].id).toBe(initial.seedId)
+ expect(rows[0].chatId).toBe(profile.groupChatId)
+ expect(rows[0].state).toBe('active')
+ await fixture('/restart', {})
+ await browser.reload()
+ expect((await receivers())[0].chatId).toBe(profile.groupChatId)
+ await expect(screen.getByRole('button', 'Enable task control for Existing webhook')).not.toBeVisible()
+ const sentBefore = (await fixture()).sent.length
+ await screen.getByRole('button', 'Send test').tap()
+ await expect.poll(async () => (await fixture()).sent.length).toBe(sentBefore + 1)
+ const last = (await fixture()).sent.at(-1)
+ expect(last.channel ?? last.channel_id).toBe(profile.groupChannel)
+})

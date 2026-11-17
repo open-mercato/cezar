@@ -1,0 +1,106 @@
+---
+title: "Control tasks from Slack and Discord"
+description: "Connect a dedicated Slack app or Discord bot to get notifications and let approved people answer, continue and start tasks."
+nav_title: "Slack and Discord bots"
+version: opt-in
+sources:
+  - label: Slack cockpit descriptor
+    path: packages/web/src/lib/chat-providers/slack/index.ts
+    line: 8
+  - label: Discord cockpit descriptor
+    path: packages/web/src/lib/chat-providers/discord/index.ts
+    line: 13
+  - label: Setup wizard
+    path: packages/web/src/routes/settings/chat-wizard.tsx
+    line: 283
+  - label: Enable task control on a webhook receiver
+    path: packages/web/src/routes/settings/webhooks-section.tsx
+    line: 245
+  - label: Discord application command
+    path: packages/chat-plugins/discord/src/native-commands.ts
+    line: 1
+  - label: Slack command parsing
+    path: packages/chat-plugins/slack/src/adapter.ts
+    line: 108
+  - label: Slack platform spec
+    path: .ai/specs/2026-11-04-slack-chat.md
+    line: 1
+  - label: Discord platform spec
+    path: .ai/specs/2026-11-04-discord-chat.md
+    line: 1
+related:
+  links:
+    - features/settings-and-projects/telegram-replies
+    - features/setup-and-integrations/project-integrations
+---
+
+A local Cezar server can connect a dedicated Slack app or Discord bot to a project. The bot sends task notifications to the chats you connect, and people you approve can answer questions, check status, and, with extra permissions, start, cancel and continue tasks. Task control works the same way as [Telegram task control](/docs/features/settings-and-projects/telegram-replies); only the setup and the command syntax differ.
+
+Bot notifications need `CEZ_WEBHOOKS=1`. Task control also needs `CEZ_CHAT_INBOUND=1`. Both work only in a local cockpit.
+
+> **Good to know**: An approved person can instruct a coding agent that runs shell commands on this machine. Approve only people you trust.
+
+## Where to find it
+
+Settings → **Integrations** → **Slack** or **Discord**. The button reads **Connect Slack** or **Connect Discord** until a bot is connected, then **Add a chat**. An existing incoming-webhook receiver keeps sending notifications; its **Enable task control for** followed by the receiver’s name button connects a bot to that same receiver, preserving its settings instead of adding a second notification destination. The webhook-only receiver list appears only when such receivers exist.
+
+## Prepare the app or bot
+
+For Slack, choose **Create a preconfigured Slack app** in the wizard. Cezar fills in the manifest; select your workspace and review the settings in Slack. **Copy Slack manifest** is available as a fallback or for configuring an existing app. The manifest enables Socket Mode, Interactivity, writable Messages in App Home, the required events and bot permissions.
+
+Open **Features → OAuth & Permissions → OAuth Tokens for Your Workspace**. If no token is shown, click **Install to Workspace** and approve with **Allow**. Copy the **Bot User OAuth Token** (starting with `xoxb-`) into **Bot token**. In **Basic Information → App-Level Tokens**, generate a token with `connections:write` and paste it into **App-level token**. For an existing app, apply the manifest settings and reinstall if Slack requests it.
+
+Slack supports both long-lived tokens (`xapp-…`, `xoxb-…`) and rotating access tokens (`xoxe.xapp-…`, `xoxe.xoxb-…`). Paste the access tokens first. For each rotating token, Cezar reveals a matching **App refresh token** or **Bot refresh token** field. Copy that refresh token from the same Slack token window. Then copy **Client ID** and **Client Secret** from **Basic Information → App Credentials**. These extra fields are hidden when renewal is not needed.
+
+Cezar verifies renewal during setup and stores the renewed tokens in the project's encrypted secret store. While connected, it renews access before expiry; after sleep or restart, it checks before the next API call. You do not need to renew tokens manually or pair the chat again. Keep using a dedicated Slack app for this project.
+
+If an exchange is interrupted and Cezar cannot know whether Slack consumed the refresh token, it stops using that token and offers **Repair connection** on the existing chat. Paste fresh credentials and confirm the chat and permissions again; this reuses the receiver rather than creating duplicate notifications. This prevents repeated exchanges with a possibly consumed token. A read-only secret store also prevents renewal; restore access to the store before reconnecting. A network failure during an exchange can therefore require fresh tokens even after the network returns.
+
+For Discord, create a dedicated application in the [Discord Developer Portal](https://discord.com/developers/applications):
+
+1. Under **Bot**, enable the Message Content intent and copy the bot token.
+2. Leave the Interactions Endpoint URL empty. Buttons arrive over the bot's own connection.
+
+Neither platform needs a public URL: Cezar opens an outbound connection (Slack Socket Mode, Discord Gateway).
+
+## How to use it
+
+1. Choose **Connect Slack** or **Connect Discord**, then **Notifications only** or **Notifications and task control**. For notifications only, paste the channel's webhook URL; Cezar saves it and sends a test. Activate only after the delivered result. If a bot is already connected, it also handles notifications. For task control, follow the app preparation instructions, enter the token fields, tick **This bot is dedicated to this project**, and choose **Continue**. Cezar checks the credentials and creates a setup code valid for five minutes.
+2. Copy the setup command and send it to the bot as a text message. Slack shows one **Setup command**: send `cezar start <code>` in a direct message with the bot, or in a channel select the bot from Slack's @ picker and paste the command after the mention. Discord shows **Command for private chat** and **Command for group or channel**: use **Invite the bot to your server** first (the invitation includes the required permissions), then open the bot from that server’s member list → **Message** and send `/start <code>` as text, or send the channel command with its mention in a guild text channel. Once the command arrives, the instructions make way for the activation choices.
+3. When the wizard shows who sent the command, activate notifications. For a private chat you can enable task control in the same step and choose **Start tasks**, **Cancel tasks** and **Continue tasks**. A group asks for a second private setup command and a code comparison before anyone gets task control.
+
+Manage chats, people and permissions in the same tab, as described for [Telegram](/docs/features/settings-and-projects/telegram-replies#manage-chats-and-people).
+
+## Commands
+
+Each bot registers one native command for looking at tasks:
+
+- **Slack**: `/cezar`, added by the app manifest. `/cezar tasks` lists tasks, `/cezar status [task-id]` shows status, and `/cezar help` lists commands; anything else shows help. Pick it from Slack's command menu.
+- **Discord**: `/tasks`, registered as an application command when the bot connects. Its optional `task` field suggests this project's tasks as you type; leave it empty to list tasks, or pick one to see its status. Only you see the answer.
+
+Everything else — answering, starting, cancelling and continuing tasks — is a text message to the bot. In Discord, a `/tasks` you type opens the native command; the other commands are sent as plain text:
+
+| Action | Slack | Discord |
+| --- | --- | --- |
+| List tasks | `cezar tasks` | `/tasks` |
+| Show status | `cezar status [task-id]` | `/status [task-id]` |
+| Answer a task | `cezar reply <task-id> <text>` | `/reply <task-id> <text>` |
+| Start a task (private chat only) | `cezar task <text>` | `/task <text>` |
+| Cancel or continue | `cezar cancel <task-id>`, `cezar continue <task-id> [text]` | `/cancel <task-id>`, `/continue <task-id> [text]` |
+| List commands | `cezar help` | `/help` |
+
+In a direct message, send the command to the bot. In a channel, select the bot from the @ picker first, then type the command after the mention. To answer a notification without a command, reply in Slack's thread under the bot's message, or use Discord's Reply on the bot's message in the same channel.
+
+> **Good to know**:
+>
+> - Slack groups include public and private channels and group DMs. Discord supports direct messages and guild text channels; threads, group DMs, forum and announcement channels are not supported.
+> - Each bot shares one sending budget: at most one message per second to a chat and ten per second across the bot. One bot serves up to 20 chats.
+> - Delivery is at most once. Messages sent while Cezar is stopped, and some sent during a reconnect, can be lost. Slack redelivers and Discord replays events missed during a short reconnect; each is handled once. Check the task in the cockpit before you send a request again.
+> - Without `CEZ_CHAT_INBOUND=1` the tab says **Notifications work now.** followed by a note that task control needs `CEZ_CHAT_INBOUND=1` and a restart. The bot sends notifications only; **Notifications and task control** and **Enable task control for** followed by the receiver’s name stay disabled. People you approved earlier stay listed under **People and permissions**, so you can still revoke them, remove permissions or turn task control off. Approving people, adding permissions and turning task control on wait until the flag is back.
+> - Without `CEZ_WEBHOOKS=1` the Slack and Discord tiles read **Off on this server**, and the tab names the variable to set before restarting cezar.
+
+## If setup is waiting
+
+Expand **No message received? Check these steps** in the wizard. In Slack, the app’s **Messages** tab must allow writing, and Event Subscriptions must include `message.im` and `app_mention`. In Discord, a Clyde rejection means the message was not delivered: check the shared server and its direct-message privacy settings. Enable Message Content Intent before reconnecting the bot.
+
+The wizard reports receiving and sending separately. A valid token alone is not a completed connection: Cezar must receive your setup command and deliver its test notification. Closing notification-only setup before activation leaves the saved connection inactive, ready to finish from its settings. Failed tests never activate it.

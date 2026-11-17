@@ -9,11 +9,13 @@ const destinations = [
 ]
 
 for (const destination of destinations) {
-  test(`${destination.name}: hint, profiles, create, test, activate and edit`, async ({ app, screen, browser }) => {
-    // Slack/Discord webhooks are set up from their own tile (Integrations → <service>).
+  test(`${destination.name}: notifications-only setup, preview, test, activate and edit`, async ({ app, screen, browser }) => {
+    // Slack/Discord webhooks are set up from their own tile (Integrations → <chat> → Notifications only).
     await app.open(`/p/default/settings/integrations?integration=${destination.name.toLowerCase()}`)
-    await screen.getByRole('button', 'Add receiver').tap()
-    await expect(screen.getByRole('dialog', 'Add receiver')).toContainText(destination.name === 'Slack' ? 'Slack channel (Incoming Webhook)' : 'Discord channel (Webhook URL)')
+    await screen.getByRole('button', `Connect ${destination.name}`).tap()
+    await screen.getByRole('button', /^Notifications only/).tap()
+    const wizard = screen.getByRole('dialog', `Connect ${destination.name} notifications`)
+    await expect(wizard).toBeVisible()
     await screen.getByLabel('Name').fill(`${destination.name} browser fixture`)
     await screen.getByLabel('Webhook URL').fill(destination.url)
     await expect(screen.getByLabel('Allow a receiver on this computer or private network')).toHaveCount(0)
@@ -25,23 +27,24 @@ for (const destination of destinations) {
     await screen.getByRole('option', 'Standard — task titles, questions and errors').tap()
     await expect(preview).toContainText('Example generated task title')
     await expect(preview).toContainText('Which example option should be used?')
-    await screen.getByRole('button', 'Save receiver').tap()
+    await screen.getByRole('button', 'Send test and continue').tap()
+    await expect(screen.getByRole('button', 'Activate notifications')).toBeDisabled()
+    await screen.getByLabel('I understand task titles and selected content will be sent to this channel.').check()
+    await expect(screen.getByRole('button', 'Activate notifications')).toBeEnabled()
+    await screen.getByRole('button', 'Activate notifications').tap()
+    await expect(screen.getByRole('heading', `${destination.name} is ready`)).toBeVisible()
+    await screen.getByRole('button', 'Done').tap()
     await expect(screen.getByRole('dialog')).toHaveCount(0)
     await expect(screen.getByText('Save your signing key')).toHaveCount(0)
+
     const card = screen.getByRole('article').filter({ hasText: `${destination.name} browser fixture` })
-    await expect(card.getByText(destination.name)).toBeVisible()
+    await expect(card).toContainText('Last test: passed')
+    await expect(card.getByRole('button', 'Pause')).toBeVisible()
     await card.getByRole('button', `More actions for ${destination.name} browser fixture`).tap()
     await expect(screen.getByRole('menuitem', 'Delete')).toBeVisible()
     await expect(screen.getByRole('menuitem', 'Rotate key')).toHaveCount(0)
     await expect(screen.getByRole('menuitem', 'Revoke old keys')).toHaveCount(0)
     await browser.keyboard.press('Escape')
-    await card.getByRole('button', 'Send test').tap()
-    await expect(card).toContainText('Last test: passed')
-    await card.getByRole('button', 'Activate').tap()
-    await expect(screen.getByRole('button', 'Confirm')).toBeDisabled()
-    await screen.getByLabel('I understand Standard sends task titles, questions and error text to this receiver.').check()
-    await screen.getByRole('button', 'Confirm').tap()
-    await expect(card.getByRole('button', 'Pause')).toBeVisible()
     await card.getByRole('button', 'Edit').tap()
     await expect(screen.getByRole('dialog', 'Edit receiver')).toContainText(destination.name === 'Slack' ? 'Slack channel (Incoming Webhook)' : 'Discord channel (Webhook URL)')
     await expect(screen.getByLabel('Webhook URL')).toHaveValue('')

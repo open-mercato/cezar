@@ -1,0 +1,33 @@
+import { test } from '@e2e-dev/web'
+import { expect } from 'e2e'
+import { chatFixture } from './chat-fixture'
+
+test('a failed bot test stays inactive and a restored bot test can be retried', async ({ app, screen }) => {
+ const { fixture, receivers, initial, provider, profile } = await chatFixture(app.baseUrl)
+ await app.open('/p/default/settings/integrations?integration=' + provider)
+ await screen.getByRole('button', 'Enable task control for Existing webhook').tap()
+ for (const [label, value] of profile.credentials) await screen.getByLabel(label).fill(value)
+ await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
+ expect((await fixture()).calls).toBe(0)
+ await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
+ await screen.getByRole('button', 'Continue').tap()
+ await expect(screen.getByLabel(profile.privateCommand)).toBeVisible()
+ await expect(screen.getByRole('button', 'Activate notifications')).toBeDisabled()
+ const command = await screen.getByLabel(profile.privateCommand).inputValue()
+ await fixture('/message', { text: command })
+ await expect(screen.getByRole('checkbox', 'Enable task control for this private chat')).toBeVisible()
+ await screen.getByRole('checkbox', 'Enable task control for this private chat').check()
+ await screen.getByRole('checkbox', 'Start tasks').check()
+ await fixture('/fail-send', { value: true })
+ await screen.getByRole('button', 'Activate notifications and task control').tap()
+ await expect(screen.getByRole('button', 'Activate notifications and task control')).toBeEnabled()
+ expect((await receivers()).find((r: any) => r.id === initial.seedId).state).not.toBe('active')
+ expect((await fixture()).inbound.grants).toHaveLength(0)
+ await fixture('/fail-send', { value: false })
+ await screen.getByRole('button', 'Activate notifications and task control').tap()
+ await expect(screen.getByText(/task control is enabled/)).toBeVisible()
+ const rows = await receivers()
+ expect(rows).toHaveLength(1)
+ expect(rows[0].id).toBe(initial.seedId)
+ expect(rows[0].state).toBe('active')
+})

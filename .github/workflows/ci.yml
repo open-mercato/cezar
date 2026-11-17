@@ -99,6 +99,8 @@ jobs:
         run: |
           npm pack --dry-run --ignore-scripts -w @open-mercato/cezar-extension-sdk
           (cd packages/chat-plugins/telegram && npm pack --dry-run --ignore-scripts)
+          (cd packages/chat-plugins/slack && npm pack --dry-run --ignore-scripts)
+          (cd packages/chat-plugins/discord && npm pack --dry-run --ignore-scripts)
           npm pack --dry-run --ignore-scripts -w @open-mercato/cezar
           (cd alias-cezar && npm pack --dry-run --ignore-scripts)
           (cd alias-cezar-run && npm pack --dry-run --ignore-scripts)
@@ -112,7 +114,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [telegram]
+        plugin: [telegram, slack, discord]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,6 +134,9 @@ jobs:
         working-directory: packages/chat-plugins/${{ matrix.plugin }}
         env:
           TELEGRAM_BOT_TOKEN: ''
+          SLACK_BOT_TOKEN: ''
+          SLACK_APP_TOKEN: ''
+          DISCORD_BOT_TOKEN: ''
         run: npm run test:pack
 
   # Exercise filesystem ownership/recovery on every supported OS. macOS and Windows also

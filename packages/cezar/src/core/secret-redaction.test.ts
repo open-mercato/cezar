@@ -231,3 +231,6 @@ it('redacts inherited tracker capability values', () => {
   const capability = '11111111-1111-4111-8111-11111111111122222222-2222-4222-8222-222222222222';
   expect(redactSecrets('grant=' + capability, collectSecretValues({ CEZ_TRACKER_CAPABILITY: capability }))).toBe('grant=' + REDACTED);
 });
+it.each(['xapp-example-token-123', 'xoxe.xapp-example-token-123', 'xoxe.xoxb-example-token-123', 'xoxe-refresh-token-123'])('redacts Slack credential %s without environment registration', token => {
+ expect(redactSecrets(`credential: ${token}`, [])).toBe(`credential: ${REDACTED}`);
+});

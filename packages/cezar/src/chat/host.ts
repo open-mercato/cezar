@@ -66,6 +66,8 @@ const providerOf = (format: string): ChatProviderId | undefined => format === 'c
 export class ChatHost implements ChatDelivery {
   readonly chats = new Map<ChatProviderId, ChatInbound>();
   readonly telegram: ChatInbound;
+  readonly slack: ChatInbound;
+  readonly discord: ChatInbound;
   private interactions?: ChatInteractions;
   private unwatchExtensions?: () => void;
   private unwatchSelection?: () => void;
@@ -79,6 +81,8 @@ export class ChatHost implements ChatDelivery {
       createReceiverFromToken: (token: string, name: string | undefined, chatId: string, existingId?: string) => this.telegramReceiver(token, name, chatId, existingId),
       removeBotReceivers: (botId: string, receiverIds: readonly string[]) => this.removeTelegramReceivers(botId, receiverIds),
     }), this.nativeAdapter('telegram')));
+    this.slack = this.add('slack', withProvider(this.dependencies('slack', {}), this.nativeAdapter('slack')));
+    this.discord = this.add('discord', withProvider(this.dependencies('discord', {}), this.nativeAdapter('discord')));
     this.unwatchSelection = watchChatAdapterSelection(options.root, async (id, enabled) => {
       const inbound = this.chats.get(id);
       if (!inbound || this.disposed) throw Error('Chat host unavailable');
@@ -217,12 +221,12 @@ export class ChatHost implements ChatDelivery {
   }
   private declared(id: ChatProviderId): boolean { return projectChatExtensions(this.options.root).some(provider => provider.id === id); }
   private seamed(id: ChatProviderId): boolean { return !!this.options.chatTransport && !this.declared(id); }
-  private nativeAdapter(id: 'telegram'): ChatProviderAdapter {
+  private nativeAdapter(id: 'telegram' | 'slack' | 'discord'): ChatProviderAdapter {
     return { provider: chatProvider(id)!,
       transport: receiverId => lazyChatTransport(async () => {
         const receiver = this.webhooks.endpoints.privateReceiver(receiverId);
         if (!receiver) throw new ChatTransportError({ kind: 'auth' });
-        const credential = await this.telegramToken(receiverId);
+        const credential = id === 'telegram' ? await this.telegramToken(receiverId) : await this.liveCredential(id, receiverId);
         return this.credentialTransport(id, credential, { id: receiver.chatBotId ?? credential.split(':')[0]!, revision: receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision) });
       }, () => !this.webhooks.stopped()),
       credentialTransport: credential => this.credentialTransport(id, credential),
@@ -230,7 +234,7 @@ export class ChatHost implements ChatDelivery {
   }
   private refreshExtensionChat(id: ChatProviderId): Promise<void> {
     const operation = this.extensionChanges.then(async () => {
-      if (id === 'telegram') {
+      if (id === 'telegram' || id === 'slack' || id === 'discord') {
         const available = chatTransportAvailable(this.options.root, id);
         if (!this.disposed) await this.chats.get(id)?.replaceTransport(available);
         return;

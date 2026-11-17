@@ -1,6 +1,6 @@
-# Telegram as an independent extension
+# Independent Telegram, Slack and Discord extensions
 
-Status: implemented (2026-11-13). Code: `packages/chat-plugins/telegram`,
+Status: implemented (2026-11-13). Code: `packages/chat-plugins/{telegram,slack,discord}`,
 `packages/cezar/src/extensions/delivery-catalog.ts`, `chat-selection*.ts`, `project-runtime.ts`,
 `manager.ts`, `host.ts`. Shared chat core: `2026-11-04-chat-providers.md`; the extension system
 this builds on (worker host, install, approval, SDK versioning, trust model):
@@ -8,9 +8,9 @@ this builds on (worker host, install, approval, SDK versioning, trust model):
 
 ## 1. Goal and boundaries
 
-Telegram is a standalone extension package running on the public SDK. The same artifact can be
-installed from a folder or package and ships with cezar. Taking the package out of the repository
-costs it no function and needs no import of private host modules.
+Telegram, Slack and Discord are three standalone extension packages running on the public SDK. The
+same artifact can be installed from a folder or package and ships with cezar. Taking a package out
+of the repository costs it no function and needs no import of private host modules.
 
 Placements of panels and commands (`2026-11-07-extension-placements.md`) apply unchanged. Switching
 implementation (shipped ↔ installed) keeps bots, pairings, permissions and receivers without a new
@@ -27,8 +27,8 @@ a separate activity.
 
 ## 2. Requirements
 
-1. A package with an extension manifest, a build, its own dependencies, tests and a README; no
-   imports of private cezar or the contract, and no paths into the monorepo.
+1. Three packages, each with an extension manifest, a build, its own dependencies, tests and a
+   README; no imports of private cezar or the contract, and no paths into the monorepo.
 2. A package installed outside the repository talks to cezar only through the public contract. The
    version shipped with cezar uses the same entry point and API.
 3. Shipping with cezar is a host decision about the artifact's origin and trust, not a separate
@@ -49,7 +49,7 @@ a separate activity.
 | Process lifetime | Dispose, aborting I/O, reporting health | Restart/backoff, timeouts, fencing, one owner per bot, artifact leases |
 | UI and installation | Declarative setup/presentation metadata | Extensions for packages, Integrations for project configuration |
 
-Adapter packages live in `packages/chat-plugins/<provider>` as separately buildable projects
+The packages live in `packages/chat-plugins/<provider>` as separately buildable projects
 (`@open-mercato/cezar-chat-<provider>`, extension ids `open-mercato.<provider>`). An extension's
 logical identity is fixed and independent of where its artifact is installed. Code the adapters
 share (`packages/chat-plugins/shared/`: pinned HTTP requests, adapter support) is copied into each
@@ -72,20 +72,33 @@ Schemas, signatures, limits and refusal cases: `packages/extension-sdk/src/chat.
   confirmations and the queue limit are handled.
 - The SDK accepts no raw platform updates: normalization happens in the package, and the host
   accepts semantic events.
+- Slack and Discord have documented ACK/reconnect boundaries (`2026-11-04-slack-chat.md`,
+  `2026-11-04-discord-chat.md`); there is no exactly-once guarantee and no durable replay from the
+  platform.
 
-### Credentials
+### Credentials and Slack rotation
 
-- `ChatBotServices.credentials.accessToken(slot, operation)` serves a host-owned credential
-  profile. The SDK names one (`slack-oauth-v1`); this host implements none yet, so a declared
-  profile gets no token.
+- `ChatBotServices.credentials.accessToken(slot, operation)` returns the current access token of
+  the bound credential profile. The handle cannot name another project or vault key.
+- The refresh token and client secret never reach the adapter. Rotation keeps the cross-process
+  lock, the `pending` write before a single-use token is used, the `ready` write after the response
+  and the refusal on an uncertain result (`2026-11-04-slack-chat.md` § Token renewal).
+- The exchange profile is closed and host-owned (`slack-oauth-v1`), available through the public
+  interface to any extension the user approved for it — with no condition on a specific
+  `extensionId`. Destination, fields, redaction and response limits are fixed; there is no general
+  HTTP proxy with vault access.
+- **Why not plain `secrets.get/set`:** it would change secret exposure and lose the protection of
+  single-use refresh tokens.
 
-### Native commands and presentation
+### Discord native commands and presentation
 
 - `ChatInteractionContext.taskChoices(query)` is a narrow task-options service for the active
   interaction; the core authorizes the person, chat and project. The context is short-lived, bound
   to one event and cannot change the actor/project, bypass grants or start work. Limits on result
   count, length, time and rate apply on the host. Neither a broad `tasks.list()` nor `project.read`
   for adapters replaces it.
+- Discord keeps the ACK/defer deadline and the interaction token's lifetime; executing the command
+  comes back to the core as an event, with the same confirmations.
 - Setup metadata, pairing links, command prefixes, button and text limits and message formatting are
   declarative (the manifest's `chatProviders`, the host descriptor). Rendering happens on the
   host/adapter side over bounded data the core approved; no extension code reaches React.
@@ -105,7 +118,7 @@ Schemas, signatures, limits and refusal cases: `packages/extension-sdk/src/chat.
 
 One artifact resolver and one ordinary worker host. Cezar's delivery catalog
 (`dist/chat-plugins/catalog.json`, built by `packages/cezar/scripts/build-chat-delivery.mjs`) maps
-the `telegram` provider to a concrete manifest, version and digest; the host
+the `telegram`/`slack`/`discord` provider to a concrete manifest, version and digest; the host
 verifies integrity before activation. Only this catalog grants a historical provider alias: a
 package name grants no right to the alias or to an existing bot's secrets.
 
@@ -162,11 +175,12 @@ Identities a change of artifact source does not re-key:
 | Cross-process ownership | `~/.cezar/chat/<provider>/bots/<botId>/{owner.lock,binding.json}` via `cezarHomeDir()` |
 | Receivers | `.ai/cezar/webhooks/endpoints.json`, receiver id, `.v1` format, revision and delivery test |
 | Secrets | Project vault, audience `cezar`, `WEBHOOK_CHAT_*` references; never in extension settings |
+| Slack rotation | `SLACK_ROTATION_*` in the vault and `~/.cezar/slack-token-locks/`, `pending`/`ready` state |
 | Implementation choice | `.ai/cezar/extensions/chat-selections/<provider>.json`; artifact leases in `~/.cezar/extensions/leases/` |
 | Task history | `chatSource`, conversation contexts and correlations use provider ids |
 
-Webhook-only Slack/Discord receivers (released in v0.17.0) stay such receivers; installing a package
-does not change them.
+Webhook-only Slack/Discord receivers (released in v0.17.0) stay such receivers. Installing a package
+does not turn them into bots; upgrading to a bot needs a delivery test and keeps the receiver id.
 
 Switching a bot's implementation: under the current lease, read the state and check the artifact's
 and SDK capabilities' compatibility; pause new operations, cancel pending ones, stop receiving and
@@ -189,11 +203,11 @@ integration stops with repair instructions.
    adapter; `npm run test:chat-plugins` builds and tests each package (`node:test`).
 4. **Failure and state:** kill before/after accept/checkpoint, a partial batch, a missing/late ACK,
    IPC timeout, a blocked worker, a partial secret in stderr, disable/revoke during I/O, concurrent
-   install/update/uninstall, artifact leases, read-only/corrupt home.
+   install/update/uninstall, artifact leases, read-only/corrupt home, token rotation.
 5. **Authorization:** a foreign person/chat/project, a copied callback, reuse/expiry, missing
    permissions. Platform data is untrusted.
-6. **UI/e2e:** the simulated browser suites `packages/web/e2e/telegram-*` and `extensions`
-   (install, setup, restart, command, refusal, update,
+6. **UI/e2e:** the simulated browser suites `packages/web/e2e/{telegram,slack,discord}-*`,
+   `extensions` and `integrations-section` (install, setup, restart, command, refusal, update,
    implementation choice, disable, uninstall, navigation between Extensions and Integrations, old
    links). Run manually with `npm run test:e2e:runner` before a release, not in CI.
 
@@ -202,7 +216,7 @@ Tests use an isolated `CEZ_HOME`, synthetic secrets, a time limit and an externa
 ## 8. Risks and limits
 
 The main risks: growing the SDK around one platform's details, exposing refresh secrets, losing an
-update when the cursor changes, changing the dedupe/lease namespace, implicit
+update when the cursor changes, changing the dedupe/lease namespace, Discord's deadline, implicit
 activation after disable, a rollback that undoes a spent secret; in the UI, confusing a global
 install with a project connection and hiding a connection that needs repair. The shared contract
 and the tests above contain them.

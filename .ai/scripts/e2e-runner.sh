@@ -1,6 +1,6 @@
 #!/bin/sh
-# Runs the `@e2e-dev/web` suites (packages/web/e2e/*.config.ts — chat, Telegram,
-# extensions, webhooks). Invoked by `npm run test:e2e:runner [name ...]`, e.g. `telegram-inbound`.
+# Runs the `@e2e-dev/web` suites (packages/web/e2e/*.config.ts — chat, Slack/Discord, Telegram,
+# extensions, webhooks). Invoked by `npm run test:e2e:runner [name ...]`, e.g. `slack-inbound`.
 # They are excluded from `npm run test:e2e` (vitest) by design: each config boots its own
 # disposable cockpit + simulator, so nothing here reuses the shared test env.
 #
