@@ -49,7 +49,7 @@ export function DeviceChip({ name, onNavigate }: { name?: string; onNavigate?: (
       data-slot="device-chip"
       aria-label={switchLabel(name)}
       onClick={onNavigate}
-      className="-ml-1.5 flex min-w-0 items-center gap-2 rounded-[11px] py-1.5 pr-2 pl-1.5 outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="-ml-1.5 flex min-h-12 min-w-0 items-center gap-2 rounded-[11px] py-1.5 pr-2 pl-1.5 outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <DeviceAvatar name={name} size={30} />
       <span data-slot="device-name" className="min-w-0 truncate text-body font-semibold">{name ?? 'Devices'}</span>

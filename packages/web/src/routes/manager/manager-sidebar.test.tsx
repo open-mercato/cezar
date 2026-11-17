@@ -181,24 +181,35 @@ describe('ManagerSidebar', () => {
     expect(quiet!.querySelector('[data-slot="manager-unread"]')).toBeNull()
   })
 
-  it('has a small Workspace group: Approvals into the first waiting chat, Jobs, Manager settings', () => {
+  it('opens workspace approvals even when the first waiting manager is already open, counting actions only', () => {
     renderSidebar([
       managerFixture({ lastActivityAt: new Date(Date.now() - 60_000).toISOString() }),
       managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, pendingQuestions: 1, lastActivityAt: new Date(Date.now() - 120_000).toISOString() }),
       managerFixture({ id: 'ops', name: 'Ops', pendingActions: 1, lastActivityAt: new Date(Date.now() - 180_000).toISOString() }),
-    ])
+    ], true, '/manager/shop')
     const links = within(workspace()).getAllByRole('link')
-    expect(links.map((link) => link.textContent)).toEqual(['Approvals3 waiting on you', 'Manager settings'])
-    expect(links[0]!.getAttribute('href')).toBe('/manager/shop')
+    expect(links.map((link) => link.textContent)).toEqual(['Approvals2 pending approvals', 'Manager settings'])
+    expect(links[0]!.getAttribute('href')).toBe('/manager/approvals')
+    expect(links[0]!.getAttribute('aria-current')).toBeNull()
     expect(links[1]!.getAttribute('href')).toBe('/settings/global/manager')
     expect(within(workspace()).getByRole('button', { name: 'Jobs' }).getAttribute('aria-haspopup')).toBe('dialog')
   })
 
-  it('drops Approvals when nothing waits, and Jobs without an open chat', () => {
+  it('keeps Approvals reachable with zero pending actions, and Jobs needs an open chat', () => {
     renderSidebar([managerFixture()], true, '/manager/new')
-    expect(within(workspace()).queryByRole('link', { name: /Approvals/ })).toBeNull()
+    expect(within(workspace()).getByRole('link', { name: 'Approvals, 0 pending approvals' }).getAttribute('href')).toBe('/manager/approvals')
     expect(within(workspace()).queryByRole('button', { name: 'Jobs' })).toBeNull()
     expect(within(workspace()).getByRole('link', { name: 'Manager settings' })).toBeTruthy()
+  })
+
+  it('selects only the workspace Approvals item at its deep link', () => {
+    renderSidebar([managerFixture({ pendingActions: 1 })], true, '/manager/approvals')
+    const approvals = within(workspace()).getByRole('link', { name: /Approvals/ })
+    expect(approvals.getAttribute('aria-current')).toBe('page')
+    expect(approvals.className).toContain('bg-muted')
+    expect(rows().every((row) => row.getAttribute('aria-current') === null)).toBe(true)
+    expect(within(workspace()).queryByRole('button', { name: 'Jobs' })).toBeNull()
+    expect(rows()[0]!.textContent).toContain('1 approval waiting')
   })
 
   it('opens the open chat\'s jobs dialog from Jobs', async () => {
@@ -212,6 +223,7 @@ describe('ManagerSidebar', () => {
     const loading = document.querySelector('[data-slot="manager-sidebar-loading"]')
     expect(loading?.getAttribute('role')).toBe('status')
     expect(screen.getByText('Loading managers…')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Approvals' }).textContent).toBe('Approvals')
     expect(loading?.querySelector('[data-slot="list-skeleton"]')?.children).toHaveLength(3)
     cleanup()
     renderSidebar([managerFixture()])

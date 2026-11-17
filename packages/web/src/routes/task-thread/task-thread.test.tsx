@@ -22,6 +22,7 @@ import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
 import { reduceThread, type ThreadTurn } from './thread-state'
 import quotaFailure from './__fixtures__/codex-usage-limit.json'
+import { clearThreadScrollCaches, saveThreadScroll } from './thread-scroll'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -276,6 +277,11 @@ describe('ThreadView', () => {
     const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="paused-hint"]')
     expect(hint?.textContent).toContain('The agent is paused, waiting for your reply')
     expect(hint?.querySelector('[data-slot="status-dot"]')).not.toBeNull()
+    // A phone wraps the hint text in its own column; End session stays one line and finger-sized.
+    const end = hint?.querySelector('[data-slot="end-session"]')
+    expect(end?.className).toContain('whitespace-nowrap')
+    expect(end?.className).toContain('pointer-coarse:max-md:min-h-11')
+    expect(hint?.querySelector('[aria-hidden="true"].max-sm\\:hidden')?.textContent).toBe('·')
     // No body footer for waiting — the dock owns that state now.
     expect(document.querySelector('[data-slot="thread-footer"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
@@ -720,7 +726,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
   })
 
-  it('an idle-closed run says so without a failure, and its Continue is still the action', async () => {
+  it('a legacy idle-closed run reads as a quiet closed session, not a failure', () => {
     renderView(
       <ThreadView
         run={run('failed', {
@@ -734,9 +740,10 @@ describe('ThreadView', () => {
       />,
     )
     const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
-    expect(footer.textContent).toContain('Closed after inactivity — Continue to pick it up')
+    expect(footer.textContent).toContain('Session closed')
     expect(footer.textContent).not.toContain('Session failed')
-    await waitFor(() => expect(document.querySelector('[data-slot="footer-continue"]')).not.toBeNull())
+    expect(footer.textContent).not.toContain('inactivity')
+    expect(document.querySelector('[data-slot="outcome-card"]')?.getAttribute('data-kind')).toBe('idle')
   })
 
   it('the same advice stays plain text when there is no session to continue', () => {
@@ -2105,4 +2112,51 @@ it('shows lifecycle recovery before agent activity and prevents misleading reply
   expect(screen.queryByRole('textbox')).toBeNull()
   // No composer, no usage line under it either.
   expect(document.querySelector('[data-slot="session-usage"]')).toBeNull()
+})
+
+describe('Manager source task arrivals', () => {
+  const questions = [{ header: 'Publish', question: 'Publish this report?', options: [{ label: 'Publish report' }, { label: 'Hold report' }] }]
+
+  function renderSourceTask(events: RunEvent[]) {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2000)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(500)
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    saveThreadScroll('r1:main', { top: 640, atBottom: false })
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/alpha/tasks/r1/chat#ask']}>
+          <main data-slot="main"><ThreadView run={run('waiting')} thread={reduceThread(events)} /></main>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  afterEach(() => {
+    cleanup()
+    clearThreadScrollCaches()
+    vi.restoreAllMocks()
+  })
+
+  it.each([false, true])('opens a plain-text waiting request at latest (historical answered card: %s)', (answeredCard) => {
+    const earlier = answeredCard ? [
+      line(8, 'ask.requested', { requestId: 'old-ask', questions }),
+      line(9, 'user-message', { text: 'Publish: Hold report' }),
+    ] : []
+    renderSourceTask([...EVENTS, ...earlier, line(10, 'text', { text: 'Please review the updated report before I publish it.' })])
+    expect(screen.queryByRole('button', { name: 'Publish report' })).toBeNull()
+    expect((document.querySelector('[data-slot="main"]') as HTMLElement).scrollTop).toBe(1500)
+  })
+
+  it('still reveals and focuses an unanswered structured question', () => {
+    const reveal = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: reveal })
+    try {
+      renderSourceTask([...EVENTS, line(8, 'ask.requested', { requestId: 'open-ask', questions })])
+      const choice = screen.getByRole('button', { name: 'Publish report' })
+      expect(document.activeElement).toBe(choice)
+      expect(reveal).toHaveBeenCalledWith({ block: 'center' })
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+    }
+  })
 })

@@ -37,7 +37,7 @@ function serve(config: Partial<ConfigResponse> = {}) {
     worktreeRetention: 10,
     liveTitleUpdates: null,
     reviewGate: null,
-    profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
+    profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,
     ...config,
   }
   const json = (payload: unknown, status = 200) =>

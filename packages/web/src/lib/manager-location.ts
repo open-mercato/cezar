@@ -1,3 +1,10 @@
+/** Overlay state never belongs to a remembered destination. */
+export function cleanManagerLocation(location: string): string {
+  const url = new URL(location, 'http://localhost')
+  url.searchParams.delete('watching')
+  return url.pathname + url.search + url.hash
+}
+
 const LAST_MANAGER_KEY = 'cez-last-manager'
 
 /** Per tab, like the browser's own history: two windows keep their own last chat. */
@@ -5,7 +12,7 @@ export function rememberManagerLocation(location: string): void {
   // Setup is a door, not a place to come back to.
   if (location.startsWith('/manager/new')) return
   try {
-    sessionStorage.setItem(LAST_MANAGER_KEY, location)
+    sessionStorage.setItem(LAST_MANAGER_KEY, cleanManagerLocation(location))
   } catch {
     // Private mode: Manager falls back to `/manager`.
   }
@@ -25,8 +32,8 @@ export function managerHref(managerIds: readonly string[] | undefined): string {
   }
   if (remembered === null || !/^\/manager(?:[/?]|$)/.test(remembered)) return '/manager'
   const id = /^\/manager\/([^/?#]+)/.exec(remembered)?.[1]
-  if (id !== undefined && managerIds !== undefined && !managerIds.includes(decodeURIComponent(id))) return '/manager'
-  return remembered
+  if (id !== undefined && id !== 'approvals' && managerIds !== undefined && !managerIds.includes(decodeURIComponent(id))) return '/manager'
+  return cleanManagerLocation(remembered)
 }
 
 const LAST_TASKS_KEY = 'cez-last-tasks'

@@ -13,7 +13,7 @@ by `test/store.test.mjs`.
 | Price | Free, no in-app purchases, no ads |
 | Support URL | https://github.com/open-mercato/cezar/issues |
 | Marketing URL | https://cezar.run |
-| Privacy policy URL | https://cezar.run/mobile/privacy (host `store/privacy-policy.html` there first, see RELEASING-MOBILE.md) |
+| Privacy policy URL | https://openmercatocloud.com/privacy |
 | Contact email | [YOUR SUPPORT EMAIL] (required by Play; shown publicly) |
 
 ## Google Play

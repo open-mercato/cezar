@@ -71,11 +71,48 @@ describe('ManagerMessageRow', () => {
     expect(document.querySelectorAll('[data-slot="session-card"]')).toHaveLength(1)
   })
 
+  it('identifies a task-origin approval inside the approval card', () => {
+    renderMessage(actionMessage(205, { sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }))
+    expect(document.querySelector('[data-slot="manager-action"] [data-slot="decision-sources"]')?.textContent).toContain('Session 123123')
+    expect(screen.getByRole('link', { name: /Inspect task:/ }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/chat#latest')
+  })
+
   describe('question card', () => {
     const ask = { questions: [
       { header: 'Shell', question: 'Which shell?', options: [{ label: 'Capacitor (recommended)' }, { label: 'Tauri' }] },
       { header: 'Default', question: 'Open on Manager?', options: [{ label: 'No' }, { label: 'Yes' }] },
     ] }
+
+    it('names the source inside a decision even when the reply omits its task reference', () => {
+      renderMessage(assistantMessage(2, { text: 'Inspect report.html and shots/mobile.png before answering.', ask, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }), vi.fn(), [{ id: 'alpha', name: 'Cockpit' }])
+      const source = document.querySelector('[data-slot="manager-ask"] [data-slot="decision-sources"]')!
+      expect(source.textContent).toContain('Session 123123')
+      expect(source.textContent).toContain('Cockpit')
+      expect(screen.getByRole('link', { name: /Inspect task:/ }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/chat#latest')
+      expect(screen.getByRole('link', { name: 'shots/mobile.png' }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/assets/shots%2Fmobile.png')
+      expect(screen.getByRole('link', { name: 'report.html' }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/assets/report.html')
+    })
+
+    it('retains an unanswered selection across a card remount', () => {
+      const message = assistantMessage(202, { ask, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] })
+      renderMessage(message)
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      cleanup()
+      renderMessage(message)
+      expect(screen.getByRole('button', { name: 'Capacitor (recommended)' }).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('provides task and asset navigation for a missing task without blocking the answer', () => {
+      renderMessage(assistantMessage(203, { ask, sourceTasks: [{ projectId: 'gone', runId: 'deleted-task' }] }))
+      expect(screen.getByText(/Task unavailable or no longer listed/)).toBeTruthy()
+      expect(screen.getByRole('link', { name: /Inspect task:/ }).getAttribute('href')).toContain('/p/gone/tasks/deleted-task/chat#latest')
+      expect(screen.getByRole('button', { name: 'Capacitor (recommended)' })).toBeTruthy()
+    })
+
+    it('uses explicit task references on older messages and deduplicates sources', () => {
+      renderMessage(assistantMessage(204, { text: '[[task:alpha/run-1]]', ask, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }))
+      expect(document.querySelectorAll('[data-slot="decision-sources"] a')).toHaveLength(2)
+    })
 
     it('sends every answer as one message', async () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
@@ -162,6 +199,8 @@ describe('ManagerMessageRow', () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri' }))
       const card = document.querySelector('[data-slot="manager-ask"]')!
       expect(card.getAttribute('data-resolved')).toBe('true')
+      // A back link to an answered decision still lands on it instead of paging all history.
+      expect(card.id).toMatch(/^decision-/)
       expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
       expect(card.textContent).toBe('Answered:ShellDefault')
       expect([...card.querySelectorAll('[data-slot="manager-ask-topics"] [data-slot="chip"]')].map((chip) => chip.textContent)).toEqual(['Shell', 'Default'])

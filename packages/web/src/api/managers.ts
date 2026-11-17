@@ -60,12 +60,13 @@ export const MANAGER_PAGE_SIZE = 50
 export async function getManagerMessages(
   id: string,
   before: number | undefined,
-  opts?: { signal?: AbortSignal; pending?: boolean },
+  opts?: { signal?: AbortSignal; pending?: boolean; kind?: 'user'; limit?: number },
 ): Promise<ManagerMessagesResponse> {
   const query = {
-    limit: String(MANAGER_PAGE_SIZE),
+    limit: String(opts?.limit ?? MANAGER_PAGE_SIZE),
     ...(before === undefined ? {} : { before: String(before) }),
     ...(opts?.pending ? { pending: '1' as const } : {}),
+    ...(opts?.kind ? { kind: opts.kind } : {}),
   }
   const since = streamClock
   const page = await unwrap(
@@ -88,6 +89,30 @@ export async function getOldestPendingAction(id: string): Promise<ManagerMessage
     if (!page.hasMore) return oldest
     before = first.seq
   }
+}
+
+/** Workspace approvals must include cards older than the newest chat page. */
+export async function getPendingManagerActions(id: string, signal?: AbortSignal): Promise<ManagerMessage[]> {
+  let before: number | undefined
+  const messages: ManagerMessage[] = []
+  for (;;) {
+    const page = await getManagerMessages(id, before, { pending: true, signal })
+    messages.unshift(...page.messages.filter((message) => message.kind === 'action' && message.status === 'pending'))
+    const first = page.messages[0]
+    if (!page.hasMore || !first) return messages
+    before = first.seq
+  }
+}
+
+/** The cursor ends at this action even when it is older than the newest chat page. A successful
+ * decision response acknowledges the request; its actual outcome lives on the action message. */
+export async function getManagerActionResult(id: string, action: Pick<ManagerMessage, 'id' | 'seq'>) {
+  const page = await bounded((signal) => getManagerMessages(id, action.seq + 1, { signal }), MANAGER_SEND_TIMEOUT_MS, 'The action result could not be loaded. Retry or open the manager’s chat.')
+  const result = page.messages.find((message) => message.id === action.id)
+  if (result?.kind !== 'action' || result.status === 'pending' || result.status === 'running') {
+    throw new Error('The action result is not available yet. Retry or open the manager’s chat.')
+  }
+  return result
 }
 
 /** How long a send may stay unanswered. The route answers at once; a request still open after this
@@ -208,6 +233,8 @@ export const managerKeys = {
   all: ['workspace', 'managers'] as const,
   list: ['workspace', 'managers', 'list'] as const,
   messages: (id: string) => ['workspace', 'managers', 'messages', id] as const,
+  approvals: (id: string) => ['workspace', 'managers', 'approvals', id] as const,
+  allApprovals: ['workspace', 'managers', 'approvals'] as const,
   connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
 }
 
@@ -381,16 +408,25 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
       else remember(message)
     }
     queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
+    if (message.kind === 'action') {
+      refreshInFlightManagerList(queryClient)
+      void refreshManagerApprovals(queryClient, managerId)
+    }
     return
   }
   const parsed = managerChangeEventSchema.safeParse(payload)
   if (!parsed.success) return
   const { id, manager, deleted = false } = parsed.data
+  refreshInFlightManagerList(queryClient)
   const before = queryClient.getQueryData<ManagerListResponse>(managerKeys.list)?.managers.find((row) => row.id === id)
   queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, deleted))
   if (deleted) {
     queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+    queryClient.removeQueries({ queryKey: managerKeys.approvals(id) })
     for (const [messageId, entry] of live) if (entry.managerId === id) forget(messageId)
+  }
+  else if (manager?.pendingActions !== before?.pendingActions) {
+    void refreshManagerApprovals(queryClient, id)
   }
   // A frame that raced the page fetch would otherwise leave a half-written reply until reload.
   if (before?.status === 'working' && manager && manager.status !== 'working') {
@@ -428,6 +464,35 @@ function fetchIdle(queryClient: QueryClient, key: readonly unknown[]): Promise<v
       resolve()
     })
   })
+}
+
+const managerListCatchups = new WeakSet<QueryClient>()
+
+/** The full list is also an approvals gate. Keep its completeness guarantee (never seed it from
+ * one frame), but repair a cold/refetch snapshot that predates a live action, summary or deletion.
+ * Coalesce frames during one read; events during the follow-up can schedule another catch-up. */
+function refreshInFlightManagerList(queryClient: QueryClient): void {
+  const query = queryClient.getQueryCache().find({ queryKey: managerKeys.list, exact: true })
+  if (query?.state.fetchStatus !== 'fetching' || managerListCatchups.has(queryClient)) return
+  managerListCatchups.add(queryClient)
+  void fetchIdle(queryClient, managerKeys.list).then(() => {
+    managerListCatchups.delete(queryClient)
+    return queryClient.invalidateQueries({ queryKey: managerKeys.list, exact: true })
+  })
+}
+
+/** Invalidation during a first fetch is deduplicated against its stale snapshot. Re-read after
+ * that fetch settles so an action/summary frame cannot disappear with the initial response. */
+async function refreshManagerApprovals(queryClient: QueryClient, id: string): Promise<void> {
+  const key = managerKeys.approvals(id)
+  await fetchIdle(queryClient, key)
+  await queryClient.invalidateQueries({ queryKey: key, exact: true })
+}
+
+/** Reconnects use the same post-fetch guarantee as individual action and summary frames. */
+export async function refreshManagerApprovalLists(queryClient: QueryClient): Promise<void> {
+  const ids = queryClient.getQueryCache().findAll({ queryKey: managerKeys.allApprovals }).map((query) => String(query.queryKey[3]))
+  await Promise.all(ids.map((id) => refreshManagerApprovals(queryClient, id)))
 }
 
 /**
@@ -482,6 +547,30 @@ export function useManagerMessages(id: string) {
     // The stream keeps it current; a refetch per focus would re-read every loaded page.
     // Catching up goes through `refreshManagerChat`, which reads only the newest.
     staleTime: Infinity,
+  })
+}
+
+/**
+ * Every message the user sent, oldest first, for the "your messages" list
+ * (spec 2026-11-17-my-message-navigation). Pages back with `before` until the start.
+ */
+export function useManagerUserMessages(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['workspace', 'managers', 'user-messages', id] as const,
+    queryFn: async ({ signal }) => {
+      const out: ManagerMessage[] = []
+      let before: number | undefined
+      // 20 × 500 messages; a chat longer than that lists its newest 10,000.
+      for (let page = 0; page < 20; page += 1) {
+        const { messages, hasMore } = await getManagerMessages(id, before, { signal, kind: 'user', limit: 500 })
+        out.unshift(...messages)
+        if (!hasMore || messages.length === 0) break
+        before = messages[0]!.seq
+      }
+      return out
+    },
+    enabled,
+    staleTime: 15_000,
   })
 }
 
@@ -541,6 +630,7 @@ export function useDeleteManager(id: string) {
     onSuccess: () => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, undefined, true))
       queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+      queryClient.removeQueries({ queryKey: managerKeys.approvals(id) })
     },
   })
 }

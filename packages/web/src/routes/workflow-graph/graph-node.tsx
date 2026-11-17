@@ -219,7 +219,7 @@ export function nodeDetail(node: WorkflowGraphNode, loopCount?: number): string 
 }
 
 /** The closing step's label (#2024, #2025): the node's dot, a child card's inner dot, the details panel. */
-export const CLOSED_LABEL: Record<RunClosure, string> = { idle: 'closed · idle', answer: 'needs you' }
+export const CLOSED_LABEL: Record<RunClosure, string> = { idle: 'idle', answer: 'needs you' }
 
 /** A status as a reader sees it: a closing step's label, else the status itself. */
 export const closedLabel = (status: string): string =>
@@ -228,14 +228,14 @@ export const closedLabel = (status: string): string =>
 /**
  * A step's state → the attention grammar. Run statuses go through `deriveAttention` — the same
  * function the task list uses, so a running node pulses the same violet as its run's dot — and
- * the two closures keep their own rule: idle-closed is orange, never a red failure (#2024);
+ * the two closures keep their own rule: idle-closed is a quiet neutral, never a red failure (#2024);
  * closed on an open question wears `waiting`'s "needs you", still, since no session is left
  * (#2025). `pending`, `reached` and `skipped` have no dot at all.
  */
 export function stepAttention(status: NodeRunState['status'] | string): Attention | undefined {
   switch (status) {
     case 'idle':
-      return { bucket: 'none', tone: 'idle', pulse: false, label: CLOSED_LABEL.idle }
+      return { bucket: 'none', tone: 'neutral', pulse: false, label: CLOSED_LABEL.idle }
     case 'answer':
       return { bucket: 'waiting', tone: 'info', pulse: false, label: CLOSED_LABEL.answer }
     case 'running':
@@ -256,7 +256,6 @@ const RING: Record<AttentionTone, string> = {
   violet: 'ring-2 ring-violet shadow-lg shadow-violet/25',
   info: 'ring-2 ring-info',
   danger: 'ring-2 ring-danger',
-  idle: 'ring-2 ring-conflict',
   pending: 'ring-2 ring-pending',
   success: '',
   neutral: '',

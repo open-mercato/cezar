@@ -83,7 +83,7 @@ export function railWanted(steps: ReadonlyArray<Pick<StepState, 'status'> & Part
 
 /** The run each rail glyph stands for, so its colour is `deriveAttention`'s answer and not a
  *  hand-picked class (redesign 2026-11, status grammar): a running step is the violet pulse, a
- *  closing question is "waiting on a person" blue, an idle close is the orange idle tone. `pending`
+ *  closing question is "waiting on a person" blue, an idle close is neutral. `pending`
  *  has no run equivalent (a step that never ran) and stays neutral. */
 const RAIL_RUN: Record<Exclude<RailVisual, 'pending'>, AttentionInput> = {
   done: { status: 'done' },
@@ -106,7 +106,6 @@ const TONE_INK: Record<AttentionTone, string> = {
   violet: 'text-violet',
   danger: 'text-danger',
   info: 'text-info',
-  idle: 'text-conflict',
   pending: 'text-pending-strong',
   neutral: 'text-soft-foreground',
 }

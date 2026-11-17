@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from '@e2e-dev/web';
 import { expect } from 'e2e';
+import { openManagerSettings } from './helpers/manager-settings';
 import { agentProfileResponseSchema, apiRunSchema, managerCreateTaskResponseSchema, managerSummarySchema, registerProjectResponseSchema } from '@open-mercato/cezar-contract';
 
 test('a phone selects two Claude accounts and one Codex account for newly spawned tasks', { trace: 'on', timeout: 180_000 }, async ({ app, screen, browser }) => {
@@ -39,6 +40,7 @@ test('a phone selects two Claude accounts and one Codex account for newly spawne
   try {
     await browser.setViewport({ width: 390, height: 844 });
     await app.open(`/manager/${manager.id}`);
+    await openManagerSettings(screen, browser);
     await screen.getByRole('button', 'Agent for new tasks', { visible: true }).tap();
     for (const profile of profiles) {
       const item = screen.getByRole('menuitemcheckbox', `${profile.provider} · ${profile.label}`, { exact: true });
@@ -50,7 +52,9 @@ test('a phone selects two Claude accounts and one Codex account for newly spawne
     await expect.poll(async () => JSON.stringify((await saved()).taskAgents)).toBe(JSON.stringify(agents));
     expect(await saved()).toMatchObject({ runner: 'codex', agentProfile: 'default' });
     await browser.reload();
+    await openManagerSettings(screen, browser);
     await expect(screen.getByRole('button', 'Agent for new tasks', { visible: true })).toContainText('3 accounts');
+    await openManagerSettings(screen, browser);
     await screen.getByRole('button', 'Agent for new tasks', { visible: true }).tap();
     for (const profile of profiles) {
       await expect(screen.getByRole('menuitemcheckbox', `${profile.provider} · ${profile.label}`, { exact: true })).toHaveAttribute('aria-checked', 'true');
@@ -76,11 +80,13 @@ test('a phone selects two Claude accounts and one Codex account for newly spawne
       body: JSON.stringify({ projectId: project.id, task: 'Unselected account', runner: 'claude', agentProfile: 'default' }),
     });
     expect(refused.status).toBe(403);
+    await openManagerSettings(screen, browser);
     await screen.getByRole('button', 'Agent for new tasks', { visible: true }).tap();
     await screen.getByRole('menuitemcheckbox', 'Automatic', { exact: true }).tap();
     await browser.keyboard.press('Escape');
     await expect.poll(async () => (await saved()).taskAgents ?? null).toBe(null);
     await browser.reload();
+    await openManagerSettings(screen, browser);
     await expect(screen.getByRole('button', 'Agent for new tasks', { visible: true })).toContainText('Automatic');
   } finally {
     for (const id of runs) await call(`/p/${project.id}/runs/${id}/cancel`, 'POST', {}).catch(() => undefined);

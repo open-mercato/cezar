@@ -1874,6 +1874,79 @@ describe('ManagerEngine', () => {
       expect(requests.some((request) => request.path.endsWith('/enable'))).toBe(false);
     });
 
+    describe('outdated enable cards', () => {
+      const enable = { type: 'enable-automation', projectId: 'alpha', automationId: 'a1' } as const;
+      const watch = async (engine: ManagerEngine, id: string) => {
+        store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        engine.tick();
+        await settled(engine);
+      };
+
+      it('re-proposing after an edit dismisses the older card', async () => {
+        const engine = makeEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: enable });
+        if ('error' in first) throw first;
+        automationRevision = 2;
+        const second = await engine.propose(id, { action: enable });
+        if ('error' in second) throw second;
+        expect(second.actionId).not.toBe(first.actionId);
+        expect(store.message(id, first.actionId)).toMatchObject({ status: 'dismissed', result: 'Replaced by a newer proposal (revision 2)' });
+        expect(store.message(id, second.actionId)).toMatchObject({ status: 'pending' });
+        expect((await engine.summary(id))?.pendingActions).toBe(1);
+      });
+
+      it('a watch check dismisses a card whose automation was edited', async () => {
+        const engine = makeEngine();
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: enable });
+        if ('error' in proposed) throw proposed;
+        automationRevision = 2;
+        await watch(engine, id);
+        expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'dismissed', result: 'Automation changed since the proposal (rev 1 -> 2)' });
+        expect(requests.some((request) => request.path.endsWith('/enable'))).toBe(false);
+      });
+
+      it('a watch check leaves a current card, and one it cannot check', async () => {
+        let failing = false;
+        const engine = makeEngine({
+          request: async (path) => {
+            if (failing) throw new Error('offline');
+            if (/\/automations\/[^/]+$/.test(path)) return Response.json({ automation: { id: 'a1', revision: automationRevision, name: 'Nightly', enabled: false } });
+            return Response.json({ ok: true });
+          },
+        });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: enable });
+        if ('error' in proposed) throw proposed;
+        await watch(engine, id);
+        expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'pending' });
+        automationRevision = 2;
+        failing = true;
+        await watch(engine, id);
+        expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'pending' });
+      });
+
+      it('onlyIfStale dismisses a card whose automation was deleted or enabled', async () => {
+        let answer: () => Response = () => Response.json({ automation: { id: 'a1', revision: 1, name: 'Nightly', enabled: false } });
+        const engine = makeEngine({ request: async () => answer() });
+        const id = await create(engine);
+        const deleted = await engine.propose(id, { action: enable });
+        if ('error' in deleted) throw deleted;
+        expect(await engine.decide(id, deleted.actionId, 'dismiss', {}, true)).toMatchObject({ status: 409 });
+        answer = () => Response.json({ error: 'automation not found' }, { status: 404 });
+        expect(await engine.decide(id, deleted.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(store.message(id, deleted.actionId)).toMatchObject({ status: 'dismissed', result: 'Automation was deleted since the proposal' });
+
+        answer = () => Response.json({ automation: { id: 'a1', revision: 1, name: 'Nightly', enabled: false } });
+        const enabled = await engine.propose(id, { action: enable });
+        if ('error' in enabled) throw enabled;
+        answer = () => Response.json({ automation: { id: 'a1', revision: 1, name: 'Nightly', enabled: true } });
+        expect(await engine.decide(id, enabled.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(store.message(id, enabled.actionId)).toMatchObject({ status: 'dismissed', result: 'Automation is already enabled' });
+      });
+    });
+
     it('a watch never resumes the chat session, and the reverse', async () => {
       const engine = makeEngine({ github: readyPrGithub });
       const id = await create(engine);
@@ -2864,9 +2937,39 @@ describe('ManagerEngine', () => {
       expect(fence).toBeTruthy();
       expect(prompt.split(`\n${fence}\n`)[1]).toContain('Alina and Maciek: give me their surnames.');
       expect(prompt).toContain('end your reply with the CEZ:ASK line');
-      expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The notes are filed.', ask });
+      expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The notes are filed.', ask, sourceTasks: [{ projectId: 'alpha', runId: 'new-run' }] });
       // The chat note stays short: the excerpt rides only the follow-up.
       expect(store.state(id).notes).toEqual([]);
+    });
+
+    it('keeps the source when Need more info causes a terse reasked decision', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const ask = { questions: [{ header: 'Approve', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+      const text = `Here is the decision.\nCEZ:ASK ${JSON.stringify(ask)}`;
+      backend.scripts.push(say(text));
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      const first = assistants(id)[1]!;
+      backend.scripts.push(say(text));
+      engine.send(id, 'Approve: Need more info', [], first.id);
+      await settled(engine);
+      expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'new-run' }] });
+    });
+
+    it('tracks a task discovered by a detail tool during an ordinary chat', async () => {
+      runs.push(run({ id: 'read-task' }));
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      const ask = { questions: [{ header: 'Approve', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+      backend.scripts.push({ ...say(`Ready.\nCEZ:ASK ${JSON.stringify(ask)}`), hold: true });
+      engine.send(id, 'What should we do?');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(await engine.taskDetail(id, 'alpha', 'read-task')).toMatchObject({ task: { runId: 'read-task' } });
+      backend.open[0]!.finish();
+      await settled(engine);
+      expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'read-task' }] });
     });
 
     it('marks a failure and a wait on the user important, and raises the notification', async () => {
@@ -3006,6 +3109,54 @@ describe('ManagerEngine', () => {
       ]]);
       engine.taskChanged('alpha', dataDir(), { ...root, status: 'done', finishedAt: later(4) }, () => undefined);
       expect(cards(id).map((message) => message.taskReport?.state)).toEqual(['needs-you', 'done']);
+    });
+
+    // An idle close is housekeeping, not news (spec 2026-11-04-idle-closed-attention-state § Revision).
+    it('an idle close posts no card, buys no follow-up turn and raises no notification', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const waiting = run({ id: 'new-run', status: 'waiting', waitingSince: later(1) });
+      runs = [waiting];
+      backend.scripts.push(say('It is waiting on your answer.'));
+      engine.taskChanged('alpha', dataDir(), waiting, () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      const before = { messages: assistants(id).length, turns: backend.specs.length, raised: raised.length };
+
+      // The idle park keeps the wait; an older cezar (or a dispatched child) settled it `failed`.
+      const parked = { ...waiting, idleClosedAt: later(2) };
+      runs = [parked];
+      engine.taskChanged('alpha', dataDir(), parked, () => undefined);
+      const legacy = run({ id: 'new-run', status: 'failed', finishedAt: later(3), idleClosedAt: later(3), error: 'the session closed after inactivity' });
+      runs = [legacy];
+      engine.taskChanged('alpha', dataDir(), legacy, () => undefined);
+      await settled(engine);
+      expect({ messages: assistants(id).length, turns: backend.specs.length, raised: raised.length }).toEqual(before);
+      expect(store.state(id).followups).toEqual([]);
+    });
+
+    it('the watch check is not woken by an idle close', async () => {
+      let clock = Date.now();
+      const waiting = run({ id: 'r', status: 'waiting', waitingSince: new Date(clock).toISOString() });
+      runs = [waiting];
+      const engine = makeEngine({ now: () => clock, projects: async () => [{ ...connected, root, runs: () => runs }] });
+      const id = await create(engine, 15);
+      backend.scripts.push(say('One task waits on you.'));
+      clock += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+
+      runs = [{ ...waiting, idleClosedAt: new Date(clock).toISOString() }];
+      clock += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      runs = [run({ id: 'r', status: 'failed', finishedAt: new Date(clock).toISOString(), idleClosedAt: new Date(clock).toISOString() })];
+      clock += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id)).toHaveLength(1);
     });
 
     it('ignores tasks it neither started nor follows, and history before a follow', async () => {

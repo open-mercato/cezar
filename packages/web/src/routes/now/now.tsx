@@ -63,7 +63,10 @@ export function NowView({
   hasScheduledTasks = false,
   setupPill,
   welcomeBack,
+  managersAvailable = false,
 }: {
+  /** Manager owns task creation on mobile when available, as on the Tasks page (#2272). */
+  managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body waits. */
   runs: RunRecord[] | undefined
   projectName?: string
@@ -197,14 +200,14 @@ export function NowView({
         </div>
 
         {/* The mobile New-task FAB — the desktop CTA lives in the sidebar. */}
-        <Link
+        {managersAvailable ? null : <Link
           to="/new"
           data-slot="new-task-fab"
           aria-label="New task"
           className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
         >
           <PlusIcon className="size-[22px]" aria-hidden="true" />
-        </Link>
+        </Link>}
       </div>
     </LiveNowProvider>
   )
@@ -436,7 +439,7 @@ function FinishedRowView({ run }: { run: RunRecord }) {
       data-kind="finished"
       className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-1.5 md:grid-cols-[16px_minmax(0,1fr)_auto_auto] md:gap-x-3.5"
     >
-      {/* Done, cancelled and closed · idle all land here: the shape tells them apart (WCAG 1.4.1). */}
+      {/* Done, cancelled and idle all land here: the shape tells them apart (WCAG 1.4.1). */}
       <StatusMark attention={attention} />
       {/* Unread is weight, plus the word for a screen reader (#unread-done-items) — the table's rule. */}
       <Link
@@ -523,6 +526,7 @@ export function NowRoute() {
         hasScheduledTasks={hasScheduledTasks}
         setupPill={<SetupPill />}
         welcomeBack={<WelcomeBack runs={runs.data ?? NO_RUNS} />}
+        managersAvailable={health.data?.capabilities?.managers === true}
 
       />
     </ReferenceStatusProvider>

@@ -73,7 +73,7 @@ describe('status grammar', () => {
     const expected = {
       done: { tone: 'success', label: 'done' },
       cancelled: { tone: 'neutral', label: 'cancelled' },
-      idle: { tone: 'idle', label: 'closed · idle' },
+      idle: { tone: 'neutral', label: 'idle' },
     } as const
     const glyphs = new Set<string>()
     for (const id of ['done', 'cancelled', 'idle'] as const) {

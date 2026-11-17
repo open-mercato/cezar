@@ -18,6 +18,7 @@ import {
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
 import { CenteredState } from '@/components/centered-state'
 import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
@@ -54,6 +55,7 @@ import { useRunRecordReconcile } from './run-reconcile'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
 import { JumpToLatestPill, useThreadScroll } from './thread-scroller'
+import { useThreadMyMessages } from './use-thread-my-messages'
 import {
   SessionTranscript,
   buildTranscriptRows,
@@ -344,11 +346,19 @@ export function ThreadView({
     if (hash === '#reply') focusComposer()
   }, [hash, focusComposer, run.id])
   const mode = threadRenderMode(search, rows.length)
+  // A wait can ask for a plain-text reply. Without an open question card to handle #ask,
+  // reveal the latest request instead of restoring an unrelated reading position.
+  const hasAskTarget = hash === '#ask' && sections.some((section) =>
+    section.entries.some((entry) => entry.kind === 'ask' && !entry.resolved),
+  )
   const scroll = useThreadScroll(`${run.id}:main`, {
     onLoadOlder: history?.hasOlder ? history.loadOlder : undefined,
     onJumpToLatest: history?.jumpToLatest,
+    startAtLatest: hash === '#latest' || (hash === '#ask' && !hasAskTarget),
     rowKeys: rows.map(({ key }) => key),
   })
+  // "Your messages" (spec 2026-11-17-my-message-navigation): the jump pill grows into ▲ · 💬 · ▼.
+  const myMessages = useThreadMyMessages({ runId: run.id, sections, rowKeys: rows.map(({ key }) => key), history, scroll })
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
@@ -482,7 +492,9 @@ export function ThreadView({
         overlay={
           scroll.pillVisible ? (
             <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center">
-              <JumpToLatestPill onJump={scroll.jumpToLatest} />
+              {myMessages.items.length > 0
+                ? <MyMessagesPill nav={myMessages} onLatest={scroll.jumpToLatest} />
+                : <JumpToLatestPill onJump={scroll.jumpToLatest} />}
             </div>
           ) : null
         }
@@ -506,29 +518,25 @@ export function ThreadView({
         <AutoResumeHint run={run} />
 
         {!lifecycleGate && budget ? (
-          <div
-            data-slot="budget-hint"
-            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-          >
+          <div data-slot="budget-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
-            Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            <span className={HINT_TEXT}>
+              Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            </span>
             {run.status === 'waiting' ? (
               <>
-                <span aria-hidden="true">·</span>
+                <span aria-hidden="true" className="max-sm:hidden">·</span>
                 <EndSessionButton runId={run.id} />
               </>
             ) : null}
           </div>
         ) : !lifecycleGate && run.status === 'waiting' ? (
-          <div
-            data-slot="paused-hint"
-            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-          >
+          <div data-slot="paused-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
-            The agent is paused, waiting for your reply
+            <span className={HINT_TEXT}>The agent is paused, waiting for your reply</span>
             {/* The other answer to "your turn": not replying at all. It sits beside the hint
                 because that is the moment the choice is made — reply below, or end it here. */}
-            <span aria-hidden="true">·</span>
+            <span aria-hidden="true" className="max-sm:hidden">·</span>
             <EndSessionButton runId={run.id} />
           </div>
         ) : null}
@@ -564,6 +572,10 @@ export function ThreadView({
   )
 }
 
+// On a phone the hint text wraps in its own column so End session stays one tappable line beside it.
+const HINT_ROW = 'flex items-center gap-2 px-1 text-xs text-muted-foreground'
+const HINT_TEXT = 'max-sm:min-w-0 max-sm:flex-1'
+
 /** Ends a waiting session (`POST /finish`): the run completes as done, or parks at review when
  *  the worktree holds changes. A text button, like the footer's Continue — part of the hint line
  *  it answers, not a toolbar control. */
@@ -576,7 +588,7 @@ function EndSessionButton({ runId }: { runId: string }) {
         data-slot="end-session"
         disabled={finish.isPending}
         onClick={() => finish.mutate()}
-        className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+        className="shrink-0 rounded-sm font-medium whitespace-nowrap text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60 pointer-coarse:max-md:min-h-11 pointer-coarse:max-md:px-2"
       >
         End session
       </button>

@@ -1,7 +1,7 @@
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isCezarShell, isPhone, shellRequest, lastProjectIndex, phoneLanding, showsBottomBar, type PhoneLandingInput } from './phone-app'
+import { isCezarShell, isPhone, shellRequest, lastProjectIndex, phoneLanding, type PhoneLandingInput } from './phone-app'
 
 const REGISTRY = {
   projects: [
@@ -38,27 +38,6 @@ describe('isPhone', () => {
     vi.stubGlobal('matchMedia', undefined)
     vi.stubGlobal('screen', { width: 390, height: 844 })
     expect(isPhone()).toBe(false)
-  })
-})
-
-describe('showsBottomBar', () => {
-  it.each([
-    ['a phone browser tab', {}, false],
-    ['a phone PWA', { standalone: true }, true],
-    ['the shell, whose webview is not display-mode standalone', { userAgent: 'x CezarMobile/0.1 (ios)' }, true],
-    ['a desktop PWA', { coarse: false, width: 1440, height: 900, standalone: true }, false],
-    ['a tablet PWA', { width: 744, height: 1133, standalone: true }, false],
-    ['a tablet browser tab', { width: 834, height: 1194 }, false],
-    ['the shell on an iPad', { width: 834, height: 1194, userAgent: 'x CezarMobile/0.1 (ios)' }, true],
-  ])('%s', (_case, input, expected) => {
-    device(input)
-    expect(showsBottomBar()).toBe(expected)
-  })
-
-  it('reads iOS home-screen apps from navigator.standalone', () => {
-    device()
-    vi.stubGlobal('navigator', { userAgent: 'Safari', standalone: true })
-    expect(showsBottomBar()).toBe(true)
   })
 })
 
@@ -110,20 +89,21 @@ describe('phoneLanding', () => {
   const ready: PhoneLandingInput = {
     health: { capabilities: { managers: true } },
     healthFailed: false,
-    registry: REGISTRY,
-    registryFailed: false,
     providers: { providers: [{ provider: 'claude', status: 'connected' }] },
     providersFailed: false,
-    agentCheckSkipped: undefined,
-    uiStateFailed: false,
   }
 
   it('lands on Manager from a signed-in agent without waiting on ui-state', () => {
     expect(phoneLanding(ready)).toBe('manager')
   })
 
-  it('still waits on ui-state while no agent is signed in', () => {
-    expect(phoneLanding({ ...ready, providers: { providers: [] } })).toBe('wait')
-    expect(phoneLanding({ ...ready, providers: { providers: [] }, agentCheckSkipped: true })).toBe('manager')
+  it('waits for provider detection and restores on an uncached failure', () => {
+    expect(phoneLanding({ ...ready, providers: undefined })).toBe('wait')
+    expect(phoneLanding({ ...ready, providers: undefined, providersFailed: true })).toBe('restore')
+    expect(phoneLanding({ ...ready, providersFailed: true })).toBe('manager')
+  })
+
+  it('opens the Manager entry for agent setup without waiting for ui-state', () => {
+    expect(phoneLanding({ ...ready, providers: { providers: [] } })).toBe('manager')
   })
 })

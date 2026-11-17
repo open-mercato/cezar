@@ -2,6 +2,8 @@
 
 Tracking issue: #1933 · Precedent: #1290 (`awaitingAnswerSince`), #690, #992
 
+> **Superseded in part by the [2026-11-17 revision](#-revision-2026-11-17-an-idle-close-is-invisible-housekeeping).** An idle close no longer settles the run: the record keeps its pre-close state and the orange "closed · idle" presentation is gone. The sections below describe what #1935 shipped and still apply to older records and dispatched children.
+
 ## 📝 TLDR
 
 **Who it affects:** a user who stops replying to a task because they no longer need it.
@@ -172,3 +174,31 @@ There is a single phase. The engine stamp without the UI rung would change nothi
 | A5 | Backfill old idle-closed records? | No | Would require matching the message string. Old records keep rendering red. |
 | A6 | Exclude from failure telemetry and dashboard counts? | Yes | It is not a failure. Mirrors `awaitingAnswerSince`. |
 | A7 | Treat it as a gate (skipped by Archive finished, never unread), like `awaitingAnswerSince`? | No, it is an ordinary finished outcome | The user walked away. Sweeping it is exactly what they want, and #690 forbids it lingering. |
+
+## 📝 Revision 2026-11-17: an idle close is invisible housekeeping
+
+**Rule.** Closing an idle session only frees the process and its slot. It is not a state change, and nothing may present it as one: no `failed` (or `cancelled`) status, no "closed · idle" mark or card, no notification of any kind, no webhook, and no manager wake-up, status card, attention item or failed count. To the user the session never closed.
+
+**Why.** The orange rung still pulled attention and read as "something to act on". Reporting it to managers was worse: a task waiting on the user produced a "Failed: the session closed after inactivity…" follow-up in the manager chat (task d1602e84).
+
+**Engine** (`workflows/run.ts`). When the inactivity timer ends a session (`state.idleClosed`) and the run is not a dispatched child, `idleParks` holds and `parkIdleClosed` writes only `idleClosedAt`. The record keeps `status: 'waiting'`, `waitingSince`, `askParked`, `attentionRequest` and the parked step's `waiting`. This covers both settle sites (first run and continuation), markerless waits and `CEZ:ASK` / monitor hand-off parks alike, and it precedes the review gate: an idle close never moves a run to `review`. The timer no longer writes its "session closed after Nm of inactivity" line, so the thread ends on its last real message.
+
+**Leaving the park.** `isIdleParked(run)` (`runs/store.ts`) is `status === 'waiting' && idleClosedAt`. It has every exit a live wait has:
+- **A message** (`sendMessage`, so `POST /runs/:id/messages`, the ask card and a manager's `task say`) reopens it through `continueRun`, exactly like Continue. The parked step settles `done` and the reopen adds a `continue-N` step on the same session.
+- **Continue** accepts it (`CONTINUABLE_STATUSES` or an idle park).
+- **Cancel** settles it `cancelled` without a live session. **Finish** settles it through `settleSuccess`.
+- A **child report** to an idle-parked parent goes through `continueRun` as before.
+
+**Restart and cold reads.** `recover()` skips idle parks (no process to recover) and `reconcileLoadedRun` leaves them `waiting` instead of stamping them interrupted, so the ⌘K index and a manager's cold read agree with the live engine. They do not count toward the self-update "active runs" either.
+
+**Store invariant.** `idleClosedAt` lives on `waiting` (new) or `failed` (older records, children). `updateRun` keeps it only through a `waiting → waiting` write and retires it on any other status, so the reopen (`running`) clears it.
+
+**Dispatched children** keep the #1935 settlement (`failed` + `idleClosedAt`): their parent waits on a report that only a terminal child sends, and a child idling forever in `waiting` would strand it (AGENTS.md: enumerate the exits).
+
+**Managers** (`managers/snapshot.ts`). An idle park keeps the wait's key and ledger, so neither the watch nor a follow hears anything new. A `failed` record carrying `idleClosedAt` without `awaitingAnswerSince` is never a `task-failed` attention item or a `failed` follow-up event.
+
+**Cockpit.** A new idle park needs no special case: it is an ordinary `waiting` run with the ordinary composer. The older `failed` form renders as a neutral, quiet "idle" (no orange, no card, no "Continue to pick it up"), with the footer `done` gets.
+
+**Trade-off.** This brings back what #1290 avoided: a markerless wait the user abandons stays under "Needs you" until they archive, finish or cancel it. That is the pre-close state the user asked to keep, and the session's resources are still freed.
+
+**Related PRs.** It supersedes the presentation half of #1935. PR #2055 ("Mark as done for idle-closed tasks") targets the `failed` + `idleClosedAt` form; for new idle parks, Finish already settles them, so #2055 matters only for older records and children. PR #2020 rewrites this spec's original sections; this revision is appended, so the two merge cleanly in content, but whichever lands second must keep the banner at the top.

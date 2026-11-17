@@ -409,7 +409,17 @@ export type ManagerAttachment = z.infer<typeof managerAttachmentSchema>;
 export const managerTaskReportStateSchema = z.enum(['done', 'review', 'failed', 'needs-you', 'cancelled']);
 export type ManagerTaskReportState = z.infer<typeof managerTaskReportStateSchema>;
 
-const managerMessageBase = { id: z.string(), seq: z.number().int().min(0), at: z.string() };
+export const managerTaskSourceSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+});
+export type ManagerTaskSource = z.infer<typeof managerTaskSourceSchema>;
+
+const managerMessageBase = {
+  id: z.string(), seq: z.number().int().min(0), at: z.string(),
+  /** Task context carried by the turn, independent of the model's wording. */
+  sourceTasks: z.array(managerTaskSourceSchema).optional(),
+};
 
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
 export const managerMessageSchema = z.discriminatedUnion('kind', [
@@ -473,6 +483,8 @@ export const managerMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
   /** `1` keeps only `action` messages still waiting for the user; `before` and `limit` still apply. */
   pending: z.literal('1').optional(),
+  /** `user` keeps only the user's own messages (the "your messages" list); `before` and `limit` still apply. */
+  kind: z.literal('user').optional(),
 });
 export const managerMessagesResponseSchema = z.object({
   messages: z.array(managerMessageSchema),

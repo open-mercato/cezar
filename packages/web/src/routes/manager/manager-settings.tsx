@@ -1,5 +1,5 @@
-import { BellIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
+import { BellIcon, BotIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { useCallback, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
 import {
@@ -32,7 +32,8 @@ import { MascotPicker } from './mascot-picker'
 import { SheetContent } from './manager-approval'
 import { ConnectorsDialog } from './manager-connectors'
 import { ShellAccessDialog } from './manager-shell-access'
-import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
+import { PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { ManagerAgentDialog } from './manager-agent-dialog'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -337,37 +338,31 @@ export function useCheckNow(managerId: string): () => void {
   }, [managerId])
 }
 
-/** What the rest of the screen can open in the gear: a failed check's "Switch account" lands on
- *  the account picker, the Watching panel's "+" on the jobs dialog. */
+/** A failed check's "Switch account" focuses the dialog's account field; Watching's "+" opens jobs. */
 export interface ManagerSettingsHandle {
   openAccount: () => void
   openJobs: () => void
 }
 
-/** The gear: the Figma's four pickers, then what a manager's lifetime needs beyond them. */
+/** The gear groups agent choices in one dialog beside the manager's other settings. */
 export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void; ref?: Ref<ManagerSettingsHandle> }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'agent' | 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const connectorCount = Object.values(manager.connectors ?? {}).filter((grant) => grant.level !== 'off').length
   const trigger = useRef<HTMLButtonElement>(null)
-  const menu = useRef<HTMLDivElement>(null)
-  // Set by `openAccount`: the picker exists only once the popover has rendered.
-  const focusAccount = useRef(false)
-  useEffect(() => {
-    if (!menuOpen || !focusAccount.current) return
-    focusAccount.current = false
-    menu.current?.querySelector<HTMLElement>('[data-slot="manager-account-picker"]')?.focus()
-  }, [menuOpen])
+  const [focusAccount, setFocusAccount] = useState(false)
   useImperativeHandle(ref, () => ({
     openAccount: () => {
-      focusAccount.current = true
-      setMenuOpen(true)
+      setFocusAccount(true)
+      setMenuOpen(false)
+      setDialog('agent')
     },
-    openJobs: () => setDialog('jobs'),
+    openJobs: () => { setMenuOpen(false); setDialog('jobs') },
   }), [])
-  const openDialog = (next: 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete') => {
+  const openDialog = (next: 'agent' | 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete') => {
+    setFocusAccount(false)
     setMenuOpen(false)
     setDialog(next)
   }
@@ -393,15 +388,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
             <SettingsIcon aria-hidden="true" className="size-5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent ref={menu} align="end" className="flex w-64 flex-col items-stretch gap-0.5 p-2" data-slot="manager-settings-menu">
+        <PopoverContent align="end" className="flex w-64 flex-col items-stretch gap-0.5 p-2" data-slot="manager-settings-menu">
           <ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} />
-          <ModelPicker {...pickModel(manager)} onChange={onPatch} />
-          <AccountPicker
-            {...(manager.runner ? { runner: manager.runner } : {})}
-            {...(manager.agentProfile ? { agentProfile: manager.agentProfile } : {})}
-            onChange={onPatch}
-          />
-          <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} />
+          <MenuRow icon={<BotIcon aria-hidden="true" />} onClick={() => openDialog('agent')}>Manager agent…</MenuRow>
           <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
           <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
             <BellIcon aria-hidden="true" className="size-3.5 shrink-0" />
@@ -451,6 +440,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           ) : null}
         </PopoverContent>
       </Popover>
+      {dialog === 'agent' ? <ManagerAgentDialog manager={manager} onPatch={onPatch} onClose={() => setDialog(null)} onCloseAutoFocus={returnFocus} focusAccount={focusAccount} /> : null}
       {dialog === 'rename' ? (
         <PersonaDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(patch) => update.mutateAsync(patch)} />
       ) : null}
@@ -482,14 +472,4 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       </AlertDialog>
     </>
   )
-}
-
-/** The optional keys `exactOptionalPropertyTypes` won't take as `undefined`. */
-export function pickModel(manager: Pick<ManagerSummary, 'runner' | 'model' | 'effort' | 'agentProfile'>) {
-  return {
-    ...(manager.runner ? { runner: manager.runner } : {}),
-    ...(manager.model ? { model: manager.model } : {}),
-    ...(manager.effort ? { effort: manager.effort } : {}),
-    ...(manager.agentProfile !== undefined ? { agentProfile: manager.agentProfile } : {}),
-  }
 }

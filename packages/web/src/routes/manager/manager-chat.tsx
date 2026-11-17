@@ -21,6 +21,7 @@ import {
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { AccountUsageWidget } from '@/components/account-usage-widget'
+import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
 import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
 import { CacheStatusChip } from '@/components/cache-status'
@@ -42,7 +43,7 @@ import {
   turnKindLabel,
   watchingLine,
 } from '@/lib/managers'
-import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { useMediaQuery } from '@/lib/use-media-query'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -55,8 +56,9 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { ModelPicker, TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
-import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
+import { useManagerMyMessages } from './use-manager-my-messages'
+import type { ManagerPatch } from './manager-pickers'
+import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
 
@@ -237,7 +239,20 @@ function useChatScroll(id: string, messages: readonly ManagerMessage[], onNearTo
     return true
   }, [])
 
-  return { ref, onScroll, jump, restick, reveal, away }
+  /** Unpin and park one row `inset` px below the top — a "your messages" jump. */
+  const revealAt = useCallback((row: HTMLElement, inset: number) => {
+    const box = ref.current
+    if (!box) return
+    pinned.current = false
+    box.scrollTop += row.getBoundingClientRect().top - box.getBoundingClientRect().top - inset
+    lastTop.current = box.scrollTop
+    // Before its scroll event: a row growing meanwhile must not pull the reader back.
+    anchor.current = rowAtTop(box)
+    leftAt.set(id, box.scrollTop)
+    setAway(true)
+  }, [id])
+
+  return { ref, onScroll, jump, restick, reveal, revealAt, away }
 }
 
 /**
@@ -395,6 +410,7 @@ function useWatchingSheet(): [boolean, (open: boolean) => void] {
     const params = new URLSearchParams(location.search)
     if (next === open) return
     if (next) {
+      if (document.activeElement instanceof HTMLElement && document.activeElement.matches('input, textarea, [contenteditable=true]')) document.activeElement.blur()
       params.set(WATCHING_PARAM, '1')
       const state = { ...(location.state as Record<string, unknown> | null), [WATCHING_PUSHED]: true }
       void navigate({ pathname: location.pathname, search: `?${params}` }, { state })
@@ -464,9 +480,9 @@ function BackToList() {
   )
 }
 
-function WorkingSpinner({ className }: { className?: string }) {
+function WorkingSpinner({ label }: { label: string }) {
   return (
-    <span role="status" aria-label="Working" data-slot="manager-working" className={cn('flex shrink-0', className)}>
+    <span role="status" aria-label="Working" title={label ? `Working on ${label}` : undefined} data-slot="manager-working" className="flex shrink-0">
       <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />
     </span>
   )
@@ -489,7 +505,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll. A
   // reader left scrolled up keeps them, or their place would not be there to come back to.
   useEffect(() => () => { if (!leftAt.has(id)) trimManagerChat(queryClient, id) }, [id, queryClient])
-  const keyboardOpen = useKeyboardOpen()
   const location = useLocation()
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
   const [focusComposer] = useState(() => shouldFocusComposer(location.state))
@@ -499,6 +514,15 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
   const scroll = useChatScroll(id, chat.messages, loadOlder)
+  const returnedDecision = useRef('')
+  useEffect(() => {
+    if (!location.hash.startsWith('#decision-') || returnedDecision.current === location.key) return
+    let target: string
+    try { target = decodeURIComponent(location.hash.slice(1)) } catch { return }
+    if (scroll.reveal((box) => Array.from(box.querySelectorAll<HTMLElement>('[id]')).find((node) => node.id === target))) {
+      returnedDecision.current = location.key
+    } else if (hasNextPage) loadOlder()
+  }, [location.hash, location.key, chat.messages, hasNextPage, loadOlder, scroll.reveal])
   useKeyboardInsetVar(scroll.restick)
   // Recovery unmounts Retry: a keyboard user who was on it lands in the transcript, not on <body>.
   const retryFocused = useRef(false)
@@ -511,6 +535,17 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  // "Your messages" (spec 2026-11-17-my-message-navigation): the ↓ button grows into ▲ · 💬 · ▼ | ↓.
+  const myMessages = useManagerMyMessages({
+    id,
+    messages: chat.messages,
+    onCard,
+    hasNextPage: Boolean(hasNextPage),
+    fetchNextPage,
+    scrollRef: scroll.ref,
+    away: scroll.away,
+    revealAt: scroll.revealAt,
+  })
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
   const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
   const asking = manager.pendingActions > 0 || questionOpen
@@ -522,7 +557,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     nextCheckAt: manager.nextCheckAt,
     now: new Date(now),
   })
-  const turnLabel = turnKindLabel(streamingReply(chat.messages))
   const checkNow = useCheckNow(id)
   const settings = useRef<ManagerSettingsHandle>(null)
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
@@ -611,7 +645,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h1 className="truncate text-body font-semibold md:text-base">{manager.name}</h1>
-            {working ? <WorkingSpinner className="md:hidden" /> : null}
+            {working ? <WorkingSpinner label={turnKindLabel(streamingReply(chat.messages))} /> : null}
           </div>
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
@@ -748,7 +782,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
 
       <div className="relative mx-auto w-full max-w-[860px] px-3 pb-2 md:px-6">
         <div ref={floating.ref} data-slot="manager-floating" className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2 *:pointer-events-auto empty:hidden">
-          {scroll.away ? (
+          {scroll.away && myMessages.items.length > 0 ? <MyMessagesPill nav={myMessages} onLatest={scroll.jump} latestLabel="Scroll to bottom" latestSlot="manager-scroll-bottom" /> : null}
+          {scroll.away && myMessages.items.length === 0 ? (
             <button
               type="button"
               aria-label="Scroll to bottom"
@@ -796,9 +831,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         ) : null}
         <Composer
           key={id}
-          compact
+          dictation={false}
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 gap-1 pointer-coarse:max-md:[&>button]:h-11"><TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} pill /><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -808,27 +842,10 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           slashCommands={MANAGER_COMMANDS}
           placeholder={`Message ${manager.name}, or / for commands`}
           ariaLabel={`Message ${manager.name}`}
+          textareaClassName="max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)]"
           sendShortcut="↵"
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
-        {keyboardOpen ? null : (
-          // One status line (design, Proposal 10): the model chip, then what the turn is doing.
-          // Phones: the interval lives in the gear and the spinner beside the name.
-          <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
-            <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
-            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} chip />
-            {working ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <span role="status" aria-label="Working" data-slot="manager-working" className="flex min-w-0 items-center gap-1.5">
-                  <StatusDot tone="violet" pulse />
-                  <span className="truncate">Working{turnLabel ? ` on ${turnLabel}` : '…'}</span>
-                </span>
-                <Button variant="ghost" size="xs" data-slot="manager-footer-stop" onClick={stop}>Stop</Button>
-              </>
-            ) : null}
-          </div>
-        )}
       </div>
     </div>
     {watchingOpen && !barEverywhere ? (

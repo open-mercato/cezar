@@ -129,6 +129,11 @@ const WORKTREE_RECOVERY = 'Worktree scripts need attention: use Retry, Start tas
 const waitDetail = (run: RunRecord): string | undefined =>
   run.attentionRequest?.questions[0]?.question ?? (run.dispatch?.overBudget ? 'Budget reached' : undefined);
 
+/** An idle close is housekeeping, not news: a legacy or dispatched-child record that settled `failed`
+ *  on it is never reported (spec 2026-11-04-idle-closed-attention-state § Revision). */
+const idleClosedFailure = (run: RunRecord): boolean =>
+  run.status === 'failed' && run.idleClosedAt !== undefined && run.awaitingAnswerSince === undefined;
+
 const unseenSince = (run: RunRecord, at: string | undefined): boolean =>
   at !== undefined && (run.seenAt === undefined || Date.parse(run.seenAt) < Date.parse(at));
 
@@ -168,7 +173,7 @@ export function taskAttention(projectId: string, runs: RunRecord[], now: number)
     // A dispatched child reports to its parent; only a wait on the user reaches the human.
     if (run.dispatch?.parentRunId) continue;
     const finished = run.finishedAt;
-    if (run.status === 'failed' && unseenSince(run, finished) && now - Date.parse(finished ?? '') < RECENT_FAILURE_MS) {
+    if (run.status === 'failed' && !idleClosedFailure(run) && unseenSince(run, finished) && now - Date.parse(finished ?? '') < RECENT_FAILURE_MS) {
       items.push({ ...base, key: settledKey('task-failed', projectId, run), kind: 'task-failed', since: finished });
     } else if (run.status === 'review' && unseenSince(run, finished)) {
       items.push({ ...base, key: settledKey('task-review', projectId, run), kind: 'task-review', since: finished });
@@ -211,7 +216,7 @@ export function taskEventOf(projectId: string, run: RunRecord): TaskEvent | unde
   const success = [settledKey('task-review', projectId, run), settledKey('task-finished', projectId, run)];
   if (run.status === 'review') return event('review', 'success', success);
   if (run.status === 'done') return event('done', 'success', success);
-  if (run.status === 'failed') return event('failed', 'failed', [settledKey('task-failed', projectId, run)]);
+  if (run.status === 'failed') return idleClosedFailure(run) ? undefined : event('failed', 'failed', [settledKey('task-failed', projectId, run)]);
   if (run.status === 'cancelled') return event('cancelled', 'cancelled', []);
   return undefined;
 }

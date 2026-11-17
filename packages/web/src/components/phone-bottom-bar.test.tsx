@@ -1,13 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import * as React from 'react'
 import { Link, MemoryRouter, useLocation, useNavigate, type InitialEntry } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { LAST_LOCATION_STORAGE_KEY } from '@/lib/last-location'
 
 import { AppShell, useShellTasksTab, type AppShellProps } from './app-shell'
+import { useHideShellTopBar } from '@/routes/manager/manager-loading'
 import { ThemeProvider } from './theme-provider'
 
 function device({ standalone = true, userAgent = 'Mozilla/5.0', width = 390, height = 844 } = {}) {
@@ -17,6 +18,7 @@ function device({ standalone = true, userAgent = 'Mozilla/5.0', width = 390, hei
     removeEventListener: () => {},
   }))
   vi.stubGlobal('screen', { width, height })
+  vi.stubGlobal('innerWidth', width)
   vi.stubGlobal('navigator', { ...navigator, userAgent })
 }
 
@@ -56,6 +58,12 @@ function renderShell(entry: InitialEntry | InitialEntry[], props: Partial<AppShe
 
 const bar = () => screen.queryByRole('navigation', { name: 'App' })
 
+/** Stands in for the manager chat, which hides the shell's top bar for its own header. */
+function HidesTopBar() {
+  useHideShellTopBar()
+  return null
+}
+
 afterEach(() => {
   cleanup()
   localStorage.clear()
@@ -63,15 +71,15 @@ afterEach(() => {
 })
 
 describe('PhoneBottomBar', () => {
-  it('leads Now, Tasks and New task into the last project, then Manager, in a phone PWA', () => {
+  it('leads Now and Tasks into the last project, then Manager, in a phone PWA', () => {
     device()
     localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
     renderShell('/manager/m-1')
     const links = within(bar()!)
-    expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'New task', 'Manager'])
+    expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'Manager'])
     expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/other/')
     expect(links.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/other/tasks')
-    expect(links.getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/p/other/new')
+    expect(links.queryByRole('link', { name: 'New task' })).toBeNull()
     // Inside Manager the tab is current and leads back to the list, like a tab bar.
     const manager = links.getByRole('link', { name: 'Manager' })
     expect(manager.getAttribute('aria-current')).toBe('page')
@@ -107,21 +115,24 @@ describe('PhoneBottomBar', () => {
     expect(within(bar()!).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
   })
 
-  it('renders New task as the primary centre item', () => {
+  it('has four destinations without manual task creation', () => {
     device()
     renderShell('/p/boot/')
-    const newTask = within(bar()!).getByRole('link', { name: 'New task' })
-    expect(newTask.dataset.slot).toBe('bottom-bar-new-task')
-    expect(newTask.querySelector('.bg-primary')).not.toBeNull()
-    const items = [...bar()!.children]
-    expect(items.indexOf(newTask)).toBe(2)
-    expect(items).toHaveLength(5)
+    expect(within(bar()!).queryByRole('link', { name: 'New task' })).toBeNull()
+    expect([...bar()!.children]).toHaveLength(4)
   })
 
-  it('stays out of a phone browser tab', () => {
+  it('returns to a clean manager from a consumed direct sheet link without popping unrelated history', async () => {
+    device()
+    renderShell(['/dashboard', { pathname: '/p/boot/tasks/run-1', state: { manager: { id: 'm-1', name: 'Ops' }, managerHistoryBack: false } }])
+    fireEvent.click(within(bar()!).getByRole('link', { name: 'Manager' }))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/m-1'))
+  })
+
+  it('appears in a narrow browser tab', () => {
     device({ standalone: false })
     renderShell('/manager')
-    expect(bar()).toBeNull()
+    expect(bar()).not.toBeNull()
   })
 
   it('reserves its height for the New-task FAB only while it is there', () => {
@@ -331,10 +342,21 @@ describe('PhoneBottomBar', () => {
       expect(within(drawer).getByText('manager rows')).toBeTruthy()
     })
 
-    it('pads the status bar above the column, where no phone header does', () => {
+    it('pads the status bar once in the visible top header', () => {
       device(IPAD)
       renderShell('/manager/m-1')
-      expect(column().className).toContain('md:pt-[env(safe-area-inset-top)]')
+      expect(column().className).not.toMatch(/(^| )md:pt-\[env\(safe-area-inset-top\)\]/)
+      expect(document.querySelector('[data-slot="mobile-top-bar"]')!.className).not.toContain('md:hidden')
+    })
+
+    it('pads the status bar in the column when a manager chat hides the top bar', () => {
+      // The chat's header pads the inset only below `md` (manager-chat.tsx), so the column must.
+      device(IPAD)
+      renderShell('/manager/m-1', { children: <HidesTopBar /> })
+      const bar = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')!
+      expect(bar.hidden).toBe(true)
+      expect(bar.parentElement).toBe(column())
+      expect(column().className).toContain('md:has-[>[data-slot=mobile-top-bar][hidden]]:pt-[env(safe-area-inset-top)]')
     })
 
     it('keeps the bar in a thread, with no top menu bar', () => {
@@ -364,6 +386,35 @@ describe('PhoneBottomBar', () => {
       fireEvent.click(tasks)
       expect(open).toHaveBeenCalledOnce()
     })
+  })
+
+  it.each([600, 834, 1023])('uses mobile navigation with a fine pointer at %spx', (width) => {
+    device({ width, standalone: false })
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    renderShell('/manager')
+    expect(bar()).not.toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+  })
+
+  it('responds to container resizing inside a wide viewport', () => {
+    onTestFinished(() => { vi.restoreAllMocks() })
+    device({ width: 1440, standalone: false })
+    let width = 700
+    let observeResize = () => {}
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width }) as DOMRect)
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { observeResize = callback }
+      observe() {}
+      disconnect() {}
+    })
+    renderShell('/manager')
+    expect(bar()).not.toBeNull()
+    act(() => { width = 1024; observeResize() })
+    expect(bar()).toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).not.toBeNull()
+    act(() => { width = 800; observeResize() })
+    expect(bar()).not.toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
   })
 
   it('a desktop browser keeps the sidebar and no bar', () => {

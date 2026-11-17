@@ -6,6 +6,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { compareIsoDesc, groupTitle, runTitle, type ListView } from '@/lib/task-groups'
 import { isAwaitingAnswer } from '@/lib/attention'
+import { TASK_COLUMN_MIN_PX } from '@/lib/task-columns'
 
 /**
  * The pure half of the Tasks table (the `/` overview): search, the header's archive count, the
@@ -571,5 +572,5 @@ export const TASK_INDENT_PX = 14
 /** Floor of the Task column for a row at `depth`: the indent is added on top of the 220px a root
  *  gets, so a nested title keeps the room it would have had unindented (#979). */
 export function taskCellMinWidth(depth: number): number {
-  return 220 + Math.max(0, depth) * TASK_INDENT_PX
+  return TASK_COLUMN_MIN_PX + Math.max(0, depth) * TASK_INDENT_PX
 }

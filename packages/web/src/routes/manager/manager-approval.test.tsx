@@ -402,6 +402,15 @@ describe('useDismissStaleMerges', () => {
     await waitFor(() => expect(onDecide).toHaveBeenCalledTimes(1))
     expect(onDecide).toHaveBeenCalledWith('a1', 'dismiss', { onlyIfStale: true })
   })
+
+  it('asks once per waiting enable card too, so an outdated one closes without a watch check', async () => {
+    const onDecide = vi.fn<DecideAction>(async () => ({ ok: true }))
+    const messages = [actionMessage(1, { action: automation }), actionMessage(2, { action: automation, status: 'dismissed' })]
+    const { rerender } = render(<Probe messages={messages} onDecide={onDecide} />)
+    rerender(<Probe messages={[...messages]} onDecide={onDecide} />)
+    await waitFor(() => expect(onDecide).toHaveBeenCalledTimes(1))
+    expect(onDecide).toHaveBeenCalledWith('a1', 'dismiss', { onlyIfStale: true })
+  })
 })
 
 describe('ActionCard tasks behind the PR', () => {

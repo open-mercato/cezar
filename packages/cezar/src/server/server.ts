@@ -218,7 +218,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
-import { artifactsDir } from '../runs/store.ts';
+import { artifactsDir, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
@@ -234,6 +234,7 @@ import {
   readEventsTail,
   validateLiveCursor,
 } from '../runs/event-history.ts';
+import { readRunUserMessages } from '../runs/user-messages.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
@@ -303,6 +304,7 @@ import {
   repoIndexContains,
 } from './git-changes.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { BYPASS_PERMISSIONS_HOSTED, bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
 import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
@@ -1694,6 +1696,7 @@ export function createApp(deps: ServerDeps) {
       return listProjects(selector);
     },
     semaphore: deps.semaphore,
+    hosted: () => !capabilities().localHandoff,
   });
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
@@ -3634,7 +3637,8 @@ export function createApp(deps: ServerDeps) {
   const activeRunCount = (projectId: string): number => {
     const ctx = contexts.peek(projectId);
     if (!ctx) return 0;
-    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length;
+    // An idle park has no agent process to strand.
+    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status) && !isIdleParked(run)).length;
   };
 
   // Workspace-level by design: update state spans project and global installs,
@@ -5387,6 +5391,26 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
+    // Spec 2026-11-17-my-message-navigation: the opening task plus every persisted user message.
+    .get(
+      '/runs/:id/user-messages',
+      paramZodValidator(runIdParamSchema),
+      async (c) => {
+        const { store, dataDir } = c.get('project');
+        const { id } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const ts = run.createdAt ?? run.startedAt;
+        return c.json({
+          messages: await readRunUserMessages(join(dataDir, 'runs', `${id}.ndjson`), {
+            task: run.task,
+            ...(ts ? { ts } : {}),
+            ...(run.taskImages ? { images: run.taskImages } : {}),
+          }),
+        });
+      },
+    )
+
     .get(
       '/runs/:id/history-context',
       paramZodValidator(runIdParamSchema),
@@ -5808,7 +5832,7 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
-        const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
+        const engineOwnsSession = (run.status === 'running' || run.status === 'queued' || run.status === 'waiting') && !isIdleParked(run);
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
@@ -7636,7 +7660,7 @@ export function createApp(deps: ServerDeps) {
     if (action === pullRepo || action === syncRepo) {
       const live = project.store
         .listRuns()
-        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting'));
+        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting') && !isIdleParked(r));
       if (live) return { error: 'an in-place task is running in this checkout — wait for it to finish' };
     }
     const result = await action(info.root);
@@ -7918,6 +7942,8 @@ export function createApp(deps: ServerDeps) {
       defaultSkill: config.defaultSkill ?? null,
       askSkill: config.askSkill ?? null,
       teamSkills: config.skillsRepos.length > 0,
+      bypassPermissions: config.bypassPermissions === true,
+      bypassPermissionsBlocked: await bypassPermissionsBlocked(repoRoot, config, { hosted: !capabilities().localHandoff }),
     };
   };
   // ---- chained family: per-repo config (project-scoped) ----
@@ -7938,6 +7964,10 @@ export function createApp(deps: ServerDeps) {
         (parsed.data.defaultModels !== undefined || parsed.data.defaultModelsAuto !== undefined)
       ) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
+      // Turning approvals off widens what an agent may do on the host; turning them back on is always allowed.
+      if (parsed.data.bypassPermissions === true && !capabilities().localHandoff) {
+        return c.json({ error: BYPASS_PERMISSIONS_HOSTED }, 409);
       }
       try {
         const configPath = join(dataDir, 'config.json');
@@ -8011,6 +8041,11 @@ export function createApp(deps: ServerDeps) {
           if (parsed.data.requiredChecks !== undefined) {
             if (!parsed.data.requiredChecks?.length) delete raw.requiredChecks;
             else raw.requiredChecks = parsed.data.requiredChecks;
+          }
+          // Only a real opinion is stored: off deletes the key.
+          if (parsed.data.bypassPermissions !== undefined) {
+            if (parsed.data.bypassPermissions === true) raw.bypassPermissions = true;
+            else delete raw.bypassPermissions;
           }
           if (parsed.data.teamSkills === false) raw.skillsRepos = [];
           else if (parsed.data.teamSkills === true && Array.isArray(raw.skillsRepos) && raw.skillsRepos.length === 0) {
@@ -9242,6 +9277,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
     semaphore: deps.semaphore,
+    hosted: () => !resolveCapabilities(process.env, deps.bindHost).localHandoff,
     automationStore: (projectId, root) => {
       const store = automationCoordinator.store(projectId, root)!;
       // A project registered out of process with automations already enabled has no other

@@ -22,7 +22,7 @@ import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
-import { RunStore } from './runs/store.ts';
+import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
@@ -401,7 +401,11 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
+  const manager = new RunManager(store, repoRoot, {
+    semaphore,
+    projectId: bootProjectId,
+    hosted: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+  });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
@@ -473,7 +477,7 @@ async function serveCommand(
   }
   const recovered = store
     .listRuns()
-    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
+    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r)).length;
   await recoverWithProviderRuntimeAuthObservation(
     store,
     () => manager.recover(),

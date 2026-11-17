@@ -17,6 +17,7 @@ import { runTitle } from '@/lib/task-groups'
 import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage, RunRecord } from '@open-mercato/cezar-api-client'
 
+import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
 import { ForgeReference } from './manager-reference'
 import { taskPath } from './manager-session-card'
@@ -296,17 +297,17 @@ function ActionSheet({
   )
 }
 
-/** Merge cards already asked about this page session, so a re-render never asks again. */
+/** Merge and enable cards already asked about this page session, so a re-render never asks again. */
 const staleChecked = new Set<string>()
 
 /**
- * Asks the server once per pending merge card whether its PR is still open; one that is not is
- * closed as `dismissed`. The chip's colour cannot decide this: it can be a cached 'ready'.
+ * Asks the server once per pending merge card whether its PR is still open, and once per enable
+ * card whether its automation is unchanged; an outdated one is closed as `dismissed`. The chip's colour cannot decide this: it can be a cached 'ready'.
  */
 export function useDismissStaleMerges(messages: readonly ManagerMessage[], onDecide: DecideAction): void {
   useEffect(() => {
     for (const message of messages) {
-      if (message.kind !== 'action' || message.status !== 'pending' || message.action.type !== 'merge-pr' || staleChecked.has(message.id)) continue
+      if (message.kind !== 'action' || message.status !== 'pending' || (message.action.type !== 'merge-pr' && message.action.type !== 'enable-automation') || staleChecked.has(message.id)) continue
       staleChecked.add(message.id)
       // A 409 is the answer "still open"; nothing to show.
       onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
@@ -376,6 +377,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
   return (
     <ManagerCard
       ref={card}
+      id={`decision-${message.id}`}
       data-slot="manager-action"
       data-status={message.status}
       data-action-id={message.id}
@@ -400,6 +402,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
         </>
       ) : undefined}
     >
+      <DecisionSources message={message} origin={origin} />
       <ReferenceStatusProvider requests={references}>
         <dl className="flex flex-col gap-1.5">
           <CardFacts action={action} projectName={projectName} origin={origin} />

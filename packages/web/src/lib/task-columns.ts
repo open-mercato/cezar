@@ -166,6 +166,27 @@ export function toggleExpandedColumn(raw: unknown, id: TaskColumnId): Record<str
   }
 }
 
+/** A folded column's width in the colgroup. */
+export const FOLDED_COLUMN_WIDTH_PX = 42
+/** The controls (checkbox) column's width in the colgroup. */
+export const CONTROLS_COLUMN_WIDTH_PX = 36
+/** The Task column's floor for a root row; `taskCellMinWidth` in tasks-table.ts adds the indent. */
+export const TASK_COLUMN_MIN_PX = 220
+
+/** The narrowest the fixed-layout table may get before the Task column would drop under its floor. */
+export function tableMinWidth(
+  columns: readonly TaskColumnDefinition[],
+  normalized: NormalizedExpandedColumns,
+  controls: boolean,
+): number {
+  let total = (controls ? CONTROLS_COLUMN_WIDTH_PX : 0) + TASK_COLUMN_MIN_PX
+  for (const column of columns) {
+    if (column.width === undefined) continue
+    total += isColumnExpanded(column.id, normalized) ? Number.parseFloat(column.width) : FOLDED_COLUMN_WIDTH_PX
+  }
+  return total
+}
+
 export function taskColumnsForCapabilities(capabilities: {
   tokens: boolean
   cost: boolean

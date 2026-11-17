@@ -1,6 +1,6 @@
 import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
-import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerChats } from './managers'
+import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerApprovalLists, refreshManagerChats } from './managers'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
@@ -505,6 +505,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
       queryClient.invalidateQueries({queryKey: ['worktree-lifecycle'], refetchType: 'none'}),
       // Only each chat's newest page: invalidating the infinite query re-reads every loaded one.
       refreshManagerChats(queryClient),
+      refreshManagerApprovalLists(queryClient),
       ...cachedProjectScopes(queryClient)
         .filter((scope) => scope !== activeScope)
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>

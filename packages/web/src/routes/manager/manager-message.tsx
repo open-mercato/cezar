@@ -38,6 +38,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import { ActionCard, type DecideAction } from './manager-approval'
+import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
 import { ForgeReference } from './manager-reference'
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
@@ -143,10 +144,12 @@ function ManagerQuestions({
   ask,
   answer,
   answerOnCard,
+  source,
 }: {
   managerId: string
   messageId: string
   ask: ManagerAsk
+  source: ReactNode
   answer: string | undefined
   /** The next row is this answer and is not drawn: the card says it instead. */
   answerOnCard: boolean
@@ -170,6 +173,7 @@ function ManagerQuestions({
     return (
       <div
         ref={answered}
+        id={`decision-${messageId}`}
         tabIndex={-1}
         data-slot="manager-ask"
         data-resolved="true"
@@ -187,6 +191,7 @@ function ManagerQuestions({
     return (
       <div
         ref={answered}
+        id={`decision-${messageId}`}
         tabIndex={-1}
         data-slot="manager-ask"
         data-resolved="true"
@@ -221,12 +226,15 @@ function ManagerQuestions({
   }
   return (
     <ManagerCard
+      id={`decision-${messageId}`}
+      tabIndex={-1}
       data-slot="manager-ask"
       data-resolved="false"
       icon={<MessageCircleQuestionIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
       title="Your decision"
       status={<><StatusDot tone="info" />Open</>}
     >
+      {source}
       {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
           chips per question are the design's ghost actions. */}
       <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
@@ -277,7 +285,7 @@ function AssistantMessage({
   )
   const references = useMemo(() => managerReferences(segments), [segments])
   return (
-    <article data-slot="manager-assistant" className="min-w-0">
+    <article data-slot="manager-assistant" data-message-id={message.id} className="min-w-0">
       <p data-slot="manager-message-meta" className="mb-1 flex items-baseline gap-2 text-xs text-muted-foreground">
         {message.turn === 'job' && message.jobName ? <span className="font-medium">{message.automationReport ? 'Automation' : 'Job'}: {message.jobName}</span> : null}
         {message.taskReport ? <span className="font-medium">Task update</span> : message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
@@ -306,7 +314,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
+          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
@@ -466,9 +474,9 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   switch (message.kind) {
     case 'user':
       return (
-        <div data-slot="manager-user" className="flex flex-col items-end gap-2">
+        <div data-slot="manager-user" data-message-id={message.id} className="flex flex-col items-end gap-2">
           {message.text ? (
-            <p className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
+            <p data-slot="manager-user-bubble" className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
           ) : null}
           {message.attachments ? <UserAttachments managerId={origin.id} attachments={message.attachments} /> : null}
         </div>

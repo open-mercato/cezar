@@ -10,6 +10,7 @@ import {
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigationType, useParams } from 'react-router'
 
+import { ManagerBackLink } from '@/routes/manager/manager-back-link'
 import { ApiError } from '@/api/client'
 import { useHealth, useMarkRunSeen, useRun, useRunArtifacts } from '@/api/queries'
 import { useRunHistory } from '@/api/run-history'
@@ -130,6 +131,7 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
     const notFound = run.error instanceof ApiError && run.error.status === 404
     return (
       <div data-route="task-workspace" className="flex min-h-full flex-col">
+        <div className="px-4"><ManagerBackLink runId={id ?? ''} /></div>
         <CenteredState
           icon={notFound ? <SearchXIcon /> : <MessageSquareTextIcon />}
           tone={notFound ? 'neutral' : 'danger'}
