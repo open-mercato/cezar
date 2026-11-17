@@ -330,7 +330,7 @@ export function clearManagerOrigins(): void {
 /** Why a manager's dot shows: an approval or a question waits on the user, or only news. */
 export type ManagerAttention = 'needs-you' | 'unread'
 
-type AttentionCounts = Pick<ManagerSummary, 'unread' | 'pendingActions' | 'pendingQuestions'>
+export type AttentionCounts = Pick<ManagerSummary, 'unread' | 'pendingActions' | 'pendingQuestions'>
 
 export function managerAttention(manager: AttentionCounts): ManagerAttention | null {
   if (manager.pendingActions > 0 || manager.pendingQuestions > 0) return 'needs-you'

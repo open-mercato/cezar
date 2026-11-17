@@ -21,6 +21,7 @@ import { ConnectPhoneLink, PhonesLink } from '@/components/connect-phone-link'
 import { RelayAccountNotice } from '@/components/relay-account-notice'
 import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
+import { countUnreadManagers, countUnreadTasks, useAppBadge } from '@/lib/app-badge'
 import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
 import { useActiveForge } from '@/lib/active-forge'
@@ -79,6 +80,7 @@ export interface SidebarCounts {
   unread: number
   needsYou: number
   running: number
+  attention: number
 }
 
 /** One pass over the active project's list for every count the sidebar paints. */
@@ -87,7 +89,12 @@ export function sidebarCounts(runs: readonly RunRecord[]): SidebarCounts {
   for (const run of runs) {
     if (!run.archived && run.status === 'running') running += 1
   }
-  return { unread: unreadDoneCount(runs), needsYou: listCounts(runs).waiting, running }
+  return {
+    unread: unreadDoneCount(runs),
+    needsYou: listCounts(runs).waiting,
+    running,
+    attention: countUnreadTasks(runs),
+  }
 }
 
 /**
@@ -201,6 +208,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const pageLabel = titleLabel ?? titleContext.pageLabel
 
   useDocumentTitle({ projectName, pageLabel, brandName: workspaceConfig.data?.branding.name, brandLogoUrl: workspaceConfig.data?.branding.logoUrl })
+  const unreadTasks = runs.data?.attention ?? ((runs.data?.needsYou ?? 0) + (runs.data?.unread ?? 0))
+  const unreadManagers = countUnreadManagers(managers.data?.managers)
+  useAppBadge(unreadTasks + unreadManagers)
 
   const repo = useMemo(
     () => repoChipOf(health.data),

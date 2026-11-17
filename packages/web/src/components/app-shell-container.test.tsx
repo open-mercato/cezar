@@ -831,3 +831,43 @@ describe('forge follows the active project, not the boot folder (#1410)', () => 
     expect(note).not.toContain('No GitHub remote detected')
   })
 })
+
+describe('app icon badge wiring', () => {
+  let mockSetAppBadge: ReturnType<typeof vi.fn>
+  let mockClearAppBadge: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    mockSetAppBadge = vi.fn().mockResolvedValue(undefined)
+    mockClearAppBadge = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, {
+      setAppBadge: mockSetAppBadge,
+      clearAppBadge: mockClearAppBadge,
+    })
+  })
+
+  afterEach(() => {
+    delete (navigator as unknown as { setAppBadge?: unknown }).setAppBadge
+    delete (navigator as unknown as { clearAppBadge?: unknown }).clearAppBadge
+  })
+
+  it('updates the badge from tasks needing attention and unread manager messages', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } },
+      '/api/v1/todos': [],
+      '/api/v1/runs': [
+        run({ id: 'r1', status: 'waiting' }),
+        run({ id: 'r2', status: 'done', finishedAt: '2026-11-17T09:10:00Z', seenAt: undefined }),
+      ],
+      '/api/v1/workspace/managers': {
+        managers: [
+          { id: 'm1', name: 'Scout', unread: 2, pendingActions: 0, pendingQuestions: 0, instructions: '', avatar: 0, costUsd: 0 },
+        ],
+      },
+    })
+    renderShell('/')
+
+    await waitFor(() => {
+      expect(mockSetAppBadge).toHaveBeenCalledWith(3)
+    })
+  })
+})
