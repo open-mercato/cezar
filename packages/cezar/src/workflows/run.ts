@@ -2598,8 +2598,9 @@ export class RunManager {
     );
     for (const run of live) {
       if (run.threadHygiene?.pending) {
-        this.store.updateRun(run.id, { status: 'waiting', activity: undefined, askParked: true,
-          idleClosedAt: run.threadHygiene.pending.since, monitoringWakeAt: undefined, autoResumeAt: undefined });
+        this.store.updateRun(run.id, { status: 'waiting', activity: undefined, askParked: true, monitoringWakeAt: undefined, autoResumeAt: undefined });
+        // updateRun retires an old idle marker on a transition into waiting; stamp the new park afterwards.
+        this.store.updateRun(run.id, { idleClosedAt: run.threadHygiene.pending.since });
         continue;
       }
       if (this.lifecycle.isBlocked(run.id)) {

@@ -29,4 +29,7 @@ Rozpoznanie: działający pakiet 0.20.0; upstream main odczytany jako 75d643737b
 
 ## Implementation limitation (pending owner acceptance)
 
-Preparing a handoff is safely refused while a graph child-wait node has no parent agent session. Reports remain retained and explicit Continue is available. The UI returns a clear refusal; it does not create another task or silently continue work. This exception must be accepted by the owner before treating the complete card as delivered or installing the patch.
+Preparing a handoff is safely refused while a graph child-wait node has no parent agent session. Reports remain retained; explicit Continue is available while the graph wait is active. After restart, a graph with no agent session also refuses Continue and needs manual recovery or further implementation. The UI returns a clear refusal; it does not create another task or silently continue work. This exception must be accepted by the owner before treating the complete card as delivered or installing the patch.
+
+
+Recovery contract: a pending decision never buys a provider turn at startup. Transition the stored run to waiting before stamping its idle-park marker; RunStore.updateRun deliberately retires the previous marker on a status transition. A stored agent session can then be resumed only by an explicit counted decision.

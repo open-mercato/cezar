@@ -54,3 +54,5 @@ node "$CEZ_BIN" handoff retain "mockup.html" "Accepted starting layout for the n
 The command returns a manifest with retained paths, hashes and missing dependencies. Link that manifest from Resume notes. The retained files stay outside the worktree and the originals remain untouched. Open the retained entry to check it before passing responsibility to a successor.
 
 > **Good to know**: Retention accepts regular files inside Assets, up to 100 files and 25 MiB per selected artifact. Missing dependencies are recorded as unverified. Copy a selected output from elsewhere into Assets with its dependencies before retaining it.
+
+> **Good to know**: Preparing a handoff is refused during a graph child wait without a parent agent session. The live graph can continue after a decision. A restored graph with no agent session also needs manual recovery before further work. Reports remain saved. These limits require acceptance before installation.

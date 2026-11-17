@@ -168,4 +168,17 @@ describe('work continuation gate at the live engine seam', () => {
     expect(captured).toMatchObject({ runner: 'codex', model: 'gpt-5', agentProfile: 'chosen', reasoningEffort: 'high', text: 'next' });
   });
 
+  it('startup recovery keeps a gated monitor resumable without buying a model turn', async () => {
+    id = store.createRun({ title: 'restored monitor', workflow: 'quick-task', task: 't', worktree: false, steps: [{ id: 'task', name: 'Task', kind: 'agent' }] }).id;
+    store.updateStep(id, 'task', { status: 'waiting', sessionId: '22222222-2222-4222-8222-222222222222', backend: 'claude' });
+    store.updateRun(id, { status: 'running', activity: 'monitoring', threadHygiene: { continuations: 3, historyKnown: true, pending: { reason: 'monitoring', since: '2026-11-17T10:00:00.000Z' } } });
+    await manager.recover();
+    expect(store.getRun(id)?.status).toBe('waiting');
+    expect(store.getRun(id)?.idleClosedAt).toBe('2026-11-17T10:00:00.000Z');
+    expect(manager.isActive(id)).toBe(false);
+    expect(store.getRun(id)?.threadHygiene?.continuations).toBe(3);
+    expect(manager.resumeThreadHygiene(id, { action: 'continue', expectedCount: 3 }, [{ type: 'text', text: 'mock:done next' }]).ok).toBe(true);
+    expect(store.getRun(id)?.threadHygiene?.continuations).toBe(4);
+  });
+
 });
