@@ -1,0 +1,67 @@
+# Jump between your own messages (task thread + manager chat)
+
+Status: **design — awaiting approval** (phase 1). Design page: [`assets/2026-11-17-my-message-navigation/design.html`](assets/2026-11-17-my-message-navigation/design.html).
+
+## Problem
+
+Long task transcripts and manager chats bury the user's own messages among agent output, tool
+rows and cards. There is no way to step back to "what did I ask" except scrolling.
+
+## Design
+
+A floating segmented pill, `▲ · 💬 3 / 7 · ▼`, in the overlay row above the composer. In the
+task thread that row is `TaskDock`'s `overlay`, beside `JumpToLatestPill`. In the manager chat
+it is `manager-floating`, beside the round scroll-to-bottom button.
+
+- **▲ / ▼** go to the previous or next message of yours, relative to the top of the viewport.
+  The jump scrolls the message to 24 px below the top, focuses it (`tabIndex=-1`) and draws
+  the #2218 ring (`ring-[3px] ring-ring/50`) with a 1.8 s violet wash. ▲ is disabled when
+  nothing of yours lies above in any range. ▼ is disabled when everything below is already
+  fully on screen.
+- **Counter**: the topmost message of yours on screen; with none on screen, the last one
+  scrolled past; `–` above the first.
+- **List**: opened by the middle segment. Desktop: a popover (150 ms hover opens a peek, a
+  click pins it). `no-hover:` devices: a bottom sheet with 44 px rows. Oldest at the top,
+  newest at the bottom, sticky day headers, HH:mm, a two-line plain-text preview, and an
+  attachment icon with a count. The message in view gets a violet bar and
+  `aria-current`. It is a `listbox` with `aria-activedescendant`: ↑/↓/Home/End move,
+  Enter jumps, Esc closes and returns focus.
+- **Hidden** when the chat has no message from the user, and then no room is reserved.
+  Otherwise the transcript reserves the row's height at the bottom (the manager's
+  `floating.overlap` already does this), so the pill never covers content.
+- Shortcuts: ⌥↑ / ⌥↓ while focus is in the transcript, never in the composer, registered in
+  `keybindings.ts` so they can be rebound.
+
+Alternatives rejected: the chat header (far from the reading position, and the phone task
+header is full) and scrollbar ticks (positions are unknown for unloaded ranges and virtua
+only estimates sizes, they can't be tapped, and iOS hides the scrollbar).
+
+## Data and paging
+
+- **Task**: `useRunHistory` retains at most 5 pages, so the client cannot list every user
+  message. Add `GET /api/v1/runs/:id/user-messages` (zod schema in `packages/contract`, chained
+  into the runs family, aliased under `/p/:projectId`). It returns `{ seq, ts, preview,
+  attachments: { images, files } }[]`, built from the NDJSON (`user-message` lines and the
+  initial task), with `preview` capped at 240 chars server-side. A jump to an unloaded `seq`
+  pages back through the existing #1909 refill until that `seq` is loaded, then reveals it.
+- **Manager**: `?kind=user` on the messages route (same paging shape). A jump runs the
+  #2218 `fetchNextPage` loop until the id is loaded.
+- While a range loads, the list row shows a spinner. A failure shows a toast and leaves the
+  scroll position alone.
+- Streaming: a message the user sends appears at once as "Sending…" (queued task messages as
+  "Queued"). It never moves the active row or focus. A jump un-pins the tail exactly as a
+  scroll-up does.
+
+## Reduced motion
+
+No smooth scroll and no wash; the ring alone marks the target.
+
+## Phase 2 plan (after approval)
+
+1. Contract + routes: task `user-messages` index; manager `kind=user` filter (+ parity tests).
+2. `packages/web`: one shared `MyMessagesNav` (pill + popover/sheet + listbox) fed by a
+   per-view adapter (`items`, `isLoaded(id)`, `ensureLoaded(id)`, `elementFor(id)`).
+   Mounted in `task-thread.tsx` and `manager-chat.tsx`.
+3. Tests: unit tests (nav state math, the list's keyboard handling, hidden when there are no
+   messages, the jump into an unloaded range) and an e2e test (`my-messages.e2e.ts`: arrows,
+   the list, the jump that pages); before/after screenshots on desktop and phone.
