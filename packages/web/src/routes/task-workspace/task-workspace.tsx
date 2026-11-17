@@ -7,6 +7,7 @@ import {
   SearchXIcon,
   TerminalIcon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigationType, useParams } from 'react-router'
 
@@ -245,9 +246,9 @@ function WorkspaceView({
   const fixedViews = useMemo<readonly ViewId[]>(
     () =>
       FIXED_VIEW_ORDER.filter(
-        (view) => availableViews.includes(view) && (view !== 'graph' || Boolean(run.workflowDef)),
+        (view) => availableViews.includes(view) && (view !== 'graph' || hasWorkflowGraph(run)),
       ),
-    [availableViews, run.workflowDef],
+    [availableViews, run],
   )
   const fixedActive: ViewId | null = !layouts.ready
     ? null

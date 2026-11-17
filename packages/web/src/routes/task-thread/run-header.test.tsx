@@ -2155,6 +2155,19 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/tasks/r1/graph')
   })
 
+  it('tabs: Graph is hidden for a one-step definition (quick-task) and shown for a multi-step one (#2246)', () => {
+    stubFetch()
+    const one = renderHeader(run('done', { workflowDef: { name: 'quick-task', source: 'built-in', steps: [{ id: 'do', prompt: '{{task}}' }] } }))
+    expect(within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement).queryByRole('link', { name: 'Graph' })).toBeNull()
+    one.unmount()
+    renderHeader(
+      run('done', {
+        workflowDef: { name: 'two', source: 'file', steps: [{ id: 'a', prompt: 'a' }, { id: 'b', prompt: 'b' }] },
+      }),
+    )
+    expect(within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement).getByRole('link', { name: 'Graph' })).toBeTruthy()
+  })
+
   it('copies the branch name from its header chip and confirms it in the tooltip', async () => {
     stubFetch()
     const writeText = vi.fn(() => Promise.resolve())
