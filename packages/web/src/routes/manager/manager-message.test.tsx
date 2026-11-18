@@ -74,7 +74,8 @@ describe('ManagerMessageRow', () => {
   })
 
   it('identifies a task-origin approval inside the approval card', () => {
-    renderMessage(actionMessage(205, { sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }))
+    // run-1 carries no PR: a merge card names it only for a card about some other action.
+    renderMessage(actionMessage(205, { action: { type: 'enable-automation', projectId: 'alpha', automationId: 'a1' }, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }))
     expect(document.querySelector('[data-slot="manager-action"] [data-slot="decision-sources"]')?.textContent).toContain('Session 123123')
     expect(screen.getByRole('link', { name: /Inspect task:/ }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/chat#latest')
   })
@@ -489,12 +490,17 @@ describe('ManagerMessageRow', () => {
     })
 
     it('shows the source task chips on an approval card too', async () => {
-      const { client } = renderMessage(actionMessage(207, { sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }), vi.fn(), projects)
+      const { client } = renderMessage(actionMessage(207, { action: { type: 'merge-pr', projectId: 'alpha', number: 2897 }, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }), vi.fn(), projects)
       client.setQueryData(workspaceQueryKeys.runsIndex, {
         runs: [{ projectId: 'alpha', id: 'run-1', title: 'Bump react', status: 'review', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', pullRequestUrl: 'https://github.com/o/alpha/pull/2897' }],
       })
       await waitFor(() => expect(document.querySelector('[data-slot="manager-action"] [data-slot="decision-sources"] [data-slot="pr-chip"]')?.getAttribute('href'))
         .toBe('https://github.com/o/alpha/pull/2897'))
+    })
+
+    it('leaves out a stored source task that does not carry the merge card\'s PR', () => {
+      renderMessage(actionMessage(208, { sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }], reason: 'Seen in [[task:alpha/run-1]]' }), vi.fn(), projects)
+      expect(document.querySelector('[data-slot="manager-action"] [data-slot="decision-sources"]')).toBeNull()
     })
 
     it('paints references in an approval reason', () => {

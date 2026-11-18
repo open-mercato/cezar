@@ -2316,6 +2316,102 @@ describe('ManagerEngine', () => {
       expect(engine.messages(id, { pending: '1' }).messages.map((message) => message.id)).toEqual([first.actionId]);
     });
 
+    describe('one waiting card per PR', () => {
+      let head = 'sha-1';
+      const headEngine = () => makeEngine({
+        request: async (path) => path.includes('/merge-state')
+          ? Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: head, defaultMethod: 'squash', methods: ['squash', 'merge'] } })
+          : Response.json({ ok: true }),
+      });
+      beforeEach(() => { head = 'sha-1'; });
+
+      it('a repeat for the same head returns the waiting card, even with another reason', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: merge, reason: 'Green.' });
+        const again = await engine.propose(id, { action: merge, reason: 'Still green.' });
+        if ('error' in first || 'error' in again) throw first;
+        expect(again).toEqual({ actionId: first.actionId, status: 'pending' });
+        expect(store.message(id, first.actionId)).toMatchObject({ reason: 'Green.' });
+        expect(actions(id)).toHaveLength(1);
+      });
+
+      it('a new head replaces the older card, which closes quietly', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: merge });
+        if ('error' in first) throw first;
+        head = 'sha-2-pushed-later';
+        const second = await engine.propose(id, { action: merge });
+        if ('error' in second) throw second;
+        expect(second).toMatchObject({ status: 'pending', replaced: [first.actionId] });
+        expect(store.message(id, first.actionId)).toMatchObject({ status: 'dismissed', result: 'Replaced by a newer proposal for head sha-2-pushed' });
+        expect(engine.messages(id, { pending: '1' }).messages.map((message) => message.id)).toEqual([second.actionId]);
+      });
+
+      it('another method replaces the card instead of changing it under the user', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: { ...merge, method: 'squash' } });
+        const second = await engine.propose(id, { action: { ...merge, method: 'merge' } });
+        if ('error' in first || 'error' in second) throw first;
+        expect(second.actionId).not.toBe(first.actionId);
+        expect(store.message(id, first.actionId)).toMatchObject({ status: 'dismissed' });
+        expect(engine.messages(id, { pending: '1' }).messages).toHaveLength(1);
+      });
+
+      it('another PR never replaces the card', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        await engine.propose(id, { action: merge });
+        const other = await engine.propose(id, { action: { ...merge, number: 8 } });
+        expect(other).not.toHaveProperty('replaced');
+        expect(engine.messages(id, { pending: '1' }).messages).toHaveLength(2);
+      });
+
+      it('racing proposals for the same PR leave one card', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const [one, two] = await Promise.all([engine.propose(id, { action: merge }), engine.propose(id, { action: merge })]);
+        if ('error' in one || 'error' in two) throw one;
+        expect(two.actionId).toBe(one.actionId);
+        expect(actions(id)).toHaveLength(1);
+      });
+
+      it('duplicates already stored collapse to the newest at boot and at a watch check', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const card = (messageId: string, headSha: string) => store.persistMessage(id, {
+          id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'action', status: 'pending',
+          action: { ...merge, headSha }, sourceTasks: [],
+        } as ManagerMessage);
+        card('old', 'sha-1');
+        card('dup', 'sha-1');
+        card('new', 'sha-1');
+        expect(engine.recover()).toBe(true);
+        expect(actions(id).map((message) => [message.id, message.status])).toEqual([['old', 'dismissed'], ['dup', 'dismissed'], ['new', 'pending']]);
+        card('later', 'sha-2');
+        store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        backend.scripts.push(say(MANAGER_QUIET));
+        engine.tick();
+        await settled(engine);
+        expect(store.message(id, 'new')).toMatchObject({ status: 'dismissed', result: 'Replaced by a newer proposal for head sha-2' });
+        expect(store.message(id, 'later')).toMatchObject({ status: 'pending' });
+      });
+
+      it('allows a card in another manager\'s chat for the same PR, and says so', async () => {
+        const engine = headEngine();
+        const a = await create(engine);
+        const b = await create(engine);
+        const first = await engine.propose(a, { action: merge });
+        const second = await engine.propose(b, { action: merge });
+        if ('error' in first || 'error' in second) throw first;
+        expect(second).toMatchObject({ status: 'pending', alsoWaitingIn: [store.get(a)?.name] });
+        expect(store.message(a, first.actionId)).toMatchObject({ status: 'pending' });
+        expect(first).not.toHaveProperty('alsoWaitingIn');
+      });
+    });
+
     it('stamps the merge card with the forge title, not the agent\'s', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -3523,6 +3619,57 @@ describe('ManagerEngine', () => {
       backend.open[0]!.finish();
       await settled(engine);
       expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'read-task' }] });
+    });
+
+    it('gives each merge card its own PR\'s task, never one the turn read', async () => {
+      const at = later(0);
+      runs.push(
+        run({ id: 'auto-review', title: '8251 auto-review with autofix to mergeable', markerRefs: { pr: 8251 } }),
+        run({ id: 'owner-9783', pullRequestUrl: 'https://github.com/o/r/pull/9783' }),
+        run({ id: 'declared-9783', prRefs: [{ number: 9783, origin: 'marker', at }] }),
+      );
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ ...say('Both are ready.'), hold: true });
+      engine.send(id, 'Merge what is ready');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      // The turn reads an unrelated task first: that read must not ride onto either card.
+      expect(await engine.taskDetail(id, 'alpha', 'auto-review')).toMatchObject({ task: { runId: 'auto-review' } });
+      const first = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9783 }, reason: 'Green, see [[task:alpha/auto-review]]' });
+      const second = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9800 }, reason: 'Green too' });
+      const third = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9801 }, reason: 'Checked in [[task:alpha/declared-9783]]' });
+      backend.open[0]!.finish();
+      await settled(engine);
+      if ('error' in first || 'error' in second || 'error' in third) throw first;
+      expect(store.message(id, first.actionId)).toMatchObject({ sourceTasks: [{ projectId: 'alpha', runId: 'owner-9783' }] });
+      expect(store.message(id, second.actionId)).toMatchObject({ sourceTasks: [] });
+      expect(store.message(id, third.actionId)).toMatchObject({ sourceTasks: [] });
+    });
+
+    it('takes a named task that carries the PR when no task opened or declared it', async () => {
+      runs.push(run({ id: 'mentions-9800', prRefs: [{ number: 9800, origin: 'derived', at: later(0) }] }), run({ id: 'unrelated' }));
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      const proposed = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9800 }, reason: 'See [[task:alpha/mentions-9800]] and [[task:alpha/unrelated]]' });
+      if ('error' in proposed) throw proposed;
+      expect(store.message(id, proposed.actionId)).toMatchObject({ sourceTasks: [{ projectId: 'alpha', runId: 'mentions-9800' }] });
+    });
+
+    it('an enable card takes only the tasks its reason names, not the turn\'s', async () => {
+      runs.push(run({ id: 'read-task' }), run({ id: 'named' }));
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ ...say('Proposed.'), hold: true });
+      engine.send(id, 'Turn it on');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      await engine.taskDetail(id, 'alpha', 'read-task');
+      const bare = await engine.propose(id, { action: { type: 'enable-automation', projectId: 'alpha', automationId: 'a1' } });
+      const job = await engine.propose(id, { action: { type: 'add-job', name: 'Digest', prompt: 'p', everyMinutes: 5 }, reason: 'For [[task:alpha/named]]' });
+      backend.open[0]!.finish();
+      await settled(engine);
+      if ('error' in bare || 'error' in job) throw bare;
+      expect(store.message(id, bare.actionId)).toMatchObject({ sourceTasks: [] });
+      expect(store.message(id, job.actionId)).toMatchObject({ sourceTasks: [{ projectId: 'alpha', runId: 'named' }] });
     });
 
     it('marks a failure and a wait on the user important, and raises the notification', async () => {
