@@ -2395,7 +2395,8 @@ export function createApp(deps: ServerDeps) {
   deps.onDispose?.(() => loginSessions.dispose());
   // Anything still waiting on this login, in any built project or manager (spec 2026-11-18-inline-account-reconnect).
   const blockedOnAccount = (provider: string, profileId: string): boolean =>
-    [bootContext, ...contexts.ids().map((id) => contexts.peek(id))].some((ctx) => ctx?.manager.hasAuthParked(provider, profileId))
+    // Optional calls: test harnesses inject partial run managers.
+    [bootContext, ...contexts.ids().map((id) => contexts.peek(id))].some((ctx) => ctx?.manager.hasAuthParked?.(provider, profileId) === true)
     || (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId));
 
   const providersRoutes = new Hono<ProjectApiEnv>()
