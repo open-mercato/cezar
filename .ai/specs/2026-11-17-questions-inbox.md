@@ -28,9 +28,9 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
 | --- | --- |
 | answered | an answer from a card (today's `askId` path) |
 | dismissed | `POST /api/v1/workspace/questions/:key/dismiss`; undo is a client-side delay before the POST |
-| replaced | a newer `CEZ:ASK` in the same chat/run with the same card `id`, or whose headers cover every header of the older card. Partial overlap stays open |
+| replaced | a newer `CEZ:ASK` in the same chat/run with the same card `id` (prompts ask agents for a stable id and to reuse it when re-asking), or, without ids, whose headers cover every header of the older card. Partial overlap stays open |
 | retracted | `CEZ:ASK-CLOSE <id\|header> [reason]` marker, same source only, parsed next to `CEZ:ASK` |
-| expired | **proved** stale: an agent-set `expires` in `CEZ:ASK` (a time, or `{"until":{"pr"\|"task"\|"issue"\|"branch":…,"state":…}}`) was reached, or a PR, task or issue the card links reached a final state (the Approvals stale-merge check, applied to questions) |
+| expired | the card declares what it is about, `"about": [{"pr": 2891}]` (or `task`/`issue`), and that work is merged, closed or finished (the Approvals stale-merge check, applied to questions). No time-based expiry, and a mere mention never closes a card |
 | ended | run reaches done/review, is cancelled, archived or deleted. `failed` (idle-closed, awaiting answer, or error) stays open: Continue can still answer it (#2286) |
 
 ## Relevance: the main list holds only what still needs an answer
@@ -38,7 +38,7 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
 - **Proved stale → closed** (above: expired, replaced, ended, retracted). No model call.
 - **Suspected → flagged "may be out of date"**: `mayBeStale: { why, since }`, computed from data the server already
   has. The triggers: the user replied in that chat after the card, the task had more turns or commits without an
-  answer, or the manager acted on the same thing since. The card **still counts**, sorts last in its group with an
+  answer, the manager acted on the same thing since, or a PR/task the card only *mentions* (no `about`) finished. The card **still counts**, sorts last in its group with an
   amber note, and offers one-click "Dismiss as out of date".
 - **Agent confirms**: each manager check and each task turn lists the agent's open cards and asks it
   to close what no longer needs the user (`CEZ:ASK-CLOSE <id> <reason>`), or to ask again. The list shows any out-of-date flag.
@@ -46,6 +46,10 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
 
 A free-text chat reply does **not** close a card (cezar can't know what it answered). It flags the card may-be-out-of-date
 instead. This changes current behavior: today the manager composer closes every open card.
+
+Evidence (local manager history, 2026-11-17): 208 cards, 9 open. A re-ask with renamed headers slipped past
+header matching (hence stable ids). No open card had a natural deadline (hence no time expiry). About 69% of cards
+mention a PR or task, often "task X done, what next?" (hence only a declared `about` closes).
 
 ## Data model
 
@@ -71,7 +75,7 @@ Remote mode reconciles over SSE.
 
 ## Phase 2 tests
 
-One test for each close rule (replaced by id / by covered headers / partial overlap stays open; retracted; expired by
-time, by `until` and by a linked PR merging; ended for done, cancelled and archived; idle-closed stays open). Each
+One test for each close rule (replaced by id / by covered headers / partial overlap stays open; retracted; expired by a
+declared `about` PR merging, a mention-only PR merging flags but does not close; ended for done, cancelled and archived; idle-closed stays open). Each
 out-of-date flag trigger, and the agent closing a flagged card; the stale-tab 409. Dismiss for each delivery path, undo, and count parity across
 summary, badge and push. Before/after screenshots on desktop and mobile.
