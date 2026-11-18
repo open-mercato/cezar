@@ -134,9 +134,10 @@ export interface ThreadReduceOptions {
   activeTurn?: boolean
   /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
   runner?: string
-  /** The run reached done, review or cancelled. A recording of such a run with no `ask.closed`
-   *  predates the event, and keeps the old rule: the next user message closed the card. */
-  runEnded?: boolean
+  /** The run record's `asks` (`[]` for a record without any). An ask it does not track, asked
+   *  before the stream's first `ask.closed`, predates the Questions inbox and keeps the old rule:
+   *  the next user message closed it. Absent (record not loaded): no ask is read as legacy. */
+  trackedAsks?: ReadonlyArray<{ requestId: string }>
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -403,8 +404,10 @@ function planFromTodos(input: unknown): PlanEntry[] | undefined {
   return entries
 }
 
-/** `runEnded` for `reduceThread`: the statuses that close a task's questions (`failed` does not, #2286). */
-export const runEndsAsks = (status: RunStatus | undefined): boolean => status === 'done' || status === 'review' || status === 'cancelled'
+const NO_ASKS: ReadonlyArray<{ requestId: string }> = []
+/** `trackedAsks` for `reduceThread`: undefined until the record loads, then its `asks` (or none). */
+export const trackedAsks = (run: { asks?: ReadonlyArray<{ requestId: string }> | undefined } | undefined) =>
+  run === undefined ? undefined : run.asks ?? NO_ASKS
 
 export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = {}): ThreadState {
   const turns: DraftTurn[] = []
@@ -419,8 +422,10 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  parks `waiting` until the user answers). */
   let pendingAsk: ThreadAsk | undefined
   const asksById = new Map<string, ThreadAsk>()
-  // Before `ask.closed` (Questions inbox) a reply closed the card; a new run keeps it open, flagged.
-  const replyCloses = options.runEnded === true && !events.some((event) => event.type === 'ask.closed')
+  // Decided per ask: a pre-inbox card closed on the next reply; a tracked one stays open, flagged.
+  const tracked = options.trackedAsks === undefined ? undefined : new Set(options.trackedAsks.map((ask) => ask.requestId))
+  const legacyAsks = new WeakSet<ThreadAsk>()
+  let sawAskClosed = false
   let lastEventAt: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
@@ -513,7 +518,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       case 'user-message': {
         const text = str(event.text) ?? ''
         // Legacy recordings only: the reply that followed an ask closed it (#473).
-        if (replyCloses && pendingAsk && !pendingAsk.resolved) {
+        if (pendingAsk && !pendingAsk.resolved && legacyAsks.has(pendingAsk)) {
           pendingAsk.resolved = true
           if (text !== '') pendingAsk.answer = text
           pendingAsk = undefined
@@ -802,11 +807,13 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         currentTurn().entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
         asksById.set(requestId, ask)
+        if (tracked !== undefined && !tracked.has(requestId) && !sawAskClosed) legacyAsks.add(ask)
         break
       }
       case 'ask.closed': {
         // The server closed the card: answered (on the card or its linked copy), dismissed,
         // replaced, withdrawn, expired or ended. The card redraws in its quiet closed state.
+        sawAskClosed = true
         const requestId = str(event.requestId)
         const reason = str(event.reason)
         const ask = requestId === undefined ? undefined : asksById.get(requestId)

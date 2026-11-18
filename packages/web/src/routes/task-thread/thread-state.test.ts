@@ -14,7 +14,6 @@ import {
   latestPlanEntries,
   reduceThread,
   threadFilePaths,
-  runEndsAsks,
   threadFooter,
   type ThreadEntry,
 } from './thread-state'
@@ -1065,27 +1064,44 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(items.find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
   })
 
-  // A recording made before `ask.closed` existed keeps the rule it was made under: once the run
-  // ended, the reply that followed an ask was its answer.
-  it('a legacy recording of an ended run still reads the next user-message as the answer', () => {
-    const events = [
-      line(1, 'text', { text: 'options', stepId: 'task' }),
-      line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
-      line(3, 'lifecycle', { message: 'session closed by user' }),
-      line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
-      line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
-    ]
-    const legacy = reduceThread(events, { runEnded: true }).turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask')
-    expect(legacy).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
-    // A live run, or one whose stream already speaks ask.closed, never does.
-    expect(reduceThread(events, { runEnded: false }).turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
-    const modern = reduceThread([...events, line(6, 'ask.closed', { requestId: 'other', reason: 'ended' })], { runEnded: true })
-    expect(modern.turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+  // A recording made before `ask.closed` existed keeps the rule it was made under: the reply that
+  // followed an ask was its answer. Decided per ask from the record's `asks`, whatever the run status.
+  const askOf = (events: RunEvent[], options: Parameters<typeof reduceThread>[1], id = ASK.requestId) =>
+    reduceThread(events, options).turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask' && i.id === id)
+  const legacyEvents = [
+    line(1, 'text', { text: 'options', stepId: 'task' }),
+    line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
+    line(3, 'lifecycle', { message: 'session closed by user' }),
+    line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
+    line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+  ]
+
+  it('a pre-upgrade recording (record tracks no asks) reads the next user-message as the answer, whatever the run status', () => {
+    expect(askOf(legacyEvents, { trackedAsks: [] })).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
   })
 
-  it('runEndsAsks: done, review and cancelled end a task’s questions; failed does not (#2286)', () => {
-    expect(['done', 'review', 'cancelled', 'failed', 'waiting', 'running'].map((status) => runEndsAsks(status as never)))
-      .toEqual([true, true, true, false, false, false])
+  it('a tracked ask stays open after a typed reply; an unloaded record reads nothing as legacy', () => {
+    expect(askOf(legacyEvents, { trackedAsks: [{ requestId: ASK.requestId }] })).toMatchObject({ resolved: false })
+    expect(askOf(legacyEvents, {})).toMatchObject({ resolved: false })
+  })
+
+  it('a run spanning the upgrade keeps the legacy rule for asks before it and the new one after', () => {
+    const NEW = { ...ASK, requestId: 'ask_2' }
+    const NEWER = { ...ASK, requestId: 'ask_3' }
+    const events = [
+      ...legacyEvents,
+      line(6, 'ask.requested', NEW),
+      line(7, 'ask.closed', { requestId: NEW.requestId, reason: 'dismissed' }),
+      line(8, 'ask.requested', NEWER),
+      line(9, 'user-message', { text: 'something else', imageCount: 0 }),
+    ]
+    // The record keeps only post-upgrade asks; the cap may already have dropped ask_2.
+    const options = { trackedAsks: [{ requestId: NEWER.requestId }] }
+    expect(askOf(events, options)).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    expect(askOf(events, options, NEW.requestId)).toMatchObject({ resolved: true, closed: { reason: 'dismissed' } })
+    expect(askOf(events, options, NEWER.requestId)).toMatchObject({ resolved: false })
+    // Untracked but asked after an ask.closed: the server already spoke the new protocol.
+    expect(askOf(events, { trackedAsks: [] }, NEWER.requestId)).toMatchObject({ resolved: false })
   })
 
   it('drops an ask.requested with no valid questions', () => {
