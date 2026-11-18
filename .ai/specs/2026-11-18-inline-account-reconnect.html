@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reconnect an agent account where the error appears — design</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.1.0/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/jetbrains-mono@5.1.0/index.css">
+<style>
+/* Tokens copied from packages/web/src/styles/index.css */
+:root{
+  --background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--sidebar:#171717;--muted:#262626;
+  --muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;--input:#262626;
+  --contrast:#ebebeb;--contrast-foreground:#171717;--primary:#6457e8;--violet:#8f86e8;--ring:#8f86e8;
+  --danger:#ef4444;--success:#10b981;--pending:#fbbf24;--info:#93c5fd;
+  --pending-strong:#fbbf24;--success-strong:#34d399;--danger-strong:#f87171;
+  --grad:linear-gradient(135deg,#b4f372 12%,#eefb63 58%,#bc9aff 100%);
+  --sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);
+}
+[data-theme=light]{
+  --background:#fff;--foreground:#171717;--card:#fff;--card-2:#fbfbfb;--sidebar:#fafafa;--muted:#f7f7f7;
+  --muted-foreground:#5c5c5c;--soft-foreground:#767676;--border:#ebebeb;--input:#ebebeb;
+  --contrast:#262626;--contrast-foreground:#fff;--primary:#5b52c7;--violet:#5b52c7;--ring:#5b52c7;
+  --info:#1d4ed8;--pending-strong:#b45309;--success-strong:#047857;--danger-strong:#b91c1c;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.12);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+code,.mono{font-family:var(--mono);font-size:12px}
+button{font:inherit;color:inherit;cursor:pointer}
+.wrap{max-width:1240px;margin:0 auto;padding:32px 24px 80px}
+h1{font-size:26px;letter-spacing:-.02em;margin:0 0 6px}
+h2{font-size:18px;margin:48px 0 12px;letter-spacing:-.01em}
+h3{font-size:14px;margin:20px 0 8px}
+.lead{color:var(--muted-foreground);max-width:780px;margin:0}
+.grad-rule{height:3px;border-radius:2px;background:var(--grad);width:96px;margin:14px 0 20px}
+.muted{color:var(--muted-foreground)}.soft{color:var(--soft-foreground)}
+.small{font-size:12px}.xs{font-size:11px}
+
+/* ---------- controls ---------- */
+.controls{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--background) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);margin:24px -24px 0;padding:12px 24px;display:flex;flex-wrap:wrap;gap:14px 22px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px}
+.ctl>label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground)}
+.seg{display:inline-flex;background:var(--muted);border:1px solid var(--border);border-radius:10px;padding:2px}
+.seg button{border:0;background:transparent;padding:4px 10px;border-radius:8px;font-size:12px;color:var(--muted-foreground)}
+.seg button[aria-pressed=true]{background:var(--card);color:var(--foreground);box-shadow:0 1px 2px rgba(0,0,0,.2)}
+select.sel{background:var(--muted);border:1px solid var(--border);color:var(--foreground);border-radius:8px;padding:4px 8px;font-size:12px}
+
+/* ---------- shared atoms (shadcn look) ---------- */
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;border:1px solid transparent;font-size:12px;font-weight:500;white-space:nowrap;outline:none}
+.btn:focus-visible{box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 50%,transparent)}
+.btn-primary{background:var(--contrast);color:var(--contrast-foreground)}
+.btn-primary:hover{opacity:.9}
+.btn-outline{background:transparent;border-color:var(--border);color:var(--foreground)}
+.btn-outline:hover{background:var(--muted)}
+.btn-ghost{background:transparent;color:var(--muted-foreground)}
+.btn-ghost:hover{background:var(--muted);color:var(--foreground)}
+.btn-link{background:none;border:0;padding:0;height:auto;color:var(--foreground);text-decoration:underline;text-underline-offset:2px;font-weight:500}
+.btn[disabled]{opacity:.5;cursor:default}
+.pill{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:999px;font-size:10px;font-weight:600;letter-spacing:.02em;border:1px solid var(--border);color:var(--muted-foreground);white-space:nowrap}
+.pill.danger{color:var(--danger-strong);border-color:color-mix(in srgb,var(--danger) 35%,transparent);background:color-mix(in srgb,var(--danger) 8%,transparent)}
+.pill.ok{color:var(--success-strong);border-color:color-mix(in srgb,var(--success) 35%,transparent);background:color-mix(in srgb,var(--success) 8%,transparent)}
+.pill.warn{color:var(--pending-strong);border-color:color-mix(in srgb,var(--pending) 35%,transparent);background:color-mix(in srgb,var(--pending) 8%,transparent)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--foreground) 18%,transparent);border-top-color:var(--foreground);animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ricon{width:22px;height:22px;border-radius:6px;display:inline-grid;place-items:center;font-weight:700;font-size:12px;color:#fff;flex:none;font-family:var(--sans)}
+.ricon.sm{width:16px;height:16px;border-radius:4px;font-size:9px}
+input.inp{height:30px;border-radius:8px;border:1px solid var(--border);background:var(--background);color:var(--foreground);padding:0 10px;font-size:13px;outline:none;min-width:0}
+input.inp:focus{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 30%,transparent)}
+
+/* ---------- reconnect card ---------- */
+.rc{border-radius:10px;border:1px solid color-mix(in srgb,var(--danger) 30%,transparent);background:color-mix(in srgb,var(--danger) 5%,transparent);padding:12px 14px;max-width:640px;margin-top:8px;transition:border-color .25s,background .25s}
+.rc.busy{border-color:var(--border);background:var(--card-2)}
+.rc.ok{border-color:color-mix(in srgb,var(--success) 32%,transparent);background:color-mix(in srgb,var(--success) 6%,transparent)}
+.rc-head{display:flex;gap:10px;align-items:flex-start}
+.rc-title{font-size:13px;font-weight:600;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.rc-sub{font-size:12px;color:var(--muted-foreground);margin-top:2px}
+.rc-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
+.rc-more{margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;display:flex;flex-direction:column;gap:8px;font-size:12px}
+.rc-more .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rc-foot{margin-top:10px;font-size:11px;color:var(--soft-foreground);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rc-foot a{color:var(--muted-foreground)}
+.codebox{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+.code{font-family:var(--mono);font-size:22px;letter-spacing:.18em;font-weight:600;padding:6px 12px;border-radius:8px;background:var(--background);border:1px solid var(--border)}
+.steps{display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--soft-foreground);flex-wrap:wrap}
+.steps span{display:flex;gap:5px;align-items:center}
+.steps .done{color:var(--success-strong)}.steps .now{color:var(--foreground)}
+.cmdline{display:flex;align-items:center;gap:6px;background:var(--background);border:1px solid var(--border);border-radius:8px;padding:4px 4px 4px 8px;max-width:100%}
+.cmdline code{overflow:auto;white-space:nowrap;flex:1;min-width:0}
+.menu{position:absolute;z-index:5;margin-top:4px;min-width:240px;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-modal);padding:4px}
+.menu .mi{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:6px 8px;border-radius:6px;font-size:12px;text-align:left}
+.menu .mi:hover:not([disabled]){background:var(--muted)}
+.menu .mi[disabled]{opacity:.45;cursor:default}
+.menu .hd{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground);padding:6px 8px 2px}
+.rel{position:relative;display:inline-block}
+.checks{display:flex;flex-direction:column;gap:4px;margin-top:8px;font-size:12px}
+.checks label{display:flex;gap:8px;align-items:center}
+.collapsed-note{font-size:12px;color:var(--soft-foreground);display:flex;gap:6px;align-items:center;margin-top:6px}
+
+/* ---------- cockpit frame ---------- */
+.stage{margin-top:18px;border:1px solid var(--border);border-radius:16px;overflow:hidden;background:var(--background);box-shadow:var(--shadow-modal)}
+.chrome{height:30px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;padding:0 12px}
+.chrome i{width:10px;height:10px;border-radius:50%;background:var(--muted);display:inline-block}
+.chrome .url{margin-left:12px;font-size:11px;color:var(--soft-foreground);font-family:var(--mono)}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:620px}
+.side{background:var(--sidebar);border-right:1px solid var(--border);padding:12px 8px;display:flex;flex-direction:column;gap:2px;font-size:13px}
+.brand{font-family:'Chakra Petch',var(--sans);font-weight:700;letter-spacing:.04em;padding:4px 8px 12px;display:flex;align-items:center;gap:8px}
+.brand b{width:18px;height:18px;border-radius:5px;background:var(--grad);display:inline-block}
+.nav{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;color:var(--muted-foreground)}
+.nav.on{background:var(--muted);color:var(--foreground)}
+.nav .cnt{margin-left:auto;font-size:11px}
+.side .sec{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground);padding:12px 8px 4px}
+.main{display:flex;flex-direction:column;min-width:0}
+.topbar{height:48px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 18px;font-size:13px}
+.topbar .t{font-weight:600}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted-foreground);border:1px solid var(--border);border-radius:999px;padding:2px 8px}
+.scroll{flex:1;overflow:auto;padding:22px 26px;display:flex;flex-direction:column;gap:16px}
+.msg-user{align-self:flex-end;background:var(--muted);border-radius:14px;padding:8px 12px;max-width:70%;font-size:14px}
+.msg-ai{max-width:720px;font-size:14px}
+.meta{font-size:11px;color:var(--muted-foreground);margin-bottom:4px;display:flex;gap:8px}
+.meta b{font-weight:500}
+.composer{margin:0 26px 18px;border:1px solid var(--border);border-radius:16px;background:var(--card);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.composer .ph{color:var(--soft-foreground);font-size:14px}
+.composer .bar{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted-foreground)}
+.composer .send{margin-left:auto;width:28px;height:28px;border-radius:8px;background:var(--contrast);color:var(--contrast-foreground);display:grid;place-items:center}
+.tool{font-family:var(--mono);font-size:12px;color:var(--soft-foreground);display:flex;gap:8px;align-items:center}
+.tool b{color:var(--muted-foreground);font-weight:500}
+.thinking{display:flex;gap:6px;align-items:center;color:var(--muted-foreground);font-size:13px}
+.streaming::after{content:'▍';animation:blink 1s steps(2) infinite;margin-left:2px;color:var(--violet)}
+@keyframes blink{50%{opacity:0}}
+.toast{position:absolute;right:18px;bottom:18px;background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-modal);padding:10px 12px;font-size:12px;max-width:340px;display:flex;gap:10px;align-items:flex-start;animation:up .3s ease}
+@keyframes up{from{transform:translateY(8px);opacity:0}}
+.banner{display:flex;align-items:center;gap:10px;padding:8px 18px;border-bottom:1px solid color-mix(in srgb,var(--danger) 25%,transparent);background:color-mix(in srgb,var(--danger) 7%,transparent);font-size:12px}
+.att{border:1px solid var(--border);border-radius:12px;background:var(--card);overflow:hidden}
+.att-row{display:flex;gap:12px;align-items:center;padding:10px 14px;border-top:1px solid var(--border);font-size:13px}
+.att-row:first-child{border-top:0}
+.att-row .grow{flex:1;min-width:0}
+
+/* ---------- phone ---------- */
+.phones{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start;margin-top:18px}
+.phone{width:360px;height:740px;border-radius:44px;border:10px solid #050505;background:var(--background);overflow:hidden;position:relative;box-shadow:var(--shadow-modal);display:flex;flex-direction:column}
+.phone .notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:110px;height:28px;border-radius:20px;background:#050505;z-index:4}
+.p-status{height:44px;flex:none}
+.p-top{display:flex;align-items:center;gap:8px;padding:6px 14px 10px;border-bottom:1px solid var(--border);font-size:14px}
+.p-top .t{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.p-scroll{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+.p-scroll .msg-user{max-width:85%}
+.p-scroll .rc{max-width:none}
+.p-bar{height:62px;border-top:1px solid var(--border);display:flex;justify-content:space-around;align-items:center;font-size:10px;color:var(--soft-foreground);flex:none;background:var(--card)}
+.p-bar span{display:flex;flex-direction:column;align-items:center;gap:3px}
+.p-bar span.on{color:var(--foreground)}
+.p-bar i{width:18px;height:18px;border-radius:5px;background:var(--muted);display:block;position:relative}
+.p-bar i em{position:absolute;top:-4px;right:-6px;background:var(--danger);color:#fff;font-style:normal;font-size:9px;border-radius:999px;padding:0 4px}
+.sheet{position:absolute;inset:auto 0 0 0;background:var(--card);border-top-left-radius:18px;border-top-right-radius:18px;border-top:1px solid var(--border);box-shadow:0 -12px 40px rgba(0,0,0,.4);padding:10px 16px 26px;z-index:3;animation:up .25s ease}
+.sheet .grab{width:36px;height:4px;border-radius:2px;background:var(--muted);margin:0 auto 12px}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:2}
+.caption{font-size:12px;color:var(--muted-foreground);max-width:360px;margin-top:10px}
+
+/* ---------- docs ---------- */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}.app{grid-template-columns:1fr}.side{display:none}}
+.panel{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px}
+.panel h3{margin-top:0}
+table.t{width:100%;border-collapse:collapse;font-size:12px}
+table.t th,table.t td{text-align:left;padding:8px 10px;border-top:1px solid var(--border);vertical-align:top}
+table.t th{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground);font-weight:600;border-top:0}
+table.t tr.hl td{background:color-mix(in srgb,var(--violet) 7%,transparent)}
+.before{display:flex;gap:6px;align-items:flex-start;color:var(--danger);font-size:14px;max-width:720px}
+.callout{border-left:3px solid var(--violet);padding:8px 12px;background:var(--card-2);border-radius:0 8px 8px 0;font-size:13px;margin:12px 0}
+ul.tight{margin:6px 0;padding-left:18px}ul.tight li{margin:3px 0}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px}
+.flow span{border:1px solid var(--border);border-radius:8px;padding:3px 8px;background:var(--card-2)}
+.flow b{color:var(--soft-foreground);font-weight:400}
+.demo-note{font-size:11px;color:var(--soft-foreground);margin-top:8px}
+.demo-ctl{display:inline-flex;gap:6px;margin-left:6px}
+.demo-ctl button{font-size:10px;border:1px dashed var(--border);background:none;border-radius:6px;padding:2px 6px;color:var(--soft-foreground)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="xs soft mono">.ai/specs/2026-11-18-inline-account-reconnect · design for approval · phase 1</div>
+  <h1>Reconnect an agent account right where the error appears</h1>
+  <div class="grad-rule"></div>
+  <p class="lead">Today an expired login leaves one red line in the chat. This design replaces it with a card that signs the account back in on the spot: in a new browser tab, with a device code or a pasted key, depending on what the agent supports. When the sign-in finishes, the turn that failed carries on, and so does everything else that was waiting on that account.</p>
+
+  <h3 class="muted" style="margin-top:24px">Before</h3>
+  <div class="panel" style="max-width:760px">
+    <div class="meta"><b>Manager</b><span>10:42</span></div>
+    <div class="before"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-top:4px;flex:none"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      <span>Sign in to Claude Code again: run its login in a terminal, or reconnect the account in Settings → Agent accounts. <u style="color:var(--foreground);font-weight:500">Try again</u></span></div>
+  </div>
+
+  <div class="controls" id="controls">
+    <div class="ctl"><label>Surface</label><div class="seg" data-key="surface">
+      <button data-v="manager">Manager chat</button><button data-v="task">Task transcript</button><button data-v="attention">Attention &amp; banner</button>
+    </div></div>
+    <div class="ctl"><label>Agent</label><select class="sel" id="runnerSel"></select></div>
+    <div class="ctl"><label>State</label><div class="seg" data-key="phase">
+      <button data-v="expired">Expired</button><button data-v="signing">Signing in</button><button data-v="success">Signed in</button><button data-v="resumed">Resumed</button><button data-v="failed">Failed</button>
+    </div></div>
+    <div class="ctl"><label>Cockpit</label><div class="seg" data-key="mode">
+      <button data-v="local">On this computer</button><button data-v="remote">Hosted / remote</button>
+    </div></div>
+    <div class="ctl"><label>After sign-in</label><div class="seg" data-key="policy">
+      <button data-v="auto">Resume automatically</button><button data-v="ask">Ask first</button>
+    </div></div>
+    <div class="ctl"><label>Accounts out</label><div class="seg" data-key="multi">
+      <button data-v="one">One</button><button data-v="many">Several</button>
+    </div></div>
+    <div class="ctl"><label>Theme</label><div class="seg" data-key="theme">
+      <button data-v="dark">Dark</button><button data-v="light">Light</button>
+    </div></div>
+  </div>
+
+  <h2 id="desktop-h">Desktop</h2>
+  <p class="muted small" id="desktop-cap"></p>
+  <div class="stage" id="stage"></div>
+  <p class="demo-note">Everything in the mockups responds to clicks: the card's buttons move it through its states, and the dashed demo buttons inside a sign-in simulate the vendor's answer.</p>
+
+  <h2>Mobile (CezarBot and the cockpit on a phone)</h2>
+  <p class="muted small">A phone is always remote, so a sign-in that only calls back to <span class="mono">localhost</span> can't work there. The phone gets the device code, a paste-the-code step, or a link that works on any device. An agent that can only sign in on the computer itself gets a <b>Finish on your computer</b> hand-off instead.</p>
+  <div class="phones" id="phones"></div>
+
+  <h2>What the card offers</h2>
+  <div class="grid2">
+    <div class="panel">
+      <h3>Actions, in order of weight</h3>
+      <ol class="tight" style="padding-left:18px">
+        <li><b>Reconnect &lt;account&gt;</b> is primary. It starts the agent's own sign-in for <i>that</i> account (same config folder as the failed run, so the session can resume).</li>
+        <li><b>Use &lt;other account&gt; instead</b> is a split button listing the healthy accounts this task or manager is allowed to use, in the account picker's order. Signed-out accounts are shown greyed with their state. One click switches and retries. A task switch starts a fresh session, as Continue with another account already does (agent-profiles spec § <span class="mono">sessionId</span>/<span class="mono">profileId</span>). The menu says so.</li>
+        <li><b>More options</b> holds <i>Already signed in? Check again</i>, <i>Open Settings → Agent accounts</i>, and last, <i>Sign in in a terminal</i> with the exact command and Copy.</li>
+      </ol>
+      <h3>One card per account, never per failure</h3>
+      <p class="small muted">Five tasks on one dead account show one live card: the newest occurrence. Older occurrences collapse to a quiet line, "Claude Code · Work was signed out here (reconnected 10:51)". Then a chat with a long history doesn't fill up with red, and one click unblocks everything.</p>
+    </div>
+    <div class="panel">
+      <h3>Resume: recommendation</h3>
+      <p class="small"><b>Resume automatically</b> is the default for the turn whose card you clicked. Clicking Reconnect there already shows you want that turn to finish.</p>
+      <p class="small">Everything else blocked on the same account (other tasks, managers, a queued watch check) is <b>listed in the success state with one "Resume all" button</b>. It doesn't restart unattended, because each of those is a model call nobody asked for at this moment (AGENTS.md § unattended cost). Watch checks need no button: the next scheduled check runs normally.</p>
+      <p class="small">With <b>Ask first</b> (a per-workspace switch beside the account settings), the originating turn waits for a single <b>Resume</b> too.</p>
+      <h3>How the user learns about the rest</h3>
+      <ul class="tight small">
+        <li>The success state names them: "Also waiting on Work: 2 tasks, 1 manager".</li>
+        <li>A toast confirms the bulk resume, with a link to the attention list.</li>
+        <li>The attention list's "Sign-in needed" group empties, the sidebar badge clears, and the banner goes away. All of it is driven by the same <span class="mono">provider-status</span> SSE event.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Mechanism, per agent</h2>
+  <p class="muted small">One new server object, a <b>login session</b>, wraps whatever each vendor offers. It reuses <span class="mono">resolveWorkspaceProfile</span>, <span class="mono">providerAuth.loginCommand</span>, the account folder, and <span class="mono">watchOpenedLogin</span> from <span class="mono">POST /providers/connect</span>. What it adds is the vendor's prompt (URL, code, key request) relayed to the card, in place of a terminal window. The rows marked “spike” must be confirmed against the installed CLI before Phase 2 relies on them. Where a spike fails, that agent keeps today's terminal hand-off, which the card still drives and watches.</p>
+  <div class="panel" style="padding:0;overflow:auto">
+  <table class="t" id="mech"></table>
+  </div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div class="panel">
+      <h3>Lifecycle of a login session</h3>
+      <div class="flow"><span>click Reconnect</span><b>→</b><span>POST /providers/login</span><b>→</b><span>spawn vendor login in the account folder</span><b>→</b><span>SSE <code>agent-login</code>: url / code / needs-input</span><b>→</b><span>user approves</span><b>→</b><span>CLI exits 0</span><b>→</b><span>fresh status probe (same account)</span><b>→</b><span>identity check</span><b>→</b><span>clear incident · SSE <code>provider-status</code></span><b>→</b><span>resume</span></div>
+      <ul class="tight small" style="margin-top:10px">
+        <li><b>Detecting success</b> relies on the vendor CLI, never on cezar reading tokens. Signs of success: the login process exits 0 (or Codex's <span class="mono">account/login/completed</span>, or OpenCode's auth callback), then a refreshed <span class="mono">profileStatus</span> must answer <i>connected</i>. For terminal-only agents, the existing <span class="mono">watchOpenedLogin</span> probes (15 s … 15 min) are the signal.</li>
+        <li><b>Account mismatch</b>: <span class="mono">readAccountIdentity</span> compares the new login with the one the account had. A different email is reported as a failure, "Signed in as another account than Work used". It does not count as success, because otherwise a task would quietly continue on someone else's plan.</li>
+        <li><b>Clearing the latch</b>: a completed login started by the user is the "evidence of a fresh login" the provider-auth spec asks for, so it clears that account's runtime incident (<span class="mono">clearRuntimeAuthFailure</span> / <span class="mono">recheckProfileAuthFailure</span>). No other path does.</li>
+        <li><b>Timeouts</b>: a session ends at the vendor's code expiry, or after 15 min, on Cancel, or when the card unmounts with no other viewer. The process tree is killed. Only one session runs per account; a second click joins it.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Resuming what was blocked</h3>
+      <ul class="tight small">
+        <li><b>Tasks</b>: an auth rejection already writes <span class="mono">provider-auth-required</span>. Phase 2 also parks the run in <i>waiting</i> with reason <span class="mono">auth</span> (attention list, "needs you") instead of only failing, and keeps <span class="mono">sessionId</span> + <span class="mono">steps[].profileId</span>. Resume is the existing <span class="mono">POST /runs/:id/continue</span> on the same account, so it reuses the same session and the agent continues with "continue where you stopped". A failed run from before this change gets the same card, and its Resume is Continue.</li>
+        <li><b>Managers</b>: resuming re-sends the failed chat turn (today's <i>Try again</i>, <span class="mono">onRetry</span>). Failed watch or job turns are not re-run; the next tick runs.</li>
+        <li><b>Who is blocked</b> is found by a server index: runs parked with <span class="mono">reason: auth</span> plus managers whose last turn failed <span class="mono">auth</span>, both keyed by <span class="mono">(provider, profileId)</span>. It is returned with the login session's success event, which is how the card can say "Also waiting: 2 tasks, 1 manager".</li>
+        <li><b>Switch account</b>: for a manager, <span class="mono">PATCH</span> its <span class="mono">agentProfile</span> (the same field as the gear's Account picker), then retry. For a task, Continue with <span class="mono">agentProfile</span> starts a fresh session (spec 2026-07-29). The choices are limited to the manager's or project's allowed accounts and to <i>connected</i> rows.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div class="panel">
+      <h3>Security</h3>
+      <ul class="tight small">
+        <li><b>No token ever reaches page JavaScript.</b> The vendor CLI completes the OAuth exchange and writes its own credential store in the account folder. The page only sees: phase, a verification URL, a short user code, an expiry time, and a fixed error reason.</li>
+        <li><b>URLs are allow-listed per agent</b> (for example <span class="mono">claude.ai</span>, <span class="mono">auth.openai.com</span>, <span class="mono">cursor.com</span>, <span class="mono">github.com/login/device</span>). A shimmed or compromised CLI can't send the user to a phishing page through cezar. Links open with <span class="mono">noopener</span>.</li>
+        <li><b>Pasted codes and API keys</b> travel once in a POST body and go straight to the CLI's stdin (or OpenCode's own auth API). They are never persisted, logged, echoed, put into SSE/NDJSON, or sent to telemetry. The field uses <span class="mono">type=password</span>, <span class="mono">autocomplete=off</span>.</li>
+        <li><b>Inputs are closed</b>: the provider enum and account id select a server descriptor. No request text becomes an argument (same rule as Connect).</li>
+        <li><b>Remote cockpits</b>: <i>starting a login on the host from elsewhere</i> is new exposure. A paired phone (an authenticated relay channel) and a local cockpit can do it. A hosted web cockpit can do it for named accounts only under the existing <span class="mono">CEZ_REMOTE_AGENT_ACCOUNTS=1</span> opt-in. Otherwise it gets today's copy-the-command 409. The cross-origin guard and the <span class="mono">accountsEnabled()</span> refusal keep their current order.</li>
+        <li><b>Dry-run</b>: <span class="mono">CEZ_DRY_RUN=1</span> uses a mock login session (a fake code, then success after 3 s) and starts no CLI.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>API sketch (zod in <span class="mono">packages/contract</span>, chained into the providers family)</h3>
+<pre class="mono small" style="white-space:pre-wrap;margin:0;color:var(--muted-foreground)">POST   /api/v1/providers/login
+       { provider, profileId?, method?: 'auto'|'device'|'paste'|'key'|'terminal' }
+    →  { sessionId, method, url?, userCode?, expiresAt? }   | 409 { error, command }
+POST   /api/v1/providers/login/:sessionId/input   { code } | { apiKey, keyProvider? }
+DELETE /api/v1/providers/login/:sessionId
+SSE    workspace 'agent-login'
+       { sessionId, provider, profileId, phase:
+         'waiting-browser'|'waiting-code'|'needs-input'|'verifying'|'connected'|'failed',
+         url?, userCode?, expiresAt?, reason?, unblocked?: { runs, managers } }
+POST   /api/v1/providers/:provider/resume-blocked  { profileId, runIds?, managerIds? }</pre>
+      <p class="small muted" style="margin-top:8px"><span class="mono">POST /providers/connect</span> stays as it is: Settings keeps working, and it remains the terminal fallback. Settings → Agent accounts' <b>Sign in again</b> then uses the same login session, so both surfaces share one flow.</p>
+    </div>
+  </div>
+
+  <h2>Open questions for approval</h2>
+  <ol class="small" style="max-width:860px">
+    <li><b>Resume policy</b>: should the clicked turn resume automatically and the rest wait for "Resume all" (recommended), or should everything blocked resume automatically?</li>
+    <li><b>Parking on auth</b>: should a task that hits an auth rejection <i>park</i> (waiting, resumable, in the attention list), instead of ending <i>failed</i> as it does today?</li>
+    <li><b>Hosted web</b>: is it enough to start a host login from a hosted web cockpit only behind <span class="mono">CEZ_REMOTE_AGENT_ACCOUNTS=1</span>, with paired phones allowed by default?</li>
+    <li><b>API-key paste</b>: offer it only where the vendor has its own store to put the key in (Codex, OpenCode)? Cursor and Gemini keep env-only keys, so cezar never stores one.</li>
+  </ol>
+</div>
+
+<script>
+const RUNNERS = {
+  claude:{name:'Claude Code',mono:'C',color:'#D97757',account:'Work',alt:'Personal',local:'browser',remote:'paste',host:'claude.ai',url:'https://claude.ai/oauth/authorize?…',cmd:"CLAUDE_CONFIG_DIR=~/.claude-work claude auth login"},
+  codex:{name:'Codex',mono:'X',color:'#0f0f0f',ring:true,account:'Work',alt:'Personal',local:'browser',remote:'device',key:true,host:'auth.openai.com',deviceUrl:'auth.openai.com/codex/device',cmd:"CODEX_HOME=~/.codex-work codex login"},
+  cursor:{name:'Cursor',mono:'Cu',color:'#3b3b3b',account:'Default',alt:'Team',local:'link',remote:'link',host:'cursor.com',url:'https://cursor.com/loginDeepControl?…',cmd:'agent login'},
+  copilot:{name:'GitHub Copilot CLI',mono:'Co',color:'#8250df',account:'Default',alt:'Org',local:'device',remote:'device',deviceUrl:'github.com/login/device',cmd:'copilot login'},
+  opencode:{name:'OpenCode',mono:'O',color:'#2563eb',account:'Default',alt:'Work',local:'key',remote:'key',key:true,cmd:'opencode auth login'},
+  kimi:{name:'Kimi Code',mono:'K',color:'#111827',ring:true,account:'Default',alt:null,local:'browser',remote:'terminal',host:'kimi.com',url:'https://kimi.com/…',cmd:'kimi login',spike:true},
+  pi:{name:'pi',mono:'π',color:'#0d9488',account:'Default',alt:null,local:'terminal',remote:'terminal',cmd:'pi /login'},
+  gemini:{name:'Gemini CLI',mono:'G',color:'#1a73e8',account:'Default',alt:null,local:'terminal',remote:'terminal',cmd:'gemini'},
+  antigravity:{name:'Antigravity CLI',mono:'A',color:'#ea4335',account:'Default',alt:null,local:'terminal',remote:'terminal',cmd:'agy'},
+  junie:{name:'Junie',mono:'J',color:'#21d789',account:'Default',alt:null,local:'terminal',remote:'terminal',cmd:'junie'},
+  omp:{name:'OMP',mono:'Ω',color:'#7c3aed',account:'Default',alt:null,local:'terminal',remote:'terminal',cmd:'omp'},
+};
+const MECH = [
+ ['claude','<code>claude auth login</code> spawned in a PTY with <code>CLAUDE_CONFIG_DIR</code> set to the account folder. Its browser launch is suppressed, and the printed authorize URL is captured and opened by the card (a tab opened synchronously on the click, then pointed at the URL, so no popup blocker gets in the way).','Local: the CLI\'s localhost callback. Hosted or phone: the CLI\'s manual flow, where the approve page shows a code and the user <b>pastes</b> it into the card, which writes it to the CLI\'s stdin.','Process exits 0, then <code>claude auth status --json</code> for that folder says <code>loggedIn</code>, then identity check.','Browser tab · paste code'],
+ ['codex','The <b>app-server</b> cezar already runs: JSON-RPC <code>account/login/start</code> returns <code>authUrl</code> (no PTY). A device code via <code>codex login --device-auth</code>. An API key via <code>codex login --with-api-key</code> on stdin.','Local: browser tab (localhost:1455 callback). Hosted or phone: <b>device code</b>.','<code>account/login/completed</code> notification, or exit 0, then <code>codex login status</code> with <code>CODEX_HOME</code>.','Browser · device code · API key'],
+ ['cursor','<code>agent login</code> with browser opening off (<code>NO_OPEN_BROWSER=1</code>, <i>spike</i>). It prints a login URL and <b>polls Cursor</b>, so nothing has to call back to the machine.','The same link works anywhere, including on the phone. Cursor\'s <code>CURSOR_API_KEY</code> stays env-only; cezar doesn\'t store it.','Process exits 0, then <code>agent status</code>, then the existing Verify-connection model refresh (#2251).','Link (any device)'],
+ ['copilot','<code>copilot login</code> runs GitHub\'s <b>device flow</b>. The code and <code>github.com/login/device</code> are parsed from its output.','Identical locally and remotely.','Exit 0, then the ACP probe.','Device code'],
+ ['opencode','cezar already runs <code>opencode serve</code>. Its auth API (<code>PUT /auth/:id</code> for a key; provider OAuth <code>authorize</code>/<code>callback</code> for OAuth providers, <i>spike</i>) replaces the interactive <code>opencode auth login</code> picker.','A key paste with a provider select works anywhere. OAuth providers follow their own method (<i>auto</i> or <i>code</i>).','<code>opencode auth list</code> for the account.','API key · provider OAuth'],
+ ['kimi','<code>kimi login</code> with output captured (<i>spike</i>: browser vs device flow).','Remote falls back to the terminal command until the spike says otherwise.','Exit 0, then <code>kimi provider list</code>.','Browser (spike)'],
+ ['pi','<code>/login</code> lives inside pi\'s TUI, so there is no headless entry.','Terminal hand-off (existing Connect) locally; the command plus Check again remotely.','<code>watchOpenedLogin</code> probes.','Terminal'],
+ ['gemini','There is no login subcommand: the TUI\'s <code>/auth</code> or a <code>GEMINI_API_KEY</code> env var, which cezar doesn\'t store.','Terminal hand-off and Check again.','Probes.','Terminal'],
+ ['antigravity','The first interactive <code>agy</code> run does the Google sign-in.','Terminal hand-off and Check again.','<code>agy models</code> probes.','Terminal'],
+ ['junie','The interactive <code>junie</code> run.','Terminal hand-off and Check again.','Probes.','Terminal'],
+ ['omp','The interactive <code>omp</code> run, or provider keys in env.','Terminal hand-off and Check again.','Probes (agent.db).','Terminal'],
+];
+
+const S = {surface:'manager',runner:'claude',phase:'expired',mode:'local',policy:'auto',multi:'one',theme:'dark',more:false,menu:false,phoneSheet:true,failReason:0};
+const $ = (s,r=document)=>r.querySelector(s);
+const esc = s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function icon(id,sm){const r=RUNNERS[id];return `<span class="ricon${sm?' sm':''}" style="background:${r.color};${r.ring?'box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)':''}" aria-hidden="true">${r.mono}</span>`}
+function method(r,mode){return mode==='remote'?r.remote:r.local}
+function methodFor(id,mode){return method(RUNNERS[id],mode)}
+
+let deadline = Date.now()+15*60*1000;
+function countdown(){const ms=Math.max(0,deadline-Date.now());const m=Math.floor(ms/60000),s=Math.floor(ms/1000)%60;return `${m}:${String(s).padStart(2,'0')}`}
+setInterval(()=>document.querySelectorAll('[data-cd]').forEach(e=>e.textContent=countdown()),1000);
+
+const FAIL = {
+  browser:['The sign-in tab was closed before you approved access.','Signed in as another account than Work used, so cezar kept the task paused rather than continue on someone else\'s plan.'],
+  paste:['That code was not accepted. Codes are single-use and expire after a few minutes.'],
+  device:['The code expired before it was approved.'],
+  link:['Cursor did not confirm the sign-in within 15 minutes.'],
+  key:['The key was rejected by the provider.'],
+  terminal:['No sign-in was detected yet. Finish it in the terminal, then check again.'],
+};
+
+/* ---------------- the card ---------------- */
+function card(ctx){
+  const id=ctx.runner||S.runner, r=RUNNERS[id], m=method(r,S.mode), phase=ctx.phase||S.phase;
+  const acct=r.account, who=`${r.name} · ${acct}`;
+  const compact=!!ctx.compact;
+  const blocked = `Also waiting on ${esc(acct)}: <a href="#" onclick="return false">2 tasks</a> · <a href="#" onclick="return false">1 manager</a>`;
+  const switchBtn = r.alt ? `<span class="rel"><button class="btn btn-outline" data-act="menu">Use ${esc(r.alt)} instead <span class="soft">▾</span></button>${S.menu&&!ctx.noMenu?switchMenu(id):''}</span>` : '';
+  const moreBtn = `<button class="btn btn-ghost" data-act="more" aria-expanded="${S.more}">More options ${S.more?'▴':'▾'}</button>`;
+
+  if(phase==='expired'){
+    return `<div class="rc" role="group" aria-label="${esc(who)} is signed out">
+      <div class="rc-head">${icon(id)}<div style="min-width:0">
+        <div class="rc-title">${esc(who)} is signed out <span class="pill danger">Login expired</span></div>
+        <div class="rc-sub">${ctx.task?'The run paused at its first request after the login expired. Reconnect and it continues from the same session.':'This turn stopped before answering. Reconnect and it picks up where it stopped.'}</div>
+      </div></div>
+      <div class="rc-actions">
+        <button class="btn btn-primary" data-act="reconnect">${m==='terminal'&&S.mode==='local'?'Sign in to '+esc(acct)+' ↗':'Reconnect '+esc(acct)}</button>
+        ${switchBtn}${moreBtn}
+      </div>
+      ${S.more?moreBlock(id):''}
+      ${compact?'':`<div class="rc-foot"><span class="dot" style="background:var(--pending)"></span>${blocked}</div>`}
+    </div>`;
+  }
+  if(phase==='signing'){
+    return `<div class="rc busy" role="group" aria-live="polite">
+      <div class="rc-head"><span class="spin" style="margin-top:4px"></span><div style="min-width:0;flex:1">
+        <div class="rc-title">${icon(id,true)} Signing in to ${esc(who)}</div>
+        ${signingBody(id,m,compact)}
+      </div></div>
+      <div class="rc-actions">${signingActions(id,m)}<button class="btn btn-ghost" data-act="cancel">Cancel</button>
+        <span class="demo-ctl"><button data-act="sim-ok">demo: approve</button><button data-act="sim-fail">demo: fail</button></span></div>
+    </div>`;
+  }
+  if(phase==='success'){
+    if(S.policy==='auto') return `<div class="rc ok" role="status">
+      <div class="rc-head"><span style="color:var(--success-strong);font-weight:700">✓</span><div style="flex:1">
+        <div class="rc-title">${esc(who)} is signed in again</div>
+        <div class="rc-sub" style="display:flex;gap:6px;align-items:center"><span class="spin" style="width:11px;height:11px"></span>${ctx.task?'Continuing the run from the same session…':'Resuming this turn…'}</div>
+      </div></div>
+      ${unblockedBlock(acct,compact)}
+    </div>`;
+    return `<div class="rc ok" role="status">
+      <div class="rc-head"><span style="color:var(--success-strong);font-weight:700">✓</span><div style="flex:1">
+        <div class="rc-title">${esc(who)} is signed in again</div>
+        <div class="rc-sub">${ctx.task?'The run is paused where it stopped.':'This turn is waiting for you.'}</div>
+      </div></div>
+      <div class="rc-actions"><button class="btn btn-primary" data-act="resume">Resume ${ctx.task?'run':'turn'}</button></div>
+      ${unblockedBlock(acct,compact,true)}
+    </div>`;
+  }
+  if(phase==='resumed'){
+    return `<div class="collapsed-note"><span style="color:var(--success-strong)">✓</span> Reconnected ${esc(who)} · resumed${S.mode==='remote'?' from '+(compact?'this phone':'a remote cockpit'):''} at 10:51</div>`;
+  }
+  if(phase==='failed'){
+    const reasons=FAIL[m]||FAIL.browser, reason=reasons[S.failReason%reasons.length];
+    return `<div class="rc" role="alert">
+      <div class="rc-head">${icon(id)}<div style="min-width:0">
+        <div class="rc-title">Sign-in to ${esc(who)} didn't finish</div>
+        <div class="rc-sub">${esc(reason)}</div>
+      </div></div>
+      <div class="rc-actions"><button class="btn btn-primary" data-act="reconnect">Try again</button>${switchBtn}${moreBtn}</div>
+      ${S.more?moreBlock(id):''}
+    </div>`;
+  }
+}
+function switchMenu(id){
+  const r=RUNNERS[id];
+  return `<div class="menu" role="menu">
+    <div class="hd">Accounts this ${S.surface==='task'?'task':'manager'} may use</div>
+    <button class="mi" data-act="switch">${icon(id,true)} ${esc(r.name)} · ${esc(r.alt)} <span class="pill ok" style="margin-left:auto">Signed in</span></button>
+    <button class="mi" disabled>${icon(id,true)} ${esc(r.name)} · ${esc(r.account)} <span class="pill danger" style="margin-left:auto">Signed out</span></button>
+    ${id!=='codex'?`<button class="mi" data-act="switch">${icon('codex',true)} Codex · Default <span class="pill ok" style="margin-left:auto">Signed in</span></button>`:''}
+    <div class="hd" style="text-transform:none;letter-spacing:0;font-size:11px;padding:6px 8px">${S.surface==='task'?'Switching account starts a fresh session; the task keeps its worktree and changes.':'The manager keeps its memory; the next turn starts a fresh transcript.'}</div>
+  </div>`;
+}
+function moreBlock(id){
+  const r=RUNNERS[id];
+  return `<div class="rc-more">
+    <div class="row"><button class="btn-link btn" data-act="check">Already signed in? Check again</button></div>
+    <div class="row"><a href="#" onclick="return false" class="btn-link btn">Open Settings → Agent accounts</a></div>
+    <div class="row muted">Last resort, on the machine running cezar:</div>
+    <div class="cmdline"><code>${esc(r.cmd)}</code><button class="btn btn-ghost" data-copy="${esc(r.cmd)}">Copy</button></div>
+  </div>`;
+}
+function signingBody(id,m,compact){
+  const r=RUNNERS[id];
+  if(m==='browser') return `<div class="rc-sub">We opened <b>${esc(r.host)}</b> in a new tab. Approve access there and this card updates by itself.</div>
+    <div class="steps"><span class="done">✓ Sign-in started</span><span class="now">● Approve in the browser</span><span>○ Verify &amp; resume</span></div>`;
+  if(m==='link') return `<div class="rc-sub">Open the ${esc(r.name)} sign-in ${S.mode==='remote'?'on this or any device':'in your browser'} and approve. Cursor confirms it to cezar directly, with no callback to this computer.</div>
+    <div class="cmdline" style="margin-top:8px"><code>${esc(r.url)}</code><button class="btn btn-ghost" data-copy="${esc(r.url)}">Copy link</button></div>`;
+  if(m==='device') return `<div class="rc-sub">Enter this code at <b>${esc(r.deviceUrl)}</b>${S.mode==='remote'?', on this or any device':''}.</div>
+    <div class="codebox"><span class="code" aria-label="one-time code">WDJB-MJHT</span><button class="btn btn-outline" data-copy="WDJB-MJHT">Copy code</button><span class="small soft">Expires in <span class="mono" data-cd>${countdown()}</span></span></div>`;
+  if(m==='paste') return `<div class="steps" style="margin-top:6px"><span class="done">✓ Sign-in started</span><span class="now">● Approve &amp; copy the code</span><span>○ Paste it here</span></div>
+    <div class="rc-sub" style="margin-top:8px">1. Open the sign-in link on ${compact?'this phone':'any device'} and approve. Claude then shows a one-time code.<br>2. Paste that code here. It goes straight to Claude Code on your computer.</div>
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><input class="inp" type="password" autocomplete="off" placeholder="Paste the code from Claude" style="flex:1;min-width:160px"><button class="btn btn-primary" data-act="sim-ok">Sign in</button></div>`;
+  if(m==='key') return `<div class="rc-sub">${id==='opencode'?'Paste an API key for the provider this account used. It goes straight into OpenCode\'s own credential store; cezar doesn\'t keep it.':'Paste an OpenAI API key. Codex stores it in this account\'s folder; cezar doesn\'t keep it.'}</div>
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">${id==='opencode'?'<select class="sel"><option>Anthropic</option><option>OpenAI</option><option>OpenRouter</option></select>':''}<input class="inp" type="password" autocomplete="off" placeholder="sk-…" style="flex:1;min-width:140px"><button class="btn btn-primary" data-act="sim-ok">Save &amp; sign in</button></div>`;
+  if(m==='terminal') return S.mode==='local'
+    ? `<div class="rc-sub">${esc(r.name)} signs in only in its own window. We opened it in Terminal; finish there and this card notices by itself.</div>`
+    : `<div class="rc-sub">${esc(r.name)} can only sign in on the computer running cezar.${compact?' We sent a notification there.':''} Run this there, then come back:</div>
+       <div class="cmdline" style="margin-top:8px"><code>${esc(r.cmd)}</code><button class="btn btn-ghost" data-copy="${esc(r.cmd)}">Copy</button></div>`;
+  return '';
+}
+function signingActions(id,m){
+  const r=RUNNERS[id];
+  if(m==='browser') return `<button class="btn btn-outline">Reopen sign-in page ↗</button>`;
+  if(m==='link') return `<button class="btn btn-outline">Open sign-in ↗</button>`;
+  if(m==='device') return `<button class="btn btn-outline">Open ${esc(r.deviceUrl.split('/')[0])} ↗</button>`;
+  if(m==='paste') return `<button class="btn btn-outline">Open sign-in link ↗</button>`;
+  if(m==='terminal') return S.mode==='local'?`<button class="btn btn-outline">Open again</button><button class="btn btn-outline" data-act="sim-ok">I've signed in</button>`:`<button class="btn btn-outline" data-act="sim-ok">I've signed in · Check</button>`;
+  return '';
+}
+function unblockedBlock(acct,compact,ask){
+  if(ask) return `<div class="rc-more"><div class="small">Also waiting on ${esc(acct)}:</div>
+    <div class="checks"><label><input type="checkbox" checked> Task “Bump vite to 7” · paused 10:40</label><label><input type="checkbox" checked> Task “Docs: managers page” · paused 10:41</label><label><input type="checkbox" checked> Manager “Triage” · chat turn</label></div>
+    <div class="row"><button class="btn btn-outline" data-act="resume-all">Resume all 3</button></div></div>`;
+  if(compact) return `<div class="rc-foot">2 tasks and 1 manager also wait on ${esc(acct)} · <a href="#" onclick="return false" data-act="resume-all">Resume all</a></div>`;
+  return `<div class="rc-more"><div class="row small"><span>Also waiting on ${esc(acct)}: 2 tasks · 1 manager</span><button class="btn btn-outline" data-act="resume-all">Resume all 3</button><span class="soft xs">Watch checks resume on their next tick.</span></div></div>`;
+}
+
+/* ---------------- multi ---------------- */
+function multiCard(compact){
+  const rows=[['claude','Work','this manager',true],['codex','Default','2 tasks',false],['copilot','Default','1 task',false]];
+  return `<div class="rc" role="group">
+    <div class="rc-title">3 agent accounts are signed out</div>
+    <div class="rc-sub">Reconnect them one by one; each resumes its own work.</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+    ${rows.map(([id,a,b,cur])=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:${cur?'var(--card-2)':'transparent'};border:1px solid ${cur?'var(--border)':'transparent'}">
+      ${icon(id,true)}<span class="small" style="flex:1;min-width:0"><b>${RUNNERS[id].name} · ${a}</b> <span class="soft">blocks ${b}</span></span>
+      <button class="btn ${cur?'btn-primary':'btn-outline'}" data-act="reconnect" data-runner="${id}">Reconnect</button></div>`).join('')}
+    </div>
+    ${compact?'':'<div class="rc-foot"><a href="#" onclick="return false">Open Settings → Agent accounts</a></div>'}
+  </div>`;
+}
+
+/* ---------------- surfaces ---------------- */
+function sidebar(active){
+  const badge = S.phase==='resumed'||S.phase==='success'?'':'<span class="cnt"><span class="pill danger">'+(S.multi==='many'?3:1)+'</span></span>';
+  return `<aside class="side">
+    <div class="brand"><b></b>cezar</div>
+    <div class="nav">New task</div>
+    <div class="nav ${active==='attention'?'on':''}">Attention ${badge}</div>
+    <div class="nav">Tasks</div>
+    <div class="sec">Managers</div>
+    <div class="nav ${active==='manager'?'on':''}"><span class="dot" style="background:${S.phase==='expired'||S.phase==='failed'?'var(--danger)':'var(--success)'}"></span>Release captain</div>
+    <div class="nav"><span class="dot" style="background:var(--success)"></span>Triage</div>
+    <div class="sec">cezar</div>
+    <div class="nav ${active==='task'?'on':''}"><span class="dot" style="background:${S.phase==='expired'||S.phase==='failed'?'var(--pending)':'var(--success)'}"></span>Fix flaky relay test</div>
+    <div class="nav"><span class="dot" style="background:var(--muted-foreground)"></span>Bump vite to 7</div>
+    <div class="nav"><span class="dot" style="background:var(--success)"></span>Docs: managers page</div>
+  </aside>`;
+}
+function resumedTail(task){
+  if(S.phase!=='resumed') return '';
+  return task
+    ? `<div class="tool"><b>⇄</b> continued on Claude Code · Work · same session</div><div class="tool"><b>Bash</b> npm test -- packages/cezar/src/relay</div><div class="msg-ai streaming">The flaky case was a race between the socket close and the retry timer</div>`
+    : `<article class="msg-ai"><div class="meta"><b>Manager</b><span>10:51</span></div><div class="streaming">PR #2304 is green now and the review is approved. I'd merge it after #2299 so the changelog stays in order</div></article>`;
+}
+function managerSurface(){
+  const r=RUNNERS[S.runner];
+  return `<div class="app">${sidebar('manager')}<section class="main">
+    <div class="topbar"><span class="t">Release captain</span><span class="badge">${icon(S.runner,true)} ${esc(S.runner)} · ${esc(r.account)} · opus</span><span style="margin-left:auto" class="soft small">⚙</span></div>
+    <div class="scroll" style="position:relative">
+      <div class="msg-user">What's left before we can cut 1.4?</div>
+      <article class="msg-ai"><div class="meta"><b>Manager</b><span>10:31</span></div>Two PRs are open on the milestone: #2304 (relay retry) and #2299 (header focus). #2299 is approved; #2304 is waiting on CI.</article>
+      <div class="msg-user">Check #2304 again and tell me if it's mergeable.</div>
+      <article class="msg-ai"><div class="meta"><b>Manager</b><span>10:42</span></div>
+        ${S.multi==='many'&&S.phase==='expired'?multiCard():card({})}
+      </article>
+      ${resumedTail(false)}
+      ${toast()}
+    </div>
+    <div class="composer"><div class="ph">Message Release captain…</div><div class="bar">${icon(S.runner,true)} ${esc(r.account)}<span class="send">↑</span></div></div>
+  </section></div>`;
+}
+function taskSurface(){
+  const r=RUNNERS[S.runner];
+  const chip = S.phase==='resumed'?'<span class="pill ok">Running</span>':S.phase==='success'&&S.policy==='auto'?'<span class="pill ok">Resuming</span>':'<span class="pill warn">Needs sign-in</span>';
+  return `<div class="app">${sidebar('task')}<section class="main">
+    <div class="topbar"><span class="t">Fix flaky relay test</span>${chip}<span class="badge">${icon(S.runner,true)} ${esc(S.runner)} · ${esc(r.account)} · opus</span><span class="mono soft xs" style="margin-left:auto">cez/4f2a91c0</span></div>
+    <div class="scroll" style="position:relative">
+      <div class="msg-user">The relay reconnect test fails ~1 in 10 on CI. Find the race and fix it.</div>
+      <div class="tool"><b>Read</b> packages/cezar/src/relay/socket.ts</div>
+      <div class="tool"><b>Grep</b> "scheduleRetry" packages/cezar/src/relay</div>
+      <div class="msg-ai">The retry timer is armed before <code>close</code> settles, so a fast reconnect can see the old socket. Let me run the test in a loop to confirm.</div>
+      <div class="tool" style="color:var(--danger-strong)"><b style="color:inherit">✗</b> ${esc(r.name)} rejected the request: authentication required</div>
+      ${S.multi==='many'&&S.phase==='expired'?multiCard():card({task:true})}
+      ${resumedTail(true)}
+      ${toast()}
+    </div>
+    <div class="composer"><div class="ph">${S.phase==='resumed'?'Message the agent…':'Reconnect to continue, or send a message to continue on another account…'}</div><div class="bar">${icon(S.runner,true)} ${esc(r.account)} · Continue<span class="send">↑</span></div></div>
+  </section></div>`;
+}
+function attentionSurface(){
+  const r=RUNNERS[S.runner];
+  const out = S.phase!=='success'&&S.phase!=='resumed';
+  const banner = out?`<div class="banner">${icon(S.runner,true)}<span><b>${esc(r.name)} · ${esc(r.account)}</b> is signed out. 3 items are waiting on it.</span><button class="btn btn-primary" data-act="reconnect" style="margin-left:auto">Reconnect</button><button class="btn btn-ghost">Dismiss</button></div>`:'';
+  const rows = out ? `
+    <div class="att-row" style="background:var(--card-2)">${icon(S.runner)}<div class="grow"><b>${esc(r.name)} · ${esc(r.account)}</b> signed out<div class="xs soft">Blocks “Fix flaky relay test”, “Bump vite to 7”, manager “Release captain”</div></div>${S.phase==='signing'?'<span class="spin"></span><span class="small muted">Signing in…</span>':'<button class="btn btn-primary" data-act="reconnect">Reconnect</button>'}</div>
+    ${S.multi==='many'?`<div class="att-row">${icon('codex')}<div class="grow"><b>Codex · Default</b> signed out<div class="xs soft">Blocks 2 tasks</div></div><button class="btn btn-outline" data-act="reconnect">Reconnect</button></div>`:''}`
+    : `<div class="att-row"><span style="color:var(--success-strong)">✓</span><div class="grow">${esc(r.name)} · ${esc(r.account)} is back. ${S.policy==='auto'||S.phase==='resumed'?'Resumed 3 items.':'3 items can resume.'}</div>${S.policy==='ask'&&S.phase==='success'?'<button class="btn btn-outline" data-act="resume-all">Resume all 3</button>':''}</div>`;
+  return `<div class="app">${sidebar('attention')}<section class="main">${banner}
+    <div class="topbar"><span class="t">Attention</span></div>
+    <div class="scroll" style="position:relative">
+      <div class="xs soft" style="text-transform:uppercase;letter-spacing:.06em">Sign-in needed</div>
+      <div class="att">${rows}</div>
+      <div class="xs soft" style="text-transform:uppercase;letter-spacing:.06em;margin-top:8px">Needs you</div>
+      <div class="att"><div class="att-row"><span class="dot" style="background:var(--pending)"></span><div class="grow">Docs: managers page<div class="xs soft">Asked: which screenshot set to use?</div></div><button class="btn btn-ghost">Open</button></div></div>
+      ${S.phase==='signing'?`<div class="rc busy" style="max-width:560px">${signingInline()}</div>`:''}
+      ${toast()}
+    </div></section></div>`;
+}
+function signingInline(){const r=RUNNERS[S.runner];const m=method(r,S.mode);return `<div class="rc-title"><span class="spin"></span>${icon(S.runner,true)} Signing in to ${esc(r.name)} · ${esc(r.account)}</div>${signingBody(S.runner,m)}<div class="rc-actions">${signingActions(S.runner,m)}<button class="btn btn-ghost" data-act="cancel">Cancel</button><span class="demo-ctl"><button data-act="sim-ok">demo: approve</button><button data-act="sim-fail">demo: fail</button></span></div>`}
+function toast(){
+  if(!(S.phase==='resumed'||(S.phase==='success'&&S.policy==='auto'&&S.surface==='attention'))) return '';
+  const r=RUNNERS[S.runner];
+  return `<div class="toast" role="status"><span style="color:var(--success-strong)">✓</span><div><b>${esc(r.name)} · ${esc(r.account)} is back</b><div class="muted">Resumed this ${S.surface==='task'?'run':'turn'}${S.policy==='auto'?'':''}. 2 tasks and 1 manager were also waiting · <u>Review</u></div></div></div>`;
+}
+
+/* ---------------- phones ---------------- */
+function phone(kind){
+  const r=RUNNERS[S.runner], m=method(r,'remote');
+  const savedMode=S.mode; S.mode='remote';
+  const showSheet = S.phase==='signing';
+  let body, title;
+  if(kind==='chat'){
+    title='Release captain';
+    body=`<div class="msg-user">Check #2304 again and tell me if it's mergeable.</div>
+      <article class="msg-ai"><div class="meta"><b>Manager</b><span>10:42</span></div>${S.multi==='many'&&S.phase==='expired'?multiCard(true):(showSheet?card({phase:'expired',compact:true,noMenu:true}):card({compact:true,noMenu:true}))}</article>${resumedTail(false)}`;
+  } else {
+    title='Fix flaky relay test';
+    body=`<div class="tool"><b>Read</b> relay/socket.ts</div><div class="msg-ai small">The retry timer is armed before <code>close</code> settles…</div>
+      <div class="tool" style="color:var(--danger-strong)">✗ authentication required</div>${showSheet?card({phase:'expired',compact:true,task:true,noMenu:true}):card({compact:true,task:true,noMenu:true})}${resumedTail(true)}`;
+  }
+  const sheet = showSheet?`<div class="scrim"></div><div class="sheet"><div class="grab"></div>
+     <div class="rc-title" style="font-size:15px">${icon(S.runner)} Reconnect ${esc(r.name)} · ${esc(r.account)}</div>
+     ${m==='terminal'?signingBody(S.runner,'terminal',true):signingBody(S.runner,m,true)}
+     <div class="rc-actions" style="flex-direction:column;align-items:stretch">${phoneSheetActions(m)}<button class="btn btn-ghost" data-act="cancel" style="justify-content:center">Cancel</button>
+     <span class="demo-ctl" style="justify-content:center"><button data-act="sim-ok">demo: approve</button><button data-act="sim-fail">demo: fail</button></span></div></div>`:'';
+  const out = S.phase==='expired'||S.phase==='failed'||S.phase==='signing';
+  const html = `<div><div class="phone"><div class="notch"></div><div class="p-status"></div>
+    <div class="p-top"><span class="soft">‹</span><span class="t">${title}</span>${icon(S.runner,true)}</div>
+    <div class="p-scroll">${body}</div>
+    <div class="p-bar"><span>${'<i></i>'}Tasks</span><span class="on"><i></i>Managers</span><span><i>${out?'<em>'+(S.multi==='many'?3:1)+'</em>':''}</i>Attention</span><span><i></i>Computers</span></div>
+    ${sheet}</div>
+    <div class="caption">${kind==='chat'?'CezarBot · manager chat. Reconnect opens a bottom sheet with the method that works from a phone.':'Cockpit on a phone · task transcript. The same card, with full-width actions.'}</div></div>`;
+  S.mode=savedMode; return html;
+}
+function phoneSheetActions(m){
+  const r=RUNNERS[S.runner];
+  if(m==='device') return `<button class="btn btn-primary" style="justify-content:center;height:36px">Copy code &amp; open ${esc(r.deviceUrl.split('/')[0])} ↗</button>`;
+  if(m==='paste') return `<button class="btn btn-outline" style="justify-content:center;height:36px">Open sign-in link ↗</button>`;
+  if(m==='link') return `<button class="btn btn-primary" style="justify-content:center;height:36px">Open Cursor sign-in ↗</button>`;
+  if(m==='key') return '';
+  return `<button class="btn btn-primary" style="justify-content:center;height:36px">Finish on my computer</button><button class="btn btn-outline" data-act="sim-ok" style="justify-content:center">I've signed in · Check</button>`;
+}
+
+/* ---------------- render ---------------- */
+const CAPS={
+  manager:'Manager chat. The card replaces the red line inside the failed turn; the composer stays usable.',
+  task:'Task transcript. A run that hit an auth rejection parks as “Needs sign-in” (amber), and its card sits where the error happened.',
+  attention:'The attention list groups sign-in incidents per account. The global runtime-auth banner gains an inline Reconnect.'
+};
+function render(){
+  document.documentElement.dataset.theme=S.theme;
+  document.querySelectorAll('.seg').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',S[seg.dataset.key]===b.dataset.v)));
+  $('#desktop-cap').textContent=CAPS[S.surface]+(S.mode==='remote'?' Shown as a hosted/remote cockpit: no localhost callback, so device codes, pasted codes and links replace the browser tab.':'');
+  const url=S.mode==='remote'?'https://cezar.example.internal':'http://127.0.0.1:4317';
+  $('#stage').innerHTML=`<div class="chrome"><i></i><i></i><i></i><span class="url">${url}/p/cezar/${S.surface==='manager'?'manager/release-captain':S.surface==='task'?'runs/4f2a91c0':'attention'}</span></div>`+
+    (S.surface==='manager'?managerSurface():S.surface==='task'?taskSurface():attentionSurface());
+  $('#phones').innerHTML=phone('chat')+phone('task');
+}
+function mechTable(){
+  $('#mech').innerHTML=`<tr><th>Agent</th><th>How cezar starts the sign-in (no terminal)</th><th>Local vs hosted / phone</th><th>Success signal</th><th>Card shows</th></tr>`+
+    MECH.map(([id,a,b,c,d])=>`<tr data-r="${id}" class="${id===S.runner?'hl':''}"><td style="white-space:nowrap">${icon(id,true)} ${RUNNERS[id].name}</td><td>${a}</td><td>${b}</td><td>${c}</td><td><span class="pill">${d}</span></td></tr>`).join('');
+}
+
+let timer;
+document.addEventListener('click',e=>{
+  const seg=e.target.closest('.seg button');
+  if(seg){S[seg.parentElement.dataset.key]=seg.dataset.v;S.more=false;S.menu=false;if(seg.parentElement.dataset.key==='phase'&&S.phase==='signing')deadline=Date.now()+15*60*1000;render();return}
+  const cp=e.target.closest('[data-copy]');
+  if(cp){navigator.clipboard?.writeText(cp.dataset.copy).catch(()=>{});const t=cp.textContent;cp.textContent='Copied';setTimeout(()=>cp.textContent=t,1200);return}
+  const a=e.target.closest('[data-act]'); if(!a) return;
+  e.preventDefault();
+  const act=a.dataset.act; clearTimeout(timer);
+  if(a.dataset.runner){S.runner=a.dataset.runner;$('#runnerSel').value=S.runner;S.multi='one'}
+  if(act==='reconnect'){S.phase='signing';S.more=false;S.menu=false;deadline=Date.now()+15*60*1000}
+  else if(act==='cancel'){S.phase='expired'}
+  else if(act==='sim-ok'||act==='check'){S.phase='success';S.more=false;if(S.policy==='auto')timer=setTimeout(()=>{S.phase='resumed';render()},2200)}
+  else if(act==='sim-fail'){S.phase='failed';S.failReason++}
+  else if(act==='resume'||act==='resume-all'){S.phase='resumed'}
+  else if(act==='switch'){S.menu=false;S.phase='resumed'}
+  else if(act==='more'){S.more=!S.more;S.menu=false}
+  else if(act==='menu'){S.menu=!S.menu;S.more=false}
+  render(); mechTable();
+});
+const sel=$('#runnerSel');
+sel.innerHTML=Object.entries(RUNNERS).map(([k,r])=>`<option value="${k}">${r.name}</option>`).join('');
+sel.addEventListener('change',()=>{S.runner=sel.value;S.more=false;S.menu=false;render();mechTable()});
+// Deep links such as ?runner=copilot&phase=signing&mode=remote
+for(const [k,v] of new URLSearchParams(location.search)) if(k in S) S[k]=v;
+sel.value=S.runner;
+render(); mechTable();
+</script>
+</body>
+</html>
