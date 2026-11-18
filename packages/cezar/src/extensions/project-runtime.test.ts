@@ -43,8 +43,8 @@ it('declares all default canonical artifacts before webhook storage and shares t
  let service:Awaited<ReturnType<typeof WebhookService.open>>
  try{
   service=await WebhookService.open({...project,mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler()})
-  expect(observed).toEqual(['telegram'])
-  expect(projectChatExtensions(project.root).map(provider=>provider.id).sort()).toEqual(['telegram'])
+  expect(observed).toEqual(['telegram','slack','discord'])
+  expect(projectChatExtensions(project.root).map(provider=>provider.id).sort()).toEqual(['discord','slack','telegram'])
   expect((await owner.manager.list()).every(record=>record.status!=='running')).toBe(true)
  }finally{await service?.dispose();vi.unstubAllEnvs()}
 })

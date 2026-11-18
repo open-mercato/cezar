@@ -105,8 +105,8 @@ it('scopes inactive binding diagnostics and release to the provider even for mat
     const binding = await telegram.bind({ projectId: 'project', root: home, installationId: 'instance' }); await telegram.release();
     const scan = (provider: string) => new ChatBindings({ provider, mode: () => 'local', projects: async () => [] });
     const row = (await scan('telegram').scan()).bindings[0]!;
-    expect((await scan('acme/chat').scan()).bindings).toEqual([]);
-    await expect(scan('acme/chat').release('123', row.inboundRevision)).rejects.toMatchObject({ code: 'binding_missing' });
+    expect((await scan('discord').scan()).bindings).toEqual([]);
+    await expect(scan('discord').release('123', row.inboundRevision)).rejects.toMatchObject({ code: 'binding_missing' });
     const rightful = await BotLease.acquire('123', false, 'telegram');
     try { expect(await rightful.binding()).toEqual(binding); }
     finally { await rightful.release(); }
@@ -114,7 +114,7 @@ it('scopes inactive binding diagnostics and release to the provider even for mat
   } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
 });
 
-const nativeProviders = ['telegram'];
+const nativeProviders = ['telegram', 'slack', 'discord'];
 const providerModes = nativeProviders.flatMap(provider => [false, true].flatMap(nativeDryRun =>
   [false, true].flatMap(qualifiedDryRun => [false, true].map(reverse => ({ provider, nativeDryRun, qualifiedDryRun, reverse })))));
 it.each(providerModes)('isolates qualified/native scans and release: %j', async ({ provider, nativeDryRun, qualifiedDryRun, reverse }) => {

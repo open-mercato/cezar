@@ -36,7 +36,7 @@
     "test:watch": "vitest",
     "test:unit": "npm run test:unit -w @open-mercato/cezar",
     "test:package": "npm run test:package -w @open-mercato/cezar",
-    "test:chat-plugins": "npm run build -w @open-mercato/cezar-extension-sdk && npm test --prefix packages/chat-plugins/telegram",
+    "test:chat-plugins": "npm run build -w @open-mercato/cezar-extension-sdk && npm test --prefix packages/chat-plugins/telegram && npm test --prefix packages/chat-plugins/slack && npm test --prefix packages/chat-plugins/discord",
     "test:e2e": "sh .ai/scripts/e2e.sh",
     "test:e2e:runner": "sh .ai/scripts/e2e-runner.sh",
     "pretypecheck": "npm run build:server",

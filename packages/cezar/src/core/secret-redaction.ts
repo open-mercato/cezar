@@ -66,7 +66,7 @@ const TOKEN_PATTERNS: readonly RegExp[] = [
   /ASIA[0-9A-Z]{16}/g, // AWS temporary access key id
   /AIza[0-9A-Za-z_-]{35}/g, // Google API key
   /ya29\.[0-9A-Za-z_-]+/g, // Google OAuth access token
-  /xox[baprs]-[0-9A-Za-z-]{10,}/g, // Slack
+  /(?:xoxe\.(?:xapp|xoxb)|xapp|xox[baprse])-+[0-9A-Za-z-]{10,}/g, // Slack access and refresh tokens
   /glpat-[0-9A-Za-z_-]{20,}/g, // GitLab PAT
 ];
 

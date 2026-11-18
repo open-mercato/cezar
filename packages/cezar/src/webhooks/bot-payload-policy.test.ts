@@ -20,6 +20,8 @@ afterEach(async () => {
 });
 const providers = [
   { format: 'telegram.v1', url: `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`, chatId: '42', botId: '123456789' },
+  { format: 'slack.v1', url: 'https://hooks.slack.com/services/TA/BB/old', destination: 'https://slack.com/api/chat.postMessage', chatId: 'private:TTEAM:UBOT:DCHAN', botId: 'TTEAM:UBOT' },
+  { format: 'discord.v1', url: `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(60)}`, destination: 'https://discord.com/api/v10', chatId: 'discord:dm:123', botId: '456' },
 ] as const;
 async function setup(provider: typeof providers[number], graceSeconds: 0 | 60) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'bot-payload-')); roots.push(root);
@@ -34,6 +36,7 @@ async function setup(provider: typeof providers[number], graceSeconds: 0 | 60) {
   vi.spyOn(service.chat, 'send').mockImplementation((_receiver, request) => send(request));
   const store = RunStore.open(dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
   let receiver = (await service.create({ name: 'Bot', format: provider.format, url: provider.url, ...(provider.format === 'telegram.v1' ? { chatId: provider.chatId } : {}), profile: 'standard', includeAgentExcerpt: true, graceSeconds })).receiver;
+  if ('destination' in provider) await service.endpoints.attachChat({ receiverId: receiver.id, expectedRevision: receiver.revision, format: provider.format, url: provider.destination, chatId: provider.chatId, botId: provider.botId, credential: 'fixture-credential' });
   receiver = service.list().receivers[0]!;
   await service.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'success', true);
   receiver = await service.activate(receiver.id, service.list().receivers[0]!.revision);

@@ -1,0 +1,35 @@
+{
+  "id": "open-mercato.discord",
+  "name": "Discord",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "entry": "dist/index.js",
+  "capabilities": [
+    "chatProviders"
+  ],
+  "permissions": [],
+  "contributes": {
+    "chatProviders": [
+      {
+        "id": "discord",
+        "label": "Discord",
+        "credentials": [
+          {
+            "name": "token",
+            "label": "Bot token"
+          }
+        ],
+        "limits": {
+          "maxText": 2000,
+          "buttonsPerMessage": 25,
+          "perChatPerSecond": 1,
+          "perBotPerSecond": 10
+        },
+        "commandPrefix": "/",
+        "groupPrefix": "discord:guild:",
+        "discoveryUrl": "https://discord.com/developers/applications",
+        "receiveModel": "opaque"
+      }
+    ]
+  }
+}

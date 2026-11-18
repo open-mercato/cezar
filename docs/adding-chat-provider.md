@@ -1,9 +1,10 @@
 # Adding a local chat provider
 
-Implement providers as public SDK extensions. Telegram lives in `packages/chat-plugins/telegram`;
-Cezar ships the same independently built artifact that can be installed separately. The host's
-native descriptor for it (`packages/cezar/src/chat/bundled.ts`) fixes its canonical ID, format
-and presentation; it is not the implementation template for a new transport.
+Implement providers as public SDK extensions. Telegram, Slack and Discord live in
+`packages/chat-plugins/{telegram,slack,discord}`; Cezar ships the same independently built
+artifacts that can be installed separately. The host's native descriptors for those three
+(`packages/cezar/src/chat/bundled.ts`) fix their canonical IDs, formats and presentation; they
+are not the implementation template for a new transport.
 
 ## Read first
 
@@ -22,14 +23,16 @@ declare its runtime dependencies and host feature requirements.
 
 The host owns consent, pairing, grants, Confirm, durable acceptance, deduplication, checkpoints,
 bot leases, credentials and task effects. Never give an adapter a run store, project context,
-vault path, command executor or agent environment. Software approval does not grant a person
-permission to control tasks.
+vault path, command executor or agent environment. Slack rotation uses the public host credential
+profile: refresh tokens and client secrets stay in the host. Software approval does not grant a
+person permission to control tasks.
 
 Honor operation cancellation and activity checks immediately before external effects; dispose
 must stop receives and settle outstanding work before ownership passes to a successor. Every
 adapter receives through `receiveSession` for its declared `receiveModel`, which supports
 long-lived connections. Preserve stable event IDs and advance checkpoints only after durable host acceptance. Telegram uses native
-ordered offsets/epochs, including eventless checkpoints. Do not promise exactly-once delivery.
+ordered offsets/epochs, including eventless checkpoints. Slack and Discord socket claims are not
+durable upstream replay guarantees; do not promise exactly-once delivery.
 
 Keep IDs opaque strings and timestamps in milliseconds. Respect platform text/button limits,
 escape markup, suppress unintended mentions and classify errors without leaking tokens.
@@ -39,7 +42,7 @@ Never fall back to a webhook send after a bot send fails: it would have no trust
 ## Identity, state and selection
 
 External providers normally use `extensionId/localId` and `extensionId/localId.v1`.
-The canonical ID `telegram` and its `.v1` format are host-controlled:
+The canonical IDs `telegram`, `slack`, `discord` and their `.v1` formats are host-controlled:
 a package name or manifest alone cannot claim them. Verified delivery metadata or an explicitly
 approved project selection binds a public implementation to a canonical ID before chat storage
 recovery. Boot chat and HTTP extension management share one manager.
@@ -48,7 +51,9 @@ Receiver IDs, pairings, grants, journals, vault records and bot leases belong to
 provider, not to the selected artifact. Bot leases live under
 `~/.cezar/chat/<provider>/[dry-run/]bots/<botId>/` and project journals under
 `.ai/cezar/webhooks/chat/<provider>/`; changing the selected artifact neither moves these records
-nor requires re-pairing. Do not introduce a second receiver or configuration form.
+nor requires re-pairing. Keep **Enable task control for <name>** attaching a bot to an existing
+receiver, and keep webhook-only receivers (`slack.v1`/`discord.v1` receivers from Cezar 0.19 and
+earlier among them) working; do not introduce a second receiver or configuration form.
 
 Install a candidate in Extensions, then preview and explicitly approve its project selection.
 Installed selections pin the exact artifact across host and installation updates. Disable or

@@ -10,7 +10,7 @@ const check = process.argv.includes('--check')
 let stale = []
 for (const file of ['adapter-support.ts', 'pinned-request.ts']) {
   const body = `// Copied from packages/chat-plugins/shared/${file} by shared/sync.mjs. Edit the shared file.\n` + readFileSync(join(here, file), 'utf8')
-  for (const plugin of ['telegram']) {
+  for (const plugin of ['telegram', 'slack', 'discord']) {
     const target = join(here, '..', plugin, 'src', file)
     let current
     try { current = readFileSync(target, 'utf8') } catch { current = undefined }

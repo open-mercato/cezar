@@ -24,7 +24,7 @@ const sourceSchema = z.strictObject({
   createdAt: timestamp, updatedAt: timestamp,
 });
 export const chatSourceRecordSchema = sourceSchema.superRefine((source, ctx) => {
- const ids = source.provider === 'telegram' ? chatIdentifierSchemas[source.provider] : undefined;
+ const ids = source.provider === 'telegram' || source.provider === 'slack' || source.provider === 'discord' ? chatIdentifierSchemas[source.provider] : undefined;
  if (!chatDestinationMatchesBot(source.provider, source.chatId, source.botId)) ctx.addIssue({ code: 'custom', path: ['chatId'], message: 'Source destination belongs to another bot' });
  if (!ids) return;
  if (source.replyTo && (source.replyTo.chatId !== source.chatId || !ids.message.safeParse(source.replyTo.messageId).success)) ctx.addIssue({ code: 'custom', path: ['replyTo'], message: 'Invalid source thread receipt' });

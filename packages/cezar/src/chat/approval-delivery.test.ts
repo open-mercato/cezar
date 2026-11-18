@@ -6,25 +6,27 @@ import { randomUUID } from 'node:crypto';
 import { ChatInbound } from './service.ts';
 import type { ChatServiceDescriptor, ChatTransport } from './provider.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
+import { discordServiceDescriptor } from './providers/discord/index.ts';
+import { slackServiceDescriptor } from './providers/slack/index.ts';
 import { telegramServiceDescriptor } from './providers/telegram/index.ts';
 import { fakeChatTransport } from './test-support/chat-transport.testkit.ts';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllEnvs(); });
 
-const providers = ['telegram'] as const;
+const providers = ['discord', 'slack', 'telegram'] as const;
 for (const provider of providers) for (const group of [false, true]) for (const path of ['pair', 'setup', 'token'] as const) {
   it(`${provider} ${group ? 'group' : 'DM'} ${path}: confirmation sends one approval to the verified private destination`, async () => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
     const directory = await mkdtemp(join(tmpdir(), 'approval-delivery-'));
     vi.stubEnv('CEZ_HOME', join(directory, 'home'));
     const posts: { destination: string; text: string }[] = [];
-    const botId = '123456';
-    const userId = '456';
-    const privateId = '456';
-    const groupId = '-10020';
-    const descriptor: ChatServiceDescriptor = telegramServiceDescriptor;
-    const token = `123456:${'A'.repeat(35)}`;
+    const botId = provider === 'slack' ? 'T1:U1' : '123456';
+    const userId = provider === 'slack' ? 'U2' : '456';
+    const privateId = provider === 'discord' ? 'discord:dm:30' : provider === 'slack' ? 'private:T1:U1:D30' : '456';
+    const groupId = provider === 'discord' ? 'discord:guild:10:20' : provider === 'slack' ? 'group:T1:U1:C20' : '-10020';
+    const descriptor: ChatServiceDescriptor = provider === 'discord' ? discordServiceDescriptor : provider === 'slack' ? slackServiceDescriptor : telegramServiceDescriptor;
+    const token = provider === 'discord' ? `${'a'.repeat(24)}.${'b'.repeat(6)}.${'c'.repeat(27)}` : provider === 'slack' ? JSON.stringify({ botToken: 'xoxb-1234567890', appToken: 'xapp-1234567890' }) : `123456:${'A'.repeat(35)}`;
     const transport: ChatTransport = fakeChatTransport({ botId, isGroup: id => descriptor.presentation.isGroup(id), send(destination, message) { posts.push({ destination, text: message.text }); return { chatId: destination, messageId: '100' }; } }).transport;
     const receiver = { id: randomUUID(), revision: 1, deliveryRevision: 1, format: descriptor.format, chatId: group ? groupId : privateId,
       state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'], chatSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
@@ -48,7 +50,7 @@ for (const provider of providers) for (const group of [false, true]) for (const 
       await expect(service.activateSetup(id, { activate: true, taskControl: true, permissions: ['respond'], groupVisibilityAccepted: true,
         comparisonVerified: true, expectedRevision: status.inboundRevision, candidateUserId: userId })).rejects.toMatchObject({ code: 'comparison_required' });
       expect(posts).toEqual([]);
-      expect(accept(privateId, 'private', '789')).toBe('ignored');
+      expect(accept(privateId, 'private', provider === 'slack' ? 'U3' : '789')).toBe('ignored');
     }
     expect(accept(privateId, 'private')).toBe('candidate');
     const status = service.pairing(id);

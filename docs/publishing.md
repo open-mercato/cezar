@@ -23,13 +23,15 @@ in `verify` instead of being duplicated in the matrix. A failing matrix leg bloc
 preview publication; blocking merges additionally requires branch protection.
 Developers keep using the existing local commands on their own operating system.
 
-Seven packages participate in the release; five of them ship. Host packages share
-a version. The Telegram adapter uses independent semver:
+Nine packages participate in the release; seven of them ship. Host packages share
+a version. The Telegram, Slack and Discord adapters use independent semver:
 
 | Package | Ships? | What it is |
 |---|---|---|
 | `@open-mercato/cezar-extension-sdk` | yes | the public extension author SDK (`packages/extension-sdk`); the contract re-exports its schemas |
 | `@open-mercato/cezar-chat-telegram` | yes | the standalone Telegram chat extension (`packages/chat-plugins/telegram`) |
+| `@open-mercato/cezar-chat-slack` | yes | the standalone Slack chat extension (`packages/chat-plugins/slack`) |
+| `@open-mercato/cezar-chat-discord` | yes | the standalone Discord chat extension (`packages/chat-plugins/discord`) |
 | `@open-mercato/cezar-contract` | **no — `private`** | the HTTP contract (`packages/contract`); the service folds it into its own `dist` |
 | `@open-mercato/cezar-api-client` | **no — `private`** | the typed client and shared contract types (`packages/api-client`) |
 | `@open-mercato/cezar` | yes | the service + CLI, ships the built cockpit (`packages/cezar`) |

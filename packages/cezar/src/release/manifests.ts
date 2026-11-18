@@ -61,6 +61,8 @@ export interface ReleaseManifests {
   extensionSdk: ManifestLike;
   /** Independently versioned chat extensions, published after their SDK. */
   telegram: ManifestLike;
+  slack: ManifestLike;
+  discord: ManifestLike;
   /**
    * The API contract (zod schemas + inferred types). Right after the SDK it re-exports, because both the
    * api-client and the service depend on it, so its version has to settle before their pins are
@@ -123,7 +125,7 @@ export function stampManifestSet(
   version: string,
   pin: PinStyle,
 ): ReleaseManifests {
-  const { extensionSdk, telegram, contract, apiClient, cezar, alias, runAlias } = manifests;
+  const { extensionSdk, telegram, slack, discord, contract, apiClient, cezar, alias, runAlias } = manifests;
   const range = pin(version);
   // Stable adapters are independently released: changing the host must not rewrite
   // an immutable adapter artifact (including its declared SDK compatibility range).
@@ -148,6 +150,8 @@ export function stampManifestSet(
   return {
     extensionSdk: { ...extensionSdk, version },
     telegram: adapter(telegram),
+    slack: adapter(slack),
+    discord: adapter(discord),
     contract: pinDependency({ ...contract, version }, extensionSdk.name, range),
     apiClient: pinDependency({ ...apiClient, version }, contract.name, range),
     cezar: pinDependency(
@@ -161,7 +165,7 @@ export function stampManifestSet(
 }
 
 /** Independent adapter versions must not influence the host's release-line selection. */
-export const ADAPTER_KEYS = ['telegram'] as const;
+export const ADAPTER_KEYS = ['telegram', 'slack', 'discord'] as const;
 export function isAdapterKey(key: string): boolean {
   return (ADAPTER_KEYS as readonly string[]).includes(key);
 }

@@ -9,10 +9,10 @@ const configs = readdirSync(dir).filter(name => name.endsWith('.config.ts') && n
 
 it('reaches every @e2e-dev/web spec through a config that npm run test:e2e:runner discovers', () => {
   expect(runnerSpecs.length).toBeGreaterThan(0)
-  // Every suite is reached by a literal `tests:` path.
+  // A literal `tests:` path, or the shared Slack/Discord factory (e2e/chat-fixture.ts) naming its suite.
   const reached = new Set(configs.flatMap(name => {
     const source = readFileSync(join(dir, name), 'utf8')
-    return [...source.matchAll(/tests:\s*'\.\/([^']+)'/g)].map(m => m[1])
+    return [...[...source.matchAll(/tests:\s*'\.\/([^']+)'/g)].map(m => m[1]), ...[...source.matchAll(/chatFixtureConfig\('([^']+)'/g)].map(m => `chat-${m[1]}.e2e.ts`)]
   }))
   expect(runnerSpecs.filter(name => !reached.has(name))).toEqual([])
 

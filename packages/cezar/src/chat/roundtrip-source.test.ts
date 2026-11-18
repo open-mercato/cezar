@@ -17,7 +17,7 @@ const source = () => ({ provider: 'telegram' as const, id: randomUUID(), botId: 
   episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed' as const, createdAt: 1, updatedAt: 1 });
 
 describe('Telegram task source round trip', () => {
-  it.each([['telegram', 'Telegram']] as const)('labels the first prompt from %s', async (provider, label) => {
+  it.each([['telegram', 'Telegram'], ['slack', 'Slack'], ['discord', 'Discord']] as const)('labels the first prompt from %s', async (provider, label) => {
     const startRun = vi.fn(() => ({ id: 'run-1' }));
     const project = { root: '/missing-project', manager: { startRun } } as never;
     const claimed = { ...source(), provider };
