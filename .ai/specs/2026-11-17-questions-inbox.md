@@ -75,7 +75,7 @@ mention a PR or task, often "task X done, what next?" (hence only a declared `ab
 ## Counts
 
 One `liveQuestions()` (open and not Older; flagged cards count) feeds `pendingQuestions`, the Questions badge, needs-you, the notch,
-native notifications and the push badge. One `questions` WebSocket topic publishes `{ live, older }` on change.
+native notifications and the push badge. One `questions` WebSocket topic publishes `{ live, older, revision }` on change (`revision` digests the open list, so a re-ask at equal counts still refreshes it).
 Remote mode reconciles over SSE.
 
 ## Phase 2 tests
