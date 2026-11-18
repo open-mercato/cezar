@@ -1,7 +1,9 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { CheckIcon } from 'lucide-react'
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 
-import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { questionKey, type ApiRun } from '@open-mercato/cezar-api-client'
+import { scheduleDismiss, undoDismiss, usePendingDismissals, useQuestions } from '@/api/questions'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -9,10 +11,10 @@ import { deriveAttention } from '@/lib/attention'
 import { composerEnterSends, useEnterInsertsNewline } from '@/lib/enter-key'
 import { useLocation } from 'react-router'
 
-import { Link } from '@/lib/project-router'
+import { Link, useActiveProjectId } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
-import { QuietClosedAsk } from '@/routes/questions/question-states'
+import { DismissingNote, QuietClosedAsk, StaleNote } from '@/routes/questions/question-states'
 
 import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
 import { ASK_MORE_INFO_ANSWER, AskAnswerSummary, askAnswerLines } from './ask-answer-summary'
@@ -122,16 +124,35 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   return <PendingAsk ask={ask} run={run} />
 }
 
+/** The inbox key of a task's question: the listed item's when cached, else built from the route's project. */
+function useTaskQuestionKey(run: ApiRun, requestId: string): string | undefined {
+  const listed = useQuestions(false).data?.open.find((item) => item.source.kind === 'task' && item.source.runId === run.id && item.key.endsWith(`:${requestId}`))
+  const projectId = useActiveProjectId()
+  if (listed) return listed.key
+  return projectId ? questionKey({ kind: 'task', projectId, runId: run.id, requestId }) : undefined
+}
+
 /** The unanswered card: option chips wired to whichever delivery seam the run's state allows. */
 function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   const delivery = useAskAnswer(run, undefined, 'ask_answer', ask.id)
+  const queryClient = useQueryClient()
+  const key = useTaskQuestionKey(run, ask.id)
+  const dismissing = usePendingDismissals().find((entry) => entry.key === key && !entry.error)
+  // A typed reply flags the card on the run record rather than closing it (Questions inbox spec).
+  const stale = run.asks?.find((record) => record.requestId === ask.id && !record.closed)?.stale
+  if (key && dismissing) return <DismissingNote label={dismissing.label} onUndo={() => undoDismiss(key)} />
   return (
-    <AskForm
-      ask={ask}
-      ownerId={run.id}
-      delivery={delivery}
-      asker={ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
-    />
+    <>
+      {stale && key ? (
+        <StaleNote detail={stale.detail} disabled={delivery.isPending} onDismiss={() => scheduleDismiss(queryClient, key, ask.questions[0]?.header ?? 'Question')} />
+      ) : null}
+      <AskForm
+        ask={ask}
+        ownerId={run.id}
+        delivery={delivery}
+        asker={ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
+      />
+    </>
   )
 }
 

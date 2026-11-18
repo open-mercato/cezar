@@ -1,8 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import { questionKeys, resetDismissals } from '@/api/questions'
 import { deriveAttention } from '@/lib/attention'
 import { AskCard, AskForm, latestOpenAskCard, revealAskCard } from './ask-card'
 import { readAskSelections, resetAskSelections } from './ask-selections'
@@ -21,6 +24,7 @@ vi.mock('@/api/queries', () => ({
 afterEach(() => {
   cleanup()
   resetAskSelections()
+  resetDismissals()
   mutateAsync.mockClear().mockResolvedValue({})
   continueAsync.mockClear().mockResolvedValue({})
   providerStatus = {
@@ -63,11 +67,16 @@ const closedRun: ApiRun = {
   steps: [step({ sessionId: 'sess-1' })],
 }
 
-const renderAsk = (ask: ThreadAsk, run: ApiRun = activeRun) => render(
-  <MemoryRouter>
-    <AskCard ask={ask} run={run} />
-  </MemoryRouter>,
+let queryClient = new QueryClient()
+const wrap = (node: ReactNode, entry = '/') => (
+  <QueryClientProvider client={queryClient}>
+    <MemoryRouter initialEntries={[entry]}>{node}</MemoryRouter>
+  </QueryClientProvider>
 )
+const renderAsk = (ask: ThreadAsk, run: ApiRun = activeRun, entry?: string) => {
+  queryClient = new QueryClient()
+  return render(wrap(<AskCard ask={ask} run={run} />, entry))
+}
 
 const singleAsk: ThreadAsk = {
   kind: 'ask',
@@ -275,11 +284,7 @@ describe('AskCard — picks survive the row unmounting', () => {
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: { labels: ['date-fns'] } })
 
-    rerender(
-      <MemoryRouter>
-        <AskCard ask={{ ...twoQuestionAsk, resolved: true, answer: 'free-form reply' }} run={activeRun} />
-      </MemoryRouter>,
-    )
+    rerender(wrap(<AskCard ask={{ ...twoQuestionAsk, resolved: true, answer: 'free-form reply' }} run={activeRun} />))
     expect(readAskSelections('r1', twoQuestionAsk)).toEqual({})
   })
 
@@ -681,5 +686,43 @@ describe('AskCard — closed by the server', () => {
     const closed = document.querySelector('[data-slot="ask-closed"]')!
     expect(closed.textContent).toContain('Answered in the manager’s chat')
     expect(closed.textContent).toContain('Library: Luxon')
+  })
+})
+
+// Questions inbox: a typed reply flags a task's card on the run record instead of closing it.
+describe('AskCard — may be out of date', () => {
+  const staleRun: ApiRun = {
+    ...activeRun,
+    asks: [{
+      requestId: singleAsk.id,
+      askedAt: '2026-11-18T08:00:00.000Z',
+      questions: singleAsk.questions,
+      stale: { why: 'replied-in-chat', detail: 'you replied 4m after it was asked', since: '2026-11-18T08:04:00.000Z' },
+    }],
+  }
+
+  it('shows the record’s flag above the open card, and Dismiss as out of date starts the undo window', () => {
+    renderAsk(singleAsk, staleRun, '/p/alpha/tasks/r1/chat')
+    expect(screen.getByText(/May be out of date: you replied 4m after it was asked/)).toBeTruthy()
+    expect(document.querySelector('[data-slot="ask-card"][data-resolved="false"]')).not.toBeNull()
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Dismiss as out of date' })))
+    expect(screen.getByText('Dismissed «Library»')).toBeTruthy()
+  })
+
+  it('prefers the inbox’s key for the card, so the dismissal names the listed question', () => {
+    queryClient = new QueryClient()
+    const key = 'r:alpha-id:r1:ask_1'
+    queryClient.setQueryData(questionKeys.all, {
+      open: [{ key, source: { kind: 'task', projectId: 'alpha-id', runId: 'r1', title: 'Task', status: 'waiting' }, askedAt: '2026-11-18T08:00:00.000Z', questions: singleAsk.questions, older: false }],
+      closed: [], counts: { live: 1, older: 0 }, olderAfterDays: 7,
+    })
+    render(wrap(<AskCard ask={singleAsk} run={staleRun} />))
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Dismiss as out of date' })))
+    expect(screen.getByText('Dismissed «Library»')).toBeTruthy()
+  })
+
+  it('no flag on the record, no note', () => {
+    renderAsk(singleAsk, activeRun, '/p/alpha/tasks/r1/chat')
+    expect(document.querySelector('[data-slot="question-stale"]')).toBeNull()
   })
 })
