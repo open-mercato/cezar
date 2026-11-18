@@ -539,6 +539,7 @@ const isSettledContextStatus = (status: string | undefined) =>
 
 interface ContextFold {
   latestPlan?: RunHistoryEvent;
+  latestModelStart?: RunHistoryEvent;
   asOfSeq: number;
   turn: number;
   boundaries: RunHistoryEvent[];
@@ -607,6 +608,10 @@ function pruneSettledHistory(fold: ContextFold): void {
 
 function foldContextEvent(fold: ContextFold, event: RunHistoryEvent): void {
   fold.asOfSeq = Math.max(fold.asOfSeq, event.seq);
+  if (event.type === 'session.started' && stringField(event, 'model')?.trim()) {
+    fold.latestModelStart = event;
+    return;
+  }
   if (event.type === 'plan.updated' || (event.type === 'tool-call' && stringField(event, 'tool') === 'TodoWrite')) {
     fold.latestPlan = event;
     return;
@@ -670,6 +675,7 @@ function finishContextFold(fold: ContextFold): RunHistoryContext {
   );
   const contextEvents = new Map<number, RunHistoryEvent>();
   if (fold.latestPlan) contextEvents.set(fold.latestPlan.seq, fold.latestPlan);
+  if (fold.latestModelStart) contextEvents.set(fold.latestModelStart.seq, fold.latestModelStart);
   for (const event of fold.boundaries) contextEvents.set(event.seq, event);
   for (const item of [...fold.roots.values(), ...relevantChildren]) {
     contextEvents.set(item.first.seq, item.first);

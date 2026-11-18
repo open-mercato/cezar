@@ -835,6 +835,19 @@ describe('ThreadView', () => {
     expect(details.querySelector('[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]')).not.toBeNull()
   })
 
+  it('shows a legacy run’s reported model from the current context without its start on the visible page', () => {
+    const session = line(1, 'session.started', { sessionId: 's1', backend: 'claude', model: 'claude-opus-5' })
+    renderView(
+      <ThreadView
+        run={run('done', { runner: 'claude' })}
+        thread={reduceThread(EVENTS.slice(2))}
+        currentThread={reduceThread([session])}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Agent: claude, model auto → claude-opus-5' })).toBeTruthy()
+  })
+
   /** #472 — stacked messages render as their own bubbles, after the task. */
   it('renders one bubble per stacked message, in order, with their images', () => {
     renderView(

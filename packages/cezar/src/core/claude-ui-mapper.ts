@@ -687,8 +687,6 @@ function resultStopReason(msg: Record<string, unknown>): StopReason {
   }
 }
 
-/** Raw counts straight off the wire — never cost-weighted (that stays a
- *  presentation concern; v1's `token-usage` keeps the weighted number). */
 /** `result.modelUsage` — `{ [model]: { inputTokens, outputTokens, costUSD, … } }` — as a list. */
 function resultModelUsage(raw: unknown): UiModelUsage[] | undefined {
   if (!isRecord(raw)) return undefined;
@@ -709,6 +707,8 @@ function resultModelUsage(raw: unknown): UiModelUsage[] | undefined {
   return models.length > 0 ? models : undefined;
 }
 
+/** Raw counts straight off the wire — never cost-weighted (that stays a
+ *  presentation concern; v1's `token-usage` keeps the weighted number). */
 function rawTokenUsage(usage: unknown): TokenUsage | undefined {
   if (!isRecord(usage)) return undefined;
   const input = num(usage.input_tokens) ?? 0;

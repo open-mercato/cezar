@@ -88,7 +88,6 @@ export type StepStatus = z.infer<typeof stepStatusSchema>;
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
-/** One step of a run's chain. */
 /** One model's share of a step's turns, as the agent reported it (`turn.completed.models`). */
 export const modelUsageSchema = z.object({
   model: z.string(),
@@ -98,6 +97,7 @@ export const modelUsageSchema = z.object({
 });
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 
+/** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),

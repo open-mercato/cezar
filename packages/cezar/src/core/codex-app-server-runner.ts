@@ -265,7 +265,9 @@ class CodexSession implements AgentSession {
             // plan/reasoning state and resetting the current turn id. Child ITEM events still
             // flow, so nested sub-agent activity keeps rendering.
             if (this.isForeignTurnLifecycle(msg)) continue;
-            this.emitUi((state) => mapCodexNotification(msg, state));
+            // The thread RPC result supplies the model and identifies the main thread.
+            // Its notification can arrive first, so bootstrap alone publishes the session.
+            if (msg.method !== 'thread/started') this.emitUi((state) => mapCodexNotification(msg, state));
             this.dispatch(msg);
           }
         };
@@ -483,8 +485,6 @@ class CodexSession implements AgentSession {
     }
     if (this.threadId) {
       this.emit({ type: 'session', sessionId: this.threadId });
-      // The result path (thread/start response, or thread/resume which sends
-      // no thread/started notification) — deduplicated inside the mapper.
       const threadId = this.threadId;
       this.emitUi((state) => codexSessionStarted(threadId, state, model));
     }

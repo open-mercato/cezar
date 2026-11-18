@@ -310,6 +310,7 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
       line(1, 'session.started', { sessionId: 'a', backend: 'claude', model: 'claude-sonnet-5-5' }),
       line(2, 'session.started', { sessionId: 'b', backend: 'claude', model: 'claude-opus-5-5' }),
       line(3, 'session.started', { sessionId: 'c', backend: 'claude' }),
+      line(4, 'session.started', { sessionId: 'd', backend: 'claude', model: '  ' }),
     ])
     expect(sessionModel).toBe('claude-opus-5-5')
   })

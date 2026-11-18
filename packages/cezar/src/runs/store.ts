@@ -133,7 +133,7 @@ const stepStateSchema = z.object({
    *  the model of the step that owns its session (#1488). Absent on older records. */
   model: z.string().optional(),
   /** The model the agent reported actually running (latest main one) and every model the
-   *  step's turns used — see `recordActualModel`. Unreadable values drop, never the record. */
+   *  step's turns used — see `recordReportedModel`. Unreadable values drop, never the record. */
   actualModel: z.string().optional().catch(undefined),
   modelsUsed: z.array(modelUsageSchema).optional().catch(undefined),
   /** Dollar cost reported by the claude CLI for this step's turns. */

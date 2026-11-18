@@ -705,7 +705,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'session.started': {
         sessionBackend = providerId(event.backend) ?? sessionBackend
-        sessionModel = str(event.model) ?? sessionModel
+        sessionModel = str(event.model)?.trim() || sessionModel
         const turn = turns.at(-1)
         if (turn) errorTwins.delete(turn)
         break
