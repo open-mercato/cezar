@@ -1826,7 +1826,8 @@ export function createApp(deps: ServerDeps) {
   };
   // Awaited before run recovery: an extension chat provider must be registered before chat resumes.
   const offExtensionCleanup = contexts.onBeforeRecover(async context => {
-    await restoreProjectExtensions(context, extensionsUnavailable, extensionHost);
+    // A context first built by a phone relay request restores under the cockpit's own gate.
+    await outsideRelayScope(() => restoreProjectExtensions(context, extensionsUnavailable, extensionHost));
     return () => closeProjectExtensions(context);
   });
   // Outside any request, so a rejection here would be unhandled and end the process.

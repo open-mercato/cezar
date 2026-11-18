@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -113,6 +113,16 @@ describe('extension routes in hosted mode', () => {
       process.env.CEZ_REMOTE_EXTENSIONS = '1';
     });
     afterEach(() => { if (prevBrowse === undefined) delete process.env.CEZ_BROWSE_ROOT; else process.env.CEZ_BROWSE_ROOT = prevBrowse; });
+
+    it('shows an in-root source relative to a browse root reached through a symlink', async () => {
+      extension(join(root, 'team', 'nested'), 'nested.test');
+      const link = join(repoRoot, 'plugins-link'); symlinkSync(root, link);
+      process.env.CEZ_BROWSE_ROOT = link;
+      const directory = join(process.env.CEZ_HOME!, 'extensions'); mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'registry.json'), JSON.stringify([{ source: realpathSync(join(root, 'team', 'nested')), installedAt: 'now', enabled: false, manifest: JSON.parse(manifest('nested.test')) }]));
+      const res = await apiRequest(app, '/api/v1/extensions');
+      expect((await res.json() as { extensions: Array<{ source: string }> }).extensions[0]?.source).toBe(join('team', 'nested'));
+    });
 
     it('stages a folder inside the root', async () => {
       const inside = await prepare(join(root, 'inside'));

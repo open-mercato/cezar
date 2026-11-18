@@ -34,6 +34,7 @@ import { realpath } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isPackageSource } from '../extensions/installer.ts'
 import { isInsideBrowseRoot, isLexicallyInsideBrowseRoot } from './fs-browse.ts'
+import { outsideRelayScope } from '../relay/scope.ts'
 
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
 
@@ -51,7 +52,8 @@ const cleanups = new WeakMap<ProjectContext, () => Promise<void>>()
 function projectManager(project: ProjectContext, host: ExtensionHostMode): Promise<ExtensionManager> {
   let value = managers.get(project)
   if (!value) {
-    value = (async()=>{
+    // Process-wide and cached: a phone relay request that builds it first must not pin the relay's hosted view on it.
+    value = outsideRelayScope(()=>(async()=>{
       const summary = (run: RunRecord) => ({ id: run.id, title: run.title, status: run.status })
       const owner = await retainProjectExtensions({root:project.root,dataDir:project.dataDir,projectId:project.id,mode:host.local()?'local':'hosted',runtimeAllowed:host.runtimeAllowed()},{
         listTasks:async()=>project.store.listRuns().map(summary),
@@ -62,7 +64,7 @@ function projectManager(project: ProjectContext, host: ExtensionHostMode): Promi
       project.store.on('run',onRun)
       cleanups.set(project,async()=>{project.store.off('run',onRun);await owner.release()})
       return owner.manager
-    })()
+    })())
     managers.set(project,value)
     void value.catch(()=>{if(managers.get(project)===value)managers.delete(project)})
   }
@@ -139,7 +141,9 @@ export function hostedSourcePolicy(browseRoot: () => string | null | Promise<str
 
 /** A hosted response never carries an absolute server path in a record (spec 2026-11-12 §3). */
 async function hostedRecords(host: ExtensionHostMode) {
-  const root = host.local() ? null : await host.browseRoot()
+  const browseRoot = host.local() ? null : await host.browseRoot()
+  // Sources are realpaths; a root reached through a symlink must compare as its realpath too.
+  const root = browseRoot ? await realpath(browseRoot).catch(() => browseRoot) : null
   const record = <T extends ExtensionRecord | null>(value: T): T =>
     host.local() || !value ? value : { ...value, source: trimHostedExtensionSource(value.source, root) }
   const artifact = <T extends Omit<ExtensionInventoryItem, 'installedCandidate'>>(value: T): T => ({
