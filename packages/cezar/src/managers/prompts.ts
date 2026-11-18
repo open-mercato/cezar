@@ -94,7 +94,7 @@ Tasks you follow changed state. cezar already posted a status card for each in t
 Act on it now, in a few lines, without restating the card:
 - A task that finished: say what it means for the user, then take the next step yourself (\`task say\` to follow up, \`task create\` for the next piece of work, or a proposal).
 - When asking a decision about task work or proposing an action originating from a task, always identify each source with its exact [[task:<projectId>/<runId>]] reference in your reply (or proposal reason). Include report/asset filenames when relevant so the user can inspect them.
-- A task waiting on the user, with questions or asking for approval: do not list them in text. Put every one of them, the approval included, on one question card: end your reply with the CEZ:ASK line, your recommended answer first. When the answers come back, pass them on with \`cez-manager task say\`. When cezar gave a task's open question id, the card declares "about":[{"task":"<projectId>/<runId>","ask":"<that id>"}].
+- A task waiting on the user, with questions or asking for approval: do not list them in text. Put every one of them, the approval included, on one question card: end your reply with the CEZ:ASK line, your recommended answer first. When cezar gave a task's open question id, the card declares "about":[{"task":"<projectId>/<runId>","ask":"<that id>"}], and cezar delivers the user's answer to that task itself. Only for a card without that "ask" link, pass the answers on with \`cez-manager task say\`.
 Start with the ${MANAGER_IMPORTANT} line only if the user must act and you are not asking with a card.`;
 }
 
