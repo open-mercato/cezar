@@ -74,8 +74,8 @@ import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { pausedAutomationHold } from '../automations/paused-work.ts';
-import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
-import { provisionSkills } from '../skills-provision.ts';
+import { getTeamSkillsCached, materializeSkillDir, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
+import { mentionsSkill, provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
@@ -5319,10 +5319,14 @@ export class RunManager {
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined) : blocks;
-    if (expanded !== blocks) {
-      // Delivery is synchronous; the body already rides the message, so the install can trail it.
-      const first = blocks.find((block) => block.type === 'text');
-      void this.provisionTaskSkills(state, { slash: first?.type === 'text' ? leadingSlashSkillName(first.text) : undefined });
+    const firstText = userAuthored ? blocks.find((block) => block.type === 'text') : undefined;
+    if (firstText?.type === 'text') {
+      // Delivery is synchronous; a named skill's install can trail the message it rides.
+      const { text } = firstText;
+      const catalog = [...(state.skills ?? []), ...getTeamSkillsCached(this.repoRoot)];
+      if (expanded !== blocks || catalog.some((skill) => skill.kind !== 'command' && mentionsSkill(text, skill.name))) {
+        void this.provisionTaskSkills(state, { slash: leadingSlashSkillName(text), text });
+      }
     }
     const withAttachments = persisted.length
       ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
@@ -6234,7 +6238,7 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt) });
+    const continueSkills = await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt), text: prompt });
     // Preparation awaits can outlive consent or this state's ownership. Revalidate after
     // the last await, before consuming inbox messages or opening a provider session.
     if (this.disposed || state.cancelled || this.active.get(runId) !== state) {
@@ -6250,7 +6254,11 @@ export class RunManager {
         return;
       }
     }
-    const expandedPrompt = [continueProfile.trackerContext, expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend)].filter(Boolean).join('\n\n');
+    const expandedPrompt = [
+      continueProfile.trackerContext,
+      expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend),
+      continueSkills.missingShared.length ? missingSharedSkillsNote(continueSkills.missingShared) : undefined,
+    ].filter(Boolean).join('\n\n');
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
@@ -7964,17 +7972,21 @@ export class RunManager {
   }
 
   /**
-   * Install the named skills and every companion they name into the run's cwd (skills-provision.ts).
-   * Once a named skill is known, waits (bounded) for the team-skill load before collecting companions.
-   * Refreshes `state.skills` so expansion sees the same catalog. Never throws.
+   * Install the named skills — a step skill, a leading `/name`, and every catalog skill the
+   * prompt names in prose — plus their companions into the run's cwd (skills-provision.ts).
+   * Once a named skill is known, waits (bounded) for the team-skill load before collecting
+   * companions; a repo extension whose shared skill is missing triggers one bounded team-skill
+   * refresh. Refreshes `state.skills` so expansion sees the same catalog. Never throws.
    */
   private async provisionTaskSkills(
     state: ActiveRun,
-    wantedSkills: { stepSkill?: string; slash?: string },
-  ): Promise<string[]> {
+    wantedSkills: { stepSkill?: string; slash?: string; text?: string },
+  ): Promise<{ installed: string[]; missingShared: string[] }> {
+    const none = { installed: [], missingShared: [] };
     const stepSkill = wantedSkills.stepSkill?.trim() || undefined;
-    const wanted = [stepSkill, wantedSkills.slash].filter((name): name is string => Boolean(name));
-    if (!wanted.length) return [];
+    const named = [stepSkill, wantedSkills.slash].filter((name): name is string => Boolean(name));
+    const text = wantedSkills.text?.trim() || undefined;
+    if (!named.length && !text) return none;
     try {
       // Companions resolve against the ungated team list too: curating a skill out of the
       // picker must not break a skill that runs it.
@@ -7984,62 +7996,85 @@ export class RunManager {
         for (const skill of getTeamSkillsCached(this.repoRoot)) if (!seen.has(skill.name)) catalog.push(skill);
         return catalog;
       };
-      const rootsIn = (catalog: readonly Skill[]) => wanted.flatMap((name) => catalog.filter((s) => s.name === name));
-      state.skills = await discoverSkills(this.repoRoot);
-      let catalog = catalogOf(state.skills);
-      let roots = rootsIn(catalog);
-      // An unknown `/name` is most likely a backend's own command (`/compact`): never stall it.
-      // A selected step skill may still arrive with the team load, so that one waits.
-      if (!roots.length && !stepSkill) return [];
-      const inPlace = resolvePath(state.cwd) === resolvePath(this.repoRoot);
-      if (!inPlace || !roots.length) {
-        // A companion (or the step skill itself) often lives only in the team repo: wait, bounded.
+      // A skill the prompt names in prose ("run om-auto-review-pr on #12") is as wanted as a
+      // `/name`: the agent goes looking for it either way.
+      const rootsIn = (catalog: readonly Skill[]) => {
+        const roots = named.flatMap((name) => catalog.filter((s) => s.name === name));
+        if (text) {
+          for (const skill of catalog) {
+            if (skill.kind !== 'command' && !roots.includes(skill) && mentionsSkill(text, skill.name)) roots.push(skill);
+          }
+        }
+        return roots;
+      };
+      const waitBounded = async (work: Promise<unknown>, ms: number) => {
         let timer: NodeJS.Timeout | undefined;
         await Promise.race([
-          waitForTeamSkills(this.repoRoot).catch(() => []),
+          work.catch(() => []),
           new Promise((resolve) => {
-            timer = setTimeout(resolve, TEAM_SKILLS_WAIT_MS);
+            timer = setTimeout(resolve, ms);
             timer.unref?.();
           }),
         ]);
         clearTimeout(timer);
+      };
+      state.skills = await discoverSkills(this.repoRoot);
+      let catalog = catalogOf(state.skills);
+      let roots = rootsIn(catalog);
+      // An unknown `/name` is most likely a backend's own command (`/compact`): never stall it.
+      // A selected step skill, or one named in prose, may still arrive with the team load.
+      if (!roots.length && !stepSkill && !text) return none;
+      const inPlace = resolvePath(state.cwd) === resolvePath(this.repoRoot);
+      if (!inPlace || !roots.length) {
+        // A companion (or the step skill itself) often lives only in the team repo: wait, bounded.
+        await waitBounded(waitForTeamSkills(this.repoRoot), TEAM_SKILLS_WAIT_MS);
         state.skills = await discoverSkills(this.repoRoot);
         catalog = catalogOf(state.skills);
         roots = rootsIn(catalog);
       }
+      if (roots.some((skill) => skill.missingShared)) {
+        // Only the repo's extension is here: fetch the team skills once before the agent starts.
+        await waitBounded(refreshTeamSkills(this.repoRoot), TEAM_SKILLS_REPAIR_MS);
+        state.skills = await discoverSkills(this.repoRoot);
+        catalog = catalogOf(state.skills);
+        roots = rootsIn(catalog);
+      }
+      const missingShared = roots.filter((skill) => skill.missingShared).map((skill) => skill.name);
       // Only a selected step skill can be missing: a leading `/name` that is no skill is a
       // backend's own command (`/compact`), not a miss.
       const stepSkillMissing = Boolean(stepSkill) && !catalog.some((s) => s.name === stepSkill);
       if (!roots.length) {
         if (stepSkillMissing) track('skills_provisioned', { label: 'root_not_found', value: 0 });
-        return [];
+        return none;
       }
       state.trackedSkills ??= new Set();
       for (const skill of roots) {
-        if (state.trackedSkills.has(skill.name)) continue;
+        if (!named.includes(skill.name) || state.trackedSkills.has(skill.name)) continue;
         state.trackedSkills.add(skill.name);
         track('skill_used', { label: skillLabel(skill) });
       }
+      // An extension without its shared skill is not installed as the skill: it would pose as it.
+      const installable = roots.filter((skill) => !skill.missingShared);
       let installed: string[];
       if (inPlace) {
         // In place, the cwd is the user's checkout: its skill dirs are what `discoverSkills` reads
         // first, so a written-out copy would shadow the real skill for good. Keep the pre-provision
         // behavior there — only the selected team skill, refreshed on every run.
         installed = [];
-        for (const skill of roots) {
+        for (const skill of installable) {
           if (skill.source !== 'team' || !skill.team?.dir) continue;
           if (await materializeSkillDir(state.cwd, skill).catch(() => false)) installed.push(skill.name);
         }
       } else {
-        installed = await provisionSkills(state.cwd, roots, catalog);
+        installed = await provisionSkills(state.cwd, installable, catalog.filter((skill) => !skill.missingShared));
       }
       track('skills_provisioned', {
-        label: stepSkillMissing ? 'root_not_found' : installed.length ? 'installed' : 'already_present',
+        label: stepSkillMissing || missingShared.length ? 'root_not_found' : installed.length ? 'installed' : 'already_present',
         value: installed.length,
       });
-      return installed;
+      return { installed, missingShared };
     } catch {
-      return [];
+      return none;
     }
   }
 
@@ -8075,10 +8110,15 @@ export class RunManager {
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
-    const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
+    const { installed, missingShared } = await this.provisionTaskSkills(state, {
+      stepSkill: step.skill,
+      slash: leadingSlashSkillName(rawPrompt),
+      text: rawPrompt,
+    });
     if (installed.length) {
       emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
     }
+    if (missingShared.length) emit({ type: 'note', stepId: step.id, message: missingSharedSkillsNote(missingShared) });
     if (step.skill) {
       const skill = (state.skills ?? skills).find((s) => s.name === step.skill);
       if (skill) {
@@ -8105,6 +8145,8 @@ export class RunManager {
     // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
     userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], step.runner ?? taskBackend);
+    // The agent must stop and say so rather than improvise the skill from its extension.
+    if (missingShared.length) userPrompt = `${userPrompt}\n\n${missingSharedSkillsNote(missingShared)}`;
     if (resumeStep) {
       const resumePrompt = autoResumeReasonFor(resumeStep.error) === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT;
       userPrompt = `${resumePrompt}\n\nCurrent task and queued updates:\n\n${userPrompt}`;
@@ -10427,7 +10469,7 @@ export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCoun
  * they are materialized into the worktree separately (see the call site).
  */
 export function skillSystemPrompt(
-  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source' | 'kind' | 'variants'>>,
+  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source' | 'kind' | 'variants' | 'extension' | 'missingShared'>>,
   options: { runner?: RunnerId; args?: string } = {},
 ): string {
   const lines = [
@@ -10447,6 +10489,10 @@ export function skillSystemPrompt(
         `It is the current installed copy — use it even though your working directory is a separate worktree that does not contain the skill.`,
     );
   }
+  if (skill.extension) {
+    lines.push('', `This repository extends the skill: apply ${skill.extension.path} (also at the same repo-relative path in your working directory) on top of the instructions below.`);
+  }
+  if (skill.missingShared) lines.push('', missingSharedSkillsNote([skill.name]));
   const body = command ? commandBody(skill, options.runner) : skill.body;
   lines.push('', command ? 'Command instructions:' : 'Skill instructions:', command ? substituteArguments(body, options.args) : body.trim());
   return lines.join('\n');
@@ -10482,6 +10528,18 @@ export function isUnknownSkillFailure(event: UiEvent): boolean {
 
 /** Bound on waiting for the first team-skill load before installing a task's skills. */
 const TEAM_SKILLS_WAIT_MS = 10_000;
+/** Bound on the clone/fetch a missing shared skill triggers before its agent starts. */
+const TEAM_SKILLS_REPAIR_MS = 30_000;
+
+/** What the agent and the transcript are told when only a repo extension of a skill is present. */
+export function missingSharedSkillsNote(names: readonly string[]): string {
+  const list = names.map((name) => `\`${name}\``).join(', ');
+  return (
+    `cezar: the shared skill ${list} is not installed — this repository only has its extension (.ai/skills/<name>/SKILL.md), ` +
+    `and cezar could not load the shared skill from the team skills repo. Do not reconstruct the shared workflow from the extension: ` +
+    `stop and tell the user to install it (Skills → Install skills in the cockpit, or \`npx skills add open-mercato/skills\`).`
+  );
+}
 
 /** The `name` of a prompt's leading `/name` slash command, else undefined. */
 export function leadingSlashSkillName(text: string): string | undefined {

@@ -4098,6 +4098,63 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(used).toEqual([['skill_used', { label: 'repo' }]]);
   }, 40_000);
 
+  it('installs a skill the task names in prose, not only as a leading /name', async () => {
+    // "Run demo-review on PR 12" names the skill without a slash: the agent still goes looking for it.
+    writeFileSync(
+      join(repoRoot, '.ai/cezar/skills/demo-review.md'),
+      '---\nname: demo-review\n---\n\nRun the `demo-engine` skill verbatim.\n',
+    );
+    writeFileSync(join(repoRoot, '.ai/cezar/skills/demo-engine.md'), '---\nname: demo-engine\n---\n\nEngine.\n');
+    const record = manager.startRun(SINGLE_STEP, { task: 'Run demo-review on PR 12', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    const wt = store.getRun(record.id)!.worktreePath!;
+    expect(readFileSync(join(wt, '.claude/skills/demo-review/SKILL.md'), 'utf8')).toContain('demo-engine');
+    expect(readFileSync(join(wt, '.claude/skills/demo-engine/SKILL.md'), 'utf8')).toContain('Engine.');
+  }, 40_000);
+
+  it("installs the shared skill, not the repo's extension of it, under the shared name", async () => {
+    // Open Mercato's layout: `.ai/skills/<name>` extends the shared skill installed in `.agents/skills`.
+    // Shadowed by the extension, the agent reported "shared skill isn't installed locally".
+    mkdirSync(join(repoRoot, '.ai/skills/om-demo'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.ai/skills/om-demo/SKILL.md'),
+      '---\nname: om-demo\ndescription: Repo-local extension of the shared `om-demo` skill.\n---\n\nExtension rules.\n',
+    );
+    mkdirSync(join(repoRoot, '.agents/skills/om-demo'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.agents/skills/om-demo/SKILL.md'),
+      '---\nname: om-demo\n---\n\nShared workflow. Apply `.ai/skills/om-demo/SKILL.md` when present.\n',
+    );
+    const record = manager.startRun(SINGLE_STEP, { task: '/om-demo 12', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    const wt = store.getRun(record.id)!.worktreePath!;
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      expect(readFileSync(join(wt, dir, 'om-demo/SKILL.md'), 'utf8')).toContain('Shared workflow.');
+    }
+  }, 40_000);
+
+  it('tells the agent and the transcript when only the extension of a shared skill exists', async () => {
+    // No team repo to repair from: the run must say so instead of letting the agent improvise.
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));
+    mkdirSync(join(repoRoot, '.ai/skills/om-lonely'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.ai/skills/om-lonely/SKILL.md'),
+      '---\nname: om-lonely\n---\n\nThis file extends the shared `om-lonely` skill.\n',
+    );
+    const record = manager.startRun(SINGLE_STEP, { task: 'run om-lonely for PR 3', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    expect(
+      eventsOf(record.id).some(
+        (e) => e.type === 'note' && String((e as { message?: unknown }).message).includes('shared skill `om-lonely` is not installed'),
+      ),
+    ).toBe(true);
+    const wt = store.getRun(record.id)!.worktreePath!;
+    expect(existsSync(join(wt, '.claude/skills/om-lonely'))).toBe(false);
+  }, 40_000);
+
   it('reports where a task came from and which workflow it ran, never a custom name', () => {
     vi.mocked(track).mockClear();
     const sid = '0192f0e0-0000-7000-8000-000000000000';

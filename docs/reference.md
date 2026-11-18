@@ -32,7 +32,11 @@ Three words, no jargon — **task**, **skill**, **chain**:
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
   git clone cached globally in `~/.cache/cez/`). A workflow step references one by
   `skill: <name>` and its body becomes the agent's extra system prompt — so you
-  shape *how* the agent reasons without touching code.
+  shape *how* the agent reasons without touching code. A skill a task uses — selected,
+  a leading `/name`, or named in the prompt's text — is installed with its companions
+  into the task worktree's `.claude/skills` and `.agents/skills`. A repo's
+  `.ai/skills/<name>/SKILL.md` that extends a shared skill of the same name is layered
+  on it rather than shadowing it.
 - 🔗 **Chains (workflows)** stitch steps into a pipeline: agent steps plus shell
   checks, with bounded `onFail` retry loops. Write the YAML yourself, build one by
   drag-ordering skills in the **Workflows** tab, or press **Plan first** and let the

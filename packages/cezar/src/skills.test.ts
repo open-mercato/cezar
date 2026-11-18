@@ -6,6 +6,7 @@ import {
   BUILTIN_SKILLS_DIR,
   discoverSkills,
   filterImportedTeamSkills,
+  layerSkillExtensions,
   parseFrontmatter,
   readImportedSkills,
   type Skill,
@@ -365,5 +366,50 @@ describe('project commands (spec 2026-11-05-project-slash-commands)', () => {
     expect(review?.variants?.map((v) => v.runner)).toEqual(['claude', 'codex', 'copilot']);
     expect(all.find((s) => s.name === 'plan')).toMatchObject({ body: 'real skill', source: 'ai' });
     expect(all.find((s) => s.name === 'plan')?.kind).toBeUndefined();
+  });
+});
+
+describe('layerSkillExtensions (repo extensions of shared skills)', () => {
+  const skill = (name: string, source: Skill['source'], body: string): Skill => ({
+    name, source, body, path: `/${source}/${name}/SKILL.md`,
+  });
+  const winner = (lists: Skill[][], pool: Skill[] = []) => layerSkillExtensions(lists, pool).flat()[0];
+
+  it('an extension the shared skill reads becomes the shared skill, carrying the extension', () => {
+    const local = skill('om-x', 'ai', 'Stricter verdicts.');
+    const shared = skill('om-x', 'team', 'Workflow. Apply `.ai/skills/om-x/SKILL.md` when present.');
+    expect(winner([[local], [shared]])).toMatchObject({ source: 'team', body: shared.body, extension: { path: local.path } });
+  });
+
+  it('an extension that says it extends the shared skill layers too, from the ungated team pool', () => {
+    const local = skill('om-x', 'ai', 'This file extends the shared `om-x` skill.');
+    // Curated out of the picker (absent from the lists) is still installed.
+    expect(winner([[local]], [skill('om-x', 'team', 'Workflow.')])).toMatchObject({ source: 'team', extension: { path: local.path } });
+  });
+
+  it('a plain repo override of the same name still wins', () => {
+    const local = skill('om-x', 'ai', 'My own version.');
+    expect(winner([[local], [skill('om-x', 'team', 'Workflow.')]])).toBe(local);
+  });
+
+  it('an extension with no shared skill is flagged, never posing as it', () => {
+    const local = skill('om-x', 'ai', 'Repo-local extension of the shared `om-x` skill.');
+    // The `.agents/skills` mirror of the same file is not a shared copy.
+    expect(winner([[local], [skill('om-x', 'agents', local.body)]])).toMatchObject({ source: 'ai', missingShared: true });
+  });
+
+  it('discoverSkills resolves an Open Mercato-style override to the installed shared skill', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'cez-skill-ext-'));
+    tempDirs.push(repo);
+    await mkdir(join(repo, '.ai/skills/om-y'), { recursive: true });
+    await writeFile(
+      join(repo, '.ai/skills/om-y/SKILL.md'),
+      '---\nname: om-y\ndescription: Repo-local extension of the shared `om-y` skill.\n---\nRules.\n',
+    );
+    await mkdir(join(repo, '.agents/skills/om-y'), { recursive: true });
+    await writeFile(join(repo, '.agents/skills/om-y/SKILL.md'), '---\nname: om-y\n---\nShared workflow.\n');
+    const found = (await discoverSkills(repo)).find((s) => s.name === 'om-y');
+    expect(found).toMatchObject({ source: 'agents', extension: { path: join(repo, '.ai/skills/om-y/SKILL.md') } });
+    expect(found?.body).toContain('Shared workflow.');
   });
 });

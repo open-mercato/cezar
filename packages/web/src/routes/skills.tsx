@@ -159,6 +159,7 @@ function SkillsCatalog() {
   }
 
   const skills = orderSkills(skillsQuery.data ?? [])
+  const missingShared = skills.filter((skill) => skill.missingShared).map((skill) => skill.name)
   const activeNames = new Set(skills.map((skill) => skill.name))
   const catalog = orderSkills<SkillCatalogItem>([
     ...skills.map((skill) => ({
@@ -241,6 +242,32 @@ function SkillsCatalog() {
             </button>
           </IconTooltip>
         </div>
+        {missingShared.length ? (
+          <div
+            data-slot="skills-missing-shared"
+            role="status"
+            className="mx-3 mb-2 flex shrink-0 flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-meta"
+          >
+            <span className="flex items-start gap-1.5">
+              <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-3 shrink-0" />
+              <span>
+                Only this repository's extension is here for {missingShared.join(', ')} — the shared skill is not
+                installed, so a task cannot run it.
+              </span>
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-action="skills-install-shared"
+              className="self-start"
+              disabled={refresh.isPending}
+              onClick={() => refresh.mutate()}
+            >
+              Install skills
+            </Button>
+          </div>
+        ) : null}
         {repoGroups.length > 1 ? (
           <div className="shrink-0 px-3 pb-2">
             {/* The cockpit select (native `<select>` is retired): same name, same `__all__` sentinel. */}
