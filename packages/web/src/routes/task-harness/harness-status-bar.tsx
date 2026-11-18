@@ -50,13 +50,13 @@ export function HarnessStatusBar({
   return (
     <div
       data-slot="harness-status-bar"
-      className="flex min-w-0 items-center gap-2.5 py-2 text-label"
+      className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 py-2 text-label @sm/run:flex-nowrap"
     >
       <StatusDot
         tone={setup || checksNeedAttention || ledger.outcome.status === 'contested' ? 'pending' : blocked ? 'danger' : toneOf(current?.status)}
         pulse={current?.status === 'running'}
       />
-      <span className="shrink-0 font-semibold text-foreground">
+      <span className="min-w-0 font-semibold text-foreground">
         {!active && setup ? 'Project setup needed' : !active && checksNeedAttention ? 'Checks need attention' : !active && ledger.outcome.status === 'contested' ? 'Verification needed' : current ? phaseLabel(current) : 'Starting'}
       </span>
       <span className="shrink-0 text-soft-foreground tabular-nums">

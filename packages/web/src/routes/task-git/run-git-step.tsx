@@ -328,8 +328,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     (land.isPending ? 'land' : push.isPending ? 'push' : createPr.isPending ? (createPr.variables ? 'create-draft-pr' : 'create-pr') : null)
 
   const onAction = (id: GitActionId) => {
-    // The agent runs every git step itself; the server only stands in when it cannot be reached.
-    const viaServer = Boolean(agentBlockedBy)
+    if (harnessBlock) return
+    // Only the server can publish a verified harness handoff.
+    const viaServer = Boolean(run.harness || agentBlockedBy)
     if (trunk) {
       if (id === 'land') {
         if (!land.isPending) land.mutate()
@@ -384,7 +385,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   return {
     action: harnessBlock ? holdGitSteps(nextAction, harnessBlock) : nextAction,
     pending,
-    byAgent: !agentBlockedBy,
+    byAgent: !run.harness && !agentBlockedBy,
     onAction,
     commitOpen,
     // Rendered by the host OUTSIDE any menu: a dialog mounted inside a dropdown's content would

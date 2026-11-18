@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createValidationSandbox } from './validation-sandbox.js';
 import {
   HarnessRuntime,
   computeGateRegressions,
@@ -26,6 +27,22 @@ import {
   resolveHarnessScript,
   runValidationCommands,
 } from './runtime.js';
+
+// Exercise command capture and process ownership on hosts without OS sandbox dependencies.
+// validation-sandbox.test.ts exercises the real isolation boundary.
+vi.mock('./validation-sandbox.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./validation-sandbox.js')>(),
+  createValidationSandbox: vi.fn(() => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-gate-unit-'));
+    const gh = join(root, 'gh');
+    mkdirSync(gh);
+    return {
+      env: { GH_CONFIG_DIR: gh, TMPDIR: root },
+      command: (args: string[]) => ({ executable: 'bash', args }),
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }),
+}));
 
 /**
  * The runtime bridge (spec Architecture §2): spawns the installed
@@ -295,6 +312,19 @@ ${leaderExits ? 'setTimeout(() => process.exit(0), 50);' : 'setInterval(() => {}
     expect(checks[2]).toMatchObject({ command: 'echo never', status: 'skipped', exitCode: null });
   });
 
+  it('records sandbox startup failures as unavailable and never continues past them', async () => {
+    const unavailableSandbox = createValidationSandbox(dir, false);
+    vi.mocked(createValidationSandbox).mockReturnValueOnce({
+      ...unavailableSandbox,
+      command: () => ({ executable: 'bash', args: ['-c', 'echo sandbox unavailable >&2; exit 1'] }),
+    });
+    const [failure, next] = await runValidationCommands(['echo first', 'echo next'], dir, {
+      continueAfter: new Set(['echo first']),
+    });
+    expect(failure).toMatchObject({ status: 'failed', unavailable: true, evidence: expect.stringContaining('sandbox unavailable') });
+    expect(next?.status).toBe('skipped');
+  });
+
   // a model-written test could push with the user's ssh-agent.
   it.skipIf(process.platform === 'win32')(
     'runValidationCommands closes the default push paths but keeps local git working',
@@ -322,7 +352,7 @@ ${leaderExits ? 'setTimeout(() => process.exit(0), 50);' : 'setInterval(() => {}
     },
   );
 
-  // `npm test` runs model-written scripts unsandboxed.
+  // The gate launches project scripts with an environment separate from provider sessions.
   it('runValidationCommands never hands provider credentials to the validated code', async () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
     vi.stubEnv('OPENAI_API_KEY', 'sk-openai-test');

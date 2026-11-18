@@ -1,8 +1,9 @@
 import { cp, realpath, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import type { Skill } from './skills.js';
 import { excludeFromGit, materializeSkillDir } from './skills-remote.js';
 import { ignoreProvisioned, isSafeSkillName } from './skills-provision.js';
+import { skillDestination } from './skill-destination.js';
 
 /**
  * Put a skill's on-disk companion files (references/, scripts/, assets/,
@@ -66,12 +67,12 @@ async function materializeOne(cwd: string, skill: Skill): Promise<boolean> {
   } catch {
     return false; // dangling install
   }
-  const target = join(cwd, '.claude', 'skills', skill.name);
-  if (srcDir === resolve(target)) return true;
   try {
+    const target = skillDestination(cwd, '.claude', 'skills', skill.name);
+    if (srcDir === target) return true;
     const existing = await stat(target).catch(() => null);
     if (existing?.isDirectory()) return true; // idempotent across phases/restarts
-    await cp(srcDir, target, { recursive: true, dereference: true });
+    await cp(srcDir, target, { recursive: true, dereference: true, force: false, errorOnExist: true });
     await ignoreHere();
     return true;
   } catch {

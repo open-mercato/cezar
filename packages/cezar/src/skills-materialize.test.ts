@@ -42,6 +42,17 @@ function dirSkill(name: string, skillDir: string, overrides: Partial<Skill> = {}
 }
 
 describe('ensureSkillOnDisk', () => {
+  it.skipIf(process.platform === 'win32')('refuses a symlinked skills directory', async () => {
+    const source = await tmp('cez-mat-source-');
+    const cwd = await tmp('cez-mat-cwd-');
+    const outside = await tmp('cez-mat-outside-');
+    const skill = dirSkill('cez-harness', await writeDirSkill(source, 'cez-harness'));
+    await mkdir(join(cwd, '.claude'));
+    await symlink(outside, join(cwd, '.claude', 'skills'), 'dir');
+
+    expect(await ensureSkillOnDisk(cwd, skill, [skill])).toBe(false);
+  });
+
   it('copies a directory skill (through a symlinked install) into <cwd>/.claude/skills and ignores it in this worktree only', async () => {
     const store = await tmp('cez-mat-store-');
     const real = await writeDirSkill(store, 'cez-harness');

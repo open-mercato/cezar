@@ -47,6 +47,7 @@ import {
   type ReconcileHarnessProcessResult,
 } from './runtime.js';
 import { ignoreProvisioned } from '../skills-provision.js';
+import { skillDestination } from '../skill-destination.js';
 import { harnessCheckUnavailable, harnessCouncilRecordSchema, harnessValidationFailureSummary, reconcileHarnessFindings } from '@open-mercato/cezar-contract';
 import { harnessActionRevision, inspectHarnessEnvironment, projectedHarnessFindings } from './review-state.ts';
 import {
@@ -1980,7 +1981,7 @@ export async function runHarnessDriver(
     });
     try {
       const checks = await validate([environment.installCommand], host.cwd, {
-        signal: controller.signal, logDir: artifactDir, logPrefix: `environment-${requestedAction.id}-`,
+        signal: controller.signal, logDir: artifactDir, logPrefix: `environment-${requestedAction.id}-`, prepareProject: true,
         onSpawn: (identity) => { invocation.process = { ...identity }; persist(); emitInvocation(invocation); },
         onExit: () => { invocation.process = undefined; persist(); emitInvocation(invocation); },
       });
@@ -2070,7 +2071,7 @@ export async function runHarnessDriver(
     const composedSkillSources = new Map<string, string>();
     const pinMaterializedSkill = (
       name: string,
-      materialized = join(host.cwd, '.claude', 'skills', name),
+      materialized = skillDestination(host.cwd, '.claude', 'skills', name),
     ): void => {
       const pinned = join(trustedSkillsRoot, name);
       rmSync(pinned, { recursive: true, force: true });
@@ -2083,7 +2084,7 @@ export async function runHarnessDriver(
       ledger.trustedSkills[name] = binding.sha256;
     };
     const composeCompleteCodeReviewSkill = async (): Promise<string | null> => {
-      const target = join(host.cwd, '.claude', 'skills', phaseSkills.codeReview);
+      const target = skillDestination(host.cwd, '.claude', 'skills', phaseSkills.codeReview);
       const required = [
         'SKILL.md',
         join('references', 'review-checklist.md'),
@@ -2109,11 +2110,10 @@ export async function runHarnessDriver(
       }
       const baseRoot = realpathSync(dirname(base.path));
       const baseRaw = readFileSync(join(baseRoot, 'SKILL.md'), 'utf8');
-      const tracked = tracksSkillDir(phaseSkills.codeReview);
-      const composed = tracked ? join(artifactDir, 'composed-skills', phaseSkills.codeReview) : target;
+      const composed = join(artifactDir, 'composed-skills', phaseSkills.codeReview);
       rmSync(composed, { recursive: true, force: true });
-      cpSync(baseRoot, composed, { recursive: true });
-      if (tracked) composedSkillSources.set(phaseSkills.codeReview, composed);
+      copyTreeByValue(baseRoot, composed);
+      composedSkillSources.set(phaseSkills.codeReview, composed);
       if (baseRaw !== extensionRaw) {
         const extension = parseFrontmatter(extensionRaw).body.trim();
         if (extension) {
@@ -2133,25 +2133,28 @@ export async function runHarnessDriver(
           );
         }
       }
-      // Ignored in this worktree only, like every materialized skill.
-      if (!tracked) await ignoreProvisioned(host.cwd, '.claude/skills', phaseSkills.codeReview);
       return null;
     };
     for (const name of needed) {
+      let target: string;
+      try {
+        target = skillDestination(host.cwd, '.claude', 'skills', name);
+        skillDestination(host.cwd, '.claude', 'skills', '.gitignore');
+      } catch (error) {
+        return { ok: false, error: `Could not prepare harness skills: ${error instanceof Error ? error.message : String(error)}` };
+      }
       const bundledSkill = bundledRoot === null ? null : join(bundledRoot, name);
       if (bundledSkill && existsSync(join(bundledSkill, 'SKILL.md'))) {
         try {
-          if (tracksSkillDir(name)) {
-            pinMaterializedSkill(name, bundledSkill);
-          } else {
-            const target = join(host.cwd, '.claude', 'skills', name);
+          if (!tracksSkillDir(name)) {
             rmSync(target, { recursive: true, force: true });
-            cpSync(bundledSkill, target, { recursive: true });
+            cpSync(bundledSkill, target, { recursive: true, force: false, errorOnExist: true });
             await ignoreProvisioned(host.cwd, '.claude/skills', name);
-            pinMaterializedSkill(name);
           }
+          pinMaterializedSkill(name, bundledSkill);
           continue;
-        } catch {
+        } catch (error) {
+          return { ok: false, error: `Could not prepare bundled skill "${name}": ${error instanceof Error ? error.message : String(error)}` };
         }
       }
       if (!(await host.ensureSkill(name))) {

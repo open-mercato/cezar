@@ -1,8 +1,10 @@
-import { copyFile, cp, lstat, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Skill } from './skills.ts';
 import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
 import { reportError } from './telemetry.ts';
+import { readHarnessFsEntry } from './fs-read.ts';
+import { skillDestination, writeSkillFile } from './skill-destination.ts';
 
 /**
  * Install a task's selected skill — and every catalog skill it names, transitively — into the
@@ -96,17 +98,20 @@ const IGNORE_MARK = '# cezar: skills installed for this task, not part of the re
  * used instead — unless the repo has its own there, which is never edited.
  */
 export async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
-  const file = join(cwd, skillsDir, '.gitignore');
+  const relativePath = join(skillsDir, '.gitignore');
+  const file = skillDestination(cwd, relativePath);
   let prev: string | undefined;
   try {
-    prev = await readFile(file, 'utf8');
-  } catch {
-    // absent: cezar creates and owns it
+    const entry = readHarnessFsEntry(file, 1 << 20);
+    if (entry.kind !== 'file' || entry.content === null) throw new Error('Skill ignore file must be a regular text file');
+    prev = entry.content.toString('utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   if (prev !== undefined && !prev.startsWith(IGNORE_MARK)) return excludeFromGit(cwd, `${skillsDir}/${name}`);
   const lines = prev?.split('\n').filter(Boolean) ?? [IGNORE_MARK, '/.gitignore'];
   if (lines.includes(`/${name}`)) return;
-  await writeFile(file, [...lines, `/${name}`].join('\n') + '\n', 'utf8');
+  writeSkillFile(cwd, relativePath, [...lines, `/${name}`].join('\n') + '\n');
 }
 
 /** One skill into one skills dir. An existing entry (tracked, or the user's own) is never touched. */

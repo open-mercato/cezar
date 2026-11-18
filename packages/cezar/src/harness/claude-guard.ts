@@ -131,7 +131,7 @@ if (filePath) {
 // to the exact flat-file shape Claude owns; never make all of /tmp writable.
 const CLAUDE_CWD_MARKER_GLOB = '/private/tmp/claude-*-cwd';
 
-function sandboxRuntimeCliPath(): string {
+export function sandboxRuntimeCliPath(): string {
   const require = createRequire(import.meta.url);
   return join(dirname(require.resolve('@anthropic-ai/sandbox-runtime')), 'cli.js');
 }

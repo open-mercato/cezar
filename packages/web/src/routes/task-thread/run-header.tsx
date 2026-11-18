@@ -66,6 +66,7 @@ import { stripGroups, stripTabs } from '../task-workspace/strip'
 
 import {
   PRIMARY_ACTION_LABELS,
+  harnessReviewPending,
   primaryRunAction,
   secondaryRunAction,
 } from './run-actions'
@@ -246,7 +247,7 @@ function RunHeaderView({
               <ImpactChip run={run} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
-              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} />
+              <HeaderActions run={run} actions={actions} tab={tab} onRename={() => beginRename.current()} />
               {/* Desktop: fold the meta row and the step rail away, leaving the title and the
                   tabs — the minimalist view short of full screen. Phones keep every line. */}
               <IconTooltip label={collapsed ? 'Expand header' : 'Collapse header'}>
@@ -359,6 +360,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
     case 'review':
       return 'Needs review'
     case 'waiting':
+      if (harnessReviewPending(run)) return 'Review needed'
       return budgetStop(run) ? 'Budget reached' : 'Asked'
     case 'queued':
       return run.fallbackEpisode?.pending ? 'Switching agent' : `Queued${queuePosition !== undefined ? ` #${queuePosition}` : ''}`
@@ -424,12 +426,12 @@ function StatusChip({ label, className }: { label: string; className?: string })
 function HeaderActions({
   run,
   actions,
-  changesShowing,
+  tab,
   onRename,
 }: {
   run: ApiRun
   actions: RunActions
-  changesShowing: boolean
+  tab: RunTab
   onRename: () => void
 }) {
   const git = useRunGitStep(run)
@@ -491,7 +493,9 @@ function HeaderActions({
     'remove-worktree': actions.removeWorktree.isPending,
   }
 
-  const primary = primaryRunAction(run, { git: git.action, ...(prUrl ? { prUrl } : {}), changesShowing })
+  const primary = primaryRunAction(run, {
+    git: git.action, ...(prUrl ? { prUrl } : {}), changesShowing: tab === 'changes', harnessReviewShowing: tab === 'review',
+  })
   const secondary = secondaryRunAction(run, primary, git.action)
   // The composer when a Chat column shows one; else bring the chat up (the workspace) or go there.
   const toComposer = () => {
@@ -520,6 +524,8 @@ function HeaderActions({
         return toComposer()
       case 'review':
         return toChanges()
+      case 'harness-review':
+        return navigate(`/tasks/${run.id}/review`)
       case 'open-pr':
         return primary?.kind === 'open-pr' ? window.open(primary.url, '_blank', 'noopener,noreferrer') : undefined
       case 'stop':

@@ -13,13 +13,14 @@ import {
 } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { harnessCheckUnavailable } from '@open-mercato/cezar-contract';
 import { discoverSkills, type Skill } from '../skills.js';
 import type { HarnessValidationCheck } from './types.js';
 import { readHarnessFsEntry, readRegularFileFollowing } from '../fs-read.js';
 import { groupStillAlive, terminateAgentProcessTree, trackAgentProcessTree } from './process-tree.js';
+import { createValidationSandbox, validationLauncherPath } from './validation-sandbox.js';
 
 /**
  * The runtime bridge (spec 2026-07-23-harness-orchestration, Architecture §2):
@@ -37,8 +38,7 @@ const DEFAULT_OP_TIMEOUT_MS = 10 * 60_000;
 const VALIDATION_TIMEOUT_MS = 30 * 60_000;
 const PROCESS_KILL_GRACE_MS = 5_000;
 
-// Provider credentials the runtime and CLI probes may need. The validation gate runs the
-// model-written scripts behind `npm test` unsandboxed, so it never receives them.
+// Provider credentials the runtime and CLI probes may need. Project checks never receive them.
 const HARNESS_PROVIDER_CREDENTIAL_ENV = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'];
 
 const HARNESS_BASE_ENV = new Set([
@@ -804,31 +804,41 @@ export async function runValidationCommands(
     logDir?: string;
     logPrefix?: string;
     continueAfter?: ReadonlySet<string>;
+    prepareProject?: true;
   } = {},
 ): Promise<HarnessValidationCheck[]> {
+  if (commands.length === 0) return [];
+  let sandbox: ReturnType<typeof createValidationSandbox>;
+  try {
+    sandbox = createValidationSandbox(cwd, opts.prepareProject === true, opts.logDir);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return commands.map((command, index) => index === 0
+      ? { command, status: 'failed', exitCode: null, unavailable: true, evidence: `Validation sandbox unavailable: ${detail}` }
+      : { command, status: 'skipped', exitCode: null, evidence: 'skipped — validation sandbox unavailable' });
+  }
   const checks: HarnessValidationCheck[] = [];
   let failed = false;
-  const inherited = harnessChildEnvironment();
-  for (const name of HARNESS_PROVIDER_CREDENTIAL_ENV) delete inherited[name];
-  // The gate runs model-written scripts unsandboxed, so the default push paths are closed as in
-  // writing phases — no ssh-agent, askpass, gh login or credential helper — and git may use only
-  // local transports, which test suites cloning fixtures still need.
-  const noGitHubAuthDir = mkdtempSync(join(tmpdir(), 'cez-gate-no-gh-'));
-  const baseEnvironment: Record<string, string> = {
-    ...inherited,
-    SSH_AUTH_SOCK: '',
-    GIT_ASKPASS: '/usr/bin/false',
-    SSH_ASKPASS: '/usr/bin/false',
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_ALLOW_PROTOCOL: 'file',
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'credential.helper',
-    GIT_CONFIG_VALUE_0: '',
-    GH_CONFIG_DIR: noGitHubAuthDir,
-    ...opts.env,
-  };
-  let corepackShimDir: string | undefined;
   try {
+    const inherited = { ...harnessChildEnvironment(), ...opts.env };
+    for (const name of [...HARNESS_PROVIDER_CREDENTIAL_ENV, 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY']) delete inherited[name];
+    // The sandbox launcher resolves tools from the host PATH. Only the isolated shell sees
+    // any paths inside the checkout or a private cache.
+    const path = (inherited.PATH ?? '').split(delimiter).filter(isAbsolute).join(delimiter);
+    const baseEnvironment: Record<string, string> = {
+      ...inherited,
+      ...sandbox.env,
+      PATH: validationLauncherPath(cwd, path),
+      SHELL: '/bin/bash',
+      SSH_AUTH_SOCK: '',
+      GIT_ASKPASS: '/usr/bin/false',
+      SSH_ASKPASS: '/usr/bin/false',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ALLOW_PROTOCOL: 'file',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '',
+    };
     const packageManager = (() => {
       try {
         // Model-writable: a FIFO here blocked the server thread on every resume.
@@ -840,29 +850,20 @@ export async function runValidationCommands(
         return undefined;
       }
     })();
+    let corepackShimDir: string | undefined;
     if (packageManager && /^(?:yarn|pnpm)@/.test(packageManager)) {
-      const candidate = mkdtempSync(join(tmpdir(), 'cez-corepack-'));
+      const candidate = mkdtempSync(join(sandbox.env.TMPDIR, 'corepack-'));
+      const invocation = sandbox.command(['-c', 'export PATH="$1"; exec corepack enable --install-directory "$2"', 'cez-corepack', path, candidate]);
       const enabled = await new Promise<boolean>((done) => {
         execFile(
-          'corepack',
-          ['enable', '--install-directory', candidate],
+          invocation.executable,
+          invocation.args,
           { cwd, env: baseEnvironment, timeout: 10_000 },
           (error) => done(!error),
         );
       });
       if (enabled) corepackShimDir = candidate;
-      else rmSync(candidate, { recursive: true, force: true });
     }
-    const validationEnvironment = {
-      ...baseEnvironment,
-      ...(corepackShimDir
-        ? {
-            PATH: `${corepackShimDir}${
-              process.platform === 'win32' ? ';' : ':'
-            }${baseEnvironment.PATH ?? ''}`,
-          }
-        : {}),
-    };
     for (const [index, command] of commands.entries()) {
       if (failed) {
         checks.push({ command, status: 'skipped', exitCode: null, evidence: 'skipped — a previous command failed' });
@@ -882,14 +883,19 @@ export async function runValidationCommands(
         output: string;
         droppedBytes: number;
         timedOut: boolean;
+        started: boolean;
       }>((resolve) => {
         const processToken = randomProcessToken();
-        // A login shell may replace PATH via /etc/profile, bypassing both the
-        // repository's Corepack shim and an explicitly supplied validation PATH.
-        const child = spawn('bash', ['-c', command], {
+        const marker = Buffer.from(`cez-validation-ready-${randomUUID()}\n`);
+        const invocation = sandbox.command([
+          '-c',
+          'printf "%s\\n" "$1"; export PATH="$2"; /bin/bash -c "$3"; exit "$?"',
+          'cez-validation', marker.toString().trimEnd(), corepackShimDir ? `${corepackShimDir}${delimiter}${path}` : path, command,
+        ]);
+        const child = spawn(invocation.executable, invocation.args, {
           cwd,
           env: {
-            ...validationEnvironment,
+            ...baseEnvironment,
             CEZ_PROCESS_TOKEN: processToken,
           },
           detached: process.platform !== 'win32',
@@ -912,6 +918,8 @@ export async function runValidationCommands(
         let droppedBytes = 0;
         let timedOut = false;
         let settled = false;
+        let started = false;
+        let startupPrefix: Buffer | undefined = Buffer.alloc(0);
         const collect = (chunk: Buffer) => {
           chunks.push(chunk);
           total += chunk.length;
@@ -934,7 +942,20 @@ export async function runValidationCommands(
             dropped: droppedBytes + (joined.length - kept.length),
           };
         };
-        child.stdout.on('data', collect);
+        child.stdout.on('data', (chunk: Buffer) => {
+          if (startupPrefix === undefined) {
+            collect(chunk);
+            return;
+          }
+          const data = Buffer.concat([startupPrefix, chunk]);
+          if (data.length < marker.length && marker.subarray(0, data.length).equals(data)) {
+            startupPrefix = data;
+            return;
+          }
+          startupPrefix = undefined;
+          started = data.subarray(0, marker.length).equals(marker);
+          collect(started ? data.subarray(marker.length) : data);
+        });
         child.stderr.on('data', collect);
         const abort = () => terminateProcessTree(child);
         opts.signal?.addEventListener('abort', abort, { once: true });
@@ -959,6 +980,7 @@ export async function runValidationCommands(
             output: syntheticOutput ?? captured.text,
             droppedBytes: syntheticOutput ? 0 : captured.dropped,
             timedOut,
+            started,
           });
         };
         try {
@@ -991,8 +1013,8 @@ export async function runValidationCommands(
       });
       if (exitRecordError !== undefined) throw exitRecordError;
       opts.onOutput?.(command, result.output);
-      const passed = result.code === 0 && !result.timedOut;
-      if (!passed && !opts.continueAfter?.has(command)) failed = true;
+      const passed = result.started && result.code === 0 && !result.timedOut && !opts.signal?.aborted;
+      if (!passed && (!result.started || !opts.continueAfter?.has(command))) failed = true;
       let logPath: string | undefined;
       if (opts.logDir) {
         try {
@@ -1023,6 +1045,7 @@ export async function runValidationCommands(
         });
       } else {
         const notes = [
+          !result.started ? 'Validation sandbox unavailable: the project command did not start.' : null,
           result.timedOut
             ? `command timed out after ${
                 timeoutMs >= 120_000 ? `${Math.round(timeoutMs / 60_000)} minutes` : `${timeoutMs / 1000}s`
@@ -1045,14 +1068,12 @@ export async function runValidationCommands(
           failureIds: failureIdsOf(result.output),
           ...(logPath ? { logPath } : {}),
           ...(result.timedOut ? { timedOut: true } : {}),
+          ...(!result.started ? { unavailable: true } : {}),
         });
       }
     }
   } finally {
-    if (corepackShimDir) {
-      rmSync(corepackShimDir, { recursive: true, force: true });
-    }
-    rmSync(noGitHubAuthDir, { recursive: true, force: true });
+    sandbox.cleanup();
   }
   return checks;
 }

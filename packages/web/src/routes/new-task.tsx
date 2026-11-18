@@ -809,7 +809,7 @@ export function NewTaskRoute() {
           runner: 'claude',
           defaultRunner,
           variants: 1,
-          images: submitted,
+          images: [],
           harnessRoles: start.harnessRoles,
           harnessIssueId: start.harnessIssueId,
           harnessSkillProfile: start.harnessSkillProfile,
@@ -1258,6 +1258,7 @@ export function NewTaskRoute() {
           onValueChange={(text) => update({ text })}
           images={images}
           onImagesChange={setImages}
+          attachments={composerMode !== 'multi'}
           autoFocus
           placeholder={
             composerMode === 'multi'

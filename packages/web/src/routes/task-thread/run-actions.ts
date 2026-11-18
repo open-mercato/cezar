@@ -1,6 +1,6 @@
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { cliTargetRunner } from '@/components/open-in-menu'
-import { isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
+import { budgetStop, isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import type { GitAction } from '@/lib/git-actions'
 import { canBeUnread, isUnread } from '@/lib/read-state'
 import { queuePositions } from '@/lib/task-groups'
@@ -230,6 +230,7 @@ export function queuePosition(runs: RunRecord[], runId: string): number | undefi
 export type PrimaryRunAction =
   | { kind: 'answer' }
   | { kind: 'review' }
+  | { kind: 'harness-review' }
   | { kind: 'git'; action: GitAction }
   | { kind: 'open-pr'; url: string }
   | { kind: 'stop' }
@@ -238,9 +239,15 @@ export type PrimaryRunAction =
 export const PRIMARY_ACTION_LABELS: Record<Exclude<PrimaryRunAction['kind'], 'git'>, string> = {
   answer: 'Answer',
   review: 'Review changes',
+  'harness-review': 'Review next steps',
   'open-pr': 'Open PR',
   stop: 'Stop',
   retry: 'Retry',
+}
+
+export function harnessReviewPending(run: RunRecord): boolean {
+  return Boolean(run.harness && run.status === 'waiting' && !budgetStop(run) &&
+    !run.attentionRequest && !run.asks?.some((ask) => !ask.closed))
 }
 
 export function primaryRunAction(
@@ -249,6 +256,7 @@ export function primaryRunAction(
     git,
     prUrl,
     changesShowing,
+    harnessReviewShowing = false,
   }: {
     /** The policy's one git step (`useRunGitStep`), or null. */
     git: GitAction | null
@@ -256,11 +264,13 @@ export function primaryRunAction(
     prUrl?: string
     /** A Changes view is on screen: "Review changes" would open what already shows. */
     changesShowing: boolean
+    harnessReviewShowing?: boolean
   },
 ): PrimaryRunAction | null {
   const flags = runActionFlags(run)
   // A worktree operation owns the task until it is resolved (#1358): its card carries the actions.
   if (run.worktreeLifecycle?.activeOperationId) return null
+  if (harnessReviewPending(run)) return harnessReviewShowing ? null : { kind: 'harness-review' }
   if (run.status === 'waiting' || isAwaitingAnswer(run)) return { kind: 'answer' }
   if (run.status === 'review' && !changesShowing) return { kind: 'review' }
   if (git) return { kind: 'git', action: git }

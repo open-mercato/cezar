@@ -189,10 +189,14 @@ Staging must exactly match the Git-derived allowlist, including deletions, renam
 sparse worktrees and nested gitlinks. Publishing rechecks the pinned worktree and
 staged outcome rather than trusting stale UI state.
 
-The boundary has limits: Codex cannot deny reads of arbitrary credential files,
-and validation commands execute repository code outside the agent sandbox. The
-validation environment removes provider/publish credentials, but cannot prevent
-code from reading the user's disk. Human review before publication remains required.
+Validation uses the standalone OS sandbox on macOS and Linux. Project checks have
+no network access and receive a private home and temp directory. The sandbox
+restricts writes to the task worktree and those private directories and protects
+the checkout's Git pointer. The explicit project preparation action can reach
+the public npm and Yarn registries under the same filesystem restrictions.
+If sandbox initialization fails, record the check as unavailable and stop at
+the recovery gate. Codex model phases may still read files their runner allows.
+Human review before publication remains required.
 
 ## Recovery, feedback and publication
 

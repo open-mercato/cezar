@@ -203,6 +203,7 @@ export interface ComposerHandle {
 }
 
 const QUICK_REPLIES: Record<string, string> = { KeyA: 'Yes, approved.', KeyC: 'Continue.' }
+const NO_ATTACHMENTS: PendingAttachment[] = []
 
 /** Every scrolled ancestor with its scrollTop, so the autosize pass can put them back. */
 function scrollAncestors(el: HTMLElement): Array<[Element, number]> {
@@ -262,13 +263,14 @@ export function Composer({
   // Optionally controlled, on the same terms as the text above: `controlledImages` (when given)
   // shadows the internal state and every write is mirrored to both.
   const [internalImages, setInternalImages] = useState<PendingAttachment[]>([])
-  const images = controlledImages ?? internalImages
-  // Mirrors `images` for reads inside event handlers that must not run through a setState updater
+  const savedImages = controlledImages ?? internalImages
+  const images = attachments ? savedImages : NO_ATTACHMENTS
+  // Mirrors the saved draft for reads inside event handlers that must not run through a setState updater
   // (StrictMode double-invokes those in dev — see addFiles / #double-paste). Updated INSIDE
   // `setImages` as well as on render, so two async appends in one tick compose instead of the
   // second clobbering the first — that is what the functional-setState form used to buy.
-  const imagesRef = useRef(images)
-  imagesRef.current = images
+  const imagesRef = useRef(savedImages)
+  imagesRef.current = savedImages
   const onImagesChangeRef = useRef(onImagesChange)
   onImagesChangeRef.current = onImagesChange
   const setImages = useCallback(
@@ -566,13 +568,15 @@ export function Composer({
           // Outside the updater (StrictMode double-invokes it): what was attached since the send
           // goes back behind the message's own, within both caps — and a drop is said, not silent.
           const dropped: PendingAttachment[] = []
-          const restored = imagesRef.current.reduce((list, a) => {
-            const next = appendAttachment(list, a)
-            if (!next) dropped.push(a)
-            return next ?? list
-          }, messageImages)
-          for (const a of dropped) toast(`“${a.name}” removed — the restored message fills the attachment limit`, { tone: 'danger' })
-          setImages(restored)
+          if (messageImages.length > 0) {
+            const restored = imagesRef.current.reduce((list, a) => {
+              const next = appendAttachment(list, a)
+              if (!next) dropped.push(a)
+              return next ?? list
+            }, messageImages)
+            for (const a of dropped) toast(`“${a.name}” removed — the restored message fills the attachment limit`, { tone: 'danger' })
+            setImages(restored)
+          }
         }
       } finally {
         setBusy(false)
@@ -599,10 +603,10 @@ export function Composer({
     // Optimistic clear — the reply feels instant; a rejection restores it above. Tagged `submit`
     // so a controlled host does not mistake it for the user emptying the composer by hand.
     setText('')
-    setImages([], 'submit')
+    if (attachments) setImages([], 'submit')
     setTrigger(null)
     void send(draftText, draftImages, true)
-  }, [allowEmptySubmit, busy, disabled, submitDisabled, sendBlockedReason, images, send, text])
+  }, [allowEmptySubmit, attachments, busy, disabled, submitDisabled, sendBlockedReason, images, send, text])
 
   useEffect(() => {
     if (busy || !queued) return
@@ -700,7 +704,7 @@ export function Composer({
     }
     if (alsoSend && !disabled && !submitDisabled) {
       setText('')
-      setImages([], 'submit')
+      if (attachments) setImages([], 'submit')
       void send(merged, images, true)
       return
     }

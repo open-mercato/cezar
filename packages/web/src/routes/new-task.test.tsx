@@ -17,7 +17,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { readDraft, resetDraft, writeDraft } from './new-task-draft'
+import { readAttachments, readDraft, resetDraft, writeAttachments, writeDraft } from './new-task-draft'
 import { harnessSetupPrefill } from './new-task-form'
 import { NewTaskRoute } from './new-task'
 
@@ -552,6 +552,25 @@ describe('the hero surface', () => {
     fireEvent.click(start)
     await waitFor(() => expect(postedBody()).toMatchObject({ workflow: 'harness-implement-feature' }))
     expect((postedBody() as { harness: object }).harness).not.toHaveProperty('issueId')
+  })
+
+  it('keeps Task draft attachments while Multi-model sends a text-only brief', async () => {
+    const attachment = { id: 'img-1', name: 'ordinary.png', data: 'AAA', mediaType: 'image/png', preview: 'data:image/png;base64,AAA', isImage: true }
+    writeAttachments([attachment])
+    writeDraft({ ...readDraft(), text: 'Improve email layout', composerMode: 'multi', harnessMode: 'implement-feature' })
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI,
+      workflows: { workflows: [{ name: 'harness-implement-feature', source: 'built-in', steps: [], capabilities: { push: false, openPr: false, postToGithub: false } }], issues: [] },
+    })
+    renderNewTask()
+    await screen.findByRole('radio', { name: /build a feature/i })
+    const start = await screen.findByRole('button', { name: 'Start multi-model run' })
+    await waitFor(() => expect(start.hasAttribute('disabled')).toBe(false))
+    expect(screen.queryByLabelText('Remove ordinary.png')).toBeNull()
+    expect(document.querySelector('[data-slot="composer"] input[type="file"]')).toBeNull()
+    fireEvent.click(start)
+    await waitFor(() => expect(postedBody()).toMatchObject({ workflow: 'harness-implement-feature' }))
+    expect(postedBody()).not.toHaveProperty('images')
+    expect(readAttachments()).toEqual([attachment])
   })
 
   it.each(['Fix issue #642', 'Fix https://github.com/acme/project/issues/642'])('fills the issue id from %s and preserves an explicit override', async (text) => {

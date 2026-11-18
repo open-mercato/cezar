@@ -131,10 +131,16 @@ an older handoff lacks that record, open **Review** and choose **Verify final
 fixes** before publishing. Completed tasks with clean worktrees follow the project
 retention limit. Work that exists only in the staging area stays available.
 
-Two limits matter when choosing a repository to run: Codex cannot deny reads of
-arbitrary credential files, and validation commands execute repository code outside
-the agent sandbox. Validation removes provider/publish credentials from its
-environment but does not prevent code from reading the user's disk. Review the
+Project checks run in an OS sandbox with a private home and temporary directory.
+They can write to the task worktree and their private directories. They have no
+network access or provider credentials. The explicit **Prepare project** action
+uses the same sandbox and can reach the public npm and Yarn registries. Install
+dependencies manually in the task terminal for other registries, then retry.
+Automated checks require macOS or Linux with a working sandbox runtime. On Linux,
+the runtime requires bubblewrap, socat and ripgrep. If isolation is unavailable,
+the run reports that checks could not start.
+
+Codex model phases may still read files that their runner allows. Review the
 staged deliverable before publishing.
 
 Claude's macOS sandbox requires the optional bundled sandbox runtime. If sandboxing

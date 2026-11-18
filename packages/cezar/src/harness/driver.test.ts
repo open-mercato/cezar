@@ -1798,6 +1798,22 @@ describe('harness driver — standard fix-issue graph', { timeout: 30_000 }, () 
     }
   });
 
+  it.skipIf(process.platform === 'win32')('pauses preflight when the bundled-skill destination has a symlinked parent', async () => {
+    const checkout = join(dir, 'checkout');
+    const outside = join(dir, 'elsewhere');
+    mkdirSync(join(checkout, '.claude'), { recursive: true });
+    mkdirSync(outside);
+    symlinkSync(outside, join(checkout, '.claude', 'skills'), 'dir');
+    const h = makeHarness(checkout);
+    const bundledRoot = join(dir, 'bundled');
+    writeTestSkill(bundledRoot, 'cez-harness');
+    h.deps.bundledSkillsRoot = bundledRoot;
+
+    expect(await runHarnessDriver(h.host, input, h.deps)).toMatch(/Unsafe skill destination/);
+    expect(existsSync(join(outside, 'cez-harness'))).toBe(false);
+    expect(h.calls).toHaveLength(0);
+  });
+
   it('fails closed when the pinned runtime is gone instead of sealing the worktree copy', async () => {
     const bundledRoot = join(dir, 'pinned-bundled');
     writeTestSkill(bundledRoot, 'cez-harness');
