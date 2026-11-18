@@ -8022,8 +8022,9 @@ export class RunManager {
       let catalog = catalogOf(state.skills);
       let roots = rootsIn(catalog);
       // An unknown `/name` is most likely a backend's own command (`/compact`): never stall it.
-      // A selected step skill, or one named in prose, may still arrive with the team load.
-      if (!roots.length && !stepSkill && !text) return none;
+      // A selected step skill may still arrive with the team load; prose resolves against what is
+      // loaded, so a prompt that names no skill never waits on a clone.
+      if (!roots.length && !stepSkill) return none;
       const inPlace = resolvePath(state.cwd) === resolvePath(this.repoRoot);
       if (!inPlace || !roots.length) {
         // A companion (or the step skill itself) often lives only in the team repo: wait, bounded.
