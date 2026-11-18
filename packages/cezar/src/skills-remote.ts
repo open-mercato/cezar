@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { loadConfig, projectGatedSkillsRepos, type SkillsRepoSource } from './config.ts';
@@ -380,13 +380,15 @@ export async function materializeSkillDir(
   if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md')) return false;
   const bareDir = bareDirFor(skill.team.repo);
   if (!existsSync(join(bareDir, 'HEAD'))) return false;
-  const ref = await resolveRef(bareDir, skill.team.ref);
+  const ref = await resolveRef(bareDir, skill.team.commit ?? skill.team.ref);
   if (ref === null) return false;
   const srcDir = skill.team.path.slice(0, -'/SKILL.md'.length);
   const ls = await git(['ls-tree', '-r', '--name-only', ref, '--', srcDir], LIST_TIMEOUT_MS, bareDir);
   if (!ls.ok) return false;
 
   const destDir = join(repoRoot, skillsDir, skill.name);
+  const isSymlink = (path: string) => lstat(path).then((entry) => entry.isSymbolicLink(), () => false);
+  if (await isSymlink(destDir) || await isSymlink(join(destDir, 'SKILL.md'))) return false;
   let wrote = 0;
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
     const rel = file.slice(srcDir.length + 1);

@@ -4183,7 +4183,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
     expect(
       eventsOf(record.id).some(
-        (e) => e.type === 'note' && String((e as { message?: unknown }).message).includes('shared skill `om-lonely` is not installed'),
+        (e) => e.type === 'note' && String((e as { message?: unknown }).message).includes('shared skill om-lonely is unavailable'),
       ),
     ).toBe(true);
     const wt = store.getRun(record.id)!.worktreePath!;
@@ -4220,9 +4220,24 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     runId = record.id;
     await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('looking into')));
     expect(eventsOf(record.id)).toContainEqual(expect.objectContaining({
-      type: 'note', action: 'install-skills', tone: 'danger', message: expect.stringContaining('om-unavailable-fixture'),
+      type: 'note', action: 'install-skills', tone: 'danger', skillNames: ['om-unavailable-fixture'],
     }));
     expect(eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('User request:\n/om-unavailable-fixture'))).toBe(true);
+  }, 40_000);
+
+  it('recognizes a quoted slash skill before the catalog has loaded', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'Please use the `/om-quoted-fixture` skill', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('looking into')));
+    expect(eventsOf(record.id)).toContainEqual(expect.objectContaining({ action: 'install-skills', skillNames: ['om-quoted-fixture'] }));
+  }, 40_000);
+
+  it('offers repair when an installed skill requires an absent Open Mercato companion', async () => {
+    writeFileSync(join(repoRoot, '.ai/cezar/skills/om-root-fixture.md'), 'Run the `om-engine-fixture` skill.');
+    const record = manager.startRun(SINGLE_STEP, { task: 'Use om-root-fixture', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('looking into')));
+    expect(eventsOf(record.id)).toContainEqual(expect.objectContaining({ action: 'install-skills', skillNames: ['om-engine-fixture'] }));
   }, 40_000);
 
   it('warns before handing a missing skill request to the existing session', async () => {
@@ -4234,6 +4249,40 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(eventsOf(record.id)).toContainEqual(expect.objectContaining({
       type: 'note', action: 'install-skills', message: expect.stringContaining('om-live-missing-fixture'),
     }));
+  }, 40_000);
+
+  it('does not reopen a finished task when an accepted message is still preparing skills', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'Start a session', worktree: true });
+    runId = record.id;
+    await waitFor(() => store.getRun(record.id)?.status === 'waiting');
+    const internals = manager as unknown as {
+      active: Map<string, { idleClosed?: boolean; session: { end(): void }; skillMessageDelivery?: Promise<void> }>;
+      provisionTaskSkills(): Promise<{ installed: string[]; missingShared: string[]; guidance: string[] }>;
+    };
+    const state = internals.active.get(record.id)!;
+    type Preparation = Awaited<ReturnType<typeof internals.provisionTaskSkills>>;
+    let resolvePreparation!: (result: Preparation) => void;
+    const prepare = new Promise<Preparation>((resolve) => { resolvePreparation = resolve; });
+    const delayed = vi.spyOn(internals, 'provisionTaskSkills').mockReturnValueOnce(prepare);
+    try {
+      const text = 'Run om-pending-fixture now';
+      expect(manager.sendMessage(record.id, [{ type: 'text', text }])).toBe(true);
+      await waitFor(() => delayed.mock.calls.length === 1);
+      // Simulate a session that has already closed when Finish is pressed.
+      state.idleClosed = true;
+      state.session.end();
+      await waitFor(() => !manager.isActive(record.id));
+      expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
+      expect(manager.finish(record.id)).toBe(true);
+      await waitFor(() => store.getRun(record.id)?.status === 'done');
+      resolvePreparation({ installed: [], missingShared: [], guidance: [] });
+      await state.skillMessageDelivery;
+      expect(eventsOf(record.id).filter((event) => event.type === 'user-message' && event.text === text)).toHaveLength(1);
+      expect(store.getRun(record.id)?.steps.map((step) => step.id)).toEqual(['task']);
+    } finally {
+      resolvePreparation({ installed: [], missingShared: [], guidance: [] });
+      delayed.mockRestore();
+    }
   }, 40_000);
 
   it('reports where a task came from and which workflow it ran, never a custom name', () => {

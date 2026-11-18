@@ -5339,13 +5339,15 @@ export class RunManager {
     if (prepared && !prepared.skills && (needsSkills || state.skillMessageDelivery)) {
       const message = prepared;
       const delivery = (state.skillMessageDelivery ?? Promise.resolve()).then(async () => {
-        if (this.disposed || state.cancelled || state.finishRequested) return;
-        message.skills = needsSkills ? await this.provisionTaskSkills(state, { slash, text }) : NO_TASK_SKILLS;
-        if (this.disposed || state.cancelled || state.finishRequested) return;
-        if (this.active.get(runId)?.session?.open && this.deliverMessage(runId, content, userAuthored, message, answering)) return;
-        if (this.enqueueMessage(runId, content) || this.deferMessage(runId, content, { replyNoted: true })) return;
-        this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
-        this.redeliverDeferred(runId);
+        const stillLive = () => this.active.get(runId) === state && state.session?.open && !state.cancelled && !state.finishRequested;
+        if (stillLive() && !this.disposed) {
+          message.skills = needsSkills ? await this.provisionTaskSkills(state, { slash, text }) : NO_TASK_SKILLS;
+          if (stillLive() && !this.disposed && this.deliverMessage(runId, content, userAuthored, message, answering)) return;
+        }
+        if (this.disposed || !this.store.getRun(runId)) return;
+        // The message is already in the thread. A replacement session has a new owner and may
+        // have been closed by Finish, so retry only on an explicit user action.
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'the session closed while preparing skills for the message. Continue the task to retry it.' });
       }).catch(() => {
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'a message could not be delivered after preparing its skills' });
       });
@@ -8024,10 +8026,16 @@ export class RunManager {
     const text = wantedSkills.text?.trim() || undefined;
     if (!named.length && !text) return none;
     const requested = requestedOpenMercatoSkills(named, text);
-    const missingFrom = (roots: readonly Skill[]): string[] => [...new Set([
-      ...roots.filter((skill) => skill.missingShared).map((skill) => skill.name),
-      ...requested.filter((name) => !roots.some((skill) => skill.name === name)),
-    ])];
+    const missingFrom = (roots: readonly Skill[], catalog: readonly Skill[]): string[] => {
+      const available = new Set(catalog.filter((skill) => !skill.missingShared && !skill.kind).map((skill) => skill.name));
+      const dependencies = skillClosure(roots.filter((skill) => !skill.kind && !skill.missingShared), catalog)
+        .flatMap((skill) => requestedOpenMercatoSkills([], skill.body));
+      return [...new Set([
+        ...roots.filter((skill) => skill.missingShared).map((skill) => skill.name),
+        ...requested.filter((name) => !roots.some((skill) => skill.name === name)),
+        ...dependencies.filter((name) => !available.has(name)),
+      ])];
+    };
     try {
       // Companions resolve against the ungated team list too: curating a skill out of the
       // picker must not break a skill that runs it.
@@ -8073,14 +8081,14 @@ export class RunManager {
         catalog = catalogOf(state.skills);
         roots = rootsIn(catalog);
       }
-      if (missingFrom(roots).length) {
+      if (missingFrom(roots, catalog).length) {
         // Retry once even if there is no project extension, such as a fresh VPS with an empty cache.
         await waitBounded(refreshTeamSkills(this.repoRoot), TEAM_SKILLS_REPAIR_MS);
         state.skills = await discoverSkills(this.repoRoot);
         catalog = catalogOf(state.skills);
         roots = rootsIn(catalog);
       }
-      const missingShared = missingFrom(roots);
+      const missingShared = missingFrom(roots, catalog);
       // Only a selected step skill can be missing: a leading `/name` that is no skill is a
       // backend's own command (`/compact`), not a miss.
       const stepSkillMissing = Boolean(stepSkill) && !catalog.some((s) => s.name === stepSkill);
@@ -8119,7 +8127,15 @@ export class RunManager {
       for (const skill of sharedClosure) {
         if (skill.kind === 'command' || !isOpenMercatoSkillName(skill.name)) continue;
         const paths = PROVISION_SKILL_DIRS.map((dir) => `${dir}/${skill.name}/SKILL.md`);
-        const relative = paths.find((path) => existsSync(join(state.cwd, path)));
+        const relative = paths.find((path) => {
+          const file = join(state.cwd, path);
+          if (!skill.extension) return existsSync(file);
+          try {
+            return parseFrontmatter(readFileSync(file, 'utf8')).body.trim() === skill.body.trim();
+          } catch {
+            return false;
+          }
+        });
         const entrypoint = relative ?? (skill.source !== 'team' && isAbsolute(skill.path) && existsSync(skill.path) ? skill.path : undefined);
         if (skill.missingShared || !entrypoint) missingShared.push(skill.name);
         else entrypoints.push(`- \`${skill.name}\` at \`${entrypoint}\``);
@@ -9955,6 +9971,10 @@ export class RunManager {
     const timeoutMs = timeoutMinutes * 60_000;
     state.idleTimer = setTimeout(() => {
       if (state.session?.open && !state.cancelled) {
+        if (state.skillMessageDelivery) {
+          this.armIdleTimer(runId, state);
+          return;
+        }
         state.idleClosed = true;
         // No transcript notice: the thread ends on its last real message (idle park). A child's
         // settle still records why it stopped.
@@ -10599,7 +10619,7 @@ export function repoExtensionNote(name: string, path: string): string {
 /** Recognize an invocation with a cold catalog, without blocking unrelated prompts on a clone. */
 function requestedOpenMercatoSkills(named: readonly string[], text?: string): string[] {
   const names = new Set(named.filter(isOpenMercatoSkillName));
-  const invocation = /(?:^\s*|\b(?:run|use|apply|load|invoke)\s+(?:the\s+)?)[`/]?(om-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w/-]|\.[\w-])/gim;
+  const invocation = /(?:^\s*|\b(?:run|use|apply|load|invoke)\s+(?:the\s+)?)`?\/?(om-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w/-]|\.[\w-])/gim;
   for (const match of (text ?? '').matchAll(invocation)) names.add(match[1]!.toLowerCase());
   return [...names];
 }
@@ -10613,13 +10633,15 @@ function taskSkillNotes(provision: TaskSkillPreparation): string[] {
 }
 
 function missingSharedSkillsEvent(stepId: string | undefined, names: readonly string[]) {
-  const list = names.map((name) => `\`${name}\``).join(', ');
   return {
     type: 'note' as const,
     stepId,
     tone: 'danger' as const,
     action: 'install-skills',
-    message: `The shared skill ${list} is not installed for this task. Install skills to retry the team catalog, then ask the agent to run the skill again.`,
+    skillNames: names,
+    message: names.length === 1
+      ? `The shared skill ${names[0]} is unavailable for this task. Install skills to refresh the catalog.`
+      : `The shared skills ${names.join(', ')} are unavailable for this task. Install skills to refresh the catalog.`,
   };
 }
 
