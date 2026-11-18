@@ -8126,6 +8126,8 @@ export class RunManager {
       const entrypoints: string[] = [];
       for (const skill of sharedClosure) {
         if (skill.kind === 'command' || !isOpenMercatoSkillName(skill.name)) continue;
+        // Selected standalone repo skills already get their local path in the system prompt.
+        if (named.includes(skill.name) && !skill.missingShared && (skill.source === 'ai' || skill.source === 'cezar')) continue;
         const paths = PROVISION_SKILL_DIRS.map((dir) => `${dir}/${skill.name}/SKILL.md`);
         const relative = paths.find((path) => {
           const file = join(state.cwd, path);

@@ -144,30 +144,24 @@ const SHARED_SKILL_SOURCES: ReadonlySet<Skill['source']> = new Set(['agents', 'g
  *  Open Mercato's convention) — "extends the shared Button component" is not that. */
 function declaresExtension(skill: Skill): boolean {
   const name = skill.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`\\bexten(?:ds|sion of)\\s+(?:the\\s+)?shared\\s+\`?${name}\`?(?![A-Za-z0-9_-])`, 'i');
+  const pattern = new RegExp(`\\bexten(?:ds?|sion of)\\s+(?:the\\s+)?shared\\s+\`?${name}\`?(?![A-Za-z0-9_-])`, 'i');
   return pattern.test(`${skill.description ?? ''}\n${skill.body.slice(0, 2000)}`);
 }
 
 /**
- * A repo skill that shares its name with a shared (installed or team) skill and is that skill's
- * EXTENSION — the shared body reads `.ai/skills/<name>/`, or the local one says it extends it —
- * must not shadow it: the catalog entry becomes the shared skill, carrying the extension's path.
- * An extension with no shared skill is flagged `missingShared` instead of posing as the skill.
- * Shadowing it was why a task's agent found only the extension ("shared skill isn't installed").
+ * When a repo skill declares an extension, use the shared skill and carry the extension's path.
+ * The shared skill may document a project path that also contains a standalone override, so
+ * the local declaration controls layering. Flag extensions with no shared skill for repair.
  */
 export function layerSkillExtensions(lists: readonly Skill[][], sharedPool: readonly Skill[] = []): Skill[][] {
   const all = [...lists.flat(), ...sharedPool];
   const replace = new Map<Skill, Skill>();
   for (const local of all) {
-    if (!REPO_SKILL_SOURCES.has(local.source) || local.kind) continue;
+    if (!REPO_SKILL_SOURCES.has(local.source) || local.kind || !declaresExtension(local)) continue;
     const base = all.find(
       (s) => s.name === local.name && !s.kind && SHARED_SKILL_SOURCES.has(s.source) && s.body.trim() !== local.body.trim(),
     );
-    if (base && (base.body.includes(`.ai/skills/${local.name}/`) || declaresExtension(local))) {
-      replace.set(local, { ...base, extension: { path: local.path } });
-    } else if (!base && declaresExtension(local)) {
-      replace.set(local, { ...local, missingShared: true });
-    }
+    replace.set(local, base ? { ...base, extension: { path: local.path } } : { ...local, missingShared: true });
   }
   return lists.map((list) => list.map((skill) => replace.get(skill) ?? skill));
 }

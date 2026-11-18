@@ -375,8 +375,8 @@ describe('layerSkillExtensions (repo extensions of shared skills)', () => {
   });
   const winner = (lists: Skill[][], pool: Skill[] = []) => layerSkillExtensions(lists, pool).flat()[0];
 
-  it('an extension the shared skill reads becomes the shared skill, carrying the extension', () => {
-    const local = skill('om-x', 'ai', 'Stricter verdicts.');
+  it('a declared extension becomes the shared skill, carrying the extension', () => {
+    const local = skill('om-x', 'ai', 'I extend the shared `om-x` skill with stricter verdicts.');
     const shared = skill('om-x', 'team', 'Workflow. Apply `.ai/skills/om-x/SKILL.md` when present.');
     expect(winner([[local], [shared]])).toMatchObject({ source: 'team', body: shared.body, extension: { path: local.path } });
   });
@@ -394,9 +394,10 @@ describe('layerSkillExtensions (repo extensions of shared skills)', () => {
     expect(winner([[skill('om-x', 'ai', 'This file extends the shared `om-xy` skill.')]])?.missingShared).toBeUndefined();
   });
 
-  it('a plain repo override of the same name still wins', () => {
+  it('a plain repo override still wins when the shared skill documents the extension path', () => {
     const local = skill('om-x', 'ai', 'My own version.');
-    expect(winner([[local], [skill('om-x', 'team', 'Workflow.')]])).toBe(local);
+    const shared = skill('om-x', 'team', 'Workflow. Apply `.ai/skills/om-x/SKILL.md` when present.');
+    expect(winner([[local], [shared]])).toBe(local);
   });
 
   it('an extension with no shared skill is flagged, never posing as it', () => {

@@ -37,7 +37,7 @@ Repo commands installed by tools such as spec-kit (`.claude/commands`, `.codex/p
 
 When a task runs in its own worktree, Cezar prepares the selected skill and its companion skills in the worktree's `.claude/skills` and `.agents/skills`. The files are available under any agent account. Cezar gives the agent the Open Mercato skill paths so it can read the files directly. You can select a skill, type `/name`, or ask in plain text, for example `Run om-auto-review-pr on #12`.
 
-A repository can extend a shared skill with its own `.ai/skills/<name>/SKILL.md`. Cezar prepares the shared skill and tells the agent to apply the repository's extension with it.
+A repository can extend a shared skill with its own `.ai/skills/<name>/SKILL.md`. Declare the extension by naming the shared skill, for example `This file extends the shared om-auto-review-pr skill.` Cezar prepares the shared skill and tells the agent to apply the repository's extension with it.
 
 Cezar uses `open-mercato/skills` as the default team repository, including on hosted installs. When you request an Open Mercato skill, Cezar gives the catalog time to load and retries if the skill is missing. If the skill stays unavailable, the task transcript shows **Install skills**. Select it to refresh the catalog, then ask the agent to run the skill again. **Settings → Agents → Skill repositories** shows Open Mercato skill availability by account for the default project. A hosted cockpit with hidden account details shows the shared catalog status. Select **Repair skill catalog** to refresh that catalog.
 
