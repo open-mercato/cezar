@@ -183,10 +183,12 @@ export function referenceProjectOf(texts: readonly string[], projects: readonly 
   return replyProject(texts.join('\n'), projects)
 }
 
-/** What the user reads where a marker cannot be a chip: `#12`, never brackets or nothing. */
-function markerText(kind: string, id: string, raw: string): string {
+/** What the user reads where a marker cannot be a chip: `#12`, never brackets or nothing. The
+ *  server measures card limits with the same words (`askVisibleText` in `core/ask.ts`). */
+function markerText(kind: string, id: string): string {
   if (kind === 'task') return `task ${id.slice(0, 8)}`
-  return REFERENCE_NUMBER.test(id) ? `#${id}` : raw
+  if (REFERENCE_NUMBER.test(id)) return `#${id}`
+  return `${kind === 'pr' ? 'PR' : 'issue'} ${id}`
 }
 
 /** Bare `#12`s and GitHub URLs in a stretch of card text, resolved as `bareReferences` does. */
@@ -250,7 +252,7 @@ export function parseInlineReferences(
     else if (connected && REFERENCE_NUMBER.test(id)) out.push({ kind: kind as 'pr' | 'issue', projectId, number: Number(id) })
     else {
       const last = out.at(-1)
-      const words = markerText(kind, id, raw)
+      const words = markerText(kind, id)
       if (last?.kind === 'text') last.text += words
       else out.push({ kind: 'text', text: words })
     }
@@ -261,7 +263,7 @@ export function parseInlineReferences(
 
 /** The words a card text reads as, every marker swapped for what its chip says (`#12`). */
 export function inlineReferenceText(text: string): string {
-  return text.replace(TOKEN, (raw, kind: string, _project: string, id: string) => markerText(kind, id, raw))
+  return text.replace(TOKEN, (_raw, kind: string, _project: string, id: string) => markerText(kind, id))
 }
 
 /** Every PR and issue some card texts paint, for the status lookup that colours their chips. */

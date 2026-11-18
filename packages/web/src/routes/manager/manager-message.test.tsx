@@ -405,8 +405,16 @@ describe('ManagerMessageRow', () => {
       renderMessage(assistantMessage(2, { text: 'Hm.', ask }), vi.fn(), projects)
       const card = document.querySelector('[data-slot="manager-ask"]')!
       expect(card.querySelectorAll('[data-slot="pr-chip"], [data-slot="issue-chip"], [data-slot="manager-task-chip"]')).toHaveLength(0)
-      expect(card.querySelector('[role="group"] p')!.textContent).toContain('Look at #12 and [[issue:alpha/abc]]?')
+      expect(card.querySelector('[role="group"] p')!.textContent).toContain('Look at #12 and issue abc?')
       expect(screen.getByRole('button', { name: 'About task abcdef12' })).toBeTruthy()
+      expect(card.textContent).not.toContain('[[')
+    })
+
+    it('keeps a chip inside an option to its own edges on a touch screen', () => {
+      renderMessage(assistantMessage(2, { text: 'Two PRs.', ask: chipAsk }), vi.fn(), projects)
+      const card = document.querySelector('[data-slot="manager-ask"]')!
+      expect(card.querySelector('[data-slot="ask-choice"] [data-slot="pr-chip"]')!.className).not.toContain('after:-inset-3')
+      expect(card.querySelector('[role="group"] p [data-slot="pr-chip"]')!.className).toContain('after:-inset-3')
     })
 
     it('reads the references back as words on the answered card', () => {
@@ -414,6 +422,34 @@ describe('ManagerMessageRow', () => {
       const answered = document.querySelector('[data-slot="manager-ask"][data-resolved="true"]')!
       expect(answered.textContent).toContain('Assess #2897 (recommended)')
       expect(answered.querySelector('[data-slot="ask-answer-description"] [data-slot="issue-chip"]')).not.toBeNull()
+    })
+
+    it('shows each source task with its pull request and issue', () => {
+      const { client } = renderMessage(assistantMessage(2, { text: 'Both wait.', ask: chipAsk, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }, { projectId: 'alpha', runId: 'run-2' }] }), vi.fn(), projects)
+      client.setQueryData(workspaceQueryKeys.runsIndex, {
+        runs: [
+          { projectId: 'alpha', id: 'run-1', title: 'Bump react', status: 'waiting', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', pullRequestUrl: 'https://github.com/o/alpha/pull/2897', issueNumber: 41 },
+          { projectId: 'alpha', id: 'run-2', title: 'Bump vite', status: 'waiting', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', markerRefs: { pr: 2896 } },
+        ],
+      })
+      return waitFor(() => {
+        const rows = [...document.querySelectorAll('[data-slot="manager-ask"] [data-slot="decision-sources"] > div')]
+        expect(rows).toHaveLength(2)
+        expect([...rows[0]!.querySelectorAll('[data-slot="pr-chip"], [data-slot="issue-chip"]')].map((chip) => chip.getAttribute('href')))
+          .toEqual(['https://github.com/o/alpha/pull/2897', 'https://github.com/o/alpha/issues/41'])
+        expect([...rows[1]!.querySelectorAll('[data-slot="pr-chip"]')].map((chip) => chip.getAttribute('href')))
+          .toEqual(['https://github.com/o/alpha/pull/2896'])
+        expect(rows[1]!.querySelector('[data-slot="issue-chip"]')).toBeNull()
+      })
+    })
+
+    it('shows the source task chips on an approval card too', async () => {
+      const { client } = renderMessage(actionMessage(207, { sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }), vi.fn(), projects)
+      client.setQueryData(workspaceQueryKeys.runsIndex, {
+        runs: [{ projectId: 'alpha', id: 'run-1', title: 'Bump react', status: 'review', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', pullRequestUrl: 'https://github.com/o/alpha/pull/2897' }],
+      })
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-action"] [data-slot="decision-sources"] [data-slot="pr-chip"]')?.getAttribute('href'))
+        .toBe('https://github.com/o/alpha/pull/2897'))
     })
 
     it('paints references in an approval reason', () => {

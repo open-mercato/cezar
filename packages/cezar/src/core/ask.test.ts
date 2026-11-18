@@ -464,7 +464,8 @@ describe('reference markers in card text', () => {
 
   it('reads a marker as the chip it becomes', () => {
     expect(askVisibleText(`Start ${pr(2897)} and [[issue:p/12]] in [[task:p/abcdef12-3456]]?`))
-      .toBe('Start #2897 and #12 in task?');
+      .toBe('Start #2897 and #12 in task abcdef12?');
+    expect(askVisibleText('[[issue:p/abc]] and [[pr:p/x1]]')).toBe('issue abc and PR x1');
   });
 
   it('accepts markers in the question, a label and a description', () => {

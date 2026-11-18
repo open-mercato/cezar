@@ -37,7 +37,14 @@ export function usePrTitles(messages: readonly ManagerMessage[]): ReadonlyMap<st
 
 /** The chat's one PR/issue chip, in a sentence and on a proposal card alike: the same bubble the
  *  task tables show, its status from the surrounding provider. Coarse pointers get a 44 px target. */
-export function ForgeReference({ kind, projectId, number, title }: { kind: 'PR' | 'Issue'; projectId: string; number: number; title?: string }) {
+export function ForgeReference({ kind, projectId, number, title, tight = false }: {
+  kind: 'PR' | 'Issue'
+  projectId: string
+  number: number
+  title?: string
+  /** No 44 px halo: inside a pick button it would swallow taps meant to pick. */
+  tight?: boolean
+}) {
   const project = useProjects().data?.projects.find((entry) => entry.id === projectId)
   const proposed = useContext(PrTitlesContext).get(`${projectId}/${number}`)
   // Named by the reference, not the manager: its title, the task that opened it, else its project.
@@ -54,7 +61,7 @@ export function ForgeReference({ kind, projectId, number, title }: { kind: 'PR' 
       {...(projectId === UNKNOWN_PROJECT
         ? {}
         : { conflictAction: <ResolveConflictsForPr projectId={projectId} prNumber={number} /> })}
-      className="align-middle no-underline pointer-coarse:relative pointer-coarse:after:absolute pointer-coarse:after:-inset-3"
+      className={cn('align-middle no-underline', !tight && 'pointer-coarse:relative pointer-coarse:after:absolute pointer-coarse:after:-inset-3')}
     />
   )
 }
@@ -73,7 +80,7 @@ export const ManagerProjectsContext = createContext<readonly ManagerReferencePro
 
 /** Card text with its references as the chat's chips. They sit above whatever overlays the card
  *  (an option's button), so a click on one opens it rather than picking. */
-export function InlineReferences({ pieces, origin }: { pieces: readonly InlineReference[]; origin: ManagerOrigin }) {
+export function InlineReferences({ pieces, origin, tight = false }: { pieces: readonly InlineReference[]; origin: ManagerOrigin; tight?: boolean }) {
   return pieces.map((piece, index) => {
     if (piece.kind === 'text') return piece.text
     return (
@@ -81,7 +88,7 @@ export function InlineReferences({ pieces, origin }: { pieces: readonly InlineRe
         {piece.kind === 'task' ? (
           <TaskReference projectId={piece.projectId} runId={piece.runId} origin={origin} />
         ) : (
-          <ForgeReference kind={piece.kind === 'pr' ? 'PR' : 'Issue'} projectId={piece.projectId} number={piece.number} />
+          <ForgeReference kind={piece.kind === 'pr' ? 'PR' : 'Issue'} projectId={piece.projectId} number={piece.number} tight={tight} />
         )}
       </span>
     )
@@ -116,7 +123,7 @@ export function ManagerAskText({ ask, origin, children }: { ask: ManagerAsk; ori
     const parsed = new Map(texts.map((text) => [text, parseInlineReferences(text, projects, project)]))
     const piecesOf = (text: string) => parsed.get(text) ?? parseInlineReferences(text, projects, project)
     const renderer: AskTextRenderer = {
-      render: (text) => <InlineReferences pieces={piecesOf(text)} origin={origin} />,
+      render: (text, where) => <InlineReferences pieces={piecesOf(text)} origin={origin} tight={where === 'option'} />,
       plain: inlineReferenceText,
       interactive: (text) => piecesOf(text).some((piece) => piece.kind !== 'text'),
     }

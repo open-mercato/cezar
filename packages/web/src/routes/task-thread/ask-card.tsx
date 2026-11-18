@@ -448,10 +448,10 @@ function AskChoice({
             {selected ? '✓' : ''}
           </span>
         ) : null}
-        <span className="min-w-0 break-words">{text.render(label)}</span>
+        <span className="min-w-0 break-words">{text.render(label, 'option')}</span>
       </span>
       {description ? (
-        <span id={descriptionId} className="min-w-0 break-words text-label text-muted-foreground">{text.render(description)}</span>
+        <span id={descriptionId} className="min-w-0 break-words text-label text-muted-foreground">{text.render(description, 'option')}</span>
       ) : null}
     </>
   )

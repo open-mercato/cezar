@@ -439,7 +439,7 @@ describe('parseInlineReferences', () => {
 
   it('falls back to the words for an unknown project or a malformed number', () => {
     expect(parseInlineReferences('[[pr:gone/12]] [[issue:alpha/x1]] [[task:gone/abcdef1234]]', projects)).toEqual([
-      { kind: 'text', text: '#12 [[issue:alpha/x1]] task abcdef12' },
+      { kind: 'text', text: '#12 issue x1 task abcdef12' },
     ])
     expect(inlineReferenceText('Assess [[pr:gone/12]]')).toBe('Assess #12')
   })
