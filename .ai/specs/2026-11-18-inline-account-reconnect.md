@@ -52,7 +52,9 @@ Success means the login exits 0 **and** a fresh `profileStatus` for that account
 user's completed login is the evidence the provider-auth spec asks for) and emits `provider-status`.
 
 **Parking.** An auth rejection parks the task as *waiting* (reason `auth`) instead of failing it, keeping its
-`sessionId`/`profileId` and showing the reconnect card. The attention list groups these per account.
+`sessionId`/`profileId` and showing the reconnect card. The attention list groups these per account. Two runs still
+fail as before: a headless `cezar run` (no reconnect can reach it, so it must exit) and a dispatched child (its parent
+waits on a settled report, not on a reconnect).
 
 **Resume.** On a confirmed sign-in the server resumes, once per reconnect, every item parked with reason `auth` on that
 `(provider, profileId)`. A task resumes through `POST /runs/:id/continue` on the same account and session, still subject
