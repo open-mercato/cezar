@@ -306,7 +306,7 @@ describe('the managers routes', () => {
     const send = (askId: string) => request(`${BASE}/${id}/messages`, { method: 'POST', body: { text: 'Base: main', askId } });
     const refused = await send('closed');
     expect(refused.status).toBe(409);
-    expect(await refused.json()).toEqual({ error: 'this question is already closed' });
+    expect(await refused.json()).toEqual({ error: 'question already closed' });
   });
 
   it('pages history oldest-first within the page, newest page by default', async () => {

@@ -9003,7 +9003,7 @@ export function createApp(deps: ServerDeps) {
         // A card answered, dismissed or closed elsewhere (another tab, the Questions page) takes no second answer.
         if (askId !== undefined && managerStore.get(id)) {
           const card = managerStore.message(id, askId);
-          if (card && !openAsk(card)) return c.json({ error: 'this question is already closed' }, 409);
+          if (card && !openAsk(card)) return c.json({ error: 'question already closed' }, 409);
         }
         if (!managerEngine.send(id, text, attachments, askId)) return c.json(MANAGER_NOT_FOUND, 404);
         return c.json((answered = { ok: true as const, attachments: attachments.length }));

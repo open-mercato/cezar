@@ -1470,7 +1470,7 @@ export class ManagerEngine {
   answerAsk(id: string, messageId: string, text: string): ManagerAskResult {
     const found = this.askCard(id, messageId);
     if (!('card' in found)) return found;
-    if (!openAsk(found.card.message)) return { ok: false, status: 409, error: 'this question is already closed' };
+    if (!openAsk(found.card.message)) return { ok: false, status: 409, error: 'question already closed' };
     this.send(id, text, [], messageId);
     return this.refreshed(id, messageId);
   }
@@ -1480,7 +1480,7 @@ export class ManagerEngine {
     const found = this.askCard(id, messageId);
     if (!('card' in found)) return found;
     const { message } = found.card;
-    if (!openAsk(message)) return { ok: false, status: 409, error: 'this question is already closed' };
+    if (!openAsk(message)) return { ok: false, status: 409, error: 'question already closed' };
     const headers = cardHeaders(message.ask);
     this.closeCard(id, message, { reason: 'dismissed', at: this.iso(), detail: `You skipped «${headers}»`.slice(0, 300) });
     this.addNote(id, `The user skipped your question «${headers}». Don't wait for an answer; decide yourself, or ask again later only if it still blocks you.`);
