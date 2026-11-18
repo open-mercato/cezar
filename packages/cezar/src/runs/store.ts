@@ -149,6 +149,14 @@ const queuedMessageSchema = z.object({
 
 /** One authoritative PR association for a task. Older records project their scalar fields
  * into this list on first append, so no migration is needed. */
+/** Per-entry salvage for `RunRecord.asks`: one unreadable ask costs only itself, never the list. */
+function salvageTaskAsks(list: unknown[]): TaskAskRecord[] {
+  return list.flatMap((entry) => {
+    const parsed = taskAskRecordSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 const prRefSchema = z.object({
   number: z.number().int().positive().max(MAX_REF),
   url: z.string().url().optional(),
@@ -300,7 +308,7 @@ export const runRecordSchema = z.object({
   completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
   /** The run's `CEZ:ASK` questions (Questions inbox spec). An older cezar's `z.object` strips the
    *  unknown key rather than rejecting the run, so this lives on the record, not in a sidecar. */
-  asks: z.array(taskAskRecordSchema).optional().catch(undefined),
+  asks: z.array(z.unknown()).transform(salvageTaskAsks).optional().catch(undefined),
   /** Dismiss notes waiting for the next Continue (the session was closed when the user skipped). */
   askNotes: z.array(z.string().max(1000)).max(TASK_ASK_NOTES_MAX).optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
@@ -1915,7 +1923,9 @@ export class RunStore extends EventEmitter {
       return next;
     });
     const partly = asksPartlyReasked(run.asks, redacted);
-    run.asks = capTaskAsks([...asks, redacted]);
+    const capped = capTaskAsks([...asks, redacted], { reason: 'expired', at, detail: 'Too many newer questions in this task' });
+    run.asks = capped.kept;
+    closed.push(...capped.evicted);
     for (const old of closed) this.appendEvent(runId, { ...askClosedEvent(old.requestId, old.closed!) });
     // Partly re-asked: its other questions still need an answer, so it stays open, flagged.
     for (const { ask: old, headers } of partly) {
@@ -1959,7 +1969,7 @@ export class RunStore extends EventEmitter {
     const flagged: TaskAskRecord[] = [];
     run.asks = run.asks.map((ask) => {
       if (!flaggable(ask)) return ask;
-      const next = { ...ask, stale };
+      const next = { ...ask, stale: { ...stale, detail: stale.detail.slice(0, 300) } };
       flagged.push(next);
       return next;
     });

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -121,6 +121,37 @@ describe('RunStore task asks', () => {
     expect(asks()[0]?.requestId).toBe('r3');
   });
 
+  it('the cap evicts closed asks before an open one, and closes an evicted open one with an event', () => {
+    store.recordTaskAsk(runId, ask('open-old', ['Keep']));
+    for (let i = 1; i < TASK_ASKS_MAX; i++) {
+      store.recordTaskAsk(runId, ask(`c${i}`, [`H${i}`]));
+      store.closeTaskAsks(runId, (a) => a.requestId === `c${i}`, { reason: 'answered', at: new Date().toISOString() });
+    }
+    store.recordTaskAsk(runId, ask('new', ['New']));
+    expect(asks()).toHaveLength(TASK_ASKS_MAX);
+    expect(asks().map((a) => a.requestId)).toContain('open-old');
+    expect(asks().map((a) => a.requestId)).not.toContain('c1');
+
+    // Every slot open: the oldest open ask goes, announced as closed.
+    for (const a of asks()) if (a.closed) store.recordTaskAsk(runId, ask(`o-${a.requestId}`, [`O-${a.requestId}`]));
+    expect(asks().filter((a) => a.closed)).toEqual([]);
+    const changes: Array<{ closed: TaskAskRecord[] }> = [];
+    store.on('asks', (change) => changes.push(change));
+    store.recordTaskAsk(runId, ask('newest', ['Newest']));
+    expect(asks().map((a) => a.requestId)).not.toContain('open-old');
+    expect(closedEvents()).toContainEqual(expect.objectContaining({ requestId: 'open-old', reason: 'expired' }));
+    expect(changes[0]?.closed.map((a) => a.requestId)).toEqual(['open-old']);
+  });
+
+  it('a long partly-reasked detail is bounded to the schema', () => {
+    const long = Array.from({ length: 19 }, (_, i) => `Header number ${i} that is long`);
+    store.recordTaskAsk(runId, ask('r1', [...long, 'Other']));
+    store.recordTaskAsk(runId, ask('r2', long));
+    expect(asks()[0]?.stale?.detail.length).toBeLessThanOrEqual(300);
+    store.flush();
+    expect(readRunIndexFromDisk(dir)[0]?.asks).toHaveLength(2);
+  });
+
   it('a flag keeps its first reason, still open; a close drops the flag', () => {
     store.recordTaskAsk(runId, ask('r1', ['Scope']));
     const since = new Date().toISOString();
@@ -170,10 +201,17 @@ describe('RunStore task asks', () => {
     expect(store.takeAskNotes(runId)).toEqual([]);
   });
 
-  it('asks survive the index round trip, and a malformed list costs only itself', () => {
+  it('asks survive the index round trip, and a malformed entry costs only itself', () => {
     store.recordTaskAsk(runId, ask('r1', ['Scope'], { cardId: 'plan', about: [{ pr: 12 }] }));
+    store.recordTaskAsk(runId, ask('r2', ['Deploy']));
     store.flush();
+    const index = join(dir, 'runs.json');
+    const raw = JSON.parse(readFileSync(index, 'utf8'));
+    const runs = Array.isArray(raw) ? raw : raw.runs;
+    runs[0].asks[1].stale = { why: 'partly-reasked', detail: 'x'.repeat(400), since: 'now' };
+    writeFileSync(index, JSON.stringify(raw));
     const [reread] = readRunIndexFromDisk(dir);
+    expect(reread?.asks).toHaveLength(1);
     expect(reread?.asks?.[0]).toMatchObject({ requestId: 'r1', cardId: 'plan', about: [{ pr: 12 }] });
   });
 });

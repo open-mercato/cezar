@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 
-import { questionCardPartlyReasked, questionCardReplaces, questionCardSharedHeaders, TASK_ASKS_MAX, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { questionCardPartlyReasked, questionCardReplaces, questionCardSharedHeaders, TASK_ASKS_MAX, type QuestionClosed, type TaskAskRecord } from '@open-mercato/cezar-contract';
 
 import type { AskCloseMarker } from '../core/ask.ts';
 
@@ -49,9 +49,31 @@ export function asksNamedBy(asks: readonly TaskAskRecord[] | undefined, marker: 
   );
 }
 
-/** Newest kept: the record is read back by an all-or-nothing index parser, so it stays bounded. */
-export function capTaskAsks(asks: TaskAskRecord[]): TaskAskRecord[] {
-  return asks.length > TASK_ASKS_MAX ? asks.slice(-TASK_ASKS_MAX) : asks;
+/**
+ * Bound the record to `TASK_ASKS_MAX`, evicting the oldest closed asks first. An open ask that must
+ * still go comes back in `evicted`, closed with `closed`, so the caller can announce it.
+ */
+export function capTaskAsks(asks: TaskAskRecord[], closed: QuestionClosed): { kept: TaskAskRecord[]; evicted: TaskAskRecord[] } {
+  let excess = asks.length - TASK_ASKS_MAX;
+  if (excess <= 0) return { kept: asks, evicted: [] };
+  const drop = new Set<TaskAskRecord>();
+  for (const ask of asks) {
+    if (excess === 0) break;
+    if (!isOpenAsk(ask)) {
+      drop.add(ask);
+      excess--;
+    }
+  }
+  const evicted: TaskAskRecord[] = [];
+  for (const ask of asks) {
+    if (excess === 0) break;
+    if (isOpenAsk(ask)) {
+      drop.add(ask);
+      evicted.push({ ...ask, stale: undefined, closed });
+      excess--;
+    }
+  }
+  return { kept: asks.filter((ask) => !drop.has(ask)), evicted };
 }
 
 /** The asks that declare `about` the given task (`<projectId>/<runId>`). */
