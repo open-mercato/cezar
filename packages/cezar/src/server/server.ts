@@ -8897,8 +8897,8 @@ export function createApp(deps: ServerDeps) {
   });
   refreshQuestions = () => questionInbox.refresh();
   deps.onDispose?.(() => questionInbox.dispose());
-  // Counts only, so any local page may read it, like `health`.
-  deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox), { loopbackReadable: true });
+  // Trusted-only like `host`: attention counts are never readable by a foreign local page (BACKWARD_COMPATIBILITY.md).
+  deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox));
   // The badge, read when a push goes out: approvals across managers that notify, plus the live questions
   // (spec § Counts: one live count everywhere).
   waitingOnUser = async () => {
