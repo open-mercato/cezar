@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
@@ -167,6 +167,35 @@ describe('task questions in the run manager (Questions inbox)', () => {
     expect(manager.dismissAsk(id, asks(id)[0]!.requestId)).toMatchObject({ ok: false, status: 409 });
     expect(manager.dismissAsk(id, 'nope')).toMatchObject({ ok: false, status: 404 });
   }, 40_000);
+
+  it('a parked session that refuses the dismiss note keeps it for the next Continue', async () => {
+    const id = await askAndPark();
+    const blocked = vi.spyOn(manager.lifecycle, 'isBlocked').mockReturnValue(true);
+    try {
+      expect(manager.dismissAsk(id, asks(id)[0]!.requestId)).toEqual({ ok: true, delivered: 'next-continue' });
+    } finally {
+      blocked.mockRestore();
+    }
+    expect(asks(id)[0]?.closed?.reason).toBe('dismissed');
+    expect(store.getRun(id)?.askNotes).toEqual([expect.stringContaining('The user skipped your question «Library»')]);
+  }, 40_000);
+
+  it('a buffered engine message (a child report) flags nothing; a buffered user message does', () => {
+    const id = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [{ id: 'task', name: 'Task', kind: 'agent' }] }).id;
+    store.updateRun(id, { status: 'running' });
+    store.recordTaskAsk(id, { requestId: 'r1', askedAt: new Date().toISOString(), questions: [{ header: 'Scope', question: 'Which?', options: [{ label: 'a' }, { label: 'b' }] }] });
+    // The start-up window `deferMessage` buffers into.
+    const starting = (manager as unknown as { starting: Set<string> }).starting;
+    starting.add(id);
+    try {
+      expect(manager.deferMessage(id, [{ type: 'text', text: 'Child abc reported: done' }])).toBe(true);
+      expect(asks(id)[0]?.stale).toBeUndefined();
+      expect(manager.deferMessage(id, [{ type: 'text', text: 'my own note' }], { userReply: true })).toBe(true);
+      expect(asks(id)[0]?.stale?.why).toBe('replied-in-chat');
+    } finally {
+      starting.delete(id);
+    }
+  });
 
   it('dismissing a question the run already moved past only closes it', async () => {
     const id = await askAndPark();

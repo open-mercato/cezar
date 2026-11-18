@@ -17,6 +17,14 @@ export function isOpenAsk(ask: TaskAskRecord): boolean {
   return ask.closed === undefined;
 }
 
+/** The one refusal text for acting on a question that already closed (inbox, card, stale tab). */
+export const QUESTION_ALREADY_CLOSED = 'question already closed';
+
+/** The card `askRequestId` answers exists and already closed: a stale tab's reply. */
+export function askAlreadyClosed(run: { asks?: readonly TaskAskRecord[] }, askRequestId: string | undefined): boolean {
+  return askRequestId !== undefined && (run.asks ?? []).some((ask) => ask.requestId === askRequestId && ask.closed !== undefined);
+}
+
 export function openTaskAsks(asks: readonly TaskAskRecord[] | undefined): TaskAskRecord[] {
   return (asks ?? []).filter(isOpenAsk);
 }
