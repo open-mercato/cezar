@@ -13,7 +13,6 @@ import { ZoomableImage } from '@/components/zoomable-image'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { StaticChip } from '@/components/chip'
-import { chipClass } from '@/components/picker-pill'
 import {
   checkFailureCause,
   ISSUE_LINK_PREFIX,
@@ -47,8 +46,8 @@ import {
 import { ActionCard, type DecideAction } from './manager-approval'
 import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
-import { ForgeReference } from './manager-reference'
-import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
+import { ForgeReference, ManagerAskText, ManagerProjectsContext, TaskReference } from './manager-reference'
+import { SessionCard, taskPath } from './manager-session-card'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
@@ -64,13 +63,7 @@ function ManagerLink({ href, children, ...props }: ComponentProps<'a'>) {
   const issue = parseReferenceLink(href, ISSUE_LINK_PREFIX)
   if (issue) return <ForgeReference kind="Issue" projectId={issue.projectId} number={Number(issue.id)} />
   const task = parseReferenceLink(href, TASK_LINK_PREFIX)
-  if (task) {
-    return (
-      <Link to={taskPath(task.projectId, task.id)} state={{ manager: origin }} data-slot="manager-task-chip" className={cn(chipClass, 'inline-flex no-underline')}>
-        <TaskChipLabel projectId={task.projectId} runId={task.id} />
-      </Link>
-    )
-  }
+  if (task) return <TaskReference projectId={task.projectId} runId={task.id} origin={origin} />
   return <TranscriptLink href={href} {...props}>{children}</TranscriptLink>
 }
 
@@ -146,7 +139,7 @@ export function answersShownOnCard(messages: readonly ManagerMessage[]): Readonl
 
 /** A `CEZ:ASK` card. Answering is just the user's next message, so the composer answers it too. */
 function ManagerQuestions({
-  managerId,
+  origin,
   messageId,
   ask,
   answer,
@@ -156,7 +149,7 @@ function ManagerQuestions({
   stale,
   superseded = false,
 }: {
-  managerId: string
+  origin: ManagerOrigin
   messageId: string
   ask: ManagerAsk
   source: ReactNode
@@ -170,6 +163,7 @@ function ManagerQuestions({
   /** Re-asked in full by a later card, in history written before the server closed it (#2307). */
   superseded?: boolean
 }) {
+  const managerId = origin.id
   const closed = closedOnServer ?? (superseded ? { reason: 'replaced' as const, at: '' } : undefined)
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
@@ -223,7 +217,9 @@ function ManagerQuestions({
           <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
           Answered
         </span>
-        <AskAnswerSummary questions={ask.questions} lines={lines} slot="manager-ask-answers" />
+        <ManagerAskText ask={ask} origin={origin}>
+          <AskAnswerSummary questions={ask.questions} lines={lines} slot="manager-ask-answers" />
+        </ManagerAskText>
       </div>
     )
   }
@@ -279,13 +275,15 @@ function ManagerQuestions({
       {source}
       {/* The card draws the box and the status, so the form is unframed; its "Other…" and "Need more
           info" chips per question are the design's ghost actions. */}
-      <AskForm
-        ask={card}
-        ownerId={managerId}
-        delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
-        asker="Your decision"
-        framed={false}
-      />
+      <ManagerAskText ask={ask} origin={origin}>
+        <AskForm
+          ask={card}
+          ownerId={managerId}
+          delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
+          asker="Your decision"
+          framed={false}
+        />
+      </ManagerAskText>
     </ManagerCard>
   )
 }
@@ -357,7 +355,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} closed={message.askClosed} stale={message.askStale} superseded={superseded} />
+          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} origin={origin} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} closed={message.askClosed} stale={message.askStale} superseded={superseded} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
@@ -517,6 +515,30 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   superseded?: boolean
   onDecide: DecideAction
 }) {
+  return (
+    <ManagerProjectsContext.Provider value={projects}>
+      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
+    </ManagerProjectsContext.Provider>
+  )
+})
+
+function MessageBody({
+  message,
+  origin,
+  onDecide,
+  projects,
+  answerOnCard,
+  superseded,
+  onRetry,
+}: {
+  message: ManagerMessage
+  origin: ManagerOrigin
+  onRetry: (() => void) | undefined
+  answerOnCard: boolean
+  superseded: boolean
+  projects: readonly ManagerReferenceProject[]
+  onDecide: DecideAction
+}) {
   switch (message.kind) {
     case 'user':
       return (
@@ -534,4 +556,4 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
     case 'notice':
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }
-})
+}

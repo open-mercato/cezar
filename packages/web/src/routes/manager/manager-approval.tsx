@@ -19,7 +19,7 @@ import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage, RunReco
 
 import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
-import { ForgeReference } from './manager-reference'
+import { ForgeReference, ManagerReferenceText } from './manager-reference'
 import { taskPath } from './manager-session-card'
 
 export type DecideAction = (actionId: string, decision: 'approve' | 'reject' | 'dismiss', opts?: { onlyIfStale?: boolean }) => Promise<unknown>
@@ -444,7 +444,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
           </button>
         </div>
       ) : null}
-      {message.reason ? <p className="text-sm">{message.reason}</p> : null}
+      {message.reason ? <p className="text-sm"><ManagerReferenceText text={message.reason} origin={origin} /></p> : null}
       {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
       <div role="status" data-slot="manager-action-outcome" className="empty:hidden">
         {message.status === 'pending' ? null : (

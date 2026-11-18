@@ -69,11 +69,11 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-function renderApprovals(entry = '/manager/approvals', seedManagers = true) {
+function renderApprovals(entry = '/manager/approvals', seedManagers = true, projects: Array<{ id: string; name: string; repoUrl?: string }> = []) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
   if (seedManagers) client.setQueryData(managerKeys.list, { managers })
-  client.setQueryData(workspaceQueryKeys.projects, { projects: [], bootProject: null, projectsDir: '' })
+  client.setQueryData(workspaceQueryKeys.projects, { projects, bootProject: null, projectsDir: '' })
   client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [] })
   client.setQueryData(workspaceQueryKeys.uiState, {})
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}>
@@ -97,6 +97,14 @@ it('leaves the current chat for all managers’ pending cards, including older p
   expect(requests.filter((path) => path.includes('/messages')).every((path) => path.includes('pending=1'))).toBe(true)
   expect(screen.getByRole('link', { name: 'Open chat with Shop' }).getAttribute('href')).toBe('/manager/shop#needs-you')
   expect(screen.getByRole('link', { name: 'Approvals, 3 pending approvals' }).getAttribute('aria-current')).toBe('page')
+})
+
+it('paints an action reason’s references as the chat’s chips', async () => {
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1 })]
+  messages = { shop: [actionMessage(2, { reason: 'Green after [[pr:alpha/2897]] landed.' })] }
+  renderApprovals('/manager/approvals', true, [{ id: 'alpha', name: 'Alpha', repoUrl: 'https://github.com/o/alpha' }])
+  const reason = await screen.findByText((_, element) => element?.tagName === 'P' && element.textContent === 'Green after #2897 landed.')
+  expect(reason.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/alpha/pull/2897')
 })
 
 it('keeps the zero state on a cold link, including when only questions remain', async () => {

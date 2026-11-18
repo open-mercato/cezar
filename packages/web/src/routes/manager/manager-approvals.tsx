@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCheckIcon } from 'lucide-react'
-import { useCallback, useRef, useState, type RefObject } from 'react'
+import { useCallback, useMemo, useRef, useState, type RefObject } from 'react'
 import { Link } from 'react-router'
 
 import { decideManagerAction, getManagerActionResult, getPendingManagerActions, managerKeys, orderManagers, refreshManagerChat, useManagers } from '@/api/managers'
-import { useHealth } from '@/api/queries'
+import { useHealth, useProjects } from '@/api/queries'
 import { CacheStatusChip } from '@/components/cache-status'
 import { CenteredState } from '@/components/centered-state'
 import { LoadingState } from '@/components/loading-state'
@@ -16,6 +16,7 @@ import { QuestionsCrossLink } from '@/routes/questions/questions-route'
 
 import { ActionCard, useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerAvatar } from './manager-avatar'
+import { ManagerProjectsContext } from './manager-reference'
 
 type Action = Extract<ManagerMessage, { kind: 'action' }>
 type DecisionResult = { managerId: string; message: Action; readError?: string }
@@ -28,6 +29,12 @@ function ManagerApprovals({ manager, heading, results, saveResult }: {
   saveResult: SaveResult
 }) {
   const client = useQueryClient()
+  // The chat's connected projects, so an action reason's references paint as chips here too.
+  const registry = useProjects().data?.projects
+  const connected = useMemo(
+    () => (registry ?? []).filter((project) => manager.connectedProjectIds.includes(project.id)),
+    [registry, manager.connectedProjectIds],
+  )
   const pending = useQuery({
     queryKey: managerKeys.approvals(manager.id),
     queryFn: ({ signal }) => getPendingManagerActions(manager.id, signal),
@@ -85,35 +92,37 @@ function ManagerApprovals({ manager, heading, results, saveResult }: {
   useDismissStaleMerges(manager.pendingActions > 0 ? pending.data ?? [] : [], onDecide)
   if (manager.pendingActions === 0 && results.length === 0) return null
   return (
-    <section aria-label={manager.name} className="flex flex-col gap-3">
-      <div className="flex items-center gap-2.5">
-        <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} className="size-8" />
-        <h2 className="min-w-0 flex-1 truncate font-semibold">{manager.name}</h2>
-        <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
-          <Link to={`/manager/${encodeURIComponent(manager.id)}#needs-you`} aria-label={`Open chat with ${manager.name}`}>Open chat</Link>
-        </Button>
-      </div>
-      {manager.pendingActions > 0 ? <CacheStatusChip queryKey={managerKeys.approvals(manager.id)} isFetching={pending.isFetching} isError={pending.isError} className="self-start" /> : null}
-      {manager.pendingActions > 0 && pending.isPending ? <LoadingState label={`Loading approvals from ${manager.name}…`} /> : null}
-      {manager.pendingActions > 0 && pending.isError ? (
-        <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
-          <p>Couldn’t load approvals from {manager.name}.</p>
-          <Button variant="outline" onClick={() => void pending.refetch()}>Retry</Button>
+    <ManagerProjectsContext.Provider value={connected}>
+      <section aria-label={manager.name} className="flex flex-col gap-3">
+        <div className="flex items-center gap-2.5">
+          <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} className="size-8" />
+          <h2 className="min-w-0 flex-1 truncate font-semibold">{manager.name}</h2>
+          <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
+            <Link to={`/manager/${encodeURIComponent(manager.id)}#needs-you`} aria-label={`Open chat with ${manager.name}`}>Open chat</Link>
+          </Button>
         </div>
-      ) : null}
-      {messages.map((message) => {
-        if (message.kind !== 'action') return null
-        const error = results.find((row) => row.message.id === message.id)?.readError
-        return error ? (
-          <div key={message.id} data-result-id={message.id} role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/45 bg-card p-3.5 text-sm">
-            <p>Couldn’t load the result for {actionTitle(message.action)}. Your decision may have completed.</p>
-            <p>{error}</p>
-            <Button variant="outline" className="self-start max-md:min-h-11" onClick={() => void readResult(message)}>Retry result</Button>
+        {manager.pendingActions > 0 ? <CacheStatusChip queryKey={managerKeys.approvals(manager.id)} isFetching={pending.isFetching} isError={pending.isError} className="self-start" /> : null}
+        {manager.pendingActions > 0 && pending.isPending ? <LoadingState label={`Loading approvals from ${manager.name}…`} /> : null}
+        {manager.pendingActions > 0 && pending.isError ? (
+          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
+            <p>Couldn’t load approvals from {manager.name}.</p>
+            <Button variant="outline" onClick={() => void pending.refetch()}>Retry</Button>
           </div>
-        ) : <ActionCard key={message.id} origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />
-      })}
-      {pending.data?.length === 0 && results.length === 0 && !pending.isError ? <p className="text-sm text-muted-foreground">No pending approvals from this manager.</p> : null}
-    </section>
+        ) : null}
+        {messages.map((message) => {
+          if (message.kind !== 'action') return null
+          const error = results.find((row) => row.message.id === message.id)?.readError
+          return error ? (
+            <div key={message.id} data-result-id={message.id} role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/45 bg-card p-3.5 text-sm">
+              <p>Couldn’t load the result for {actionTitle(message.action)}. Your decision may have completed.</p>
+              <p>{error}</p>
+              <Button variant="outline" className="self-start max-md:min-h-11" onClick={() => void readResult(message)}>Retry result</Button>
+            </div>
+          ) : <ActionCard key={message.id} origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />
+        })}
+        {pending.data?.length === 0 && results.length === 0 && !pending.isError ? <p className="text-sm text-muted-foreground">No pending approvals from this manager.</p> : null}
+      </section>
+    </ManagerProjectsContext.Provider>
   )
 }
 
