@@ -109,6 +109,9 @@ interface Entry {
   previousEmail?: Promise<string | undefined>;
 }
 
+const liveManagers = new Set<LoginSessionManager>();
+let exitHookInstalled = false;
+
 function emailOf(identity: AccountIdentity | undefined): string | undefined {
   if (!identity?.available) return undefined;
   return identity.fields.find((field) => field.label === 'Email')?.value.trim().toLowerCase();
@@ -240,12 +243,14 @@ export class LoginSessionManager {
 
   // ---- internals ------------------------------------------------------------
 
-  private exitHook = false;
   /** Sign-ins run in their own process groups, so nothing else takes them down with cezar. */
   private ensureExitHook(): void {
-    if (this.exitHook) return;
-    this.exitHook = true;
-    process.once('exit', () => this.dispose());
+    liveManagers.add(this);
+    if (exitHookInstalled) return;
+    exitHookInstalled = true;
+    process.once('exit', () => {
+      for (const manager of liveManagers) manager.dispose();
+    });
   }
 
   private control(entry: Entry, input: LoginSessionStartInput, remote: boolean): DriverControl {
