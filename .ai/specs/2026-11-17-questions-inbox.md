@@ -27,6 +27,7 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
 | Reason | Trigger |
 | --- | --- |
 | answered | an answer from a card (today's `askId` path) |
+| answered elsewhere | a manager card relaying a task's question declares `"about": [{"task": "<project>/<runId>", "ask": "<card id>"}]` (the snapshot gives the id). The two are one question: answering either closes both ("Answered in task X" / "in <manager>'s chat"). An answer on the manager card is delivered to the task by cezar directly; an answer in the task reaches the manager as a note on its next turn. Any other close of the task's question closes the copy too |
 | dismissed | `POST /api/v1/workspace/questions/:key/dismiss`; undo is a client-side delay before the POST |
 | replaced | a newer `CEZ:ASK` in the same chat/run with the same card `id` (prompts ask agents for a stable id and to reuse it when re-asking), or, without ids, whose headers cover every header of the older card. Partial overlap stays open |
 | retracted | `CEZ:ASK-CLOSE <id\|header> [reason]` marker, same source only, parsed next to `CEZ:ASK` |
@@ -58,6 +59,7 @@ mention a PR or task, often "task X done, what next?" (hence only a declared `ab
   UiEvent in the run NDJSON so replays draw the quiet card (AGENT_PROTOCOL.md updated).
 - Read: `GET /api/v1/workspace/questions` → `{ open[], closed[] }`, keys `m:<managerId>:<messageId>` /
   `r:<projectId>:<runId>:<requestId>`, zod in `packages/contract`, chained single-mount route.
+- Relayed pair: merged into one inbox item under the task (chip "also in <manager>'s chat"), counted once; closing either closes both in one write.
 - Older: ui-state `questionsOlderAfterDays` (absent = 7, `0` = off), computed, never stored.
 
 ## Telling the agent on dismiss
@@ -77,5 +79,5 @@ Remote mode reconciles over SSE.
 
 One test for each close rule (replaced by id / by covered headers / partial overlap stays open; retracted; expired by a
 declared `about` PR merging, a mention-only PR merging flags but does not close; ended for done, cancelled and archived; idle-closed stays open). Each
-out-of-date flag trigger, and the agent closing a flagged card; the stale-tab 409. Dismiss for each delivery path, undo, and count parity across
+out-of-date flag trigger, and the agent closing a flagged card; the stale-tab 409. Relayed pair: answer in task closes the manager copy and vice versa (task receives the answer once), counted once. Dismiss for each delivery path, undo, and count parity across
 summary, badge and push. Before/after screenshots on desktop and mobile.
