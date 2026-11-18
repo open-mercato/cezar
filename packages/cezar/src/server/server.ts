@@ -1485,8 +1485,6 @@ export function createApp(deps: ServerDeps) {
   setNamerModelCatalog(modelCatalog);
   const providerAuth = deps.providerAuth
     ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
-  // Inline account reconnect (spec 2026-11-18-inline-account-reconnect).
-  const loginSessions = deps.loginSessions ?? new LoginSessionManager();
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -2359,9 +2357,38 @@ export function createApp(deps: ServerDeps) {
     const cancel = watchLogin(check, () => {
       loginWatches.delete(key);
       track('provider_connected', { label: provider }, { sid });
+      // A terminal sign-in resumes what was blocked too (spec 2026-11-18-inline-account-reconnect).
+      void loginSessions.accountConnected(provider, profile.id);
     }, deps.loginWatchOffsetsMs ?? LOGIN_WATCH_OFFSETS_MS);
     loginWatches.set(key, cancel);
   };
+
+  // Inline account reconnect (spec 2026-11-18-inline-account-reconnect).
+  const loginSessions = deps.loginSessions ?? new LoginSessionManager({
+    resolveProfile: resolveWorkspaceProfile,
+    loginCommand: (provider, configDir) => providerAuth.loginCommand(provider, configDir),
+    // The user's completed login is the evidence the provider-auth spec asks for, so the incident
+    // is lifted before the fresh probe that must answer connected.
+    confirmConnected: async (provider, profile) => {
+      if (profile.isDefault) {
+        const latched = providerAuth.peekStatus()?.providers.find((row) => row.provider === provider)?.authFailureId;
+        if (latched) providerAuth.clearRuntimeAuthFailure(provider, latched);
+        const row = (await providerStatus({ refresh: true })).providers.find((candidate) => candidate.provider === provider);
+        if (row) workspaceEvents.emit('provider-status', row);
+        return row?.status === 'connected';
+      }
+      // No `provider-status` here: that event carries default-login rows only.
+      providerAuth.recheckProfileAuthFailure(provider, profile.id);
+      providerAuth.forgetProfileStatus(provider, profile.id);
+      return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
+    },
+    remoteAccountsEnabled: () => agentAccountsEnabled(process.env, bindHost),
+    emit: (event, payload) => workspaceEvents.emit(event, payload),
+    openTerminal: (command) => openTerminal(bootRoot, command),
+    watchTerminal: (provider, profile) => watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }),
+    readIdentity: (provider, configDir) => readAccountIdentity(provider, configDir),
+    dryRun: () => process.env.CEZ_DRY_RUN === '1',
+  });
 
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -2414,6 +2441,8 @@ export function createApp(deps: ServerDeps) {
         const result = await providerStatus({ refresh: true });
         const row = result.providers.find(({ provider: id }) => id === provider.data);
         if (row) workspaceEvents.emit('provider-status', row);
+        // The incident this retry cleared is over: resume what was parked on it.
+        if (row?.status === 'connected') void loginSessions.accountConnected(provider.data, DEFAULT_AGENT_ACCOUNT_ID);
         return c.json(result);
       },
     )
@@ -2932,13 +2961,15 @@ export function createApp(deps: ServerDeps) {
         // invalidated by asking about this one. Only `recheck` (the pane's button) may lift a dead
         // login; New task's verify-before-refuse re-probes with `refresh` alone (telemetry 9e4a95db).
         if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
+        const hadIncident = recheck && providerAuth.peekProfileStatus(account.provider, account.id)?.authFailureId !== undefined;
         if (recheck) providerAuth.recheckProfileAuthFailure(account.provider, account.id);
-        return c.json({
-          status: await providerAuth.profileStatus(account.provider, {
-            id: account.id,
-            configDir: account.path,
-          }),
+        const status = await providerAuth.profileStatus(account.provider, {
+          id: account.id,
+          configDir: account.path,
         });
+        // Check again lifted this account's incident: resume what was parked on it.
+        if (hadIncident && status.status === 'connected') void loginSessions.accountConnected(account.provider, account.id);
+        return c.json({ status });
       },
     )
 

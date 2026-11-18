@@ -31,6 +31,8 @@ export const loginSessionStartSchema = z.object({
   provider: providerIdSchema,
   profileId: z.string().max(64).optional(),
   method: loginMethodSchema.optional(),
+  /** OpenCode only: which of its auth providers to sign into (`openai`, `github-copilot`, …). */
+  authProvider: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).optional(),
 }).strict();
 export type LoginSessionStartInput = z.infer<typeof loginSessionStartSchema>;
 
