@@ -36,7 +36,11 @@ Three words, no jargon — **task**, **skill**, **chain**:
   a leading `/name`, or named in the prompt's text — is installed with its companions
   into the task worktree's `.claude/skills` and `.agents/skills`. A repo's
   `.ai/skills/<name>/SKILL.md` that extends a shared skill of the same name is layered
-  on it rather than shadowing it.
+  onto the shared skill. The default team repository is `open-mercato/skills`.
+  An explicit request for an `om-*` skill waits for a cold catalog and retries once
+  if the skill is missing. If it stays unavailable, select **Install skills** in the
+  task transcript to refresh the catalog. **Settings → Agents → Skill repositories**
+  shows which agent accounts can use the project's catalog and lets you repair it.
 - 🔗 **Chains (workflows)** stitch steps into a pipeline: agent steps plus shell
   checks, with bounded `onFail` retry loops. Write the YAML yourself, build one by
   drag-ordering skills in the **Workflows** tab, or press **Plan first** and let the
