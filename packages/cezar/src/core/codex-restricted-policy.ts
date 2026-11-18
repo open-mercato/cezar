@@ -1,0 +1,80 @@
+import { DEFAULT_ALLOWED_TOOLS, type AgentRunSpec } from './agent-runner.ts';
+import { CodexToolPolicyError } from './codex-tool-policy.ts';
+import { tokenizePlainShell } from './plain-shell.ts';
+
+const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'Bash']);
+// A prefix here is only a grant selector. Each invocation is validated again below.
+export const CODEX_READ_PREFIXES = [
+  'gh pr view', 'gh pr diff', 'gh pr checks', 'gh pr list', 'gh issue view', 'gh issue list', 'gh repo view',
+  'git status', 'git ls-files', 'git rev-parse', 'git merge-base',
+] as const;
+
+export interface CodexRestrictedPolicy {
+  readonly tools: ReadonlySet<string>;
+  readonly bashPrefixes: readonly string[];
+}
+
+/** Undefined is the historical unrestricted path. Unsupported grants never become unrestricted. */
+export function compileCodexRestrictedPolicy(spec: Pick<AgentRunSpec,
+  'allowedTools' | 'bashAllowlist' | 'bashHookCommand' | 'enforceReadOnly'
+>): CodexRestrictedPolicy | undefined {
+  const tools = spec.allowedTools;
+  const legacy = tools === undefined || (tools.length === DEFAULT_ALLOWED_TOOLS.length && DEFAULT_ALLOWED_TOOLS.every(t => tools.includes(t)));
+  if (legacy && !spec.enforceReadOnly && spec.bashAllowlist === undefined && spec.bashHookCommand === undefined) return undefined;
+  // view_image is native and cannot be individually approved in this protocol. Its Read grant is required.
+  if (spec.bashHookCommand !== undefined || !tools?.includes('Read') || tools.some(t => !READ_TOOLS.has(t))) throw new CodexToolPolicyError();
+  if (tools.includes('Bash') && (!spec.bashAllowlist || spec.bashAllowlist.some(p => !(CODEX_READ_PREFIXES as readonly string[]).includes(p)))) throw new CodexToolPolicyError();
+  return { tools: new Set(tools), bashPrefixes: [...(spec.bashAllowlist ?? [])] };
+}
+
+const ONE_VALUE = new Set(['--json', '--jq', '-q', '--template', '-t', '--repo', '-R', '--limit', '-L', '--state', '-s', '--base', '-B', '--head', '-H', '--author', '-A', '--assignee', '-a', '--label', '-l', '--search', '-S', '--color']);
+const GH_FLAGS = new Set(['--comments', '-c', '--patch', '--name-only', '--required', '--draft']);
+const GIT_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  status: new Set(['--short', '-s', '--porcelain', '--porcelain=v1', '--porcelain=v2', '--branch', '-b', '--untracked-files=no', '--untracked-files=all', '--ignored']),
+  'ls-files': new Set(['--cached', '-c', '--modified', '-m', '--deleted', '-d', '--others', '-o', '--exclude-standard', '--stage', '-s', '--full-name', '--error-unmatch']),
+  'rev-parse': new Set(['--show-toplevel', '--git-dir', '--absolute-git-dir', '--is-inside-work-tree', '--abbrev-ref', '--verify', '--symbolic-full-name', '--short']),
+  'merge-base': new Set(['--is-ancestor', '--all', '-a', '--octopus', '--independent']),
+};
+function flags(args: readonly string[], bare: ReadonlySet<string>, value: ReadonlySet<string> = new Set()): boolean {
+  let operandsOnly = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (operandsOnly) continue;
+    if (arg === '--') { operandsOnly = true; continue; }
+    if (!arg.startsWith('-') || arg === '-') continue;
+    if (bare.has(arg)) continue;
+    if (value.has(arg) && args[i + 1] !== undefined) { i++; continue; }
+    return false;
+  }
+  return true;
+}
+
+function github(args: readonly string[]): boolean {
+  if (!flags(args.slice(3), GH_FLAGS, ONE_VALUE)) return false;
+  // No browser/editor, aliases, extensions, arbitrary HTTP method, or option-file support.
+  return !args.some(a => /^(--web|-w|--watch|--browser|--editor|--hostname)(=|$)/.test(a));
+}
+
+function permittedArgv(argv: readonly string[], policy: CodexRestrictedPolicy): boolean {
+  const program = argv[0];
+  // Accept only names resolved through the sealed runtime PATH, never an executable from the repo.
+  if (!program || program.includes('/') || program.includes('\\')) return false;
+  if (program === 'gh' || program === 'git') {
+    if (!policy.tools.has('Bash')) return false;
+    const prefix = program === 'gh' ? argv.slice(0, 3).join(' ') : argv.slice(0, 2).join(' ');
+    if (!policy.bashPrefixes.includes(prefix)) return false;
+    if (program === 'gh') return github(argv);
+    const verb = argv[1]!;
+    return !!GIT_FLAGS[verb] && flags(argv.slice(2), GIT_FLAGS[verb]);
+  }
+
+  return false;
+}
+
+/** No shell is started: this returns one validated argv for the host read broker. */
+export function codexBashArgv(command: unknown, policy: CodexRestrictedPolicy): string[] | undefined {
+  if (typeof command !== 'string' || command.length > 16_000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(command)) return undefined;
+  const parsed = tokenizePlainShell(command);
+  if (typeof parsed === 'string' || parsed.length !== 1 || !permittedArgv(parsed[0]!, policy)) return undefined;
+  return parsed[0];
+}
