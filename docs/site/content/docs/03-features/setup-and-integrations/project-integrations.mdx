@@ -27,7 +27,7 @@ Settings → project → Integrations
 | Testing | TesterArmy e2e |
 | Webhooks | Slack and Discord channel webhooks, and custom signed Cezar JSON endpoints |
 
-Slack, Discord and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles read **Off on this server**, and each tab names the variable to set; restart cezar after setting it.
+Slack, Discord and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles read **Off on this server**, and each tile's configuration names the variable to set; restart cezar after setting it.
 
 ## How to use it
 
@@ -37,4 +37,4 @@ Slack, Discord and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles re
 
 > **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`.
 
-Links to the Settings → Issue tracker and Settings → Webhooks pages of Cezar 0.19 and earlier open this page.
+Links to the Settings → Issue tracker and Settings → Webhooks pages of Cezar 0.20 and earlier open this page.

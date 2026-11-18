@@ -54,6 +54,13 @@ describe('Integrations gallery', () => {
     expect(await screen.findByRole('button', { name: /Deleted receiver/ })).toBeTruthy()
   })
 
+  it.each(['slack', 'discord'])('offers no deleted receivers on the %s tile, whose history lives on Webhooks', async integration => {
+    const history = [{ kind: 'history', id: 'deleted-0', name: 'Deleted receiver', deletedAt: '2026-11-04T12:00:00Z' }]
+    mount({ '/webhooks': { receivers: [], history, historyCount: 1, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/webhooks/history?limit=100': { items: history, total: 1, hasMore: false } }, false, true, `/?integration=${integration}`)
+    await screen.findByText('No receivers yet')
+    expect(screen.queryByRole('button', { name: 'Show deleted receivers' })).toBeNull()
+  })
+
   it.each([['webhooks', 'Your own HTTPS endpoint (signed JSON)'], ['slack', 'Slack channel (Incoming Webhook)'], ['discord', 'Discord channel (Webhook URL)']])('locks the %s add form to its own destination', async (integration, label) => {
     mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
     const add = await screen.findByRole('button', { name: 'Add receiver' })

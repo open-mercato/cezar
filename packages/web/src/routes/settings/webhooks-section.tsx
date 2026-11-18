@@ -269,10 +269,11 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
       </article>
     })}
     </SettingsCard>
-    {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
+    {/* Deleted receivers carry no format, so their history lives on the Webhooks tile only. */}
+    {format === 'cezar.json.v1' && (historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : 'Show deleted receivers'}</Button></div>
       {deleted && <>
-        <p className="text-ui text-muted-foreground">Deleted receivers for this integration.</p>
+        <p className="text-ui text-muted-foreground">Deleted receivers of every destination, including Slack and Discord.</p>
         {history.error && <p role="alert" className="text-ui text-danger">{history.error.message}</p>}
         {history.data?.pages.flatMap(page => page.items).filter(belongsHere).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
         {history.data && !history.data.pages.some(page => page.items.some(belongsHere)) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
