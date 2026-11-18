@@ -409,6 +409,23 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
 ]);
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;
 
+/**
+ * Unanswered question cards a newer card re-asks: every one of their headers appears on a later
+ * `ask`. A card sharing only some headers stays open — its other questions still need an answer.
+ */
+export function supersededAskIds(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const superseded = new Set<string>();
+  const later = new Set<string>();
+  const newestFirst = [...messages].sort((a, b) => b.seq - a.seq);
+  for (const message of newestFirst) {
+    if (message.kind !== 'assistant' || !message.ask) continue;
+    const headers = message.ask.questions.map((question) => question.header.trim()).filter(Boolean);
+    if (message.askAnswer === undefined && headers.length > 0 && headers.every((header) => later.has(header))) superseded.add(message.id);
+    for (const header of headers) later.add(header);
+  }
+  return superseded;
+}
+
 export const managerMessagesQuerySchema = z.object({
   /** Page older history: only messages with a lower `seq`. */
   before: z.coerce.number().int().min(0).optional(),

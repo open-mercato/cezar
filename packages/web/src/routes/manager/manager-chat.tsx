@@ -45,7 +45,7 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
-import { managerAccessOf, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
+import { managerAccessOf, supersededAskIds, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
@@ -449,8 +449,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  const superseded = useMemo(() => supersededAskIds(chat.messages), [chat.messages])
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
-  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
+  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
   const subline = watchingLine({
@@ -633,6 +634,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   origin={origin}
                   onDecide={onDecide}
                   projects={connected}
+                  superseded={superseded.has(message.id)}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
                 />
               )))}
