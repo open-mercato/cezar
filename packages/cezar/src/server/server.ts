@@ -243,7 +243,7 @@ import {
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { readRunUserMessages } from '../runs/user-messages.ts';
-import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
+import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
 import {
@@ -2395,7 +2395,7 @@ export function createApp(deps: ServerDeps) {
   deps.onDispose?.(() => loginSessions.dispose());
   const blockedOnAccount = async (provider: ProviderId, profileId: string): Promise<boolean> =>
     (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId))
-    || (await workspaceProjectSources()).some((project) => project.available
+    || (await workspaceProjectSources({ salvageColdRuns: true })).some((project) => project.available
       && project.runs().some((run) => authParkForAccount(run, provider, profileId)));
 
   const providersRoutes = new Hono<ProjectApiEnv>()
@@ -8895,7 +8895,7 @@ export function createApp(deps: ServerDeps) {
   // Spec 2026-10-31-managers. Single-mount: a manager spans projects, so a scoped spelling would
   // be a contradiction. Explicit paths for the gate, for the reason `requireAutomations` spells out.
   const managerLoopback: { request?: (path: string, init?: RequestInit) => Response | Promise<Response> } = {};
-  const workspaceProjectSources = async (): Promise<ManagerProjectSource[]> => {
+  const workspaceProjectSources = async ({ salvageColdRuns = false } = {}): Promise<ManagerProjectSource[]> => {
     const registry = await loadWorkspaceConfig().then((config) => config.projects).catch(() => []);
     const bootId = await resolveBootProject(registry);
     const visible = capabilities().singleProject ? registry.filter((project) => project.id === bootId) : registry;
@@ -8909,7 +8909,11 @@ export function createApp(deps: ServerDeps) {
         name: project.name || basename(project.root),
         root: project.root,
         available: existsSync(project.root),
-        runs: () => owned ? owned.store.listRuns() : readColdRuns(join(project.root, '.ai/cezar')),
+        runs: () => {
+          if (owned) return owned.store.listRuns();
+          const dataDir = join(project.root, '.ai/cezar');
+          return salvageColdRuns ? readRunIndexDiagnostic(dataDir, project.root).runs : readColdRuns(dataDir);
+        },
         automationFailures: () => {
           if (!owned) return [];
           return owned.automationStore.list().flatMap((automation) => {

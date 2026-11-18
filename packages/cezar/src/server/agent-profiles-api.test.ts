@@ -700,7 +700,7 @@ describe('agent profiles API', () => {
   });
 
   describe('auth park recovery', () => {
-    it.each(['work', 'default'])('rechecks a %s account parked in an unopened project', async (profileId) => {
+    it.each(['work', 'default'])('rechecks a %s account parked in an unopened project with a partially unreadable index', async (profileId) => {
       if (profileId === 'work') {
         await send('POST', '/api/v1/workspace/agent-profiles', {
           provider: 'claude', label: 'work', configDir: claudeDir('claude-work'),
@@ -709,11 +709,15 @@ describe('agent profiles API', () => {
       const projectRoot = join(home, 'unopened');
       mkdirSync(projectRoot);
       const project = await registerProject(projectRoot);
-      const parkedStore = RunStore.open(join(project.root, '.ai/cezar'));
+      const dataDir = join(project.root, '.ai/cezar');
+      const parkedStore = RunStore.open(dataDir);
       const run = parkedStore.createRun({ title: 'Parked task', task: 'work', workflow: 'quick-task', steps: [] });
       const at = new Date(Date.now() - 1_000).toISOString();
       parkedStore.updateRun(run.id, { status: 'waiting', idleClosedAt: at, parked: { kind: 'auth', provider: 'claude', profileId, at } });
       parkedStore.flush();
+      const indexPath = join(dataDir, 'runs.json');
+      const savedRuns = JSON.parse(readFileSync(indexPath, 'utf8')) as unknown[];
+      writeFileSync(indexPath, JSON.stringify([...savedRuns, { id: 'unreadable', createdAt: at }]));
 
       const contexts = new ProjectContexts({ listProjects });
       const workspaceEvents = new WorkspaceEventBus();
