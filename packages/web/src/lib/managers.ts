@@ -37,6 +37,7 @@ export const UNKNOWN_PROJECT = '_'
 
 export interface ManagerReferenceProject {
   id: string
+  name?: string
   repoUrl?: string
 }
 
@@ -45,6 +46,19 @@ const BARE_NUMBER = /(?<![\w/#&[])#(\d{1,7})\b/g
 const PR_WORD_BEFORE = /\b(?:PRs?|pull requests?)\s*$/i
 const GITHUB_URL = /(?<![("<[])(https:\/\/github\.com\/[^\s/]+\/[^\s/]+)\/(pull|issues)\/(\d+)(?![\w/])/g
 const INLINE_CODE = /(`[^`]*`)/
+/** `frontends/2902` or `frontends#2902`: it names its project, so it is safe to resolve when that
+ *  project is connected. Not a path, a URL, a marker's inside or a markdown link's text or target. */
+const PROJECT_NUMBER = /(?<![\w./:#@[-])(?<!\]\()([A-Za-z0-9][\w.-]*)[/#](\d{1,7})(?![\w/\]])/g
+
+/** A connected project named by its id, else by a name no other connected project shares: two
+ *  clones of one repo can both be `frontends`, and a guess would link the wrong one. */
+function namedProject(name: string, projects: readonly ManagerReferenceProject[]): ManagerReferenceProject | undefined {
+  const wanted = name.toLowerCase()
+  const byId = projects.find((project) => project.id.toLowerCase() === wanted)
+  if (byId) return byId
+  const byName = projects.filter((project) => project.name?.toLowerCase() === wanted)
+  return byName.length === 1 ? byName[0] : undefined
+}
 
 /** An inline reference becomes a hash link, which `ManagerLink` paints as a chip: splitting the
  *  markdown around it would break the paragraph or list item it sits in. */
@@ -71,6 +85,11 @@ function bareReferences(line: string, project: string, projects: readonly Manage
       const owner = projects.find((candidate) => candidate.repoUrl === repo)
       if (!owner) return url
       return `[#${number}](${kind === 'pull' ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX}${encodeURIComponent(owner.id)}/${number})`
+    }).replace(PROJECT_NUMBER, (match, name: string, number: string, at: number, whole: string) => {
+      const owner = namedProject(name, projects)
+      if (!owner) return match
+      const prefix = PR_WORD_BEFORE.test(whole.slice(0, at)) ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX
+      return `[#${number}](${prefix}${encodeURIComponent(owner.id)}/${number})`
     })
     return linked.replace(BARE_NUMBER, (match, number: string, at: number, whole: string) => {
       const prefix = PR_WORD_BEFORE.test(whole.slice(0, at)) ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX
@@ -191,7 +210,7 @@ function markerText(kind: string, id: string): string {
   return `${kind === 'pr' ? 'PR' : 'issue'} ${id}`
 }
 
-/** Bare `#12`s and GitHub URLs in a stretch of card text, resolved as `bareReferences` does. */
+/** Bare `#12`s, `project/12`s and GitHub URLs in a stretch of card text, resolved as `bareReferences` does. */
 function bareInline(text: string, project: string, projects: readonly ManagerReferenceProject[]): InlineReference[] {
   const out: InlineReference[] = []
   const pushText = (value: string) => {
@@ -202,7 +221,7 @@ function bareInline(text: string, project: string, projects: readonly ManagerRef
   }
   text.split(INLINE_CODE).forEach((part, index) => {
     if (index % 2 === 1) return pushText(part)
-    const pattern = new RegExp(`${GITHUB_URL.source}|${BARE_NUMBER.source}`, 'g')
+    const pattern = new RegExp(`${GITHUB_URL.source}|${BARE_NUMBER.source}|${PROJECT_NUMBER.source}`, 'g')
     let at = 0
     for (const match of part.matchAll(pattern)) {
       const start = match.index
@@ -210,6 +229,9 @@ function bareInline(text: string, project: string, projects: readonly ManagerRef
       if (match[1] !== undefined) {
         const owner = projects.find((candidate) => candidate.repoUrl === match[1])
         if (owner) reference = { kind: match[2] === 'pull' ? 'pr' : 'issue', projectId: owner.id, number: Number(match[3]) }
+      } else if (match[5] !== undefined) {
+        const owner = namedProject(match[5], projects)
+        if (owner) reference = { kind: PR_WORD_BEFORE.test(part.slice(0, start)) ? 'pr' : 'issue', projectId: owner.id, number: Number(match[6]) }
       } else if (project !== UNKNOWN_PROJECT) {
         // A card has no use for a chip that links nowhere: an unknown project stays words.
         reference = { kind: PR_WORD_BEFORE.test(part.slice(0, start)) ? 'pr' : 'issue', projectId: project, number: Number(match[4]) }

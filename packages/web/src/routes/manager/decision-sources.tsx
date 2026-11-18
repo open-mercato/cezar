@@ -1,9 +1,11 @@
+import { useQueries } from '@tanstack/react-query'
 import { Link } from 'react-router'
+import { getProjectRun } from '@/api/client'
 import { useProjects, useRunsIndex } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
-import { ResolveConflictsForPr } from '@/components/reference-conflict-action'
+import { prTaskRuns, ResolveConflictsForPr } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { taskReferences, type TaskReference } from '@/lib/tasks-table'
+import { taskReferences, type TaskReference, type TaskReferenceInput } from '@/lib/tasks-table'
 import { runTitle } from '@/lib/task-groups'
 import type { ManagerOrigin } from '@/lib/managers'
 import type { ManagerMessage, RunRecord } from '@open-mercato/cezar-api-client'
@@ -36,23 +38,61 @@ export function DecisionSources({ message, origin }: { message: ManagerMessage; 
   const text = message.kind === 'assistant'
     ? [message.text, ...(message.ask?.questions.map((question) => question.question) ?? [])].join(' ')
     : message.kind === 'action' ? message.reason ?? '' : ''
-  return <DecisionSourceList sources={decisionSources(message)} text={text} origin={origin} decisionId={message.id} />
+  const index = useRunsIndex().data
+  const projects = useProjects().data?.projects
+  // The index keeps 200 tasks a project: a stored source past that cap is read by its id.
+  const unlisted = message.kind === 'action' && message.action.type === 'merge-pr' && index
+    ? decisionSources(message).filter((source) => (index.truncated ?? []).includes(source.projectId)
+      && !index.runs.some((run) => run.projectId === source.projectId && run.id === source.runId))
+    : []
+  const fetched = useQueries({
+    queries: unlisted.map((source) => ({
+      queryKey: [source.projectId, 'runs', 'detail', source.runId] as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) => getProjectRun(source.projectId, source.runId, { signal }),
+      retry: false,
+    })),
+  })
+  const pending = fetched.some((query) => query.isPending)
+  const extra = fetched.flatMap((query, at) => query.data
+    ? [{ ...query.data, projectId: unlisted[at]!.projectId, archived: Boolean(query.data.archived) }]
+    : [])
+  const runs = !index || pending ? undefined : [...index.runs, ...extra]
+  return <DecisionSourceList sources={cardSources(message, runs, projects)} text={text} origin={origin} decisionId={message.id} unlisted={extra as unknown as IndexRun[]} />
+}
+
+/**
+ * A merge card names only tasks that carry its PR: cards stored before the server checked this
+ * named whatever task the manager's turn had read. Unknown until the runs index loads.
+ */
+export function cardSources(
+  message: ManagerMessage,
+  runs: ReadonlyArray<TaskReferenceInput & { id: string; projectId: string; archived: boolean; createdAt: string }> | undefined,
+  projects: ReadonlyArray<{ id: string; repoUrl?: string | undefined }> | undefined,
+) {
+  const sources = decisionSources(message)
+  if (message.kind !== 'action' || message.action.type !== 'merge-pr') return sources
+  const { projectId, number } = message.action
+  if (!runs) return []
+  const tied = new Set(prTaskRuns(runs, projectId, number, projects?.find((entry) => entry.id === projectId)?.repoUrl).map((run) => run.id))
+  return sources.filter((source) => source.projectId === projectId && tied.has(source.runId))
 }
 
 /** The Source task block, for a chat card and for its row in the Questions inbox alike. */
-export function DecisionSourceList({ sources, text, origin, decisionId, returnHint = true }: {
+export function DecisionSourceList({ sources, text, origin, decisionId, returnHint = true, unlisted = [] }: {
   sources: readonly { projectId: string; runId: string }[]
   /** Searched for file names the task's assets may hold (one source only). */
   text: string
   origin: ManagerOrigin
   decisionId: string
   returnHint?: boolean
+  /** Source runs the index left out, read by id. */
+  unlisted?: readonly IndexRun[]
 }) {
   const index = useRunsIndex()
   const projects = useProjects()
   if (!sources.length) return null
   const rows = sources.map((source) => {
-    const run = index.data?.runs.find((entry) => entry.projectId === source.projectId && entry.id === source.runId)
+    const run = [...(index.data?.runs ?? []), ...unlisted].find((entry) => entry.projectId === source.projectId && entry.id === source.runId)
     const project = projects.data?.projects.find((entry) => entry.id === source.projectId)
     return { ...source, run, project, references: sourceReferences(run, project?.repoUrl) }
   })
