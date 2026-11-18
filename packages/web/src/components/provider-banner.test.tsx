@@ -160,6 +160,19 @@ describe('ProviderBanner', () => {
     expect(screen.getByRole('alert').textContent).toContain('Claude Code')
   })
 
+  it('offers an inline Reconnect per signed-out agent (spec 2026-11-18-inline-account-reconnect)', () => {
+    renderBanner({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'codex-1' },
+        ],
+      },
+    })
+    expect(screen.getByRole('button', { name: 'Reconnect Claude Code' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reconnect Codex' })).toBeTruthy()
+  })
+
   it('keeps the runtime alert settings link scoped to the active project', () => {
     renderBanner({
       status: {
