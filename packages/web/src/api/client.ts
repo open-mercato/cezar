@@ -1900,6 +1900,8 @@ export interface ContinueOptions {
   agentProfile?: string
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey?: string
+  /** Sent from an ask card: the reopened session answers that card (Questions inbox spec). */
+  askRequestId?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1913,6 +1915,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+    ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
@@ -1939,6 +1942,7 @@ export async function continueProjectRun(
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
         ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+        ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
       },
     }),
     runPath(id, '/continue'),

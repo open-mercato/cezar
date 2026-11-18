@@ -155,7 +155,7 @@ export function useAskAnswer(
     }
     // No runner override: the server keeps the run's own backend and model, so answering a
     // question cannot silently switch engines when another provider happens to be connected.
-    return resume.mutateAsync({ text }).then((result) => {
+    return resume.mutateAsync({ text, ...(askRequestId ? { askRequestId } : {}) }).then((result) => {
       trackMessageSent(surface)
       return result
     })

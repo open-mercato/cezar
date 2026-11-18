@@ -323,8 +323,9 @@ describe('AskCard — answering after the session has ended', () => {
     renderAsk(singleAsk, closedRun)
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
-    // No runner override: answering a question must not silently switch the run's engine.
-    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
+    // No runner override: answering a question must not silently switch the run's engine. The
+    // reopened session still answers exactly this card (Questions inbox).
+    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', askRequestId: 'ask_1' })
     expect(mutateAsync).not.toHaveBeenCalled()
   })
 
@@ -358,6 +359,7 @@ describe('AskCard — answering after the session has ended', () => {
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
     expect(continueAsync).toHaveBeenCalledWith({
       text: 'Library: date-fns\nStyle: Relative',
+      askRequestId: expect.any(String),
     })
   })
 
@@ -367,7 +369,7 @@ describe('AskCard — answering after the session has ended', () => {
     renderAsk(singleAsk, { ...activeRun, steps: [step({ sessionId: 'sess-1' })] })
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
-    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
+    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', askRequestId: 'ask_1' })
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -389,8 +391,8 @@ describe('AskCard — answering after the session has ended', () => {
     fireEvent.click(option)
 
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(2))
-    expect(continueAsync).toHaveBeenNthCalledWith(1, { text: 'Library: date-fns' })
-    expect(continueAsync).toHaveBeenNthCalledWith(2, { text: 'Library: date-fns' })
+    expect(continueAsync).toHaveBeenNthCalledWith(1, { text: 'Library: date-fns', askRequestId: 'ask_1' })
+    expect(continueAsync).toHaveBeenNthCalledWith(2, { text: 'Library: date-fns', askRequestId: 'ask_1' })
     expect(mutateAsync).toHaveBeenCalledTimes(1)
     resolveContinuation?.({ continued: true })
     await waitFor(() => expect((option as HTMLButtonElement).disabled).toBe(false))
