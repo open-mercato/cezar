@@ -10,23 +10,27 @@ import { CenteredState } from '@/components/centered-state'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { actionTitle } from '@/lib/managers'
+import { cn } from '@/lib/utils'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { QuestionsCrossLink } from '@/routes/questions/questions-route'
 
 import { ActionCard, useDismissStaleMerges, type DecideAction } from './manager-approval'
+import { isFinished, lingerEnded, lingerFading, useLingerClock, useStableOrder } from './approvals-linger'
 import { ManagerAvatar } from './manager-avatar'
 import { ManagerProjectsContext } from './manager-reference'
 
 type Action = Extract<ManagerMessage, { kind: 'action' }>
-type DecisionResult = { managerId: string; message: Action; readError?: string }
+/** `finishedAt`: when this page saw it finish; the card lingers 30 s from then (this mount only). */
+type DecisionResult = { managerId: string; message: Action; readError?: string; finishedAt?: number }
 type SaveResult = (managerId: string, actionId: string, message?: Action, readError?: string) => void
 
-function ManagerApprovals({ manager, heading, results, saveResult }: {
+function ManagerApprovals({ manager, heading, results, saveResult, now }: {
   manager: ManagerSummary
   heading: RefObject<HTMLHeadingElement | null>
   results: DecisionResult[]
   saveResult: SaveResult
+  now: number
 }) {
   const client = useQueryClient()
   // The chat's connected projects, so an action reason's references paint as chips here too.
@@ -40,10 +44,11 @@ function ManagerApprovals({ manager, heading, results, saveResult }: {
     queryFn: ({ signal }) => getPendingManagerActions(manager.id, signal),
     enabled: manager.pendingActions > 0,
   })
-  const messages = [
+  // Stable: a decided card stays where it was instead of joining the end of the list.
+  const messages = useStableOrder([
     ...(manager.pendingActions > 0 ? pending.data ?? [] : []).filter((message) => !results.some((row) => row.message.id === message.id)),
     ...results.map((row) => row.message),
-  ]
+  ])
   const readResult = useCallback(async (message: Action) => {
     const ownsFocus = document.activeElement?.closest('[data-result-id]')?.getAttribute('data-result-id') === message.id
     saveResult(manager.id, message.id, { ...message, status: 'running', result: undefined })
@@ -111,14 +116,24 @@ function ManagerApprovals({ manager, heading, results, saveResult }: {
         ) : null}
         {messages.map((message) => {
           if (message.kind !== 'action') return null
-          const error = results.find((row) => row.message.id === message.id)?.readError
+          const row = results.find((entry) => entry.message.id === message.id)
+          const error = row?.readError
           return error ? (
             <div key={message.id} data-result-id={message.id} role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/45 bg-card p-3.5 text-sm">
               <p>Couldn’t load the result for {actionTitle(message.action)}. Your decision may have completed.</p>
               <p>{error}</p>
               <Button variant="outline" className="self-start max-md:min-h-11" onClick={() => void readResult(message)}>Retry result</Button>
             </div>
-          ) : <ActionCard key={message.id} origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />
+          ) : (
+            <div
+              key={message.id}
+              data-slot="approval-row"
+              data-lingering={row?.finishedAt === undefined ? undefined : 'true'}
+              className={cn('transition-opacity duration-300 motion-reduce:transition-none', lingerFading(row?.finishedAt, now) && 'opacity-0')}
+            >
+              <ActionCard origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />
+            </div>
+          )
         })}
         {pending.data?.length === 0 && results.length === 0 && !pending.isError ? <p className="text-sm text-muted-foreground">No pending approvals from this manager.</p> : null}
       </section>
@@ -134,11 +149,19 @@ export function ManagerApprovalsRoute() {
   const [results, setResults] = useState<DecisionResult[]>([])
   const saveResult = useCallback<SaveResult>((managerId, actionId, message, readError) => {
     setResults((rows) => {
-      const others = rows.filter((row) => row.managerId !== managerId || row.message.id !== actionId)
-      return message ? [...others, { managerId, message, ...(readError ? { readError } : {}) }] : others
+      const same = (row: DecisionResult) => row.managerId === managerId && row.message.id === actionId
+      const finishedAt = message && !readError && isFinished(message.status) ? rows.find(same)?.finishedAt ?? Date.now() : undefined
+      const others = rows.filter((row) => !same(row))
+      return message ? [...others, { managerId, message, ...(readError ? { readError } : {}), ...(finishedAt !== undefined ? { finishedAt } : {}) }] : others
     })
   }, [])
-  const ordered = orderManagers(managers.data?.managers ?? [])
+  // A finished card stays 30 s, then leaves; results live in this mount, so re-entry starts empty.
+  const prune = useCallback((at: number) => {
+    setResults((rows) => rows.filter((row) => !lingerEnded(row.finishedAt, at)))
+  }, [])
+  const now = useLingerClock(results, prune)
+  // A decision bumps its manager's activity; re-sorting would move the card from under the reader.
+  const ordered = useStableOrder(orderManagers(managers.data?.managers ?? []))
   const visibleResults = results.filter((row) => ordered.some((manager) => manager.id === row.managerId))
   const count = ordered.reduce((sum, manager) => sum + manager.pendingActions, 0)
   return (
@@ -167,7 +190,7 @@ export function ManagerApprovalsRoute() {
       {managers.data && count === 0 && visibleResults.length === 0 ? (
         <CenteredState heading="h2" icon={<CheckCheckIcon aria-hidden="true" />} title="No pending approvals" subtitle="Approval requests from all your managers appear here. Questions have their own page." />
       ) : null}
-      {ordered.map((manager) => <ManagerApprovals key={manager.id} manager={manager} heading={heading} results={results.filter((row) => row.managerId === manager.id)} saveResult={saveResult} />)}
+      {ordered.map((manager) => <ManagerApprovals key={manager.id} manager={manager} heading={heading} results={results.filter((row) => row.managerId === manager.id)} saveResult={saveResult} now={now} />)}
     </div>
   )
 }

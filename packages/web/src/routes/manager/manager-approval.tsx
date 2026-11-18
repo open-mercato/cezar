@@ -36,6 +36,15 @@ const ACTION_STATUS: Record<ManagerActionStatus, { tone: StatusDotTone; label: s
 }
 
 /** Keyed by string: a type from a newer server must still get a sheet, never a crash. */
+/** A merge says what it did: "Merging…" then "Merged" (the Approvals page shows it live). */
+const MERGE_STATUS: Partial<Record<ManagerActionStatus, string>> = { running: 'Merging…', done: 'Merged' }
+
+const statusOf = (message: ActionMessage) => {
+  const base = ACTION_STATUS[message.status]
+  const merge = message.action.type === 'merge-pr' ? MERGE_STATUS[message.status] : undefined
+  return merge ? { ...base, label: merge } : base
+}
+
 const SHEET_COPY: Record<string, { title: string; confirm: string; effect: string } | undefined> = {
   'merge-pr': { title: 'Merge this pull request?', confirm: 'Merge', effect: 'The merge is refused if the pull request changed after this proposal.' },
   'enable-automation': { title: 'Enable this automation?', confirm: 'Enable', effect: 'It starts launching tasks on its own. It is refused if the automation was edited after this proposal.' },
@@ -343,7 +352,7 @@ export function forgetStaleChecks(): void {
 export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigin; message: ActionMessage; onDecide: DecideAction }) {
   const managerId = origin.id
   const { action } = message
-  const status = ACTION_STATUS[message.status]
+  const status = statusOf(message)
   const detail = actionPreview(action)
   const own = useManagers().data?.managers.find((entry) => entry.id === managerId)?.confirm
   const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
