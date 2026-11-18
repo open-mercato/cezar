@@ -165,7 +165,8 @@ describe('the General page', () => {
     expect(cards).toHaveLength(2)
     expect(general()!.querySelectorAll('[data-slot="form-row"]').length).toBeGreaterThanOrEqual(4)
     expect(general()!.querySelector('[data-slot="project-folder-row"]')).not.toBeNull()
-    expect(general()!.querySelector('[data-slot="webhook-card"]')).not.toBeNull()
+    // Webhooks moved to Settings → Integrations; General carries no webhook row.
+    expect(general()!.querySelector('[data-slot="webhook-card"]')).toBeNull()
     expect(document.querySelector('select')).toBeNull()
     expect(document.querySelector('input[type="number"]')).toBeNull()
     expect(document.querySelector('[data-slot="project-general"] [title]')).toBeNull()

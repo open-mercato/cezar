@@ -65,7 +65,7 @@ can never see a field the cezar payload for that profile would not carry.
 
 ### 4. Cockpit (`webhook-form.tsx`, `webhook-card.tsx`)
 
-- First field **Destination**: "Custom receiver (signed cezar JSON)" / "Slack channel
+- First field **Destination**: "Your own HTTPS endpoint (signed JSON)" / "Slack channel
   (Incoming Webhook)" / "Discord channel (Webhook URL)".
 - Slack: placeholder `https://hooks.slack.com/services/…`, one sentence + link to Slack's
   "Sending messages using incoming webhooks" page, local-network checkbox hidden, JSON preview

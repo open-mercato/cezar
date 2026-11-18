@@ -10,7 +10,7 @@ vi.mock('@/api/client', async (importOriginal) => ({ ...await importOriginal<typ
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
 const receiver = { kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com/', state: 'active', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'every_task', graceSeconds: 180, allowLocalNetwork: false, includeScheduledFailures: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }
 function Location() { const navigate = useNavigate(); return <><output data-testid="location">{useLocation().search}</output><button onClick={() => void navigate(-1)}>Browser back</button></> }
-function mount(search: string) { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection /><Location /></MemoryRouter></QueryClientProvider>) }
+function mount(search: string) { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection format="cezar.json.v1" /><Location /></MemoryRouter></QueryClientProvider>) }
 beforeEach(() => {
  vi.stubGlobal('EventSource', undefined)
  api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
@@ -64,6 +64,23 @@ it('identifies a deleted notice target and opens its retained Activity directly'
  fireEvent.click(screen.getByRole('button', { name: 'View activity' }))
  expect(await screen.findByText('Deleted alerts — history')).toBeTruthy()
  expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true')
+})
+it('lists and resolves a deleted receiver history written without a format', async () => {
+ // History rows carry no format; they belong to the generic receivers.
+ const legacy = { kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }
+ api.list.mockResolvedValue({ receivers: [receiver], history: [legacy], historyCount: 1, changeSequence: 9, webhookHealth: { status: 'ready' } })
+ api.deliveries.mockResolvedValue({ receiver: legacy, items: [], total: 0, hasMore: false, timezone: 'UTC' })
+ mount('?endpoint=legacy&tab=deliveries')
+ expect(await screen.findByText('Legacy receiver — history')).toBeTruthy()
+})
+it('links a notice written without a format into Webhooks history', async () => {
+ const legacy = { kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }
+ api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 10, webhookHealth: { status: 'ready' }, notice: { changeSequence: 10, at: legacy.deletedAt, action: 'deleted', receiverId: 'legacy', receiverName: legacy.name, destination: 'https://old.example/…', source: 'cockpit/api' } })
+ api.activity.mockResolvedValue({ receiver: legacy, items: [], total: 0, hasMore: false, timezone: 'UTC' })
+ mount('')
+ fireEvent.click(await screen.findByRole('button', { name: 'View activity' }))
+ expect(await screen.findByText('Legacy receiver — history')).toBeTruthy()
+ expect(api.activity).toHaveBeenCalledWith('alpha', 'legacy')
 })
 it('explains payload expiry separately from retry deadline and task deletion', async () => {
  api.deliveries.mockResolvedValue({ receiver, items: [{ deliveryId: 'd', eventId: 'event', receiverId: 'r', deliveryRevision: 1, eventType: 'task.finished', status: 'delivered', taskId: 'task', taskAvailability: 'deleted', createdAt: '2026-10-01T12:00:00Z', expiresAt: '2026-10-04T12:00:00Z', attempts: 1, destination: receiver.destination, payloadAvailability: 'expired', payloadRetainedUntil: '2026-10-08T12:00:00Z', historyRetainedUntil: '2026-10-31T12:00:00Z', retryAllowed: false, replayAllowed: false, replayUnavailableReason: 'payload_expired' }], total: 1, hasMore: false, timezone: 'UTC' })

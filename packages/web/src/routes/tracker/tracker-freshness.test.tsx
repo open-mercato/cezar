@@ -30,6 +30,8 @@ describe('tracker snapshot freshness', () => {
     }));
     mount(client, '/tracker');
     expect(await screen.findByText('Connect an issue tracker')).toBeTruthy();
+    // The saved scope names its provider, so setup opens that provider's panel.
+    expect(screen.getByRole('link', { name: 'Open tracker settings' }).getAttribute('href')).toBe('/settings/integrations?integration=jira');
     expect(requests.some(url => /\/tracker(?:\?|$|\/watch)/.test(url))).toBe(false);
   });
 

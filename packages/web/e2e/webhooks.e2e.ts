@@ -32,7 +32,7 @@ afterAll(async () => {
 })
 describe('project lifecycle webhook setup in the cockpit', () => {
   it('adds, tests, activates and records a dry-run task delivery, then retains deleted history', async () => {
-    browser.goto(`${url}/p/${project}/settings/webhooks`)
+    browser.goto(`${url}/p/${project}/settings/integrations?integration=webhooks`)
     browser.waitForFunction("document.body.textContent.includes('No receivers yet')")
     click('Add receiver'); browser.waitForFunction("document.querySelector('[role=dialog] input') !== null")
     fill('Name', 'E2E receiver'); fill('Receiver URL', 'https://receiver.invalid/no-network')
