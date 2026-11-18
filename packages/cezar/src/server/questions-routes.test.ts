@@ -96,11 +96,11 @@ describe('Questions inbox routes', () => {
     expect((body as { attention?: { waiting: number } }).attention?.waiting).toBe(2);
   }, 30_000);
 
-  it('registers the counts-only questions topic, readable like health', async () => {
+  it('registers the counts-only questions topic, trusted-only like host', async () => {
     const topics = new Map<string, { publisher: TopicPublisher; loopbackReadable?: boolean }>();
     build({ registerTopic: (name, publisher, options) => { topics.set(name, { publisher, loopbackReadable: options?.loopbackReadable }); return () => {}; }, attach: () => undefined, close: () => undefined });
     const topic = topics.get('questions')!;
-    expect(topic.loopbackReadable).toBe(true);
+    expect(topic.loopbackReadable ?? false).toBe(false);
     expect(await topic.publisher.snapshot()).toEqual({ live: 2, older: 0 });
   }, 30_000);
 });

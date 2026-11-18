@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { questionKey, type TaskAskRecord } from '@open-mercato/cezar-contract';
 
 import { reportPrClosed } from '../server/forge/pr-closed.ts';
-import type { ProjectContext, ProjectContexts } from '../server/project-context.ts';
+import { ProjectContextError, type ProjectContext, type ProjectContexts } from '../server/project-context.ts';
 import type { QuestionChange } from '../questions/types.ts';
 import { createTaskQuestionProvider } from './questions.ts';
 import { RunStore } from './store.ts';
@@ -153,6 +153,16 @@ describe('createTaskQuestionProvider', () => {
     expect(await provider().answer('m:mgr:msg', 'A')).toMatchObject({ ok: false, status: 404 });
   });
 
+  it('a project whose folder is gone answers 409, an unknown one 404', async () => {
+    const missing = questionKey({ kind: 'task', projectId: 'gone', runId: 'run1', requestId: 'r1' });
+    contexts.context = (async (id: string) => {
+      throw new ProjectContextError(id === 'gone' ? 'missing-root' : 'unknown-project', id);
+    }) as ProjectContexts['context'];
+    expect(await provider().answer(missing, 'A')).toEqual({ ok: false, status: 409, error: 'project folder not found: gone' });
+    expect(await provider().dismiss(missing)).toMatchObject({ ok: false, status: 409 });
+    expect(await provider().answer(questionKey({ kind: 'task', projectId: 'nope', runId: 'run1', requestId: 'r1' }), 'A')).toMatchObject({ ok: false, status: 404 });
+  });
+
   it('answer() answers 409 when no rung can take the message', async () => {
     const ctx = project('alpha');
     build(ctx);
@@ -173,7 +183,7 @@ describe('createTaskQuestionProvider', () => {
       return { ok: true, delivered: 'session' };
     });
     const result = await provider().dismiss(questionKey({ kind: 'task', projectId: 'alpha', runId, requestId: 'r1' }));
-    expect(manager.dismissAsk).toHaveBeenCalledWith(runId, 'r1');
+    expect(manager.dismissAsk).toHaveBeenCalledWith(runId, 'r1', {});
     expect(result).toMatchObject({ ok: true, item: { closed: { reason: 'dismissed' } } });
     manager.dismissAsk.mockReturnValue({ ok: false, status: 409, error: 'question already closed' });
     expect(await provider().dismiss(questionKey({ kind: 'task', projectId: 'alpha', runId, requestId: 'r1' }))).toMatchObject({ ok: false, status: 409 });

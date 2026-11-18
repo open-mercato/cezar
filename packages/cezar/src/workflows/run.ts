@@ -22,7 +22,7 @@ import {
   type AskMarkerParseResult,
   type AskRequest,
 } from '../core/ask.ts';
-import { askSkippedMessage, asksNamedBy, hasCommitsSince, openAsksBlock, openTaskAsks } from '../runs/task-asks.ts';
+import { askSkippedMessage, asksNamedBy, QUESTION_ALREADY_CLOSED, hasCommitsSince, openAsksBlock, openTaskAsks } from '../runs/task-asks.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { interruptAfterGrace, MISSING_SESSION_NOTE, ResumeFallback, trackFallbackOutcome } from './resume-fallback.ts';
 import {
@@ -571,6 +571,8 @@ interface SendMessageOptions {
   askRequestId?: string;
   /** The reply was already recorded when the message was accepted (a deferred flush). */
   replyNoted?: boolean;
+  /** Typed by the user: a buffered message flags open cards replied-in-chat; an engine one never does. */
+  userReply?: boolean;
 }
 
 interface ContinueRunOptions {
@@ -3391,20 +3393,21 @@ export class RunManager {
    * closed (idle or awaiting an answer): the note waits for the next Continue. Otherwise the
    * question just closes.
    */
-  dismissAsk(runId: string, requestId: string): { ok: true; delivered: 'session' | 'next-continue' | 'none' } | { ok: false; status: 404 | 409; error: string } {
+  dismissAsk(runId: string, requestId: string, options: { holdNote?: boolean } = {}): { ok: true; delivered: 'session' | 'next-continue' | 'none' } | { ok: false; status: 404 | 409; error: string } {
     const run = this.store.getRun(runId);
     const ask = run?.asks?.find((candidate) => candidate.requestId === requestId);
     if (!run || !ask) return { ok: false, status: 404, error: 'question not found' };
-    if (ask.closed) return { ok: false, status: 409, error: 'question already closed' };
+    if (ask.closed) return { ok: false, status: 409, error: QUESTION_ALREADY_CLOSED };
     const parkedOnIt = run.status === 'waiting' && run.attentionRequest?.requestId === requestId;
     const sessionClosed = isIdleParked(run) || run.awaitingAnswerSince !== undefined;
     this.store.closeTaskAsks(runId, (candidate) => candidate.requestId === requestId, { reason: 'dismissed', at: new Date().toISOString() });
     const note = askSkippedMessage(ask);
-    if (parkedOnIt && !sessionClosed && this.deliverMessage(runId, [{ type: 'text', text: note }], false)) {
+    if (parkedOnIt && !sessionClosed && !options.holdNote && this.deliverMessage(runId, [{ type: 'text', text: note }], false)) {
       this.store.appendEvent(runId, { type: 'note', message: 'question skipped in the Questions inbox — the agent was told' });
       return { ok: true, delivered: 'session' };
     }
-    if (sessionClosed) {
+    // A parked session that refused the note (lifecycle blocked, provider unavailable) hears it on the next Continue.
+    if (sessionClosed || parkedOnIt) {
       this.store.pushAskNote(runId, note);
       return { ok: true, delivered: 'next-continue' };
     }
@@ -5179,7 +5182,7 @@ export class RunManager {
     if (!startingUp && !sessionGap) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
     // Accepted is the reply's moment; the later flush must not count it twice.
-    this.noteAskReply(runId, messageText(content), options.askRequestId);
+    if (!options.replyNoted && (options.userReply || options.askRequestId)) this.noteAskReply(runId, messageText(content), options.askRequestId);
     return true;
   }
 
@@ -5294,7 +5297,8 @@ export class RunManager {
         this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
         if (this.deliverMessage(runId, content, userAuthored, prepared, answering)) return;
         // The session closed while we waited: keep the message the way the ladder would.
-        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
+        // `sendMessage` already recorded the reply when this was accepted.
+        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content, { replyNoted: true });
       });
       return true;
     }

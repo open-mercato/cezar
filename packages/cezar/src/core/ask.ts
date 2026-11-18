@@ -145,13 +145,16 @@ function lastMarkerCandidate(turnText: string, keyword: string): string | null {
  * server's event loop for 85 s (CodeQL js/redos, alert #10). Only a marker on its OWN line is
  * dropped, as before.
  */
+/** A `CEZ:ASK-CLOSE` line after the card is applied separately, never part of the JSON. */
+const ASK_CLOSE_ONE_LINE_RE = /^CEZ:ASK-CLOSE[ \t]+\S/;
+
 function trimTrailingControlMarkers(candidate: string): string {
   let text = candidate.trimEnd();
   for (;;) {
     const newline = text.lastIndexOf('\n');
     if (newline < 0) return text;
     const line = text.slice(newline + 1).trim();
-    if (line !== 'CEZ:MONITORING' && line !== 'CEZ:DONE') return text;
+    if (line !== 'CEZ:MONITORING' && line !== 'CEZ:DONE' && !ASK_CLOSE_ONE_LINE_RE.test(line)) return text;
     text = text.slice(0, newline).trimEnd();
   }
 }

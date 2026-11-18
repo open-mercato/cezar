@@ -478,4 +478,11 @@ describe('card id, about and CEZ:ASK-CLOSE (Questions inbox spec)', () => {
   it('a close marker is not an ask marker', () => {
     expect(parseAskMarker('CEZ:ASK-CLOSE design-v2')).toBeNull();
   });
+
+  it('a card followed by a close line still parses, and the close still applies', () => {
+    const text = `New card.\nCEZ:ASK ${JSON.stringify({ id: 'design-v3', questions: [q] })}\nCEZ:ASK-CLOSE design-v2 superseded\nCEZ:DONE`;
+    expect(parseAskMarkerResult(text).kind).toBe('valid');
+    expect(parseAskMarker(text)?.id).toBe('design-v3');
+    expect(parseAskCloseMarkers(text)).toEqual([{ id: 'design-v2', reason: 'superseded' }]);
+  });
 });

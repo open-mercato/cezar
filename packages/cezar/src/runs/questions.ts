@@ -10,13 +10,13 @@ import {
   type TaskAskRecord,
 } from '@open-mercato/cezar-contract';
 
-import type { ProjectContext, ProjectContexts } from '../server/project-context.ts';
+import { ProjectContextError, type ProjectContext, type ProjectContexts } from '../server/project-context.ts';
 import { onPrClosed } from '../server/forge/pr-closed.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import type { QuestionChange, QuestionProvider, QuestionResult } from '../questions/types.ts';
 import { readRunIndexFromDisk } from './run-index.ts';
 import type { RunRecord, RunStore } from './store.ts';
-import { ASK_ENDING_STATUSES, isAboutPr, isAboutTask, isOpenAsk } from './task-asks.ts';
+import { ASK_ENDING_STATUSES, isAboutPr, isAboutTask, isOpenAsk, QUESTION_ALREADY_CLOSED } from './task-asks.ts';
 
 export interface TaskQuestionDeps {
   contexts: ProjectContexts;
@@ -25,6 +25,8 @@ export interface TaskQuestionDeps {
   /** A cold project's runs, read-only. Default: `readRunIndexFromDisk`. */
   readRuns?: (dataDir: string) => RunRecord[];
   now?: () => number;
+  /** The provider gate the messages and Continue routes run: a refusal text, or null to proceed. */
+  providerBlocked?: (ctx: ProjectContext, run: RunRecord) => Promise<string | null | undefined>;
 }
 
 const DAY_MS = 86_400_000;
@@ -69,6 +71,9 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
       }
     }
   };
+
+  const notFound: QuestionResult = { ok: false, status: 404, error: 'question not found' };
+  const alreadyClosed: QuestionResult = { ok: false, status: 409, error: QUESTION_ALREADY_CLOSED };
 
   const builtContexts = (): ProjectContext[] =>
     contexts.ids().map((id) => contexts.peek(id)).filter((ctx): ctx is ProjectContext => ctx !== undefined);
@@ -202,23 +207,26 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
   };
 
   /** The project's live context, built if needed: acting on a question is a reason to open it. */
-  const contextFor = async (projectId: string): Promise<ProjectContext | undefined> => {
+  const contextFor = async (projectId: string): Promise<ProjectContext | QuestionResult> => {
     try {
       const ctx = await contexts.context(projectId);
       attach(ctx);
       return ctx;
-    } catch {
-      return undefined;
+    } catch (err) {
+      // A gone root answers 409 like every project route; anything else is not found.
+      if (err instanceof ProjectContextError && err.reason === 'missing-root') return { ok: false, status: 409, error: `project folder not found: ${projectId}` };
+      return notFound;
     }
   };
 
   const resolve = async (key: string) => {
     const parsed = parseQuestionKey(key);
-    if (parsed?.kind !== 'task') return undefined;
+    if (parsed?.kind !== 'task') return notFound;
     const ctx = await contextFor(parsed.projectId);
-    const run = ctx?.store.getRun(parsed.runId);
+    if ('ok' in ctx) return ctx;
+    const run = ctx.store.getRun(parsed.runId);
     const ask = run?.asks?.find((candidate) => candidate.requestId === parsed.requestId);
-    return ctx && run && ask ? { ctx, run, ask, runId: parsed.runId, requestId: parsed.requestId } : undefined;
+    return run && ask ? { ctx, run, ask, runId: parsed.runId, requestId: parsed.requestId } : notFound;
   };
 
   const current = (ctx: ProjectContext, runId: string, requestId: string): QuestionResult => {
@@ -227,8 +235,6 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
     return run && ask ? { ok: true, item: item(ctx.id, run, ask) } : { ok: false, status: 404, error: 'question not found' };
   };
 
-  const notFound: QuestionResult = { ok: false, status: 404, error: 'question not found' };
-  const alreadyClosed: QuestionResult = { ok: false, status: 409, error: 'question already closed' };
 
   return {
     async list() {
@@ -246,9 +252,11 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
 
     async answer(key, text) {
       const found = await resolve(key);
-      if (!found) return notFound;
+      if ('ok' in found) return found;
       if (found.ask.closed) return alreadyClosed;
       const { ctx, runId, requestId } = found;
+      const blocked = await deps.providerBlocked?.(ctx, found.run);
+      if (blocked) return { ok: false, status: 409, error: blocked };
       const content = [{ type: 'text' as const, text }];
       // The composer's ladder (live session → between sessions), then the Continue an awaiting-answer run needs.
       const delivered = ctx.manager.sendMessage(runId, content, { askRequestId: requestId })
@@ -260,15 +268,17 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
 
     async dismiss(key) {
       const found = await resolve(key);
-      if (!found) return notFound;
-      const outcome = found.ctx.manager.dismissAsk(found.runId, found.requestId);
+      if ('ok' in found) return found;
+      // A dismiss is a mutation and always closes; an unavailable provider only holds the note for the next Continue.
+      const blocked = found.ask.closed ? undefined : await deps.providerBlocked?.(found.ctx, found.run);
+      const outcome = found.ctx.manager.dismissAsk(found.runId, found.requestId, blocked ? { holdNote: true } : {});
       if (!outcome.ok) return outcome;
       return current(found.ctx, found.runId, found.requestId);
     },
 
     async close(key, closed) {
       const found = await resolve(key);
-      if (!found) return notFound;
+      if ('ok' in found) return found;
       if (!found.ask.closed) found.ctx.store.closeTaskAsks(found.runId, (ask) => ask.requestId === found.requestId, closed);
       return current(found.ctx, found.runId, found.requestId);
     },

@@ -58,6 +58,7 @@ import { watchAutomationReports } from '../managers/automation-reports.ts';
 import { watchTaskReports } from '../managers/task-reports.ts';
 import { createManagerQuestionProvider, openAsk } from '../managers/questions.ts';
 import { createTaskQuestionProvider } from '../runs/questions.ts';
+import { askAlreadyClosed, QUESTION_ALREADY_CLOSED } from '../runs/task-asks.ts';
 import { createQuestionInbox } from '../questions/inbox.ts';
 import { questionsTopic } from '../questions/topic.ts';
 import type { QuestionProvider } from '../questions/types.ts';
@@ -5506,6 +5507,8 @@ export function createApp(deps: ServerDeps) {
       // A retried POST whose first attempt already landed answers as it did (message-receipts.ts).
       const receipt = parsed.data.idempotencyKey ? await messageReceipts.claim(`${id}:${parsed.data.idempotencyKey}`) : undefined;
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
+      // A card answered from a stale tab: its question closed meanwhile (Questions inbox spec).
+      if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
       let answered: MessageResponse | undefined;
       try {
         // Stacking onto a queued prompt mutates an existing task and invokes no provider.
@@ -5548,7 +5551,7 @@ export function createApp(deps: ServerDeps) {
 
         const queued = manager.enqueueMessage(id, content);
         if (queued) return c.json((answered = { queued: true as const, message: queued }));
-        if (manager.deferMessage(id, content, reply)) return c.json((answered = { deferred: true as const }));
+        if (manager.deferMessage(id, content, { ...reply, userReply: true })) return c.json((answered = { deferred: true as const }));
         return c.json({ error: 'session closed' }, 409);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
@@ -5659,6 +5662,7 @@ export function createApp(deps: ServerDeps) {
       // run's teardown, which adds no step yet — answers as it did instead of continuing twice.
       const receipt = parsed.data.idempotencyKey ? await continueReceipts.claim(`${id}:${parsed.data.idempotencyKey}`) : undefined;
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
+      if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
       let answered: ContinueResponse | undefined;
       try {
         if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
@@ -8873,7 +8877,17 @@ export function createApp(deps: ServerDeps) {
   deps.onManagerEngine?.(managerEngine);
   // The Questions inbox (spec 2026-11-17-questions-inbox): every open manager and task question. With
   // managers off the manager provider is gated out and the inbox serves task questions only.
-  const taskQuestions = createTaskQuestionProvider({ contexts });
+  const taskQuestions = createTaskQuestionProvider({
+    contexts,
+    // The gate the messages and Continue routes meet before an answer reaches the agent.
+    providerBlocked: (ctx, run) => {
+      const live = ['running', 'waiting'].includes(run.status) && run.idleClosedAt === undefined && run.awaitingAnswerSince === undefined;
+      return providerActionError([live ? providerForActiveRun(run) : providerForExistingRun(run)], {
+        repoRoot: ctx.root,
+        profileFor: (provider) => recordedProfileFor(run, provider),
+      });
+    },
+  });
   deps.onDispose?.(() => taskQuestions.dispose());
   const questionInbox = createQuestionInbox({
     task: deps.questionProviders?.task ?? taskQuestions,
@@ -8883,8 +8897,8 @@ export function createApp(deps: ServerDeps) {
   });
   refreshQuestions = () => questionInbox.refresh();
   deps.onDispose?.(() => questionInbox.dispose());
-  // Counts only, so any local page may read it, like `health`.
-  deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox), { loopbackReadable: true });
+  // Trusted-only like `host`: attention counts are never readable by a foreign local page (BACKWARD_COMPATIBILITY.md).
+  deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox));
   // The badge, read when a push goes out: approvals across managers that notify, plus the live questions
   // (spec § Counts: one live count everywhere).
   waitingOnUser = async () => {

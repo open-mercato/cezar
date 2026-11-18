@@ -52,7 +52,7 @@ describe('askRequestId on POST /runs/:id/messages and /continue', () => {
     const run = store.createRun({ title: 't', workflow: 'w', task: 'chat', steps: [] });
     store.updateRun(run.id, { status: 'running' });
     expect((await post(`/api/v1/runs/${run.id}/messages`, { text: 'Base: main', askRequestId: 'ask-1' })).status).toBe(200);
-    expect(calls.at(-1)).toEqual({ via: 'defer', options: { askRequestId: 'ask-1' } });
+    expect(calls.at(-1)).toEqual({ via: 'defer', options: { askRequestId: 'ask-1', userReply: true } });
   });
 
   it('marks a Continue as the user reply, with the card it answers', async () => {
@@ -61,5 +61,21 @@ describe('askRequestId on POST /runs/:id/messages and /continue', () => {
     expect((await post(`/api/v1/runs/${run.id}/continue`, { text: 'Base: main', askRequestId: 'ask-1' })).status).toBe(200);
     expect((await post(`/api/v1/runs/${run.id}/continue`, { text: 'carry on' })).status).toBe(200);
     expect(calls).toEqual([{ via: 'continue', options: { askRequestId: 'ask-1' } }, { via: 'continue', options: {} }]);
+  });
+
+  it('refuses a card answer whose question already closed (a stale tab), on both routes', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'chat', steps: [] });
+    store.updateRun(run.id, { status: 'waiting' });
+    store.recordTaskAsk(run.id, { requestId: 'ask-1', askedAt: new Date().toISOString(), questions: [{ header: 'Base', question: 'Which?', options: [{ label: 'a' }, { label: 'b' }] }] });
+    store.closeTaskAsks(run.id, () => true, { reason: 'dismissed', at: new Date().toISOString() });
+    for (const route of ['messages', 'continue']) {
+      const res = await post(`/api/v1/runs/${run.id}/${route}`, { text: 'Base: main', askRequestId: 'ask-1' });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'question already closed' });
+    }
+    expect(calls).toEqual([]);
+    // A typed reply, or a card the run never recorded, still goes through.
+    expect((await post(`/api/v1/runs/${run.id}/messages`, { text: 'go on' })).status).toBe(200);
+    expect((await post(`/api/v1/runs/${run.id}/messages`, { text: 'x', askRequestId: 'graph-ask' })).status).toBe(200);
   });
 });
