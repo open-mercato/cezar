@@ -307,6 +307,10 @@ function serve(overrides: {
       if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
       if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
       if (url === '/api/v1/ui-state' && method === 'PUT') return json(body ?? {})
+      if (url === '/api/v1/workspace/uploads' && method === 'POST') {
+        const upload = body as { mediaType: string }
+        return json({ uploadId: String(requests.length).padStart(24, 'a'), mediaType: upload.mediaType, bytes: 3 }, 201)
+      }
       if (url === '/api/v1/runs' && method === 'POST') return json(data.createRun, data.createRunStatus)
       if (url === '/api/v1/config' && method === 'GET')
         return typeof data.config === 'function'
@@ -505,6 +509,25 @@ describe('the hero surface', () => {
     const body = postedBody() as { task: string; images?: unknown[] }
     expect(body.task).toBe('')
     expect(body.images).toHaveLength(1)
+  })
+
+  // #1735: three screenshots must not ride inside POST /runs as base64 when staging works.
+  it('starts a task with three screenshots as upload references, not inline bytes (#1735)', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    paste(textarea(), [pngFile('a.png', [1, 2, 3]), pngFile('b.png', [4, 5, 6]), pngFile('c.png', [7, 8, 9])])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(3))
+
+    await startTask()
+
+    const body = postedBody() as { images?: Record<string, unknown>[] }
+    expect(body.images).toHaveLength(3)
+    for (const image of body.images ?? []) {
+      expect(image).toHaveProperty('uploadId')
+      expect(image).not.toHaveProperty('dataBase64')
+    }
+    expect(JSON.stringify(body)).not.toContain('base64')
   })
 })
 
