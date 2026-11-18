@@ -10,6 +10,7 @@ import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
+import { ReconnectCard, ReconnectedLine } from '@/components/reconnect/reconnect-card'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { StaticChip } from '@/components/chip'
@@ -311,6 +312,7 @@ function AssistantMessage({
   projects,
   answerOnCard,
   superseded = false,
+  authLive = true,
   onRetry,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
@@ -318,6 +320,8 @@ function AssistantMessage({
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
   superseded?: boolean
+  /** The newest failure on its account: the live card. Older ones collapse to a quiet line. */
+  authLive?: boolean
   onRetry?: (() => void) | undefined
 }) {
   const segments = useMemo(
@@ -360,7 +364,17 @@ function AssistantMessage({
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.resumeAt ? <ResumeHint managerId={origin.id} at={message.resumeAt} /> : null}
-      {message.error && message.turn !== 'chat' ? (
+      {message.authFailure ? (
+        // The reconnect card replaces the red line (spec 2026-11-18-inline-account-reconnect).
+        authLive ? (
+          <ReconnectCard provider={message.authFailure.provider} profileId={message.authFailure.profileId} place="manager" />
+        ) : (
+          <ReconnectedLine provider={message.authFailure.provider} profileId={message.authFailure.profileId} signedOutHere />
+        )
+      ) : message.reconnectedAt ? (
+        // The record drops `authFailure` on resume, so the line names no account.
+        <ReconnectedLine at={message.reconnectedAt} />
+      ) : message.error && message.turn !== 'chat' ? (
         <CheckFailedCard managerId={origin.id} turn={message.turn} jobName={message.jobName} error={message.error} at={message.at} />
       ) : message.error ? (
         // No `role="alert"`: a chat opened on old failures must not shout them all; the announcer says new ones.
@@ -501,10 +515,13 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   projects = NO_PROJECTS,
   answerOnCard = false,
   superseded = false,
+  authLive = true,
   onRetry,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** False for an older failure on an account whose newest failure draws the live card. */
+  authLive?: boolean
   /** Sends the question again; only the newest failed chat reply has one. */
   onRetry?: (() => void) | undefined
   /** An answered card whose answer, the next message, is drawn here and not as its own row. */
@@ -517,7 +534,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
 }) {
   return (
     <ManagerProjectsContext.Provider value={projects}>
-      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
+      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} />
     </ManagerProjectsContext.Provider>
   )
 })
@@ -529,6 +546,7 @@ function MessageBody({
   projects,
   answerOnCard,
   superseded,
+  authLive,
   onRetry,
 }: {
   message: ManagerMessage
@@ -536,6 +554,7 @@ function MessageBody({
   onRetry: (() => void) | undefined
   answerOnCard: boolean
   superseded: boolean
+  authLive: boolean
   projects: readonly ManagerReferenceProject[]
   onDecide: DecideAction
 }) {
@@ -550,7 +569,7 @@ function MessageBody({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} />
     case 'action':
       return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':
