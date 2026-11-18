@@ -19,7 +19,7 @@ import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu
 import { ManagerHeads } from '@/components/manager-heads'
 import { ConnectPhoneLink, PhonesLink } from '@/components/connect-phone-link'
 import { RelayAccountNotice } from '@/components/relay-account-notice'
-import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
+import { ManagerRail, ManagerSidebar, ProjectQuestionsLink } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
@@ -222,6 +222,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
   const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const currentTasks = useMemo(() => <CurrentTasksContainer />, [])
+  // With managers off the Questions row moves here (spec 2026-11-17-questions-inbox § F).
+  const workspaceQuestions = useMemo(() => (health.data && !managersAvailable ? <ProjectQuestionsLink /> : null), [health.data, managersAvailable])
   // The machine glance lives in the footer's "⋯" menu now, so it mounts only while that is open;
   // its own wrapper still gates the viewport and transport (nothing below `md` or in remote).
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
@@ -309,6 +311,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         footerBanner={footerBanner}
         singleProject={singleProject}
         currentTasks={currentTasks}
+        workspaceQuestions={workspaceQuestions}
         switcher={switcher}
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}

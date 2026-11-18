@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ASK_MAX_OPTIONS,
+  parseAskCloseMarkers,
+  stripAskCloseMarkers,
   ASK_MAX_QUESTIONS,
   parseAskMarker,
   parseAskMarkerResult,
@@ -448,5 +450,32 @@ describe('parseAskMarker — backend-agnostic assembly (codex/opencode delta str
     const assembled = chunks.join('');
     expect(chunks.length).toBeGreaterThan(1);
     expect(parseAskMarker(assembled)).toEqual(valid);
+  });
+});
+
+describe('card id, about and CEZ:ASK-CLOSE (Questions inbox spec)', () => {
+  const q = { header: 'Merge', question: 'Merge it?', options: [{ label: 'Yes' }, { label: 'No' }] };
+
+  it('keeps a valid card id and about', () => {
+    const ask = parseAskMarker(`CEZ:ASK ${JSON.stringify({ id: 'merge-2891', about: [{ pr: 2891 }, { task: 'cezar/abc', ask: 'base' }], questions: [q] })}`);
+    expect(ask?.id).toBe('merge-2891');
+    expect(ask?.about).toEqual([{ pr: 2891 }, { task: 'cezar/abc', ask: 'base' }]);
+  });
+
+  it('drops an invalid id or about rather than the card', () => {
+    const ask = parseAskMarker(`CEZ:ASK ${JSON.stringify({ id: 'has spaces', about: [{ pr: 'x' }], questions: [q] })}`);
+    expect(ask?.questions).toHaveLength(1);
+    expect(ask?.id).toBeUndefined();
+    expect(ask?.about).toBeUndefined();
+  });
+
+  it('parses close markers on their own lines, with an optional reason', () => {
+    const text = 'Done.\nCEZ:ASK-CLOSE design-v2 superseded by v3\n  CEZ:ASK-CLOSE Release\nnot a marker: CEZ:ASK-CLOSE x';
+    expect(parseAskCloseMarkers(text)).toEqual([{ id: 'design-v2', reason: 'superseded by v3' }, { id: 'Release' }]);
+    expect(stripAskCloseMarkers(text)).toBe('Done.\n\nnot a marker: CEZ:ASK-CLOSE x');
+  });
+
+  it('a close marker is not an ask marker', () => {
+    expect(parseAskMarker('CEZ:ASK-CLOSE design-v2')).toBeNull();
   });
 });

@@ -150,11 +150,12 @@ describe('AskCard', () => {
     expect(screen.getByText(description).className).toContain('break-words')
   })
 
-  it('a single single-select question sends "header: label" on one tap (no Send button)', () => {
+  it('a single single-select question sends "header: label" on one tap (no Send button), naming its card', () => {
     renderAsk(singleAsk)
     expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
+    // askRequestId closes exactly this card server-side; a composer reply sends none (Questions inbox).
+    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', askRequestId: 'ask_1' })
   })
 
   it('gives Other… and Need more info a 44 px target on a touch screen', () => {
@@ -180,7 +181,7 @@ describe('AskCard', () => {
     expect(send.disabled).toBe(false)
     fireEvent.click(send)
     expect(mutateAsync).toHaveBeenCalledTimes(1)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns\nStyle: Relative' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: date-fns\nStyle: Relative' })
   })
 
   it('multi-select: Send is disabled until options are picked, then sends the comma-joined labels', () => {
@@ -191,7 +192,7 @@ describe('AskCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Billing/ }))
     expect(send.disabled).toBe(false)
     fireEvent.click(send)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Sections: Profile, Billing' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Sections: Profile, Billing' })
   })
 
   it('a resolved ask collapses to answer chips with no option buttons', () => {
@@ -254,7 +255,7 @@ describe('AskCard — picks survive the row unmounting', () => {
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
     expect(send.disabled).toBe(false)
     fireEvent.click(send)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns\nStyle: ISO' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: date-fns\nStyle: ISO' })
   })
 
   it('never carries picks to another run or another ask', () => {
@@ -451,7 +452,7 @@ describe('AskCard — Other… and Need more info', () => {
     expect(send.disabled).toBe(true)
     fireEvent.change(ownAnswer(), { target: { value: '  Temporal,\nonce it ships  ' } })
     fireEvent.click(send)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Temporal, once it ships' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: Temporal, once it ships' })
   })
 
   it('one-tap card: Enter in the field sends, Shift+Enter does not', () => {
@@ -461,13 +462,14 @@ describe('AskCard — Other… and Need more info', () => {
     fireEvent.keyDown(ownAnswer(), { key: 'Enter', shiftKey: true })
     expect(mutateAsync).not.toHaveBeenCalled()
     fireEvent.keyDown(ownAnswer(), { key: 'Enter' })
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Day.js' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: Day.js' })
   })
 
   it('one-tap card: Need more info sends the request at once', () => {
     renderAsk(singleAsk)
     fireEvent.click(moreInfoButton())
     expect(mutateAsync).toHaveBeenCalledWith({
+      askRequestId: expect.any(String),
       text: 'Library: I need more information to answer this — please explain the context and ask again.',
     })
   })
@@ -488,6 +490,7 @@ describe('AskCard — Other… and Need more info', () => {
     fireEvent.click(send)
     expect(mutateAsync).toHaveBeenCalledTimes(1)
     expect(mutateAsync).toHaveBeenCalledWith({
+      askRequestId: expect.any(String),
       text:
         'Library: Temporal\n' +
         'Style: I need more information to answer this — please explain the context and ask again.',
@@ -517,7 +520,7 @@ describe('AskCard — Other… and Need more info', () => {
     fireEvent.click(otherButton())
     fireEvent.change(ownAnswer(), { target: { value: 'Notifications' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Sections: Profile, Notifications' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Sections: Profile, Notifications' })
   })
 
   it('keeps the typed text across an unmount and remount of the card', () => {
@@ -562,7 +565,7 @@ describe('AskForm — phones, screen readers and a pending send', () => {
       expect(fireEvent.keyDown(ownAnswer(), { key: 'Enter' })).toBe(true)
       expect(mutateAsync).not.toHaveBeenCalled()
       fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
-      expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Day.js' })
+      expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: Day.js' })
     } finally {
       vi.unstubAllGlobals()
     }
@@ -632,5 +635,37 @@ describe('latestOpenAskCard / revealAskCard (#2297)', () => {
     revealAskCard(latestOpenAskCard(root)!)
     expect(document.activeElement?.textContent).toBe('Yes')
     root.remove()
+  })
+})
+
+// Questions inbox: an `ask.closed` card redraws in the quiet closed state.
+describe('AskCard — closed by the server', () => {
+  it.each([
+    ['replaced', 'Closed: replaced'],
+    ['dismissed', 'Closed: dismissed by you'],
+    ['retracted', 'Closed: withdrawn by the agent'],
+    ['expired', 'Closed: expired'],
+    ['ended', 'Closed: task ended'],
+  ] as const)('draws a %s card as one quiet line with no chips', (reason, headline) => {
+    renderAsk({ ...singleAsk, resolved: true, closed: { reason, detail: reason === 'ended' ? 'The task was cancelled.' : undefined } })
+    const closed = document.querySelector('[data-slot="ask-closed"]')!
+    expect(closed.querySelector('[data-slot="ask-closed-reason"]')?.textContent).toBe(headline)
+    expect(closed.querySelector('s')?.textContent).toBe('Which date library should I standardize on?')
+    expect(screen.queryByRole('button', { name: /date-fns/ })).toBeNull()
+    if (reason === 'replaced') expect(screen.getByRole('link', { name: 'Go to the newer question ↓' }).getAttribute('href')).toBe('/#ask')
+    if (reason === 'ended') expect(closed.textContent).toContain('The task was cancelled.')
+  })
+
+  it('an answer from the card keeps the answered summary', () => {
+    renderAsk({ ...singleAsk, resolved: true, answer: 'Library: date-fns', closed: { reason: 'answered', answer: 'Library: date-fns' } })
+    expect(document.querySelector('[data-slot="ask-closed"]')).toBeNull()
+    expect(document.querySelector('[data-slot="ask-card"][data-resolved="true"]')?.textContent).toContain('Answered')
+  })
+
+  it('an answer on the manager’s linked copy says where it was answered', () => {
+    renderAsk({ ...singleAsk, resolved: true, answer: 'Library: Luxon', closed: { reason: 'answered', answer: 'Library: Luxon', answeredIn: 'manager:global' } })
+    const closed = document.querySelector('[data-slot="ask-closed"]')!
+    expect(closed.textContent).toContain('Answered in the manager’s chat')
+    expect(closed.textContent).toContain('Library: Luxon')
   })
 })

@@ -10,6 +10,7 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+import { taskAskRecordSchema } from './questions.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
@@ -300,6 +301,10 @@ export const runRecordSchema = z.object({
   status: runStatusSchema,
   attentionRequest: webhookAttentionRequestSchema.optional(),
   completionReason: webhookCompletionReasonSchema.optional(),
+  /** The run's `CEZ:ASK` questions, newest last, at most `TASK_ASKS_MAX` (Questions inbox spec). */
+  asks: z.array(taskAskRecordSchema).optional(),
+  /** Notes for the next Continue: a question the user skipped while the session was closed. */
+  askNotes: z.array(z.string()).optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
@@ -1336,6 +1341,8 @@ export const messageInputSchema = z
     images: attachmentListSchema.default([]),
     /** One per message, reused by its retries: a key that already landed is not delivered again. */
     idempotencyKey: z.string().uuid().optional(),
+    /** Sent from an ask card: answers that card. Absent (typed in the composer): open cards stay open, flagged. */
+    askRequestId: z.string().min(1).max(200).optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
@@ -1359,6 +1366,8 @@ export const continueInputSchema = z.object({
   agentProfile: z.string().max(64).optional(),
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey: z.string().uuid().optional(),
+  /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
+  askRequestId: z.string().min(1).max(200).optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 

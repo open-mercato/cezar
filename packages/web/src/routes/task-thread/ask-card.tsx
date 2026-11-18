@@ -12,6 +12,8 @@ import { useLocation } from 'react-router'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
+import { QuietClosedAsk } from '@/routes/questions/question-states'
+
 import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
 import { ASK_MORE_INFO_ANSWER, AskAnswerSummary, askAnswerLines } from './ask-answer-summary'
 import {
@@ -72,6 +74,19 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   // provider-status subscription) only mounts for a question that can still be answered.
   // Threads accumulate asks; every resolved one would otherwise carry live machinery for a
   // question nobody can answer again.
+  // Closed by the server for any reason but a plain answer: one quiet line (Questions inbox).
+  if (ask.closed && (ask.closed.reason !== 'answered' || ask.closed.answeredIn)) {
+    return (
+      <QuietClosedAsk
+        closed={ask.closed}
+        questions={ask.questions}
+        asker="agent"
+        link={ask.closed.reason === 'replaced' ? (
+          <Link to={{ hash: '#ask' }} data-slot="ask-closed-newer" className="font-medium text-foreground underline underline-offset-4">Go to the newer question ↓</Link>
+        ) : undefined}
+      />
+    )
+  }
   const lines = ask.resolved && ask.answer ? askAnswerLines(ask, ask.answer) : null
   if (lines) {
     return (
@@ -109,7 +124,7 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
 
 /** The unanswered card: option chips wired to whichever delivery seam the run's state allows. */
 function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
-  const delivery = useAskAnswer(run)
+  const delivery = useAskAnswer(run, undefined, 'ask_answer', ask.id)
   return (
     <AskForm
       ask={ask}
@@ -126,12 +141,15 @@ export function AskForm({
   ownerId,
   delivery,
   asker,
+  composerBelow = true,
 }: {
   ask: Pick<ThreadAsk, 'id' | 'questions'>
   /** Keys the held picks, so they outlive a virtualized row. */
   ownerId: string
   delivery: Pick<AskAnswerDelivery, 'mode' | 'blockedBy' | 'reason' | 'isPending' | 'error' | 'send'>
   asker: string
+  /** A composer sits under the card (a chat): the hint offers it. The Questions inbox has none. */
+  composerBelow?: boolean
 }) {
   const blocked = delivery.blockedBy !== undefined
   const questions = ask.questions
@@ -239,7 +257,7 @@ export function AskForm({
           >
             {resuming
               ? 'the session has ended — sending reopens it'
-              : `${questions.length > 1 ? 'answer each question' : 'pick one or more'} — or type a reply below`}
+              : `${questions.length > 1 ? 'answer each question' : 'pick one or more'}${composerBelow ? ' — or type a reply below' : ''}`}
           </span>
         </div>
       )}
@@ -433,7 +451,7 @@ function AskChoice({
       aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none',
+        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none pointer-coarse:min-h-11',
         'focus-visible:ring-[3px] focus-visible:ring-ring/50',
         'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
         selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',

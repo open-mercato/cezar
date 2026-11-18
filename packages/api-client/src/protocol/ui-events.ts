@@ -256,6 +256,19 @@ export interface UiAskQuestion {
  * option chips. Resolution is client-side (the next user message closes the
  * card) — there is no `ask.resolved` event.
  */
+/**
+ * A task's question closed without being answered from its card, or was answered (Questions inbox
+ * spec). The thread redraws the card in its quiet closed state; a replay draws the same.
+ */
+export interface UiAskClosedEvent {
+  type: 'ask.closed'
+  requestId: string
+  reason: 'answered' | 'dismissed' | 'replaced' | 'retracted' | 'expired' | 'ended'
+  detail?: string
+  replacedBy?: string
+  answer?: string
+}
+
 export interface UiAskRequestedEvent {
   type: 'ask.requested'
   requestId: string
@@ -293,6 +306,7 @@ export type UiEvent =
   | UiPermissionRequestedEvent
   | UiPermissionResolvedEvent
   | UiAskRequestedEvent
+  | UiAskClosedEvent
   | UiUsageUpdatedEvent
   | UiImageEvent
 

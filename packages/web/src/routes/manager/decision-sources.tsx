@@ -19,13 +19,24 @@ const linkClass = 'inline-flex min-w-0 max-w-full break-all min-h-11 items-cente
 
 /** Inside the decision, so its provenance survives a short or clamped model reply. */
 export function DecisionSources({ message, origin }: { message: ManagerMessage; origin: ManagerOrigin }) {
-  const index = useRunsIndex()
-  const projects = useProjects()
-  const sources = decisionSources(message)
-  if (!sources.length) return null
   const text = message.kind === 'assistant'
     ? [message.text, ...(message.ask?.questions.map((question) => question.question) ?? [])].join(' ')
     : message.kind === 'action' ? message.reason ?? '' : ''
+  return <DecisionSourceList sources={decisionSources(message)} text={text} origin={origin} decisionId={message.id} />
+}
+
+/** The Source task block, for a chat card and for its row in the Questions inbox alike. */
+export function DecisionSourceList({ sources, text, origin, decisionId, returnHint = true }: {
+  sources: readonly { projectId: string; runId: string }[]
+  /** Searched for file names the task's assets may hold (one source only). */
+  text: string
+  origin: ManagerOrigin
+  decisionId: string
+  returnHint?: boolean
+}) {
+  const index = useRunsIndex()
+  const projects = useProjects()
+  if (!sources.length) return null
   const files = sources.length === 1 ? [...new Set(text.match(/(?:[a-zA-Z0-9_-]+\/)?[a-zA-Z0-9_][a-zA-Z0-9_.-]*\.(?:html|md|png|jpg|pdf|json)\b/g) ?? [])] : []
   return (
     <div data-slot="decision-sources" className="flex min-w-0 flex-col gap-2 rounded-md border border-border bg-muted/30 p-2">
@@ -34,7 +45,7 @@ export function DecisionSources({ message, origin }: { message: ManagerMessage; 
         const run = index.data?.runs.find((entry) => entry.projectId === projectId && entry.id === runId)
         const project = projects.data?.projects.find((entry) => entry.id === projectId)
         const path = taskPath(projectId, runId)
-        const state = { manager: { ...origin, decision: message.id } }
+        const state = { manager: { ...origin, decision: decisionId } }
         return (
           <div key={path} className="min-w-0">
             <p className="break-words text-sm font-semibold">{run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`}</p>
@@ -47,7 +58,7 @@ export function DecisionSources({ message, origin }: { message: ManagerMessage; 
           </div>
         )
       })}
-      <p className="text-xs text-muted-foreground">Return using “Back to {origin.name}”. Your unanswered decision and draft stay here.</p>
+      {returnHint ? <p className="text-xs text-muted-foreground">Return using “Back to {origin.name}”. Your unanswered decision and draft stay here.</p> : null}
     </div>
   )
 }

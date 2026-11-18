@@ -89,6 +89,8 @@ export type AppShellProps = {
   starCount?: number | null
   /** The active project's "Current tasks" (`CurrentTasksContainer`). */
   currentTasks?: ReactNode
+  /** The Workspace group's Questions row when managers are off (spec 2026-11-17-questions-inbox). */
+  workspaceQuestions?: ReactNode
   /** The project switcher control under the brand (`ProjectSwitcher`). Absent — the registry
    *  still loading, or a bare shell — the plain repo chip stands in. */
   switcher?: ReactNode
@@ -257,6 +259,7 @@ export const AppShell = React.memo(function AppShell({
   latestVersion = null,
   starCount = null,
   currentTasks,
+  workspaceQuestions,
   switcher,
   hostWidget,
   whatsNew,
@@ -380,6 +383,7 @@ export const AppShell = React.memo(function AppShell({
     latestVersion,
     starCount,
     currentTasks,
+    workspaceQuestions,
     switcher,
     hostWidget,
     whatsNew,
@@ -576,6 +580,7 @@ type NavProps = {
   latestVersion: string | null
   starCount: number | null
   currentTasks?: ReactNode
+  workspaceQuestions?: ReactNode
   switcher?: ReactNode
   hostWidget?: ReactNode
   whatsNew?: ReactNode
@@ -951,7 +956,7 @@ function SidebarContent({
 }) {
   const {
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
-    newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
+    newNavItems, version, latestVersion, starCount, currentTasks, workspaceQuestions, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
     offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
     computerName,
   } = props
@@ -1034,6 +1039,7 @@ function SidebarContent({
               <h2 className="px-3 pt-3 pb-1 eyebrow text-soft-foreground">Workspace</h2>
               <DashboardLink onNavigate={onNavigate} />
               <AllTasksLink active={globalTasks} onNavigate={onNavigate} />
+              {workspaceQuestions ? <SidebarNavigateContext.Provider value={onNavigate}>{workspaceQuestions}</SidebarNavigateContext.Provider> : null}
               {workspace.map((item) => (
                 <SidebarNavRow
                   key={item.to}

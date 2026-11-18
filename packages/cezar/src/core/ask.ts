@@ -13,6 +13,7 @@
  * is always available via the composer, so it is never an explicit option.
  */
 import { z } from 'zod';
+import { questionAboutSchema, questionCardIdSchema } from '@open-mercato/cezar-contract';
 
 /**
  * How many questions one card may carry, and how many options one question may
@@ -59,6 +60,10 @@ export const askQuestionSchema = z
 
 export const askRequestSchema = z
   .object({
+    /** The card's stable name (Questions inbox spec): re-asking with it replaces the older card. */
+    id: questionCardIdSchema.optional(),
+    /** The PR, issue or task the card is about; its end expires the card. */
+    about: questionAboutSchema.optional(),
     questions: z
       .array(askQuestionSchema)
       .min(1)
@@ -182,6 +187,9 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
 function normalizeAskRequest(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const request: Record<string, unknown> = {};
+  // An invalid id or about is dropped, never the card: they only help close it later.
+  if (questionCardIdSchema.safeParse(value.id).success) request.id = value.id;
+  if (questionAboutSchema.safeParse(value.about).success) request.about = value.about;
   if (!hasOwn(value, 'questions')) return request;
   request.questions = Array.isArray(value.questions)
     ? value.questions.map((question) => {
@@ -338,4 +346,29 @@ export function parseAskMarker(turnText: string): AskRequest | null {
 export function stripAskMarker(text: string): string {
   if (parseAskMarker(text) === null) return text;
   return stripLastMarker(text, 'CEZ:ASK');
+}
+
+/** One `CEZ:ASK-CLOSE <id> [reason]` line: the agent withdraws its own card (Questions inbox spec). */
+export interface AskCloseMarker {
+  /** The card's `id`, or a header when the card had none. */
+  id: string;
+  reason?: string;
+}
+
+const ASK_CLOSE_LINE_RE = /^[ \t]*CEZ:ASK-CLOSE[ \t]+(\S{1,64})(?:[ \t]+([^\n]*?))?[ \t]*$/gm;
+export const ASK_CLOSE_REASON_MAX = 140;
+
+/** Every `CEZ:ASK-CLOSE` line in a turn, each on its own line, in order. */
+export function parseAskCloseMarkers(turnText: string): AskCloseMarker[] {
+  const found: AskCloseMarker[] = [];
+  for (const match of turnText.matchAll(ASK_CLOSE_LINE_RE)) {
+    const reason = match[2]?.trim().slice(0, ASK_CLOSE_REASON_MAX);
+    found.push({ id: match[1]!, ...(reason ? { reason } : {}) });
+  }
+  return found;
+}
+
+/** Drop `CEZ:ASK-CLOSE` lines from text the user reads: protocol, not prose. */
+export function stripAskCloseMarkers(text: string): string {
+  return text.replace(ASK_CLOSE_LINE_RE, '').replace(/\n{3,}/g, '\n\n').trimEnd();
 }

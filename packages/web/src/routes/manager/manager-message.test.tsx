@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workspaceQueryKeys } from '@/api/queries'
+import { resetDismissals } from '@/api/questions'
 import { supersededAskIds, type ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
@@ -40,6 +41,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  resetDismissals()
   vi.unstubAllGlobals()
 })
 
@@ -183,6 +185,50 @@ describe('ManagerMessageRow', () => {
       expect(document.activeElement).toBe(document.body)
     })
 
+    // Questions inbox: a closed card is one quiet line, never actionable.
+    it('draws a replaced card as one quiet line with a link to the newer card', () => {
+      renderMessage(assistantMessage(2, { text: 'v1', ask, askClosed: { reason: 'replaced', at: new Date().toISOString(), replacedBy: 'msg-9' } }))
+      const closed = document.querySelector('[data-slot="ask-closed"]')!
+      // Keeps its anchor: an older card's "Go to the newer question" may point here.
+      expect(closed.id).toMatch(/^decision-/)
+      expect(closed.getAttribute('data-reason')).toBe('replaced')
+      expect(closed.textContent).toContain('Closed: replaced')
+      expect(closed.querySelector('s')?.textContent).toBe('Which shell?')
+      expect(screen.queryByRole('button', { name: 'Tauri' })).toBeNull()
+      expect(screen.getByRole('link', { name: 'Go to the newer question ↓' }).getAttribute('href')).toBe('/manager/global#decision-msg-9')
+    })
+
+    it.each([
+      ['dismissed', 'Closed: dismissed by you', 'The manager was told you skipped it.'],
+      ['retracted', 'Closed: withdrawn by the manager', '#2280 merged'],
+      ['expired', 'Closed: expired', '#2280 merged'],
+    ] as const)('draws a %s card quietly with its reason', (reason, headline, detail) => {
+      renderMessage(assistantMessage(2, { ask, askClosed: { reason, at: new Date().toISOString(), ...(reason === 'dismissed' ? {} : { detail: '#2280 merged' }) } }))
+      const closed = document.querySelector('[data-slot="ask-closed"]')!
+      expect(closed.querySelector('[data-slot="ask-closed-reason"]')?.textContent).toBe(headline)
+      expect(closed.textContent).toContain(detail)
+      expect(document.querySelector('[data-slot="manager-ask"][data-resolved="false"]')).toBeNull()
+    })
+
+    it('says a card answered in its task, with the answer and a way to the task', () => {
+      renderMessage(assistantMessage(2, { ask, askClosed: { reason: 'answered', at: new Date().toISOString(), answeredIn: 'task:alpha/run-1', answer: 'Shell: Tauri' } }))
+      const closed = document.querySelector('[data-slot="ask-closed"]')!
+      expect(closed.textContent).toContain('Answered in the task')
+      expect(closed.textContent).toContain('Shell: Tauri')
+      expect(screen.getByRole('link', { name: 'Open task' }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/chat')
+    })
+
+    it('keeps a stale card open with the amber note; Dismiss as out of date holds it for undo', () => {
+      renderMessage(assistantMessage(2, { ask, askStale: { why: 'replied-in-chat', detail: 'you replied 4m after it was asked', since: new Date().toISOString() } }))
+      expect(screen.getByText('May be out of date: you replied 4m after it was asked')).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Tauri' })).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss as out of date' }))
+      expect(screen.getByText('Dismissed «Shell»')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Tauri' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+      expect(screen.getByRole('button', { name: 'Tauri' })).toBeTruthy()
+    })
+
     it('is the one card shape while open: a titled header with Open at the right, the form inside', () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
       const card = document.querySelector('[data-slot="manager-ask"][data-resolved="false"]')!
@@ -229,13 +275,12 @@ describe('ManagerMessageRow', () => {
       expect(screen.queryAllByRole('button')).toHaveLength(0)
     })
 
-    it('renders superseded state with topic chips and no buttons when superseded by a newer card', () => {
+    it('renders a superseded card as the quiet replaced line, with no buttons', () => {
       renderMessage(assistantMessage(2, { text: 'Older decision.', ask }), vi.fn(), undefined, true)
-      const card = document.querySelector('[data-slot="manager-ask"]')!
-      expect(card.getAttribute('data-resolved')).toBe('true')
-      expect(card.getAttribute('data-superseded')).toBe('true')
-      expect(card.textContent).toContain('Superseded')
-      expect([...card.querySelectorAll('[data-slot="manager-ask-topics"] [data-slot="chip"]')].map((chip) => chip.textContent)).toEqual(['Shell', 'Default'])
+      // History from before the server closed replaced cards draws the same quiet line (Questions inbox).
+      const card = document.querySelector('[data-slot="ask-closed"]')!
+      expect(card.querySelector('[data-slot="ask-closed-reason"]')?.textContent).toBe('Closed: replaced')
+      expect(card.id).toBe('decision-m2')
       expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
       expect(screen.queryAllByRole('button')).toHaveLength(0)
     })

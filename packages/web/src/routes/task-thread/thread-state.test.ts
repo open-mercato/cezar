@@ -14,6 +14,7 @@ import {
   latestPlanEntries,
   reduceThread,
   threadFilePaths,
+  runEndsAsks,
   threadFooter,
   type ThreadEntry,
 } from './thread-state'
@@ -1033,28 +1034,58 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(ask).toMatchObject({ kind: 'ask', id: 'ask_1', resolved: false })
   })
 
-  it('the next user-message resolves the ask and records the answer', () => {
-    const ask = allItems([
+  // Questions inbox: the card closes on the server's `ask.closed`, never on a reply alone.
+  it('a typed reply leaves the ask open; ask.closed answered resolves it with the answer', () => {
+    const events = [
       line(1, 'text', { text: 'options' }),
       line(2, 'ask.requested', ASK),
       line(3, 'user-message', { text: 'Library: date-fns', imageCount: 0 }),
-    ]).find((i) => i.kind === 'ask')
-    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    ]
+    expect(allItems(events).find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+    const ask = allItems([...events, line(4, 'ask.closed', { requestId: ASK.requestId, reason: 'answered', answer: 'Library: date-fns' })])
+      .find((i) => i.kind === 'ask')
+    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns', closed: { reason: 'answered' } })
   })
 
-  // The card outlives its session: the run closed with the question unanswered, and the
-  // answer arrives as the opening `user-message` of a CONTINUATION step (`POST /continue`,
-  // `runContinuation`). Nothing about resolution is session-scoped, and this pins that —
-  // it is what makes answering a closed run's question read the same as answering a live one.
-  it('a continuation step resolves an ask left pending when the session ended', () => {
+  it.each(['dismissed', 'replaced', 'retracted', 'expired', 'ended'] as const)('ask.closed %s closes the card with its reason', (reason) => {
     const ask = allItems([
+      line(1, 'ask.requested', ASK),
+      line(2, 'ask.closed', { requestId: ASK.requestId, reason, detail: 'why', replacedBy: 'ask_9', ts: '2026-11-18T10:00:00.000Z' }),
+    ]).find((i) => i.kind === 'ask')
+    expect(ask).toMatchObject({ resolved: true, closed: { reason, detail: 'why', replacedBy: 'ask_9' } })
+    expect(ask).not.toHaveProperty('answer')
+  })
+
+  it('ignores an ask.closed for another card or with an unknown reason', () => {
+    const items = allItems([
+      line(1, 'ask.requested', ASK),
+      line(2, 'ask.closed', { requestId: 'someone-else', reason: 'dismissed' }),
+      line(3, 'ask.closed', { requestId: ASK.requestId, reason: 'vanished' }),
+    ])
+    expect(items.find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+  })
+
+  // A recording made before `ask.closed` existed keeps the rule it was made under: once the run
+  // ended, the reply that followed an ask was its answer.
+  it('a legacy recording of an ended run still reads the next user-message as the answer', () => {
+    const events = [
       line(1, 'text', { text: 'options', stepId: 'task' }),
       line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
       line(3, 'lifecycle', { message: 'session closed by user' }),
       line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
       line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
-    ]).find((i) => i.kind === 'ask')
-    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    ]
+    const legacy = reduceThread(events, { runEnded: true }).turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask')
+    expect(legacy).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    // A live run, or one whose stream already speaks ask.closed, never does.
+    expect(reduceThread(events, { runEnded: false }).turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+    const modern = reduceThread([...events, line(6, 'ask.closed', { requestId: 'other', reason: 'ended' })], { runEnded: true })
+    expect(modern.turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+  })
+
+  it('runEndsAsks: done, review and cancelled end a task’s questions; failed does not (#2286)', () => {
+    expect(['done', 'review', 'cancelled', 'failed', 'waiting', 'running'].map((status) => runEndsAsks(status as never)))
+      .toEqual([true, true, true, false, false, false])
   })
 
   it('drops an ask.requested with no valid questions', () => {

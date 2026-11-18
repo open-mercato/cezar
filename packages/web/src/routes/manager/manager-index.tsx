@@ -1,8 +1,9 @@
-import { BotIcon, PlusIcon } from 'lucide-react'
+import { BotIcon, CheckCheckIcon, ChevronRightIcon, MessageCircleQuestionIcon, PlusIcon } from 'lucide-react'
 import { useMemo, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router'
 
 import { managerKeys, orderManagers, useManagers } from '@/api/managers'
+import { useLiveQuestionCount } from '@/api/questions'
 import { useShellTasksTab } from '@/components/app-shell'
 import { CacheStatusChip } from '@/components/cache-status'
 import { useHealth, useWorkspaceConfig } from '@/api/queries'
@@ -19,6 +20,7 @@ import { ManagerDirectoryCard } from './manager-directory-card'
 import { DeviceChip } from '@/components/device-avatar'
 import { isCezarShell } from '@/lib/phone-app'
 import { ManagerNewRoute } from './manager-new'
+import { workspaceCountClass } from './manager-sidebar'
 
 const DESKTOP = '(min-width: 768px)'
 
@@ -42,6 +44,35 @@ export function pendingFirst(managers: readonly ManagerSummary[]): ManagerSummar
   return [...managers].sort((a, b) => Number(waitsOnUser(b)) - Number(waitsOnUser(a)))
 }
 
+/** The Manager index's Workspace block (Questions inbox design § 02): the phone's way to the two
+ *  workspace pages, which the desktop reaches from the sidebar. Also the CezarBot home. */
+function WorkspaceRows({ managers }: { managers: readonly ManagerSummary[] }) {
+  const questions = useLiveQuestionCount()
+  const approvals = managers.reduce((sum, manager) => sum + manager.pendingActions, 0)
+  const rows = [
+    { to: '/manager/questions', slot: 'manager-index-questions', icon: MessageCircleQuestionIcon, label: 'Questions', count: questions, noun: 'waiting' },
+    { to: '/manager/approvals', slot: 'manager-index-approvals', icon: CheckCheckIcon, label: 'Approvals', count: approvals, noun: 'pending' },
+  ]
+  return (
+    <nav aria-label="Workspace" data-slot="manager-index-workspace" className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+      {rows.map(({ to, slot, icon: Icon, label, count, noun }) => (
+        <Link
+          key={to}
+          to={to}
+          data-slot={slot}
+          aria-label={count === undefined ? label : `${label}, ${count} ${noun}`}
+          className="flex min-h-12 items-center gap-3 px-3.5 text-ui font-medium outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50"
+        >
+          <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          <span className="flex-1">{label}</span>
+          {count !== undefined ? <span className={workspaceCountClass(count)}>{count}</span> : null}
+          <ChevronRightIcon aria-hidden="true" className="size-4 text-muted-foreground" />
+        </Link>
+      ))}
+    </nav>
+  )
+}
+
 /** The phone has no sidebar column, so its list is a screen (spec, Surface). */
 function ManagerListScreen({ managers, isFetching, isError }: { managers: readonly ManagerSummary[]; isFetching: boolean; isError: boolean }) {
   const now = useNow(60_000)
@@ -59,6 +90,7 @@ function ManagerListScreen({ managers, isFetching, isError }: { managers: readon
     <div data-route="manager-list" className="@container/directory mx-auto flex w-full max-w-[1200px] flex-col gap-3 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">Managers</h1>{isCezarShell() ? <DeviceChip name={deviceLabel} /> : <span className="text-sm text-muted-foreground">{deviceLabel}</span>}</div>
       <CacheStatusChip queryKey={managerKeys.list} isFetching={isFetching} isError={isError} className="mx-1 mb-1 self-start" />
+      <WorkspaceRows managers={managers} />
       <div className="flex flex-wrap items-center gap-3">
         {/* A 12rem basis wraps the filter below rather than squeezing the search to a few letters at large text. */}
         <Input aria-label="Search managers or device" placeholder="Search managers" value={search} onChange={(event) => setSearch(event.target.value)} className="min-h-12 min-w-0 flex-[1_1_12rem]" />

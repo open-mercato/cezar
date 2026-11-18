@@ -66,6 +66,7 @@ import {
 import {
   latestPlanEntries,
   reduceThread,
+  runEndsAsks,
   threadFilePaths,
   threadFooter,
   type ThreadAsk,
@@ -90,11 +91,11 @@ export function TaskThreadRoute() {
   const history = useRunHistory(id)
   const runStatus = run.data?.status
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
+    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner, runEnded: runEndsAsks(runStatus) }),
     [history.visibleEvents, runStatus, run.data?.runner],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
+    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner, runEnded: runEndsAsks(runStatus) }),
     [history.currentEvents, runStatus, run.data?.runner],
   )
 

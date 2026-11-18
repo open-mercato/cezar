@@ -128,6 +128,10 @@ const managerChat = preloadableRoute('manager', () =>
 const ManagerApprovalsRoute = lazyRoute('manager', () =>
   import('./routes/manager/manager-approvals').then((m) => ({ default: m.ManagerApprovalsRoute })),
 )
+/** Workspace-level, with or without managers (spec 2026-11-17-questions-inbox). */
+const QuestionsRoute = lazyRoute('questions', () =>
+  import('./routes/questions/questions-route').then((m) => ({ default: m.QuestionsRoute })),
+)
 const ManagerIndexRoute = managerIndex.Route
 const ManagerNewRoute = managerNew.Route
 const ManagerChatRoute = managerChat.Route
@@ -397,6 +401,8 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/manager/new', pageLabel: 'New manager' },
   { pattern: '/manager/approvals', pageLabel: 'Approvals' },
+  { pattern: '/manager/questions', pageLabel: 'Questions' },
+  { pattern: '/questions', pageLabel: 'Questions' },
   { pattern: '/manager/*', pageLabel: 'Manager' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
@@ -429,6 +435,16 @@ export function pageTitleContext(pathname: string): PageTitleContext {
 
 /** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. The
  *  fallback is the route's own skeleton, so a cold chat never flashes the list's first. */
+/** One Questions page, two URLs: `/manager/questions` with managers on, `/questions` without (§ F). */
+function QuestionsGate({ managersRoute }: { managersRoute: boolean }) {
+  const health = useHealth()
+  if (health.data) {
+    const managers = health.data.capabilities.managers === true
+    if (managers !== managersRoute) return <Navigate to={managers ? '/manager/questions' : '/questions'} replace />
+  }
+  return <Suspense fallback={<ScreenLoading label="Loading questions…" />}><QuestionsRoute /></Suspense>
+}
+
 function ManagersGate({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const health = useHealth()
   if (health.data && health.data.capabilities.managers !== true) return <Navigate to="/" replace />
@@ -800,6 +816,8 @@ export const AppRoutes = memo(function AppRoutes() {
       <Route path="/manager" element={<ManagersGate fallback={<ManagerIndexLoading />}><MobileManagerEntry /></ManagersGate>} />
       <Route path="/manager/new" element={<ManagersGate fallback={<ScreenLoading label="Loading setup…" />}><ManagerNewRoute /></ManagersGate>} />
       <Route path="/manager/approvals" element={<ManagersGate fallback={<ScreenLoading label="Loading approvals…" />}><ManagerApprovalsRoute /></ManagersGate>} />
+      <Route path="/manager/questions" element={<QuestionsGate managersRoute />} />
+      <Route path="/questions" element={<QuestionsGate managersRoute={false} />} />
       <Route path="/manager/:id" element={<ManagersGate fallback={<ManagerChatLoading />}><ManagerChatRoute /></ManagersGate>} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT

@@ -12,6 +12,8 @@ import { Button } from '@/components/ui/button'
 import { actionTitle } from '@/lib/managers'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { QuestionsCrossLink } from '@/routes/questions/questions-route'
+
 import { ActionCard, useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerAvatar } from './manager-avatar'
 
@@ -133,7 +135,10 @@ export function ManagerApprovalsRoute() {
   return (
     <div data-route="manager-approvals" className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:p-6">
       <header className="flex flex-col gap-1">
-        <h1 ref={heading} tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">Approvals</h1>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h1 ref={heading} tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">Approvals</h1>
+          <QuestionsCrossLink />
+        </div>
         <p role="status" className="text-sm text-muted-foreground">{managers.data ? `${count} pending ${count === 1 ? 'approval' : 'approvals'} across all managers` : managers.isError ? 'Pending approvals across all managers' : 'Loading approvals…'}</p>
         {visibleResults.some((row) => row.message.status !== 'running' || row.readError) ? (
           <Button variant="ghost" className="mt-1 self-start max-md:min-h-11" onClick={() => {
@@ -151,7 +156,7 @@ export function ManagerApprovalsRoute() {
       ) : null}
       {!managers.data && managers.isPending ? <LoadingState label="Loading managers…" /> : null}
       {managers.data && count === 0 && visibleResults.length === 0 ? (
-        <CenteredState heading="h2" icon={<CheckCheckIcon aria-hidden="true" />} title="No pending approvals" subtitle="Approval requests from all your managers appear here. Questions stay in each manager’s chat." />
+        <CenteredState heading="h2" icon={<CheckCheckIcon aria-hidden="true" />} title="No pending approvals" subtitle="Approval requests from all your managers appear here. Questions have their own page." />
       ) : null}
       {ordered.map((manager) => <ManagerApprovals key={manager.id} manager={manager} heading={heading} results={results.filter((row) => row.managerId === manager.id)} saveResult={saveResult} />)}
     </div>

@@ -302,6 +302,7 @@ type UiEvent =
   | UiPermissionRequestedEvent  // 'permission.requested' — RESERVED (types only; wired when approvals become optional)
   | UiPermissionResolvedEvent   // 'permission.resolved'  — RESERVED
   | UiAskRequestedEvent      // 'ask.requested'    — requestId, questions[] (AskUser; the cockpit renders option chips)
+  | UiAskClosedEvent         // 'ask.closed'       — requestId, reason, detail?, replacedBy?, answer? (the card closes)
   | UiUsageUpdatedEvent      // 'usage.updated'    — usage: TokenUsage, costUsd? (cumulative-for-session)
   | UiImageEvent;            // 'image'            — itemId?, mediaType, data (base64; manager re-emits URL)
 ```
@@ -316,9 +317,18 @@ work — validates the payload (`packages/cezar/src/core/ask.ts`, shaped after C
 2–`ASK_MAX_OPTIONS` options each — 20 and 10, finite for payload size and a
 scrollable card rather than for parity with that tool's 4 and 4), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
-chips; the user's pick (or a free-form reply) rides the normal reply seam
-(`POST /api/runs/:id/messages`), and the card resolves client-side when that
-message lands (no `ask.resolved` event). Codex additionally bridges its native
+chips; the user's pick rides the normal reply seam (`POST /api/v1/runs/:id/messages`
+with `askRequestId`). A `CEZ:ASK` card closes only with an **`ask.closed`** event in the
+run's NDJSON (Questions inbox spec, `.ai/specs/2026-11-17-questions-inbox.md`), so a replay
+draws the same closed card: `answered` (a message carrying its `askRequestId`), `dismissed`
+(the Questions inbox), `replaced` (a newer card with the same top-level `id`, or one whose
+headers cover every header of the old one; `replacedBy` names it), `retracted` (the agent's
+own `CEZ:ASK-CLOSE <id> [reason]` line, stripped from the transcript), `expired` (the card's
+declared `about` PR merged or closed, or its `{task}` finished) and `ended` (the run reached
+done, review or cancelled, or was archived; `failed` keeps it open for Continue). A free-form
+composer reply closes nothing: it flags the card "may be out of date" on the run record
+(`RunRecord.asks`). The run record keeps each card's state; the event only redraws the
+thread. Codex additionally bridges its native
 `item/tool/requestUserInput` server request onto the same event and routes the
 next answer back as the documented JSON-RPC response. Malformed or unsupported
 native requests receive an error response rather than hanging the turn. A

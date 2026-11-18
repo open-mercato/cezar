@@ -103,7 +103,8 @@ it('keeps the zero state on a cold link, including when only questions remain', 
   managers = [managerFixture({ pendingQuestions: 2 })]
   renderApprovals()
   expect(await screen.findByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
-  expect(requests).toEqual([])
+  // No approvals read: the only request is the Questions badge's own.
+  expect(requests.filter((path) => !path.startsWith('/api/v1/workspace/questions'))).toEqual([])
   expect(screen.getByText('Waiting for 2 answers')).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Approvals, 0 pending approvals' }).getAttribute('aria-current')).toBe('page')
 })
