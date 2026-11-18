@@ -73,8 +73,6 @@ describe('auth park and reconnect resume', () => {
     expect(parked.parked?.stepId).toBe(parked.steps.find((step) => step.status === 'failed')?.id);
     // The idle-park rest state: no process, no slot, and Continue reopens it.
     expect(isIdleParked(parked)).toBe(true);
-    expect(manager!.hasAuthParked('claude', 'default')).toBe(true);
-    expect(manager!.hasAuthParked('claude', 'work')).toBe(false);
     expect(parked.finishedAt).toBeUndefined();
     expect(parked.steps.some((step) => step.sessionId)).toBe(true);
     const lines = store.readEvents(id).map((event) => String(event.message ?? ''));

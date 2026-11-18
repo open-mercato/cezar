@@ -226,7 +226,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
-import { artifactsDir, isIdleParked } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
@@ -2393,11 +2393,10 @@ export function createApp(deps: ServerDeps) {
   });
 
   deps.onDispose?.(() => loginSessions.dispose());
-  // Anything still waiting on this login, in any built project or manager (spec 2026-11-18-inline-account-reconnect).
-  const blockedOnAccount = (provider: string, profileId: string): boolean =>
-    // Optional calls: test harnesses inject partial run managers.
-    [bootContext, ...contexts.ids().map((id) => contexts.peek(id))].some((ctx) => ctx?.manager.hasAuthParked?.(provider, profileId) === true)
-    || (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId));
+  const blockedOnAccount = async (provider: ProviderId, profileId: string): Promise<boolean> =>
+    (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId))
+    || (await workspaceProjectSources()).some((project) => project.available
+      && project.runs().some((run) => authParkForAccount(run, provider, profileId)));
 
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -2964,6 +2963,9 @@ export function createApp(deps: ServerDeps) {
           const all = await providerStatus(refresh ? { refresh: true } : undefined);
           const row = all.providers.find((candidate) => candidate.provider === account.provider);
           if (recheck && account.provider === 'cursor') await modelCatalog.refresh('cursor');
+          if (recheck && row?.status === 'connected' && await blockedOnAccount(account.provider, DEFAULT_AGENT_ACCOUNT_ID)) {
+            void loginSessions.accountConnected(account.provider, DEFAULT_AGENT_ACCOUNT_ID);
+          }
           return c.json({ status: row ?? { provider: account.provider, status: 'unknown' as const } });
         }
         // "Check again" re-probes THIS account only — the other accounts' warm answers are not
@@ -2978,8 +2980,9 @@ export function createApp(deps: ServerDeps) {
         });
         // Check again lifted this account's incident, or something parked on it survived a restart
         // that forgot the incident: resume it. A healthy account's Check again announces nothing.
-        const blocked = hadIncident || blockedOnAccount(account.provider, account.id);
-        if (recheck && blocked && status.status === 'connected') void loginSessions.accountConnected(account.provider, account.id);
+        if (recheck && status.status === 'connected' && (hadIncident || await blockedOnAccount(account.provider, account.id))) {
+          void loginSessions.accountConnected(account.provider, account.id);
+        }
         return c.json({ status });
       },
     )
@@ -8892,7 +8895,7 @@ export function createApp(deps: ServerDeps) {
   // Spec 2026-10-31-managers. Single-mount: a manager spans projects, so a scoped spelling would
   // be a contradiction. Explicit paths for the gate, for the reason `requireAutomations` spells out.
   const managerLoopback: { request?: (path: string, init?: RequestInit) => Response | Promise<Response> } = {};
-  const managerProjectSources = async (): Promise<ManagerProjectSource[]> => {
+  const workspaceProjectSources = async (): Promise<ManagerProjectSource[]> => {
     const registry = await loadWorkspaceConfig().then((config) => config.projects).catch(() => []);
     const bootId = await resolveBootProject(registry);
     const visible = capabilities().singleProject ? registry.filter((project) => project.id === bootId) : registry;
@@ -8924,7 +8927,7 @@ export function createApp(deps: ServerDeps) {
   const managerEngine = new ManagerEngine({
     store: managerStore,
     emit: (event, data) => workspaceEvents.emit(event, data),
-    projects: managerProjectSources,
+    projects: workspaceProjectSources,
     github: {
       list: (root) => fetchGithub(root, false, 30),
       refStatus: (root, prs) => fetchGithubRefStatus(root, { prs: prs.slice(0, GH_REF_STATUS_MAX), issues: [] }),

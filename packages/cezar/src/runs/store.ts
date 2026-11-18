@@ -1011,6 +1011,12 @@ export function isIdleParked(run: Pick<RunRecord, 'status' | 'idleClosedAt'>): b
   return run.status === 'waiting' && run.idleClosedAt !== undefined;
 }
 
+export function authParkForAccount(run: Pick<RunRecord, 'status' | 'archived' | 'parked'>, provider: string, profileId: string) {
+  const { parked } = run;
+  return run.status === 'waiting' && !run.archived && parked?.kind === 'auth'
+    && parked.provider === provider && parked.profileId === profileId ? parked : undefined;
+}
+
 /**
  * Reconcile one record just read off disk with the fact that whichever process wrote it is gone.
  *

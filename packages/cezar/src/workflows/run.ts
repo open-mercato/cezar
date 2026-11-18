@@ -105,7 +105,7 @@ import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
-import { artifactsDir, isIdleParked } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -4588,19 +4588,12 @@ export class RunManager {
    * reconnect finds nothing — on the same session, queued under `maxParallel`. A stopped or
    * archived task is no longer blocked and stays put.
    */
-  /** Is any run here parked on this login? Gates Check again, which must not announce a no-op reconnect. */
-  hasAuthParked(provider: string, profileId: string): boolean {
-    return this.store.listRuns().some(({ status, archived, parked }) => status === 'waiting' && !archived
-      && parked?.kind === 'auth' && parked.provider === provider && parked.profileId === profileId);
-  }
-
   resumeAuthParked(provider: string, profileId: string, parkedBefore?: string): Array<{ runId: string; title: string }> {
     const resumed: Array<{ runId: string; title: string }> = [];
     if (this.disposed) return resumed;
     for (const run of this.store.listRuns()) {
-      const parked = run.parked;
-      if (run.status !== 'waiting' || run.archived || parked?.kind !== 'auth') continue;
-      if (parked.provider !== provider || parked.profileId !== profileId) continue;
+      const parked = authParkForAccount(run, provider, profileId);
+      if (!parked) continue;
       // A project opened after the reconnect: only what parked before it is still blocked on it.
       if (parkedBefore !== undefined && parked.at >= parkedBefore) continue;
       if (this.active.has(run.id) || this.starting.has(run.id)) continue;
