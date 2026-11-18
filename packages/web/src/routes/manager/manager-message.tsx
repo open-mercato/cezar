@@ -1,6 +1,5 @@
 import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, MessageCircleQuestionIcon, PaperclipIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps, type ReactNode } from 'react'
-import { Link } from 'react-router'
 
 import { checkManager, managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
 import { StatusDot } from '@/components/status-dot'
@@ -10,7 +9,6 @@ import { ZoomableImage } from '@/components/zoomable-image'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { StaticChip } from '@/components/chip'
-import { chipClass } from '@/components/picker-pill'
 import {
   checkFailureCause,
   ISSUE_LINK_PREFIX,
@@ -40,8 +38,8 @@ import {
 import { ActionCard, type DecideAction } from './manager-approval'
 import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
-import { ForgeReference } from './manager-reference'
-import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
+import { ForgeReference, ManagerAskText, ManagerProjectsContext, TaskReference } from './manager-reference'
+import { SessionCard } from './manager-session-card'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
@@ -57,13 +55,7 @@ function ManagerLink({ href, children, ...props }: ComponentProps<'a'>) {
   const issue = parseReferenceLink(href, ISSUE_LINK_PREFIX)
   if (issue) return <ForgeReference kind="Issue" projectId={issue.projectId} number={Number(issue.id)} />
   const task = parseReferenceLink(href, TASK_LINK_PREFIX)
-  if (task) {
-    return (
-      <Link to={taskPath(task.projectId, task.id)} state={{ manager: origin }} data-slot="manager-task-chip" className={cn(chipClass, 'inline-flex no-underline')}>
-        <TaskChipLabel projectId={task.projectId} runId={task.id} />
-      </Link>
-    )
-  }
+  if (task) return <TaskReference projectId={task.projectId} runId={task.id} origin={origin} />
   return <TranscriptLink href={href} {...props}>{children}</TranscriptLink>
 }
 
@@ -139,7 +131,7 @@ export function answersShownOnCard(messages: readonly ManagerMessage[]): Readonl
 
 /** A `CEZ:ASK` card. Answering is just the user's next message, so the composer answers it too. */
 function ManagerQuestions({
-  managerId,
+  origin,
   messageId,
   ask,
   answer,
@@ -147,7 +139,7 @@ function ManagerQuestions({
   source,
   superseded = false,
 }: {
-  managerId: string
+  origin: ManagerOrigin
   messageId: string
   ask: ManagerAsk
   source: ReactNode
@@ -156,6 +148,7 @@ function ManagerQuestions({
   answerOnCard: boolean
   superseded?: boolean
 }) {
+  const managerId = origin.id
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const [localAnswer, setLocalAnswer] = useState<string | undefined>()
@@ -188,7 +181,9 @@ function ManagerQuestions({
           <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
           Answered
         </span>
-        <AskAnswerSummary questions={ask.questions} lines={lines} slot="manager-ask-answers" />
+        <ManagerAskText ask={ask} origin={origin}>
+          <AskAnswerSummary questions={ask.questions} lines={lines} slot="manager-ask-answers" />
+        </ManagerAskText>
       </div>
     )
   }
@@ -262,12 +257,14 @@ function ManagerQuestions({
       {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
           chips per question are the design's ghost actions. */}
       <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
-        <AskForm
-          ask={card}
-          ownerId={managerId}
-          delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
-          asker="Your decision"
-        />
+        <ManagerAskText ask={ask} origin={origin}>
+          <AskForm
+            ask={card}
+            ownerId={managerId}
+            delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
+            asker="Your decision"
+          />
+        </ManagerAskText>
       </div>
     </ManagerCard>
   )
@@ -340,7 +337,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} superseded={superseded} />
+          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} origin={origin} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} superseded={superseded} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
@@ -500,6 +497,30 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   superseded?: boolean
   onDecide: DecideAction
 }) {
+  return (
+    <ManagerProjectsContext.Provider value={projects}>
+      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
+    </ManagerProjectsContext.Provider>
+  )
+})
+
+function MessageBody({
+  message,
+  origin,
+  onDecide,
+  projects,
+  answerOnCard,
+  superseded,
+  onRetry,
+}: {
+  message: ManagerMessage
+  origin: ManagerOrigin
+  onRetry: (() => void) | undefined
+  answerOnCard: boolean
+  superseded: boolean
+  projects: readonly ManagerReferenceProject[]
+  onDecide: DecideAction
+}) {
   switch (message.kind) {
     case 'user':
       return (
@@ -517,4 +538,4 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
     case 'notice':
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }
-})
+}

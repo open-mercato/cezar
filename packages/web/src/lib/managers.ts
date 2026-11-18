@@ -168,6 +168,115 @@ export function parseManagerText(
   return segments
 }
 
+// ---- references in card text ---------------------------------------------------------------
+
+/** A run of card text: plain words, or a reference that paints as the chat's chip. */
+export type InlineReference =
+  | { kind: 'text'; text: string }
+  | { kind: 'pr' | 'issue'; projectId: string; number: number }
+  | { kind: 'task'; projectId: string; runId: string }
+
+const REFERENCE_NUMBER = /^\d{1,7}$/
+
+/** The project a card's bare `#12` belongs to: the one any of its texts names, else the only one. */
+export function referenceProjectOf(texts: readonly string[], projects: readonly ManagerReferenceProject[]): string {
+  return replyProject(texts.join('\n'), projects)
+}
+
+/** What the user reads where a marker cannot be a chip: `#12`, never brackets or nothing. The
+ *  server measures card limits with the same words (`askVisibleText` in `core/ask.ts`). */
+function markerText(kind: string, id: string): string {
+  if (kind === 'task') return `task ${id.slice(0, 8)}`
+  if (REFERENCE_NUMBER.test(id)) return `#${id}`
+  return `${kind === 'pr' ? 'PR' : 'issue'} ${id}`
+}
+
+/** Bare `#12`s and GitHub URLs in a stretch of card text, resolved as `bareReferences` does. */
+function bareInline(text: string, project: string, projects: readonly ManagerReferenceProject[]): InlineReference[] {
+  const out: InlineReference[] = []
+  const pushText = (value: string) => {
+    if (value === '') return
+    const last = out.at(-1)
+    if (last?.kind === 'text') last.text += value
+    else out.push({ kind: 'text', text: value })
+  }
+  text.split(INLINE_CODE).forEach((part, index) => {
+    if (index % 2 === 1) return pushText(part)
+    const pattern = new RegExp(`${GITHUB_URL.source}|${BARE_NUMBER.source}`, 'g')
+    let at = 0
+    for (const match of part.matchAll(pattern)) {
+      const start = match.index
+      let reference: InlineReference | null = null
+      if (match[1] !== undefined) {
+        const owner = projects.find((candidate) => candidate.repoUrl === match[1])
+        if (owner) reference = { kind: match[2] === 'pull' ? 'pr' : 'issue', projectId: owner.id, number: Number(match[3]) }
+      } else if (project !== UNKNOWN_PROJECT) {
+        // A card has no use for a chip that links nowhere: an unknown project stays words.
+        reference = { kind: PR_WORD_BEFORE.test(part.slice(0, start)) ? 'pr' : 'issue', projectId: project, number: Number(match[4]) }
+      }
+      if (!reference) continue
+      pushText(part.slice(at, start))
+      out.push(reference)
+      at = start + match[0].length
+    }
+    pushText(part.slice(at))
+  })
+  return out
+}
+
+/**
+ * Card text (a `CEZ:ASK` question or option, a proposal's reason) is plain, not markdown, so it is
+ * split rather than rewritten into links. Markers and bare `#12`s follow the chat's rules, but only
+ * a connected project becomes a chip: anything else falls back to the words it stands for.
+ */
+export function parseInlineReferences(
+  text: string,
+  projects: readonly ManagerReferenceProject[],
+  project: string = referenceProjectOf([text], projects),
+): InlineReference[] {
+  const out: InlineReference[] = []
+  const pushText = (value: string) => {
+    for (const piece of bareInline(value, project, projects)) {
+      const last = out.at(-1)
+      if (piece.kind === 'text' && last?.kind === 'text') last.text += piece.text
+      else out.push(piece)
+    }
+  }
+  let at = 0
+  for (const match of text.matchAll(TOKEN)) {
+    const [raw, kind, projectId, id] = match as unknown as [string, string, string, string]
+    pushText(text.slice(at, match.index))
+    at = match.index + raw.length
+    const connected = projects.some((candidate) => candidate.id === projectId)
+    if (connected && kind === 'task') out.push({ kind: 'task', projectId, runId: id })
+    else if (connected && REFERENCE_NUMBER.test(id)) out.push({ kind: kind as 'pr' | 'issue', projectId, number: Number(id) })
+    else {
+      const last = out.at(-1)
+      const words = markerText(kind, id)
+      if (last?.kind === 'text') last.text += words
+      else out.push({ kind: 'text', text: words })
+    }
+  }
+  pushText(text.slice(at))
+  return out
+}
+
+/** The words a card text reads as, every marker swapped for what its chip says (`#12`). */
+export function inlineReferenceText(text: string): string {
+  return text.replace(TOKEN, (_raw, kind: string, _project: string, id: string) => markerText(kind, id))
+}
+
+/** Every PR and issue some card texts paint, for the status lookup that colours their chips. */
+export function inlineReferenceRequests(parts: readonly InlineReference[][]): Array<{ projectId: string; kind: 'PR' | 'Issue'; number: number }> {
+  const seen = new Map<string, { projectId: string; kind: 'PR' | 'Issue'; number: number }>()
+  for (const piece of parts.flat()) {
+    if (piece.kind !== 'pr' && piece.kind !== 'issue') continue
+    const kind = piece.kind === 'pr' ? 'PR' : 'Issue'
+    seen.set(`${piece.projectId} ${kind} ${piece.number}`, { projectId: piece.projectId, kind, number: piece.number })
+  }
+  return [...seen.values()]
+}
+
 /** Undo `inlineReferences`' path, or null for a link that is not a cockpit reference. */
 export function parseReferenceLink(href: string | undefined, prefix: string): { projectId: string; id: string } | null {
   if (!href?.startsWith(prefix)) return null

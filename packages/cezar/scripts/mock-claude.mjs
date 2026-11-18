@@ -275,6 +275,20 @@ async function managerTurn(userText) {
       { header: 'Default', question: 'Does a phone browser open on Manager?', options: [{ label: 'No (recommended)' }, { label: 'Yes' }] },
     ] })}`);
   }
+  // A card naming pull requests: its markers paint as chips inside the question and the options.
+  const repo = projects[0]?.projectId;
+  if (/\bdependabot\b/i.test(said) && repo) {
+    const pr = (number) => `[[pr:${repo}/${number}]]`;
+    // Its source task declares a PR and an issue (`mock:refs`), so the Source block shows chips too.
+    const source = /\[\[task:[^\]]+\]\]/.exec(tool(['task', 'create', '--project', repo, '--title', 'Assess the bumps', 'Assess the bumps mock:refs']) ?? '')?.[0];
+    lines.push(`Two Dependabot bumps are open.${source ? ` I looked at them in ${source}.` : ''}`, `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: 'Dependabot', question: `Should I start assessment tasks for ${pr(2897)} and ${pr(2896)}?`, options: [
+        { label: 'Assess both (recommended)', description: `One read-only task each for ${pr(2897)} and ${pr(2896)}.` },
+        { label: `Only ${pr(2897)}`, description: 'The frontend bump; the other waits.' },
+        { label: 'Neither' },
+      ] },
+    ] })}`);
+  }
   return say(lines.join('\n\n'));
 }
 
