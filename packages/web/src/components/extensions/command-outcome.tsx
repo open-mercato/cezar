@@ -30,7 +30,13 @@ export function useExtensionCommandResult() {
 
 export function ExtensionCommandOutcome({ projectId, result, onDismiss }: { projectId: string; result?: ExtensionCommandResult; onDismiss: () => void }) {
   const heading = useRef<HTMLHeadingElement>(null)
-  useEffect(() => { if (result?.proposals.length) heading.current?.focus() }, [result])
+  // Focus only a NEW result: a remount (reopened panel, re-shown column) must not steal focus.
+  const seen = useRef(result?.seq)
+  useEffect(() => {
+    if (result?.seq === seen.current) return
+    seen.current = result?.seq
+    if (result?.proposals.length) heading.current?.focus()
+  }, [result])
   // The live region is always mounted, so screen readers announce what lands in it.
   return <div role="status" aria-live="polite" data-slot="extension-command-outcome">
     {result && !result.proposals.length && <p className="rounded-md border border-success/50 bg-success/10 p-2 text-sm">{result.message ?? 'Done. No tasks were proposed.'}</p>}

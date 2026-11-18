@@ -40,3 +40,6 @@ skills-lock.json
 .e2e/logs/
 .e2e/videos/
 .e2e/cez-home/
+
+# A failed `npm pack` of the SDK leaves its prepack backup (packages/extension-sdk/scripts/source-export.mjs).
+packages/extension-sdk/.package.json.prepack

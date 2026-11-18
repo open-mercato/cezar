@@ -38,7 +38,7 @@ const failed: ExtensionPlacement = { extensionId: 'broken', name: 'Broken', stat
 let calls: { url: string; init?: RequestInit }[] = []
 let uiState: Record<string, unknown> = {}
 
-function stub({ extensions = true, placements = [] as ExtensionPlacement[], panelError = false } = {}) {
+function stub({ extensions = true, placements = [] as ExtensionPlacement[], panelError = false, uiStateError = false } = {}) {
   calls = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input).replace(/\?$/, '')
@@ -46,6 +46,7 @@ function stub({ extensions = true, placements = [] as ExtensionPlacement[], pane
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
     if (url === '/api/v1/health') return json(health(extensions))
     if (url === '/api/v1/workspace/ui-state') {
+      if (uiStateError) return json({ error: 'ui-state unreadable' }, 409)
       if (init?.method === 'PUT') uiState = { ...uiState, ...JSON.parse(String(init.body)) }
       return json(uiState)
     }
@@ -90,6 +91,16 @@ describe('SidebarExtensionPanels', () => {
     const { container } = renderPanels()
     await waitFor(() => expect(requested('placements?location=sidebar')).toBe(true))
     expect(container.querySelector('[data-slot="sidebar-extension-panels"]')).toBeNull()
+  })
+
+  it('still opens a panel (for this session, without a write) when the ui-state GET failed', async () => {
+    stub({ placements: [running], uiStateError: true })
+    renderPanels()
+    await screen.findByRole('region', { name: 'Project summary' })
+    await waitFor(() => expect(disclosure('Project summary').hasAttribute('disabled')).toBe(false))
+    fireEvent.click(disclosure('Project summary'))
+    await waitFor(() => expect(disclosure('Project summary').getAttribute('aria-expanded')).toBe('true'))
+    expect(calls.some((call) => call.url === '/api/v1/workspace/ui-state' && call.init?.method === 'PUT')).toBe(false)
   })
 
   it('lists each panel as a section, collapsed by default, without fetching its body', async () => {

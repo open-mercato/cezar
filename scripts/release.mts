@@ -44,7 +44,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isPublishable, type ManifestLike, type ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
+import { isPublishable, publishedManifest, type ManifestLike, type ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
 import {
   computeStableVersion,
   isReleaseBump,
@@ -120,7 +120,8 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampStableManifests(manifests, version);
-for (const key of KEYS) writeManifest(dirs[key], stamped[key]);
+// What reaches the registry drops workspace-only exports (publishedManifest); this checkout is never committed.
+for (const key of KEYS) writeManifest(dirs[key], isPublishable(stamped[key]) ? publishedManifest(stamped[key]) : stamped[key]);
 const stampedNames = KEYS.map((key) => stamped[key].name);
 console.log(
   `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,

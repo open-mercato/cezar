@@ -85,7 +85,8 @@ export function ExtensionsSection() {
   const requested = params.get('project')
   const linkedProject = requested === 'default' || projects?.projects.some(project => project.id === requested) ? requested : undefined
   const [chosen, setChosen] = useState<string>()
-  const projectId = chosen ?? (linkedProject === projects?.bootProject ? 'default' : linkedProject) ?? origin
+  // Only a DEFINED link can be the boot project: before `projects` loads both sides are undefined.
+  const projectId = chosen ?? (linkedProject !== undefined && linkedProject === projects?.bootProject ? 'default' : linkedProject) ?? origin
   const boot = projects?.projects.find(project => project.id === projects.bootProject)
   const label = (id: string, name: string) => id === origin ? `${name} (current)` : name
   // The picker stays outside the keyed section so a project change keeps its focus.

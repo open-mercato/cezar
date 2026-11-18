@@ -112,6 +112,7 @@ import {
   looksLikeQuestion,
   projectDefaultSource,
   resolveSource,
+  sourceExists,
   startedRunPath,
   type TaskSource,
 } from './new-task-form'
@@ -556,7 +557,12 @@ export function NewTaskRoute() {
       // needs no catalog lookup to say so.
       update({ text: unknownSkillPrefillText(deepLink.skill, deepLink.ref), source: null })
     }
-    const { message, tone } = deepLinkToast(notice, unknownSkill)
+    const unknownWorkflow =
+      deepLink.workflow && unknownSkill === '' && deepLink.skill === '' && !catalogFailed
+        && !sourceExists({ source: 'workflow', ref: deepLink.workflow } as TaskSource, skillList, workflowList)
+        ? deepLink.workflow
+        : ''
+    const { message, tone } = deepLinkToast(notice, unknownSkill, unknownWorkflow)
     toast(message, { tone })
     // Legacy focused the Run button so a bare Enter submits the reviewed form.
     document

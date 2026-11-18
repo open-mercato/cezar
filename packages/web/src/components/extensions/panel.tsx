@@ -27,7 +27,7 @@ export function ExtensionPanelView({ panel, onAction, compact = false }: Extensi
     {panel.blocks.map((block, index) => {
       if (block.type === 'text') return <p key={index} className="whitespace-pre-wrap text-sm">{block.text}</p>
       if (block.type === 'status') return <div key={index} className="flex justify-between text-sm"><span>{block.label}</span><span className="font-medium">{block.value}</span></div>
-      if (block.type === 'table') return <div key={index} className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{block.columns.map(column => <th key={column} className="p-1 font-medium">{column}</th>)}</tr></thead><tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex} className="p-1">{cell}</td>)}</tr>)}</tbody></table></div>
+      if (block.type === 'table') return <div key={index} className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{block.columns.map((column, columnIndex) => <th key={columnIndex} className="p-1 font-medium">{column}</th>)}</tr></thead><tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex} className="p-1">{cell}</td>)}</tr>)}</tbody></table></div>
       return null
     })}
     {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}

@@ -117,7 +117,7 @@ the npm versions of the SDK or your package. The SDK exports the accepted list a
 - A breaking change gets a new `apiVersion`. A host lists every version it still runs, so a
   release can accept both the old and the new value for a transition period.
 - The SDK package is released in lockstep with cezar, so its npm version follows cezar's.
-  Depend on it with `>=0.1.0 <1.0.0` (as the examples do); the `apiVersion` you declare,
+  Depend on it with `>=0.1.0 <1.0.0` (as the example does); the `apiVersion` you declare,
   not the SDK version, decides whether a host accepts your extension.
 - A host that does not support a manifest's `apiVersion` rejects the install with a
   validation error. A stored record with an unsupported `apiVersion` (for example after

@@ -74,6 +74,18 @@ describe('extension placements and task-located calls over HTTP', () => {
     expect(await off.json()).toEqual({ available: false, extensions: [] });
   });
 
+  it('hides installed records (and their local source paths) from a hosted cockpit', async () => {
+    await installAndEnable();
+    const local = await (await apiRequest(app, '/api/v1/extensions')).json() as { extensions: { source: string }[] };
+    expect(local.extensions).toHaveLength(1);
+    expect(local.extensions[0]!.source.endsWith('placed')).toBe(true);
+    process.env.CEZ_REMOTE = '1';
+    const hosted = await apiRequest(app, '/api/v1/extensions');
+    expect(hosted.status).toBe(200);
+    expect(await hosted.json()).toEqual({ extensions: [] });
+    delete process.env.CEZ_REMOTE;
+  });
+
   it('validates the location as middleware', async () => {
     expect((await apiRequest(app, '/api/v1/extensions/placements')).status).toBe(400);
     expect((await apiRequest(app, '/api/v1/extensions/placements?location=toolbar')).status).toBe(400);

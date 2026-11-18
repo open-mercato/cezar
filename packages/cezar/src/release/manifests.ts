@@ -33,6 +33,16 @@ export function isPublishable(pkg: ManifestLike): boolean {
   return pkg.private !== true;
 }
 
+/** The manifest as it goes to the registry: without the workspace-only `./source` export, whose
+ *  `src/` the tarball never ships. Publish time only — `--ignore-scripts` skips the SDK's prepack,
+ *  and release-line commits stamped manifests the workspace still resolves `./source` through. */
+export function publishedManifest(pkg: ManifestLike): ManifestLike {
+  const exports = pkg.exports;
+  if (!exports || typeof exports !== 'object' || Array.isArray(exports) || !('./source' in exports)) return pkg;
+  const { './source': _source, ...rest } = exports as Record<string, unknown>;
+  return { ...pkg, exports: rest };
+}
+
 /**
  * Every manifest a release stamps.
  *
@@ -50,7 +60,7 @@ export interface ReleaseManifests {
    */
   extensionSdk: ManifestLike;
   /**
-   * The API contract (zod schemas + inferred types). FIRST in the stamped set because both the
+   * The API contract (zod schemas + inferred types). Right after the SDK it re-exports, because both the
    * api-client and the service depend on it, so its version has to settle before their pins are
    * rewritten. Like the api-client it is `private`, so it is stamped but never published — which
    * is exactly why the service cannot simply depend on it at runtime: `packages/cezar/scripts/

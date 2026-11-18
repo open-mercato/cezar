@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PuzzleIcon } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import type { ApiRun, ExtensionPlacement } from '@open-mercato/cezar-api-client'
 
@@ -18,11 +18,24 @@ const NO_EXTENSIONS: ExtensionPlacement[] = []
 export function useExtensionTaskView(projectId: string | null, run: ApiRun) {
   const queryClient = useQueryClient()
   const scope = projectId ?? 'default'
-  const allowed = useHealth().data?.capabilities?.extensions === true
+  const health = useHealth()
+  const allowed = health.data?.capabilities?.extensions === true
   const placements = useExtensionPlacements(scope, 'task', allowed)
   const extensions = allowed && placements.data?.available ? placements.data.extensions : NO_EXTENSIONS
   const available = extensions.length > 0
-  const { result, show, dismiss } = useExtensionCommandResult()
+  // A deep link must not flash the empty state before health and placements have answered.
+  const loading = health.isPending || (allowed && placements.isPending)
+  const { result, show: record, dismiss } = useExtensionCommandResult()
+  // WorkspaceView is not remounted per task: an outcome belongs to the run it was run for.
+  const shownRun = useRef(run.id)
+  useEffect(() => {
+    if (shownRun.current === run.id) return
+    shownRun.current = run.id
+    dismiss()
+  }, [run.id, dismiss])
+  const show = useCallback((key: string, outcome: ExtensionCommandOutcomeValue, forRun: string = run.id) => {
+    if (forRun === shownRun.current) record(key, outcome)
+  }, [record, run.id])
   // Only a status or step change is a reason to re-read task panels — not every SSE patch (token
   // counters, diff stats) and not the first render.
   const progress = `${run.status}|${run.finishedAt ?? ''}|${run.steps.map((step) => step.status).join(',')}`
@@ -35,7 +48,7 @@ export function useExtensionTaskView(projectId: string | null, run: ApiRun) {
     }, EXTENSION_PANEL_REFETCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [available, queryClient, progress, run.id, scope])
-  return useMemo(() => ({ projectId: scope, extensions, available, result, show, dismiss }), [scope, extensions, available, result, show, dismiss])
+  return useMemo(() => ({ projectId: scope, extensions, available, loading, result, show, dismiss }), [scope, extensions, available, loading, result, show, dismiss])
 }
 
 export type ExtensionTaskView = ReturnType<typeof useExtensionTaskView>
@@ -44,11 +57,11 @@ export type ExtensionTaskView = ReturnType<typeof useExtensionTaskView>
 export function ExtensionTaskCommands({ view, runId }: { view: ExtensionTaskView; runId: string }) {
   const queryClient = useQueryClient()
   const command = useMutation({
-    mutationFn: ({ extension, commandId }: { extension: ExtensionPlacement; commandId: string }) =>
-      runExtensionCommand(view.projectId, extension.extensionId, commandId, undefined, runId),
-    onSuccess: async (outcome, { extension, commandId }) => {
-      view.show(qualifiedExtensionId(extension.extensionId, commandId), outcome)
-      await queryClient.invalidateQueries({ queryKey: extensionKeys.taskPanels(view.projectId, runId) })
+    mutationFn: ({ extension, commandId, runId: forRun }: { extension: ExtensionPlacement; commandId: string; runId: string }) =>
+      runExtensionCommand(view.projectId, extension.extensionId, commandId, undefined, forRun),
+    onSuccess: async (outcome, { extension, commandId, runId: forRun }) => {
+      view.show(qualifiedExtensionId(extension.extensionId, commandId), outcome, forRun)
+      await queryClient.invalidateQueries({ queryKey: extensionKeys.taskPanels(view.projectId, forRun) })
     },
   })
   const buttons = view.extensions.flatMap((extension) =>
@@ -71,7 +84,7 @@ export function ExtensionTaskCommands({ view, runId }: { view: ExtensionTaskView
             data-extension-command={qualified}
             disabled={command.isPending}
             title={`${extension.name}: ${entry.title}`}
-            onClick={() => command.mutate({ extension, commandId: entry.id })}
+            onClick={() => command.mutate({ extension, commandId: entry.id, runId })}
             className="max-w-40 truncate"
           >
             {running ? 'Running…' : entry.title}
@@ -98,6 +111,9 @@ function HeaderError({ error }: { error: Error | null }) {
 
 /** One card per `task` panel, each with its own loading and error state so one broken extension stays contained. */
 export function ExtensionsColumn({ view, run }: { view: ExtensionTaskView; run: ApiRun }) {
+  if (view.loading) {
+    return <LoadingState label="Loading extensions…" className="p-4"><RowsSkeleton rows={2} /></LoadingState>
+  }
   if (!view.available) {
     return (
       <CenteredState
@@ -128,7 +144,7 @@ export function ExtensionsColumn({ view, run }: { view: ExtensionTaskView; run: 
               runId={run.id}
               extension={extension}
               panelId={panel.id}
-              onOutcome={(outcome) => view.show(qualifiedExtensionId(extension.extensionId, panel.id), outcome)}
+              onOutcome={(outcome, forRun) => view.show(qualifiedExtensionId(extension.extensionId, panel.id), outcome, forRun)}
             />
           ))
         ),
@@ -140,7 +156,8 @@ export function ExtensionsColumn({ view, run }: { view: ExtensionTaskView; run: 
 function FailedCard({ projectId, extension }: { projectId: string; extension: ExtensionPlacement }) {
   return (
     <section data-slot="extension-task-failed" data-extension-id={extension.extensionId} aria-label={extension.name} className="flex flex-col gap-1 rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm">
-      <p role="alert" className="text-danger">
+      {/* status, not alert: an alert would re-announce on every mount while the worker stays down (as in the sidebar). */}
+      <p role="status" className="text-danger">
         <span className="font-medium">{extension.name}</span>: {extension.error ?? 'the extension stopped'}
       </p>
       <Link to={extensionSettingsHref(projectId, extension.extensionId)} className="text-xs text-muted-foreground underline-offset-2 hover:underline">Open Settings → Extensions</Link>
@@ -148,7 +165,7 @@ function FailedCard({ projectId, extension }: { projectId: string; extension: Ex
   )
 }
 
-function TaskPanelCard({ projectId, runId, extension, panelId, onOutcome }: { projectId: string; runId: string; extension: ExtensionPlacement; panelId: string; onOutcome: (outcome: ExtensionCommandOutcomeValue) => void }) {
+function TaskPanelCard({ projectId, runId, extension, panelId, onOutcome }: { projectId: string; runId: string; extension: ExtensionPlacement; panelId: string; onOutcome: (outcome: ExtensionCommandOutcomeValue, forRun: string) => void }) {
   const queryClient = useQueryClient()
   const qualified = qualifiedExtensionId(extension.extensionId, panelId)
   const panel = useQuery({
@@ -168,7 +185,7 @@ function TaskPanelCard({ projectId, runId, extension, panelId, onOutcome }: { pr
         <ExtensionPanelView
           panel={panel.data}
           onAction={async (actionId) => {
-            onOutcome(await runExtensionCommand(projectId, extension.extensionId, actionId, undefined, runId))
+            onOutcome(await runExtensionCommand(projectId, extension.extensionId, actionId, undefined, runId), runId)
             await queryClient.invalidateQueries({ queryKey: extensionKeys.taskPanels(projectId, runId) })
           }}
         />

@@ -8,7 +8,7 @@ Node 20+, and its only runtime dependency is Zod. No private cezar package is ne
 npm install @open-mercato/cezar-extension-sdk
 ```
 
-The full guide is [docs/authoring-extensions.md](../../docs/authoring-extensions.md) in the
+The full guide is [docs/authoring-extensions.md](https://github.com/open-mercato/cezar/blob/main/docs/authoring-extensions.md) in the
 source repository; the working example is `examples/extensions/project-summary` (commands and
 panels in Settings, the project sidebar, the command palette and the task view).
 
@@ -73,6 +73,6 @@ it with `>=0.1.0 <1.0.0`. See the guide's Versioning section for what a host doe
 
 Run `npm test`, `npm run typecheck` and `npm run test:pack` in this directory. The pack check
 needs the service built first (`npm run build` at the repository root). It installs the SDK
-tarball in a temporary project outside the workspace, builds both examples, exercises their
+tarball in a temporary project outside the workspace, builds the example, exercises their
 lifecycles, activates the project-summary example in an installed cezar tarball, and removes
 the temporary project.

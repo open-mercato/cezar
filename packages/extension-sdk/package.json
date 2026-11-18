@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/cezar-extension-sdk",
-  "version": "0.1.0",
+  "version": "0.21.0",
   "description": "Public schemas and lifecycle API for cezar extensions",
   "license": "MIT",
   "private": false,

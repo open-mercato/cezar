@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRightIcon } from 'lucide-react'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import type { ApiRun, ExtensionPlacement, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 
@@ -31,9 +31,16 @@ export function isSidebarPanelCollapsed(state: WorkspaceUiState | undefined, key
 function useSidebarPanelCollapse() {
   const queryClient = useQueryClient()
   const uiState = useWorkspaceUiState()
+  // A failed GET must not lock every panel shut: toggle for this session only, without a write.
+  const [local, setLocal] = useState<Record<string, boolean>>({})
+  const offline = uiState.data === undefined && uiState.isError
   const toggle = useCallback(
     (key: string) => {
       const current = queryClient.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)
+      if (current === undefined && offline) {
+        setLocal((previous) => ({ ...previous, [key]: !(previous[key] ?? true) }))
+        return
+      }
       // Until the authoritative GET lands a write could not preserve its siblings; the toggle waits.
       if (current === undefined) return
       const siblings = asRecord(current.sidebarExtensionPanels)
@@ -48,9 +55,13 @@ function useSidebarPanelCollapse() {
         },
       )
     },
-    [queryClient],
+    [queryClient, offline],
   )
-  return { state: uiState.data, toggle }
+  const isCollapsed = useCallback(
+    (key: string) => (uiState.data === undefined && offline ? local[key] ?? true : isSidebarPanelCollapsed(uiState.data, key)),
+    [uiState.data, offline, local],
+  )
+  return { ready: uiState.data !== undefined || offline, isCollapsed, toggle }
 }
 
 const runProgress = (runs: ApiRun[]) => runs.map((run) => `${run.id}:${run.status}`).join(',')
@@ -77,7 +88,7 @@ export function useSidebarPanelRefresh(projectId: string, enabled: boolean) {
 export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
   const allowed = useHealth().data?.capabilities?.extensions === true
   const placements = useExtensionPlacements(projectId, 'sidebar', allowed)
-  const { state, toggle } = useSidebarPanelCollapse()
+  const { ready, isCollapsed, toggle } = useSidebarPanelCollapse()
   const { result, show, dismiss } = useExtensionCommandResult()
   const extensions = allowed && placements.data?.available ? placements.data.extensions : []
   useSidebarPanelRefresh(projectId, extensions.length > 0)
@@ -90,7 +101,7 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
         ) : (
           extension.panels.map((panel) => {
             const key = qualifiedExtensionId(extension.extensionId, panel.id)
-            const collapsed = isSidebarPanelCollapsed(state, key)
+            const collapsed = isCollapsed(key)
             const bodyId = `sidebar-extension-panel-${key.replace(/[^A-Za-z0-9_-]/g, '-')}`
             return (
               <section key={key} data-slot="sidebar-extension-panel" data-extension-panel={key} data-collapsed={collapsed ? '' : undefined} aria-label={panel.title}>
@@ -99,8 +110,8 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
                   onClick={() => toggle(key)}
                   aria-expanded={!collapsed}
                   aria-controls={collapsed ? undefined : bodyId}
-                  // Disabled until the ui-state cache exists: a write without it could drop siblings.
-                  disabled={state === undefined}
+                  // Disabled until the ui-state cache exists (a write without it could drop siblings), or its GET failed.
+                  disabled={!ready}
                   title={`${extension.name} · ${key}`}
                   className="flex h-11 w-full items-center gap-2 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60 md:h-[30px]"
                 >

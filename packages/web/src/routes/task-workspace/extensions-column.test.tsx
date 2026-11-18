@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, renderHook, screen } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -74,6 +74,17 @@ describe('useExtensionTaskView', () => {
     const { result } = renderHook(() => useExtensionTaskView(null, run('done')), { wrapper })
     expect(result.current.projectId).toBe('default')
   })
+  it('keeps a command outcome on the task it was run for', () => {
+    const { result, rerender } = mount(run('running'))
+    act(() => result.current.show('example.cmd', { message: 'done on r1' }))
+    expect(result.current.result?.message).toBe('done on r1')
+    // Navigating to another task (same WorkspaceView) clears it…
+    rerender({ current: { ...run('running'), id: 'r2' } })
+    expect(result.current.result).toBeUndefined()
+    // …and a late answer for r1 never lands on r2.
+    act(() => result.current.show('example.cmd', { message: 'late r1' }, 'r1'))
+    expect(result.current.result).toBeUndefined()
+  })
   it('returns the same view while nothing it carries changed', () => {
     placementsEnabled = false
     const { result, rerender } = mount(run('running'))
@@ -85,12 +96,17 @@ describe('useExtensionTaskView', () => {
 
 describe('ExtensionsColumn', () => {
   const view = (extensions: ExtensionTaskView['extensions']): ExtensionTaskView =>
-    ({ projectId: 'beta', extensions, available: extensions.length > 0, result: undefined, show: () => {}, dismiss: () => {} })
+    ({ projectId: 'beta', extensions, available: extensions.length > 0, loading: false, result: undefined, show: () => {}, dismiss: () => {} })
   const settle = (node: ReactNode) => render(<QueryClientProvider client={new QueryClient()}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>)
 
   it('links the empty state to Settings → Extensions for this task\'s project', () => {
     settle(<ExtensionsColumn view={view([])} run={run('done')} />)
     expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions?project=beta')
+  })
+  it('shows a loading state, not the empty state, until placements have answered', () => {
+    settle(<ExtensionsColumn view={{ ...view([]), loading: true }} run={run('done')} />)
+    expect(screen.queryByText('No extension panels for this task')).toBeNull()
+    expect(screen.getByText('Loading extensions…')).toBeTruthy()
   })
   it('links a failed worker to its row in this task\'s project', () => {
     const failed = { extensionId: 'broken', name: 'Broken', status: 'failed', error: 'exit 1', panels: [], commands: [] } as unknown as ExtensionTaskView['extensions'][number]

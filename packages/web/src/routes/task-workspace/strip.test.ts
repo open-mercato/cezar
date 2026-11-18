@@ -5,7 +5,7 @@ import { stripEntries, stripGroups, stripTabs } from './strip'
 
 describe('stripTabs — where Notes lands', () => {
   it("keeps main's order — Chat, Changes, Commits, Files, Graph, Notes, Preview — so 5/6/7 open what they did", () => {
-    expect(stripTabs(FIXED_VIEW_ORDER)).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'notes', 'browser', 'assets', 'extensions', 'terminal'])
+    expect(stripTabs(FIXED_VIEW_ORDER)).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'notes', 'browser', 'assets', 'terminal', 'extensions'])
   })
 
   it('before Preview, Assets or Terminal, else last', () => {
@@ -15,6 +15,10 @@ describe('stripTabs — where Notes lands', () => {
     expect(stripTabs(['session', 'changes', 'assets'])).toEqual(['session', 'changes', 'notes', 'assets'])
     expect(stripTabs(['session', 'changes', 'terminal'])).toEqual(['session', 'changes', 'notes', 'terminal'])
     expect(stripTabs(['session', 'changes'])).toEqual(['session', 'changes', 'notes'])
+  })
+
+  it('keeps Terminal on its 9 key when an extension contributes a task view', () => {
+    expect(stripTabs(FIXED_VIEW_ORDER).indexOf('terminal')).toBe(8)
   })
 
   it('numbers the tabs in that order — the number on a tab is the key that opens it', () => {
@@ -29,7 +33,7 @@ describe('stripGroups — Chat | the review | the run', () => {
     expect(stripGroups(stripTabs(FIXED_VIEW_ORDER))).toEqual([
       ['session'],
       ['changes', 'commits', 'files'],
-      ['graph', 'notes', 'browser', 'assets', 'extensions', 'terminal'],
+      ['graph', 'notes', 'browser', 'assets', 'terminal', 'extensions'],
     ])
   })
 

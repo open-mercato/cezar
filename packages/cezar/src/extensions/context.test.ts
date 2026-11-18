@@ -1,6 +1,6 @@
 import { SecretStore } from '../workspace/secrets.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { ExtensionHostContext, MAX_KNOWN_SECRETS } from './context.ts'
@@ -23,6 +23,16 @@ describe('ExtensionHostContext', () => {
     await one.storage.set('answer', 42)
     expect(await two.storage.get('answer')).toBeUndefined()
     expect(await one.storage.get('answer')).toBe(42)
+  })
+
+  it('refuses to overwrite an unreadable storage file instead of replacing every key with one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-extension-storage-'))
+    const file = join(root, 'extensions', 'one', 'storage.json')
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, '{"kept": 1, ')
+    const one = new ExtensionHostContext({ secrets: new SecretStore(), dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: [] })
+    await expect(one.storage.set('answer', 42)).rejects.toThrow('unreadable')
+    expect(await readFile(file, 'utf8')).toBe('{"kept": 1, ')
   })
 })
 

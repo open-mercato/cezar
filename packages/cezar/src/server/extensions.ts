@@ -165,7 +165,8 @@ export function globalExtensionRoutes(project: ProjectContext, unavailable: Exte
       if (!discloseInventory()) return c.json({ error: 'extensions are disabled in hosted mode' }, 409)
       return c.json(extensionUninstallImpactSchema.parse(await (await manager(project)).uninstallImpact(c.req.valid('param').extensionId)), 200)
     })
-    .get('/extensions', async c => c.json(extensionsResponseSchema.parse({ extensions: await (await manager(project)).installed() })))
+    // Records carry local `folder:` source paths: hidden on a hosted cockpit like the inventory.
+    .get('/extensions', async c => c.json(extensionsResponseSchema.parse({ extensions: discloseInventory() ? await (await manager(project)).installed() : [] })))
     .post('/extensions/:extensionId/prepare-update', local, paramZodValidator(extensionIdParamsSchema), async c => {
       try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepareUpdate(c.req.valid('param').extensionId))) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be inspected' }, 400) }

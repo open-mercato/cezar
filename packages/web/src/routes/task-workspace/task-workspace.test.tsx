@@ -703,12 +703,12 @@ describe('the extensions view (spec 2026-11-07-extension-placements)', () => {
     expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="browser"]')).not.toBeNull()
   })
 
-  it('joins the strip and the tiles, between Preview and Terminal, once an extension contributes', async () => {
+  it('joins the strip after Terminal (keeping its 9 key) and the tiles beside Preview, once an extension contributes', async () => {
     stubFetch({ placements: [TASK_EXTENSION] })
     renderWorkspace()
     await ready()
 
-    await waitFor(() => expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Extensions', 'Terminal']))
+    await waitFor(() => expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Terminal', 'Extensions']))
     fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
     await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
     const splits = screen.getAllByRole('button', { name: 'Split view' })
@@ -760,7 +760,8 @@ describe('the extensions view (spec 2026-11-07-extension-placements)', () => {
 
     await screen.findByRole('region', { name: 'Notes for r1' })
     const alerts = (await screen.findAllByRole('alert')).map((alert) => alert.textContent)
-    expect(alerts).toContain('Dead: worker exited with code 1')
+    // A stopped worker is a status (no re-announcement on every mount); a failed load is an alert.
+    expect(screen.getAllByRole('status').map((status) => status.textContent)).toContain('Dead: worker exited with code 1')
     expect(alerts).toContain('Example: extension panel timed out')
     expect(screen.getByRole('button', { name: 'Retry panel' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions?project=default&extension=dead')

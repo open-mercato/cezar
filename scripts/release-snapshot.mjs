@@ -38,7 +38,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isPublishable } from '../packages/cezar/dist/release/manifests.js';
+import { isPublishable, publishedManifest } from '../packages/cezar/dist/release/manifests.js';
 import {
   buildInstallLines,
   computeSnapshot,
@@ -116,7 +116,8 @@ if (!dryRun && !token) {
 
 const stamped = stampManifests(manifests, plan.version);
 const order = ['extensionSdk', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
-for (const key of order) writeManifest(dirs[key], stamped[key]);
+// What reaches the registry drops workspace-only exports (publishedManifest); this checkout is never committed.
+for (const key of order) writeManifest(dirs[key], isPublishable(stamped[key]) ? publishedManifest(stamped[key]) : stamped[key]);
 console.log(
   `release-snapshot: stamped ${order.map((key) => stamped[key].name).join(' + ')} to ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,
 );

@@ -31,7 +31,7 @@ import { drawerStorageKey } from './drawer-state'
 // task panels — a closed literal, offered only while an enabled extension contributes to it.
 export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'assets' | 'terminal' | 'extensions'
 
-export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'extensions', 'terminal']
+export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal', 'extensions']
 
 /** Views minted on first use rather than seeded into every task: the Terminal (a drawer first),
  *  Assets (most tasks never publish one) and Extensions (most projects have none). */
@@ -39,8 +39,9 @@ const UNSEEDED_VIEWS: readonly ViewId[] = ['terminal', 'assets', 'extensions']
 
 /** The view tabs, left to right — main's order, so the 1–9 keys open what they always did: Chat;
  *  the review — Changes, Commits, Files; the run — Graph, Notes (its own page), Preview, Assets,
- *  Extensions, Terminal (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'extensions', 'terminal']
+ *  Terminal (`strip.ts`); the ` key docks Terminal as a drawer instead. Extensions comes after it,
+ *  so a project gaining a task view never moves Terminal off its 9 key. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal', 'extensions']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {

@@ -13,7 +13,7 @@ import {
   stampStableManifests,
   type ReleaseManifests,
 } from './stable.ts';
-import { isPublishable } from './manifests.ts';
+import { isPublishable, publishedManifest } from './manifests.ts';
 
 describe('computeStableVersion', () => {
   it('increments each semver component the way npm version does', () => {
@@ -132,6 +132,14 @@ describe('stampStableManifests', () => {
     expect(stamped.extensionSdk.version).toBe('0.1.6');
     expect(isPublishable(stamped.extensionSdk)).toBe(true);
     expect(stamped.contract.dependencies).toEqual({ '@scope/sdk': '^0.1.6' });
+  });
+
+  it('publishes the SDK without its workspace-only `./source` export, and leaves others alone', () => {
+    const sdk = { name: '@scope/sdk', version: '1.0.0', exports: { '.': './dist/index.js', './source': './src/schemas.ts' } };
+    expect(publishedManifest(sdk).exports).toEqual({ '.': './dist/index.js' });
+    expect(sdk.exports).toHaveProperty('./source');
+    const plain = { name: 'x', version: '1.0.0', exports: './index.js' };
+    expect(publishedManifest(plain)).toBe(plain);
   });
 
   it('treats a manifest with no `private` flag as publishable', () => {

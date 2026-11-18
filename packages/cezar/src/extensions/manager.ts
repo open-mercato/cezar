@@ -528,6 +528,13 @@ export class ExtensionManager {
     if (preview) await this.installer.discardInstall(preview.value)
   }
 
+  /** The live context, re-read after every await: a worker can stop mid-call. */
+  private context(id: string): ExtensionHostContext {
+    const context = this.running.get(id)
+    if (!context) throw new Error('extension stopped')
+    return context
+  }
+
   private async enabled(id: string): Promise<ExtensionRecord> {
     const record = (await this.list()).find(item => item.manifest.id === id && item.enabled)
     if (!record) {
@@ -578,7 +585,7 @@ export class ExtensionManager {
       if (error instanceof Error && /exceeds 1 MiB/.test(error.message)) throw new Error('Panel too large')
       throw error
     })
-    const panel = extensionPanelSchema.parse(this.running.get(id)!.redact(raw))
+    const panel = extensionPanelSchema.parse(this.context(id).redact(raw))
     if (panel.id !== panelId) throw new Error('extension panel identity changed')
     const commands = declaredCommands(record.manifest)
     if (panel.actions.some(action => !commands.some(command => command.id === action.id))) {
@@ -592,7 +599,8 @@ export class ExtensionManager {
     const commands = declaredCommands(record.manifest)
     const result: ExtensionForm[] = []
     for (const declaration of record.manifest.contributes?.forms ?? []) {
-      const form = extensionFormSchema.parse(this.running.get(id)!.redact(await this.host.form(id, declaration.id)))
+      const raw = await this.host.form(id, declaration.id)
+      const form = extensionFormSchema.parse(this.context(id).redact(raw))
       if (form.id !== declaration.id || !commands.some(command => command.id === form.commandId)) {
         throw new Error('undeclared form command')
       }
@@ -615,7 +623,7 @@ export class ExtensionManager {
     const runId = await this.taskContext(action.location, options.runId)
     const forms = (record.manifest.contributes?.forms ?? []).filter(form => form.commandId === actionId)
     for (const form of forms) input = validateExtensionForm(form, input ?? {})
-    const context = this.running.get(id)!
+    const context = this.context(id)
     for (const form of forms) {
       for (const field of form.fields) {
         const value = input?.[field.key]

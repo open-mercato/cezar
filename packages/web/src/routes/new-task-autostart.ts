@@ -61,6 +61,7 @@ export type DeepLinkNotice =
 export function deepLinkToast(
   notice: DeepLinkNotice,
   unknownSkill: string,
+  unknownWorkflow = '',
 ): { message: string; tone: 'default' | 'danger' } {
   if (notice.kind === 'failed') {
     return { message: `Auto-start failed: ${notice.message} — review and press Start`, tone: 'danger' }
@@ -73,6 +74,10 @@ export function deepLinkToast(
       message: `Unknown skill "${unknownSkill}" — prefilled for quick-task; review and press Start`,
       tone: 'danger',
     }
+  }
+  // An extension proposal can name a workflow this project lacks; say so, never swap silently.
+  if (unknownWorkflow !== '') {
+    return { message: `Unknown workflow "${unknownWorkflow}" — prefilled for quick-task; review and press Start`, tone: 'danger' }
   }
   return { message: 'Prefilled from link — review and press Start', tone: 'default' }
 }

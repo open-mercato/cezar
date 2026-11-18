@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "zod": "^4.6.7",
-    "@open-mercato/cezar-extension-sdk": "0.1.0"
+    "@open-mercato/cezar-extension-sdk": "0.21.0"
   },
   "private": true
 }

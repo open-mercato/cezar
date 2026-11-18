@@ -15,9 +15,17 @@ export const MAX_STORAGE_KEYS = 1000
 export class ExtensionStorage {
   constructor(private readonly root: string, private readonly extensionId: string) {}
   private file() { return join(this.root, 'extensions', this.extensionId, 'storage.json') }
+  /** Only a missing file is empty: an unreadable one must fail the set, or it would be overwritten with one key. */
   private async read(): Promise<Record<string, ExtensionJsonValue>> {
-    try { return z.record(z.string(), valueSchema).parse(JSON.parse(await readFile(this.file(), 'utf8'))) }
-    catch { return {} }
+    let text: string
+    try { text = await readFile(this.file(), 'utf8') }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+      throw error
+    }
+    const parsed = z.record(z.string(), valueSchema).safeParse((() => { try { return JSON.parse(text) } catch { return undefined } })())
+    if (!parsed.success) throw new Error(`extension storage is unreadable; repair or delete ${this.file()}`)
+    return parsed.data
   }
   async get(key: string): Promise<ExtensionJsonValue | undefined> {
     extensionStorageKeySchema.parse(key)
