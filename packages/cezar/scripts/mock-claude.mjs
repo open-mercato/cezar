@@ -289,6 +289,15 @@ async function managerTurn(userText) {
       ] },
     ] })}`);
   }
+  // A card that names its PRs as `project/N` and a bare number: the first is a chip, the second stays words.
+  if (/\bsupersede\b/i.test(said) && repo) {
+    lines.push('One PR may supersede another.', `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: '2902 + 2894', question: `Should I assess ${repo}/2902 and check whether it makes 2894 unnecessary?`, options: [
+        { label: 'Assess it (recommended)', description: `One read-only task for [[pr:${repo}/2902]].` },
+        { label: 'Leave both' },
+      ] },
+    ] })}`);
+  }
   return say(lines.join('\n\n'));
 }
 

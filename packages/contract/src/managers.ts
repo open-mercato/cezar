@@ -742,7 +742,14 @@ export const managerProposeActionInputSchema = z.object({
 });
 export type ManagerProposeActionInput = z.infer<typeof managerProposeActionInputSchema>;
 
-export const managerProposeActionResponseSchema = z.object({ actionId: z.string(), status: managerActionStatusSchema });
+export const managerProposeActionResponseSchema = z.object({
+  actionId: z.string(),
+  status: managerActionStatusSchema,
+  /** Older waiting cards for the same PR or automation this proposal closed as `dismissed`. */
+  replaced: z.array(z.string()).optional(),
+  /** Other managers whose chats already wait on a card for the same PR or automation. */
+  alsoWaitingIn: z.array(z.string()).optional(),
+});
 
 export const managerTaskDetailQuerySchema = z.object({
   projectId: boundedId,

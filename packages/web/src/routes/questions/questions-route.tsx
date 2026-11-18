@@ -32,6 +32,7 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { DecisionSourceList } from '@/routes/manager/decision-sources'
 import { ManagerAvatar } from '@/routes/manager/manager-avatar'
+import { ManagerAskText, ManagerProjectsContext, ManagerReferenceText } from '@/routes/manager/manager-reference'
 import { taskPath } from '@/routes/manager/manager-session-card'
 import { AskForm } from '@/routes/task-thread/ask-card'
 
@@ -39,6 +40,7 @@ import { StaleNote } from './question-states'
 import {
   parseQuestionKey,
   QUESTIONS_OLDER_DEFAULT_DAYS,
+  type ManagerAsk,
   type ManagerSummary,
   type QuestionClosed,
   type QuestionItem,
@@ -411,35 +413,69 @@ function QuestionCard({ item, now, managerById, onDismiss, onAnswered }: {
         />
       ) : null}
       <div>
-        <AskForm ask={card} ownerId="questions" delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }} asker="Your decision" composerBelow={false} framed={false} />
+        <QuestionText item={item} managerById={managerById} ask={card}>
+          <AskForm ask={card} ownerId="questions" delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }} asker="Your decision" composerBelow={false} framed={false} />
+        </QuestionText>
       </div>
     </div>
   )
 }
 
+/** A manager's connected projects, so its card's markers paint as the chat's chips (#2306). */
+function useManagerProjects(manager: ManagerSummary | undefined) {
+  const registry = useProjects().data?.projects
+  return useMemo(
+    () => (manager ? (registry ?? []).filter((project) => manager.connectedProjectIds.includes(project.id)) : []),
+    [registry, manager],
+  )
+}
+
+/** A manager's question reads as it does in the chat; a task's card shows its words as written. */
+function QuestionText({ item, managerById, ask, children }: {
+  item: QuestionItem
+  managerById: (id: string) => ManagerSummary | undefined
+  ask: Pick<ManagerAsk, 'questions'>
+  children: ReactNode
+}) {
+  const manager = item.source.kind === 'manager' ? managerById(item.source.managerId) : undefined
+  const projects = useManagerProjects(manager)
+  if (item.source.kind !== 'manager') return children
+  return (
+    <ManagerProjectsContext.Provider value={projects}>
+      <ManagerAskText ask={ask} origin={{ id: item.source.managerId, name: manager?.name ?? item.source.name }}>{children}</ManagerAskText>
+    </ManagerProjectsContext.Provider>
+  )
+}
+
 function ClosedRow({ item, now, managerById }: { item: QuestionItem; now: number; managerById: (id: string) => ManagerSummary | undefined }) {
+  const source = item.source
+  const manager = source.kind === 'manager' ? managerById(source.managerId) : undefined
+  const projects = useManagerProjects(manager)
   const closed = item.closed
   if (!closed) return null
   const label = closedLabel(closed, (id) => managerById(id)?.name)
-  const source = item.source
   const task = source.kind === 'task' ? source : item.sourceTasks?.[0]
+  const origin = source.kind === 'manager' ? { id: source.managerId, name: manager?.name ?? source.name } : undefined
+  const words = (text: string) => (origin ? <ManagerReferenceText text={text} origin={origin} /> : text)
   return (
-    <li data-slot="question-closed" data-reason={closed.reason} className="flex flex-col gap-1 rounded-lg border border-border bg-card px-3 py-2 text-label text-muted-foreground">
-      <span className="flex flex-wrap items-center gap-2">
-        <span data-slot="question-closed-reason" className="rounded-full bg-muted px-2 py-px text-micro font-semibold text-foreground">{label}</span>
-        <span>{shortAge(closed.at, now) || 'just now'} ago</span>
-        <span className="font-medium text-foreground">{source.kind === 'manager' ? source.name : source.title}</span>
-      </span>
-      {item.questions.map((question, index) => (
-        <span key={index} className="break-words"><span className="font-medium">{question.header}</span> <s>{question.question}</s></span>
-      ))}
-      {closed.answer && closed.reason === 'answered' ? <span className="break-words text-foreground">{closed.answer}</span> : null}
-      {closed.detail ? <span className="break-words">{closed.detail}</span> : null}
-      <span className="flex flex-wrap gap-x-3">
-        {task ? <Link to={`${taskPath(task.projectId, task.runId)}/chat`} className="font-medium text-foreground underline underline-offset-4">Open task</Link> : null}
-        {source.kind === 'manager' ? <Link to={questionContextHref(item)} className="font-medium text-foreground underline underline-offset-4">Open in chat</Link> : null}
-      </span>
-    </li>
+    <ManagerProjectsContext.Provider value={projects}>
+      <li data-slot="question-closed" data-reason={closed.reason} className="flex flex-col gap-1 rounded-lg border border-border bg-card px-3 py-2 text-label text-muted-foreground">
+        <span className="flex flex-wrap items-center gap-2">
+          <span data-slot="question-closed-reason" className="rounded-full bg-muted px-2 py-px text-micro font-semibold text-foreground">{label}</span>
+          <span>{shortAge(closed.at, now) || 'just now'} ago</span>
+          <span className="font-medium text-foreground">{source.kind === 'manager' ? source.name : source.title}</span>
+        </span>
+        {item.questions.map((question, index) => (
+          <span key={index} className="break-words"><span className="font-medium">{question.header}</span> <s>{words(question.question)}</s></span>
+        ))}
+        {closed.answer && closed.reason === 'answered' ? <span className="break-words text-foreground">{words(closed.answer)}</span> : null}
+        {closed.detail ? <span className="break-words">{closed.detail}</span> : null}
+        <span className="flex flex-wrap gap-x-3">
+          {task ? <Link to={`${taskPath(task.projectId, task.runId)}/chat`} className="font-medium text-foreground underline underline-offset-4">Open task</Link> : null}
+          {source.kind === 'manager' ? <Link to={questionContextHref(item)} className="font-medium text-foreground underline underline-offset-4">Open in chat</Link> : null}
+        </span>
+      </li>
+    </ManagerProjectsContext.Provider>
   )
 }
 
