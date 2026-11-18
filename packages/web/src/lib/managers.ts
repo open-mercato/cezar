@@ -47,14 +47,17 @@ const PR_WORD_BEFORE = /\b(?:PRs?|pull requests?)\s*$/i
 const GITHUB_URL = /(?<![("<[])(https:\/\/github\.com\/[^\s/]+\/[^\s/]+)\/(pull|issues)\/(\d+)(?![\w/])/g
 const INLINE_CODE = /(`[^`]*`)/
 /** `frontends/2902` or `frontends#2902`: it names its project, so it is safe to resolve when that
- *  project is connected. Not a path, a URL, a marker's inside or a markdown link's own text. */
-const PROJECT_NUMBER = /(?<![\w./:#@[-])([A-Za-z0-9][\w.-]*)[/#](\d{1,7})(?![\w/\]])/g
+ *  project is connected. Not a path, a URL, a marker's inside or a markdown link's text or target. */
+const PROJECT_NUMBER = /(?<![\w./:#@[-])(?<!\]\()([A-Za-z0-9][\w.-]*)[/#](\d{1,7})(?![\w/\]])/g
 
-/** A connected project named by its id or its name, the two the manager's prompt lists. */
+/** A connected project named by its id, else by a name no other connected project shares: two
+ *  clones of one repo can both be `frontends`, and a guess would link the wrong one. */
 function namedProject(name: string, projects: readonly ManagerReferenceProject[]): ManagerReferenceProject | undefined {
   const wanted = name.toLowerCase()
-  return projects.find((project) => project.id.toLowerCase() === wanted)
-    ?? projects.find((project) => project.name?.toLowerCase() === wanted)
+  const byId = projects.find((project) => project.id.toLowerCase() === wanted)
+  if (byId) return byId
+  const byName = projects.filter((project) => project.name?.toLowerCase() === wanted)
+  return byName.length === 1 ? byName[0] : undefined
 }
 
 /** An inline reference becomes a hash link, which `ManagerLink` paints as a chip: splitting the
