@@ -98,7 +98,7 @@ import {
   worktreeDiff,
   worktreeShortstat,
 } from '../git-worktree.ts';
-import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, updatePr } from '../server/forge/github.ts';
+import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
 import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
@@ -211,6 +211,7 @@ import {
   type GraphTransition,
   type WorkflowGraph,
 } from './graph.ts';
+import { GATE_APPROVE, GATE_FULL_PR, GATE_REJECT, classifyGateReply, gateInstructionsPrompt, gateOpensPr } from './gate-reply.ts';
 import { resolveContinuationModel } from './run-continuation-model.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
@@ -2638,7 +2639,9 @@ export class RunManager {
       const walkedGraph = run.workflowDef ? (run.workflowDef.graph ?? compileV1(run.workflowDef.steps)) : undefined;
       const cursorNode = walkedGraph?.nodes.find((n) => n.id === cursor);
       const parkedAgent = cursorNode?.type === 'agent' && (run.status === 'waiting' || run.activity === 'monitoring');
-      if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
+      const applyingGate = cursorNode?.type === 'gate.human' && Boolean(run.graphState?.outputs?.[cursorNode.id]?.instructions);
+      const graphWaiting = run.status === 'waiting' && (run.askParked || applyingGate);
+      if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || graphWaiting)) {
         for (const step of run.steps) {
           if (step.status === 'running' || step.status === 'waiting') {
             this.store.updateStep(run.id, step.id, { status: 'pending' });
@@ -7044,7 +7047,51 @@ export class RunManager {
         port = 'failed';
       } else if (node.type !== 'agent' && node.type !== 'check') {
         // Nodes cezar runs itself: gates, questions, dispatch, git and GitHub (phase 1c).
-        const outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk, resuming);
+        const opensPr = node.type === 'gate.human' && gateOpensPr(graph, node.id);
+        const prGate = node.type === 'github.draft-pr'
+          ? graph.nodes.find((gate) => gate.type === 'gate.human' && taken.at(-1) === `${gate.id}.approve->${node.id}`)
+          : undefined;
+        const prApproval = prGate ? outputs.get(prGate.id) : undefined;
+        let gateNote: string | undefined;
+        if (resuming && node.type === 'gate.human' && outputs.get(node.id)?.instructions) {
+          gateNote = 'The workflow restarted while applying your instructions. Review the branch, then reply again or choose an option.';
+          outputs.delete(node.id);
+          persistWalk();
+        }
+        let resumeHere = resuming;
+        let outcome: string;
+        for (;;) {
+          outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk, resumeHere, {
+            opensPr, gateNote, readyPr: prApproval?.pr === 'ready', updateExistingPr: Boolean(prApproval?.instructions),
+          });
+          if (state.cancelled) return null;
+          if (outcome === 'unanswered') {
+            gateNote = 'Reply with instructions in text, or choose an option.';
+            resumeHere = false;
+            continue;
+          }
+          if (node.type !== 'gate.human' || outcome !== 'approve') break;
+          const instructions = outputs.get(node.id)?.instructions;
+          if (typeof instructions !== 'string' || !instructions) break;
+          // An approval with instructions (a typed reply at the gate): apply them, then go on.
+          persistWalk();
+          this.store.flush();
+          const applied = await this.applyGateInstructions(graph, runId, state, node, instructions, outputs, {
+            input, skills, emit, taskBackend, extraSystemPrompt,
+          });
+          if (state.cancelled) return null;
+          if (applied === 'finished') {
+            outcome = 'finished';
+            break;
+          }
+          if (applied === null) break;
+          // Could not apply them: the gate waits again, saying why, instead of failing the run.
+          gateNote = `Your instructions could not be applied (${applied.failed}). Review the branch, then reply again or choose an option.`;
+          emit({ type: 'note', stepId: node.id, message: gateNote, tone: 'danger' });
+          outputs.delete(node.id);
+          persistWalk();
+          resumeHere = false;
+        }
         if (state.cancelled) return null;
         // Finish on a parked gate/question is "stop here and accept" — the same settlement a
         // Finish on a parked agent step gets (`askPark === 'abandoned'`).
@@ -7406,7 +7453,9 @@ export class RunManager {
      *  awaited, not sent again. False on every ordinary visit — a loop coming back through a
      *  dispatch is a new round, and its earlier child's result is not this round's. */
     resuming = false,
-  ): Promise<string | 'finished'> {
+    context?: { opensPr: boolean; gateNote?: string; readyPr: boolean; updateExistingPr: boolean },
+  ): Promise<string> {
+    const { opensPr = false, gateNote, readyPr = false, updateExistingPr = false } = context ?? {};
     const render = (text: string) => applyTemplate(renderNodeRefs(text, outputs), task);
     const note = (message: string, tone?: 'danger') =>
       emit({ type: 'note', stepId: node.id, message, ...(tone ? { tone } : {}) });
@@ -7422,14 +7471,25 @@ export class RunManager {
     switch (node.type) {
       case 'gate.human': {
         const header = node.name ?? 'Approval';
-        const outcome = await this.parkForUser(runId, state, node.id, [
-          { header, question: render(node.message), options: [{ label: 'Approve' }, { label: 'Reject' }] },
-        ], node.timeoutMs);
+        const options = [GATE_APPROVE, ...(opensPr ? [GATE_FULL_PR] : []), GATE_REJECT].map((label) => ({ label }));
+        const question = render(node.message) + (gateNote ? `\n\n${gateNote}` : '');
+        const outcome = await this.parkForUser(runId, state, node.id, [{ header, question, options }], node.timeoutMs);
         if (outcome.kind !== 'answer') return outcome.kind === 'timeout' ? 'timeout' : 'finished';
         const reply = cardReply(outcome.text, header);
-        const approved = /^\s*approve\b/i.test(reply);
-        outputs.set(node.id, { comment: reply });
-        return approved ? 'approve' : 'reject';
+        // A typed reply is the gate's answer too: anything but a clear reject approves, and its
+        // text is applied before the workflow goes on (the walk runs that turn).
+        const decided = classifyGateReply(reply, opensPr);
+        if (!decided) return 'unanswered';
+        outputs.set(node.id, {
+          comment: reply,
+          ...(decided.instructions ? { instructions: decided.instructions } : {}),
+          ...(decided.fullPr ? { pr: 'ready' } : {}),
+        });
+        note(
+          decided.decision === 'reject' ? 'rejected'
+            : `approved${decided.fullPr ? ' — open a full PR' : ''}${decided.instructions ? ', with instructions' : ''}`,
+        );
+        return decided.decision;
       }
       case 'ask-user': {
         const header = node.name ?? 'Question';
@@ -7496,17 +7556,34 @@ export class RunManager {
       case 'github.draft-pr': {
         const run = record();
         if (!run) return 'failed';
+        // A gate answered "open a full PR": ready for review instead of a draft.
+        const markReady = async (url: string): Promise<boolean> => {
+          // A stored URL can come from the agent's transcript. Confirm the PR belongs
+          // to this task branch before changing a PR we did not just find by branch.
+          if (url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1') {
+            const target = await resolvePrTarget(run);
+            const existing = target && run.worktreePath ? await findBranchPr(run.worktreePath, target) : null;
+            if (existing?.url !== url) {
+              note('could not confirm that the existing PR belongs to this task branch', 'danger');
+              return false;
+            }
+          }
+          const res = await updatePr(this.repoRoot, url, { ready: true });
+          note(res.ok ? `PR marked ready for review: ${url}` : `could not mark PR ready — ${res.error}`, res.ok ? undefined : 'danger');
+          return res.ok;
+        };
         // One PR per task: a PR this run already opened (a resumed walk, or a loop back through
         // this node) is reported, never opened twice.
-        if (run.pullRequestUrl) {
+        if (run.pullRequestUrl && !updateExistingPr) {
           const n = /\/pull\/(\d+)/.exec(run.pullRequestUrl)?.[1];
           outputs.set(node.id, { url: run.pullRequestUrl, number: n ? Number(n) : '' });
-          note(`draft PR already open: ${run.pullRequestUrl}`);
-          return 'created';
+          note(`PR already open: ${run.pullRequestUrl}`);
+          return !readyPr || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
         }
         // Nothing to propose — a clean tree with no commits ahead of the base (a review-only
         // run): succeed without pushing, rather than fail on gh's refusal.
         if (
+          !run.pullRequestUrl &&
           run.worktreePath &&
           (await worktreeChangedPaths(run.worktreePath)).length === 0 &&
           (await baseDivergence(run.worktreePath, run.baseBranch)).ahead === 0
@@ -7520,16 +7597,20 @@ export class RunManager {
           repoRoot: this.repoRoot,
           run: title ? { ...run, title } : run,
           handoffText: readHandoff(this.dataDir, runId),
+          ...(readyPr ? { draft: false } : {}),
+          ...(run.pullRequestUrl && updateExistingPr ? { updateExisting: true } : {}),
         });
         if (!outcome.ok) {
-          note(`draft PR failed — ${outcome.error}`, 'danger');
+          note(`${readyPr ? 'PR' : 'draft PR'} failed — ${outcome.error}`, 'danger');
           return 'failed';
         }
         this.store.updateRun(runId, { pullRequestUrl: outcome.url });
         const number = /\/pull\/(\d+)/.exec(outcome.url)?.[1];
         if (number) this.store.recordPrRef(runId, { number: Number(number), url: outcome.url, origin: 'created' });
         outputs.set(node.id, { url: outcome.url, number: number ? Number(number) : '' });
-        note(`draft PR opened: ${outcome.url}`);
+        // An adopted PR (the agent opened one already) keeps its own draft state until told.
+        if (readyPr && outcome.updated && !await markReady(outcome.url)) return 'failed';
+        note(`${readyPr ? 'PR (ready for review)' : 'PR'} ${outcome.updated ? 'already open' : 'opened'}: ${outcome.url}`);
         return 'created';
       }
       case 'github.pr-comment': {
@@ -7861,6 +7942,7 @@ export class RunManager {
     questions: { header: string; question: string; options: { label: string }[] }[],
     timeoutMs?: number,
   ): Promise<GraphParkOutcome> {
+    state.currentStepId = nodeId;
     const requestId = randomUUID();
     this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId, questions, source: 'workflow' });
     const attentionRequest = this.recordAttention(requestId, questions);
@@ -7961,6 +8043,69 @@ export class RunManager {
       return undefined;
     }
     return rec!.sessionId;
+  }
+
+  /**
+   * The turn that applies a gate's typed instructions before the walk goes on, on the gate's own
+   * rail row. Reuse the implementer's session when available. A failed or unconfirmed turn
+   * returns to the same gate so the graph can still continue after the next answer.
+   */
+  private async applyGateInstructions(
+    graph: WorkflowGraph,
+    runId: string,
+    state: ActiveRun,
+    gate: Extract<GraphNode, { type: 'gate.human' }>,
+    instructions: string,
+    outputs: ReadonlyMap<string, Record<string, string | number>>,
+    ctx: {
+      input: StartRunInput;
+      skills: Skill[];
+      emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void;
+      taskBackend: RunnerId;
+      extraSystemPrompt: string | undefined;
+    },
+  ): Promise<null | 'finished' | { failed: string }> {
+    const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
+    const steps = this.store.getRun(runId)?.steps ?? [];
+    const worker = graph.nodes.find(
+      (n): n is Extract<GraphNode, { type: 'agent' }> =>
+        n.type === 'agent' && !n.review && !n.verdicts?.length && Boolean(steps.find((s) => s.id === n.id)?.sessionId),
+    );
+    const nextId = edgeFrom(graph, gate.id, 'approve')?.to;
+    const next = nextId ? graph.nodes.find((n) => n.id === nextId) : undefined;
+    const prompt = gateInstructionsPrompt(
+      gate.name ?? gate.id,
+      instructions,
+      next && next.type !== 'end'
+        ? { name: next.name ?? next.id, opensPr: next.type === 'github.draft-pr', fullPr: outputs.get(gate.id)?.pr === 'ready' }
+        : undefined,
+    );
+    const step: WorkflowStepDef = {
+      ...(worker ? nodeToStep(worker) : { allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'] }),
+      id: gate.id, name: gate.name ?? gate.id, prompt,
+    };
+    const backend = step.runner ?? taskBackend;
+    const resumeSessionId = worker
+      ? this.graphResumeSession(runId, { ...worker, id: gate.id, session: { continue: worker.id } }, backend, emit)
+      : undefined;
+    emit({ type: 'note', stepId: gate.id, message: 'applying your instructions before the workflow goes on' });
+    const lastTurn = { text: '' };
+    const failure = await this.runAgentStep(
+      runId, state, step, input, skills, null, false, emit, undefined, taskBackend, extraSystemPrompt, undefined, [],
+      { resumeSessionId, lastTurn },
+    );
+    if (state.cancelled || state.finishRequested || state.askPark === 'abandoned') return 'finished';
+    if (state.askPark === 'waiting' || state.idleClosed) {
+      state.askPark = undefined;
+      state.idleClosed = undefined;
+      state.monitorHandoff = undefined;
+      this.clearPendingAsk(runId);
+      return { failed: 'the agent session closed while waiting for a reply' };
+    }
+    if (failure) return { failed: failure };
+    const verdict = parseVerdict(lastTurn.text, ['applied', 'blocked']);
+    if (verdict === 'applied') return null;
+    return { failed: verdict === 'blocked' ? 'the agent reported a blocker' : 'the agent did not confirm completion' };
   }
 
   /**

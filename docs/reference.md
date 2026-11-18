@@ -455,7 +455,7 @@ whose counter never resets within a run, so every run is finite.
 | `loop` (`max`) | `repeat`, `exhausted` | `iteration`, `max` |
 | `agent` (`prompt`, `skill`, `runner`, `model`, `session.continue`, `verdicts`; after a fork also `review`, `budgetUsd`) | `done`, `failed` — or one port per verdict | `summary`, `verdict`, `costUsd` (a fork branch: `runId`, `status`, `summary`) |
 | `check` (`command`) | `pass`, `fail` | `exitCode`, `output` |
-| `gate.human` (`message`, `timeoutMs?`) | `approve`, `reject` (+`timeout`) | `comment` |
+| `gate.human` (`message`, `timeoutMs?`) | `approve`, `reject` (+`timeout`) | `comment` (the reply text) |
 | `ask-user` (`question`, `options?`, `timeoutMs?`) | `answered` (+`timeout`) | `answer` |
 | `dispatch` (`prompt`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
 | `git.commit` (`message`) | `done`, `nothing`, `failed` | `sha` |
@@ -489,6 +489,14 @@ whose counter never resets within a run, so every run is finite.
 - **Built-in templates** — `implement-and-verify`, `implement-review-pr`, `review-council`
   (three fresh reviewers at once, then a judge that ships or sends it back), `fix-ci` — sit
   next to `quick-task` (still the default). Open one in the editor; it saves as your copy.
+- **Human gates.** Choose **Approve** or **Reject**, or reply in the task composer or
+  through `cez-manager task say`. Plain replies such as “approve” and “reject” take the
+  corresponding path. “Request changes” takes the reject path. Other text, such as
+  “rebase first”, approves with instructions. An agent applies them on the task branch
+  before the workflow advances. If the agent cannot confirm completion, the gate asks again.
+  In `implement-review-pr`, `review-council`, and custom graphs whose approve port leads
+  directly to a PR node, **Approve** opens a draft. Choose **Approve, open a full PR** or
+  include “open a full PR” in your reply to open it ready for review.
 - **Restarts** resume a walk parked at a gate, question, CI wait or subtask (or mid-check)
   at that node; an interrupted agent node keeps the usual Continue path.
 - **Verdicts.** An agent with `verdicts` ends its turn with `CEZ:VERDICT <name>`; the
