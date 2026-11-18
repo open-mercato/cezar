@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * The agent-step kill switch is an INACTIVITY bound, not a wall clock (cf2191f1): a step that
  * is still streaming frames is working, however long it takes, and only one that has gone
@@ -64,4 +66,17 @@ export function inactivityTimeoutMessage(agent: string, limitMs: number, by: Dea
   return by === 'ceiling'
     ? `${agent} timed out after ${span(limitMs * HARD_CEILING_FACTOR)} and was killed — Continue picks the task up again`
     : `${agent} timed out after ${span(limitMs)} without any output and was killed — Continue picks the task up again`;
+}
+
+const idleMinutesSchema = z.coerce.number().int().min(1).max(24 * 60);
+
+/**
+ * `CEZ_AGENT_IDLE_TIMEOUT_MINUTES` (#1493): the no-output window for every runner. Unset or invalid
+ * means `undefined`, so each runner keeps its own default (30m).
+ */
+export function agentIdleTimeoutMs(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const raw = env.CEZ_AGENT_IDLE_TIMEOUT_MINUTES?.trim();
+  if (!raw) return undefined;
+  const parsed = idleMinutesSchema.safeParse(raw);
+  return parsed.success ? parsed.data * 60_000 : undefined;
 }

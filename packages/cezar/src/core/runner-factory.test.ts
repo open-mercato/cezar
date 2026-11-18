@@ -75,3 +75,22 @@ describe('createRunner refuses a volume below the free-space floor', () => {
     }
   });
 });
+
+/** #1493: CEZ_AGENT_IDLE_TIMEOUT_MINUTES reaches every runner's no-output window. */
+describe('createRunner honors CEZ_AGENT_IDLE_TIMEOUT_MINUTES', () => {
+  const window = (id: (typeof RUNNER_IDS)[number]): number => {
+    let r: unknown = createRunner(id);
+    // guardWorkingDirectory wraps the runner in a Proxy-free object; unwrap if needed.
+    const inner = (r as { inner?: unknown }).inner;
+    if (inner) r = inner;
+    return (r as { timeoutMs: number }).timeoutMs;
+  };
+
+  it.each(RUNNER_IDS)('%s: default stays 30m, override applies', (id) => {
+    vi.stubEnv('CEZ_AGENT_IDLE_TIMEOUT_MINUTES', '');
+    expect(window(id)).toBe(30 * 60_000);
+    vi.stubEnv('CEZ_AGENT_IDLE_TIMEOUT_MINUTES', '90');
+    expect(window(id)).toBe(90 * 60_000);
+    vi.unstubAllEnvs();
+  });
+});
