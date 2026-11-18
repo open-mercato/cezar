@@ -8,6 +8,7 @@
 - ✨ New built-in `review-pr` workflow: give it a pull request URL and correctness, security and tests reviewers plus a judge write a verdict (approve, changes or reject), findings with `path:line` and draft review comments, without pushing, opening a PR or posting to GitHub. It runs on Claude Code and Pi, which enforce its read-only tools; other agents refuse it. *(@patzick)*
 - ✨ The workflow list reports what each workflow can do outside the machine (`capabilities`: push, open a PR, post to GitHub), so a manager can pick a safe one. *(@patzick)*
 - ✨ A manager can stop and steer the tasks it starts: `cez-manager task cancel <run> --reason "…"` cancels a task and everything it dispatched, keeps the worktree and branch, and the task shows who cancelled it and why. It cancels only its own tasks unless you turn on **Cancel any task** in its settings. `task create --model opus --effort max` (and `task say` on a finished task) picks the model and effort, refusing an unknown one with the valid choices; `task retry` restarts a failed task. Its task list now marks tasks you started yourself and the pull request each task opened, `workflows` marks what each workflow can do, and every `cez-manager` command takes `--help` and names the valid subcommands on a typo. *(@patzick)*
+- ✨ Jira and Linear credentials can be reused across projects: untick **Visible only for this project** when saving them, then pick the shared connection under **Use a shared connection** in another project's Settings; **Share with other projects** promotes an existing project connection, and `cez tracker-connections list|remove` covers shared records. A project only uses a shared connection after you pick it. *(@pelkamarcin)*
 
 ## 🐛 Fixes
 - 🐛 A session closed for inactivity no longer changes the task: it keeps its state (usually **needs you**), its thread ends on the agent's last message, and writing to it reopens the session. No failure, no "closed · idle" mark, no notification, and managers are not woken or told about it. Dispatched child tasks still settle so their parent gets a report. *(@patzick)*
@@ -16,6 +17,7 @@
 ## 👥 Contributors
 
 - @patzick
+- @pelkamarcin
 
 # 0.19.0 (2026-11-08)
 
