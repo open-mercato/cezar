@@ -1006,6 +1006,14 @@ export class ManagerEngine {
    * whose latest chat turn failed on that login re-runs it, once. Watch and job turns wait for
    * their next tick.
    */
+  /** Does any manager's latest chat turn wait on this login? */
+  hasAuthFailed(provider: string, profileId: string): boolean {
+    return this.deps.store.list().some((manager) => {
+      const failure = this.latestAuthFailedChat(manager.id)?.authFailure;
+      return failure?.provider === provider && failure.profileId === profileId;
+    });
+  }
+
   resumeAuthFailed(provider: string, profileId: string): Array<{ managerId: string; title: string }> {
     const resumed: Array<{ managerId: string; title: string }> = [];
     for (const manager of this.deps.store.list()) {

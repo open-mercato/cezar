@@ -4588,6 +4588,12 @@ export class RunManager {
    * reconnect finds nothing — on the same session, queued under `maxParallel`. A stopped or
    * archived task is no longer blocked and stays put.
    */
+  /** Is any run here parked on this login? Gates Check again, which must not announce a no-op reconnect. */
+  hasAuthParked(provider: string, profileId: string): boolean {
+    return this.store.listRuns().some(({ status, archived, parked }) => status === 'waiting' && !archived
+      && parked?.kind === 'auth' && parked.provider === provider && parked.profileId === profileId);
+  }
+
   resumeAuthParked(provider: string, profileId: string, parkedBefore?: string): Array<{ runId: string; title: string }> {
     const resumed: Array<{ runId: string; title: string }> = [];
     if (this.disposed) return resumed;

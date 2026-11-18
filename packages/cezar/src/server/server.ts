@@ -2393,6 +2393,10 @@ export function createApp(deps: ServerDeps) {
   });
 
   deps.onDispose?.(() => loginSessions.dispose());
+  // Anything still waiting on this login, in any built project or manager (spec 2026-11-18-inline-account-reconnect).
+  const blockedOnAccount = (provider: string, profileId: string): boolean =>
+    [bootContext, ...contexts.ids().map((id) => contexts.peek(id))].some((ctx) => ctx?.manager.hasAuthParked(provider, profileId))
+    || (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId));
 
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -2965,14 +2969,16 @@ export function createApp(deps: ServerDeps) {
         // invalidated by asking about this one. Only `recheck` (the pane's button) may lift a dead
         // login; New task's verify-before-refuse re-probes with `refresh` alone (telemetry 9e4a95db).
         if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
+        const hadIncident = recheck && providerAuth.peekProfileStatus(account.provider, account.id)?.authFailureId !== undefined;
         if (recheck) providerAuth.recheckProfileAuthFailure(account.provider, account.id);
         const status = await providerAuth.profileStatus(account.provider, {
           id: account.id,
           configDir: account.path,
         });
-        // Check again confirmed the login: resume what was parked on it. Not gated on the in-memory
-        // incident, which a restart forgets while the parks survive (same as the default retry route).
-        if (recheck && status.status === 'connected') void loginSessions.accountConnected(account.provider, account.id);
+        // Check again lifted this account's incident, or something parked on it survived a restart
+        // that forgot the incident: resume it. A healthy account's Check again announces nothing.
+        const blocked = hadIncident || blockedOnAccount(account.provider, account.id);
+        if (recheck && blocked && status.status === 'connected') void loginSessions.accountConnected(account.provider, account.id);
         return c.json({ status });
       },
     )

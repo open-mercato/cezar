@@ -193,11 +193,10 @@ function writeHandoffAndTodo() {
 // proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
 /** True the first time this message fails on auth in this cezar home; later replays succeed. */
 function firstAuthFailure(text) {
-  const home = process.env.CEZ_HOME ?? process.env.HOME ?? '';
-  // A private cache dir, not the shared tmp (CodeQL js/insecure-temporary-file), and an exclusive
-  // create so the check and the write are one step.
-  const dir = join(homedir(), '.cache', 'cez', 'mock-auth');
-  const marker = join(dir, createHash('sha256').update(`${home}\0${text}`).digest('hex').slice(0, 16));
+  // Under the cezar home, so a fresh CEZ_HOME fails again; never the shared tmp (CodeQL
+  // js/insecure-temporary-file). The exclusive create makes the check and the write one step.
+  const dir = join(process.env.CEZ_HOME ?? join(homedir(), '.cache', 'cez'), 'mock-auth');
+  const marker = join(dir, createHash('sha256').update(text).digest('hex').slice(0, 16));
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(marker, '', { flag: 'wx', mode: 0o600 });
