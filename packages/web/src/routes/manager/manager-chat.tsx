@@ -449,21 +449,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
-<<<<<<< HEAD
-=======
   const superseded = useMemo(() => supersededAskIds(chat.messages), [chat.messages])
-  // "Your messages" (spec 2026-11-17-my-message-navigation): the ↓ button grows into ▲ · 💬 · ▼ | ↓.
-  const myMessages = useManagerMyMessages({
-    id,
-    messages: chat.messages,
-    onCard,
-    hasNextPage: Boolean(hasNextPage),
-    fetchNextPage,
-    scrollRef: scroll.ref,
-    away: scroll.away,
-    revealAt: scroll.revealAt,
-  })
->>>>>>> 468826f (fix(managers): lock answered and superseded question cards (#2307))
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
   const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen

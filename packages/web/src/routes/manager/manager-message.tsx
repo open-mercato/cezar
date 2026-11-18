@@ -153,11 +153,7 @@ function ManagerQuestions({
   ask,
   answer,
   answerOnCard,
-<<<<<<< HEAD
-=======
-  source,
   superseded = false,
->>>>>>> 468826f (fix(managers): lock answered and superseded question cards (#2307))
 }: {
   managerId: string
   messageId: string
@@ -238,7 +234,7 @@ function ManagerQuestions({
         <StatusDot tone="neutral" />
         <span>Superseded<span className="sr-only">:</span></span>
         <ul data-slot="manager-ask-topics" className="flex min-w-0 flex-wrap gap-1.5">
-          {ask.questions.map((question, index) => <li key={index} className="flex min-w-0 max-w-full"><StaticChip>{question.header}</StaticChip></li>)}
+          {ask.questions.map((question, index) => <li key={index} className="flex min-w-0 max-w-full"><span data-slot="chip" className="inline-flex min-h-7 max-w-full items-center rounded-[14px] border border-border bg-card px-2.5 py-0.5 text-ui font-medium break-words text-muted-foreground">{question.header}</span></li>)}
         </ul>
       </div>
     )
@@ -306,21 +302,13 @@ function AssistantMessage({
   origin,
   projects,
   answerOnCard,
-<<<<<<< HEAD
-=======
   superseded = false,
-  onRetry,
->>>>>>> 468826f (fix(managers): lock answered and superseded question cards (#2307))
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
-<<<<<<< HEAD
-=======
   superseded?: boolean
-  onRetry?: (() => void) | undefined
->>>>>>> 468826f (fix(managers): lock answered and superseded question cards (#2307))
 }) {
   const segments = useMemo(
     () => parseManagerText(message.text, message.commands, projects),
@@ -357,11 +345,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-<<<<<<< HEAD
-          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
-=======
-          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} superseded={superseded} />
->>>>>>> 468826f (fix(managers): lock answered and superseded question cards (#2307))
+          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} superseded={superseded} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
@@ -496,11 +480,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   onDecide,
   projects = NO_PROJECTS,
   answerOnCard = false,
-<<<<<<< HEAD
-=======
   superseded = false,
-  onRetry,
->>>>>>> 468826f (fix(managers): lock answered and superseded question cards (#2307))
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
@@ -523,11 +503,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
         </div>
       )
     case 'assistant':
-<<<<<<< HEAD
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} />
-=======
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
->>>>>>> 468826f (fix(managers): lock answered and superseded question cards (#2307))
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} />
     case 'action':
       return <ActionCard managerId={origin.id} message={message} onDecide={onDecide} />
     case 'notice':
