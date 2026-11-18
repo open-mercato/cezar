@@ -294,6 +294,54 @@ describe('the Questions page', () => {
   })
 })
 
+describe('references on the Questions page (#2306)', () => {
+  const chipsIn = (root: Element) => root.querySelectorAll('[data-slot="pr-chip"], [data-slot="issue-chip"]')
+  const asked = {
+    header: '2902 + 2894',
+    question: 'Should I assess [[pr:alpha/2902]] and alpha/2894, not 2895?',
+    options: [{ label: 'Assess [[pr:alpha/2902]] (recommended)' }, { label: 'Skip' }],
+  }
+
+  it.each([['desktop', 1280], ['mobile', 375]])('paints a manager card’s markers and project/N as chips, never the header or a bare number (%s)', async (_label, width) => {
+    vi.stubGlobal('innerWidth', width)
+    data.open = [managerItem('m1', 'x', { questions: [asked] })]
+    renderPage()
+    const group = await screen.findByRole('group', { name: '2902 + 2894' })
+    const question = within(group).getByRole('group', { name: /Should I assess/ })
+    await waitFor(() => expect(chipsIn(question.querySelector('p')!)).toHaveLength(2))
+    expect(question.querySelector('p')!.textContent).toContain('not 2895?')
+    expect(group.textContent).not.toContain('[[')
+    expect(group.textContent).toContain('2902 + 2894')
+    expect(screen.getByRole('button', { name: 'Assess #2902 (recommended)' })).toBeTruthy()
+  })
+
+  it('leaves a project the manager is not connected to as words', async () => {
+    data.open = [managerItem('m1', 'x', { questions: [{ header: 'Odd', question: 'Look at gamma/12 and [[pr:gamma/13]]?', options: [{ label: 'Yes' }, { label: 'No' }] }] })]
+    renderPage()
+    const group = await screen.findByRole('group', { name: 'Odd' })
+    expect(chipsIn(group)).toHaveLength(0)
+    expect(group.textContent).toContain('Look at gamma/12 and #13?')
+  })
+
+  it('paints chips in a closed row', async () => {
+    data.closed = [managerItem('m1', 'x', { questions: [asked], closed: { reason: 'answered', at: new Date().toISOString(), answer: '2902 + 2894: Assess [[pr:alpha/2902]] (recommended)' } })]
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Closed · 1/ }))
+    const row = document.querySelector('[data-slot="question-closed"]')!
+    await waitFor(() => expect(chipsIn(row)).toHaveLength(3))
+    expect(row.textContent).not.toContain('[[')
+    expect(row.textContent).toContain('2902 + 2894')
+  })
+
+  it('shows a task’s card as written', async () => {
+    data.open = [taskItem('ask_1', 'Storage', { questions: [{ header: 'Storage', question: 'Merge alpha/12?', options: [{ label: 'Yes' }, { label: 'No' }] }] })]
+    renderPage()
+    const group = await screen.findByRole('group', { name: 'Storage' })
+    expect(chipsIn(group)).toHaveLength(0)
+    expect(group.textContent).toContain('Merge alpha/12?')
+  })
+})
+
 describe('question helpers', () => {
   it('closedLabel names where a linked copy was answered', () => {
     expect(closedLabel({ reason: 'answered', at: '', answeredIn: 'task:alpha/run1' })).toBe('Answered in the task')

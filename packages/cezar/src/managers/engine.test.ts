@@ -2781,6 +2781,15 @@ describe('ManagerEngine', () => {
     });
   });
 
+  it('the system prompt tells the manager to write PRs, issues and tasks in a card as markers (#2306)', async () => {
+    const created = await makeEngine().create({ instructions: '', projects: 'all', cronMinutes: 0 });
+    if ('error' in created) throw created;
+    const prompt = managerSystemPrompt(created, [{ id: 'alpha', name: 'Alpha', access: 'write' }]);
+    expect(prompt).toContain('Inside the question, labels and descriptions, write every pull request as [[pr:<projectId>/<number>]], every issue as [[issue:<projectId>/<number>]] and every task as [[task:<projectId>/<runId>]]');
+    expect(prompt).toContain('never a bare number, "#123" or "<project>/123"');
+    expect(prompt).toContain('The header is a short plain label: no markers in it.');
+  });
+
   describe('task agent selection', () => {
     it('selects only allowed runner/account pairs, validates at launch and tells the manager their CLI arguments', async () => {
       let removed = false;

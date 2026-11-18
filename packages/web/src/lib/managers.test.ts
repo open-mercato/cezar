@@ -90,6 +90,13 @@ describe('managerAttention', () => {
 })
 
 describe('parseManagerText', () => {
+  it('links project/N for a connected project, leaving markers, unknown projects and bare numbers alone', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }]
+    expect(parseManagerText('Assess frontends/2902 vs 2894, other/5 and [[pr:fe-1/3]]', [], named)).toEqual([
+      { kind: 'markdown', text: 'Assess [#2902](#cez-issue/fe-1/2902) vs 2894, other/5 and [#3](#cez-pr/fe-1/3)' },
+    ])
+  })
+
   it('makes a task alone on its line a card, and keeps the text around it', () => {
     expect(parseManagerText('Before\n\n[[task:alpha/run-1]]\n\nAfter')).toEqual([
       { kind: 'markdown', text: 'Before' },
@@ -442,5 +449,19 @@ describe('parseInlineReferences', () => {
       { kind: 'text', text: '#12 issue x1 task abcdef12' },
     ])
     expect(inlineReferenceText('Assess [[pr:gone/12]]')).toBe('Assess #12')
+  })
+
+  it('resolves project/N and project#N for a connected project, by id or name, and nothing else', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }, { id: 'beta' }]
+    expect(parseInlineReferences('Should I assess frontends/2902 and check whether it makes 2894 unnecessary?', named)).toEqual([
+      { kind: 'text', text: 'Should I assess ' },
+      { kind: 'issue', projectId: 'fe-1', number: 2902 },
+      { kind: 'text', text: ' and check whether it makes 2894 unnecessary?' },
+    ])
+    expect(parseInlineReferences('PR Beta#7', named)).toEqual([{ kind: 'text', text: 'PR ' }, { kind: 'pr', projectId: 'beta', number: 7 }])
+    // Unknown projects, paths, URLs and dates stay words.
+    for (const text of ['Assess other/2902', 'see src/frontends/2902', 'https://x.dev/frontends/12', 'on 2026/11', 'frontends/2902/files']) {
+      expect(parseInlineReferences(text, named)).toEqual([{ kind: 'text', text }])
+    }
   })
 })
