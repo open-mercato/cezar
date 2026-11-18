@@ -595,7 +595,12 @@ function SwitchAccount({ provider, profileId, profiles, kind, onSwitch }: {
   )
 }
 
-function ResumedList({ account, resumed, compact }: { account: string; resumed: ReconnectResumed; compact: boolean }) {
+function ResumedList({ account, resumed: all, compact }: { account: string; resumed: ReconnectResumed; compact: boolean }) {
+  const ownId = useReconnectSurface()?.ownId
+  const resumed: ReconnectResumed = {
+    runs: all.runs.filter((run) => run.runId !== ownId),
+    managers: all.managers.filter((manager) => manager.managerId !== ownId),
+  }
   const count = resumed.runs.length + resumed.managers.length
   if (count === 0) return null
   if (compact) {

@@ -7,6 +7,8 @@ import { createContext, useContext } from 'react'
  */
 export interface ReconnectSurface {
   kind: 'manager' | 'task'
+  /** The manager or run this card belongs to: "Also resuming" lists only the others. */
+  ownId?: string
   switchTo?: (profileId: string) => Promise<unknown>
 }
 

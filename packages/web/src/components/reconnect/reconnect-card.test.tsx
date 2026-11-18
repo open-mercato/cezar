@@ -251,6 +251,16 @@ describe('ReconnectCard — outcomes', () => {
     expect(screen.getByRole('link', { name: 'Manager “Triage”' }).getAttribute('href')).toBe('/manager/m1')
   })
 
+  it('signed in: "Also resuming" leaves out the card\'s own manager', async () => {
+    renderCard({ place: 'manager' }, { kind: 'manager', ownId: 'm1' })
+    await seedSession(session({
+      phase: 'connected',
+      resumed: { runs: [{ projectId: 'acme', runId: 'r2', title: 'Bump vite' }], managers: [{ managerId: 'm1', title: 'Triage' }] },
+    }))
+    expect(screen.getByRole('link', { name: 'Task “Bump vite”' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Manager “Triage”' })).toBeNull()
+  })
+
   it.each([
     ['expired', 'device', 'The code expired before it was approved.'],
     ['rejected', 'key', 'The key was rejected by the provider.'],

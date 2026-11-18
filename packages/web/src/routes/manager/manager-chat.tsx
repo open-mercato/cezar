@@ -604,6 +604,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   latestMessages.current = chat.messages
   const reconnectSurface = useMemo<ReconnectSurface>(() => ({
     kind: 'manager',
+    ownId: id,
     switchTo: async (agentProfile: string) => {
       await update.mutateAsync({ agentProfile })
       const failed = retryOf(latestMessages.current)

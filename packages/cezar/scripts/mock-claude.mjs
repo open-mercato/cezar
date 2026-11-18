@@ -188,11 +188,21 @@ function writeHandoffAndTodo() {
 
 // Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
 // proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
+/** True the first time this message fails on auth in this cezar home; later replays succeed. */
+function firstAuthFailure(text) {
+  const home = process.env.CEZ_HOME ?? process.env.HOME ?? '';
+  const marker = join(tmpdir(), `cez-mock-auth-${createHash('sha256').update(`${home}\0${text}`).digest('hex').slice(0, 16)}`);
+  if (existsSync(marker)) return false;
+  try { writeFileSync(marker, ''); } catch { /* read-only tmp: fail every time, as before */ }
+  return true;
+}
+
 async function managerTurn(userText) {
   const kind = /\[cez-manager:(chat|watch|job|followup)\]/.exec(userText)?.[1] ?? 'chat';
   const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
-  // `mock:auth-error` fails a manager turn the way a revoked login does (spec 2026-11-18-inline-account-reconnect).
-  if (said.includes('mock:auth-error')) {
+  // `mock:auth-error` fails a manager turn the way a revoked login does, once per message: the turn a
+  // reconnect replays then answers (spec 2026-11-18-inline-account-reconnect).
+  if (said.includes('mock:auth-error') && firstAuthFailure(said)) {
     emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.', usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 });
     return;
   }
