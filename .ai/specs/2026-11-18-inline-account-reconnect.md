@@ -1,6 +1,6 @@
 # Reconnect an agent account where the error appears
 
-Status: design, awaiting approval · Date: 2026-11-18 · Design page: `2026-11-18-inline-account-reconnect.html`
+Status: design, decisions recorded, awaiting further changes before approval · Date: 2026-11-18 · Design page: `2026-11-18-inline-account-reconnect.html`
 (interactive; deep links such as `?runner=copilot&phase=signing&mode=remote`)
 
 ## Problem
@@ -21,8 +21,9 @@ runtime-auth banner, the phone cockpit and CezarBot.
 - **Signing in** uses whatever the vendor supports: a browser tab, a device code with Copy and a countdown, a
   paste-the-code step, an API-key field (only where the vendor stores the key itself), or a watched terminal
   hand-off.
-- **Signed in**: the turn whose card was clicked resumes automatically. Everything else blocked on the same account
-  is listed with **Resume all**. An "Ask first" setting turns the first resume into a single **Resume** button too.
+- **Signed in**: everything blocked on that account restarts automatically: the clicked turn, other parked tasks, and
+  managers whose chat turn failed on it. There is no Resume step and no setting. The card lists what is resuming, a
+  toast confirms it, and every other blocked chat or transcript shows "✓ Reconnected … · resumed".
 - **Failed**: a fixed reason (code expired, tab closed, different account signed in), plus Try again and the switch
   action.
 - **Several accounts out**: one card per account, never one per failure. Older occurrences collapse to a quiet line.
@@ -50,9 +51,13 @@ Success means the login exits 0 **and** a fresh `profileStatus` for that account
 `readAccountIdentity` matches the account's previous identity. Success clears that account's runtime incident (the
 user's completed login is the evidence the provider-auth spec asks for) and emits `provider-status`.
 
-**Resume.** Phase 2 parks a task that hits an auth rejection as *waiting* (reason `auth`), keeping its
-`sessionId`/`profileId`. Resume is then `POST /runs/:id/continue` on the same account. A manager re-sends its failed
-chat turn. Watch and job turns wait for their next tick. Switching account goes through the existing `agentProfile`
+**Parking.** An auth rejection parks the task as *waiting* (reason `auth`) instead of failing it, keeping its
+`sessionId`/`profileId` and showing the reconnect card. The attention list groups these per account.
+
+**Resume.** On a confirmed sign-in the server resumes, once per reconnect, every item parked with reason `auth` on that
+`(provider, profileId)`. A task resumes through `POST /runs/:id/continue` on the same account and session, still subject
+to `maxParallel`. A manager re-sends its failed chat turn. Watch and job turns are not re-run; they wait for their next
+tick. Stopped or archived tasks are no longer blocked and stay put. Switching account goes through the existing `agentProfile`
 fields and starts a fresh session (spec 2026-07-29 § sessionId and profileId are a pair).
 
 ## Security
@@ -62,14 +67,18 @@ fields and starts a fresh session (spec 2026-07-29 § sessionId and profileId ar
 - Pasted codes and keys go straight to the CLI's stdin. They are never persisted, logged, streamed or sent as
   telemetry.
 - Inputs are a closed enum plus an account id.
-- Remote starts are allowed for local cockpits and paired phones. Hosted web needs `CEZ_REMOTE_AGENT_ACCOUNTS=1`;
-  otherwise it gets the existing 409 with the command.
+- Remote starts are allowed for local cockpits and paired phones. Hosted web needs `CEZ_REMOTE_AGENT_ACCOUNTS=1`
+  (an existing flag, so `.env.example` only gains a line on its widened meaning); otherwise it gets the existing 409
+  with the command.
+- API-key paste exists only for Codex and OpenCode, which store the key themselves.
 - `CEZ_DRY_RUN=1` uses a mock session.
 
-## Open questions
+## Decisions (2026-11-18)
 
-1. Should the clicked turn resume automatically while the rest wait for "Resume all" (recommended), or should
-   everything resume automatically?
-2. Should an auth rejection park a task (waiting, resumable) instead of failing it?
-3. Hosted web: is gating behind `CEZ_REMOTE_AGENT_ACCOUNTS=1`, with paired phones allowed by default, enough?
-4. Should the API-key paste be limited to vendors with their own credential store (Codex, OpenCode)?
+1. **Resume**: everything blocked on the reconnected account restarts automatically, with no Resume step. This is an
+   unattended model cost, so it must be listed under AGENTS.md § Zero config as pending owner ratification when Phase 2
+   lands. The bound is one resume per blocked item per reconnect, `auth`-parked items only.
+2. **Parking**: an auth rejection parks the task (waiting, resumable), not failed.
+3. **Hosted web**: host sign-in from hosted web needs `CEZ_REMOTE_AGENT_ACCOUNTS=1`; paired phones are allowed by
+   default.
+4. **API keys**: offered only for Codex and OpenCode.

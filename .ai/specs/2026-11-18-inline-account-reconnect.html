@@ -205,9 +205,6 @@ ul.tight{margin:6px 0;padding-left:18px}ul.tight li{margin:3px 0}
     <div class="ctl"><label>Cockpit</label><div class="seg" data-key="mode">
       <button data-v="local">On this computer</button><button data-v="remote">Hosted / remote</button>
     </div></div>
-    <div class="ctl"><label>After sign-in</label><div class="seg" data-key="policy">
-      <button data-v="auto">Resume automatically</button><button data-v="ask">Ask first</button>
-    </div></div>
     <div class="ctl"><label>Accounts out</label><div class="seg" data-key="multi">
       <button data-v="one">One</button><button data-v="many">Several</button>
     </div></div>
@@ -238,14 +235,14 @@ ul.tight{margin:6px 0;padding-left:18px}ul.tight li{margin:3px 0}
       <p class="small muted">Five tasks on one dead account show one live card: the newest occurrence. Older occurrences collapse to a quiet line, "Claude Code · Work was signed out here (reconnected 10:51)". Then a chat with a long history doesn't fill up with red, and one click unblocks everything.</p>
     </div>
     <div class="panel">
-      <h3>Resume: recommendation</h3>
-      <p class="small"><b>Resume automatically</b> is the default for the turn whose card you clicked. Clicking Reconnect there already shows you want that turn to finish.</p>
-      <p class="small">Everything else blocked on the same account (other tasks, managers, a queued watch check) is <b>listed in the success state with one "Resume all" button</b>. It doesn't restart unattended, because each of those is a model call nobody asked for at this moment (AGENTS.md § unattended cost). Watch checks need no button: the next scheduled check runs normally.</p>
-      <p class="small">With <b>Ask first</b> (a per-workspace switch beside the account settings), the originating turn waits for a single <b>Resume</b> too.</p>
+      <h3>Resume: everything, automatically (decided 2026-11-18)</h3>
+      <p class="small">When the account is signed in again, <b>every task and manager blocked on it restarts by itself</b>: the turn whose card you clicked, the other parked tasks, and the managers whose chat turn failed on it. There is no "Resume" or "Resume all" step and no setting.</p>
+      <p class="small">Each restart is a model call nobody clicked for, so the spec records it as an unattended cost (AGENTS.md § Zero config). The restarts are bounded: only items parked with reason <span class="mono">auth</span> on <i>that</i> account, each resumed once per reconnect, with tasks still going through <span class="mono">maxParallel</span>. A stopped or archived task is not blocked any more and doesn't restart. Watch and job turns are not re-run; their next tick runs normally.</p>
       <h3>How the user learns about the rest</h3>
       <ul class="tight small">
-        <li>The success state names them: "Also waiting on Work: 2 tasks, 1 manager".</li>
-        <li>A toast confirms the bulk resume, with a link to the attention list.</li>
+        <li>The success state lists them while they restart: "Also resuming on Work: 2 tasks, 1 manager", each with a link.</li>
+        <li>A toast confirms it ("Resumed this turn and 3 more"), with a link to the attention list.</li>
+        <li>Every other blocked chat or transcript shows the quiet line "✓ Reconnected Claude Code · Work · resumed", so a user who opens it later sees why it moved.</li>
         <li>The attention list's "Sign-in needed" group empties, the sidebar badge clears, and the banner goes away. All of it is driven by the same <span class="mono">provider-status</span> SSE event.</li>
       </ul>
     </div>
@@ -307,12 +304,12 @@ POST   /api/v1/providers/:provider/resume-blocked  { profileId, runIds?, manager
     </div>
   </div>
 
-  <h2>Open questions for approval</h2>
+  <h2>Decisions (2026-11-18)</h2>
   <ol class="small" style="max-width:860px">
-    <li><b>Resume policy</b>: should the clicked turn resume automatically and the rest wait for "Resume all" (recommended), or should everything blocked resume automatically?</li>
-    <li><b>Parking on auth</b>: should a task that hits an auth rejection <i>park</i> (waiting, resumable, in the attention list), instead of ending <i>failed</i> as it does today?</li>
-    <li><b>Hosted web</b>: is it enough to start a host login from a hosted web cockpit only behind <span class="mono">CEZ_REMOTE_AGENT_ACCOUNTS=1</span>, with paired phones allowed by default?</li>
-    <li><b>API-key paste</b>: offer it only where the vendor has its own store to put the key in (Codex, OpenCode)? Cursor and Gemini keep env-only keys, so cezar never stores one.</li>
+    <li><b>Resume</b>: everything blocked on the reconnected account restarts automatically; there is no Resume step.</li>
+    <li><b>Parking</b>: an auth rejection parks the task as <i>waiting</i> (reason <span class="mono">auth</span>), resumable and showing the reconnect card. It no longer ends <i>failed</i>.</li>
+    <li><b>Hosted web</b>: starting a host sign-in needs <span class="mono">CEZ_REMOTE_AGENT_ACCOUNTS=1</span>. Paired phones and the local cockpit can always do it.</li>
+    <li><b>API keys</b>: the paste field is offered only for Codex and OpenCode, which store the key themselves. Cursor and Gemini keep env-only keys, and cezar never stores one.</li>
   </ol>
 </div>
 
@@ -344,7 +341,7 @@ const MECH = [
  ['omp','The interactive <code>omp</code> run, or provider keys in env.','Terminal hand-off and Check again.','Probes (agent.db).','Terminal'],
 ];
 
-const S = {surface:'manager',runner:'claude',phase:'expired',mode:'local',policy:'auto',multi:'one',theme:'dark',more:false,menu:false,phoneSheet:true,failReason:0};
+const S = {surface:'manager',runner:'claude',phase:'expired',mode:'local',multi:'one',theme:'dark',more:false,menu:false,phoneSheet:true,failReason:0};
 const $ = (s,r=document)=>r.querySelector(s);
 const esc = s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -399,20 +396,12 @@ function card(ctx){
     </div>`;
   }
   if(phase==='success'){
-    if(S.policy==='auto') return `<div class="rc ok" role="status">
+    return `<div class="rc ok" role="status">
       <div class="rc-head"><span style="color:var(--success-strong);font-weight:700">✓</span><div style="flex:1">
         <div class="rc-title">${esc(who)} is signed in again</div>
         <div class="rc-sub" style="display:flex;gap:6px;align-items:center"><span class="spin" style="width:11px;height:11px"></span>${ctx.task?'Continuing the run from the same session…':'Resuming this turn…'}</div>
       </div></div>
       ${unblockedBlock(acct,compact)}
-    </div>`;
-    return `<div class="rc ok" role="status">
-      <div class="rc-head"><span style="color:var(--success-strong);font-weight:700">✓</span><div style="flex:1">
-        <div class="rc-title">${esc(who)} is signed in again</div>
-        <div class="rc-sub">${ctx.task?'The run is paused where it stopped.':'This turn is waiting for you.'}</div>
-      </div></div>
-      <div class="rc-actions"><button class="btn btn-primary" data-act="resume">Resume ${ctx.task?'run':'turn'}</button></div>
-      ${unblockedBlock(acct,compact,true)}
     </div>`;
   }
   if(phase==='resumed'){
@@ -477,12 +466,12 @@ function signingActions(id,m){
   if(m==='terminal') return S.mode==='local'?`<button class="btn btn-outline">Open again</button><button class="btn btn-outline" data-act="sim-ok">I've signed in</button>`:`<button class="btn btn-outline" data-act="sim-ok">I've signed in · Check</button>`;
   return '';
 }
-function unblockedBlock(acct,compact,ask){
-  if(ask) return `<div class="rc-more"><div class="small">Also waiting on ${esc(acct)}:</div>
-    <div class="checks"><label><input type="checkbox" checked> Task “Bump vite to 7” · paused 10:40</label><label><input type="checkbox" checked> Task “Docs: managers page” · paused 10:41</label><label><input type="checkbox" checked> Manager “Triage” · chat turn</label></div>
-    <div class="row"><button class="btn btn-outline" data-act="resume-all">Resume all 3</button></div></div>`;
-  if(compact) return `<div class="rc-foot">2 tasks and 1 manager also wait on ${esc(acct)} · <a href="#" onclick="return false" data-act="resume-all">Resume all</a></div>`;
-  return `<div class="rc-more"><div class="row small"><span>Also waiting on ${esc(acct)}: 2 tasks · 1 manager</span><button class="btn btn-outline" data-act="resume-all">Resume all 3</button><span class="soft xs">Watch checks resume on their next tick.</span></div></div>`;
+function unblockedBlock(acct,compact){
+  const sp='<span class="spin" style="width:10px;height:10px;border-width:1.5px"></span>';
+  if(compact) return `<div class="rc-foot">${sp} Also resuming on ${esc(acct)}: 2 tasks · 1 manager</div>`;
+  return `<div class="rc-more"><div class="small">Also resuming on ${esc(acct)}:</div>
+    <div class="checks"><span style="display:flex;gap:8px;align-items:center">${sp}<a href="#" onclick="return false">Task “Bump vite to 7”</a><span class="soft">· parked 10:40</span></span><span style="display:flex;gap:8px;align-items:center">${sp}<a href="#" onclick="return false">Task “Docs: managers page”</a><span class="soft">· parked 10:41</span></span><span style="display:flex;gap:8px;align-items:center">${sp}<a href="#" onclick="return false">Manager “Triage”</a><span class="soft">· chat turn</span></span></div>
+    <div class="soft xs">Watch checks run on their next tick.</div></div>`;
 }
 
 /* ---------------- multi ---------------- */
@@ -542,7 +531,7 @@ function managerSurface(){
 }
 function taskSurface(){
   const r=RUNNERS[S.runner];
-  const chip = S.phase==='resumed'?'<span class="pill ok">Running</span>':S.phase==='success'&&S.policy==='auto'?'<span class="pill ok">Resuming</span>':'<span class="pill warn">Needs sign-in</span>';
+  const chip = S.phase==='resumed'?'<span class="pill ok">Running</span>':S.phase==='success'?'<span class="pill ok">Resuming</span>':'<span class="pill warn">Needs sign-in</span>';
   return `<div class="app">${sidebar('task')}<section class="main">
     <div class="topbar"><span class="t">Fix flaky relay test</span>${chip}<span class="badge">${icon(S.runner,true)} ${esc(S.runner)} · ${esc(r.account)} · opus</span><span class="mono soft xs" style="margin-left:auto">cez/4f2a91c0</span></div>
     <div class="scroll" style="position:relative">
@@ -565,7 +554,7 @@ function attentionSurface(){
   const rows = out ? `
     <div class="att-row" style="background:var(--card-2)">${icon(S.runner)}<div class="grow"><b>${esc(r.name)} · ${esc(r.account)}</b> signed out<div class="xs soft">Blocks “Fix flaky relay test”, “Bump vite to 7”, manager “Release captain”</div></div>${S.phase==='signing'?'<span class="spin"></span><span class="small muted">Signing in…</span>':'<button class="btn btn-primary" data-act="reconnect">Reconnect</button>'}</div>
     ${S.multi==='many'?`<div class="att-row">${icon('codex')}<div class="grow"><b>Codex · Default</b> signed out<div class="xs soft">Blocks 2 tasks</div></div><button class="btn btn-outline" data-act="reconnect">Reconnect</button></div>`:''}`
-    : `<div class="att-row"><span style="color:var(--success-strong)">✓</span><div class="grow">${esc(r.name)} · ${esc(r.account)} is back. ${S.policy==='auto'||S.phase==='resumed'?'Resumed 3 items.':'3 items can resume.'}</div>${S.policy==='ask'&&S.phase==='success'?'<button class="btn btn-outline" data-act="resume-all">Resume all 3</button>':''}</div>`;
+    : `<div class="att-row"><span style="color:var(--success-strong)">✓</span><div class="grow">${esc(r.name)} · ${esc(r.account)} is back. ${S.phase==='resumed'?'Resumed 3 items.':'Resuming 3 items…'}</div></div>`;
   return `<div class="app">${sidebar('attention')}<section class="main">${banner}
     <div class="topbar"><span class="t">Attention</span></div>
     <div class="scroll" style="position:relative">
@@ -579,9 +568,9 @@ function attentionSurface(){
 }
 function signingInline(){const r=RUNNERS[S.runner];const m=method(r,S.mode);return `<div class="rc-title"><span class="spin"></span>${icon(S.runner,true)} Signing in to ${esc(r.name)} · ${esc(r.account)}</div>${signingBody(S.runner,m)}<div class="rc-actions">${signingActions(S.runner,m)}<button class="btn btn-ghost" data-act="cancel">Cancel</button><span class="demo-ctl"><button data-act="sim-ok">demo: approve</button><button data-act="sim-fail">demo: fail</button></span></div>`}
 function toast(){
-  if(!(S.phase==='resumed'||(S.phase==='success'&&S.policy==='auto'&&S.surface==='attention'))) return '';
+  if(!(S.phase==='resumed'||(S.phase==='success'&&S.surface==='attention'))) return '';
   const r=RUNNERS[S.runner];
-  return `<div class="toast" role="status"><span style="color:var(--success-strong)">✓</span><div><b>${esc(r.name)} · ${esc(r.account)} is back</b><div class="muted">Resumed this ${S.surface==='task'?'run':'turn'}${S.policy==='auto'?'':''}. 2 tasks and 1 manager were also waiting · <u>Review</u></div></div></div>`;
+  return `<div class="toast" role="status"><span style="color:var(--success-strong)">✓</span><div><b>${esc(r.name)} · ${esc(r.account)} is back</b><div class="muted">Resumed this ${S.surface==='task'?'run':'turn'} and 3 more that were waiting on it · <u>Review</u></div></div></div>`;
 }
 
 /* ---------------- phones ---------------- */
@@ -654,7 +643,7 @@ document.addEventListener('click',e=>{
   if(a.dataset.runner){S.runner=a.dataset.runner;$('#runnerSel').value=S.runner;S.multi='one'}
   if(act==='reconnect'){S.phase='signing';S.more=false;S.menu=false;deadline=Date.now()+15*60*1000}
   else if(act==='cancel'){S.phase='expired'}
-  else if(act==='sim-ok'||act==='check'){S.phase='success';S.more=false;if(S.policy==='auto')timer=setTimeout(()=>{S.phase='resumed';render()},2200)}
+  else if(act==='sim-ok'||act==='check'){S.phase='success';S.more=false;timer=setTimeout(()=>{S.phase='resumed';render()},2200)}
   else if(act==='sim-fail'){S.phase='failed';S.failReason++}
   else if(act==='resume'||act==='resume-all'){S.phase='resumed'}
   else if(act==='switch'){S.menu=false;S.phase='resumed'}
