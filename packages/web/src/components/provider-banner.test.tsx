@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -19,6 +20,7 @@ function renderBanner(
   entry = '/p/cezar/',
 ) {
   return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter initialEntries={[entry]}>
       <ProviderBanner
         status={DEFINITIVE_MISSING}
@@ -28,7 +30,8 @@ function renderBanner(
         onDismissAuthFailures={vi.fn()}
         {...props}
       />
-    </MemoryRouter>,
+    </MemoryRouter>
+    </QueryClientProvider>,
   )
 }
 

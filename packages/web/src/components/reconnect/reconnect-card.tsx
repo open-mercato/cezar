@@ -4,17 +4,8 @@ import { Link as GlobalLink } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import type { AgentProfile, LoginMethod, LoginSession, ProviderId, ReconnectResumed } from '@open-mercato/cezar-api-client'
 
-import { useAccountReconnected, useLoginSession } from '@/api/agent-login'
-import { ApiError, sendLoginSessionInput } from '@/api/client'
-import {
-  isActiveLoginSession,
-  useAgentProfiles,
-  useCancelLoginSession,
-  useHealth,
-  useRecheckAgentAccount,
-  useStartLoginSession,
-  writeLoginSession,
-} from '@/api/queries'
+import { sendLoginSessionInput } from '@/api/client'
+import { useAgentProfiles, writeLoginSession } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -27,13 +18,12 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/
 import { Spinner } from '@/components/ui/spinner'
 import { toast } from '@/components/ui/toaster'
 import { writeClipboard } from '@/lib/clipboard'
-import { isPhone } from '@/lib/phone-app'
-import { useMediaQuery } from '@/lib/use-media-query'
 import { cn } from '@/lib/utils'
 
-import { agentName, failureCopy, fallbackCommand, KEY_CAPABLE, OPENS_A_TAB, TERMINAL_ONLY, urlHost } from './copy'
+import { agentName, failureCopy, fallbackCommand, KEY_CAPABLE, TERMINAL_ONLY, urlHost } from './copy'
 import { RunnerMark } from './runner-mark'
 import { useReconnectSurface } from './surface'
+import { useReconnect } from './use-reconnect'
 
 /**
  * The inline reconnect card (spec 2026-11-18-inline-account-reconnect, design page `.html`):
@@ -57,87 +47,15 @@ export interface ReconnectCardProps {
   className?: string
 }
 
-type View = 'expired' | 'signing' | 'success' | 'failed'
-
-const NARROW_QUERY = '(max-width: 767px)'
-
 export function ReconnectCard({ provider, profileId, place, compact = false, inSheet = false, blocked, className }: ReconnectCardProps) {
-  const queryClient = useQueryClient()
-  const session = useLoginSession(provider, profileId)
-  const news = useAccountReconnected(provider, profileId)
-  const profiles = useAgentProfiles().data?.profiles
-  const profile = profiles?.find((row) => row.provider === provider && row.id === profileId)
-  const account = profile?.label ?? (profileId === 'default' ? 'Default' : profileId)
-  const who = `${agentName(provider)} · ${account}`
-  const localHandoff = useHealth().data?.capabilities?.localHandoff
-  const remote = localHandoff === false || isPhone()
-  const narrow = useMediaQuery(NARROW_QUERY)
+  const { session, news, profiles, profile, account, who, remote, narrow, view, startError, start, recheck, reconnect: begin, checkAgain, stop } = useReconnect(provider, profileId)
   const surface = useReconnectSurface()
-
-  const start = useStartLoginSession()
-  const cancel = useCancelLoginSession()
-  const recheck = useRecheckAgentAccount()
-  const [startError, setStartError] = useState<{ message: string; command?: string } | null>(null)
   const [more, setMore] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(true)
-  const pendingTab = useRef<Window | null>(null)
-
-  const active = isActiveLoginSession(session)
-  const view: View = startError ? 'failed'
-    : active ? 'signing'
-    : session?.phase === 'connected' ? 'success'
-    : session?.phase === 'failed' ? 'failed'
-    : 'expired'
-
-  // The tab opened inside the click learns its URL from the session once the vendor prints it.
-  useEffect(() => {
-    const tab = pendingTab.current
-    if (!tab) return
-    if (session?.url) {
-      tab.location.href = session.url
-      pendingTab.current = null
-    } else if (startError || (session && (!isActiveLoginSession(session) || session.method === 'key' || session.method === 'terminal'))) {
-      tab.close()
-      pendingTab.current = null
-    }
-  }, [session, startError])
-
   const reconnect = (method?: LoginMethod) => {
-    setStartError(null)
     setMore(false)
     setSheetOpen(true)
-    // Synchronously, inside the click: a tab opened after the answer arrives is a blocked popup.
-    if (!remote && !narrow && method === undefined && OPENS_A_TAB.has(provider) && typeof window !== 'undefined') {
-      const tab = window.open('', '_blank')
-      if (tab) {
-        tab.opener = null
-        pendingTab.current = tab
-      }
-    }
-    start.mutate(
-      { provider, ...(profileId !== 'default' ? { profileId } : {}), ...(method ? { method } : {}) },
-      {
-        onError: (error) => setStartError({
-          message: error.message,
-          ...(error instanceof ApiError && error.command ? { command: error.command } : {}),
-        }),
-      },
-    )
-  }
-
-  const checkAgain = () => {
-    recheck.mutate(profile?.isDefault === false ? profileId : `default:${provider}`, {
-      onSuccess: (answer) => {
-        if (answer.status.status === 'connected') toast(`${who} is signed in. Resuming what waited on it…`)
-        else toast(`${who} is still signed out. Finish the sign-in, then check again.`)
-      },
-      onError: (error) => toast(error.message, { tone: 'danger' }),
-    })
-  }
-
-  const stop = () => {
-    if (session) cancel.mutate(session)
-    setStartError(null)
+    begin(method)
   }
 
   const switchMenu = surface?.switchTo
