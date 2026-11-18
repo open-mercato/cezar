@@ -117,6 +117,27 @@ describe('reclaimWorktrees (real git, #483)', () => {
     expect(store.runs.find((r) => r.id === harnessId)?.worktreeReclaimedAt).toBeUndefined();
   });
 
+  it('reclaims a completed harness worktree only after its changes are on the branch', async () => {
+    const repo = await fixtureRepo();
+    const harnessId = '33333333-3333-4333-8333-333333333333';
+    const plainId = '44444444-4444-4444-8444-444444444444';
+    const harnessWt = await createWorktree(repo, harnessId, 'main');
+    const plainWt = await createWorktree(repo, plainId, 'main');
+    writeFileSync(join(harnessWt.path, 'feature.ts'), 'export const reviewed = true;\n');
+    await run('git', ['add', 'feature.ts'], { cwd: harnessWt.path });
+    const store = fakeStore([
+      { ...finishedRun(harnessId, harnessWt.path, '2026-07-01T00:00:00.000Z'), harness: { profile: 'standard', workflow: 'harness-implement-feature' } },
+      finishedRun(plainId, plainWt.path, '2026-07-02T00:00:00.000Z'),
+    ]);
+
+    expect(await reclaimWorktrees(repo, store, 1)).toEqual([]);
+    expect(existsSync(join(harnessWt.path, 'feature.ts'))).toBe(true);
+    await run('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'Preserve reviewed work'], { cwd: harnessWt.path });
+    expect(await reclaimWorktrees(repo, store, 1)).toEqual([harnessId]);
+    expect(existsSync(harnessWt.path)).toBe(false);
+    expect(await branchExists(repo, harnessId)).toBe(true);
+  });
+
   it('does not stamp a run whose directory still exists after a no-op remove (retries next pass)', async () => {
     const repo = await fixtureRepo();
     const oldId = '44444444-4444-4444-8444-444444444444';

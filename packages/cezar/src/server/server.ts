@@ -288,6 +288,8 @@ import {
 import { loadAgenticConfig, resolveHarnessRuntimeInfo } from '../harness/runtime.ts';
 import { probeKey, type ModelProber } from '../harness/probe.ts';
 import { createProjectProber } from '../harness/probe-transports.ts';
+import { commitHarnessHandoff, verifyHarnessHandoff } from '../harness/handoff.ts';
+import { pinWorktreeGitDir, resolveTrustedGitDir, verifyWorktreeGitPointer } from '../git-pin.ts';
 import { harnessArtifactDir } from '../harness/driver.ts';
 import { harnessReviewProjection } from '../harness/review-state.ts';
 import { requestHarnessReviewAction } from '../harness/review-actions.ts';
@@ -296,7 +298,7 @@ import { canonicalizeAdvisorRefs } from '../harness/advisor-identity.ts';
 import { opencodeSeatingError, runnerEquivalentOf } from '../harness/reviewer-binding.ts';
 import { releaseLedgerIssueClaim } from '../harness/issue-claim.ts';
 import { readHarnessFsEntry } from '../fs-read.ts';
-import { harnessProfileFor } from '../harness/types.ts';
+import { harnessProfileFor, type HarnessStage } from '../harness/types.ts';
 import { HARNESS_FIX_ISSUE, HARNESS_MODELS_LOCKED_ERROR, HARNESS_TEXT_ONLY_ERROR, isHarnessWorkflow, isHarnessWorkflowName } from '../harness/workflows.ts';
 import { extractTaskRefs } from '../runs/task-refs.ts';
 import {
@@ -641,8 +643,8 @@ async function legacyLifecycleGate(project: ProjectContext, runId: string): Prom
 }
 const LIFECYCLE_ENDPOINT_REQUIRED = 'Worktree scripts require a lifecycle operation; use /worktree-lifecycle/operations';
 
-async function withWorktreeMutation<T>(project: ProjectContext, runId: string, mutate: () => Promise<T>): Promise<T> {
-  return project.manager.lifecycle ? project.manager.lifecycle.withWorktreeMutation(runId, mutate) : mutate();
+async function withWorktreeMutation<T>(project: ProjectContext, runId: string, mutate: () => Promise<T>, forceLock = false): Promise<T> {
+  return project.manager.lifecycle ? project.manager.lifecycle.withWorktreeMutation(runId, mutate, forceLock) : mutate();
 }
 
 async function legacyWorktreeMutation<T>(project: ProjectContext, runId: string, mutate: () => Promise<T>): Promise<T> {
@@ -5244,12 +5246,10 @@ export function createApp(deps: ServerDeps) {
     return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
   };
 
-  const harnessPublishBlockReason = (run: RunRecord, dataDir: string): string | null => {
-    if (!run.harness) return null;
+  const harnessPublishBlockReason = (run: RunRecord, read: ReturnType<typeof readLedger>): string | null => {
     if (!['review', 'done'].includes(run.status)) {
       return 'stage-only: this harness run has not reached its review gate — publishing stays yours after review';
     }
-    const read = readLedger(dataDir, run.id);
     if (read.status === 'missing') {
       return 'harness recovery state is missing — publishing is blocked until the ledger is restored';
     }
@@ -5283,6 +5283,35 @@ export function createApp(deps: ServerDeps) {
         ? `: ${read.ledger.outcome.blockingReasons.join('; ')}`
         : ''
     }`;
+  };
+
+  const verifyStagedHarness = (project: ProjectContext, run: RunRecord, stage: HarnessStage) => {
+    const pin = stage.publishPin;
+    const worktree = run.worktreePath;
+    if (!pin) throw new Error('This handoff needs a new verification. Open Review and choose Verify final fixes.');
+    if (!worktree || run.branch !== pin.branch || project.manager.isActive(run.id)) {
+      throw new Error('The reviewed worktree must be available and idle before publishing.');
+    }
+    const gitDir = resolveTrustedGitDir(project.root, worktree);
+    if (!gitDir || !verifyWorktreeGitPointer(worktree, gitDir).ok) throw new Error('The reviewed worktree could not be verified.');
+    pinWorktreeGitDir(worktree, gitDir);
+    try {
+      return { worktree, pin, ...verifyHarnessHandoff(worktree, pin) };
+    } catch {
+      throw new Error('The reviewed handoff changed. Open Review and choose Verify final fixes before publishing.');
+    }
+  };
+
+  // Call inside the worktree mutation lock so a review action cannot invalidate the approval
+  // between reading the ledger and using the approved Git objects.
+  const checkHarnessPublication = (project: ProjectContext, runId: string) => {
+    const run = project.store.getRun(runId);
+    if (!run) throw new Error('Task no longer exists');
+    if (!run.harness) return undefined;
+    const read = readLedger(project.dataDir, runId);
+    const reason = harnessPublishBlockReason(run, read);
+    if (reason || read.status !== 'valid') throw new Error(reason ?? 'The review snapshot is unavailable.');
+    return { ...verifyStagedHarness(project, run, read.ledger.stage), stage: read.ledger.stage };
   };
 
   const HARNESS_ARTIFACT_CHAR_CAP = 400_000;
@@ -5436,9 +5465,13 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/harness/review-action', paramZodValidator(runIdParamSchema), jsonZodValidator(harnessReviewActionInputSchema), async (c) => {
-      const result = await requestHarnessReviewAction(c.get('project'), c.req.valid('param').id, c.req.valid('json'));
-      if (!result.ok) return c.json({ error: result.error }, result.status);
-      return c.json(result.value);
+      const project = c.get('project');
+      const { id } = c.req.valid('param');
+      try {
+        const result = await withWorktreeMutation(project, id, () => requestHarnessReviewAction(project, id, c.req.valid('json')), Boolean(project.store.getRun(id)?.harness));
+        if (!result.ok) return c.json({ error: result.error }, result.status);
+        return c.json(result.value);
+      } catch (error) { return lifecycleError(c, error); }
     })
 
     .get('/runs/:id/harness/invocations/:invocationId', (c) => {
@@ -5499,109 +5532,117 @@ export function createApp(deps: ServerDeps) {
       '/runs/:id/harness/accept-contested',
       jsonZodValidator(harnessAcceptContestedInputSchema),
       async (c) => {
-        const { dataDir, store, manager } = c.get('project');
+        const project = c.get('project');
+        const { dataDir, store, manager } = project;
         const id = c.req.param('id');
-        const run = store.getRun(id);
-        if (!run) return c.json({ error: 'not found' }, 404);
-        if (!run.harness) return c.json({ error: 'run is not a harness run' }, 409);
         const body = c.req.valid('json');
-        const read = readLedger(dataDir, id);
-        if (read.status !== 'valid') {
-          return c.json(
-            {
-              error:
-                read.status === 'missing'
-                  ? 'no harness ledger for this run'
-                  : read.status === 'corrupt'
-                    ? `harness ledger is corrupt: ${read.error}`
-                    : `harness ledger version ${String(read.version)} is not supported`,
-            },
-            409,
-          );
-        }
-        if (read.ledger.outcome.status !== 'contested') {
-          return c.json({ error: 'harness outcome is not contested' }, 409);
-        }
-        const pendingSpec = read.ledger.outcome.pendingDecision;
-        if (pendingSpec?.kind === 'spec') {
-          if (read.ledger.stage.status !== 'pending' || run.status !== 'failed') {
+        const candidate = store.getRun(id);
+        if (!candidate) return c.json({ error: 'not found' }, 404);
+        if (!candidate.harness) return c.json({ error: 'run is not a harness run' }, 409);
+        const accept = async () => {
+          const run = store.getRun(id);
+          if (!run) return c.json({ error: 'not found' }, 404);
+          const read = readLedger(dataDir, id);
+          if (read.status !== 'valid') {
             return c.json(
-              { error: 'specification risk can be accepted only while implementation is paused' },
+              {
+                error:
+                  read.status === 'missing'
+                    ? 'no harness ledger for this run'
+                    : read.status === 'corrupt'
+                      ? `harness ledger is corrupt: ${read.error}`
+                      : `harness ledger version ${String(read.version)} is not supported`,
+              },
               409,
             );
           }
+          if (read.ledger.outcome.status !== 'contested') {
+            return c.json({ error: 'harness outcome is not contested' }, 409);
+          }
+          const pendingSpec = read.ledger.outcome.pendingDecision;
+          if (pendingSpec?.kind === 'spec') {
+            if (read.ledger.stage.status !== 'pending' || run.status !== 'failed') {
+              return c.json(
+                { error: 'specification risk can be accepted only while implementation is paused' },
+                409,
+              );
+            }
+            const at = new Date().toISOString();
+            const previousOutcome = read.ledger.outcome;
+            const decisionStart = read.ledger.decisions.length;
+            read.ledger.decisions.push({
+              at,
+              kind: 'spec.accept',
+              by: 'user',
+              detail:
+                pendingSpec.gate === 'council'
+                  ? `council:${pendingSpec.round}`
+                  : `pre-implement:${pendingSpec.round}`,
+            });
+            read.ledger.decisions.push({
+              at,
+              kind: 'spec.accept.reason',
+              by: 'user',
+              detail: body.reason,
+            });
+            read.ledger.outcome = { status: 'pending', blockingReasons: [] };
+            saveLedger(dataDir, id, read.ledger);
+            const resumed = manager.continueRun(id);
+            if (!resumed.ok) {
+              read.ledger.decisions.splice(decisionStart);
+              read.ledger.outcome = previousOutcome;
+              saveLedger(dataDir, id, read.ledger);
+              return c.json(
+                { error: `acceptance recorded but the run could not resume: ${resumed.error}` },
+                409,
+              );
+            }
+            store.appendEvent(id, {
+              type: 'harness.outcome.updated',
+              outcome: read.ledger.outcome,
+            });
+            return c.json({
+              outcome: read.ledger.outcome,
+              decisions: read.ledger.decisions,
+              resumed: true,
+            });
+          }
+          if (run.status !== 'review' || read.ledger.stage.status !== 'staged') {
+            return c.json(
+              { error: 'contested risk can be accepted only at the final staged review gate' },
+              409,
+            );
+          }
+          verifyStagedHarness(project, run, read.ledger.stage);
           const at = new Date().toISOString();
-          const previousOutcome = read.ledger.outcome;
-          const decisionStart = read.ledger.decisions.length;
+          read.ledger.outcome = {
+            ...read.ledger.outcome,
+            acceptedAt: at,
+            acceptedBy: 'user',
+            acceptanceReason: body.reason,
+          };
           read.ledger.decisions.push({
             at,
-            kind: 'spec.accept',
-            by: 'user',
-            detail:
-              pendingSpec.gate === 'council'
-                ? `council:${pendingSpec.round}`
-                : `pre-implement:${pendingSpec.round}`,
-          });
-          read.ledger.decisions.push({
-            at,
-            kind: 'spec.accept.reason',
+            kind: 'accept-contested',
             by: 'user',
             detail: body.reason,
           });
-          read.ledger.outcome = { status: 'pending', blockingReasons: [] };
+          read.ledger.stage.prBody = [
+            read.ledger.stage.prBody ?? '',
+            '',
+            `Risk accepted by the user at ${at}: ${body.reason}`,
+          ]
+            .filter(Boolean)
+            .join('\n');
           saveLedger(dataDir, id, read.ledger);
-          const resumed = manager.continueRun(id);
-          if (!resumed.ok) {
-            read.ledger.decisions.splice(decisionStart);
-            read.ledger.outcome = previousOutcome;
-            saveLedger(dataDir, id, read.ledger);
-            return c.json(
-              { error: `acceptance recorded but the run could not resume: ${resumed.error}` },
-              409,
-            );
-          }
           store.appendEvent(id, {
             type: 'harness.outcome.updated',
             outcome: read.ledger.outcome,
           });
-          return c.json({
-            outcome: read.ledger.outcome,
-            decisions: read.ledger.decisions,
-            resumed: true,
-          });
-        }
-        if (run.status !== 'review' || read.ledger.stage.status !== 'staged') {
-          return c.json(
-            { error: 'contested risk can be accepted only at the final staged review gate' },
-            409,
-          );
-        }
-        const at = new Date().toISOString();
-        read.ledger.outcome = {
-          ...read.ledger.outcome,
-          acceptedAt: at,
-          acceptedBy: 'user',
-          acceptanceReason: body.reason,
+          return c.json({ outcome: read.ledger.outcome, decisions: read.ledger.decisions });
         };
-        read.ledger.decisions.push({
-          at,
-          kind: 'accept-contested',
-          by: 'user',
-          detail: body.reason,
-        });
-        read.ledger.stage.prBody = [
-          read.ledger.stage.prBody ?? '',
-          '',
-          `Risk accepted by the user at ${at}: ${body.reason}`,
-        ]
-          .filter(Boolean)
-          .join('\n');
-        saveLedger(dataDir, id, read.ledger);
-        store.appendEvent(id, {
-          type: 'harness.outcome.updated',
-          outcome: read.ledger.outcome,
-        });
-        return c.json({ outcome: read.ledger.outcome, decisions: read.ledger.decisions });
+        try { return await withWorktreeMutation(project, id, accept, true); }
+        catch (error) { return lifecycleError(c, error); }
       },
     )
 
@@ -6376,22 +6417,24 @@ export function createApp(deps: ServerDeps) {
     })
 
     // "Finish": gracefully close a waiting session — the run completes as done.
-    .post('/runs/:id/finish', (c) => {
-      const { dataDir, store, manager } = c.get('project');
+    .post('/runs/:id/finish', async (c) => {
+      const project = c.get('project');
+      const { dataDir, store, manager } = project;
       const id = c.req.param('id');
       const before = store.getRun(id);
       if (!before) return c.json({ error: 'not found' }, 404);
-      // Accepting a harness review is publishing's twin: the same gate, or a contested outcome
-      // finished as done without its risk ever being accepted.
-      const acceptBlock = before.status === 'review' ? harnessPublishBlockReason(before, dataDir) : null;
-      if (acceptBlock) return c.json({ error: acceptBlock }, 409);
-      const finished = manager.finish(id);
-      if (!finished) return c.json({ error: 'no open session' }, 409);
-      // Finishing a harness phase session leaves the driver conducting the run, and the driver
-      // releases its own claim — as archive/remove-worktree/delete check too.
-      if (before.harness && !manager.isActive(id)) releaseLedgerIssueClaim(dataDir, id);
-      if (before.status === 'review') track('review_decided', { label: 'accepted' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return c.json({ finished: true });
+      const finish = () => {
+        const current = store.getRun(id);
+        if (!current) return c.json({ error: 'not found' }, 404);
+        if (before.harness && (before.status === 'review' || current.status === 'review')) checkHarnessPublication(project, id);
+        if (!manager.finish(id)) return c.json({ error: 'no open session' }, 409);
+        if (current.harness && !manager.isActive(id)) releaseLedgerIssueClaim(dataDir, id);
+        if (current.status === 'review') track('review_decided', { label: 'accepted' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+        return c.json({ finished: true });
+      };
+      if (!before.harness || before.status !== 'review') return finish();
+      try { return await withWorktreeMutation(project, id, async () => finish(), true); }
+      catch (error) { return lifecycleError(c, error); }
     })
 
     // An in-place task's Commit to the base branch (spec 2026-10-20-trunk-based-projects).
@@ -6446,7 +6489,7 @@ export function createApp(deps: ServerDeps) {
         }
         const images = resolveAttachments(parsed.data.images);
         if (typeof images === 'string') return c.json({ error: images }, 400);
-        const result = manager.continueRun(id, {
+        const continueRun = () => manager.continueRun(id, {
           text: parsed.data.text,
           images,
           runner: parsed.data.runner,
@@ -6456,8 +6499,12 @@ export function createApp(deps: ServerDeps) {
           // The user's own Continue: answers its card, or flags open cards as replied in chat.
           reply: parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {},
         });
+        const result = run.harness ? await withWorktreeMutation(c.get('project'), id, async () => continueRun(), true) : continueRun();
         if (!result.ok) return c.json({ error: result.error }, 409);
         return c.json((answered = { continued: true as const }));
+      } catch (error) {
+        if (!run.harness) throw error;
+        return lifecycleError(c, error);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
       }
@@ -6924,31 +6971,45 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/git/commit', jsonZodValidator(gitCommitSchema), async (c) => {
-      const { dataDir, store } = c.get('project');
+      const project = c.get('project');
+      const { store } = project;
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      const publishBlock = harnessPublishBlockReason(run, dataDir);
-      if (publishBlock) return c.json({ error: publishBlock }, 409);
-      const worktree = worktreeOf(run);
-      if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const parsed = { data: c.req.valid('json') };
       let result;
-      try { result = await withWorktreeMutation(c.get('project'), run.id, () => commitAll(worktree, parsed.data.message)); }
+      try {
+        result = await withWorktreeMutation(project, run.id, async () => {
+          const reviewed = checkHarnessPublication(project, run.id);
+          if (reviewed) {
+            return { ok: true as const, sha: commitHarnessHandoff(reviewed.worktree, reviewed.pin, reviewed, parsed.data.message) };
+          }
+          const worktree = worktreeOf(run);
+          return worktree ? commitAll(worktree, parsed.data.message) : { ok: false as const, error: NO_WORKTREE };
+        }, Boolean(run.harness));
+      }
       catch (error) { return lifecycleError(c, error); }
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ committed: true, sha: result.sha });
     })
 
     .post('/runs/:id/git/push', async (c) => {
-      const { root: repoRoot, dataDir, store } = c.get('project');
+      const project = c.get('project');
+      const { root: repoRoot, store } = project;
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      const publishBlock = harnessPublishBlockReason(run, dataDir);
-      if (publishBlock) return c.json({ error: publishBlock }, 409);
-      const worktree = worktreeOf(run);
-      if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       let result;
-      try { result = await withWorktreeMutation(c.get('project'), run.id, () => pushCurrentBranch(worktree, { leaseRewrites: true, baseBranch: run.baseBranch })); }
+      try {
+        result = await withWorktreeMutation(project, run.id, async () => {
+          const reviewed = checkHarnessPublication(project, run.id);
+          if (reviewed?.state === 'staged') throw new Error('Commit the reviewed handoff before pushing.');
+          const worktree = reviewed?.worktree ?? worktreeOf(run);
+          return worktree ? pushCurrentBranch(worktree, {
+            leaseRewrites: true,
+            baseBranch: run.baseBranch,
+            ...(reviewed ? { reviewed: { branch: reviewed.pin.branch, sha: reviewed.head } } : {}),
+          }) : { ok: false as const, error: NO_WORKTREE };
+        }, Boolean(run.harness));
+      }
       catch (error) { return lifecycleError(c, error); }
       if (!result.ok) return c.json({ error: result.error }, 409);
       // A push is the event that changes what the chips say about this task's pull requests —
@@ -6988,13 +7049,12 @@ export function createApp(deps: ServerDeps) {
     // badge. Failures come back as 409 with a `manual` merge command the GUI
     // shows next to the toast. CEZ_DRY_RUN=1 fakes the URL (no push, no gh).
     .post('/runs/:id/pr', jsonZodValidator(createPrSchema, { absent: ({}) }), async (c) => {
-      const { root: repoRoot, dataDir, store, manager } = c.get('project');
+      const project = c.get('project');
+      const { root: repoRoot, dataDir, store, manager } = project;
       const draft = c.req.valid('json').draft ?? true;
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
-      const publishBlock = harnessPublishBlockReason(run, dataDir);
-      if (publishBlock) return c.json({ error: publishBlock }, 409);
       if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
       // A pull-request head run's branch holds the whole foreign PR under this run's changes: a
       // draft PR from it into the default base would re-propose that PR (spec
@@ -7024,18 +7084,18 @@ export function createApp(deps: ServerDeps) {
       let publish = prPublishes.get(key);
       if (!publish) {
         const branch = run.branch;
-        publish = (async () => {
-          const harnessRead = run.harness ? readLedger(dataDir, id) : null;
-          const preparedHarnessBody =
-            harnessRead?.status === 'valid' ? harnessRead.ledger.stage.prBody : undefined;
-          const outcome = await withWorktreeMutation(c.get('project'), id, () =>
-            createDraftPr({
-              repoRoot,
-              run,
-              handoffText: preparedHarnessBody ?? readHandoff(dataDir, id),
-              draft,
-            }),
+        const create = async () => {
+          const reviewed = checkHarnessPublication(project, id);
+          const reviewedSha = reviewed && commitHarnessHandoff(
+            reviewed.worktree, reviewed.pin, reviewed, reviewed.stage.suggestedCommit ?? `cezar: ${run.title}`,
           );
+          const outcome = await createDraftPr({
+            repoRoot,
+            run,
+            handoffText: reviewed?.stage.prBody ?? readHandoff(dataDir, id),
+            draft,
+            ...(reviewedSha ? { reviewedSha } : {}),
+          });
           if (!outcome.ok) return outcome;
           // A number the cockpit asked about BEFORE the pull request existed is cached as "this
           // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
@@ -7055,7 +7115,9 @@ export function createApp(deps: ServerDeps) {
           });
           if (run.harness) releaseLedgerIssueClaim(dataDir, id);
           return outcome;
-        })()
+        };
+        // The harness must retain its verified branch until publishing and its status update finish.
+        publish = withWorktreeMutation(project, id, create, Boolean(run.harness))
           .then((outcome) => ({ outcome, branch }))
           .finally(() => prPublishes.delete(key));
         prPublishes.set(key, publish);

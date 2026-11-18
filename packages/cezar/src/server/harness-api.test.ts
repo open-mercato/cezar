@@ -6,6 +6,7 @@ import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { harnessLedgerResponseSchema, harnessProbeInputSchema, harnessStartInputSchema } from '@open-mercato/cezar-contract';
 import { createLedger, readLedger, saveLedger } from '../harness/ledger.js';
+import { captureHarnessHandoff } from '../harness/handoff.js';
 import { acquireIssueClaim } from '../harness/issue-claim.js';
 import { HARNESS_FIX_ISSUE, HARNESS_TEXT_ONLY_ERROR } from '../harness/workflows.js';
 import { RunStore } from '../runs/store.js';
@@ -538,16 +539,27 @@ describe('harness API', () => {
   });
 
   describe('stage-only publish guards', () => {
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', [
+      '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args,
+    ], { cwd, encoding: 'utf8' }).trimEnd();
     const mkHarnessRun = (status: 'running' | 'review') => {
       const run = store.createRun({ title: 't', workflow: HARNESS_FIX_ISSUE, task: 'x', steps: [] });
+      const worktree = join(repoRoot, 'task-worktree');
+      const branch = 'fix/issue-642';
+      git(repoRoot, 'worktree', 'add', '-qb', branch, worktree);
+      writeFileSync(join(worktree, 'reviewed.txt'), 'reviewed\n');
+      git(worktree, 'add', 'reviewed.txt');
       store.updateRun(run.id, {
         status,
         harness: { profile: 'standard', workflow: HARNESS_FIX_ISSUE },
-        worktreePath: repoRoot, // exists — the guard must fire before git work
-        branch: 'fix/issue-642',
+        worktreePath: worktree,
+        branch,
       });
-      return run;
+      return { id: run.id, branch, worktree };
     };
+    const handoff = (worktree: string) => ({
+      status: 'staged' as const, stagedPaths: ['reviewed.txt'], publishPin: captureHarnessHandoff(worktree),
+    });
 
     it('refuses push and PR while a harness run is still before its review gate', async () => {
       const run = mkHarnessRun('running');
@@ -559,19 +571,72 @@ describe('harness API', () => {
       expect(((await pr.json()) as { error: string }).error).toMatch(/stage-only/);
     });
 
-    it('allows push once the harness run parked at review', async () => {
+    it('commits and pushes only the verified tree, and allows a commit retry', async () => {
       const run = mkHarnessRun('review');
       const ledger = createLedger({
         workflow: HARNESS_FIX_ISSUE,
         requestedProfile: 'standard',
         subject: { kind: 'brief', text: 'x' },
       });
-      ledger.stage = { status: 'staged', stagedPaths: [] };
+      ledger.stage = handoff(run.worktree);
       ledger.outcome = { status: 'ready', blockingReasons: [] };
       saveLedger(dataDir, run.id, ledger);
-      const push = await post(`/api/v1/runs/${run.id}/git/push`, {});
-      const body = (await push.json()) as { error?: string };
-      expect(body.error ?? '').not.toMatch(/harness|stage-only|contested/i);
+      const remote = join(repoRoot, 'remote.git');
+      git(repoRoot, 'init', '--bare', '-q', remote);
+      git(repoRoot, 'remote', 'add', 'origin', remote);
+      const push = () => post(`/api/v1/runs/${run.id}/git/push`, {});
+      await expect((await push()).json()).resolves.toMatchObject({ error: expect.stringMatching(/before pushing/i) });
+      const commit = () => post(`/api/v1/runs/${run.id}/git/commit`, { message: 'Review accepted' });
+      const first = await commit();
+      expect(first.status).toBe(200);
+      const { sha } = await first.json() as { sha: string };
+      await expect((await commit()).json()).resolves.toMatchObject({ sha });
+      expect(git(run.worktree, 'rev-parse', 'HEAD^{tree}')).toBe(ledger.stage.publishPin?.tree);
+      expect((await push()).status).toBe(200);
+      expect(git(remote, 'rev-parse', `refs/heads/${run.branch}`)).toBe(sha);
+      git(run.worktree, 'commit', '--allow-empty', '-qm', 'Outside the review');
+      expect((await push()).status).toBe(409);
+      expect(git(remote, 'rev-parse', `refs/heads/${run.branch}`)).toBe(sha);
+    });
+
+    it.each(['untracked', 'unstaged', 'restaged'])('refuses publication after %s changes', async (change) => {
+      vi.stubEnv('CEZ_DRY_RUN', '1');
+      const run = mkHarnessRun('review');
+      const ledger = createLedger({ workflow: HARNESS_FIX_ISSUE, requestedProfile: 'standard', subject: { kind: 'brief', text: 'x' } });
+      ledger.stage = handoff(run.worktree);
+      ledger.outcome = { status: 'ready', blockingReasons: [] };
+      saveLedger(dataDir, run.id, ledger);
+      writeFileSync(join(run.worktree, change === 'untracked' ? 'later.txt' : 'reviewed.txt'), 'added after review\n');
+      if (change === 'restaged') git(run.worktree, 'add', 'reviewed.txt');
+      for (const route of ['git/commit', 'git/push', 'pr', 'finish']) {
+        const response = await post(`/api/v1/runs/${run.id}/${route}`, route === 'git/commit' ? { message: 'Attempt' } : {});
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/handoff changed/i) });
+      }
+      expect(git(run.worktree, 'rev-parse', 'HEAD')).toBe(ledger.stage.publishPin?.head);
+    });
+
+    it('requires older staged reviews without a pin to reverify', async () => {
+      const run = mkHarnessRun('review');
+      const ledger = createLedger({ workflow: HARNESS_FIX_ISSUE, requestedProfile: 'standard', subject: { kind: 'brief', text: 'x' } });
+      ledger.stage = { status: 'staged', stagedPaths: ['reviewed.txt'] };
+      ledger.outcome = { status: 'ready', blockingReasons: [] };
+      saveLedger(dataDir, run.id, ledger);
+      const response = await post(`/api/v1/runs/${run.id}/git/commit`, { message: 'Attempt' });
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/verify final fixes/i) });
+    });
+
+    it('prepares a draft PR from the exact staged tree', async () => {
+      vi.stubEnv('CEZ_DRY_RUN', '1');
+      const run = mkHarnessRun('review');
+      const ledger = createLedger({ workflow: HARNESS_FIX_ISSUE, requestedProfile: 'standard', subject: { kind: 'brief', text: 'x' } });
+      ledger.stage = handoff(run.worktree);
+      ledger.outcome = { status: 'ready', blockingReasons: [] };
+      saveLedger(dataDir, run.id, ledger);
+      expect((await post(`/api/v1/runs/${run.id}/pr`, {})).status).toBe(201);
+      expect(git(run.worktree, 'rev-parse', 'HEAD^{tree}')).toBe(ledger.stage.publishPin?.tree);
+      expect(store.getRun(run.id)?.status).toBe('done');
     });
 
     it('blocks a staged handoff whose durable outcome is still pending', async () => {
@@ -623,7 +688,7 @@ describe('harness API', () => {
         requestedProfile: 'standard',
         subject: { kind: 'brief', text: 'x' },
       });
-      ledger.stage = { status: 'staged', stagedPaths: ['src/x.ts'] };
+      ledger.stage = handoff(run.worktree);
       ledger.outcome = {
         status: 'contested',
         blockingReasons: ['[major] replay race remains'],

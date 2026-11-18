@@ -121,7 +121,15 @@ Codex permits writes only to the worktree, phase output and run-specific temp
 directory; the shared `/tmp` and host `TMPDIR` are excluded.
 Git verification checks HEAD, the task branch and their reflogs between phases;
 staging must match the changed paths derived from Git. Trusted skills, runtime and
-validation policy are pinned outside the model-writable worktree.
+validation policy are pinned outside the model-writable worktree. A setup in the
+project checkout can supply advisor bindings before they are committed. Validation
+still uses the checks pinned from the base.
+
+The handoff records the reviewed branch, HEAD and staged tree. Commit and Draft
+PR use that tree, and Push sends the reviewed commit. If the worktree changes or
+an older handoff lacks that record, open **Review** and choose **Verify final
+fixes** before publishing. Completed tasks with clean worktrees follow the project
+retention limit. Work that exists only in the staging area stays available.
 
 Two limits matter when choosing a repository to run: Codex cannot deny reads of
 arbitrary credential files, and validation commands execute repository code outside

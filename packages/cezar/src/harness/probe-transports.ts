@@ -1,9 +1,10 @@
 
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { harnessRunnerSchema, type HarnessRunner as ProbeRunner } from '@open-mercato/cezar-contract';
 import { PROFILE_ENV_VAR } from '../core/agent-profiles.js';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.js';
@@ -511,12 +512,23 @@ export function accountEnvironment(accounts: ProbeAccounts): Record<string, stri
 /** One project's prober: its account per runner, and a cache scoped to the project and account. */
 export async function createProjectProber(opts: { repoRoot: string; cwd?: string; advisors?: unknown }): Promise<ModelProber> {
   const accounts = await probeAccounts(opts.repoRoot);
+  const advisors = opts.advisors as LiveAdvisors | undefined;
+  const cwd = opts.cwd ?? opts.repoRoot;
   return createModelProber({
-    transport: createLiveTransport({ advisors: opts.advisors as LiveAdvisors | undefined, cwd: opts.cwd ?? opts.repoRoot, accounts }),
+    transport: createLiveTransport({ advisors, cwd, accounts }),
     cache: sharedHarnessProbeCache,
     scope: (ref) => {
-      const account = ref.runner === 'harness' ? '' : accounts[ref.runner as ProbeRunner]?.id ?? '';
-      return `${opts.repoRoot}|${account}|`;
+      if (ref.runner !== 'harness') return `${opts.repoRoot}|${accounts[ref.runner]?.id ?? ''}|`;
+      const advisor = advisors?.[ref.model];
+      const command = advisor?.commands?.review?.[0] ?? advisor?.commands?.probe?.[0];
+      const relativeCommand = command && /[\\/]/.test(command) && !isAbsolute(command);
+      const binding = createHash('sha256').update(JSON.stringify([
+        advisor,
+        relativeCommand ? cwd : undefined,
+        advisor?.credentialEnv ? process.env[advisor.credentialEnv] : undefined,
+        advisor?.binaryEnv ? process.env[advisor.binaryEnv] : undefined,
+      ])).digest('hex');
+      return `${opts.repoRoot}|${binding}|`;
     },
   });
 }

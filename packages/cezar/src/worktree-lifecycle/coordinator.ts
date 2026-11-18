@@ -414,14 +414,14 @@ export class WorktreeLifecycleCoordinator {
       if (--entry.count === 0) { if (this.agentLeases.get(runId) === entry) this.agentLeases.delete(runId); entry.release(); }
     };
   }
-  async withWorktreeMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
+  async withWorktreeMutation<T>(runId: string, mutate: () => Promise<T>, forceLock = false): Promise<T> {
     // This process's held agent lease already excludes teardown; its own git actions (commit,
     // push, publish) run beside the agent exactly as they did before scripts existed.
     if (this.agentLeases.get(runId)?.held) return mutate();
-    return this.lockedMutation(runId, mutate);
+    return this.lockedMutation(runId, mutate, forceLock);
   }
-  private async lockedMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
-    if (!await this.requiresGate(runId)) return mutate();
+  private async lockedMutation<T>(runId: string, mutate: () => Promise<T>, forceLock = false): Promise<T> {
+    if (!forceLock && !await this.requiresGate(runId)) return mutate();
     return this.store.withWorktreeLock(runId, async () => {
       const record = await this.store.readWorktree(runId);
       const operation = record?.activeOperationId ? await this.store.readOperation(record.activeOperationId) : undefined;

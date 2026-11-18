@@ -2849,13 +2849,16 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   if (!worktree || !branch) {
     return { ok: false, error: 'this task has no worktree/branch to publish' };
   }
+  if (run.harness && !input.reviewedSha) {
+    return { ok: false, error: 'the harness handoff must be verified before preparing a draft PR' };
+  }
 
   // Final autosave: the branch must hold everything before it leaves the box.
   // This is the LAST flush — unlike the turn-end and run-finalize ones there is
   // no later autosave to pick the work up, so a refusal (conflicted tree) or a
   // failed commit has to stop the publish instead of silently opening a PR from
   // a branch that is missing the run's final state.
-  const saved = await autosaveCommit(worktree, 'pre-PR');
+  const saved = input.reviewedSha ? undefined : await autosaveCommit(worktree, 'pre-PR');
   if (saved === 'refused') {
     return {
       ok: false,
@@ -2881,17 +2884,22 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): gh would only refuse after the
   // push, leaving a branch on the remote with nothing in it. Unknown base → let gh decide.
-  const { ahead } = await baseDivergence(worktree, run.baseBranch);
+  const { ahead } = await baseDivergence(worktree, run.baseBranch, input.reviewedSha);
   if (ahead === 0) return { ok: false, error: nothingToPropose(branch, prBase) };
 
-  let push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+  const refspec = input.reviewedSha ? `${input.reviewedSha}:refs/heads/${branch}` : branch;
+  const pushArgs = [...(input.reviewedSha ? [] : ['-u']), remotes.push, refspec];
+  let push = await execTool(['push', ...pushArgs], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     // A rebased branch is rejected as non-fast-forward; lease only against a tip this branch held (#1758).
     const lease = await rewriteLeaseArg(worktree, remotes.push, branch, [run.baseBranch, prBase]);
-    if (lease) push = await execTool(['push', lease, '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+    if (lease) push = await execTool(['push', lease, ...pushArgs], worktree, 'git', PUSH_TIMEOUT_MS);
   }
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
+  }
+  if (input.reviewedSha) {
+    await execTool(['branch', `--set-upstream-to=${remotes.push}/${branch}`, branch], worktree, 'git');
   }
 
   const body = buildPrBody(input.handoffText, run.task);

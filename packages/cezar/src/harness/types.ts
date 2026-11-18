@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   harnessProfileSchema,
+  harnessPublishPinSchema,
   harnessSkillProfileSchema,
   type HarnessProfile,
   harnessEnvironmentSchema,
@@ -94,6 +95,7 @@ const harnessStageSchema = z.object({
   startStatePath: z.string().optional(),
   allowlistPath: z.string().optional(),
   stagedPaths: z.array(z.string()).optional(),
+  publishPin: harnessPublishPinSchema.optional(),
   suggestedCommit: z.string().optional(),
   prBody: z.string().optional(),
   error: z.string().optional(),

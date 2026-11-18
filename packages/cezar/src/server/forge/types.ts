@@ -258,6 +258,8 @@ export interface DraftPrInput {
   handoffText: string;
   /** Open it as a draft. Absent = draft — what every caller got before this flag existed. */
   draft?: boolean;
+  /** Immutable commit authorized by the staged harness review. */
+  reviewedSha?: string;
 }
 
 /** Purpose-specific creation feed; independent of open lists and relevance search. */

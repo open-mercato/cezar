@@ -23,12 +23,11 @@ function recencyKey(run: RunRecord): string {
 }
 
 /** A run is reclaimable when it is finished, still has a materialized worktree
- *  directory, has not already been reclaimed, and is not pinned. A harness run never is: it is
- *  stage-only and never autosaves, so its work lives in the worktree alone, and a
- *  run parked on a council decision ends `failed` while still resumable.
- *  Archive and delete still remove it explicitly. */
+ *  directory, has not already been reclaimed, and is not pinned. Failed and cancelled harness
+ *  runs may still resume. For completed runs the normal uncommitted-work check protects the index. */
 export function isReclaimable(run: RunRecord): boolean {
-  return FINISHED.has(run.status) && !!run.worktreePath && !run.worktreeReclaimedAt && !run.pinned && !run.harness;
+  return FINISHED.has(run.status) && !!run.worktreePath && !run.worktreeReclaimedAt && !run.pinned &&
+    (!run.harness || run.status === 'done');
 }
 
 /**

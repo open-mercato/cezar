@@ -357,11 +357,20 @@ export const harnessOutcomeRecordSchema = z.looseObject({
 });
 export type HarnessOutcomeRecord = z.infer<typeof harnessOutcomeRecordSchema>;
 
+const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+export const harnessPublishPinSchema = z.object({
+  branch: z.string().min(1),
+  head: gitObjectIdSchema,
+  tree: gitObjectIdSchema,
+});
+export type HarnessPublishPin = z.infer<typeof harnessPublishPinSchema>;
+
 export const harnessStageRecordSchema = z.looseObject({
   status: z.enum(['pending', 'staged', 'failed']),
   startStatePath: z.string().optional(),
   allowlistPath: z.string().optional(),
   stagedPaths: z.array(z.string()).optional(),
+  publishPin: harnessPublishPinSchema.optional(),
   suggestedCommit: z.string().optional(),
   prBody: z.string().optional(),
   error: z.string().optional(),

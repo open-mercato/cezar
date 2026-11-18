@@ -248,6 +248,7 @@ function makeHarness(dir: string) {
     exportConfig: async () => null,
     snapshotReviewSubject: async () => 'stable-review-subject',
     snapshotStageSubject: async () => 'stable-stage-subject',
+    captureHandoff: () => ({ branch: 'task', head: 'a'.repeat(40), tree: 'b'.repeat(40) }),
     discoverChangedPaths: (_cwd, declaredPaths) => [...declaredPaths],
     createProber: () => ({
       probe: async (ref) => probeVerdicts.get(probeKey(ref)) ?? { status: 'ready', detail: 'stub' },
@@ -5868,7 +5869,7 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(h.calls.map((c) => c.id)).not.toContain('capture');
   });
 
-  it('falls back to the repo working tree config when the base carries no agentHarness (staged setup)', async () => {
+  it('uses working-copy advisor bindings with the validation checks pinned from the base', async () => {
     const h = makeHarness(dir); // dir = the run worktree
     const root = mkdtempSync(join(tmpdir(), 'cez-driver-root-'));
     try {
@@ -5883,8 +5884,13 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       h.host.repoRoot = root;
       h.deps.loadAgentic = async (cwd: string) =>
         cwd === root
-          ? { baseBranch: 'main', validationCommands: ['echo ok'], agentHarness }
+          ? { baseBranch: 'main', validationCommands: [], agentHarness }
           : { baseBranch: 'main', validationCommands: ['echo ok'], agentHarness: undefined };
+      h.deps.exportConfig = async (_root, _ref, artifacts) => {
+        const path = join(artifacts, 'trusted-agentic.config.json');
+        writeFileSync(path, JSON.stringify({ validation: { commands: ['echo base-policy'] } }));
+        return { path, ref: 'main@base' };
+      };
       scriptCouncil(h, () => ({
         ok: true,
         result: {
@@ -5905,6 +5911,8 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
 
       const ledger = loadLedger(h.host.dataDir, h.host.runId);
       expect(ledger?.trustedConfig?.baseRef).toContain('working-tree');
+      expect(ledger?.baselineValidation?.map((check) => check.command)).toEqual(['echo base-policy']);
+      expect(ledger?.validation.map((check) => check.command)).toEqual(['echo base-policy']);
       expect(h.events.some((e) => e.type === 'note' && String(e.message).includes('staged'))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });

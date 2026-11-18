@@ -87,6 +87,7 @@ import { loadTrustedHarnessSkill } from './skill-binding.js';
 import { acquireIssueClaim, issueClaimStaysHeld, releaseIssueClaim } from './issue-claim.js';
 import { readHarnessFsEntry } from '../fs-read.js';
 import { pinnedGitEnv, pinWorktreeGitDir, resolveTrustedGitDir, verifyWorktreeGitPointer } from '../git-pin.js';
+import { captureHarnessHandoff } from './handoff.js';
 import { harnessPhaseSkills } from './skill-routing.js';
 import { isUsageLimitMessage } from '../core/usage-limit.js';
 import { classifyAgentFailure } from '../core/agent-failure-class.js';
@@ -251,6 +252,7 @@ export interface HarnessDriverDeps {
   createProber?: (opts: { advisors: Record<string, unknown>; cwd: string }) => ModelProber | Promise<ModelProber>;
   snapshotReviewSubject?: (cwd: string) => Promise<string>;
   snapshotStageSubject?: (cwd: string) => Promise<string>;
+  captureHandoff?: typeof captureHarnessHandoff;
   /** Return the complete Git-derived changed-path set. The declared paths are
    *  supplied only so tests can model Git without creating a repository;
    *  production deliberately ignores them. */
@@ -826,6 +828,7 @@ export async function runHarnessDriver(
   const exportConfig = deps.exportConfig ?? exportTrustedConfig;
   const snapshotReviewSubject = deps.snapshotReviewSubject ?? ((cwd: string) => snapshotHarnessReviewSubject(cwd, artifactDir));
   const snapshotStageSubject = deps.snapshotStageSubject ?? ((cwd: string) => snapshotHarnessStageSubject(cwd, artifactDir));
+  const captureHandoff = deps.captureHandoff ?? captureHarnessHandoff;
   const discoverChangedPaths =
     deps.discoverChangedPaths ?? ((cwd: string) => currentChangedPaths(cwd));
   const discoverCandidates = deps.discoverSkillCandidates ?? discoverSkillCandidates;
@@ -2221,27 +2224,23 @@ export async function runHarnessDriver(
     // Setup stages `.ai/agentic.config.json` in the REPO working tree for
     // human review (harnessSetupPrefill runs in-root) — so between "setup
     // done" and "reviewed + committed", the base ref a worktree forks from
-    // carries no `agentHarness` yet. Fall back to the repo working tree's
-    // config in exactly that window, snapshotted into the run's artifacts so
-    // the whole run sees one immutable copy. The user's own checkout is as
-    // trusted as the base — the untrusted thing is the TASK branch, which
-    // never feeds config here.
+    // carries no `agentHarness` yet. Snapshot those working-copy bindings
+    // alongside the validation policy already selected from the base.
     let workingTreeConfig = false;
     if (agentic.agentHarness === undefined && host.repoRoot !== host.cwd) {
       const rootAgentic = await loadAgentic(host.repoRoot);
       if (rootAgentic.agentHarness !== undefined) {
-        agentic = rootAgentic;
         workingTreeConfig = true;
         const copyPath = join(artifactDir, 'working-agentic.config.json');
-        writeFileSync(
-          copyPath,
-          readHarnessArtifactText(join(host.repoRoot, '.ai', 'agentic.config.json')),
-          'utf8',
-        );
+        writeJsonAtomic(copyPath, {
+          baseBranch: agentic.baseBranch,
+          validation: { commands: agentic.validationCommands },
+          agentHarness: rootAgentic.agentHarness,
+        });
         ledger.trustedConfig = {
-          baseRef: 'working-tree (uncommitted)',
+          baseRef: `${baseSnapshot?.ref ?? 'initial-worktree snapshot'} + working-tree advisor bindings`,
           path: copyPath,
-          overlay: false,
+          overlay: true,
           sha256: hashFile(copyPath) ?? undefined,
         };
         host.emit({
@@ -4902,7 +4901,15 @@ export async function runHarnessDriver(
       stageInputSha256,
       harnessStageResultSchema,
     );
-    if (recoveredStage) {
+    const savedPin = ledger.stage.publishPin;
+    let canReuseStage = false;
+    if (recoveredStage && savedPin && ledger.stage.status === 'staged') {
+      try {
+        const pin = captureHandoff(host.cwd);
+        canReuseStage = pin.branch === savedPin.branch && pin.head === savedPin.head && pin.tree === savedPin.tree;
+      } catch { /* Fall through to the normal staging op for a fresh handoff. */ }
+    }
+    if (canReuseStage) {
       if (ledger.outcome.status === 'pending') setOutcome({ status: 'ready', blockingReasons: [] });
       host.emit({
         type: 'note',
@@ -5045,11 +5052,25 @@ export async function runHarnessDriver(
       host.emit({ type: 'note', stepId: 'stage', message: `staged with a warning — ${warning}` });
     }
 
+    let publishPin: ReturnType<typeof captureHarnessHandoff>;
+    try {
+      if (await snapshotStageSubject(host.cwd) !== stageSubjectSha256) {
+        throw new Error('the reviewed worktree changed during staging');
+      }
+      publishPin = captureHandoff(host.cwd);
+    } catch (error) {
+      const reason = `could not pin the staged handoff: ${error instanceof Error ? error.message : String(error)}`;
+      rejectStageResult(reason);
+      ledger.stage = { ...ledger.stage, status: 'failed', error: reason };
+      setOutcome({ status: 'blocked', blockingReasons: [reason] });
+      return reason;
+    }
     ledger.stage = {
       status: 'staged',
       startStatePath,
       allowlistPath,
       stagedPaths,
+      publishPin,
       suggestedCommit:
         suggestedCommit ?? (isFeature ? `feat: ${input.task.split('\n')[0]}` : `fix: ${input.task.split('\n')[0]}`),
       prBody: [

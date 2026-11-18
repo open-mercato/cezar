@@ -207,8 +207,10 @@ prompt. Feedback on a completed implementation clears its implementation cursor
 and re-runs validation/review. Issue claims and owned process resources are released
 on terminal paths. Retention preserves review evidence while the task is resumable.
 
-Commit/push/PR/accept actions stay blocked until the ledger records an intact staged
-outcome. A contested outcome additionally requires an explicit, recorded user
+Commit/push/PR/accept actions recheck the ledger's reviewed branch, HEAD and index
+tree under the worktree mutation lock. Commit and PR creation use the recorded
+tree, and push sends the verified commit by object ID. A handoff from before the
+pin was recorded must be verified again. A contested outcome additionally requires an explicit, recorded user
 acceptance. Server checks apply to every publication entry point, including command
 palette and workspace actions; disabled UI buttons are not the enforcement layer.
 

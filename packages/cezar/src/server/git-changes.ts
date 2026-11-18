@@ -902,6 +902,7 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
 export async function baseDivergence(
   dir: string,
   baseBranch: string | undefined,
+  tip = 'HEAD',
 ): Promise<{ behind: number | null; ahead: number | null }> {
   const unknown = { behind: null, ahead: null };
   if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
@@ -912,7 +913,7 @@ export async function baseDivergence(
     const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
     if (!exists.ok) continue;
     // `--left-right` over `HEAD...ref` prints "<only in HEAD>\t<only in ref>".
-    const count = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...${ref}`]);
+    const count = await git(dir, ['rev-list', '--left-right', '--count', `${tip}...${ref}`]);
     if (!count.ok) return unknown;
     const [ahead, behind] = count.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
     return {
@@ -953,14 +954,16 @@ export type PushResult =
  *  detached HEAD and rejected pushes all degrade to `{ ok:false, error }`. */
 export async function pushCurrentBranch(
   dir: string,
-  opts: { leaseRewrites?: boolean; baseBranch?: string } = {},
+  opts: { leaseRewrites?: boolean; baseBranch?: string; reviewed?: { branch: string; sha: string } } = {},
 ): Promise<PushResult> {
-  const branchRes = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const branchRes = await git(dir, opts.reviewed ? ['symbolic-ref', 'HEAD'] : ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (!branchRes.ok) return { ok: false, error: gitReason(branchRes, 'not a git repository') };
-  const branch = branchRes.stdout.trim();
+  const checkedOut = branchRes.stdout.trim();
+  const branch = opts.reviewed?.branch ?? checkedOut;
   if (!branch || branch === 'HEAD') {
     return { ok: false, error: 'detached HEAD — check out a branch before pushing' };
   }
+  if (opts.reviewed && checkedOut !== `refs/heads/${branch}`) return { ok: false, error: 'the reviewed task branch is no longer checked out' };
   const remotesRes = await git(dir, ['remote']);
   const remotes = remotesRes.stdout.split('\n').map((r) => r.trim()).filter(Boolean);
   if (remotes.length === 0) {
@@ -968,13 +971,16 @@ export async function pushCurrentBranch(
   }
   const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
+  const refspec = opts.reviewed ? `${opts.reviewed.sha}:refs/heads/${branch}` : branch;
+  const args = opts.reviewed ? ['push', remote, refspec] : upstream.ok ? ['push'] : ['push', '-u', remote, branch];
   let push = await git(dir, args);
   // Only a task's own branch: the repo-root Push must keep refusing, it may be on the user's main.
   if (opts.leaseRewrites && !push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     const lease = await rewriteLeaseArg(dir, remote, branch, [opts.baseBranch]);
-    if (lease) push = await git(dir, ['push', lease, ...(upstream.ok ? [] : ['-u']), remote, branch]);
+    if (lease) push = await git(dir, ['push', lease, ...(upstream.ok || opts.reviewed ? [] : ['-u']), remote, refspec]);
   }
   if (!push.ok) return { ok: false, error: syncFailureReason(push, 'git push failed') };
-  return { ok: true, branch, remote, upstreamSet: !upstream.ok };
+  const upstreamSet = !upstream.ok && (!opts.reviewed ||
+    (await git(dir, ['branch', `--set-upstream-to=${remote}/${branch}`, branch])).ok);
+  return { ok: true, branch, remote, upstreamSet };
 }

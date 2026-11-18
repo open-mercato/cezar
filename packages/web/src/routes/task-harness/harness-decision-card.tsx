@@ -84,6 +84,11 @@ export function HarnessDecisionCard({ run, ledger }: { run: ApiRun; ledger: Harn
             {ledger.baselineValidation?.some(harnessCheckUnavailable) ? <p className="mt-2 text-meta text-muted-foreground">Baseline checks could not run; these failures have not been compared with a working baseline.</p> : null}
           </div> : null}
           {candidates.length ? <p className="mt-1 text-label text-muted-foreground">{reviewFindings.length} review {reviewFindings.length === 1 ? 'finding' : 'findings'} to verify · {rows.filter((row) => row.status === 'resolved').length} no longer reported</p> : null}
+          {ready && run.status === 'review' && implemented ? (
+            <Button className="mt-3" variant="outline" disabled={busy || !ledger.actionRevision} onClick={() => request('verify')}>
+              Verify final fixes
+            </Button>
+          ) : null}
           {!ready ? <div className="mt-3 flex flex-wrap items-center gap-2">
             {setup ? <Button disabled={busy || !ledger.actionRevision} onClick={() => request('prepare', Boolean(resumable && latestAction?.action === 'prepare'))}>
               {action.isPending ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : null}{ledger.environment?.installCommand ? `Prepare project${implemented ? ' & verify' : ' & resume'}` : 'Retry project checks'}

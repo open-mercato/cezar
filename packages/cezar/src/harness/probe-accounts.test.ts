@@ -48,4 +48,14 @@ describe('a project prober probes the account the project selected', () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]![0].env?.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
+
+  it('probes a new binding when a command advisor is reconfigured under the same name', async () => {
+    const ref = { runner: 'harness', model: 'reviewer' } as const;
+    const prober = (program: string) => createProjectProber({
+      repoRoot: workRepo,
+      advisors: { reviewer: { adapter: 'command', commands: { review: [program] } } },
+    });
+    await expect((await prober(process.execPath)).probe(ref)).resolves.toMatchObject({ status: 'ready' });
+    await expect((await prober(join(home, 'missing-cli'))).probe(ref)).resolves.toMatchObject({ status: 'failed' });
+  });
 });

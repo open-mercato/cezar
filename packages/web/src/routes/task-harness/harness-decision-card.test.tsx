@@ -30,6 +30,11 @@ describe('guided review decision', () => {
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ action: 'verify', revision: 'snapshot' }), expect.anything())
     expect(accept).not.toHaveBeenCalled()
   })
+  it('can reverify a ready handoff when publication reports that it changed', () => {
+    show({ ...ledger, outcome: { status: 'ready', blockingReasons: [] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Verify final fixes' }))
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ action: 'verify', revision: 'snapshot' }), expect.anything())
+  })
   it('requires a selected concern for the bounded repair and retains finding identity', async () => {
     show()
     fireEvent.click(screen.getByRole('button', { name: 'Inspect findings' }))
