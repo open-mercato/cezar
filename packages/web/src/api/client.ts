@@ -526,26 +526,6 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
   return body
 }
 
-/**
- * A JSON route sent by path rather than through `cez`, checked against its contract schema. For
- * a route whose server half is not in `AppType` on every server this page may talk to.
- */
-export async function requestValidated<T>(
-  path: string,
-  schema: ResponseValidator<T>,
-  init: RequestInit & { json?: unknown } = {},
-): Promise<T> {
-  const { json, ...rest } = init
-  const headers = new Headers(rest.headers)
-  if (json !== undefined) headers.set('content-type', 'application/json')
-  const res = await send(path, { ...rest, headers, ...(json !== undefined ? { body: JSON.stringify(json) } : {}) })
-  const body = await readBody(res)
-  if (!res.ok) throw errorFor(res.status, res.statusText, body)
-  const result = schema.safeParse(parseJson(body))
-  if (!result.success) throw new ApiError(res.status, `the cezar server answered ${path} with an unexpected body`)
-  return result.data
-}
-
 const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent(id)}${suffix}`
 
 // ---- reads --------------------------------------------------------------------------------

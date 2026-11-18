@@ -1,7 +1,5 @@
 import {
   questionCountsSchema,
-  questionMutationResponseSchema,
-  questionsResponseSchema,
   type HealthResponse,
   type QuestionCounts,
   type QuestionItem,
@@ -10,7 +8,7 @@ import {
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect, useSyncExternalStore } from 'react'
 
-import { requestValidated } from './client'
+import { cez, unwrap } from './client'
 import { queryKeys } from './queries'
 import { subscribeTopic } from './ws'
 
@@ -23,18 +21,18 @@ export const questionKeys = {
   all: ['workspace', 'questions'] as const,
 }
 
-const questionPath = (key: string, verb: 'answer' | 'dismiss') => `/workspace/questions/${encodeURIComponent(key)}/${verb}`
+const questions = () => cez.api.v1.workspace.questions
 
-export function getQuestions(opts?: { signal?: AbortSignal }): Promise<QuestionsResponse> {
-  return requestValidated('/workspace/questions', questionsResponseSchema, { signal: opts?.signal })
+export async function getQuestions(opts?: { signal?: AbortSignal }): Promise<QuestionsResponse> {
+  return unwrap(await questions().$get({}, opts?.signal ? { init: { signal: opts.signal } } : undefined), '/workspace/questions')
 }
 
 export async function answerQuestion(key: string, text: string): Promise<QuestionItem> {
-  return (await requestValidated(questionPath(key, 'answer'), questionMutationResponseSchema, { method: 'POST', json: { text } })).item
+  return (await unwrap(await questions()[':key'].answer.$post({ param: { key: encodeURIComponent(key) }, json: { text } }), '/workspace/questions/:key/answer')).item
 }
 
 export async function dismissQuestion(key: string): Promise<QuestionItem> {
-  return (await requestValidated(questionPath(key, 'dismiss'), questionMutationResponseSchema, { method: 'POST' })).item
+  return (await unwrap(await questions()[':key'].dismiss.$post({ param: { key: encodeURIComponent(key) } }), '/workspace/questions/:key/dismiss')).item
 }
 
 /** Every reader shares one cache: the sidebar badge keeps it observed, the topic keeps it fresh. */
