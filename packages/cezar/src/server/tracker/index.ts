@@ -1,12 +1,13 @@
 import type {
   TrackerKind, TrackerAssociationInput, TrackerAssociationResult, TrackerCandidatesQuery,
-  TrackerCandidatesResult, TrackerFailure, TrackerCredentials, TrackerConnectionResponse, TrackerListQuery, TrackerSearchQuery, TrackerItemsResult,
+  TrackerCandidatesResult, TrackerFailure, TrackerConnectionInput, TrackerConnectionResponse, TrackerListQuery, TrackerSearchQuery, TrackerItemsResult,
+  TrackerSharedConnectionsResponse,
 } from '@open-mercato/cezar-contract';
 import { readTrackerAssociation } from '../../tracker-association.ts';
 import { createDryTrackerClient } from './dry-run.ts';
 import { createJiraClient } from './jira.ts';
 import { createLinearClient } from './linear.ts';
-import { TrackerConnections } from './connections.ts';
+import { TrackerConnections, type ConnectionInspection, type ConnectionOutcome, type SharedConnectionSummary } from './connections.ts';
 import { decodeCursor, encodeCursor } from './cursor.ts';
 import { requestFailure, TrackerRequestError } from './transport.ts';
 import type { TrackerProvider, TrackerDriver } from './types.ts';
@@ -15,6 +16,15 @@ const missing = (): TrackerFailure => ({
   available: false, code: 'credentials_missing',
   reason: 'Configure a connection for this project in Settings → Issue tracker. Server-wide credentials are not used.',
 });
+/** Per provider, so a new tracker must name what identifies its shared connection (no secrets). */
+const sharedLabels: Record<TrackerKind, (item: SharedConnectionSummary) => string> = {
+  jira: item => {
+    const host = item.credentials.origin ? new URL(item.credentials.origin).host : 'Jira';
+    const [local = '', domain = ''] = (item.credentials.email ?? '').split('@');
+    return `${domain ? `${host} — ${local.slice(0, 1)}…@${domain}` : host} · ${item.id.slice(0, 4)}`;
+  },
+  linear: item => `Linear API key · saved ${item.createdAt.slice(0, 10)} · ${item.id.slice(0, 4)}`,
+};
 const changed = (): TrackerFailure => ({ available: false, code: 'source_changed', reason: 'This project connection changed. Reconnect the tracker scope in Settings.' });
 
 /** Secrets, adapter instances and cursor namespaces belong to a project and connection revision. */
@@ -28,8 +38,16 @@ export function createTrackerService(env: NodeJS.ProcessEnv = process.env, fetch
     }
   };
   const connection = async (root: string): Promise<TrackerConnectionResponse> => {
-    const { record, error } = demo ? { record: null } : await store.inspect(root);
-    return { connection: record ? { id: record.id, kind: record.credentials.kind } : null, demo, ...(error ? { error } : {}) };
+    const { record, error, shared }: ConnectionInspection = demo ? { record: null } : await store.inspect(root);
+    return {
+      connection: record ? { id: record.id, kind: record.credentials.kind, ...(shared ? { shared } : {}) } : null,
+      demo, ...(error ? { error } : {}),
+    };
+  };
+  const settle = (root: string, outcome: ConnectionOutcome, shared: boolean): TrackerConnectionResponse | { saveFailure: string | null } => {
+    if (!('record' in outcome)) return { saveFailure: outcome.error };
+    invalidate(root);
+    return { connection: { id: outcome.record.id, kind: outcome.record.credentials.kind, ...(shared ? { shared: true as const } : {}) }, demo: false };
   };
   const get = async (root: string, kind: TrackerKind) => {
     const record = demo ? null : await store.read(root);
@@ -64,13 +82,31 @@ export function createTrackerService(env: NodeJS.ProcessEnv = process.env, fetch
   return {
     connection,
     /** `{ saveFailure }` carries a user-facing reason, or `null` for the generic storage failure. */
-    async saveConnection(root: string, credentials: TrackerCredentials): Promise<TrackerConnectionResponse | { saveFailure: string | null }> {
+    async saveConnection(root: string, input: TrackerConnectionInput): Promise<TrackerConnectionResponse | { saveFailure: string | null }> {
       if (demo) return { saveFailure: null };
-      const outcome = await store.saveCredentials(root, credentials);
-      if (!('record' in outcome)) return { saveFailure: outcome.error };
-      const saved = outcome.record;
-      invalidate(root);
-      return { connection: { id: saved.id, kind: saved.credentials.kind }, demo: false };
+      const { shared, ...credentials } = input;
+      return settle(root, await store.saveCredentials(root, credentials, { shared: shared === true }), shared === true);
+    },
+    /** Spec 2026-11-18-shared-tracker-connections: the explicit pick that lets a project use one. */
+    async linkSharedConnection(root: string, sharedId: string): Promise<TrackerConnectionResponse | { saveFailure: string | null } | { missing: true }> {
+      if (demo) return { saveFailure: null };
+      const outcome = await store.link(root, sharedId);
+      return 'missing' in outcome ? outcome : settle(root, outcome, true);
+    },
+    async promoteConnection(root: string): Promise<TrackerConnectionResponse | { saveFailure: string | null }> {
+      if (demo) return { saveFailure: null };
+      return settle(root, await store.promote(root), true);
+    },
+    async sharedConnections(root: string): Promise<TrackerSharedConnectionsResponse> {
+      if (demo) return { connections: [], demo };
+      const [listed, current] = await Promise.all([store.listShared(), store.inspect(root)]);
+      return {
+        connections: listed.map(item => ({
+          id: item.id, kind: item.kind, createdAt: item.createdAt, current: current.sharedId === item.id,
+          label: sharedLabels[item.kind](item),
+        })),
+        demo,
+      };
     },
     async removeConnection(root: string): Promise<boolean> {
       if (demo) return false;

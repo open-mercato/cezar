@@ -23,4 +23,12 @@ Settings → project → Issue tracker
 2. Enter the Jira URL, account email, and API token, then save.
 3. Choose Browse Jira, find the project, and click Connect.
 
-> **Good to know**: Cezar stores credentials locally, outside the repository, in a private `.env` file. The file is not encrypted. The Jira connection does not use the Secrets store.
+## Reuse credentials in another project
+
+1. When saving credentials, uncheck **Visible only for this project**. To share credentials a project already has, choose **Share with other projects**.
+2. In the other project's Issue tracker settings, pick the connection under **Use a shared connection** and choose **Use**.
+3. Choose Browse Jira and connect that project's Jira project.
+
+A project uses a shared connection only after you pick it there.
+
+> **Good to know**: Cezar stores credentials locally, outside the repository, encrypted with the vault key. The Jira connection does not use the Secrets store.

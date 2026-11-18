@@ -74,7 +74,7 @@ import {
   getSkills,
   getSkillsWhenReady,
   getTodos,
-  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
+  getTrackerAssociation, getTrackerConnection, getTrackerSharedConnections, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
   getTrackerCandidates,
   getTrackerItem,
   getTrackerItems,
@@ -197,6 +197,7 @@ export const queryKeys = {
     association: () => ['tracker', queryScope(), 'association'] as const,
     candidates: (kind: TrackerKind, query = '') => ['tracker', queryScope(), 'candidates', kind, query] as const,
     connection: () => ['tracker', queryScope(), 'connection'] as const,
+    shared: () => ['tracker', queryScope(), 'shared-connections'] as const,
     items: (
       association: TrackerAssociation,
       params: { state: 'active' | 'all'; labels: readonly string[]; query?: string },
@@ -355,6 +356,11 @@ export function useE2eStatus() {
 
 export function useTrackerConnection() {
   return useQuery({ queryKey: queryKeys.tracker.connection(), queryFn: ({ signal }) => getTrackerConnection({ signal }) })
+}
+
+/** Only once the project is known not to be in demo mode, which has no shared connections. */
+export function useTrackerSharedConnections(enabled: boolean) {
+  return useQuery({ queryKey: queryKeys.tracker.shared(), queryFn: ({ signal }) => getTrackerSharedConnections({ signal }), enabled })
 }
 
 export function useTrackerAssociation() {
