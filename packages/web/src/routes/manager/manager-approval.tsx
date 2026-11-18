@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import { useProjects, useRunsIndex, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
 import { chipClass } from '@/components/chip'
 import { prTaskRuns } from '@/components/reference-conflict-action'
-import { ReferenceStatusProvider } from '@/components/reference-status'
+import { ReferenceStatusProvider, useReferenceStatus } from '@/components/reference-status'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -315,8 +315,29 @@ export function useDismissStaleMerges(messages: readonly ManagerMessage[], onDec
   }, [messages, onDecide])
 }
 
+/** Merge cards whose chip already reported the PR merged or closed, so the ask goes out once. */
+const closedChecked = new Set<string>()
+
+/**
+ * The fallback for a PR that merges while the chat is open: the chip's own status, which the
+ * cockpit already polls, re-sends the onlyIfStale dismiss. The server confirms before closing.
+ */
+function DismissWhenPrCloses({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
+  const { action } = message
+  const merge = action.type === 'merge-pr' ? action : undefined
+  const status = useReferenceStatus('PR', merge?.number, merge?.projectId).status
+  const closed = message.status === 'pending' && (status === 'merged' || status === 'closed')
+  useEffect(() => {
+    if (!closed || closedChecked.has(message.id)) return
+    closedChecked.add(message.id)
+    onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
+  }, [closed, message.id, onDecide])
+  return null
+}
+
 export function forgetStaleChecks(): void {
   staleChecked.clear()
+  closedChecked.clear()
 }
 
 export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigin; message: ActionMessage; onDecide: DecideAction }) {
@@ -404,6 +425,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
     >
       <DecisionSources message={message} origin={origin} />
       <ReferenceStatusProvider requests={references}>
+        {action.type === 'merge-pr' && message.status === 'pending' ? <DismissWhenPrCloses message={message} onDecide={onDecide} /> : null}
         <dl className="flex flex-col gap-1.5">
           <CardFacts action={action} projectName={projectName} origin={origin} />
         </dl>
