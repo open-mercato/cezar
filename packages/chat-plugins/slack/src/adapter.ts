@@ -47,13 +47,15 @@ export function slackRequest(credentials: Credentials, options: SlackRequestOpti
   const controller = new AbortController()
   const abort = () => controller.abort()
   operation?.signal.addEventListener('abort', abort, { once: true })
-  const timer = setTimeout(abort, method === 'apps.connections.open' ? 15000 : 10000)
+  let timer: ReturnType<typeof setTimeout> | undefined
   let lease: AgentLease<Agent> | undefined
   try {
    const target = await pinPublicAddress('slack.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, method === 'apps.connections.open' ? 15000 : 10000, fail); lease = pool.lease(target); const dispatcher = lease.agent
    await operation?.assertActive(); const form = new URLSearchParams(); for (const [key, value] of Object.entries(body)) if (value !== undefined) form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
    const access = services?.credentials && operation ? await services.credentials.accessToken(method === 'apps.connections.open' ? 'app' : 'bot', operation) : method === 'apps.connections.open' ? credentials.appToken : credentials.botToken
    await operation?.assertActive()
+   // Start after the token: a host-side renewal has its own bound and must not eat this request's budget.
+   timer = setTimeout(abort, method === 'apps.connections.open' ? 15000 : 10000)
    const response = await (options.request ?? undiciRequest)(`https://slack.com/api/${method}`, {
     dispatcher,
     method: 'POST',
@@ -556,7 +558,7 @@ export function createSlackReceiver(
     remember(
      texts,
      `${parsed.channel}:${messageId}`,
-     { text: formatted ? message.text : escapeText(message.text), formatted: true },
+     { text: message.text, formatted },
      CACHE_SIZE,
     )
    return { chatId, messageId }
@@ -573,7 +575,9 @@ export function createSlackReceiver(
     const row = rows.map(obj).find(item => item?.ts === receipt.messageId && item.user === bot)
     return typeof row?.text === 'string' ? row.text : undefined
    }
-   let current = texts.get(key)?.text
+   const cached = texts.get(key)
+   // Slack returns the wire text (already escaped/mrkdwn); only our own cache knows a plain message.
+   let current = cached && (cached.formatted ? cached.text : escapeText(cached.text))
    if (current === undefined)
     current = own(
      await call(
@@ -587,14 +591,15 @@ export function createSlackReceiver(
     current = own(
      await call(
       'conversations.replies',
-      { channel: parsed.channel, ts: receipt.messageId, latest: receipt.messageId, inclusive: true, limit: 1 },
+      // Slack lists the thread parent first whatever the window, so ask for two and match by ts.
+      { channel: parsed.channel, ts: receipt.messageId, oldest: receipt.messageId, latest: receipt.messageId, inclusive: true, limit: 2 },
       op,
      ),
     )
    if (!current || current.length > 40000) return
    const result = await call(
     'chat.update',
-    { channel: parsed.channel, ts: receipt.messageId, text: current, blocks: textBlocks(current, true) },
+    { channel: parsed.channel, ts: receipt.messageId, text: current, blocks: cached ? textBlocks(cached.text, cached.formatted) : textBlocks(current, true) },
     op,
    )
    if (obj(result)?.channel && obj(result)?.channel !== parsed.channel) throw fail('blocked')
@@ -669,7 +674,10 @@ export function createSlackReceiver(
      taken = undefined
      throw error
     }
-    if (!['gone', 'rate_limited'].includes(error.failure.kind)) {
+    if (error.failure.kind === 'rate_limited') {
+     dropped++
+     ;(options.report ?? console.error)(`Slack dropped an acknowledged event while channel lookups were rate-limited (${dropped} so far).`)
+    } else if (error.failure.kind !== 'gone') {
      dropped++
      ;(options.report ?? console.error)(
       `Slack dropped an acknowledged event it is not allowed to resolve (${dropped} so far); check the app's conversation scopes.`,

@@ -188,7 +188,7 @@ test('the socket is pinged and a silent one is dropped after 90 seconds', async 
   await h.adapter.dispose(); await pending
 })
 const recording = (history = { messages: [] }, replies = { messages: [] }) => {
-  const updates = [], h = harness(undefined, { 'conversations.history': () => history, 'conversations.replies': () => replies, 'chat.update': body => { updates.push(body); return { ok: true } } })
+  const updates = [], h = harness(undefined, { 'conversations.history': () => history, 'conversations.replies': body => ({ messages: replies.messages.slice(0, body.limit ?? Infinity) }), 'chat.update': body => { updates.push(body); return { ok: true } } })
   return { h, updates }
 }
 const receipt = { chatId: 'group:T1:U1:C1', messageId: '1800000001.000001' }
@@ -196,7 +196,11 @@ test('clearing buttons keeps the posted text and sections', async () => {
   const { h, updates } = recording()
   await h.adapter.identify(op)
   await h.adapter.clearButtons(await h.adapter.send(receipt.chatId, { text: 'Choose & go', buttons: [[{ text: 'Yes', data: 'y' }]] }, op), op)
-  assert.deepEqual(updates, [{ channel: 'C1', ts: receipt.messageId, text: 'Choose &amp; go', blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Choose &amp; go', verbatim: true } }] }])
+  await h.adapter.clearButtons(await h.adapter.send(receipt.chatId, { text: '*Plain* :x: & go', buttons: [[{ text: 'Yes', data: 'y' }]] }, op), op)
+  assert.deepEqual(updates, [
+    { channel: 'C1', ts: receipt.messageId, text: 'Choose &amp; go', blocks: [{ type: 'section', text: { type: 'plain_text', text: 'Choose &amp; go', emoji: false } }] },
+    { channel: 'C1', ts: receipt.messageId, text: '*Plain* :x: &amp; go', blocks: [{ type: 'section', text: { type: 'plain_text', text: '*Plain* :x: &amp; go', emoji: false } }] },
+  ])
   assert.equal(h.calls.includes('conversations.history'), false)
   await h.adapter.dispose()
 })
@@ -254,4 +258,13 @@ test('inspect verifies the private/group namespace against Slack', async () => {
   await assert.rejects(h.adapter.inspect('private:T1:U1:G1', op), /blocked/)
   await assert.rejects(h.adapter.send('private:T1:U9:D1', { text: 'secret' }, op), /blocked/)
   await h.adapter.dispose()
+})
+test('a slow host-side token renewal does not spend the request timeout', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let signal
+  const request = slackRequest(creds, { lookup, request: async (_url, init) => { signal = init.signal; return { statusCode: 200, headers: {}, body: Readable.from([Buffer.from('{"ok":true}')]) } } },
+    { credentials: { accessToken: async () => { t.mock.timers.tick(14_000); return 'fixture-token' } } })
+  const controller = new AbortController()
+  assert.deepEqual(await request('chat.postMessage', {}, { signal: controller.signal, assertActive: async () => {} }), { ok: true })
+  assert.equal(signal.aborted, false)
 })
