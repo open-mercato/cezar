@@ -15,7 +15,9 @@ import {
   useProjectRepoBase,
   useRunArtifacts,
   useRuns,
+  useContinueRun,
 } from '@/api/queries'
+import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
@@ -365,7 +367,16 @@ export function ThreadView({
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
 
+  // "Use <other> instead" on a reconnect card: Continue on that account, a fresh session (spec
+  // 2026-11-18-inline-account-reconnect; 2026-07-29-agent-profiles § sessionId and profileId).
+  const continueOn = useContinueRun(run.id)
+  const reconnectSurface = useMemo<ReconnectSurface>(() => ({
+    kind: 'task',
+    switchTo: (agentProfile: string) => continueOn.mutateAsync({ agentProfile }),
+  }), [continueOn.mutateAsync])
+
   return (
+    <ReconnectSurfaceContext.Provider value={reconnectSurface}>
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
       {embedded ? null : <RunHeader run={run} planTally={planTally} onMarkedUnread={markedUnread} />}
 
@@ -532,6 +543,13 @@ export function ThreadView({
               </>
             ) : null}
           </div>
+        ) : !lifecycleGate && run.status === 'waiting' && run.parked?.kind === 'auth' ? (
+          // Parked on an expired login (spec 2026-11-18-inline-account-reconnect): the card in the
+          // thread reconnects; a message here continues on another account instead.
+          <div data-slot="sign-in-hint" className={HINT_ROW}>
+            <StatusDot tone="pending" />
+            <span className={HINT_TEXT}>Reconnect to continue, or send a message to continue on another account</span>
+          </div>
         ) : !lifecycleGate && run.status === 'waiting' ? (
           <div data-slot="paused-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
@@ -571,6 +589,7 @@ export function ThreadView({
         ) : null}
       </TaskDock>
     </div>
+    </ReconnectSurfaceContext.Provider>
   )
 }
 

@@ -326,6 +326,16 @@ export function retryOf(messages: readonly ManagerMessage[]): { messageId: strin
   return asked.length > 0 ? { messageId: last.id, text: asked.join('\n\n') } : undefined
 }
 
+/** Ids of the newest auth-failed message per account: those draw the live reconnect card, older
+ *  ones a quiet line (spec 2026-11-18-inline-account-reconnect, one card per account). */
+export function liveAuthFailures(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const newest = new Map<string, string>()
+  for (const message of messages) {
+    if (message.kind === 'assistant' && message.authFailure) newest.set(`${message.authFailure.provider}:${message.authFailure.profileId}`, message.id)
+  }
+  return new Set(newest.values())
+}
+
 // ---- labels --------------------------------------------------------------------------------
 
 export function cronLabel(minutes: number): string {

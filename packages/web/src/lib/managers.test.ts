@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import {
+  liveAuthFailures,
   managerReplyAnnouncement,
   accessLabel,
   managerAttention,
@@ -442,5 +444,14 @@ describe('parseInlineReferences', () => {
       { kind: 'text', text: '#12 issue x1 task abcdef12' },
     ])
     expect(inlineReferenceText('Assess [[pr:gone/12]]')).toBe('Assess #12')
+  })
+})
+
+describe('liveAuthFailures (spec 2026-11-18-inline-account-reconnect)', () => {
+  it('keeps the newest failure per account', () => {
+    const failed = (id: string, provider: 'claude' | 'codex', profileId: string): ManagerMessage =>
+      ({ id, seq: 0, at: '', kind: 'assistant', text: '', turn: 'chat', streaming: false, commands: [], error: 'x', authFailure: { provider, profileId } })
+    const live = liveAuthFailures([failed('a', 'claude', 'work'), failed('b', 'codex', 'default'), failed('c', 'claude', 'work')])
+    expect([...live].sort()).toEqual(['b', 'c'])
   })
 })
