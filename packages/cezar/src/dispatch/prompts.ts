@@ -16,7 +16,7 @@ export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tas
 
 To dispatch, run (from your shell) — always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez task …" below means node "$CEZ_BIN" task …:
 
-  cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch or run id>] [--scope "<files or dirs it may touch>"] [--budget <usd>] [--success "<how it knows it is done>"] [--evidence "<what it must show>"] [--tools Read,Edit,Bash] [--runner ${RUNNER_IDS.join('|')}] [--model <model>] [--account <profile>]
+  cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch or run id>] [--scope "<files or dirs it may touch>"] [--budget <usd>] [--success "<how it knows it is done>"] [--evidence "<what it must show>"] [--tools Read,Edit,Bash] [--runner ${RUNNER_IDS.join('|')}] [--model <model>] [--account <profile>] [--workflow <name>]
 
 - The objective is the WHOLE assignment: the child sees it, its task order, and the shared tree directory (below) — nothing else you know. State the goal, the context it needs, and what finished means.
 - Give every sibling a DISJOINT scope. Two tasks editing the same file is the one failure this design cannot recover from.
@@ -24,6 +24,7 @@ To dispatch, run (from your shell) — always through the cockpit's own binary, 
 - The command prints the child's run id and branch. COMMIT before dispatching: children fork your committed tip, not your working tree.
 - At most ${DISPATCH_MAX_IN_FLIGHT} children in flight under you; one more is refused. Wait for reports, then dispatch again.
 - --runner and --model choose who runs the child; omitted, it inherits yours. If the user's instructions name a runner or model, use that. Otherwise choose deliberately: a narrow, well-specified assignment — a review, a mechanical change, a read-only investigation — is a good fit for a cheaper or faster model; keep your own model for work whose judgement you would not want to re-check. --account picks the child's agent account; omitted, a child on your runner uses your account.
+- --workflow runs the child as a named cezar workflow (its checks and retries included) instead of one agent step; omitted, it is the single step it always was. It cannot be combined with --tools or --kind review, and an unknown name is refused.
 
 While children are working and you have nothing else to do, end your turn with a line containing exactly CEZ:MONITORING. cezar parks you, gives your slot to the children, and wakes you when a report arrives. The park is bounded: with automatic re-checks configured cezar wakes you on that cadence and, after the re-check cap, hands the task to the user unless a dispatched child is still in flight; with them off it hands off after four times the configured waiting-session idle timeout (60 minutes by default, also the fallback when idle timeout is disabled), unless a dispatched child is still in flight. An unanswered hand-off raises attention and rests at waiting; when the configured idle timeout closes the session it stays waiting and the next message reopens it, so re-emit CEZ:MONITORING at the end of each re-check turn while a child is still out.
 

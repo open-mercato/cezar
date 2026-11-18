@@ -5128,7 +5128,17 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(runner, input.account);
         if ('error' in account) return c.json({ error: `dispatch refused — ${account.error}` }, 409);
       }
+      // A named child workflow resolves like POST /runs does; unknown is a 400, never a fallback (#2098).
+      let namedWorkflow: WorkflowDef | undefined;
+      if (input.workflow !== undefined) {
+        if (input.allowed_tools?.length) return c.json({ error: 'workflow cannot be combined with tools — the workflow\'s own steps set their tools' }, 400);
+        if (input.kind === 'review') return c.json({ error: 'workflow cannot be combined with kind review' }, 400);
+        const { workflows } = await loadWorkflows(c.get('project').root);
+        namedWorkflow = workflows.find((w) => w.name === input.workflow);
+        if (!namedWorkflow) return c.json({ error: `unknown workflow: ${input.workflow}` }, 400);
+      }
       const outcome = manager.dispatch(c.req.param('id'), input, {
+        ...(namedWorkflow ? { namedWorkflow } : {}),
         automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
       });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);

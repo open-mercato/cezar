@@ -47,6 +47,12 @@ describe('cez task', () => {
     expect(h.out[0]).toContain('dispatched child-1 on branch cez/child1');
   });
 
+  it('create sends --workflow as the order\'s workflow (#2098)', async () => {
+    const h = harness({ status: 201, body: { id: 'child-1' } });
+    expect(await runTaskCommand(['create', 'do it', '--workflow', 'implement-and-verify'], env, h.io)).toBe(0);
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({ objective: 'do it', workflow: 'implement-and-verify' });
+  });
+
   it('create surfaces a refusal with the server’s reason and a non-zero exit', async () => {
     const h = harness({ status: 409, body: { error: 'no budget left' } });
     expect(await runTaskCommand(['create', 'x'], env, h.io)).toBe(1);
