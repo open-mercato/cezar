@@ -191,6 +191,11 @@ function writeHandoffAndTodo() {
 async function managerTurn(userText) {
   const kind = /\[cez-manager:(chat|watch|job|followup)\]/.exec(userText)?.[1] ?? 'chat';
   const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
+  // `mock:auth-error` fails a manager turn the way a revoked login does (spec 2026-11-18-inline-account-reconnect).
+  if (said.includes('mock:auth-error')) {
+    emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.', usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
   const tool = (args) => {
     const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cez-manager ${args.join(' ')}` } }], usage: { input_tokens: 90, output_tokens: 30 } } });
