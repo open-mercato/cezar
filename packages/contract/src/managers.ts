@@ -449,7 +449,12 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     commands: z.array(managerCommandSchema),
     stopped: z.boolean().optional(),
     error: z.string().optional(),
-    /** A provider usage limit ended this turn; the manager resumes it at this instant. Dropped once it does, or is cancelled. */
+    /** The turn failed because this agent account's login was rejected (spec 2026-11-18-inline-account-reconnect):
+     *  the chat renders the reconnect card. Dropped once the turn is resumed. */
+    authFailure: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
+    /** Set when a reconnect re-ran this failed turn. */
+    reconnectedAt: z.string().optional(),
+    /** A provider usage limit ended this turn); the manager resumes it at this instant. Dropped once it does, or is cancelled. */
     resumeAt: z.string().optional(),
     costUsd: z.number().optional(),
     /** Posted by the server for a linked automation's run, with no model turn (`turn: 'job'`,
