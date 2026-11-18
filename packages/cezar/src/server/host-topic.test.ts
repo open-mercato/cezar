@@ -109,7 +109,9 @@ describe('host topic + sampler (live-server path)', () => {
       version: '0.0.0-test',
       socketHub: hub,
     });
-    expect([...topics.keys()].sort()).toEqual(['health', 'host']);
+    // `questions` carries counts only, so any local page may read it (Questions inbox spec).
+    expect([...topics.keys()].sort()).toEqual(['health', 'host', 'questions']);
+    expect(topics.get('questions')?.options?.loopbackReadable).toBe(true);
     // Not a discovery payload: the loopback-origin fallback admits foreign local pages at the
     // handshake, so only an explicitly `loopbackReadable` topic may be read by one.
     expect(topics.get('host')?.options?.loopbackReadable ?? false).toBe(false);
