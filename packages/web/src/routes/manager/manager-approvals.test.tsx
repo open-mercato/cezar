@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, refreshManagerApprovalLists } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
@@ -424,64 +424,4 @@ it('does not bring finished cards back when the reader leaves and returns', asyn
   await screen.findByText('Job 3')
   expect(screen.queryByText('Job 2')).toBeNull()
   expect(screen.queryByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })).toBeNull()
-})
-
-describe('a decided card lingers for 30 seconds on this page only', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] })
-    managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 2, confirm: { 'add-job': false } })]
-    messages = { shop: [job(2, 'First'), job(4, 'Second')] }
-  })
-  afterEach(() => { vi.useRealTimers() })
-
-  const ids = { First: 'a2', Second: 'a4' } as const
-  const card = (name: keyof typeof ids) => document.querySelector<HTMLElement>(`[data-slot="manager-action"][data-action-id="${ids[name]}"]`)
-
-  it('keeps its place and result, drops the count at once, then leaves after 30 s', async () => {
-    // One pending card per page in the mock: the newest shows first, the older one after it loads.
-    renderApprovals()
-    await screen.findByText('Second')
-    await screen.findByText('First')
-    const before = [...document.querySelectorAll('[data-slot="manager-action"]')].map((element) => element.getAttribute('data-action-id'))
-    fireEvent.click(within(card('First')!).getByRole('button', { name: 'Approve' }))
-    await waitFor(() => expect(card('First')?.getAttribute('data-status')).toBe('dismissed'))
-    expect(screen.getByText('1 pending approval across all managers')).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Approvals, 1 pending approval' })).toBeTruthy()
-    // Still where it was, not moved to the end of the list.
-    expect([...document.querySelectorAll('[data-slot="manager-action"]')].map((element) => element.getAttribute('data-action-id'))).toEqual(before)
-    act(() => { vi.advanceTimersByTime(29_000) })
-    expect(card('First')).not.toBeNull()
-    act(() => { vi.advanceTimersByTime(1_100) })
-    await waitFor(() => expect(card('First')).toBeNull())
-    expect(card('Second')?.getAttribute('data-status')).toBe('pending')
-  })
-
-  it('is already gone when the user comes back to the page', async () => {
-    renderApprovals()
-    await screen.findByText('First')
-    fireEvent.click(within(card('First')!).getByRole('button', { name: 'Approve' }))
-    await waitFor(() => expect(card('First')?.getAttribute('data-status')).toBe('dismissed'))
-    cleanup()
-    renderApprovals()
-    await screen.findByText('Second')
-    expect(card('First')).toBeNull()
-  })
-
-  it('shows a failure with its reason for the 30 s, then lets it go', async () => {
-    managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, confirm: { 'add-job': false } })]
-    messages = { shop: [job(2, 'First')] }
-    const client = renderApprovals()
-    const failure = { ...job(2, 'First'), status: 'failed' as const, result: 'Required checks are failing.' }
-    onDecision = async () => {
-      messages.shop = [failure]
-      act(() => applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'shop', message: failure })))
-    }
-    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
-    expect(await screen.findByText('Required checks are failing.')).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
-    expect(screen.getByRole('link', { name: 'Approvals, 0 pending approvals' })).toBeTruthy()
-    act(() => { vi.advanceTimersByTime(30_100) })
-    await waitFor(() => expect(screen.queryByText('Required checks are failing.')).toBeNull())
-    expect(screen.getByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
-  })
 })

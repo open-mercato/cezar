@@ -35,7 +35,6 @@ const ACTION_STATUS: Record<ManagerActionStatus, { tone: StatusDotTone; label: s
   dismissed: { tone: 'neutral', label: 'Dismissed' },
 }
 
-/** Keyed by string: a type from a newer server must still get a sheet, never a crash. */
 /** A merge says what it did: "Merging…" then "Merged" (the Approvals page shows it live). */
 const MERGE_STATUS: Partial<Record<ManagerActionStatus, string>> = { running: 'Merging…', done: 'Merged' }
 
@@ -45,6 +44,7 @@ const statusOf = (message: ActionMessage) => {
   return merge ? { ...base, label: merge } : base
 }
 
+/** Keyed by string: a type from a newer server must still get a sheet, never a crash. */
 const SHEET_COPY: Record<string, { title: string; confirm: string; effect: string } | undefined> = {
   'merge-pr': { title: 'Merge this pull request?', confirm: 'Merge', effect: 'The merge is refused if the pull request changed after this proposal.' },
   'enable-automation': { title: 'Enable this automation?', confirm: 'Enable', effect: 'It starts launching tasks on its own. It is refused if the automation was edited after this proposal.' },
