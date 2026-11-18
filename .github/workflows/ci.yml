@@ -82,6 +82,14 @@ jobs:
       - name: Run packaged CLI E2E tests
         run: npm run test:package
 
+      # The SDK's own suites run against its built dist; test:pack installs the SDK tarball
+      # and the packed service outside the workspace, so both need `npm run build` above.
+      - name: Run extension SDK tests
+        run: npm test -w @open-mercato/cezar-extension-sdk
+
+      - name: Verify the extension SDK tarball with external consumers
+        run: npm run test:pack -w @open-mercato/cezar-extension-sdk
+
       # Every package the release publishes must be packable — the workspace root is `private`
       # and publishes nothing, so packing THERE just errors ("must have name and version").
       # Named explicitly rather than with `--workspaces`, which would also pack the packages
@@ -89,6 +97,7 @@ jobs:
       # nobody publishes. The `alias-cezar*` packages are not workspaces, so each packs from its own directory.
       - name: Verify release packages
         run: |
+          npm pack --dry-run --ignore-scripts -w @open-mercato/cezar-extension-sdk
           npm pack --dry-run --ignore-scripts -w @open-mercato/cezar
           (cd alias-cezar && npm pack --dry-run --ignore-scripts)
           (cd alias-cezar-run && npm pack --dry-run --ignore-scripts)

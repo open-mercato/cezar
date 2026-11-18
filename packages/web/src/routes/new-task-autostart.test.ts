@@ -95,3 +95,11 @@ describe('deepLinkToast', () => {
 it('unknownSkillPrefillText is byte-for-byte the legacy embedding', () => {
   expect(unknownSkillPrefillText('om-fix', 'https://x')).toBe('Use the "om-fix" skill on: https://x')
 })
+
+it('deepLinkToast names an unknown workflow instead of silently falling back to quick-task', () => {
+  expect(deepLinkToast({ kind: 'prefill' }, '', 'missing-flow')).toEqual({
+    message: 'Unknown workflow "missing-flow" — prefilled for quick-task; review and press Start',
+    tone: 'danger',
+  })
+  expect(deepLinkToast({ kind: 'prefill' }, '').tone).toBe('default')
+})

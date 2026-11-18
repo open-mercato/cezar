@@ -141,6 +141,9 @@ export type AppShellProps = {
   /** The bottom edge of the main column, above the composer row: the telemetry consent bar
    *  (docs/telemetry.md) lives here, so it never covers the view or interrupts a flow. */
   footerBanner?: ReactNode
+  /** The active project's sidebar extension panels (spec 2026-11-07-extension-placements),
+   *  under its area nav. Built by the container (it needs the query client); absent renders nothing. */
+  extensionPanels?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
   /** This computer's name (`workspace/config`): CezarBot's header avatar and sidebar chip. */
@@ -276,6 +279,7 @@ export const AppShell = React.memo(function AppShell({
   singleProject = false,
   banner,
   footerBanner,
+  extensionPanels,
   brandName = 'cezar',
   brandLogoUrl = null,
   computerName,
@@ -387,6 +391,7 @@ export const AppShell = React.memo(function AppShell({
     healthReason,
     offerAddProject: offerAddProject && !singleProject,
     toolsMenu,
+    extensionPanels,
     connectPhone,
     phonesLink,
     phonesRail,
@@ -583,6 +588,7 @@ type NavProps = {
   healthReason: string | null
   offerAddProject: boolean
   toolsMenu?: ReactNode
+  extensionPanels?: ReactNode
   /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
   connectPhone?: ReactNode
   /** Footer controls: the Phones icon beside the version chip, once a phone is paired. Gates itself. */
@@ -952,7 +958,7 @@ function SidebarContent({
   const {
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
     newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
-    offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
+    offerAddProject, toolsMenu, extensionPanels, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
     computerName,
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
@@ -1025,6 +1031,8 @@ function SidebarContent({
                 />
               ))}
             </nav>
+            {/* The active project's extension sidebar panels, under its areas — nothing when none. */}
+            {extensionPanels}
 
             <div data-slot="current-tasks-slot" className="px-2.5">
               <SidebarNavigateContext.Provider value={onNavigate}>{currentTasks}</SidebarNavigateContext.Provider>

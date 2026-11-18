@@ -28,6 +28,7 @@ const HEALTH: HealthResponse = {
     phonePairing: false,
     singleProject: false,
     automations: false, webhooks: false,
+    extensions: true,
     dispatch: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,

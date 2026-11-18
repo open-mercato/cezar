@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Capabilities } from '@open-mercato/cezar-contract';
+import { extensionsOffReason } from '../server/capabilities.ts';
 
 /**
  * The relay principal (spec 2026-11-01-relay-qr-pairing § Authorization). A decrypted OPEN runs
@@ -22,10 +23,15 @@ export const runInRelayScope = <T>(scope: RelayScope, fn: () => T): T => storage
 export const outsideRelayScope = <T>(fn: () => T): T => storage.exit(fn);
 
 /** The one place capabilities narrow; `createApp`'s `capabilities()` closure routes through it. */
-export function narrowForRelay(capabilities: Capabilities): Capabilities {
+export function narrowForRelay(capabilities: Capabilities, env: NodeJS.ProcessEnv = process.env): Capabilities {
   if (!inRelayScope()) return capabilities;
+  // A relay request is a hosted request: extensions stay off, as on a hosted cockpit.
+  const extensionsOff = extensionsOffReason(env, false);
+  const { extensionsUnavailableReason: _reason, ...rest } = capabilities;
   return {
-    ...capabilities,
+    ...rest,
+    extensions: !extensionsOff,
+    ...(extensionsOff ? { extensionsUnavailableReason: extensionsOff } : {}),
     localHandoff: false,
     terminal: false,
     designMode: false,

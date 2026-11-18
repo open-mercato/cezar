@@ -33,6 +33,16 @@ export function isPublishable(pkg: ManifestLike): boolean {
   return pkg.private !== true;
 }
 
+/** The manifest as it goes to the registry: without the workspace-only `./source` export, whose
+ *  `src/` the tarball never ships. Publish time only — `--ignore-scripts` skips the SDK's prepack,
+ *  and release-line commits stamped manifests the workspace still resolves `./source` through. */
+export function publishedManifest(pkg: ManifestLike): ManifestLike {
+  const exports = pkg.exports;
+  if (!exports || typeof exports !== 'object' || Array.isArray(exports) || !('./source' in exports)) return pkg;
+  const { './source': _source, ...rest } = exports as Record<string, unknown>;
+  return { ...pkg, exports: rest };
+}
+
 /**
  * Every manifest a release stamps.
  *
@@ -44,7 +54,13 @@ export function isPublishable(pkg: ManifestLike): boolean {
  */
 export interface ReleaseManifests {
   /**
-   * The API contract (zod schemas + inferred types). FIRST in the stamped set because both the
+   * The public extension SDK (`@open-mercato/cezar-extension-sdk`). FIRST because the contract
+   * depends on it; published, so extension authors can install the version a cezar release
+   * was built with. The service does not depend on it at runtime — inline-contract folds it in.
+   */
+  extensionSdk: ManifestLike;
+  /**
+   * The API contract (zod schemas + inferred types). Right after the SDK it re-exports, because both the
    * api-client and the service depend on it, so its version has to settle before their pins are
    * rewritten. Like the api-client it is `private`, so it is stamped but never published — which
    * is exactly why the service cannot simply depend on it at runtime: `packages/cezar/scripts/
@@ -88,7 +104,8 @@ export function pinDependency(pkg: ManifestLike, depName: string, range: string)
 /**
  * Stamp every manifest to `version` and re-pin the intra-release dependencies.
  *
- * Two pins, both derived from the manifests rather than hardcoded:
+ * Pins, all derived from the manifests rather than hardcoded:
+ *   - the contract → the extension SDK, whose author schemas it re-exports;
  *   - each alias → the service, so `npx <alias>@<v>` runs the matching CLI;
  *   - the service → the api-client, so a published service can never resolve a client build it
  *     was not released with.
@@ -103,7 +120,7 @@ export function stampManifestSet(
   version: string,
   pin: PinStyle,
 ): ReleaseManifests {
-  const { contract, apiClient, cezar, alias, runAlias } = manifests;
+  const { extensionSdk, contract, apiClient, cezar, alias, runAlias } = manifests;
   const range = pin(version);
 
   const inherited: Partial<ManifestLike> = {};
@@ -119,7 +136,8 @@ export function stampManifestSet(
   });
 
   return {
-    contract: { ...contract, version },
+    extensionSdk: { ...extensionSdk, version },
+    contract: pinDependency({ ...contract, version }, extensionSdk.name, range),
     apiClient: pinDependency({ ...apiClient, version }, contract.name, range),
     cezar: pinDependency(
       pinDependency({ ...cezar, version }, apiClient.name, range),

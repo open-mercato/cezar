@@ -34,6 +34,7 @@ import {
 } from './events'
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
+import { useExtensionSubscription } from './extensions'
 import { ApiError, getHealth, getProjectRun } from './client'
 import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
 import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
@@ -1140,6 +1141,7 @@ export function GlobalEventsProvider({ children }: { children: ReactNode }) {
   // mounted for the app's whole life, so health stays live continuously instead of flapping with
   // the lifecycles of the ~15 `useHealth` readers below.
   useHealthSubscription()
+  useExtensionSubscription()
   return <UsageContext.Provider value={usage}>{children}</UsageContext.Provider>
 }
 

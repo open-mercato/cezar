@@ -8,7 +8,7 @@ import { fixtureRepo, type FixtureRepo } from './fixture-repo.testkit.ts';
 
 const ENTRY = fileURLToPath(new URL('../index.ts', import.meta.url));
 // Resolved here, not from the fixture cwd, where no node_modules exists.
-const TSX = import.meta.resolve('tsx');
+const TSX_URL = import.meta.resolve('tsx');
 let repo: FixtureRepo | undefined;
 afterEach(() => {
   repo?.dispose();
@@ -127,7 +127,7 @@ describe('runImpactCommand', () => {
 describe('cez impact (process)', () => {
   const cli = (args: string[], cwd: string, env: NodeJS.ProcessEnv) =>
     new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
-      execFile(process.execPath, ['--import', TSX, ENTRY, 'impact', ...args], { cwd, env }, (error, stdout, stderr) => {
+      execFile(process.execPath, ['--import', TSX_URL, ENTRY, 'impact', ...args], { cwd, env }, (error, stdout, stderr) => {
         done({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout, stderr });
       });
     });

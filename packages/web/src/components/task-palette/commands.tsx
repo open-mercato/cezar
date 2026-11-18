@@ -352,7 +352,8 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
 function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null, terminalAvailable: boolean): readonly ViewId[] {
   return (
     workspace?.views ??
-    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable))
+    // Off the workspace the project's extension placements are unknown, so Extensions is not offered.
+    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable) && view !== 'extensions')
   )
 }
 

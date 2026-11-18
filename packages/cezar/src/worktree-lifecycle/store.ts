@@ -43,14 +43,14 @@ export async function assertLifecyclePath(path: string, root: string): Promise<v
   }
 }
 
-export async function atomicLifecycleWrite(path: string, value: unknown): Promise<void> {
+export async function atomicLifecycleWrite(path: string, value: unknown, ensureActive: () => void = () => {}): Promise<void> {
   await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     const file = await fs.open(temporary, 'wx', 0o600);
     try { await file.writeFile(`${JSON.stringify(value, null, 2)}\n`); await file.sync(); }
     finally { await file.close(); }
-    await renameWithRetry(temporary, path);
+    await renameWithRetry(temporary, path, { rename: async (from, to) => { ensureActive(); await fs.rename(from, to); } });
     // Durable rename on platforms that support directory fsync.
     const directory = await fs.open(dirname(path), 'r').catch(() => null);
     if (directory) { try { await directory.sync(); } catch {} finally { await directory.close(); } }

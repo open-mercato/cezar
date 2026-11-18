@@ -9,13 +9,14 @@
   },
   "workspaces": [
     "packages/contract",
+    "packages/extension-sdk",
     "packages/api-client",
     "packages/cezar",
     "packages/web"
   ],
   "scripts": {
     "build": "npm run build:server && npm run build:web && npm run check:pack",
-    "build:server": "npm run build -w @open-mercato/cezar",
+    "build:server": "npm run build -w @open-mercato/cezar-extension-sdk && npm run build -w @open-mercato/cezar",
     "build:web": "npm run build -w @open-mercato/cezar-web",
     "check:pack": "npm run check:pack -w @open-mercato/cezar",
     "dev": "node scripts/dev.mjs",
@@ -36,11 +37,12 @@
     "test:package": "npm run test:package -w @open-mercato/cezar",
     "test:e2e": "sh .ai/scripts/e2e.sh",
     "pretypecheck": "npm run build:server",
-    "typecheck": "npm run typecheck:contract && npm run typecheck:client && npm run typecheck:server && npm run typecheck:web && npm run typecheck:release",
+    "typecheck": "npm run typecheck:sdk && npm run typecheck:contract && npm run typecheck:client && npm run typecheck:server && npm run typecheck:web && npm run typecheck:release",
     "typecheck:client": "npm run typecheck -w @open-mercato/cezar-api-client",
     "typecheck:server": "npm run typecheck -w @open-mercato/cezar",
     "typecheck:web": "npm run typecheck -w @open-mercato/cezar-web",
     "typecheck:contract": "npm run typecheck -w @open-mercato/cezar-contract",
+    "typecheck:sdk": "npm run typecheck -w @open-mercato/cezar-extension-sdk",
     "typecheck:release": "tsc -p scripts/tsconfig.release.json"
   },
   "devDependencies": {

@@ -66,6 +66,7 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
 // which versions in lockstep without shipping on its own.
 type SetKey = keyof ReleaseManifests;
 const SET: Record<SetKey, string> = {
+  extensionSdk: 'packages/extension-sdk',
   contract: 'packages/contract',
   apiClient: 'packages/api-client',
   cezar: 'packages/cezar',

@@ -60,6 +60,21 @@ describe('ProjectContexts', () => {
     expect(contexts.ids()).toEqual([]);
   });
 
+  it('awaits asynchronous extension cleanup before shutdown completes', async () => {
+    const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
+    let release!: () => void;
+    const cleanup = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+    contexts.onBeforeRecover(async () => cleanup);
+    await contexts.context('a');
+    let finished = false;
+    const stopping = contexts.shutdownAll().then(() => { finished = true; });
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+    expect(finished).toBe(false);
+    release();
+    await stopping;
+    expect(finished).toBe(true);
+  });
+
   it('builds lazily: nothing on construction, first access builds, second returns the same instance', async () => {
     const contexts = makeContexts([
       { id: 'a', root: rootA, status: 'not-git' },
