@@ -81,7 +81,7 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * publish (spec 2026-10-22-html-artifacts-and-impact).
  */
 export function codexThreadOverrides(
-  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env'>,
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'enforceReadOnly'>,
   mcpConfig: Record<string, unknown> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
@@ -98,7 +98,7 @@ export function codexThreadOverrides(
   return {
     model: spec.model,
     cwd: spec.cwd,
-    sandbox: sandboxed ? 'workspace-write' : 'danger-full-access',
+    sandbox: spec.enforceReadOnly ? 'read-only' : sandboxed ? 'workspace-write' : 'danger-full-access',
     approvalPolicy: 'never',
     config,
   };
@@ -501,11 +501,9 @@ class CodexSession implements AgentSession {
       this.emitUi((state) => codexSessionStarted(threadId, state));
     }
 
-    // Seed the first turn. The system prompt (skill body + handoff contract)
-    // has no dedicated app-server field, so it rides along as a leading block
-    // of the opening message.
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
-    await this.startOrSteerTurn(first);
+    // Native developerInstructions replaces config guidance and stays stale on resume/fork.
+    // Keep each invocation's current guidance in its opening turn instead.
+    await this.startOrSteerTurn(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
   }
 
   /**
@@ -669,7 +667,10 @@ class CodexSession implements AgentSession {
         if (type === 'agentMessage') {
           // One v1 `text` per finished message — the snapshot's full text when
           // present (also covers turns that send no deltas), else the deltas.
-          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined);
+          // A parent's final answer is the last block (#2197): drain abandoned commentary first.
+          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined, {
+            drainOlder: ownThread && stringField(item, 'phase') === 'final_answer',
+          });
         } else if (type && !NON_TOOL_ITEMS.has(type) && id) {
           this.emit({
             type: 'tool-result',

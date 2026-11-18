@@ -15,9 +15,12 @@ import { queryKeys } from '@/api/queries'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { RunDiff } from '@/components/run-diff'
+import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { deriveAttention } from '@/lib/attention'
 import { Link } from '@/lib/project-router'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
 import { isHttpUrl } from '@/lib/utils'
@@ -45,6 +48,9 @@ import { writeClipboard } from '@/lib/clipboard'
  * ride Send back — the review gate is the self-review moment, and notes sent without them would
  * leave them pending for some later message.
  */
+/** The review gate's attention, from the one canonical function — blue, pulsing: waiting on you. */
+const REVIEW_GATE = deriveAttention({ status: 'review' })
+
 export function ReviewPanel({
   run,
   diffComments,
@@ -58,11 +64,15 @@ export function ReviewPanel({
 }) {
   return (
     <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
+      {/* The review gate waits on a person: the banner wears `deriveAttention`'s tone for `review`
+          (blue), not the accent — violet means cezar is working (redesign 2026-11). */}
       <div
         data-slot="review-banner"
-        className={run.harness ? 'hidden' : 'flex items-center gap-2.5 rounded-md border border-violet/30 bg-violet/10 px-3.5 py-2.5'}
+        data-tone={REVIEW_GATE.tone}
+        className={run.harness ? 'hidden' : 'flex items-center gap-2.5 rounded-md border border-info/30 bg-info/5 px-3.5 py-2.5'}
       >
-        <EyeIcon className="size-4 shrink-0 text-violet" aria-hidden="true" />
+        <StatusDot tone={REVIEW_GATE.tone} pulse={REVIEW_GATE.pulse} />
+        <EyeIcon className="size-4 shrink-0 text-info" aria-hidden="true" />
         <p className="min-w-0 text-ui">
           <span className="font-semibold">Review the changes before anything lands.</span>{' '}
           <span className="text-muted-foreground">
@@ -146,7 +156,7 @@ function ReviewActions({
   const draftPr = useMutation({
     mutationFn: () => createRunPr(run.id),
     onSuccess: (result) => {
-      toast(`Draft PR created — ${result.url}`)
+      toast(result.updated ? `PR updated — ${result.url}` : `Draft PR created — ${result.url}`)
       invalidate() // the run completed as done with `pullRequestUrl` — refetch shows PR ↗
     },
     onError: (error: Error) => {
@@ -229,18 +239,19 @@ function ReviewActions({
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          data-slot="review-send-back"
-          variant="outline"
-          size="sm"
-          title={continuation.reason ?? "Send the notes back into the agent's session"}
-          aria-describedby={!continuation.canContinue ? 'review-provider-guidance' : undefined}
-          disabled={sendBack.isPending || !continuation.canContinue}
-          onClick={submitNotes}
-        >
-          <CornerUpLeftIcon aria-hidden="true" />
-          Send back
-        </Button>
+        <IconTooltip label={continuation.reason ?? "Send the notes back into the agent's session"}>
+          <Button
+            data-slot="review-send-back"
+            variant="outline"
+            size="sm"
+            aria-describedby={!continuation.canContinue ? 'review-provider-guidance' : undefined}
+            disabled={sendBack.isPending || !continuation.canContinue}
+            onClick={submitNotes}
+          >
+            <CornerUpLeftIcon aria-hidden="true" />
+            Send back
+          </Button>
+        </IconTooltip>
         {isHttpUrl(run.pullRequestUrl) ? (
           // A PR already exists (agent-opened, spotted in the transcript) — a second Draft PR
           // click would open a duplicate. Legacy parity: the link replaces the button.
@@ -252,6 +263,7 @@ function ReviewActions({
               href={run.pullRequestUrl}
               target="_blank"
               rel="noopener noreferrer"
+              // An external link keeps its native title (design rule); no tooltip machinery.
               title="The PR for this task is already open"
             >
               <ExternalLinkIcon aria-hidden="true" />
@@ -260,43 +272,42 @@ function ReviewActions({
           </Button>
         ) : run.subject ? null : (
           // An impact run's report is what is reviewed; it proposes no PR (the server 409s, Q11).
-          <Button
-            hidden={guided}
-            className={guided ? 'hidden' : undefined}
-            data-slot="review-draft-pr"
-            variant="outline"
-            size="sm"
-            title={
-              publishBlockedReason ??
-              (git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR')
-            }
-            aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
-            disabled={draftPrBusy || publishBlockedReason !== undefined}
-            aria-busy={draftPrBusy || undefined}
-            onClick={openDraftPr}
-          >
-            {draftPrBusy ? (
-              <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" />
-            ) : (
-              <GitPullRequestIcon aria-hidden="true" />
-            )}
-            {draftPrBusy ? GIT_ACTION_PENDING_LABELS['create-draft-pr'] : 'Draft PR'}
-          </Button>
+          <IconTooltip label={publishBlockedReason ?? (git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR')}>
+            <Button
+              data-slot="review-draft-pr"
+              data-by-agent={git.byAgent ? 'true' : undefined}
+              variant="outline"
+              size="sm"
+              hidden={guided}
+              aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+              disabled={draftPrBusy || publishBlockedReason !== undefined}
+              aria-busy={draftPrBusy || undefined}
+              onClick={openDraftPr}
+            >
+              {draftPrBusy ? (
+                <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" />
+              ) : (
+                <GitPullRequestIcon aria-hidden="true" />
+              )}
+              {draftPrBusy ? GIT_ACTION_PENDING_LABELS['create-draft-pr'] : 'Draft PR'}
+            </Button>
+          </IconTooltip>
         )}
-        <Button
-          hidden={guided}
-          data-slot="review-accept"
-          variant="contrast"
-          size="sm"
-          className={guided ? 'hidden' : 'ml-auto'}
-          title={publishBlockedReason ?? finishTitle('review')}
-          aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
-          disabled={finish.isPending || publishBlockedReason !== undefined}
-          onClick={() => finish.mutate()}
-        >
-          <CheckIcon aria-hidden="true" />
-          Accept
-        </Button>
+        <IconTooltip label={publishBlockedReason ?? finishTitle('review')}>
+          <Button
+            data-slot="review-accept"
+            variant="contrast"
+            size="sm"
+            hidden={guided}
+            className={guided ? 'hidden' : 'ml-auto'}
+            aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+            disabled={finish.isPending || publishBlockedReason !== undefined}
+            onClick={() => finish.mutate()}
+          >
+            <CheckIcon aria-hidden="true" />
+            Accept
+          </Button>
+        </IconTooltip>
       </div>
       {publishBlockedReason ? (
         <p
@@ -320,7 +331,7 @@ function ManualMergeLine({ command }: { command: string }) {
     <button
       type="button"
       data-slot="review-manual"
-      title="Copy the command"
+      aria-label={`Copy the command: ${command}`}
       onClick={() => {
         void writeClipboard(command)
           .then(() => toast('Command copied to clipboard.'))

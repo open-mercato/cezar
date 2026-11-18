@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
+import { ArrowLeftIcon, ListChevronsUpDownIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
@@ -21,9 +21,12 @@ import type { SkillActivation } from '@/components/skill-detail'
 import { SkillEmptyHint } from '@/components/skill-empty-hint'
 import { SkillsUpdateCard } from '@/components/skills-update-card'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { filterSkills, groupSkillsByRepo, isProjectSkill, orderSkills, skillUsedBy } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
@@ -96,6 +99,8 @@ function SkillsCatalog() {
   const [searchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const [repoFilter, setRepoFilter] = useState<string | null>(null)
+  // Session-only on purpose (#895): a view toggle is not worth a persisted setting.
+  const [detailed, setDetailed] = useState(false)
   const queryClient = useQueryClient()
   const uiState = useUiState()
   const importable = importableQuery.data ?? []
@@ -135,6 +140,7 @@ function SkillsCatalog() {
     onSuccess: (catalog) => {
       // The POST answers the merged catalog — seed the shared query instead of refetching.
       queryClient.setQueryData(queryKeys.skills, catalog)
+      queryClient.setQueryData(queryKeys.skillsReady, catalog)
       toast('Team skills refreshed.')
     },
     onError: (error) => toast(error.message, { tone: 'danger' }),
@@ -188,7 +194,8 @@ function SkillsCatalog() {
       <section
         data-slot="skills-list"
         className={cn(
-          'w-full flex-col border-border md:flex md:w-96 md:shrink-0 md:border-r',
+          'w-full flex-col border-border md:flex md:shrink-0 md:border-r',
+          detailed ? 'md:w-[32rem]' : 'md:w-96',
           // Pin the pane below the sticky h-14 header so the ROWS scroll inside it (the #384
           // stable-scroll surface) — `var(--spacing)*14` tracks the density token.
           'md:sticky md:top-14 md:max-h-[calc(100dvh-(var(--spacing)*14))]',
@@ -204,37 +211,55 @@ function SkillsCatalog() {
             onChange={(event) => setQuery(event.target.value)}
             className="h-8 text-ui"
           />
-          <button
-            type="button"
-            data-slot="skills-refresh"
-            title="git fetch the team skills repos"
-            disabled={refresh.isPending}
-            onClick={() => refresh.mutate()}
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
-          >
-            <RefreshCwIcon
-              aria-hidden="true"
-              className={cn('size-3', refresh.isPending && 'motion-safe:animate-spin')}
-            />
-            Refresh
-          </button>
+          {/* Both buttons share the field's 32px height; their explanations are the one Tooltip,
+              not a native title. */}
+          <IconTooltip label={detailed ? 'Show short descriptions' : 'Show full descriptions'}>
+            <button
+              type="button"
+              data-slot="skills-detailed"
+              aria-pressed={detailed}
+              onClick={() => setDetailed((value) => !value)}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-label font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none aria-pressed:bg-muted aria-pressed:text-foreground"
+            >
+              <ListChevronsUpDownIcon aria-hidden="true" className="size-3" />
+              Details
+            </button>
+          </IconTooltip>
+          <IconTooltip label="Fetch the team skills repos">
+            <button
+              type="button"
+              data-slot="skills-refresh"
+              disabled={refresh.isPending}
+              onClick={() => refresh.mutate()}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-label font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
+            >
+              <RefreshCwIcon
+                aria-hidden="true"
+                className={cn('size-3', refresh.isPending && 'motion-safe:animate-spin')}
+              />
+              Refresh
+            </button>
+          </IconTooltip>
         </div>
         {repoGroups.length > 1 ? (
           <div className="shrink-0 px-3 pb-2">
-            <select
-              data-slot="skills-repo-filter"
-              aria-label="Filter by repository"
+            {/* The cockpit select (native `<select>` is retired): same name, same `__all__` sentinel. */}
+            <Select
               value={activeRepo ?? '__all__'}
-              onChange={(event) => setRepoFilter(event.target.value === '__all__' ? null : event.target.value)}
-              className="h-8 w-full rounded-md border border-border bg-card px-2 text-ui text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              onValueChange={(next) => setRepoFilter(next === '__all__' ? null : next)}
             >
-              <option value="__all__">All repositories</option>
-              {repoGroups.map((group) => (
-                <option key={group.key} value={group.key}>
-                  {group.label} ({group.skills.length})
-                </option>
-              ))}
-            </select>
+              <SelectTrigger data-slot="skills-repo-filter" aria-label="Filter by repository" size="sm" className="w-full text-ui">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All repositories</SelectItem>
+                {repoGroups.map((group) => (
+                  <SelectItem key={group.key} value={group.key}>
+                    {group.label} ({group.skills.length})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         ) : null}
         {projectId ? (
@@ -267,7 +292,7 @@ function SkillsCatalog() {
 
         <ul data-slot="skill-rows" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
           {skillsQuery.isPending ? (
-            <li className="px-2.5 py-2 text-ui text-soft-foreground">Loading…</li>
+            <LoadingState as="li" label="Loading skills…" className="list-none"><RowsSkeleton rows={5} /></LoadingState>
           ) : shown.length > 0 ? (
             shownGroups.map((group) => (
               <li key={group.key} data-slot="skill-group" data-group={group.key || 'local'} className="list-none">
@@ -282,6 +307,7 @@ function SkillsCatalog() {
                       key={skill.name}
                       skill={skill}
                       active={selection === skill.name}
+                      detailed={detailed}
                       activation={skillActivation(
                         skill,
                         importableNames,
@@ -295,7 +321,7 @@ function SkillsCatalog() {
               </li>
             ))
           ) : (
-            <li className="px-2.5 py-2 text-xs leading-relaxed text-soft-foreground">
+            <li className="px-2.5 py-2 text-label leading-relaxed text-muted-foreground">
               {catalog.length > 0 ? '(no skills match)' : <SkillEmptyHint />}
             </li>
           )}
@@ -314,7 +340,7 @@ function SkillsCatalog() {
                 <Link
                   to="/skills"
                   data-slot="skills-back"
-                  className="mb-3 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground md:hidden"
+                  className="mb-3 inline-flex items-center gap-1.5 text-label font-medium text-muted-foreground hover:text-foreground md:hidden"
                 >
                   <ArrowLeftIcon aria-hidden="true" className="size-3.5" />
                   Back to skills
@@ -345,10 +371,12 @@ function SkillsCatalog() {
 function SkillRow({
   skill,
   active,
+  detailed,
   activation,
 }: {
   skill: SkillCatalogItem
   active: boolean
+  detailed: boolean
   activation?: SkillActivation
 }) {
   const project = isProjectSkill(skill)
@@ -367,7 +395,12 @@ function SkillRow({
         </span>
         <SkillSourceTag source={skill.source} teamRepo={skill.team?.repo} className="ml-auto" />
       </span>
-      {skill.description ? <span className="line-clamp-2 text-xs text-soft-foreground">{skill.description}</span> : null}
+      {skill.description ? <span
+          data-slot="skill-description"
+          className={cn('text-label text-muted-foreground', detailed ? 'whitespace-pre-line break-words' : 'line-clamp-2')}
+        >
+          {skill.description}
+        </span> : null}
     </>
   )
   return (

@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ASSET_CACHE_CONTROL,
@@ -5,6 +8,7 @@ import {
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
+  readRegularFile,
   resolveGetRequest,
   resolveIndexHtml,
   type GetTarget,
@@ -58,6 +62,11 @@ describe('resolveGetRequest', () => {
     { name: '/assets/index-abc123.js → passthrough', path: '/assets/index-abc123.js', target: 'passthrough' },
     { name: '/icon.svg (favicon) → passthrough', path: '/icon.svg', target: 'passthrough' },
     { name: '/open-mercato.svg (legacy favicon alias) → passthrough', path: '/open-mercato.svg', target: 'passthrough' },
+    { name: '/manifest.webmanifest (install) → passthrough', path: '/manifest.webmanifest', target: 'passthrough' },
+    { name: '/apple-touch-icon.png (install) → passthrough', path: '/apple-touch-icon.png', target: 'passthrough' },
+    { name: '/icon-192.png (install) → passthrough', path: '/icon-192.png', target: 'passthrough' },
+    { name: '/icon-512.png (install) → passthrough', path: '/icon-512.png', target: 'passthrough' },
+    { name: '/icon-maskable-512.png (install) → passthrough', path: '/icon-maskable-512.png', target: 'passthrough' },
     // Passthrough is about ownership, not about the build being there.
     { name: '/assets/x.js with no build → still passthrough', path: '/assets/x.js', distExists: false, target: 'passthrough' },
     // R7: the legacy asset routes are gone — these are SPA paths like any other.
@@ -150,5 +159,21 @@ describe('SHELL_CACHE_CONTROL', () => {
     expect(SHELL_CACHE_CONTROL).not.toBe(ASSET_CACHE_CONTROL);
     expect(ASSET_CACHE_CONTROL).toContain('immutable');
     expect(SHELL_CACHE_CONTROL).not.toContain('max-age');
+  });
+});
+
+describe('readRegularFile', () => {
+  it('returns the bytes of a regular file and null for a missing path or a directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-static-'));
+    try {
+      writeFileSync(join(dir, 'icon-192.png'), 'png-bytes');
+      mkdirSync(join(dir, 'sub'));
+      expect(readRegularFile(join(dir, 'icon-192.png'))?.toString()).toBe('png-bytes');
+      expect(readRegularFile(join(dir, 'nope.png'))).toBeNull();
+      expect(readRegularFile(join(dir, 'sub'))).toBeNull();
+      expect(readRegularFile(dir)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

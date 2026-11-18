@@ -171,7 +171,7 @@ export interface ForgePrMergeState {
   baseRef: string;
   headSha: string;
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
-  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown';
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'not-required' | 'unknown';
   checks: ForgePrCheck[];
   /**
    * How much of the check tier the token could actually read (#969):
@@ -248,7 +248,7 @@ export type ForgePrDiffResult =
 export type ForgeRefKind = 'repo' | 'issue' | 'pr' | 'branch' | 'commit';
 
 export type DraftPrOutcome =
-  | { ok: true; url: string; dryRun: boolean }
+  | { ok: true; url: string; dryRun: boolean; /** the branch already had an open PR; the push updated it */ updated?: boolean }
   | { ok: false; error: string };
 
 export interface DraftPrInput {

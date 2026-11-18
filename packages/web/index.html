@@ -11,6 +11,14 @@
     />
     <!-- Relative so Vite bundles the legacy logo out of web/ instead of duplicating it under a public dir. -->
     <link rel="icon" href="/icon.svg" />
+    <!-- use-credentials: behind a Basic gate the default anonymous manifest fetch gets a 401 (#1762). -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- The standalone fallback for an iOS that cannot read the manifest. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="cezar" />
+    <meta name="theme-color" content="#0d0d0d" />
     <title>cezar</title>
     <!-- Theme before first paint — no flash. Mirrors resolveTheme()/applyResolvedTheme() in
          src/lib/theme.ts; keep the two in sync. Shares the legacy cockpit's `cez-theme` key
@@ -24,23 +32,24 @@
             (pref === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
           document.documentElement.classList.toggle('light', light)
           document.documentElement.style.colorScheme = light ? 'light' : 'dark'
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute('content', light ? '#ffffff' : '#0d0d0d')
         } catch (e) {
           // Storage or matchMedia unavailable — the default dark tokens already apply.
         }
-        // Accent + density + reading width before first paint, from the localStorage MIRROR of ui-state.json
+        // Density + reading width before first paint, from the localStorage MIRROR of ui-state.json
         // (src/lib/appearance.ts owns the contract; keep the two in sync). Defaults are the
         // absence of the attribute, so only the known deviations are stamped. A pre-upgrade
         // `cez-width=narrow` mirror can flash once before the server migration settles.
         try {
-          if (localStorage.getItem('cez-accent') === 'violet')
-            document.documentElement.dataset.accent = 'violet'
           var density = localStorage.getItem('cez-density')
           if (density === 'compact' || density === 'ultra')
             document.documentElement.dataset.density = density
           if (localStorage.getItem('cez-width') === 'narrow')
             document.documentElement.dataset.width = 'narrow'
         } catch (e) {
-          // Storage unavailable — lime/comfortable defaults already apply.
+          // Storage unavailable — the comfortable/full defaults already apply.
         }
       })()
     </script>

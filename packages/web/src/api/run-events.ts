@@ -170,7 +170,8 @@ export interface RunEventStreamOptions {
    *  `RUN_EVENT_BATCH_MS` flush as the transcript frames, so a burst of changes costs one call
    *  with the latest record. */
   onRun?: (run: RunRecord) => void
-  /** A fresh cursorless connect replayed only the newest part of the file (#882). */
+  /** A fresh cursorless connect replayed only the newest part of the file (#882); the range left
+   *  out will never arrive on this socket. */
   onTruncated?: (frame: RunEventsTruncatedFrame) => void
 }
 

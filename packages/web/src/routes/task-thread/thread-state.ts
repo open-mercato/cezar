@@ -6,6 +6,7 @@ import {
   toolDisplay,
   type PlanEntry,
   type PlanStatus,
+  type QuestionClosed,
   type StopReason,
   type UiAskQuestion,
   type UiItem,
@@ -62,10 +63,8 @@ export interface ThreadImage {
 
 /**
  * A structured AskUser question the agent posed via `CEZ:ASK` (#473, v2
- * `ask.requested`). The cockpit renders it as clickable option chips. Resolution
- * is client-side: the next `user-message` for the run flips `resolved` and
- * records the reply as `answer`, so a reloaded thread reconstructs the same
- * resolved/pending state from the persisted stream.
+ * `ask.requested`). The cockpit renders it as clickable option chips. It closes on the
+ * server's `ask.closed` (Questions inbox spec), so a reloaded thread draws the same state.
  */
 export interface ThreadAsk {
   kind: 'ask'
@@ -73,6 +72,8 @@ export interface ThreadAsk {
   questions: UiAskQuestion[]
   resolved: boolean
   answer?: string
+  /** Why it closed, from `ask.closed`. Absent on a recording made before that event existed. */
+  closed?: Pick<QuestionClosed, 'reason' | 'detail' | 'replacedBy' | 'answer' | 'answeredIn'> & { at?: string }
   /** A workflow gate/question rather than the agent (spec 2026-09-30-workflow-node-editor). */
   fromWorkflow?: boolean
 }
@@ -162,6 +163,10 @@ export interface ThreadReduceOptions {
   /** A harness run: its phase sessions never render an ask card, so a cardless `CEZ:ASK` reads as
    *  its questions (user reports 2026-07-27/28). Every other run keeps the raw fallback (#757). */
   askAsProse?: boolean
+  /** The run record's `asks` (`[]` for a record without any). An ask it does not track and the
+   *  stream never closes (a pre-inbox card, a graph gate, a native ask) keeps the old rule: the
+   *  next user message closes it. Absent (record not loaded): no ask is read as legacy. */
+  trackedAsks?: ReadonlyArray<{ requestId: string }>
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -222,6 +227,7 @@ export function threadFooter(
   awaitingAnswer = false,
   idleClosed = false,
   thread?: ThreadState,
+  cancel?: { reason?: string | undefined; by?: string | undefined },
 ): ThreadFooter {
   switch (status) {
     case 'waiting':
@@ -232,9 +238,9 @@ export function threadFooter(
       if (awaitingAnswer) {
         return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
       }
-      // Nobody replied, so the idle timer freed the process: nothing failed.
+      // Legacy idle close: housekeeping, so it reads like `done` (spec 2026-11-04-idle-closed-attention-state).
       if (idleClosed) {
-        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
+        return { state: 'closed', tone: 'dim', label: 'Session closed' }
       }
       const alreadyShown = error && thread?.turns.at(-1)?.items.some((item) =>
         item.kind === 'note' && (item.tone === 'danger' || FAILURE_PREFIX.test(item.text)) &&
@@ -243,8 +249,13 @@ export function threadFooter(
       return { state: 'closed', tone: 'danger', label: error && !alreadyShown ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }
-    case 'done':
     case 'cancelled':
+      // A manager's `task cancel` says why (spec 2026-10-31-managers).
+      if (cancel?.reason || cancel?.by) {
+        return { state: 'closed', tone: 'dim', label: `Cancelled${cancel.by ? ` by ${cancel.by}` : ''}${cancel.reason ? ` — ${cancel.reason}` : ''}` }
+      }
+      return { state: 'closed', tone: 'dim', label: 'Session closed' }
+    case 'done':
       return { state: 'closed', tone: 'dim', label: 'Session closed' }
     default:
       // queued/running: the stream itself is the status.
@@ -309,6 +320,9 @@ function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | un
   const parsed = runnerSchema.safeParse(value)
   return parsed.success ? parsed.data : undefined
 }
+
+const CLOSE_REASONS: ReadonlySet<string> = new Set<QuestionClosed['reason']>(['answered', 'dismissed', 'replaced', 'retracted', 'expired', 'ended'])
+const isCloseReason = (value: string | undefined): value is QuestionClosed['reason'] => value !== undefined && CLOSE_REASONS.has(value)
 
 const isAskQuestion = (value: unknown): value is UiAskQuestion =>
   isRecord(value) && typeof value.header === 'string' && Array.isArray(value.options)
@@ -473,6 +487,10 @@ function stepDividerLabel(names: ReadonlyMap<string, string>, stepId: string): s
   const base = round ? names.get(round[1]!) : undefined
   return base ? `${base} · round ${round![2]}` : stepId
 }
+const NO_ASKS: ReadonlyArray<{ requestId: string }> = []
+/** `trackedAsks` for `reduceThread`: undefined until the record loads, then its `asks` (or none). */
+export const trackedAsks = (run: { asks?: ReadonlyArray<{ requestId: string }> | undefined } | undefined) =>
+  run === undefined ? undefined : run.asks ?? NO_ASKS
 
 export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = {}): ThreadState {
   const turns: DraftTurn[] = []
@@ -486,6 +504,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  it client-side (only one ask is ever pending — the agent asks once, then
    *  parks `waiting` until the user answers). */
   let pendingAsk: ThreadAsk | undefined
+  const asksById = new Map<string, ThreadAsk>()
+  // Decided per ask: a pre-inbox card closed on the next reply; a tracked one stays open, flagged.
+  const tracked = options.trackedAsks === undefined ? undefined : new Set(options.trackedAsks.map((ask) => ask.requestId))
+  const legacyAsks = new WeakSet<ThreadAsk>()
+  // Graph gates and native asks are never tracked nor closed server-side, whatever closed before them.
+  const serverClosed = new Set(events.flatMap((event) => event.type === 'ask.closed' && typeof event.requestId === 'string' ? [event.requestId] : []))
   let lastEventAt: string | undefined
 
   const newTurn = (sourceSeq?: number, stepId?: string): DraftTurn => {
@@ -652,9 +676,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {
         const text = str(event.text) ?? ''
-        // Client-side resolution of the pending AskUser card (#473): the reply
-        // that follows an ask closes it and records the answer.
-        if (pendingAsk && !pendingAsk.resolved) {
+        // Legacy recordings only: the reply that followed an ask closed it (#473).
+        if (pendingAsk && !pendingAsk.resolved && legacyAsks.has(pendingAsk)) {
           pendingAsk.resolved = true
           if (text !== '') pendingAsk.answer = text
           pendingAsk = undefined
@@ -974,6 +997,29 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         }
         turnFor(event).entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
+        asksById.set(requestId, ask)
+        if (tracked !== undefined && !tracked.has(requestId) && !serverClosed.has(requestId)) legacyAsks.add(ask)
+        break
+      }
+      case 'ask.closed': {
+        // The server closed the card: answered (on the card or its linked copy), dismissed,
+        // replaced, withdrawn, expired or ended. The card redraws in its quiet closed state.
+        const requestId = str(event.requestId)
+        const reason = str(event.reason)
+        const ask = requestId === undefined ? undefined : asksById.get(requestId)
+        if (!ask || !isCloseReason(reason)) break
+        const answer = str(event.answer)
+        ask.resolved = true
+        ask.closed = {
+          reason,
+          ...(str(event.detail) !== undefined ? { detail: str(event.detail) } : {}),
+          ...(str(event.replacedBy) !== undefined ? { replacedBy: str(event.replacedBy) } : {}),
+          ...(answer !== undefined ? { answer } : {}),
+          ...(str(event.answeredIn) !== undefined ? { answeredIn: str(event.answeredIn) } : {}),
+          ...(stamp(event.ts) !== undefined ? { at: stamp(event.ts) } : {}),
+        }
+        if (reason === 'answered' && answer !== undefined && answer !== '') ask.answer = answer
+        if (pendingAsk === ask) pendingAsk = undefined
         break
       }
 

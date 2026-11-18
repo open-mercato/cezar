@@ -23,6 +23,10 @@ export const skillSchema = z.object({
   source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'bundled', 'builtin']),
   /** Optional companion skills that must be materialized with this entry. */
   requires: z.array(z.string()).optional(),
+  /** A repo-local agent command (spec-kit's `.claude/commands/…`), not a skill: delivered inline only. */
+  kind: z.literal('command').optional(),
+  /** Commands only: every definition of this name, one per agent that ships it. */
+  variants: z.array(z.object({ runner: runnerSchema, path: z.string() })).optional(),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z
     .object({

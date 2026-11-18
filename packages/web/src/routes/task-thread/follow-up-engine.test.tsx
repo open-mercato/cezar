@@ -63,7 +63,7 @@ const HEALTH_MULTI: HealthResponse = {
   forge: null,
   // `followups` became a required capability in #471 (merged from main): irrelevant to the
   // Continue pills these tests drive, but the shape must be whole.
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 type Recorded = { method: string; url: string; body?: unknown }
@@ -270,7 +270,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     const options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((option) => option.textContent?.includes('gpt-5.6-codex')) as HTMLElement)
 
-    expect((await screen.findByLabelText('Effort')).textContent).toContain('Codex default')
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('Effort: default')
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({ model: 'gpt-5.6-codex', reasoningEffort: '' })
@@ -317,7 +317,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(options.find((o) => o.textContent?.includes('opus')) as HTMLElement)
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ model: 'opus' })
+    // Claude takes an effort too (#808), so a model change carries the explicit native-default reset.
+    expect(continueBody()).toEqual({ model: 'opus', reasoningEffort: '' })
   })
 
   it("a legacy run's pinned model stays the pill default — keyed under claude, not defaultRunner", async () => {

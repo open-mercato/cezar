@@ -73,7 +73,9 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
 });
 
-describe('worktree lifecycle coordinator with real Git and command fixtures', () => {
+// A flow can prepare, fail, retry and remove real worktrees. Its overall budget must cover
+// several operations; `settled` and the individual liveness checks keep their own deadlines.
+describe('worktree lifecycle coordinator with real Git and command fixtures', { timeout: 20_000 }, () => {
   it.skipIf(process.platform === 'win32')('shutdown drains the script process group before persisting stopped recovery state', async () => {
     const p = await project();
     await p.config([entry('sleep 120 & child=$!; printf "%s" "$child" > child.pid; wait')]);
@@ -124,6 +126,22 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect((await p.coordinator.operation(removal.id)).intent).toBe('reclaim');
     expect((await p.coordinator.operation(removal.id)).state).toBe('needs_attention');
     expect(existsSync(p.records.get(p.id)!.worktreePath!)).toBe(true);
+  });
+
+  it('offers cancel-task on interrupted setup whose process cannot be verified (#2165)', async () => {
+    const p = await project(); await p.config([entry('exit 9')]);
+    const prepared = await p.prepare();
+    const setup = await p.coordinator.store.readOperation(prepared.operationId!);
+    setup!.state = 'interrupted';
+    setup!.executions.at(-1)!.process = {pid: 123, hostname: 'unverifiable-host', startedAt: new Date().toISOString(), quiescent: false};
+    setup!.revision++;
+    await p.coordinator.store.writeOperation(setup!, setup!.revision - 1);
+    const view = await p.coordinator.operation(setup!.id);
+    expect(view.allowedActions).toEqual(['cancel-task']);
+    await expect(p.coordinator.action(setup!.id, {requestId: randomUUID(), expectedRevision: view.revision, action: 'retry'})).rejects.toThrow('not available');
+    const done = await p.coordinator.action(setup!.id, {requestId: randomUUID(), expectedRevision: view.revision, action: 'cancel-task'});
+    expect(done.state).toBe('cancelled');
+    expect(existsSync(prepared.path)).toBe(true);
   });
 
   it('retains interrupted setup with an unverifiable process rather than converting it to variant removal', async () => {
@@ -211,6 +229,19 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect((await p.prepare()).ready).toBe(true);
     expect(await readFile(join(prepared.path, 'trace'), 'utf8')).toBe('first\nfailing\nthird\ninserted\nrepaired\n');
     expect((await p.coordinator.operation(initial.id)).history.filter(item => item.entryId === first.id)).toHaveLength(1);
+  });
+
+  it('tells a retry\'s failure from the one before it on the run record', async () => {
+    const p = await project(); await p.config([entry('exit 4')]);
+    const prepared = await p.prepare();
+    const first = p.records.get(p.id)?.worktreeLifecycle as {activeOperationId?: string; revision?: number; needsAttention: boolean};
+    expect(first.needsAttention).toBe(true);
+    p.resume.mockImplementation(async () => { await p.prepare(); });
+    await p.action(prepared.operationId!, 'retry');
+    await vi.waitFor(() => expect(p.records.get(p.id)?.worktreeLifecycle).toMatchObject({needsAttention: true}), {timeout: 5000, interval: 25});
+    const second = p.records.get(p.id)?.worktreeLifecycle as typeof first;
+    expect(second.activeOperationId).toBe(first.activeOperationId);
+    expect(second.revision).toBeGreaterThan(first.revision!);
   });
 
   it('reruns an edited successful entry and omits removed entries on current-list retry', async () => {

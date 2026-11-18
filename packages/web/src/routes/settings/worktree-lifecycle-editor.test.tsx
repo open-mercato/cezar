@@ -7,7 +7,7 @@ import { WorktreeLifecycleEditor } from './worktree-lifecycle-editor'
 
 const firstId = '11111111-1111-4111-8111-111111111111'
 const secondId = '22222222-2222-4222-8222-222222222222'
-const config: ConfigResponse = { baseBranch: null, defaultRunner: 'claude', systemPrompt: null, branchNaming: null, defaultModels: {}, modelsLocked: false, maxParallel: 2, memoryLimitMb: null, worktreeRetention: 10, liveTitleUpdates: null, reviewGate: null, multiModel: false, profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
+const config: ConfigResponse = { baseBranch: null, defaultRunner: 'claude', systemPrompt: null, branchNaming: null, defaultModels: {}, modelsLocked: false, maxParallel: 2, memoryLimitMb: null, worktreeRetention: 10, liveTitleUpdates: null, reviewGate: null, multiModel: false, profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,
   worktreeLifecycle: { afterCreate: [{ id: firstId, command: 'printf first', name: 'Prepare' }, { id: secondId, command: 'printf second' }], beforeRemove: [] }, worktreeLifecycleRevision: 'revision-1' }
 let requests: { method: string; path: string; body?: Record<string, unknown> }[]
 let conflict: boolean
@@ -128,5 +128,25 @@ describe('Worktree lifecycle settings editor', () => {
     expect(screen.getAllByText('Command must not be blank')).toHaveLength(2)
     expect(puts()).toHaveLength(0)
     expect(requests.some(request => request.path.endsWith('/preview'))).toBe(false)
+  })
+
+  it('renders a settings card of form rows with no native select or number input (UI strategy)', async () => {
+    mount()
+    expect(document.querySelector('select')).toBeNull()
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(document.querySelector('[data-slot="worktree-lifecycle-editor"]')).not.toBeNull()
+    // Scripts need a host Bash — said up front, not discovered from a failed run.
+    expect(document.querySelector('[data-slot="worktree-lifecycle-editor"]')?.textContent).toContain('Bash must be installed on the host')
+    expect(document.querySelectorAll('[data-slot="form-row"]').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByRole('combobox', { name: 'Preview context' })).toBeTruthy()
+    // The timeout is an IntegerStepper that commits into the draft: blank keeps the default.
+    fireEvent.click(screen.getAllByText('Advanced timeout')[0]!)
+    const timeout = screen.getByRole('spinbutton', { name: 'Timeout in seconds for after worktree creation command 1' }) as HTMLInputElement
+    expect(timeout.placeholder).toBe('Default (1800)')
+    fireEvent.change(timeout, { target: { value: '90' } })
+    fireEvent.blur(timeout)
+    fireEvent.click(screen.getByRole('button', { name: 'Save scripts' }))
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(worktreeLifecycleConfigSchema.parse(puts()[0]?.body?.worktreeLifecycle).afterCreate[0]).toMatchObject({ id: firstId, timeoutSeconds: 90 })
   })
 })

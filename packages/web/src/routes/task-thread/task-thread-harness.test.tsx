@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -376,8 +376,8 @@ describe('harness rail layout', () => {
       </QueryClientProvider>
     )
     const { rerender } = render(view())
-    const transcript = document.querySelector('[data-slot="thread-rows"]')!
-    const answer = screen.getByText('Ready to review')
+    const transcript = document.querySelector<HTMLElement>('[data-slot="thread-rows"]')!
+    const answer = within(transcript).getByText('Ready to review')
     const review = document.querySelector('[data-slot="review-panel"]')!
     const boundary = document.querySelector('[data-slot="history-boundary"]')!
     const notes = screen.getByLabelText<HTMLTextAreaElement>('Notes for the agent')
@@ -387,7 +387,7 @@ describe('harness rail layout', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="harness-rail"]')).not.toBeNull())
 
     expect(document.querySelector('[data-slot="thread-rows"]'), 'transcript DOM node must survive ledger arrival').toBe(transcript)
-    expect(screen.getByText('Ready to review')).toBe(answer)
+    expect(within(transcript).getByText('Ready to review')).toBe(answer)
     expect(document.querySelector('[data-slot="review-panel"]')).toBe(review)
     expect(document.querySelector('[data-slot="history-boundary"]')).toBe(boundary)
     expect(screen.getByLabelText<HTMLTextAreaElement>('Notes for the agent').value).toBe('Keep my review notes')
@@ -428,6 +428,6 @@ describe('harness rail layout', () => {
 
     expect(document.querySelector('[data-route="task-thread"]')!.className).toBe('flex min-h-full flex-col')
     expect(document.querySelector('[data-slot="run-rail-grid"]')).toBeNull()
-    expect(document.querySelector('[data-route="task-thread"] .contents')).toBeNull()
+    expect(document.querySelector('[data-route="task-thread"] > div > .contents')).toBeNull()
   })
 })

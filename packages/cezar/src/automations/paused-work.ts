@@ -22,6 +22,11 @@ function isContinuation(run: RunRecord): boolean {
   return run.steps.some((step) => Boolean(step.sessionId) || step.id.startsWith('continue-'));
 }
 
+/** Is a run this automation launched still queued and never started? (#2094: a schedule coalesces behind it.) */
+export function hasUnstartedAutomationRun(runs: readonly RunRecord[], automationId: string): boolean {
+  return runs.some((run) => run.status === 'queued' && launchingAutomationId(run) === automationId && !isContinuation(run));
+}
+
 /** Every live run in the trees this automation launched, split into pending and active. */
 export function automationWork(runs: readonly RunRecord[], automationId: string): AutomationWork {
   const roots = new Set(runs.filter((run) => launchingAutomationId(run) === automationId).map((run) => run.id));

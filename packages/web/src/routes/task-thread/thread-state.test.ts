@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import quotaFailure from './__fixtures__/codex-usage-limit.json'
 
 import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
+import { isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiMessageItem, UiToolItem } from '@open-mercato/cezar-api-client'
 
@@ -955,19 +956,30 @@ describe('threadFooter', () => {
     expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
   })
 
-  it('an idle-closed run reads as closed, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
-    const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
-    expect(threadFooter('failed', IDLE, false, true)).toEqual({
+  it('a cancelled run says who stopped it and why (spec 2026-10-31-managers)', () => {
+    expect(threadFooter('cancelled', undefined, false, false, undefined, { reason: 'review only', by: 'Coding Manager' })).toEqual({
       state: 'closed',
       tone: 'dim',
-      label: 'Closed after inactivity — Continue to pick it up',
+      label: 'Cancelled by Coding Manager — review only',
     })
+    expect(threadFooter('cancelled', undefined, false, false, undefined, {})).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
+  })
+
+  it('a legacy idle-closed run reads like done, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
+    const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
+    expect(threadFooter('failed', IDLE, false, true)).toEqual(threadFooter('done'))
+    expect(threadFooter('failed', IDLE, false, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
     // Without the marker (an old record) it is still the red failure it always was.
     expect(threadFooter('failed', IDLE)).toMatchObject({ tone: 'danger' })
     // An unanswered question wins: the answer, not Continue, is the way forward.
     expect(threadFooter('failed', IDLE, true, true)).toMatchObject({
       label: 'Session closed — waiting for your answer, which reopens it',
     })
+  })
+
+  it('a waiting run the timer closed keeps the plain waiting footer — no idle special case', () => {
+    const parked = { status: 'waiting', idleClosedAt: '2026-11-04T10:00:00.000Z' } as const
+    expect(threadFooter(parked.status, undefined, isAwaitingAnswer(parked), isIdleClosed(parked))).toEqual({ state: 'waiting' })
   })
 })
 
@@ -1157,28 +1169,86 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(ask).toMatchObject({ kind: 'ask', id: 'ask_1', resolved: false })
   })
 
-  it('the next user-message resolves the ask and records the answer', () => {
-    const ask = allItems([
+  // Questions inbox: the card closes on the server's `ask.closed`, never on a reply alone.
+  it('a typed reply leaves the ask open; ask.closed answered resolves it with the answer', () => {
+    const events = [
       line(1, 'text', { text: 'options' }),
       line(2, 'ask.requested', ASK),
       line(3, 'user-message', { text: 'Library: date-fns', imageCount: 0 }),
-    ]).find((i) => i.kind === 'ask')
-    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    ]
+    expect(allItems(events).find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+    const ask = allItems([...events, line(4, 'ask.closed', { requestId: ASK.requestId, reason: 'answered', answer: 'Library: date-fns' })])
+      .find((i) => i.kind === 'ask')
+    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns', closed: { reason: 'answered' } })
   })
 
-  // The card outlives its session: the run closed with the question unanswered, and the
-  // answer arrives as the opening `user-message` of a CONTINUATION step (`POST /continue`,
-  // `runContinuation`). Nothing about resolution is session-scoped, and this pins that —
-  // it is what makes answering a closed run's question read the same as answering a live one.
-  it('a continuation step resolves an ask left pending when the session ended', () => {
+  it.each(['dismissed', 'replaced', 'retracted', 'expired', 'ended'] as const)('ask.closed %s closes the card with its reason', (reason) => {
     const ask = allItems([
-      line(1, 'text', { text: 'options', stepId: 'task' }),
-      line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
-      line(3, 'lifecycle', { message: 'session closed by user' }),
-      line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
-      line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+      line(1, 'ask.requested', ASK),
+      line(2, 'ask.closed', { requestId: ASK.requestId, reason, detail: 'why', replacedBy: 'ask_9', ts: '2026-11-18T10:00:00.000Z' }),
     ]).find((i) => i.kind === 'ask')
-    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    expect(ask).toMatchObject({ resolved: true, closed: { reason, detail: 'why', replacedBy: 'ask_9' } })
+    expect(ask).not.toHaveProperty('answer')
+  })
+
+  it('ignores an ask.closed for another card or with an unknown reason', () => {
+    const items = allItems([
+      line(1, 'ask.requested', ASK),
+      line(2, 'ask.closed', { requestId: 'someone-else', reason: 'dismissed' }),
+      line(3, 'ask.closed', { requestId: ASK.requestId, reason: 'vanished' }),
+    ])
+    expect(items.find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+  })
+
+  // A recording made before `ask.closed` existed keeps the rule it was made under: the reply that
+  // followed an ask was its answer. Decided per ask from the record's `asks`, whatever the run status.
+  const askOf = (events: RunEvent[], options: Parameters<typeof reduceThread>[1], id = ASK.requestId) =>
+    reduceThread(events, options).turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask' && i.id === id)
+  const legacyEvents = [
+    line(1, 'text', { text: 'options', stepId: 'task' }),
+    line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
+    line(3, 'lifecycle', { message: 'session closed by user' }),
+    line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
+    line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+  ]
+
+  it('a pre-upgrade recording (record tracks no asks) reads the next user-message as the answer, whatever the run status', () => {
+    expect(askOf(legacyEvents, { trackedAsks: [] })).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+  })
+
+  it('a tracked ask stays open after a typed reply; an unloaded record reads nothing as legacy', () => {
+    expect(askOf(legacyEvents, { trackedAsks: [{ requestId: ASK.requestId }] })).toMatchObject({ resolved: false })
+    expect(askOf(legacyEvents, {})).toMatchObject({ resolved: false })
+  })
+
+  it('a run spanning the upgrade keeps the legacy rule for asks before it and the new one after', () => {
+    const NEW = { ...ASK, requestId: 'ask_2' }
+    const NEWER = { ...ASK, requestId: 'ask_3' }
+    const events = [
+      ...legacyEvents,
+      line(6, 'ask.requested', NEW),
+      line(7, 'ask.closed', { requestId: NEW.requestId, reason: 'dismissed' }),
+      line(8, 'ask.requested', NEWER),
+      line(9, 'user-message', { text: 'something else', imageCount: 0 }),
+    ]
+    // The record keeps only post-upgrade asks; the cap may already have dropped ask_2.
+    const options = { trackedAsks: [{ requestId: NEWER.requestId }] }
+    expect(askOf(events, options)).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    expect(askOf(events, options, NEW.requestId)).toMatchObject({ resolved: true, closed: { reason: 'dismissed' } })
+    expect(askOf(events, options, NEWER.requestId)).toMatchObject({ resolved: false })
+  })
+
+  it('a graph gate asked after a closed CEZ:ASK card still closes on the next reply', () => {
+    const CARD = { ...ASK, requestId: 'ask_2' }
+    const GATE = { ...ASK, requestId: 'gate_1', source: 'workflow' }
+    const events = [
+      line(1, 'ask.requested', CARD),
+      line(2, 'ask.closed', { requestId: CARD.requestId, reason: 'answered', answer: 'Library: date-fns' }),
+      line(3, 'ask.requested', GATE),
+      line(4, 'user-message', { text: 'Library: luxon', imageCount: 0 }),
+    ]
+    // The record tracks CEZ:ASK cards only; the server never closes a gate.
+    expect(askOf(events, { trackedAsks: [{ requestId: CARD.requestId }] }, GATE.requestId)).toMatchObject({ resolved: true, answer: 'Library: luxon' })
   })
 
   it('drops an ask.requested with no valid questions', () => {

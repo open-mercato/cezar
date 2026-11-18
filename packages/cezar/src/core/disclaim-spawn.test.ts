@@ -115,11 +115,12 @@ describe('disclaimedCommand', () => {
     const node = exe('npm/node', Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
     const pi = exe('npm/pi', '#!/usr/bin/env node\nconsole.log(1)\n');
     const flagged = exe('npm/flagged', `#!/usr/bin/env -S node --no-warnings\n`);
-    const [, argv] = disclaimedCommand('pi', ['--mode', 'rpc'], { PATH: join(dir, 'npm') }, { ...darwin, clone });
+    const opts = { ...darwin, clone };
+    const [, argv] = disclaimedCommand('pi', ['--mode', 'rpc'], { PATH: join(dir, 'npm') }, opts);
     expect(argv.slice(2)).toEqual([pi, '--mode', 'rpc']);
     expect(argv[1]).toBe(join(cloneDir, 'pi', 'pi'));
     expect(readFileSync(argv[1]!)).toEqual(readFileSync(node));
-    expect(disclaimedCommand(flagged, [], { PATH: join(dir, 'npm') }, darwin)[1].slice(2)).toEqual(['--no-warnings', flagged]);
+    expect(disclaimedCommand(flagged, [], { PATH: join(dir, 'npm') }, opts)[1].slice(2)).toEqual(['--no-warnings', flagged]);
   });
 
   it('never renames a node that is really a Volta or mise shim', () => {

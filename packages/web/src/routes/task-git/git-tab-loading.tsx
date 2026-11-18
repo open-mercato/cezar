@@ -56,7 +56,7 @@ export function GitTabLoadError({ tab, error }: { tab: GitRunTab; error: Error }
         }
         actions={
           <Button asChild variant="outline">
-            <Link to="/">Back to tasks</Link>
+            <Link to="/tasks">Back to tasks</Link>
           </Button>
         }
       />

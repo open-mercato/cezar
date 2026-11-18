@@ -364,7 +364,7 @@ describe('tasks table overview', () => {
 
   beforeAll(() => {
     browser.setViewport(1440, 900)
-    browser.goto(`${baseUrl}${scoped('/')}`)
+    browser.goto(`${baseUrl}${scoped('/tasks')}`)
     browser.waitForFunction(`document.querySelectorAll('${TABLE_ROW}').length > 0`)
   })
 
@@ -455,7 +455,7 @@ describe('tasks table overview', () => {
     browser.click(`${TABLE_ROW}[data-run-id="fix-done"]`)
     browser.waitForFunction(`location.pathname === '${scoped('/tasks/fix-done')}'`)
     expect(browser.url()).toContain(scoped('/tasks/fix-done'))
-    browser.goto(`${baseUrl}${scoped('/')}`)
+    browser.goto(`${baseUrl}${scoped('/tasks')}`)
     browser.waitForFunction(`document.querySelectorAll('${TABLE_ROW}').length > 0`)
   })
 
@@ -493,7 +493,7 @@ describe('tasks table overview', () => {
 
   it('reflows to cards plus a New-task FAB at phone width, with no horizontal overflow', () => {
     browser.setViewport(390, 844)
-    browser.goto(`${baseUrl}${scoped('/')}`)
+    browser.goto(`${baseUrl}${scoped('/tasks')}`)
     browser.waitForFunction(`document.querySelectorAll('[data-slot="task-card"]').length > 0`)
 
     expect(browser.count('[data-slot="task-card"]')).toBe(5)

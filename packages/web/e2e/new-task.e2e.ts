@@ -168,9 +168,14 @@ describe('the full-screen /new against a live dry-run server', () => {
       `${baseUrl}/api/v1/config`,
     )
     expect(browser.text('[data-slot="model-pill"]')).toContain(config.defaultModels?.claude || 'auto')
-    expect(browser.text('[data-slot="variants-pill"]')).toContain('×1')
-    expect(browser.text('[data-slot="base-pill"]')).toContain('base: main')
     browser.screenshot(`${artifactsDir}/new-task-hero.png`)
+    // Everything that is not a value pill lives behind Options (design Proposal 5).
+    expect(browser.count('[data-slot="variants-pill"]')).toBe(0)
+    browser.click('[data-slot="composer-options-trigger"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="composer-options"]') !== null`)
+    expect(browser.text('[data-slot="variants-pill"]')).toContain('×1')
+    expect(browser.text('[data-slot="base-pill"]')).toBe('main')
+    browser.screenshot(`${artifactsDir}/new-task-options.png`)
   })
 
   it('the source dropdown groups project skills first and picking one updates the pill', () => {

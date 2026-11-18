@@ -127,11 +127,15 @@ describe('the compare columns', () => {
     expect(a?.getAttribute('data-variant')).toBe('A')
     expect(b?.getAttribute('data-variant')).toBe('B')
 
-    // The letter badge and the canonical attention grammar: review → "needs review",
-    // done → "done" (deriveAttention, not a second hand-rolled mapping).
+    // The letter badge and the canonical attention grammar: review → "needs review" in a pill
+    // with the blue "waiting on a person" dot; done → calm: a green dot and the word, no pill
+    // (deriveAttention, not a second hand-rolled mapping).
     expect(a?.querySelector('[data-slot="variant-letter"]')?.textContent).toBe('A')
     expect(a?.querySelector('[data-slot="pill"]')?.textContent).toContain('needs review')
-    expect(b?.querySelector('[data-slot="pill"]')?.textContent).toContain('done')
+    expect(a?.querySelector('[data-slot="pill"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+    expect(b?.querySelector('[data-slot="pill"]')).toBeNull()
+    expect(b?.querySelector('[data-slot="status-quiet"]')?.textContent).toContain('done')
+    expect(b?.querySelector('[data-slot="status-quiet"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
 
     // Directional tokens and cost per column.
     expect(a?.textContent).toContain('IN 92.0k · OUT 4.2k')
@@ -151,6 +155,9 @@ describe('the compare columns', () => {
     // The shared header: the group title without the variant suffix.
     expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('Add autocomplete')
     expect(screen.getByRole('heading', { level: 1 }).textContent).not.toContain('(A)')
+    // The heading truncates a long title; the native title reveals it.
+    expect(screen.getByRole('heading', { level: 1 }).querySelector('[title]')?.getAttribute('title')).toBe('Add autocomplete')
+
   })
 
   it('removes token and cost metadata when health disables it', async () => {
@@ -204,22 +211,27 @@ describe('the compare columns', () => {
     stubFetch(group(), { 'GET /api/v1/groups/g1': () => jsonResponse({ error: 'not found' }, 404) })
     renderCompare()
     await waitFor(() => expect(screen.queryByText('No such variant group')).not.toBeNull())
-    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/')
+    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/tasks')
   })
 })
 
 // ---- the pick flow ----------------------------------------------------------------------------
 
 describe('✔ Pick this one', () => {
-  it('is disabled while any variant is still non-terminal, with the reason in the title', async () => {
+  it('is disabled while any variant is still non-terminal, with the reason as a visible line', async () => {
     stubFetch(group(variant('A', 'review'), variant('B', 'running')))
     renderCompare()
     await waitForColumns(2)
 
     for (const button of pickButtons()) {
       expect(button.disabled).toBe(true)
-      expect(button.title).toBe('Every variant must finish before you can pick')
+      // Not a native title: a disabled button shows no tooltip, so the gate says why in text.
+      expect(button.hasAttribute('title')).toBe(false)
     }
+    expect(document.querySelectorAll('[data-slot="variant-pick-gate"]')).toHaveLength(2)
+    expect(document.querySelector('[data-slot="variant-pick-gate"]')?.textContent).toBe(
+      'Every variant must finish before you can pick.',
+    )
   })
 
   it('review counts as terminal — the agent is done, a human is not', async () => {

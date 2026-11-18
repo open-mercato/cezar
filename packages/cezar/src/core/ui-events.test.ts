@@ -80,6 +80,7 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
       'permission.requested': 'reserved',
       'permission.resolved': 'reserved',
       'ask.requested': 'thread',
+      'ask.closed': 'thread',
       'usage.updated': 'gauge',
       'image': 'thread',
       // Harness driver events (spec 2026-07-23-harness-orchestration):
@@ -95,7 +96,7 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
 
     // And the map has no extra keys either: its key set IS the event set.
     assertType<Equal<keyof typeof renderRelevance, UiEventType>>();
-    expect(Object.keys(renderRelevance)).toHaveLength(20);
+    expect(Object.keys(renderRelevance)).toHaveLength(21);
   });
 
   it('the event union narrows on `type`', () => {
@@ -122,6 +123,7 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
         case 'permission.requested':
         case 'permission.resolved':
         case 'ask.requested':
+        case 'ask.closed':
         case 'image':
         case 'harness.phase.updated':
         case 'harness.readiness.updated':

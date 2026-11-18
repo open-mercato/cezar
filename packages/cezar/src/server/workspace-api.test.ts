@@ -91,6 +91,7 @@ describe('the workspace settings API (step 2.7)', () => {
     const body = (await res.json()) as WorkspaceConfigResponse & Record<string, unknown>;
     expect(body).toEqual({
       branding: { name: 'cezar', logoUrl: null },
+      computerName: expect.any(String),
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
@@ -289,6 +290,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(res.status).toBe(200);
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
       branding: { name: 'cezar', logoUrl: null },
+      computerName: expect.any(String),
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,

@@ -139,6 +139,26 @@ describe('discoverClaudeModels', () => {
     ]);
   });
 
+  it('carries each model\'s advertised effort levels, read leniently (#808)', async () => {
+    const { promise } = run((f) =>
+      f.write(answer([
+        // The real 2.1.x shape.
+        { value: 'opus', displayName: 'Opus', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        // Blanks, non-strings and duplicates are dropped without hiding the model.
+        { value: 'sonnet', displayName: 'Sonnet', supportedEffortLevels: [' high ', '', 42, 'high', 'low'] },
+        { value: 'haiku', displayName: 'Haiku', supportsEffort: false, supportedEffortLevels: ['low'] },
+        { value: 'legacy', displayName: 'Legacy', supportedEffortLevels: 'high' },
+      ])),
+    );
+    const levels = (ids: string[]) => ids.map((id) => ({ id, description: '' }));
+    await expect(promise).resolves.toEqual([
+      { id: 'opus', label: 'Opus', description: '', reasoningEfforts: levels(['low', 'medium', 'high', 'xhigh', 'max']) },
+      { id: 'sonnet', label: 'Sonnet', description: '', reasoningEfforts: levels(['high', 'low']) },
+      { id: 'haiku', label: 'Haiku', description: '' },
+      { id: 'legacy', label: 'Legacy', description: '' },
+    ]);
+  });
+
   it('ignores a control response answering someone else\'s request', async () => {
     const { promise } = run((f) => {
       f.write(

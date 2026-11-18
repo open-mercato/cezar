@@ -15,10 +15,8 @@ import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
  * network-backed `npx skills check`.
  */
 
-const artifactsDir = resolve(
-  import.meta.dirname,
-  '../../../.ai/runs/2026-07-22-automatic-open-mercato-skills-updates/checkpoint-3-artifacts',
-)
+// Ignored output: the tracked checkpoint PNGs under .ai/runs are that run's evidence, not ours.
+const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e/skills-update')
 const workspaceConfig = resolve(import.meta.dirname, '../../../.ai/qa/cez-home/config.json')
 const sessionId = `e2e-skills-update-${process.pid}`
 const DESKTOP = { width: 1440, height: 900 }
@@ -87,9 +85,9 @@ describe('automatic Open Mercato skills updates', () => {
 
   it('keeps the navigation marker absent for the dry-run current state', () => {
     browser.goto(`${baseUrl}/p/${projectId}/`)
-    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav[aria-label="Main"]') !== null`)
     expect(browser.count('[data-slot="nav-update-marker"]')).toBe(0)
-    expect(browser.text('[data-slot="sidebar"] nav')).toContain('Skills')
+    expect(browser.text('[data-slot="sidebar"] nav[aria-label="Main"]')).toContain('Skills')
     browser.screenshot(`${artifactsDir}/skills-navigation-current.png`)
   })
 
@@ -118,9 +116,9 @@ describe('automatic Open Mercato skills updates', () => {
     browser.goto(`${baseUrl}/p/${projectId}/`)
     browser.waitForFunction(`document.querySelector('[data-slot="mobile-top-bar"]') !== null`)
     browser.click('[data-slot="mobile-top-bar"] button[aria-label="Open menu"]')
-    browser.waitForFunction(`document.querySelector('[role="dialog"] nav') !== null`)
+    browser.waitForFunction(`document.querySelector('[role="dialog"] nav[aria-label="Main"]') !== null`)
 
-    expect(browser.text('[role="dialog"] nav')).toContain('Skills')
+    expect(browser.text('[role="dialog"] nav[aria-label="Main"]')).toContain('Skills')
     expect(browser.count('[role="dialog"] [data-slot="nav-update-marker"]')).toBe(0)
     browser.screenshot(`${artifactsDir}/skills-mobile-navigation.png`, { viewport: true })
   })

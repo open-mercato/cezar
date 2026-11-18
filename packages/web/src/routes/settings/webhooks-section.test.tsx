@@ -9,8 +9,13 @@ const mocks = vi.hoisted(() => ({ healthState: 'ready', enabled: false, unsuppor
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ isError: mocks.healthState === 'error', data: mocks.healthState === 'ready' ? { capabilities: { webhooks: mocks.enabled, webhooksUnavailableReason: mocks.unsupported ? 'unsupported_platform' : undefined } } : undefined }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => mocks.project }))
 vi.mock('@/api/client', () => ({ getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
-beforeEach(() => { vi.stubGlobal('EventSource', undefined); vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request') })) })
+beforeEach(() => { vi.stubGlobal('EventSource', undefined); vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request') })); Element.prototype.scrollIntoView = vi.fn(); vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }) })
 afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.healthState = 'ready'; mocks.enabled = false; mocks.unsupported = false; mocks.project = 'alpha' })
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(label: string, option: string | RegExp) {
+  fireEvent.keyDown(screen.getByLabelText(label), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
 function mount(client = createQueryClient()) { return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
 describe('project webhook settings', () => {
 
@@ -44,8 +49,8 @@ describe('project webhook settings', () => {
   it('offers full Custom selection and keeps destination secrets out of warnings', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mount(); await screen.findByText(/No receivers yet/); expect(screen.getByText(/Send a test, then activate it/)).toBeTruthy(); fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
-    expect(screen.getByText('Attention, review and results')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Events'), { target: { value: 'custom' } })
+    expect(screen.getByLabelText('Events').textContent).toContain('Attention, review and results')
+    await pick('Events', 'Custom')
     expect(screen.getByLabelText('Task finished')).toBeTruthy(); expect(screen.getByLabelText('Task cancelled')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Receiver URL'), { target: { value: 'https://hooks.slack.com/services/private-value' } })
     expect(screen.getByText(/This is a Slack webhook/)).toBeTruthy()
@@ -64,13 +69,28 @@ describe('project webhook settings', () => {
     const menu = await screen.findByRole('menu')
     expect(within(menu).getAllByRole('menuitem').map(item => item.textContent)).toEqual(['Delete'])
   })
+  it('confirms a delete with the filled destructive button and says it cannot be undone', async () => {
+    mocks.enabled = true
+    mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'chat', name: 'Chat alerts', format: 'slack.v1', destination: 'https://example.com/[redacted]', state: 'active', revision: 1, profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none' }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mount()
+    await screen.findByText('Chat alerts')
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Chat alerts' }), { button: 0, ctrlKey: false })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.getByText(/cannot be restored/)).toBeTruthy()
+    const confirm = dialog.getByRole('button', { name: 'Delete' })
+    expect(confirm.getAttribute('data-variant')).toBe('destructive')
+    // Cancel sits left of the primary.
+    const buttons = dialog.getAllByRole('button').map(button => button.textContent)
+    expect(buttons.indexOf('Cancel')).toBeLessThan(buttons.indexOf('Delete'))
+  })
   it('does not reveal a key after creating a chat receiver', async () => {
     mocks.enabled = true
     mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mocks.create.mockResolvedValue({ receiver: { id: 'chat', format: 'slack.v1' }, secret: 'UNEXPECTED_CHAT_SECRET' })
     mount(); await screen.findByText(/No receivers yet/)
     fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
-    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'slack.v1' } })
+    await pick('Destination', /Slack channel/)
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Chat alerts' } })
     fireEvent.change(screen.getByLabelText('Webhook URL'), { target: { value: 'https://hooks.slack.com/services/T1/B1/test' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))

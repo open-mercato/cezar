@@ -72,6 +72,8 @@ export interface ThreadScrollControls {
   /** Re-pin if stuck — the keyboard-settled hook (content height didn't change, but the
    *  visual viewport did, so the RO won't fire). */
   restickIfStuck: () => void
+  /** Unpin and scroll a row to `inset` px below the scroller's top ("your messages" jumps). */
+  revealRow: (key: string, inset: number) => boolean
 }
 
 /**
@@ -88,12 +90,14 @@ export function useThreadScroll(
   viewKey: string,
   options: {
     surface?: 'document' | 'panel'
+    /** Explicit status/result links override an old reading position on arrival. */
+    startAtLatest?: boolean
     onLoadOlder?: () => Promise<void>
     onJumpToLatest?: () => Promise<void>
     rowKeys?: readonly string[]
   } = {},
 ): ThreadScrollControls {
-  const { surface = 'document', onLoadOlder, onJumpToLatest, rowKeys = [] } = options
+  const { startAtLatest = false, surface = 'document', onLoadOlder, onJumpToLatest, rowKeys = [] } = options
   const scrollElRef = useRef<HTMLElement | null>(null)
   // State, not a ref: crossing the virtualization threshold mid-replay REPLACES the rows
   // container, and the observers below must re-subscribe to the new element.
@@ -130,7 +134,7 @@ export function useThreadScroll(
     if (!scroller) return
     if (arrivedForRef.current !== viewKey) {
       arrivedForRef.current = viewKey
-      const memory = readThreadScroll(viewKey)
+      const memory = startAtLatest ? undefined : readThreadScroll(viewKey)
       if (memory && !memory.atBottom) {
         stuckRef.current = false
         pendingRestoreRef.current = memory.top
@@ -141,7 +145,7 @@ export function useThreadScroll(
     }
     if (pendingRestoreRef.current !== null) setOffset(pendingRestoreRef.current)
     else if (stuckRef.current) toBottom()
-  }, [viewKey, setOffset, toBottom])
+  }, [viewKey, startAtLatest, setOffset, toBottom])
 
   // The callback ref runs in the destination commit itself. Applying arrival here closes the
   // gap between the route render and the follow-up state update that installs subscriptions;
@@ -228,6 +232,25 @@ export function useThreadScroll(
       })
     })
   }, [onJumpToLatest])
+
+  const revealRow = useCallback((key: string, inset: number) => {
+    const scroller = scrollElRef.current
+    if (!scroller) return false
+    // A jump is the reader leaving the tail, exactly as a scroll up is.
+    pendingRestoreRef.current = null
+    stuckRef.current = false
+    const handle = virtualizerRef.current
+    const index = rowKeysRef.current.indexOf(key)
+    if (handle && index >= 0) {
+      handle.scrollToIndex(index, { align: 'start', offset: -inset })
+      return true
+    }
+    const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(key) : key.replace(/["\\]/g, '\\$&')
+    const row = scroller.querySelector<HTMLElement>(`[data-slot="thread-row"][data-row-key="${escaped}"]`)
+    if (!row) return false
+    setOffset(scroller.scrollTop + row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - inset)
+    return true
+  }, [setOffset])
 
   // Arrival is the route-owned pre-paint write. AppShell deliberately does not reset task
   // routes, so a destination thread never exposes an intermediate top-of-transcript frame.
@@ -499,7 +522,7 @@ export function useThreadScroll(
     }
   }, [viewKey, contentEl, loadOlder, setOffset, toBottom])
 
-  return { attachContent, scrollElRef, virtualizerRef, pillVisible, jumpToLatest, loadOlder, restickIfStuck }
+  return { attachContent, scrollElRef, virtualizerRef, pillVisible, jumpToLatest, loadOlder, restickIfStuck, revealRow }
 }
 
 /**

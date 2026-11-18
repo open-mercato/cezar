@@ -24,6 +24,9 @@ describe('IssueOwnership (#1620)', () => {
   it('shows multiple assignees and independently accessible authoritative PR links', () => {
     render(<IssueOwnership item={{ ...issue, assignees: ['grace', 'lin'], linkedPrs: [pr] }} />)
     expect(screen.getByText('Assigned to @grace, @lin')).toBeTruthy()
+    // The chip truncates; its native title reveals every assignee.
+    expect(screen.getByText('Assigned to @grace, @lin').parentElement?.getAttribute('title')).toBe('Assigned to @grace, @lin')
+
     const link = screen.getByRole('link', { name: 'PR #80 · Open: Fix login' })
     expect(link.getAttribute('href')).toBe(pr.url)
     expect(link.getAttribute('target')).toBe('_blank')
@@ -50,7 +53,9 @@ describe('IssueOwnership (#1620)', () => {
     const login = 'a'.repeat(200)
     const title = 'Long implementation title '.repeat(30)
     render(<IssueOwnership item={{ ...issue, assignees: [login], linkedPrs: [{ ...pr, title, url: 'javascript:void(0)' }] }} />)
+    // The chip truncates a long login: its native title reveals the whole of it.
     expect(screen.getByText(`Assigned to @${login}`).parentElement?.getAttribute('title')).toBe(`Assigned to @${login}`)
+
     expect(screen.getByText('PR #80 · Open')).toBeTruthy()
     expect(screen.queryByRole('link')).toBeNull()
   })

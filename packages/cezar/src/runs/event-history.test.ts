@@ -131,30 +131,33 @@ describe('readRunHistoryPage', () => {
     expect(page.events.filter((event) => event.type === 'turn.started').map((event) => event.seq)).toEqual([1, 2, 153]);
   });
 
-  it.each([undefined, 'ordinary-step'])('guard: ordinary history pages retain f1a8541a bytes (stepId=%s)', async (stepId) => {
+  it.each([undefined, 'ordinary-step'])('guard: ordinary history pages keep their events and live cursor boundaries (stepId=%s)', async (stepId) => {
     const file = fixture([
       { seq: 1, type: 'turn.started', turnId: 'ordinary', ...(stepId === undefined ? {} : { stepId }) },
       ...Array.from({ length: 150 }, (_, index) => ({
         seq: index + 2, type: 'note', message: `note-${index}`, ...(stepId === undefined ? {} : { stepId }),
       })),
     ]);
-    const events = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as RunEvent);
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    const events = lines.map((line) => JSON.parse(line) as RunEvent);
     const size = statSync(file).size;
     const cursor = (kind: 'older' | 'newer') => Buffer.from(JSON.stringify({
       v: 1, kind: 'page', direction: kind, fileSize: size, boundarySeq: kind === 'older' ? 52 : 51,
     })).toString('base64url');
-    const liveCursor = Buffer.from(JSON.stringify({ v: 1, kind: 'live', offset: size, boundarySeq: 151 })).toString('base64url');
+    const liveCursor = (boundarySeq: number) => Buffer.from(JSON.stringify({
+      v: 1, kind: 'live', offset: Buffer.byteLength(lines.slice(0, boundarySeq).join('\n') + '\n'), boundarySeq,
+    })).toString('base64url');
     const reads: number[] = [];
     const onRead = ({ bytesRead }: { bytesRead: number }) => reads.push(bytesRead);
     const newest = await readRunHistoryPage(file, undefined, onRead);
     const older = await readRunHistoryPage(file, newest.olderCursor, onRead);
     const forward = await readRunHistoryPage(file, older.newerCursor, onRead);
     const expectedNewest = {
-      events: [events[0], ...events.slice(51)], itemCount: 100, olderCursor: cursor('older'), liveCursor, asOfSeq: 151, hasOlder: true,
+      events: [events[0], ...events.slice(51)], itemCount: 100, olderCursor: cursor('older'), liveCursor: liveCursor(151), asOfSeq: 151, hasOlder: true,
     };
     expect(JSON.stringify(newest)).toBe(JSON.stringify(expectedNewest));
     expect(JSON.stringify(older)).toBe(JSON.stringify({
-      events: events.slice(0, 51), itemCount: 50, newerCursor: cursor('newer'), liveCursor, asOfSeq: 151, hasOlder: false,
+      events: events.slice(0, 51), itemCount: 50, newerCursor: cursor('newer'), liveCursor: liveCursor(51), asOfSeq: 51, hasOlder: false,
     }));
     expect(JSON.stringify(forward)).toBe(JSON.stringify(expectedNewest));
     expect(reads).toEqual([size * 2, size * 2, size * 2]);
@@ -187,7 +190,7 @@ describe('readRunHistoryPage', () => {
     expect(older.hasOlder).toBe(false);
     expect(older.events.at(-1)?.seq).toBe(51);
     expect(older.newerCursor).toBeTypeOf('string');
-    expect(older.asOfSeq).toBe(151);
+    expect(older.asOfSeq).toBe(51);
 
     const newer = await readRunHistoryPage(file, older.newerCursor);
     expect(newer.itemCount).toBe(100);
@@ -220,6 +223,41 @@ describe('readRunHistoryPage', () => {
     expect(canonicalSessionItems(forward.events)).toHaveLength(100);
     expect(forward.events).toHaveLength(101);
     expect(forward.events.at(-1)?.seq).toBe(651);
+  });
+
+  it('bounds a non-newest page\'s live cursor to its own last event after the file grows (#2018)', async () => {
+    const message = (seq: number) => ({
+      seq,
+      type: 'item.completed',
+      item: { kind: 'message', id: `m-${seq}`, role: 'assistant', text: `${seq} ✓` },
+    });
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
+      { seq: 1, type: 'turn.started', turnId: 't1' },
+    ];
+    for (let seq = 2; seq <= 251; seq += 1) events.push(message(seq));
+    const file = fixture(events);
+    const newest = await readRunHistoryPage(file);
+    for (let seq = 252; seq <= 400; seq += 1) {
+      appendFileSync(file, JSON.stringify({ ts: '2026-07-30T00:00:00.000Z', ...message(seq) }) + '\n');
+    }
+
+    // How TanStack refetches an infinite query: page 0 from its stored (older) cursor, then forward.
+    const older = await readRunHistoryPage(file, newest.olderCursor);
+    const forward = await readRunHistoryPage(file, older.newerCursor);
+    for (const page of [older, forward]) {
+      expect(page.newerCursor).toBeTypeOf('string');
+      const lastSeq = page.events.at(-1)!.seq;
+      expect(page.asOfSeq).toBe(lastSeq);
+      const replay = await readEventsAfterLiveCursor(file, page.liveCursor);
+      expect(replay.boundarySeq).toBe(lastSeq);
+      expect(replay.events.map(({ seq }) => seq)).toEqual(
+        Array.from({ length: 400 - lastSeq }, (_, index) => lastSeq + 1 + index),
+      );
+    }
+    const latest = await readRunHistoryPage(file);
+    expect(latest.newerCursor).toBeUndefined();
+    expect(latest.asOfSeq).toBe(400);
+    expect((await readEventsAfterLiveCursor(file, latest.liveCursor)).events).toEqual([]);
   });
 
   it('preserves UTF-8 when a multibyte code point crosses a reverse-read chunk boundary', async () => {
@@ -379,22 +417,25 @@ describe('readRunHistoryPage — bounded council start search', () => {
 
   it('guard: ordinary multi-chunk pages keep their events, cursors and exact read budget', async () => {
     const file = fixture(implementation());
-    const events = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as RunEvent);
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    const events = lines.map((line) => JSON.parse(line) as RunEvent);
     const size = statSync(file).size;
     const cursor = (direction: 'older' | 'newer', boundarySeq: number) => Buffer.from(JSON.stringify({
       v: 1, kind: 'page', direction, fileSize: size, boundarySeq,
     })).toString('base64url');
-    const liveCursor = Buffer.from(JSON.stringify({ v: 1, kind: 'live', offset: size, boundarySeq: 8_000 })).toString('base64url');
+    const liveCursor = (boundarySeq: number) => Buffer.from(JSON.stringify({
+      v: 1, kind: 'live', offset: Buffer.byteLength(lines.slice(0, boundarySeq).join('\n') + '\n'), boundarySeq,
+    })).toString('base64url');
     const reads: number[] = [];
     const onRead = ({ bytesRead }: { bytesRead: number }) => reads.push(bytesRead);
     const newest = await readRunHistoryPage(file, undefined, onRead);
     const older = await readRunHistoryPage(file, newest.olderCursor, onRead);
 
     expect(JSON.stringify(newest)).toBe(JSON.stringify({
-      events: events.slice(-200), itemCount: 100, olderCursor: cursor('older', 7_802), liveCursor, asOfSeq: 8_000, hasOlder: true,
+      events: events.slice(-200), itemCount: 100, olderCursor: cursor('older', 7_802), liveCursor: liveCursor(8_000), asOfSeq: 8_000, hasOlder: true,
     }));
     expect(JSON.stringify(older)).toBe(JSON.stringify({
-      events: events.slice(-400, -199), itemCount: 100, olderCursor: cursor('older', 7_602), newerCursor: cursor('newer', 7_800), liveCursor, asOfSeq: 8_000, hasOlder: true,
+      events: events.slice(-400, -199), itemCount: 100, olderCursor: cursor('older', 7_602), newerCursor: cursor('newer', 7_800), liveCursor: liveCursor(7_801), asOfSeq: 7_801, hasOlder: true,
     }));
     expect(reads).toEqual([3 * 64 * 1024, 5 * 64 * 1024]);
   });

@@ -4,7 +4,9 @@ import { Link, useParams } from 'react-router'
 import { useHarnessStatus } from '@/api/harness'
 import type { HarnessModel } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { SettingsCard } from './form-row'
 
 /**
  * Project settings → Harness (spec 2026-07-23-harness-orchestration; user feedback
@@ -59,44 +61,30 @@ export function HarnessSection() {
   const external = models.filter((model) => model.id !== 'claude')
 
   return (
-    <div className="flex flex-col gap-5 p-4 md:p-6" data-slot="harness-section">
-      <section>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-ui font-semibold">Models</h3>
-          <div className="flex items-center gap-1.5">
-            <Link
-              to={checkHref}
-              className="inline-flex h-7 items-center rounded-lg border border-border px-2.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              Check setup
-            </Link>
-            <Link
-              to={configureHref}
-              className="inline-flex h-7 items-center rounded-lg bg-contrast px-2.5 text-xs font-semibold text-contrast-foreground"
-            >
-              Configure models
-            </Link>
-          </div>
-        </div>
-        <p className="mt-1 max-w-[62ch] text-label leading-relaxed text-muted-foreground">
-          Check access to your models or connect another model. Both actions open an
-          interactive setup task that verifies provider access and prepares changes for your review.
+    <SettingsCard
+      title="Models"
+      slot="harness-section"
+      description="Check access to your models or connect another model. Both actions open an interactive setup task that verifies provider access and prepares changes for your review."
+      action={(
+        <>
+          <Button asChild size="sm" variant="outline"><Link to={checkHref}>Check setup</Link></Button>
+          <Button asChild size="sm" variant="contrast"><Link to={configureHref}>Configure models</Link></Button>
+        </>
+      )}
+    >
+      <ul>
+        {models.map((model) => (
+          <ModelRow key={model.id} model={model} />
+        ))}
+      </ul>
+      {external.length === 0 ? (
+        <p data-slot="harness-empty" className="px-4 py-2 text-label text-muted-foreground">
+          No external models configured — the composer can still seat the Claude, Codex and
+          OpenCode models you are signed in to. Configure models to add advisor reviewers such as
+          DeepSeek or Kimi.
         </p>
-
-        <ul className="mt-3 flex flex-col overflow-hidden rounded-xl border border-border bg-card">
-          {models.map((model) => (
-            <ModelRow key={model.id} model={model} />
-          ))}
-        </ul>
-        {external.length === 0 ? (
-          <p data-slot="harness-empty" className="mt-2 text-label text-muted-foreground">
-            No external models configured — the composer can still seat the Claude, Codex and
-            OpenCode models you are signed in to. Configure models to add advisor reviewers such as
-            DeepSeek or Kimi.
-          </p>
-        ) : null}
-      </section>
-    </div>
+      ) : null}
+    </SettingsCard>
   )
 }
 

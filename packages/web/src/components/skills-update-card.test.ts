@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
 import type { SkillsUpdateState } from '@open-mercato/cezar-api-client'
 
-import { applySkillsUpdateSettled } from './skills-update-card'
+import { applySkillsUpdateSettled, trackedNames } from './skills-update-card'
 
 const state = (over: Partial<SkillsUpdateState>): SkillsUpdateState => ({
   status: 'available',
@@ -85,5 +85,14 @@ describe('applySkillsUpdateSettled', () => {
       applySkillsUpdateSettled('p', null, { apply: vi.fn().mockRejectedValue(error), read, wait }),
     ).rejects.toBe(error)
     expect(read).not.toHaveBeenCalled()
+  })
+})
+
+describe('trackedNames', () => {
+  it('counts tracked skills that are all current (#1905)', () => {
+    expect(trackedNames({ skills: [], tracked: ['a', 'b'] })).toEqual(['a', 'b'])
+  })
+  it('falls back to the updatable list from an older server', () => {
+    expect(trackedNames({ skills: ['a'] })).toEqual(['a'])
   })
 })

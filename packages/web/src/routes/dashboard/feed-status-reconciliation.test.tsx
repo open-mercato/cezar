@@ -83,6 +83,6 @@ it('labels an idle-closed result as closed, not failed (spec 2026-11-04-idle-clo
       <Feed filter="tasks" setFilter={vi.fn()} count={6} more={vi.fn()} />
     </MemoryRouter>,
   )
-  expect(screen.getByText('Latest result: Closed after inactivity')).toBeTruthy()
+  expect(screen.getByText('Latest result: Session closed')).toBeTruthy()
   expect(screen.getByText('Latest result: Failed')).toBeTruthy()
 })
