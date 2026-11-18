@@ -193,6 +193,8 @@ test('a missing heartbeat ACK reconnects', async t => {
  t.mock.timers.tick(100); await settle()
  assert.equal(h.sockets[0].sent.find(frame => frame.op === 1)?.d, 1)
  t.mock.timers.tick(100); await settle(); assert.equal(h.sockets[0].closed, true)
+ t.mock.timers.tick(5000); await settle(16)
+ assert.equal(h.sockets.length, 2); assert.equal(h.sockets[1].sent.find(frame => frame.op === 6)?.d.seq, 1)
 })
 test('a heartbeat before any dispatch carries null', async t => {
  clock(t); const h = harness(t, { withholdReady: true }); h.start(); await settle()
@@ -411,4 +413,50 @@ test('autocomplete for another command or option is ignored', async t => {
  h.dispatch('INTERACTION_CREATE', autocomplete({ name: 'tasks', options: [{ name: 'other', value: 'tas', focused: true }] }))
  h.dispatch('MESSAGE_CREATE', message()); await settle()
  assert.equal(h.accepted.length, 1); assert.equal(opened, 0); assert.equal(h.calls.some(c => c.path.includes('/callback')), false)
+})
+const httpReply = (statusCode, text, headers = {}) => async () => ({ statusCode, headers, body: Readable.from(text ? [Buffer.from(text)] : []) })
+test('an HTML 429 from the edge still cools the route down', async () => {
+ let dials = 0; const request = discordRequest('x', { lookup, request: async (...args) => { dials++; return httpReply(429, '<html>slow down</html>', { 'retry-after': '5' })(...args) } })
+ await assert.rejects(request('GET', `/channels/${dm}`), e => e.failure?.kind === 'rate_limited' && e.failure.retryAfterMs === 5000)
+ await assert.rejects(request('GET', `/channels/${dm}`), e => e.failure?.kind === 'rate_limited'); assert.equal(dials, 1)
+ await assert.rejects(discordRequest('x', { lookup, request: httpReply(200, '<html>') })('GET', '/users/@me'), e => e.failure?.kind === 'transient')
+})
+test('a global rate limit never blocks interaction callbacks', async () => {
+ const paths = [], request = discordRequest('x', { lookup, request: async url => { paths.push(url); return paths.length === 1 ? httpReply(429, JSON.stringify({ global: true, retry_after: 5 }))() : httpReply(204, '')() } })
+ await assert.rejects(request('POST', `/channels/${dm}/messages`, {}), e => e.failure?.kind === 'rate_limited')
+ await assert.rejects(request('POST', `/channels/${room}/messages`, {}), e => e.failure?.kind === 'rate_limited')
+ await request('POST', '/interactions/1/token/callback', { type: 6 }); await request('PATCH', `/webhooks/${bot}/token/messages/@original`, {})
+ assert.equal(paths.length, 3)
+})
+test('an application id distinct from the bot user accepts interactions and owns the commands', async t => {
+ const app = '10000000000000099'
+ clock(t); const h = harness(t, { ready: () => ({ user: { id: bot, username: 'bot', bot: true }, application: { id: app }, session_id: 'session', resume_gateway_url: 'wss://gateway-resume.discord.gg/' }) })
+ h.start(); await settle()
+ h.dispatch('INTERACTION_CREATE', button({ application_id: app })); await settle()
+ assert.equal(h.accepted.length, 1); assert.equal(h.calls.find(c => c.method === 'PUT').path, `/applications/${app}/commands`)
+})
+test('a failed or late autocomplete answer is dropped without failing the record', async t => {
+ clock(t); const h = harness(t, { rest: async (_m, path) => { if (path.includes('/callback')) throw failure('gone') } })
+ h.session.openInteraction = async () => ({ taskChoices: async () => [], dispose: async () => {} })
+ h.start(); await settle()
+ h.dispatch('INTERACTION_CREATE', autocomplete({ name: 'tasks', options: [{ name: 'task', value: 'tas', focused: true }] }))
+ h.dispatch('MESSAGE_CREATE', message()); await settle(16)
+ assert.equal(h.accepted.length, 1); assert.deepEqual(h.reports, [])
+})
+test('dispatches the core ignores never take a queue slot', async t => {
+ clock(t); const h = harness(t); h.start(); await settle()
+ for (let i = 0; i < 300; i++) h.dispatch('MESSAGE_UPDATE', { id: String(++ids), channel_id: room, guild_id: guild })
+ assert.equal(h.sockets[0].closed, false)
+})
+test('an oversized dispatch (1009) stops the bot instead of resuming into it forever', async t => {
+ clock(t); const h = harness(t); h.start(); await settle()
+ h.sockets[0].close(1009); await settle(12)
+ assert.equal(h.outcome()?.failure?.kind, 'blocked')
+})
+test('opcode 7 drops the socket at once and resumes on a new one', async t => {
+ clock(t); const h = harness(t); h.start(); await settle()
+ h.sockets[0].close = () => { throw Error('must not wait for a close handshake') }
+ h.sockets[0].frame({ op: 7 }); await settle(16)
+ assert.equal(h.sockets[0].closed, true); assert.equal(h.sockets.length, 2)
+ assert.equal(h.sockets[1].sent.find(frame => frame.op === 6)?.d.session_id, 'session')
 })

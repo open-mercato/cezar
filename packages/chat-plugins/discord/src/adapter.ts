@@ -39,7 +39,9 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
   const route = routeOf(method, path), key = () => `${buckets.get(route) ?? route}|${major(path)}`
   // A cooldown stored under the route before its bucket hash was learned still applies.
   const until = (k: string) => { const t = cooldowns.get(k) ?? 0; if (t && t <= Date.now()) cooldowns.delete(k); return t }
-  const wait = Math.max(globalUntil, until(`${route}|${major(path)}`), until(key()))
+  // Interaction callbacks and their webhook follow-ups do not count against the bot's global limit.
+  const exempt = path.startsWith('/interactions/') || path.startsWith('/webhooks/')
+  const wait = Math.max(exempt ? 0 : globalUntil, until(`${route}|${major(path)}`), until(key()))
   if (Date.now() < wait) throw fail('rate_limited', wait - Date.now())
   // A POST whose outcome is unknown must not be retried: only reads are transient.
   const ambiguous = () => fail(method === 'GET' ? 'transient' : 'blocked')
@@ -57,7 +59,8 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
    })
    const received = await readCapped(response.body, kind => kind === 'blocked' ? fail('blocked') : ambiguous(), controller.signal)
-   let data: unknown; try { data = received.length ? JSON.parse(received.toString()) : undefined } catch { throw ambiguous() }
+   // Read status and rate-limit headers even when an edge (Cloudflare) answers with HTML.
+   let data: unknown, unreadable = false; try { data = received.length ? JSON.parse(received.toString()) : undefined } catch { unreadable = true }
    const headers = response.headers as Record<string, unknown> | undefined
    const bucket = header(headers, 'x-ratelimit-bucket'); if (bucket && /^[\w-]{1,128}$/.test(bucket)) remember(buckets, route, bucket, REMEMBERED)
    const reset = Number(header(headers, 'x-ratelimit-reset-after')) * 1000
@@ -67,7 +70,7 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
     if (limit?.global === true || header(headers, 'x-ratelimit-global') === 'true') globalUntil = Date.now() + wait; else cool(cooldowns, key(), Date.now() + wait)
     throw fail('rate_limited', wait)
    }
-   if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode >= 500 || (response.statusCode >= 300 && response.statusCode < 400)) throw ambiguous(); if (response.statusCode >= 400) throw fail('blocked'); return data
+   if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode >= 500 || (response.statusCode >= 300 && response.statusCode < 400)) throw ambiguous(); if (response.statusCode >= 400) throw fail('blocked'); if (unreadable) throw ambiguous(); return data
   } catch (e) { if (e instanceof ExtensionChatError) throw e; throw operation?.signal.aborted ? fail('blocked') : ambiguous() } finally { lease?.release(); clearTimeout(timer); operation?.signal.removeEventListener('abort', abort) }
  }, { close: () => pool.close() })
 }
@@ -123,6 +126,10 @@ const HOLD_LIMIT_MS = 60000, HOLD_CAP = 100, ACK_DEADLINE_MS = 2500, DROP_REPORT
 // Discord interaction tokens stay valid for 15 minutes; keep a margin for the request itself.
 const INTERACTION_TOKEN_MS = 14 * 60000
 const CHANNEL_EVENTS = ['CHANNEL_UPDATE', 'CHANNEL_DELETE', 'THREAD_UPDATE', 'THREAD_DELETE']
+// Every other dispatch (edits, deletes, roles, emoji) converts to nothing and must not take a queue slot.
+const QUEUED_EVENTS = new Set(['MESSAGE_CREATE', 'INTERACTION_CREATE', 'GUILD_CREATE', 'GUILD_DELETE', ...CHANNEL_EVENTS])
+// Discord answers a late autocomplete with 404; past this age, skip it instead of failing the record.
+const AUTOCOMPLETE_MAX_AGE_MS = 2500
 const COMMAND_RECEIVED = 'Command received. If you have access, Cezar replies in this chat.'
 type Ack = { promise: Promise<void>; settled: boolean; failed: boolean }
 type RecordState = { ack?: Ack; since?: number; heldUntil?: number; terminal?: string }
@@ -138,7 +145,7 @@ export function createDiscordReceiver(
  },
 ): Receiver {
  let receiveContext: ChatReceiveSession | undefined
- let botId = ''
+ let botId = '', applicationId = ''
  let gatewaySequence: number | null = null
  let deliverySequence = 0
  let pending: Batch | undefined
@@ -367,7 +374,7 @@ export function createDiscordReceiver(
  }
  const interactionNeedsAck = (event: Interaction) => {
   const user = event.member?.user ?? event.user
-  if (event.application_id !== botId || !user || user.bot) return undefined
+  if (event.application_id !== (applicationId || botId) || !user || user.bot) return undefined
   if (
    event.type === 3 &&
    event.data?.custom_id &&
@@ -390,7 +397,7 @@ export function createDiscordReceiver(
   if (commandsRegistered || !session) return
   commandsRegistered = true
   // Never gates receiving, and is retried after a failure: this route has a tight daily budget.
-  commandsPending = invoke('PUT', `/applications/${botId}/commands`, discordApplicationCommands(), session).then(
+  commandsPending = invoke('PUT', `/applications/${applicationId || botId}/commands`, discordApplicationCommands(), session).then(
    () => undefined,
    () => {
     commandsRegistered = false
@@ -488,9 +495,12 @@ export function createDiscordReceiver(
      resumeUrl = undefined
      gatewaySequence = null
     }
+    // 1009: a dispatch above the payload cap (a huge GUILD_CREATE) would recur on every resume or identify.
     const closed =
      code === 4004
       ? fail('auth')
+      : code === 1009
+        ? fail('blocked')
       : code !== undefined && [4010, 4011, 4012, 4013, 4014].includes(code)
         ? fail('blocked')
         : undefined
@@ -553,7 +563,8 @@ export function createDiscordReceiver(
      }
      graceful = true
      requested = frame.op === 7
-     connection.close()
+     // Drop the socket now: a close handshake can hold CLOSING for 30 s, and no close frame keeps the session resumable.
+     connection.terminate()
      return
     }
     if (frame.op !== 0 || frame.s == null || !Number.isSafeInteger(frame.s)) return
@@ -576,6 +587,9 @@ export function createDiscordReceiver(
       return refuse(error as ExtensionChatError)
      }
      botId = user.id
+     // Older applications have an id distinct from their bot user's.
+     const application = obj(ready?.application)
+     applicationId = typeof application?.id === 'string' && snowflake.safeParse(application.id).success ? application.id : user.id
      sessionId = sid
      resumeUrl = resume
      gatewaySequence = frame.s
@@ -609,8 +623,8 @@ export function createDiscordReceiver(
      if (id.success) channels.delete(id.data)
     }
     // Chatter the core ignores needs no order and must not consume the cap.
-    if (type === 'MESSAGE_CREATE' && !relevant(data)) return
-    const record: Json = { ...data, __type: type, __bytes: bytes, __seq: frame.s },
+    if (!QUEUED_EVENTS.has(type) || (type === 'MESSAGE_CREATE' && !relevant(data))) return
+    const record: Json = { ...data, __type: type, __bytes: bytes, __seq: frame.s, __at: Date.now() },
      lane = laneOf(record),
      lanes = parkedLanes()
     if (lane && lanes.has(lane)) {
@@ -747,11 +761,12 @@ export function createDiscordReceiver(
   if (type === 'INTERACTION_CREATE') {
    const parsed = interactionSchema.safeParse(raw)
    const user = parsed.success ? (parsed.data.member?.user ?? parsed.data.user) : undefined
-   if (!parsed.success || !user || user.bot || parsed.data.application_id !== botId) return none
+   if (!parsed.success || !user || user.bot || parsed.data.application_id !== (applicationId || botId)) return none
    const event = parsed.data,
     chatKey = `discord:${event.guild_id ? `guild:${event.guild_id}:${event.channel_id}` : `dm:${event.channel_id}`}`
    if (event.type === 4) {
     if (event.data?.name !== 'tasks') return none
+    if (typeof raw.__at === 'number' && Date.now() - raw.__at > AUTOCOMPLETE_MAX_AGE_MS) return none
     let choices: { name: string; value: string }[] = []
     const focused = event.data.options?.find(option => option.focused && option.name === 'task')
     if (!focused) return none
@@ -785,12 +800,10 @@ export function createDiscordReceiver(
      }
     }
     await op?.assertActive()
-    await invoke(
-     'POST',
-     `/interactions/${event.id}/${event.token}/callback`,
-     discordCommandInteractionCallback(choices),
-     op,
-    )
+    // Suggestions are disposable: a failed answer never fails the record or parks its lane.
+    await invoke('POST', `/interactions/${event.id}/${event.token}/callback`, discordCommandInteractionCallback(choices), op).catch(error => {
+     if (op?.signal.aborted) throw error
+    })
     return none
    }
    const state = conversion.get(raw)
