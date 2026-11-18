@@ -4196,8 +4196,8 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     for (const [name, body] of [
       ['om-review-fixture', 'Run the `om-review-engine-fixture` skill.'],
       ['om-review-engine-fixture', 'Review engine instructions.'],
-    ]) {
-      const dir = join(teamRepo, 'skills', name!);
+    ] as const) {
+      const dir = join(teamRepo, 'skills', name);
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\n---\n\n${body}\n`);
     }
@@ -4205,7 +4205,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     await run('git', [...GIT_ID, 'commit', '-qm', 'team skills'], { cwd: teamRepo });
     writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [{ repo: teamRepo, ref: 'main' }] }));
 
-    const record = manager.startRun(SINGLE_STEP, { task: 'Run om-review-fixture on PR 12', worktree: true, runner: 'codex' });
+    const record = manager.startRun(SINGLE_STEP, { task: 'Review PR 12. Run om-review-fixture.', worktree: true, runner: 'codex' });
     runId = record.id;
     await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('om-review-fixture')));
     const worktree = store.getRun(record.id)!.worktreePath!;

@@ -10599,7 +10599,7 @@ export function repoExtensionNote(name: string, path: string): string {
 /** Recognize an invocation with a cold catalog, without blocking unrelated prompts on a clone. */
 function requestedOpenMercatoSkills(named: readonly string[], text?: string): string[] {
   const names = new Set(named.filter(isOpenMercatoSkillName));
-  const invocation = /(?:^\s*|\b(?:run|use|apply|load|invoke)\s+(?:the\s+)?)[`/]?(om-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w./-])/gim;
+  const invocation = /(?:^\s*|\b(?:run|use|apply|load|invoke)\s+(?:the\s+)?)[`/]?(om-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w/-]|\.[\w-])/gim;
   for (const match of (text ?? '').matchAll(invocation)) names.add(match[1]!.toLowerCase());
   return [...names];
 }
