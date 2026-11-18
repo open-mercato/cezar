@@ -116,6 +116,16 @@ describe('materializeSkillDir', () => {
     expect(readFileSync(exclude, 'utf8')).toContain(`.claude/skills/${name}/`);
   });
 
+  it('refreshes an in-place copy a released cezar owned through info/exclude only', async () => {
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), 'Previous instructions');
+    expect(await materializeSkillDir(worktree, skill)).toBe(false);
+    writeFileSync(join(worktree, '.git/info/exclude'), `.claude/skills/${name}/\n`);
+    expect(await materializeSkillDir(worktree, skill)).toBe(true);
+    expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf8')).toBe('Team instructions');
+    expect(readFileSync(join(skillDir, '.cezar-skill'), 'utf8')).toBe(`${name}\n`);
+  });
+
   it('replaces a hard-linked reference without writing to its external file', async () => {
     expect(await materializeSkillDir(worktree, skill)).toBe(true);
     const outside = join(root, 'guide.md');

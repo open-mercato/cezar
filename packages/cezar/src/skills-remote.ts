@@ -435,7 +435,11 @@ export async function materializeSkillDir(
     const ignoreText = await regularFileText(join(parent, '.gitignore'));
     const legacy = ignoreText.startsWith(TASK_SKILL_IGNORE_MARK) && ignoreText.split('\n').includes(`/${skill.name}`);
     const managed = (await regularFileText(marker)) === `${skill.name}\n`;
-    if (!legacy && !managed) return false;
+    // Released in-place copies were owned through `info/exclude` only (#2319 review).
+    const excluded = !legacy && !managed
+      && (await regularFileText(await gitExcludePath(repoRoot))).split('\n').includes(`${skillsDir}/${skill.name}/`);
+    if (!legacy && !managed && !excluded) return false;
+    if (!managed) await writeFile(marker, `${skill.name}\n`, { flag: 'wx' }).catch(() => undefined);
   } else {
     await mkdir(destDir);
     await writeFile(marker, `${skill.name}\n`, { flag: 'wx' });
@@ -473,19 +477,18 @@ export async function materializeSkillDir(
   }
 }
 
+/** The real exclude file: in a linked worktree (spec 006) `.git` is a file and `info/exclude`
+ *  lives in the shared common dir — which also means one exclude entry covers every task worktree. */
+async function gitExcludePath(repoRoot: string): Promise<string> {
+  const probe = await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], LIST_TIMEOUT_MS, repoRoot);
+  const gitDir = probe.ok && probe.stdout.trim() ? probe.stdout.trim() : join(repoRoot, '.git');
+  return join(gitDir, 'info', 'exclude');
+}
+
 /** Append a pattern to git's `info/exclude` (idempotent, non-fatal). */
 export async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> {
   try {
-    // Resolve the real exclude file: in a linked worktree (spec 006) `.git`
-    // is a file and `info/exclude` lives in the shared common dir — which
-    // also means one exclude entry covers every task worktree.
-    const probe = await git(
-      ['rev-parse', '--path-format=absolute', '--git-common-dir'],
-      LIST_TIMEOUT_MS,
-      repoRoot,
-    );
-    const gitDir = probe.ok && probe.stdout.trim() ? probe.stdout.trim() : join(repoRoot, '.git');
-    const excludePath = join(gitDir, 'info', 'exclude');
+    const excludePath = await gitExcludePath(repoRoot);
     let prev = '';
     try {
       prev = await readFile(excludePath, 'utf8');
