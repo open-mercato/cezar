@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { constants, existsSync, readFileSync } from 'node:fs';
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { loadConfig, projectGatedSkillsRepos, type SkillsRepoSource } from './config.ts';
@@ -368,8 +368,16 @@ export const TASK_SKILL_IGNORE_MARK = '# cezar: skills installed for this task, 
 const MATERIALIZATION_MARK = '.cezar-skill';
 
 async function regularFileText(path: string): Promise<string> {
-  const entry = await lstat(path).catch(() => undefined);
-  return entry?.isFile() ? readFile(path, 'utf8').catch(() => '') : '';
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+  const file = await open(path, flags).catch(() => undefined);
+  if (!file) return '';
+  try {
+    return (await file.stat()).isFile() ? await file.readFile('utf8') : '';
+  } catch {
+    return '';
+  } finally {
+    await file.close();
+  }
 }
 
 export async function skillPathIsUntracked(repoRoot: string, path: string): Promise<boolean> {
@@ -415,6 +423,7 @@ export async function materializeSkillDir(
   const srcDir = skill.team.path.slice(0, -'/SKILL.md'.length);
   const ls = await git(['ls-tree', '-r', '--name-only', ref, '--', srcDir], LIST_TIMEOUT_MS, bareDir);
   if (!ls.ok) return false;
+  if (!(await skillPathIsUntracked(repoRoot, `${skillsDir}/${skill.name}`))) return false;
 
   const parent = await ensureSkillDirectory(repoRoot, segments);
   if (!parent) return false;
@@ -426,12 +435,12 @@ export async function materializeSkillDir(
     const ignoreText = await regularFileText(join(parent, '.gitignore'));
     const legacy = ignoreText.startsWith(TASK_SKILL_IGNORE_MARK) && ignoreText.split('\n').includes(`/${skill.name}`);
     const managed = (await regularFileText(marker)) === `${skill.name}\n`;
-    if ((!legacy && !managed) || !(await skillPathIsUntracked(repoRoot, `${skillsDir}/${skill.name}`))) return false;
+    if (!legacy && !managed) return false;
   } else {
     await mkdir(destDir);
     await writeFile(marker, `${skill.name}\n`, { flag: 'wx' });
-    await ignore();
   }
+  await ignore();
 
   const targets: Array<{ file: string; rel: string; target: string }> = [];
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
@@ -446,16 +455,22 @@ export async function materializeSkillDir(
     if (entry && !entry.isFile()) return false;
     targets.push({ file, rel, target });
   }
-  let entryWritten = false;
-  for (const { file, rel, target } of targets) {
-    const show = await git(['show', `${ref}:${file}`], LIST_TIMEOUT_MS, bareDir);
-    if (!show.ok) return false;
-    await writeFile(target, show.stdout, {
-      encoding: 'utf8', flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0),
-    });
-    entryWritten ||= rel === 'SKILL.md';
+  const staging = await mkdtemp(join(destDir, '.cezar-copy-'));
+  try {
+    const staged = join(staging, 'file');
+    let entryWritten = false;
+    for (const { file, rel, target } of targets) {
+      const show = await git(['show', `${ref}:${file}`], LIST_TIMEOUT_MS, bareDir);
+      if (!show.ok) return false;
+      // Replace the directory entry so an existing hard link cannot mutate an external file.
+      await writeFile(staged, show.stdout, { encoding: 'utf8', flag: 'wx' });
+      await rename(staged, target);
+      entryWritten ||= rel === 'SKILL.md';
+    }
+    return entryWritten;
+  } finally {
+    await rm(staging, { recursive: true, force: true });
   }
-  return entryWritten;
 }
 
 /** Append a pattern to git's `info/exclude` (idempotent, non-fatal). */

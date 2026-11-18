@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -88,6 +88,9 @@ describe('materializeSkillDir', () => {
     writeFileSync(join(worktree, '.claude/skills/.gitignore'), `# cezar: skills installed for this task, not part of the repository\n/${name}\n`);
     expect(await materializeSkillDir(worktree, skill)).toBe(false);
     expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf8')).toBe('Branch instructions');
+    rmSync(skillDir, { recursive: true });
+    expect(await materializeSkillDir(worktree, skill)).toBe(false);
+    expect(existsSync(skillDir)).toBe(false);
   });
 
   it('rejects links in the reference path of a managed skill before writing any files', async () => {
@@ -103,10 +106,25 @@ describe('materializeSkillDir', () => {
     expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf8')).toBe('Previous instructions');
   });
 
-  it('refreshes a previously materialized skill directory', async () => {
+  it('refreshes a previously materialized skill directory and restores its ignore rule', async () => {
     expect(await materializeSkillDir(worktree, skill)).toBe(true);
     writeFileSync(join(skillDir, 'SKILL.md'), 'Previous instructions');
+    const exclude = join(worktree, '.git/info/exclude');
+    writeFileSync(exclude, '# no local excludes\n');
     expect(await materializeSkillDir(worktree, skill)).toBe(true);
     expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf8')).toBe('Team instructions');
+    expect(readFileSync(exclude, 'utf8')).toContain(`.claude/skills/${name}/`);
+  });
+
+  it('replaces a hard-linked reference without writing to its external file', async () => {
+    expect(await materializeSkillDir(worktree, skill)).toBe(true);
+    const outside = join(root, 'guide.md');
+    const reference = join(skillDir, 'references/guide.md');
+    writeFileSync(outside, 'Local guide');
+    rmSync(reference);
+    linkSync(outside, reference);
+    expect(await materializeSkillDir(worktree, skill)).toBe(true);
+    expect(readFileSync(outside, 'utf8')).toBe('Local guide');
+    expect(readFileSync(reference, 'utf8')).toBe('Team guide');
   });
 });
