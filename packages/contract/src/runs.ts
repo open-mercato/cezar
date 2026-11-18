@@ -6,6 +6,7 @@ import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
 import { runSubjectSchema } from './artifacts.ts';
+import { runParkedSchema } from './agent-login.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
@@ -207,6 +208,8 @@ export const runRecordSchema = z.object({
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Set while the run waits on an expired agent login (spec 2026-11-18-inline-account-reconnect). */
+  parked: runParkedSchema.optional(),
   /** Enabled policy captured at task creation; manual Continue does not refresh it. */
   fallbackPolicy: z.object({
     enabled: z.boolean(),

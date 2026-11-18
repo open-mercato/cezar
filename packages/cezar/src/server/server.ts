@@ -837,6 +837,8 @@ export type WorkspaceEventName =
   | 'project-removed'
   | 'checkout-progress'
   | 'provider-status'
+  | 'agent-login'
+  | 'account-reconnected'
   | 'automation-change'
   | 'tracker-changed'
   | 'worktree-lifecycle'

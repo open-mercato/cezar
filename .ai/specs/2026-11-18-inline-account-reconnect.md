@@ -1,6 +1,6 @@
 # Reconnect an agent account where the error appears
 
-Status: design, decisions recorded, awaiting further changes before approval · Date: 2026-11-18 · Design page: `2026-11-18-inline-account-reconnect.html`
+Status: approved 2026-11-18 (`80ec33628`), implementation in progress · Date: 2026-11-18 · Design page: `2026-11-18-inline-account-reconnect.html`
 (interactive; deep links such as `?runner=copilot&phase=signing&mode=remote`)
 
 ## Problem
@@ -75,10 +75,26 @@ fields and starts a fresh session (spec 2026-07-29 § sessionId and profileId ar
 
 ## Decisions (2026-11-18)
 
-1. **Resume**: everything blocked on the reconnected account restarts automatically, with no Resume step. This is an
-   unattended model cost, so it must be listed under AGENTS.md § Zero config as pending owner ratification when Phase 2
-   lands. The bound is one resume per blocked item per reconnect, `auth`-parked items only.
+1. **Resume**: everything blocked on the reconnected account restarts automatically, with no Resume step. The owner
+   ratified the unattended cost (AGENTS.md § Zero config): one restart per blocked task or manager per reconnect,
+   `auth`-parked items only, tasks within `maxParallel`.
 2. **Parking**: an auth rejection parks the task (waiting, resumable), not failed.
 3. **Hosted web**: host sign-in from hosted web needs `CEZ_REMOTE_AGENT_ACCOUNTS=1`; paired phones are allowed by
    default.
 4. **API keys**: offered only for Codex and OpenCode.
+
+## Sign-in path checks (2026-11-18)
+
+Each check ran the installed CLI with its stdio piped (no TTY), in a throwaway `HOME` and config dir, with a PATH shim for
+`open`/`xdg-open`. No login was completed and no real credentials were touched.
+
+| Path | CLI | Result |
+| --- | --- | --- |
+| Claude Code without a terminal | `claude` 2.1.310 | **Confirmed.** `claude auth login` prints "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?…" with `redirect_uri=https://platform.claude.com/oauth/code/callback` and then reads "Paste code here if prompted >" from stdin. That is the paste-code flow, and it works headless. Its browser launch goes through `open` with a `localhost` callback URL, which a PATH shim captures, so the local flow needs no paste. |
+| Codex device code | `codex-cli` 0.169.0 | **Confirmed.** `codex login --device-auth` prints `https://auth.openai.com/codex/device` and a one-time code in `XXXX-XXXXX` form, "expires in 15 minutes". The plain `codex login` prints its authorize URL on stderr (localhost:1455 callback). `--with-api-key` reads stdin. |
+| Cursor without a browser | `agent` 2026.10.22 | **Confirmed.** With `NO_OPEN_BROWSER=1`, `agent login` prints `https://cursor.com/loginDeepControl?challenge=…&uuid=…` and waits; it polls Cursor, so the link works from any device. |
+| OpenCode OAuth providers | `opencode` 1.19.2 | **Confirmed through `opencode serve`.** `GET /provider/auth` lists each provider's methods (`oauth`/`api`). `POST /provider/{id}/oauth/authorize {method}` answers `{url, method: 'auto'\|'code', instructions}` (OpenAI: device page plus "Enter code: XXXX-XXXXX"). `POST /provider/{id}/oauth/callback` completes it, and `PUT /auth/{id}` saves a key. The CLI's `auth login -p` is an interactive prompt, so it is not used. |
+| Kimi | not installed on the check machine | **Not confirmed.** Kimi keeps today's terminal sign-in (Connect plus the login watcher). |
+
+GitHub Copilot CLI wasn't installed either. Its device flow follows GitHub's documented `login/device` page, and its
+driver falls back to the terminal sign-in when the code can't be parsed.
