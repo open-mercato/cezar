@@ -110,7 +110,8 @@ import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { getAgentFallbackPolicyQuerySchema, putAgentFallbackPolicySchema } from '@open-mercato/cezar-contract';
-import { providerConnectSchema } from '@open-mercato/cezar-contract';
+import { providerConnectSchema, loginSessionStartSchema, loginSessionInputSchema } from '@open-mercato/cezar-contract';
+import { LoginSessionManager, type LoginSessionResult } from '../core/login-session.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -571,6 +572,8 @@ export interface ServerDeps {
   socketHub?: SocketHub;
   /** The task terminal's session registry. Injectable so route tests drive a fake PTY. */
   terminalSessions?: TerminalSessions;
+  /** Inline account reconnect's login sessions; tests inject a fake. */
+  loginSessions?: LoginSessionManager;
   /** What the first-run page's install commands are chosen from. Injectable so a route test probes nothing. */
   agentSetupProbeEnv?: () => Promise<InstallEnv>;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
@@ -825,6 +828,12 @@ export interface RemoveProjectResponse {
  *  back to "inherit the workspace cap". */
 export interface UpdateProjectResponse {
   project: ProjectListEntry;
+}
+
+/** One reply shape for the login-session routes: the session, or `{ error, command? }`. */
+function loginSessionReply(c: Context, result: LoginSessionResult) {
+  if (result.ok) return c.json(result.session, 200);
+  return c.json({ error: result.error, ...(result.command ? { command: result.command } : {}) }, result.status);
 }
 
 // ---- workspace SSE (multi-project spec, step 2.8) --------------------------
@@ -1476,6 +1485,8 @@ export function createApp(deps: ServerDeps) {
   setNamerModelCatalog(modelCatalog);
   const providerAuth = deps.providerAuth
     ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
+  // Inline account reconnect (spec 2026-11-18-inline-account-reconnect).
+  const loginSessions = deps.loginSessions ?? new LoginSessionManager();
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -2497,6 +2508,24 @@ export function createApp(deps: ServerDeps) {
       watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
     })
+
+    // Inline account reconnect (spec 2026-11-18-inline-account-reconnect): the vendor's own sign-in,
+    // relayed to the card instead of a terminal. Tokens and pasted keys never reach a response.
+    .post('/providers/login', jsonZodValidator(loginSessionStartSchema, { message: `provider must be one of ${RUNNER_IDS.join(', ')}` }), async (c) => {
+      const result = await loginSessions.start(c.req.valid('json'), { local: capabilities().localHandoff, phone: inRelayScope() });
+      return loginSessionReply(c, result);
+    })
+    .post(
+      '/providers/login/:sessionId/input',
+      paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
+      jsonZodValidator(loginSessionInputSchema, { message: 'code or apiKey is required' }),
+      async (c) => loginSessionReply(c, await loginSessions.input(c.req.valid('param').sessionId, c.req.valid('json'))),
+    )
+    .delete(
+      '/providers/login/:sessionId',
+      paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
+      async (c) => loginSessionReply(c, await loginSessions.cancel(c.req.valid('param').sessionId)),
+    )
 
     // Offered next to an "X or newer is required" agent error: hands the CLI's own self-update to
     // a terminal, like Connect hands it the login.
