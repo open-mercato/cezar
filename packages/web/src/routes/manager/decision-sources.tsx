@@ -1,7 +1,7 @@
 import { Link } from 'react-router'
 import { useProjects, useRunsIndex } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
-import { ResolveConflictsForPr } from '@/components/reference-conflict-action'
+import { prTaskRuns, ResolveConflictsForPr } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { taskReferences, type TaskReference } from '@/lib/tasks-table'
 import { runTitle } from '@/lib/task-groups'
@@ -36,7 +36,26 @@ export function DecisionSources({ message, origin }: { message: ManagerMessage; 
   const text = message.kind === 'assistant'
     ? [message.text, ...(message.ask?.questions.map((question) => question.question) ?? [])].join(' ')
     : message.kind === 'action' ? message.reason ?? '' : ''
-  return <DecisionSourceList sources={decisionSources(message)} text={text} origin={origin} decisionId={message.id} />
+  const runs = useRunsIndex().data?.runs
+  const projects = useProjects().data?.projects
+  return <DecisionSourceList sources={cardSources(message, runs, projects)} text={text} origin={origin} decisionId={message.id} />
+}
+
+/**
+ * A merge card names only tasks that carry its PR: cards stored before the server checked this
+ * named whatever task the manager's turn had read. Unknown until the runs index loads.
+ */
+export function cardSources(
+  message: ManagerMessage,
+  runs: readonly IndexRun[] | undefined,
+  projects: ReadonlyArray<{ id: string; repoUrl?: string | undefined }> | undefined,
+) {
+  const sources = decisionSources(message)
+  if (message.kind !== 'action' || message.action.type !== 'merge-pr') return sources
+  const { projectId, number } = message.action
+  if (!runs) return []
+  const tied = new Set(prTaskRuns(runs, projectId, number, projects?.find((entry) => entry.id === projectId)?.repoUrl).map((run) => run.id))
+  return sources.filter((source) => source.projectId === projectId && tied.has(source.runId))
 }
 
 /** The Source task block, for a chat card and for its row in the Questions inbox alike. */
