@@ -9,7 +9,6 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -191,20 +190,21 @@ function writeHandoffAndTodo() {
 
 // Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
 // proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
-/** True the first time this message fails on auth in this cezar home; later replays succeed. */
+/** True the first time this message fails on auth in this cezar home; later replays succeed.
+ *  Without `CEZ_HOME` (no sandboxed home to write to) it fails every time, as before. */
 function firstAuthFailure(text) {
-  // Under the cezar home, so a fresh CEZ_HOME fails again; never the shared tmp (CodeQL
-  // js/insecure-temporary-file). The exclusive create makes the check and the write one step.
-  const dir = join(process.env.CEZ_HOME ?? join(homedir(), '.cache', 'cez'), 'mock-auth');
+  const home = process.env.CEZ_HOME;
+  if (!home) return true;
+  const dir = join(home, 'mock-auth-once');
   const marker = join(dir, createHash('sha256').update(text).digest('hex').slice(0, 16));
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Exclusive create: the existence check and the write are one step.
     writeFileSync(marker, '', { flag: 'wx', mode: 0o600 });
+    return true;
   } catch (error) {
-    if (error?.code === 'EEXIST') return false;
-    /* unwritable cache: fail every time, as before */
+    return error?.code !== 'EEXIST';
   }
-  return true;
 }
 
 async function managerTurn(userText) {
