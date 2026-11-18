@@ -1,5 +1,5 @@
 import { CheckIcon } from 'lucide-react'
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { type ReactNode, useContext, useEffect, useId, useRef, useState } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
@@ -13,6 +13,7 @@ import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
 import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
+import { AskTextContext } from './ask-text'
 import { ASK_MORE_INFO_ANSWER, AskAnswerSummary, askAnswerLines } from './ask-answer-summary'
 import {
   type AskQuestionAnswer,
@@ -290,6 +291,7 @@ function AskQuestionBlock({
   onSubmit: (answer: AskQuestionAnswer) => void
 }) {
   const multiSelect = question.multiSelect === true
+  const text = useContext(AskTextContext)
   const newlineOnEnter = useEnterInsertsNewline()
   const questionId = useId()
   const otherOpen = answer.other !== undefined
@@ -340,7 +342,7 @@ function AskQuestionBlock({
         ) : null}
       </div>
       <p id={questionId} className="mb-2.5 break-words text-body font-semibold text-foreground">
-        {question.question}
+        {text.render(question.question)}
         {multiSelect ? <span className="sr-only"> (select all that apply)</span> : null}
       </p>
       <div className="flex flex-col gap-2">
@@ -373,7 +375,7 @@ function AskQuestionBlock({
             <Textarea
               ref={otherInput}
               rows={2}
-              aria-label={`Your own answer: ${question.question}`}
+              aria-label={`Your own answer: ${text.plain(question.question)}`}
               placeholder="Type your own answer"
               value={answer.other}
               disabled={disabled}
@@ -426,19 +428,14 @@ function AskChoice({
   disabled: boolean
   onClick: () => void
 }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      aria-pressed={selected}
-      onClick={onClick}
-      className={cn(
-        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none',
-        'focus-visible:ring-[3px] focus-visible:ring-ring/50',
-        'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
-        selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
-      )}
-    >
+  const text = useContext(AskTextContext)
+  const descriptionId = useId()
+  const box = cn(
+    'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none',
+    selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
+  )
+  const content = (
+    <>
       <span className="flex min-w-0 items-start gap-2 text-ui font-semibold text-foreground">
         {checkbox ? (
           <span
@@ -451,11 +448,53 @@ function AskChoice({
             {selected ? '✓' : ''}
           </span>
         ) : null}
-        <span className="min-w-0 break-words">{label}</span>
+        <span className="min-w-0 break-words">{text.render(label)}</span>
       </span>
       {description ? (
-        <span className="min-w-0 break-words text-label text-muted-foreground">{description}</span>
+        <span id={descriptionId} className="min-w-0 break-words text-label text-muted-foreground">{text.render(description)}</span>
       ) : null}
+    </>
+  )
+  // A chip is a link of its own, and a link inside a button is neither: the button lies over the
+  // whole option and the chips sit above it, so a click on a chip opens it and anywhere else picks.
+  if (text.interactive(label) || (description !== undefined && text.interactive(description))) {
+    return (
+      <div
+        data-slot="ask-choice"
+        className={cn(
+          box,
+          'relative has-[>button:hover]:border-primary/50 has-[>button:hover]:bg-primary/[0.06]',
+          'has-[>button:focus-visible]:ring-[3px] has-[>button:focus-visible]:ring-ring/50',
+          disabled && 'opacity-50',
+        )}
+      >
+        <button
+          type="button"
+          disabled={disabled}
+          aria-pressed={selected}
+          aria-label={text.plain(label)}
+          {...(description ? { 'aria-describedby': descriptionId } : {})}
+          onClick={onClick}
+          className="absolute inset-0 rounded-md outline-none"
+        />
+        {content}
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      data-slot="ask-choice"
+      disabled={disabled}
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        box,
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
+      )}
+    >
+      {content}
     </button>
   )
 }

@@ -31,6 +31,8 @@ import {
   streamingReply,
   turnKindLabel,
   watchingLine,
+  inlineReferenceText,
+  parseInlineReferences,
 } from './managers'
 import { assistantMessage, managerFixture, userMessage } from '@/routes/manager/manager-fixtures'
 
@@ -399,5 +401,46 @@ describe('the screen around the chat', () => {
     expect(lastCheckResult([assistantMessage(2, { at: '2026-10-31T09:19:00.000Z' })], at, false)).toBeUndefined()
     expect(lastCheckResult([], at, false)).toBeUndefined()
     expect(lastCheckResult([], undefined, true)).toBeUndefined()
+  })
+})
+
+describe('parseInlineReferences', () => {
+  const projects = [{ id: 'alpha', repoUrl: 'https://github.com/o/alpha' }, { id: 'beta' }]
+
+  it('splits markers out of plain text', () => {
+    expect(parseInlineReferences('Assess [[pr:alpha/2897]] for [[task:beta/run-1]].', projects)).toEqual([
+      { kind: 'text', text: 'Assess ' },
+      { kind: 'pr', projectId: 'alpha', number: 2897 },
+      { kind: 'text', text: ' for ' },
+      { kind: 'task', projectId: 'beta', runId: 'run-1' },
+      { kind: 'text', text: '.' },
+    ])
+  })
+
+  it('resolves a bare #N against the project the text names, and leaves plain numbers alone', () => {
+    expect(parseInlineReferences('[[issue:beta/3]] then PR #12, not 2896', projects)).toEqual([
+      { kind: 'issue', projectId: 'beta', number: 3 },
+      { kind: 'text', text: ' then PR ' },
+      { kind: 'pr', projectId: 'beta', number: 12 },
+      { kind: 'text', text: ', not 2896' },
+    ])
+  })
+
+  it('keeps a bare #N as words when no single project owns it', () => {
+    expect(parseInlineReferences('Merge #12?', projects)).toEqual([{ kind: 'text', text: 'Merge #12?' }])
+  })
+
+  it('turns a connected GitHub URL into a chip', () => {
+    expect(parseInlineReferences('See https://github.com/o/alpha/pull/7', projects)).toEqual([
+      { kind: 'text', text: 'See ' },
+      { kind: 'pr', projectId: 'alpha', number: 7 },
+    ])
+  })
+
+  it('falls back to the words for an unknown project or a malformed number', () => {
+    expect(parseInlineReferences('[[pr:gone/12]] [[issue:alpha/x1]] [[task:gone/abcdef1234]]', projects)).toEqual([
+      { kind: 'text', text: '#12 [[issue:alpha/x1]] task abcdef12' },
+    ])
+    expect(inlineReferenceText('Assess [[pr:gone/12]]')).toBe('Assess #12')
   })
 })

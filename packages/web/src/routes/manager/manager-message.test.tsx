@@ -16,7 +16,7 @@ function Probe() {
   return <span data-testid="at">{`${location.pathname}|${JSON.stringify(location.state)}`}</span>
 }
 
-function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: ReadonlyArray<{ id: string; name?: string; repoUrl?: string }>, superseded = false) {
+function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: ReadonlyArray<{ id: string; name?: string; repoUrl?: string }>, superseded = false, answerOnCard = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(workspaceQueryKeys.projects, { projects: projects ?? [], bootProject: 'alpha', projectsDir: '' })
   client.setQueryData(workspaceQueryKeys.runsIndex, {
@@ -26,7 +26,7 @@ function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: R
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/manager/global']}>
         <Routes>
-          <Route path="*" element={<><ManagerMessageRow message={next} origin={origin} onDecide={onDecide} superseded={nextSuperseded} {...(projects ? { projects } : {})} /><Probe /></>} />
+          <Route path="*" element={<><ManagerMessageRow message={next} origin={origin} onDecide={onDecide} superseded={nextSuperseded} answerOnCard={answerOnCard} {...(projects ? { projects } : {})} /><Probe /></>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
@@ -343,6 +343,85 @@ describe('ManagerMessageRow', () => {
     for (const chip of chips) expect(chip.getAttribute('aria-label')).not.toContain('Global Manager')
     expect(chips[0]!.getAttribute('aria-label')).toBe('Open the pull request for #12, Fix the login bug')
     expect(chips[1]!.getAttribute('aria-label')).toBe('Open the pull request for #13, Alpha')
+  })
+
+  describe('references inside a decision card', () => {
+    const projects = [{ id: 'alpha', name: 'Alpha', repoUrl: 'https://github.com/o/alpha' }]
+    const chipAsk = { questions: [
+      {
+        header: 'Dependabot',
+        question: 'Start assessment tasks for [[pr:alpha/2897]] and [[pr:alpha/2896]]?',
+        options: [
+          { label: 'Assess [[pr:alpha/2897]] (recommended)', description: 'Opens a task for [[issue:alpha/41]] in [[task:alpha/run-1]]' },
+          { label: 'Skip both' },
+        ],
+      },
+    ] }
+
+    it('paints markers in the question, a label and a description as the chat chips', () => {
+      renderMessage(assistantMessage(2, { text: 'Two PRs.', ask: chipAsk }), vi.fn(), projects)
+      const card = document.querySelector('[data-slot="manager-ask"]')!
+      const question = card.querySelector('[role="group"] p')!
+      expect([...question.querySelectorAll('[data-slot="pr-chip"]')].map((chip) => chip.getAttribute('href')))
+        .toEqual(['https://github.com/o/alpha/pull/2897', 'https://github.com/o/alpha/pull/2896'])
+      expect(question.textContent).not.toContain('[[')
+      const option = card.querySelector('[data-slot="ask-choice"]')!
+      expect(option.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/alpha/pull/2897')
+      expect(option.querySelector('[data-slot="issue-chip"]')?.getAttribute('href')).toBe('https://github.com/o/alpha/issues/41')
+      expect(option.querySelector('[data-slot="manager-task-chip"]')?.textContent).toBe('Session 123123')
+      // The pick is still one button, named by what the label reads.
+      expect(screen.getByRole('button', { name: 'Assess #2897 (recommended)' })).toBeTruthy()
+      expect(card.textContent).not.toContain('[[')
+    })
+
+    it('opens a chip inside an option without picking the option', async () => {
+      renderMessage(assistantMessage(2, { text: 'Two PRs.', ask: chipAsk }), vi.fn(), projects)
+      const option = document.querySelector('[data-slot="ask-choice"]')!
+      const chip = option.querySelector<HTMLAnchorElement>('[data-slot="pr-chip"]')!
+      // The chip is not inside the button that picks, so its click can never reach it.
+      expect(chip.closest('button')).toBeNull()
+      const sent = () => vi.mocked(fetch).mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST')
+      fireEvent.click(chip)
+      expect(sent()).toHaveLength(0)
+      expect(option.querySelector('button')!.getAttribute('aria-pressed')).toBe('false')
+      vi.mocked(fetch).mockResolvedValue(new Response('{"ok":true}', { status: 200 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Assess #2897 (recommended)' }))
+      await waitFor(() => expect(sent()).toHaveLength(1))
+      expect(JSON.parse(String((sent()[0]![1] as RequestInit).body)).text).toBe('Dependabot: Assess [[pr:alpha/2897]] (recommended)')
+    })
+
+    it('resolves a bare #N against the only connected project, never a plain number', () => {
+      const ask = { questions: [{ header: 'Merge', question: 'Merge PR #2897 now? It closes 2896.', options: [{ label: 'Yes' }, { label: 'No' }] }] }
+      renderMessage(assistantMessage(2, { text: 'One PR.', ask }), vi.fn(), projects)
+      const question = document.querySelector('[data-slot="manager-ask"] [role="group"] p')!
+      const chips = question.querySelectorAll('[data-slot="pr-chip"], [data-slot="issue-chip"]')
+      expect(chips).toHaveLength(1)
+      expect(chips[0]!.getAttribute('data-slot')).toBe('pr-chip')
+      expect(question.textContent).toContain('It closes 2896.')
+    })
+
+    it('falls back to the words for an unknown project or a malformed number', () => {
+      const ask = { questions: [{ header: 'Odd', question: 'Look at [[pr:elsewhere/12]] and [[issue:alpha/abc]]?', options: [{ label: 'About [[task:elsewhere/abcdef1234]]' }, { label: 'No' }] }] }
+      renderMessage(assistantMessage(2, { text: 'Hm.', ask }), vi.fn(), projects)
+      const card = document.querySelector('[data-slot="manager-ask"]')!
+      expect(card.querySelectorAll('[data-slot="pr-chip"], [data-slot="issue-chip"], [data-slot="manager-task-chip"]')).toHaveLength(0)
+      expect(card.querySelector('[role="group"] p')!.textContent).toContain('Look at #12 and [[issue:alpha/abc]]?')
+      expect(screen.getByRole('button', { name: 'About task abcdef12' })).toBeTruthy()
+    })
+
+    it('reads the references back as words on the answered card', () => {
+      renderMessage(assistantMessage(2, { text: 'Two PRs.', ask: chipAsk, askAnswer: 'Dependabot: Assess [[pr:alpha/2897]] (recommended)' }), vi.fn(), projects, false, true)
+      const answered = document.querySelector('[data-slot="manager-ask"][data-resolved="true"]')!
+      expect(answered.textContent).toContain('Assess #2897 (recommended)')
+      expect(answered.querySelector('[data-slot="ask-answer-description"] [data-slot="issue-chip"]')).not.toBeNull()
+    })
+
+    it('paints references in an approval reason', () => {
+      renderMessage(actionMessage(206, { reason: 'Green after [[pr:alpha/2897]] landed.' }), vi.fn(), projects)
+      const reason = [...document.querySelectorAll('[data-slot="manager-action"] p')].find((p) => p.textContent?.startsWith('Green after'))!
+      expect(reason.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/alpha/pull/2897')
+      expect(reason.textContent).not.toContain('[[')
+    })
   })
 
   describe('a conflicting pull request chip', () => {
