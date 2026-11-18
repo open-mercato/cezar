@@ -63,7 +63,6 @@ describe('auth park and reconnect resume', () => {
     else process.env.CEZ_CODEX_BIN = savedCodexBin;
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    // A Codex session stopping under load outlasts the default 10 s hook limit.
   }, 40_000);
 
   it('a rejected login on a workflow step parks the run at waiting, keeping its session', async () => {
@@ -166,10 +165,12 @@ describe('auth park and reconnect resume', () => {
     const id = await parkedRun();
     const session = [...record(id).steps].reverse().find((step) => step.sessionId)?.sessionId;
     expect(manager!.continueRun(id, { text: 'carry on', agentProfile: 'default', runner: 'codex' })).toEqual({ ok: true });
-    await until(() => record(id).steps.some((step) => step.id === 'continue-1' && step.sessionId !== undefined));
+    await until(() => store.readEvents(id).some((event) => event.stepId === 'continue-1' && event.type === 'turn-end'));
     expect(record(id).parked).toBeUndefined();
     expect(record(id).runner).toBe('codex');
-    expect(record(id).steps.find((step) => step.id === 'continue-1')?.sessionId).not.toBe(session);
+    const continued = record(id).steps.find((step) => step.id === 'continue-1');
+    expect(continued?.sessionId).toBe('th_mock_1');
+    expect(continued?.sessionId).not.toBe(session);
   }, 40_000);
 
   it('a failure that is not an auth rejection still fails the run', async () => {
