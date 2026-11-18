@@ -50,6 +50,8 @@ const seedSession = (value: LoginSession) => act(async () => {
 })
 
 beforeEach(() => {
+  // Radix Select scrolls its options into view; jsdom has no layout.
+  Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
   client = createQueryClient()
   client.setQueryData(queryKeys.health, { capabilities: { localHandoff: true } })
@@ -191,7 +193,10 @@ describe('ReconnectCard — signing in', () => {
     api.sendLoginSessionInput.mockResolvedValue(session({ provider: 'opencode', profileId: 'default', method: 'key', phase: 'verifying' }))
     renderCard({ provider: 'opencode', profileId: 'default' })
     await seedSession(session({ provider: 'opencode', profileId: 'default', method: 'key', phase: 'needs-input', keyProviders: ['anthropic', 'openai'] }))
-    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'openai' } })
+    // A Radix Select (design-guardian: no native <select>): open it and pick the option.
+    fireEvent.keyDown(screen.getByLabelText('Provider'), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'openai' }))
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save & sign in' }))
     await waitFor(() => expect(api.sendLoginSessionInput).toHaveBeenCalledWith('s1', { apiKey: 'sk-test', keyProvider: 'openai' }))

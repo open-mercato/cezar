@@ -12,12 +12,12 @@ export function RunnerMark({ provider, small = false, className }: { provider: P
       aria-hidden="true"
       data-slot="runner-mark"
       className={cn(
-        'inline-grid shrink-0 place-items-center font-sans font-bold text-white',
+        'inline-grid shrink-0 place-items-center font-sans font-bold text-device-ink',
+        mark.tile,
         small ? 'size-4 rounded-[4px] text-[9px]' : 'size-[22px] rounded-md text-xs',
         mark.ring && 'shadow-[inset_0_0_0_1px_rgba(255,255,255,.25)]',
         className,
       )}
-      style={{ background: mark.color }}
     >
       {mark.mono}
     </span>

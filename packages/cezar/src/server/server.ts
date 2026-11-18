@@ -2383,7 +2383,8 @@ export function createApp(deps: ServerDeps) {
       providerAuth.forgetProfileStatus(provider, profile.id);
       return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
     },
-    remoteAccountsEnabled: () => agentAccountsEnabled(process.env, bindHost),
+    // A phone is `ctx.phone`; this answers for hosted web, and is false inside the relay scope.
+    remoteAccountsEnabled: accountsEnabled,
     emit: (event, payload) => workspaceEvents.emit(event, payload),
     openTerminal: (command) => openTerminal(bootRoot, command),
     watchTerminal: (provider, profile) => watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }),

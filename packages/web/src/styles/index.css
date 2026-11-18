@@ -369,6 +369,18 @@
   --color-device-5: #e05a73;
   --color-device-6: #22b3a0;
   --color-device-ink: #fff;
+  /* The agents' own brand colours, for the reconnect card's runner mark (spec 2026-11-18-inline-account-reconnect). */
+  --color-runner-claude: #d97757;
+  --color-runner-codex: #0f0f0f;
+  --color-runner-cursor: #3b3b3b;
+  --color-runner-copilot: #8250df;
+  --color-runner-opencode: #2563eb;
+  --color-runner-kimi: #111827;
+  --color-runner-pi: #0d9488;
+  --color-runner-gemini: #1a73e8;
+  --color-runner-antigravity: #ea4335;
+  --color-runner-junie: #21d789;
+  --color-runner-omp: #7c3aed;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

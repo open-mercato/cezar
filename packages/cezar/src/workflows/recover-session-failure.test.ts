@@ -82,7 +82,7 @@ describe('recover() contains backend session failures (#562)', () => {
     secondManager.dispose();
   });
 
-  it('keeps recovery failed when the fresh fallback session has a genuine nonmissing failure', async () => {
+  it('keeps recovery stopped when the fresh fallback session has a genuine nonmissing failure', async () => {
     process.env.MOCK_CODEX_REJECT_START = '1';
     const record = store.createRun({
       title: 'fallback failure', workflow: 'quick-task', task: 'continue safely', runner: 'codex',
@@ -94,7 +94,10 @@ describe('recover() contains backend session failures (#562)', () => {
     store.updateRun(record.id, { status: 'running', currentStepId: 'work' });
     const manager = new RunManager(store, repoRoot);
     await manager.recover();
-    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 5_000 }).toBe('failed');
+    // The genuine failure is an auth rejection, so the run parks for a reconnect rather than
+    // failing (spec 2026-11-18-inline-account-reconnect); either way no second fallback runs.
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 5_000 }).toBe('waiting');
+    expect(store.getRun(record.id)?.parked?.kind).toBe('auth');
     expect(store.getRun(record.id)?.error).toContain('authentication failed: session token missing');
     expect(store.getRun(record.id)?.steps.filter((step) => step.id.startsWith('continue-'))).toHaveLength(1);
     manager.dispose();

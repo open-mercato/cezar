@@ -14,6 +14,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { toast } from '@/components/ui/toaster'
@@ -218,7 +219,7 @@ const BUSY = 'border-border bg-card'
 const TITLE = 'flex flex-wrap items-center gap-1.5 text-ui font-semibold text-foreground'
 const SUB = 'mt-0.5 text-xs text-muted-foreground'
 const ACTIONS = 'mt-2.5 flex flex-wrap items-center gap-1.5'
-const PILL = 'inline-flex h-[18px] items-center rounded-full border px-1.5 text-[10px] font-semibold tracking-[.02em] whitespace-nowrap'
+const PILL = 'inline-flex h-[18px] items-center rounded-full border px-1.5 text-micro font-semibold tracking-[.02em] whitespace-nowrap'
 
 /** The quiet line every other blocked surface shows once the account is back, or, for an older
  *  occurrence of a still-signed-out account, where the live card is (design: one card per account). */
@@ -233,7 +234,7 @@ export function ReconnectedLine({ provider, profileId, at, signedOutHere = false
   const time = at ? new Date(at) : undefined
   const clock = time && Number.isFinite(time.getTime()) ? time.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : undefined
   return (
-    <p data-slot="reconnected-line" data-state={signedOutHere ? 'older' : 'reconnected'} className="mt-1.5 flex items-center gap-1.5 text-xs text-soft-foreground">
+    <p data-slot="reconnected-line" data-state={signedOutHere ? 'older' : 'reconnected'} className="mt-1.5 flex items-center gap-1.5 text-label text-muted-foreground">
       {signedOutHere ? (
         <><span aria-hidden="true">·</span>{who.trim()} was signed out here</>
       ) : (
@@ -397,10 +398,10 @@ function DeviceCode({ code, expiresAt }: { code: string; expiresAt: string | und
   const left = useCountdown(expiresAt)
   return (
     <div data-slot="reconnect-device" className="mt-2.5 flex flex-wrap items-center gap-2.5">
-      <span aria-label="One-time code" className="rounded-lg border border-border bg-background px-3 py-1.5 font-mono text-[22px] font-semibold tracking-[.18em]">{code}</span>
+      <span aria-label="One-time code" className="rounded-lg border border-border bg-background px-3 py-1.5 font-mono text-2xl font-semibold tracking-[.18em]">{code}</span>
       <CopyButton text={code} label="Copy code" variant="outline" />
       {left !== undefined ? (
-        <span className="text-xs text-soft-foreground">Expires in <span data-slot="reconnect-countdown" className="font-mono">{left}</span></span>
+        <span className="text-label text-muted-foreground">Expires in <span data-slot="reconnect-countdown" className="font-mono">{left}</span></span>
       ) : null}
     </div>
   )
@@ -434,7 +435,7 @@ function SecretForm({ session, kind, placeholder, submitLabel, keyProviders, onA
   onAnswer: (session: LoginSession) => void
 }) {
   const input = useRef<HTMLInputElement>(null)
-  const select = useRef<HTMLSelectElement>(null)
+  const [keyProvider, setKeyProvider] = useState(keyProviders?.[0])
   const [sending, setSending] = useState(false)
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -442,7 +443,6 @@ function SecretForm({ session, kind, placeholder, submitLabel, keyProviders, onA
     const value = field?.value.trim() ?? ''
     if (field) field.value = ''
     if (!value) return
-    const keyProvider = select.current?.value
     setSending(true)
     sendLoginSessionInput(session.sessionId, kind === 'code' ? { code: value } : { apiKey: value, ...(keyProvider ? { keyProvider } : {}) })
       .then(onAnswer)
@@ -452,14 +452,14 @@ function SecretForm({ session, kind, placeholder, submitLabel, keyProviders, onA
   return (
     <form data-slot="reconnect-secret" onSubmit={submit} className="mt-2 flex flex-wrap gap-1.5">
       {keyProviders && keyProviders.length > 0 ? (
-        <select
-          ref={select}
-          aria-label="Provider"
-          data-slot="reconnect-key-provider"
-          className="h-[30px] rounded-sm border border-border bg-muted px-2 text-xs text-foreground"
-        >
-          {keyProviders.map((id) => <option key={id} value={id}>{id}</option>)}
-        </select>
+        <Select value={keyProvider ?? keyProviders[0]} onValueChange={setKeyProvider}>
+          <SelectTrigger size="sm" aria-label="Provider" data-slot="reconnect-key-provider">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent position="popper">
+            {keyProviders.map((id) => <SelectItem key={id} value={id}>{id}</SelectItem>)}
+          </SelectContent>
+        </Select>
       ) : null}
       <input
         ref={input}
@@ -571,7 +571,7 @@ function SwitchAccount({ provider, profileId, profiles, kind, onSwitch }: {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-60">
-          <DropdownMenuLabel className="text-[10px] tracking-[.06em] text-soft-foreground uppercase">Accounts this {kind} may use</DropdownMenuLabel>
+          <DropdownMenuLabel className="text-micro tracking-[.06em] text-soft-foreground uppercase">Accounts this {kind} may use</DropdownMenuLabel>
           {mine.map((row) => {
             const state = row.id === profileId ? 'disconnected' : row.status?.status
             return (

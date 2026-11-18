@@ -8,29 +8,36 @@ import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
 
 export const agentName = (provider: ProviderId): string => PROVIDER_LABELS[provider]
 
-/** Agents with no headless login: the card hands off to a terminal and watches it. */
-export const TERMINAL_ONLY: ReadonlySet<ProviderId> = new Set(['pi', 'gemini', 'antigravity', 'junie', 'omp'])
+/** How each agent's sign-in reaches the card: `tab` opens a web page locally, `terminal` has no
+ *  headless login (the card hands off to a terminal and watches it), `inline` is relayed in place. */
+const SIGN_IN: Record<ProviderId, 'tab' | 'terminal' | 'inline'> = {
+  claude: 'tab', codex: 'tab', cursor: 'tab', copilot: 'tab', kimi: 'tab',
+  opencode: 'inline',
+  pi: 'terminal', gemini: 'terminal', antigravity: 'terminal', junie: 'terminal', omp: 'terminal',
+}
+
+export const TERMINAL_ONLY = { has: (provider: ProviderId): boolean => SIGN_IN[provider] === 'terminal' }
 
 /** Agents that store a pasted API key themselves (decision 4): the only ones offered a key field. */
 export const KEY_CAPABLE: ReadonlySet<ProviderId> = new Set(['codex', 'opencode'])
 
 /** Agents whose local sign-in opens a web page: the card opens the tab inside the click so no popup
  *  blocker stands between it and the URL that arrives a moment later. */
-export const OPENS_A_TAB: ReadonlySet<ProviderId> = new Set(['claude', 'codex', 'cursor', 'copilot', 'kimi'])
+export const OPENS_A_TAB = { has: (provider: ProviderId): boolean => SIGN_IN[provider] === 'tab' }
 
-/** The agents' brand marks, as the design draws them. */
-export const RUNNER_MARK: Record<ProviderId, { mono: string; color: string; ring?: boolean }> = {
-  claude: { mono: 'C', color: '#D97757' },
-  codex: { mono: 'X', color: '#0f0f0f', ring: true },
-  cursor: { mono: 'Cu', color: '#3b3b3b' },
-  copilot: { mono: 'Co', color: '#8250df' },
-  opencode: { mono: 'O', color: '#2563eb' },
-  kimi: { mono: 'K', color: '#111827', ring: true },
-  pi: { mono: 'π', color: '#0d9488' },
-  gemini: { mono: 'G', color: '#1a73e8' },
-  antigravity: { mono: 'A', color: '#ea4335' },
-  junie: { mono: 'J', color: '#21d789' },
-  omp: { mono: 'Ω', color: '#7c3aed' },
+/** The agents' brand marks, as the design draws them; colours are `--color-runner-*` tokens. */
+export const RUNNER_MARK: Record<ProviderId, { mono: string; tile: string; ring?: boolean }> = {
+  claude: { mono: 'C', tile: 'bg-runner-claude' },
+  codex: { mono: 'X', tile: 'bg-runner-codex', ring: true },
+  cursor: { mono: 'Cu', tile: 'bg-runner-cursor' },
+  copilot: { mono: 'Co', tile: 'bg-runner-copilot' },
+  opencode: { mono: 'O', tile: 'bg-runner-opencode' },
+  kimi: { mono: 'K', tile: 'bg-runner-kimi', ring: true },
+  pi: { mono: 'π', tile: 'bg-runner-pi' },
+  gemini: { mono: 'G', tile: 'bg-runner-gemini' },
+  antigravity: { mono: 'A', tile: 'bg-runner-antigravity' },
+  junie: { mono: 'J', tile: 'bg-runner-junie' },
+  omp: { mono: 'Ω', tile: 'bg-runner-omp' },
 }
 
 /** The host of a sign-in URL, for "We opened claude.ai" and "Open github.com ↗". */

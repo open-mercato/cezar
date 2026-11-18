@@ -81,7 +81,8 @@ const RECONNECT_COALESCE_MS = 60_000;
 export const DRY_RUN_USER_CODE = 'DRYR-UN00';
 
 const KEY_PROVIDERS = new Set<ProviderId>(['codex', 'opencode']);
-const IDENTITY_PROVIDERS = new Set<ProviderId>(['claude', 'codex', 'cursor']);
+/** Agents whose account identity cezar can read (account-identity.ts). */
+const IDENTITY_PROVIDERS: Partial<Record<ProviderId, true>> = { claude: true, codex: true, cursor: true };
 const ENDED = new Set<LoginSession['phase']>(['connected', 'failed', 'cancelled']);
 
 const DEFAULT_DRIVERS: Partial<Record<ProviderId, StartDriver>> = {
@@ -181,7 +182,7 @@ export class LoginSessionManager {
         return { ok: true, session: this.view(entry) };
       }
     }
-    if (this.deps.readIdentity && IDENTITY_PROVIDERS.has(provider)) {
+    if (this.deps.readIdentity && IDENTITY_PROVIDERS[provider]) {
       const read = this.deps.readIdentity;
       entry.previousEmail = read(provider, profile.path).then(emailOf, () => undefined);
     }
