@@ -45,6 +45,7 @@ export interface ThreadNote {
   text: string
   /** `info`: an event the user should notice without alarm — another agent taking a task over. */
   tone: 'dim' | 'danger' | 'info'
+  action?: 'install-skills'
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -672,7 +673,10 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
             ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
-          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
+          entry: {
+            kind: 'note', id: `v1:${event.seq}`, text, tone,
+            ...(event.type === 'note' && event.action === 'install-skills' ? { action: event.action } : {}),
+          },
         })
         break
       }
