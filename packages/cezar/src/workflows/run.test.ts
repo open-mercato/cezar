@@ -22,6 +22,7 @@ import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
+import { bareDirFor } from '../skills-remote.ts';
 import {
   appendTurnText,
   endsWithDoneMarker,
@@ -3968,6 +3969,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
   let manager: RunManager;
   let runId: string | undefined;
   let savedDryRun: string | undefined;
+  let teamRepo: string | undefined;
   const SINGLE_STEP: WorkflowDef = {
     name: 'quick-task',
     source: 'built-in',
@@ -3983,6 +3985,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     mkdirSync(join(repoRoot, '.ai/cezar/skills'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));
     writeFileSync(
       join(repoRoot, '.ai/cezar/skills/demo-review.md'),
       '---\nname: demo-review\ndescription: Review a diff.\n---\n\nRun the demo review playbook.\n',
@@ -3994,10 +3997,16 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
 
   afterEach(() => {
     if (runId) manager.cancel(runId);
+    manager.dispose();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    if (teamRepo) {
+      rmSync(bareDirFor(teamRepo), { recursive: true, force: true });
+      rmSync(teamRepo, { recursive: true, force: true });
+      teamRepo = undefined;
+    }
   });
 
   // Tolerant of the pre-first-event window: the run's ndjson does not exist until
@@ -4179,6 +4188,52 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     ).toBe(true);
     const wt = store.getRun(record.id)!.worktreePath!;
     expect(existsSync(join(wt, '.claude/skills/om-lonely'))).toBe(false);
+  }, 40_000);
+
+  it('loads a cold team catalog and installs a prose-requested shared skill with its companion', async () => {
+    teamRepo = mkdtempSync(join(tmpdir(), 'cez-278-team-'));
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: teamRepo });
+    for (const [name, body] of [
+      ['om-review-fixture', 'Run the `om-review-engine-fixture` skill.'],
+      ['om-review-engine-fixture', 'Review engine instructions.'],
+    ]) {
+      const dir = join(teamRepo, 'skills', name!);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\n---\n\n${body}\n`);
+    }
+    await run('git', ['add', '-A'], { cwd: teamRepo });
+    await run('git', [...GIT_ID, 'commit', '-qm', 'team skills'], { cwd: teamRepo });
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [{ repo: teamRepo, ref: 'main' }] }));
+
+    const record = manager.startRun(SINGLE_STEP, { task: 'Run om-review-fixture on PR 12', worktree: true, runner: 'codex' });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('om-review-fixture')));
+    const worktree = store.getRun(record.id)!.worktreePath!;
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      expect(readFileSync(join(worktree, dir, 'om-review-fixture/SKILL.md'), 'utf8')).toContain('om-review-engine-fixture');
+      expect(readFileSync(join(worktree, dir, 'om-review-engine-fixture/SKILL.md'), 'utf8')).toContain('Review engine instructions.');
+    }
+  }, 40_000);
+
+  it('offers install in the task transcript when a fresh workspace lacks the requested skill and extension', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: '/om-unavailable-fixture 12', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('looking into')));
+    expect(eventsOf(record.id)).toContainEqual(expect.objectContaining({
+      type: 'note', action: 'install-skills', tone: 'danger', message: expect.stringContaining('om-unavailable-fixture'),
+    }));
+    expect(eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('User request:\n/om-unavailable-fixture'))).toBe(true);
+  }, 40_000);
+
+  it('warns before handing a missing skill request to the existing session', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'Start a session', worktree: true });
+    runId = record.id;
+    await waitFor(() => store.getRun(record.id)?.status === 'waiting');
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'Run om-live-missing-fixture next' }])).toBe(true);
+    await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('Run om-live-missing-fixture next')));
+    expect(eventsOf(record.id)).toContainEqual(expect.objectContaining({
+      type: 'note', action: 'install-skills', message: expect.stringContaining('om-live-missing-fixture'),
+    }));
   }, 40_000);
 
   it('reports where a task came from and which workflow it ran, never a custom name', () => {

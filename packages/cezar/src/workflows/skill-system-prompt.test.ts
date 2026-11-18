@@ -193,6 +193,7 @@ describe('skillSystemPrompt — repo extensions of shared skills', () => {
   it('tells the agent to stop rather than improvise when only the extension exists', () => {
     const out = skillSystemPrompt({ ...base, source: 'ai', body: 'Extension rules.', missingShared: true });
     expect(out).toContain('shared skill `om-auto-review-pr` is not installed');
-    expect(out).toContain('Do not reconstruct the shared workflow');
+    expect(out).toContain('Stop the requested skill workflow');
+    expect(out).not.toContain('Extension rules.');
   });
 });
