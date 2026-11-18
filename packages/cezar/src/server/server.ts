@@ -5507,10 +5507,10 @@ export function createApp(deps: ServerDeps) {
       // A retried POST whose first attempt already landed answers as it did (message-receipts.ts).
       const receipt = parsed.data.idempotencyKey ? await messageReceipts.claim(`${id}:${parsed.data.idempotencyKey}`) : undefined;
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
-      // A card answered from a stale tab: its question closed meanwhile (Questions inbox spec).
-      if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
       let answered: MessageResponse | undefined;
       try {
+        // A card answered from a stale tab (Questions inbox spec); inside the try so the receipt settles.
+        if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
         // Stacking onto a queued prompt mutates an existing task and invokes no provider.
         // Provider availability still gates live delivery after the record leaves `queued`, but
         // must not strand prompt authoring just because an unrelated fallback provider is
@@ -5662,9 +5662,9 @@ export function createApp(deps: ServerDeps) {
       // run's teardown, which adds no step yet — answers as it did instead of continuing twice.
       const receipt = parsed.data.idempotencyKey ? await continueReceipts.claim(`${id}:${parsed.data.idempotencyKey}`) : undefined;
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
-      if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
       let answered: ContinueResponse | undefined;
       try {
+        if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
         if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
           return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
         }

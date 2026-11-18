@@ -78,4 +78,17 @@ describe('askRequestId on POST /runs/:id/messages and /continue', () => {
     expect((await post(`/api/v1/runs/${run.id}/messages`, { text: 'go on' })).status).toBe(200);
     expect((await post(`/api/v1/runs/${run.id}/messages`, { text: 'x', askRequestId: 'graph-ask' })).status).toBe(200);
   });
+
+  it('settles the idempotency receipt on that 409, so a retry answers instead of hanging', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'chat', steps: [] });
+    store.updateRun(run.id, { status: 'waiting' });
+    store.recordTaskAsk(run.id, { requestId: 'ask-1', askedAt: new Date().toISOString(), questions: [{ header: 'Base', question: 'Which?', options: [{ label: 'a' }, { label: 'b' }] }] });
+    store.closeTaskAsks(run.id, () => true, { reason: 'dismissed', at: new Date().toISOString() });
+    for (const route of ['messages', 'continue']) {
+      const body = { text: 'Base: main', askRequestId: 'ask-1', idempotencyKey: crypto.randomUUID() };
+      expect((await post(`/api/v1/runs/${run.id}/${route}`, body)).status).toBe(409);
+      const retry = await Promise.race([post(`/api/v1/runs/${run.id}/${route}`, body), new Promise<'hung'>((done) => setTimeout(() => done('hung'), 2_000))]);
+      expect(retry === 'hung' ? retry : retry.status).toBe(409);
+    }
+  });
 });

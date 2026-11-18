@@ -101,6 +101,6 @@ describe('Questions inbox routes', () => {
     build({ registerTopic: (name, publisher, options) => { topics.set(name, { publisher, loopbackReadable: options?.loopbackReadable }); return () => {}; }, attach: () => undefined, close: () => undefined });
     const topic = topics.get('questions')!;
     expect(topic.loopbackReadable ?? false).toBe(false);
-    expect(await topic.publisher.snapshot()).toEqual({ live: 2, older: 0 });
+    expect(await topic.publisher.snapshot()).toEqual({ live: 2, older: 0, revision: expect.any(String) });
   }, 30_000);
 });

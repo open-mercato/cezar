@@ -134,9 +134,9 @@ export interface ThreadReduceOptions {
   activeTurn?: boolean
   /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
   runner?: string
-  /** The run record's `asks` (`[]` for a record without any). An ask it does not track, asked
-   *  before the stream's first `ask.closed`, predates the Questions inbox and keeps the old rule:
-   *  the next user message closed it. Absent (record not loaded): no ask is read as legacy. */
+  /** The run record's `asks` (`[]` for a record without any). An ask it does not track and the
+   *  stream never closes (a pre-inbox card, a graph gate, a native ask) keeps the old rule: the
+   *  next user message closes it. Absent (record not loaded): no ask is read as legacy. */
   trackedAsks?: ReadonlyArray<{ requestId: string }>
 }
 
@@ -425,7 +425,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   // Decided per ask: a pre-inbox card closed on the next reply; a tracked one stays open, flagged.
   const tracked = options.trackedAsks === undefined ? undefined : new Set(options.trackedAsks.map((ask) => ask.requestId))
   const legacyAsks = new WeakSet<ThreadAsk>()
-  let sawAskClosed = false
+  // Graph gates and native asks are never tracked nor closed server-side, whatever closed before them.
+  const serverClosed = new Set(events.flatMap((event) => event.type === 'ask.closed' && typeof event.requestId === 'string' ? [event.requestId] : []))
   let lastEventAt: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
@@ -807,13 +808,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         currentTurn().entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
         asksById.set(requestId, ask)
-        if (tracked !== undefined && !tracked.has(requestId) && !sawAskClosed) legacyAsks.add(ask)
+        if (tracked !== undefined && !tracked.has(requestId) && !serverClosed.has(requestId)) legacyAsks.add(ask)
         break
       }
       case 'ask.closed': {
         // The server closed the card: answered (on the card or its linked copy), dismissed,
         // replaced, withdrawn, expired or ended. The card redraws in its quiet closed state.
-        sawAskClosed = true
         const requestId = str(event.requestId)
         const reason = str(event.reason)
         const ask = requestId === undefined ? undefined : asksById.get(requestId)

@@ -254,7 +254,7 @@ export interface UiAskQuestion {
  * The agent asked the user a structured multiple-choice question via a
  * `CEZ:ASK` marker. The run parks `waiting`; the cockpit renders clickable
  * option chips. A task's card closes on its `ask.closed` event (Questions inbox
- * spec); a graph gate's card closes client-side on the next user message.
+ * spec); a graph gate's or a native ask's card closes client-side on the next user message.
  */
 export interface UiAskRequestedEvent {
   type: 'ask.requested'

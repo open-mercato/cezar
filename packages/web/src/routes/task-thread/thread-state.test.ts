@@ -1100,8 +1100,19 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(askOf(events, options)).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
     expect(askOf(events, options, NEW.requestId)).toMatchObject({ resolved: true, closed: { reason: 'dismissed' } })
     expect(askOf(events, options, NEWER.requestId)).toMatchObject({ resolved: false })
-    // Untracked but asked after an ask.closed: the server already spoke the new protocol.
-    expect(askOf(events, { trackedAsks: [] }, NEWER.requestId)).toMatchObject({ resolved: false })
+  })
+
+  it('a graph gate asked after a closed CEZ:ASK card still closes on the next reply', () => {
+    const CARD = { ...ASK, requestId: 'ask_2' }
+    const GATE = { ...ASK, requestId: 'gate_1', source: 'workflow' }
+    const events = [
+      line(1, 'ask.requested', CARD),
+      line(2, 'ask.closed', { requestId: CARD.requestId, reason: 'answered', answer: 'Library: date-fns' }),
+      line(3, 'ask.requested', GATE),
+      line(4, 'user-message', { text: 'Library: luxon', imageCount: 0 }),
+    ]
+    // The record tracks CEZ:ASK cards only; the server never closes a gate.
+    expect(askOf(events, { trackedAsks: [{ requestId: CARD.requestId }] }, GATE.requestId)).toMatchObject({ resolved: true, answer: 'Library: luxon' })
   })
 
   it('drops an ask.requested with no valid questions', () => {
