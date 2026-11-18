@@ -42,7 +42,8 @@ const RAW_TEXT_FACTOR = 4;
 
 /** What a card text reads as once its reference markers are chips. */
 export function askVisibleText(text: string): string {
-  // The cockpit's fallback words (`markerText` in web `lib/managers.ts`): a chip is never longer.
+  // The cockpit's fallback words (`markerText` in web `lib/managers.ts`). A PR or issue chip reads the
+  // same `#N`; a task chip shows the task's title instead, truncated to one chip's width.
   return text.replace(REFERENCE_MARKER_RE, (_marker, kind: string, id: string) => {
     if (kind === 'task') return `task ${id.slice(0, 8)}`;
     return /^\d{1,7}$/.test(id) ? `#${id}` : `${kind === 'pr' ? 'PR' : 'issue'} ${id}`;
