@@ -293,7 +293,7 @@ type UiEvent =
   | UiSessionEndedEvent      // 'session.ended'    — reason: StopReason (replaces v1 done / fatal error)
   | UiSessionErrorEvent      // 'session.error'    — message, fatal (v1 note + error unified)
   | UiTurnStartedEvent       // 'turn.started'     — turnId
-  | UiTurnCompletedEvent     // 'turn.completed'   — turnId, stopReason, usage?, costUsd?, models? (each model the turn billed, with its share)
+  | UiTurnCompletedEvent     // 'turn.completed'   — turnId, stopReason, usage?, costUsd?, models? (models reported for the turn, with shares when known)
   | UiItemStartedEvent       // 'item.started'     — item (tools usually pending/running)
   | UiItemDeltaEvent         // 'item.delta'       — itemId, field:'text'|'reasoning'|'output', delta
   | UiItemUpdatedEvent       // 'item.updated'     — item (status flips, streamed snapshots)

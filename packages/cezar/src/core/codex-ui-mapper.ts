@@ -55,16 +55,15 @@ interface CodexCollabTask {
 }
 
 export interface CodexUiMapperState {
-  /** True once `session.started` was emitted (thread/started notification or
-   *  the runner's `codexSessionStarted` after the thread/start result —
-   *  whichever lands first wins; the other is deduplicated). */
-  readonly sessionStarted: boolean;
-  /** The thread's resolved model, from the thread/* result; echoed on every `turn.completed`
-   *  because the `thread/started` notification that may open the session first carries none. */
+  /** The main thread id once `session.started` has been emitted. */
+  readonly threadId?: string;
+  /** The thread's resolved model from the thread RPC result. */
   readonly model?: string;
   /** Fallback counter for turn frames that arrive without a wire turn id. */
   readonly turnSeq: number;
   readonly currentTurnId: string | null;
+  /** The provider's reroute destination for the active turn, when reported. */
+  readonly pendingTurnModel?: string;
   /** Fresh `tokenUsage.last` received while the current turn is active.
    * Consumed exactly once by its matching turn end; cumulative `total` is
    * never used as a persisted per-turn delta. */
@@ -125,7 +124,6 @@ export interface CodexUiMapping {
 
 export function createCodexUiState(): CodexUiMapperState {
   return {
-    sessionStarted: false,
     turnSeq: 0,
     currentTurnId: null,
     pendingTurnUsage: null,
@@ -139,17 +137,16 @@ export function createCodexUiState(): CodexUiMapperState {
 }
 
 /**
- * Codex confirms the thread via the `thread/start`/`thread/resume` RESULT
- * (a response frame the mapper cannot attribute), so the runner calls this
- * once the thread id is known. Deduplicated against the `thread/started`
- * notification — whichever arrives first emits `session.started`.
+ * The runner calls this with the confirmed thread and model from the RPC result.
+ * Replaying notification-only fixtures can also open the same session.
  */
 export function codexSessionStarted(threadId: string, state: CodexUiMapperState, model?: string): CodexUiMapping {
+  if (threadId === '' || (state.threadId !== undefined && state.threadId !== threadId)) return { events: [], state };
   const withModel = model ? { ...state, model } : state;
-  if (state.sessionStarted || threadId === '') return { events: [], state: withModel };
+  if (state.threadId !== undefined) return { events: [], state: withModel };
   return {
     events: [{ type: 'session.started', sessionId: threadId, backend: 'codex', ...(model ? { model } : {}) }],
-    state: { ...withModel, sessionStarted: true },
+    state: { ...withModel, threadId },
   };
 }
 
@@ -164,6 +161,8 @@ export function mapCodexNotification(frame: unknown, state: CodexUiMapperState):
       return codexSessionStarted(threadIdOf(params) ?? '', state);
     case 'turn/started':
       return mapTurnStarted(params, state);
+    case 'model/rerouted':
+      return mapModelRerouted(params, state);
     case 'turn/completed':
       return mapTurnEnd(params, state, codexTurnError('turn/completed', params) !== undefined);
     case 'turn/failed':
@@ -226,11 +225,21 @@ function mapTurnStarted(params: Record<string, unknown>, state: CodexUiMapperSta
       ...state,
       turnSeq,
       currentTurnId: turnId,
+      pendingTurnModel: undefined,
       pendingTurnUsage: null,
       planFromNotification: false,
       reasonings: new Map(),
     },
   };
+}
+
+function mapModelRerouted(params: Record<string, unknown>, state: CodexUiMapperState): CodexUiMapping {
+  const model = str(params.toModel)?.trim();
+  if (
+    state.threadId === undefined || params.threadId !== state.threadId ||
+    state.currentTurnId === null || params.turnId !== state.currentTurnId || !model
+  ) return { events: [], state };
+  return { events: [], state: { ...state, pendingTurnModel: model } };
 }
 
 function mapTurnEnd(
@@ -267,12 +276,15 @@ function mapTurnEnd(
   if (turnId === state.currentTurnId && state.pendingTurnUsage !== null) {
     completed.usage = state.pendingTurnUsage;
   }
-  if (state.model) completed.models = [{ model: state.model }];
+  if (closesActiveTurn) {
+    const model = state.pendingTurnModel ?? state.model;
+    if (model) completed.models = [{ model }];
+  }
   events.push(completed);
   return {
     events,
     state: closesActiveTurn
-      ? { ...state, turnSeq, currentTurnId: null, pendingTurnUsage: null, reviewItemId: null }
+      ? { ...state, turnSeq, currentTurnId: null, pendingTurnModel: undefined, pendingTurnUsage: null, reviewItemId: null }
       : { ...state, turnSeq },
   };
 }

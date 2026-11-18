@@ -372,6 +372,34 @@ describe('mapCodexNotification edge cases', () => {
     ]);
   });
 
+  it('attributes a reroute only to the matching main-thread turn', () => {
+    let state = codexSessionStarted('main', createCodexUiState(), 'configured-model').state;
+    const map = (method: string, params: Record<string, unknown>) => {
+      const result = mapCodexNotification({ method, params }, state);
+      state = result.state;
+      return result.events;
+    };
+    const start = (id: string) => map('turn/started', { threadId: 'main', turn: { id } });
+    const complete = (id: string) => map('turn/completed', { threadId: 'main', turn: { id } });
+    const reroute = (turnId: string, threadId: string, toModel: string) =>
+      map('model/rerouted', { threadId, turnId, toModel });
+
+    start('t1');
+    expect(reroute('t1', 'main', 'serving-model')).toEqual([]);
+    reroute('t1', 'child', 'child-model');
+    reroute('stale-turn', 'main', 'stale-model');
+    expect(complete('stale-turn')).toEqual([
+      { type: 'turn.completed', turnId: 'stale-turn', stopReason: 'end_turn' },
+    ]);
+    expect(complete('t1')).toEqual([
+      { type: 'turn.completed', turnId: 't1', stopReason: 'end_turn', models: [{ model: 'serving-model' }] },
+    ]);
+    start('t2');
+    expect(complete('t2')).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', models: [{ model: 'configured-model' }] },
+    ]);
+  });
+
   it('session.started is emitted once whichever path lands first', () => {
     let s = createCodexUiState();
     const viaNotification = mapCodexNotification(

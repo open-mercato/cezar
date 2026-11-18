@@ -188,7 +188,7 @@ function UsageChip({
                     {row.others.length > 0 ? (
                       <span className="text-muted-foreground">
                         {' + '}
-                        {row.others.map((entry) => modelShare(entry)).join(', ')}
+                        {row.others.map((entry) => modelShare(entry, showTokens, showCost)).join(', ')}
                       </span>
                     ) : null}
                   </span>
@@ -208,9 +208,11 @@ function UsageChip({
   )
 }
 
-/** "claude-haiku-5-5 ($0.01)" — a side model with its share when the agent reported one. */
-function modelShare(entry: ModelUsage): string {
-  if (entry.costUsd !== undefined && entry.costUsd > 0) return `${entry.model} (${formatCost(entry.costUsd)})`
+/** A side model with the first available share the cockpit is configured to show. */
+function modelShare(entry: ModelUsage, showTokens: boolean, showCost: boolean): string {
+  if (showCost && entry.costUsd !== undefined && entry.costUsd > 0) {
+    return `${entry.model} (${formatCost(entry.costUsd)})`
+  }
   const tokens = (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0)
-  return tokens > 0 ? `${entry.model} (${compactTokens(tokens)} tokens)` : entry.model
+  return showTokens && tokens > 0 ? `${entry.model} (${compactTokens(tokens)} tokens)` : entry.model
 }

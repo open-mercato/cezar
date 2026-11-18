@@ -141,6 +141,39 @@ describe('the model that actually ran', () => {
     ])
   })
 
+  it.each([
+    { showTokens: false, showCost: false, both: 'both', tokens: 'token-only' },
+    { showTokens: false, showCost: true, both: 'both ($0.01)', tokens: 'token-only' },
+    { showTokens: true, showCost: false, both: 'both (3.0k tokens)', tokens: 'token-only (2.0k tokens)' },
+  ])('respects per-model metric visibility with tokens=$showTokens and cost=$showCost', async ({
+    showTokens, showCost, both, tokens,
+  }) => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({
+        capabilities: { tokenUsageMetrics: showTokens, costMetrics: showCost },
+      }),
+    })
+    renderUsage(run('done', {
+      costUsd: 0.04,
+      steps: [step({
+        actualModel: 'main',
+        modelsUsed: [
+          { model: 'main' },
+          { model: 'both', costUsd: 0.01, inputTokens: 3_000 },
+          { model: 'token-only', outputTokens: 2_000 },
+        ],
+      })],
+    }))
+    const dialog = await openDetails()
+    await waitFor(() => {
+      const details = within(dialog)
+      expect(details.queryByText('Input tokens') !== null).toBe(showTokens)
+      expect(details.queryByText('Cost') !== null).toBe(showCost)
+    })
+    expect(dialog.querySelector('[data-slot="agent-badge-step-models"] li')?.textContent)
+      .toBe(`Do the taskmain + ${both}, ${tokens}`)
+  })
+
   it('falls back to the thread\'s reported model on a run recorded before the field', () => {
     stubFetch()
     render(
