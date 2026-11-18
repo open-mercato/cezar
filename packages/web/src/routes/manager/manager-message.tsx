@@ -372,8 +372,7 @@ function AssistantMessage({
           <ReconnectedLine provider={message.authFailure.provider} profileId={message.authFailure.profileId} signedOutHere />
         )
       ) : message.reconnectedAt ? (
-        // The record drops `authFailure` on resume, so the line names no account.
-        <ReconnectedLine at={message.reconnectedAt} />
+        <ReconnectedLine provider={message.reconnectedFrom?.provider} profileId={message.reconnectedFrom?.profileId} at={message.reconnectedAt} />
       ) : message.error && message.turn !== 'chat' ? (
         <CheckFailedCard managerId={origin.id} turn={message.turn} jobName={message.jobName} error={message.error} at={message.at} />
       ) : message.error ? (

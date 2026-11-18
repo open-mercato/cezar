@@ -795,4 +795,9 @@ describe('ManagerMessageRow — expired login (spec 2026-11-18-inline-account-re
     expect(screen.getByText(/Reconnected · resumed/)).toBeTruthy()
     expect(document.querySelector('[data-slot="manager-error"]')).toBeNull()
   })
+
+  it('a reconnected turn names the account it came back on', () => {
+    renderMessage(assistantMessage(6, { text: '', reconnectedAt: '2026-11-18T10:51:00Z', reconnectedFrom: { provider: 'claude', profileId: 'default' } }))
+    expect(screen.getByText(/Reconnected Claude Code · Default · resumed/)).toBeTruthy()
+  })
 })

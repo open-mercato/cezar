@@ -1026,8 +1026,8 @@ export class ManagerEngine {
     const { store } = this.deps;
     const failed = this.latestAuthFailedChat(id);
     if (!failed || this.runtime(id).deleted) return false;
-    const { authFailure: _authFailure, ...rest } = failed;
-    this.publish(id, { ...rest, reconnectedAt: this.iso() }, true);
+    const { authFailure, ...rest } = failed;
+    this.publish(id, { ...rest, reconnectedAt: this.iso(), ...(authFailure ? { reconnectedFrom: authFailure } : {}) }, true);
     const retry = store.state(id).authRetry;
     store.updateState(id, (state) => ({ ...state, authRetry: undefined }));
     // A follow-up's events already moved to the notes: the next chat hears them.

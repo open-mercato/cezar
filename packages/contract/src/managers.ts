@@ -454,6 +454,8 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     authFailure: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
     /** Set when a reconnect re-ran this failed turn. */
     reconnectedAt: z.string().optional(),
+    /** The account whose reconnect re-ran it (`authFailure` before the resume). */
+    reconnectedFrom: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
     /** A provider usage limit ended this turn); the manager resumes it at this instant. Dropped once it does, or is cancelled. */
     resumeAt: z.string().optional(),
     costUsd: z.number().optional(),

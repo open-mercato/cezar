@@ -660,6 +660,7 @@ describe('ManagerEngine', () => {
         const [failed, retried] = assistants(id);
         expect(failed).not.toHaveProperty('authFailure');
         expect(failed?.reconnectedAt).toBeDefined();
+        expect(failed?.reconnectedFrom).toEqual({ provider: 'claude', profileId: 'default' });
         expect(retried).toMatchObject({ turn: 'chat', text: 'Done' });
         expect(store.state(id).authRetry).toBeUndefined();
       });

@@ -138,10 +138,10 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('done')} thread={reduceThread(authRequired)} />)
 
-    expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
-    expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
-    )
+    // The inline reconnect card (spec 2026-11-18-inline-account-reconnect) outlives the run.
+    const card = screen.getByRole('group', { name: /Codex · .* is signed out/ })
+    expect(card.closest('[data-slot="provider-auth-required"]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^Reconnect/ })).toBeTruthy()
   })
 
   it('a running run clocks its open turn and last activity on the Working… line; a closed run shows none', () => {
