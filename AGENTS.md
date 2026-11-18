@@ -6,7 +6,9 @@ cezar is a **parallel coding-agents orchestrator**: a local cockpit (CLI + brows
 
 cezar ships no config file the user must create and no setting they must set before it works. Every capability is discovered from what is already there — the repo, the environment, `gh`, the running processes — or it degrades quietly to a smaller cezar. `.ai/cezar/config.json` is optional and every key has a working default; A repository `.env` is never auto-loaded. Tracker credentials use managed encrypted per-project records
 in `cezarHomeDir()/tracker-connections/`, written by Settings and decrypted only into the
-project connection object, never into `process.env` or agent environments.
+project connection object, never into `process.env` or agent environments. A shared record
+beside them is used by a project only after the user picks it in that project's Settings
+(spec `.ai/specs/2026-11-18-shared-tracker-connections.md`).
 
 New state may be **written**, never **required**: `.ai/cezar/`, `~/.cache/cez/`, `~/.cezar/`. Delete any of them and cezar rebuilds what it needs on the next run. State that a user must author, migrate, or repair is not state — it is configuration, and it needs a reason. One deliberate exception inside that rule: the project registry keeps a `~/.cezar/config.json.bak` snapshot, so deleting `config.json` alone restores instead of resetting — delete the `~/.cezar` directory for a true reset.
 
