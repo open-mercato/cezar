@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import { deriveAttention } from '@/lib/attention'
-import { AskCard, AskForm } from './ask-card'
+import { AskCard, AskForm, latestOpenAskCard, revealAskCard } from './ask-card'
 import { readAskSelections, resetAskSelections } from './ask-selections'
 import type { ThreadAsk } from './thread-state'
 import type { ApiRun, ProviderStatusResponse, StepState } from '@open-mercato/cezar-api-client'
@@ -589,5 +589,35 @@ describe('the ask card wears the attention tone for "waiting on a person" (redes
     const dot = card.querySelector<HTMLElement>('[data-slot="status-dot"]')!
     expect(dot.dataset.tone).toBe(expected.tone)
     expect(dot.className.includes('animate-pulse')).toBe(expected.pulse)
+  })
+})
+
+describe('latestOpenAskCard / revealAskCard (#2297)', () => {
+  const stage = (html: string) => {
+    const root = document.createElement('div')
+    root.innerHTML = html
+    return root
+  }
+
+  it('finds the newest unresolved card and skips answered ones', () => {
+    const root = stage(
+      '<div data-slot="ask-card" data-resolved="false" id="old"></div>' +
+        '<div data-slot="ask-card" data-resolved="false" id="new"></div>' +
+        '<div data-slot="ask-card" data-resolved="true" id="answered"></div>',
+    )
+    expect(latestOpenAskCard(root)?.id).toBe('new')
+  })
+
+  it('is null when every card is answered or none is mounted', () => {
+    expect(latestOpenAskCard(stage('<div data-slot="ask-card" data-resolved="true"></div>'))).toBeNull()
+    expect(latestOpenAskCard(stage(''))).toBeNull()
+  })
+
+  it('reveal focuses the card\'s first control', () => {
+    const root = stage('<div data-slot="ask-card" data-resolved="false"><button>Yes</button><button>No</button></div>')
+    document.body.append(root)
+    revealAskCard(latestOpenAskCard(root)!)
+    expect(document.activeElement?.textContent).toBe('Yes')
+    root.remove()
   })
 })

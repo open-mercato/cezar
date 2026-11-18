@@ -444,9 +444,17 @@ function HeaderActions({
     if (bridge) return bridge.openView('changes')
     navigate(`/tasks/${run.id}/changes`)
   }
+  // Answer goes to the open question card; the composer only when there is no structured question (#2297).
+  const toQuestion = () => {
+    const bridge = taskWorkspaceFor(run.id)
+    if (bridge?.focusQuestion) return bridge.focusQuestion()
+    if (bridge) return toComposer()
+    navigate(`/tasks/${run.id}#ask`)
+  }
   const perform = (kind: Exclude<NonNullable<typeof primary>['kind'], 'git'>) => {
     switch (kind) {
       case 'answer':
+        return toQuestion()
       case 'retry':
         return toComposer()
       case 'review':
