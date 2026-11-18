@@ -108,6 +108,19 @@ describe('createTaskQuestionProvider', () => {
     expect(open.closed).toBeUndefined();
   });
 
+  it('a session closed on its question reads as waiting, not failed', async () => {
+    const ctx = project('alpha');
+    build(ctx);
+    const runId = newRun(ctx);
+    ctx.store.recordTaskAsk(runId, ask('open'));
+    ctx.store.updateRun(runId, { status: 'failed', awaitingAnswerSince: new Date().toISOString() });
+    expect((await provider().list())[0]?.source).toMatchObject({ status: 'waiting' });
+    ctx.store.updateRun(runId, { awaitingAnswerSince: undefined, idleClosedAt: new Date().toISOString() });
+    expect((await provider().list())[0]?.source).toMatchObject({ status: 'waiting' });
+    ctx.store.updateRun(runId, { idleClosedAt: undefined });
+    expect((await provider().list())[0]?.source).toMatchObject({ status: 'failed' });
+  });
+
   it('reads a project nobody opened from disk, without building its context', async () => {
     const cold = project('cold');
     const runId = newRun(cold);

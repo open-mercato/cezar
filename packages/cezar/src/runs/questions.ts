@@ -40,6 +40,11 @@ const PROJECTS_TTL_MS = 30_000;
  * session, so its questions cannot change until it is opened, which is when `onContextBuilt`
  * attaches the live listeners.
  */
+/** A session closed on its open question (idle, or awaiting the answer) is still waiting on the user,
+ *  not a failure: Continue answers it (#2286). */
+const sourceStatus = (run: RunRecord): string =>
+  run.status === 'failed' && (run.awaitingAnswerSince !== undefined || run.idleClosedAt !== undefined) ? 'waiting' : run.status;
+
 export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProvider & { dispose(): void } {
   const { contexts } = deps;
   const now = deps.now ?? Date.now;
@@ -70,7 +75,7 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
 
   const item = (projectId: string, run: RunRecord, ask: TaskAskRecord): QuestionItem => ({
     key: questionKey({ kind: 'task', projectId, runId: run.id, requestId: ask.requestId }),
-    source: { kind: 'task', projectId, runId: run.id, title: run.titleSummary ?? run.title, status: run.status },
+    source: { kind: 'task', projectId, runId: run.id, title: run.titleSummary ?? run.title, status: sourceStatus(run) },
     ...(ask.cardId ? { cardId: ask.cardId } : {}),
     askedAt: ask.askedAt,
     questions: ask.questions,
