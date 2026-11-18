@@ -903,20 +903,13 @@ export class ManagerEngine {
   send(id: string, text: string, attachments: AttachmentInput[] = [], askId?: string): boolean {
     if (!this.deps.store.get(id)) return false;
     const messages = this.deps.store.messages(id);
-    const superseded = supersededAskIds(messages);
-
-    // An answer targeting an already answered or superseded card is dropped: never wake the manager again.
-    if (askId !== undefined) {
-      const target = messages.find((message) => message.id === askId);
-      if (!target || target.kind !== 'assistant' || !target.ask || target.askAnswer !== undefined || superseded.has(target.id)) {
-        return true;
-      }
-    }
-
-    // A card answers itself alone; the composer closes every open card, their one sure exit.
-    const answered = messages
-      .filter((message): message is Extract<ManagerMessage, { kind: 'assistant' }> => openAsk(message) && !superseded.has(message.id))
-      .filter((message) => askId === undefined || message.id === askId);
+    // A second answer to one card is a double submit: the first already woke the manager (#2293).
+    const target = askId === undefined ? undefined : messages.find((message) => message.id === askId);
+    if (target?.kind === 'assistant' && target.ask && target.askAnswer !== undefined) return true;
+    // A card answers itself alone, superseded or not; the composer closes every open card a newer one did not re-ask.
+    const open = messages.filter(openAsk);
+    const superseded = askId === undefined ? supersededAskIds(messages) : new Set<string>();
+    const answered = open.filter((message) => askId === undefined ? !superseded.has(message.id) : message.id === askId);
     for (const message of answered) {
       this.publish(id, { ...message, askAnswer: text || 'Sent attachments' }, true);
       // Asked from a session the chat never saw: `Header: choice` alone answers nothing.

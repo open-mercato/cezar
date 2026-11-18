@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workspaceQueryKeys } from '@/api/queries'
-import { isAskOpen, supersededAskIds, type ManagerMessage } from '@open-mercato/cezar-api-client'
+import { supersededAskIds, type ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
 import { answersShownOnCard, askAnswerLines, CommandsRow, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
@@ -592,31 +592,20 @@ describe('light-theme contrast', () => {
 })
 
 describe('supersededAskIds', () => {
-  it('marks older unanswered cards with matching question headers as superseded', () => {
-    const older = assistantMessage(1, { text: 'Q1', ask: { questions: [{ header: 'PR 2225', question: 'Rebase?', options: [{ label: 'Yes' }] }] } })
-    const newer = assistantMessage(2, { text: 'Q2', ask: { questions: [{ header: 'PR 2225', question: 'Rebase?', options: [{ label: 'Yes' }] }] } })
-    const set = supersededAskIds([older, newer])
-    expect(set.has(older.id)).toBe(true)
-    expect(set.has(newer.id)).toBe(false)
-    expect(isAskOpen(older, [older, newer])).toBe(false)
-    expect(isAskOpen(newer, [older, newer])).toBe(true)
+  const card = (seq: number, headers: string[], askAnswer?: string) => assistantMessage(seq, {
+    text: `Q${seq}`,
+    ask: { questions: headers.map((header) => ({ header, question: `${header}?`, options: [{ label: 'Yes' }] })) },
+    ...(askAnswer ? { askAnswer } : {}),
   })
 
-  it('keeps older card superseded even after the newer card is answered', () => {
-    const older = assistantMessage(1, { text: 'Q1', ask: { questions: [{ header: 'PR 2225', question: 'Rebase?', options: [{ label: 'Yes' }] }] } })
-    const newer = assistantMessage(2, { text: 'Q2', ask: { questions: [{ header: 'PR 2225', question: 'Rebase?', options: [{ label: 'Yes' }] }] }, askAnswer: 'Yes' })
-    const set = supersededAskIds([older, newer])
-    expect(set.has(older.id)).toBe(true)
-    expect(set.has(newer.id)).toBe(false)
+  it('supersedes an older unanswered card a newer card re-asks, answered or not', () => {
+    const older = card(1, ['PR 2225'])
+    expect([...supersededAskIds([older, card(2, ['PR 2225'])])]).toEqual([older.id])
+    expect([...supersededAskIds([card(2, ['PR 2225'], 'Yes'), older])]).toEqual([older.id])
   })
 
-  it('does not supersede cards with different question headers', () => {
-    const cardA = assistantMessage(1, { text: 'Q1', ask: { questions: [{ header: 'PR 100', question: 'Merge?', options: [{ label: 'Yes' }] }] } })
-    const cardB = assistantMessage(2, { text: 'Q2', ask: { questions: [{ header: 'PR 200', question: 'Close?', options: [{ label: 'Yes' }] }] } })
-    const set = supersededAskIds([cardA, cardB])
-    expect(set.size).toBe(0)
-    expect(isAskOpen(cardA, [cardA, cardB])).toBe(true)
-    expect(isAskOpen(cardB, [cardA, cardB])).toBe(true)
+  it('keeps a card open when a newer card shares only some of its headers', () => {
+    expect(supersededAskIds([card(1, ['Shell', 'Default']), card(2, ['Shell'])]).size).toBe(0)
+    expect(supersededAskIds([card(1, ['PR 100']), card(2, ['PR 200'])]).size).toBe(0)
   })
 })
-
