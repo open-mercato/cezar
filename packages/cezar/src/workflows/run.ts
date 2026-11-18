@@ -1,3 +1,4 @@
+import type { StepToolPolicy } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
@@ -6327,6 +6328,21 @@ export class RunManager {
         ? undefined
         : defSteps.find((s) => s.id === owningStep?.id)
           ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
+    const savedTools = owningStep?.toolPolicy ?? (!owningStep
+      ? [...(record?.steps ?? [])].reverse().find(s => s.kind === 'agent' && s.toolPolicy)?.toolPolicy : undefined);
+    if (continueBackend === 'codex' && record?.workflowDef?.graph && !savedTools &&
+      (!owningStep || (!owningStep.id.startsWith('continue-') && !defSteps?.some(s => s.id === owningStep.id)))) {
+      failBeforeSpawn('codex: cannot restore this legacy graph step’s tool policy safely; start a new restricted task');
+      return;
+    }
+    const continuationTools: StepToolPolicy = state.readOnly ? {
+      allowedTools: [...READ_ONLY_TOOLS], ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    } : savedTools ?? {
+      allowedTools: [...(toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
+      ...(toolsStep?.bashAllowlist !== undefined ? { bashAllowlist: [...toolsStep.bashAllowlist] } : {}),
+      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    };
+    this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
     // returns nothing is worse than a turn that refuses to start and says why.
@@ -6418,19 +6434,17 @@ export class RunManager {
             : contextualOpeningPrompt,
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
-          allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
-          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
-          bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
+          ...continuationTools,
+          ...(state.bypassPermissions && !continuationTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             continueProfile.env,
           ),
-          env: state.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
+          env: continuationTools.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
-          mcpServers: state.enforceReadOnly ? [] : continueMcp,
+          mcpServers: continuationTools.enforceReadOnly ? [] : continueMcp,
           model: continueModel,
           reasoningEffort: continuationReasoningEffort,
           sessionId: launchSessionId,
@@ -8854,6 +8868,12 @@ export class RunManager {
       const refusal = readOnlyWorkflowRefusal(stepDef, stepBackend);
       if (refusal) return refusal;
     }
+    const stepTools: StepToolPolicy = {
+      allowedTools: [...(state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
+      ...(!state.readOnly && step.bashAllowlist !== undefined ? { bashAllowlist: [...step.bashAllowlist] } : {}),
+      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    };
+    this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
@@ -8882,10 +8902,8 @@ export class RunManager {
           userPrompt: [stepProfile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
-          allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+          ...stepTools,
           ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
-          bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),

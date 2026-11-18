@@ -17,7 +17,11 @@ const requestSchema = z.discriminatedUnion('tool', [
 export const CODEX_READ_TOOL = {
   type: 'function', name: 'cezar_read',
   description: 'Read-only tools enforced by cezar. Use Read for files, Grep for content, Glob for file names, Bash for a single approved git/GitHub read command. Native shell and write tools are denied. No pipelines, shell syntax, writes, browser, pushes or GitHub mutations.',
-  inputSchema: z.toJSONSchema(requestSchema),
+  inputSchema: z.toJSONSchema(z.object({
+    tool: z.enum(['Read', 'Grep', 'Glob', 'Bash']), path: path.nullable(),
+    offset: z.number().int().nullable(), limit: z.number().int().nullable(),
+    pattern: z.string().nullable(), glob: z.string().nullable(), command: z.string().nullable(),
+  }).strict()),
 };
 
 export type CodexReadResult = { success: boolean; contentItems: Array<{ type: 'inputText'; text: string }> };
@@ -28,8 +32,9 @@ export class CodexReadBroker {
   private readonly cwd: Promise<string>;
   private readonly aborter = new AbortController();
 
-  constructor(private readonly policy: CodexRestrictedPolicy, spec: Pick<AgentRunSpec, 'cwd' | 'additionalDirectories'>, private readonly env: NodeJS.ProcessEnv) {
+  constructor(private readonly policy: CodexRestrictedPolicy, spec: Pick<AgentRunSpec, 'cwd' | 'additionalDirectories'>, private readonly env: NodeJS.ProcessEnv, private readonly githubReadsAllowed = true) {
     this.cwd = realpath(spec.cwd);
+    void this.cwd.catch(() => {});
     this.allowedRoots = Promise.all([spec.cwd, ...(spec.additionalDirectories ?? [])].map(async p => realpath(p).catch(() => undefined)))
       .then(paths => paths.filter((p): p is string => p !== undefined));
   }
@@ -60,19 +65,38 @@ export class CodexReadBroker {
     });
   }
 
+  private pending = 0;
   async call(params: Record<string, unknown>): Promise<CodexReadResult> {
+    if (this.pending >= 4) return result(false, 'cezar: at most four read operations may run at once');
+    this.pending++;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([this.perform(params), new Promise<CodexReadResult>(done => {
+        timer = setTimeout(() => { this.close(); done(result(false, 'cezar: read timed out; this broker is closed')); }, 20_000);
+        timer.unref?.();
+      })]);
+    } finally { if (timer) clearTimeout(timer); this.pending--; }
+  }
+
+  private async perform(params: Record<string, unknown>): Promise<CodexReadResult> {
     try {
       if (this.aborter.signal.aborted) throw new Error('session is closed');
       if (params.tool !== CODEX_READ_TOOL.name || (params.namespace !== undefined && params.namespace !== null)) throw new Error('tool is not granted');
-      const input = requestSchema.parse(params.arguments);
+      const raw = params.arguments;
+      const nullable = new Set(['path', 'offset', 'limit', 'pattern', 'glob', 'command']);
+      const args = raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? Object.fromEntries(Object.entries(raw).filter(([key, value]) => value !== null || !nullable.has(key))) : raw;
+      const input = requestSchema.parse(args);
       if (!this.policy.tools.has(input.tool)) throw new Error(`${input.tool} is not granted`);
       switch (input.tool) {
         case 'Read': {
-          const file = await open(await this.allowedPath(input.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+          const file = await open(await this.allowedPath(input.path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
           try {
             const stat = await file.stat();
             if (!stat.isFile() || stat.size > 2_000_000) throw new Error('Read requires a regular file of at most 2 MB');
-            const text = await file.readFile('utf8');
+            const buffer = Buffer.alloc(stat.size);
+            const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+            const text = buffer.subarray(0, bytesRead).toString('utf8');
             return result(true, text.split('\n').slice((input.offset ?? 1) - 1, (input.offset ?? 1) - 1 + (input.limit ?? 500)).join('\n'));
           } finally { await file.close(); }
         }
@@ -88,6 +112,23 @@ export class CodexReadBroker {
         case 'Bash': {
           const argv = codexBashArgv(input.command, this.policy);
           if (!argv) throw new Error('command is outside this step’s approved read-only Bash grant');
+          if (argv[0] === 'gh') {
+            if (!this.githubReadsAllowed) throw new Error('GitHub reads are disabled by CEZ_CODEX_NETWORK=0');
+            const hosts = new Set(['github.com', (this.env.GH_HOST ?? 'github.com').toLowerCase()]);
+            for (const arg of argv.slice(3)) {
+              if (/^https?:\/\//i.test(arg)) {
+                const url = new URL(arg);
+                if (url.protocol !== 'https:' || url.username || url.password || url.port || !hosts.has(url.hostname.toLowerCase())) throw new Error('GitHub host is outside this step’s configured hosts');
+              }
+            }
+            for (let i = 3; i < argv.length; i++) if (argv[i] === '--repo' || argv[i] === '-R') {
+              const repository = argv[++i]!;
+              if (!repository.startsWith('https://') && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+                const [host, owner, repo, ...extra] = repository.split('/');
+                if (!host || !hosts.has(host.toLowerCase()) || !owner || !repo || extra.length) throw new Error('GitHub repository host is not granted');
+              }
+            }
+          }
           return result(true, await this.execute(argv));
         }
       }

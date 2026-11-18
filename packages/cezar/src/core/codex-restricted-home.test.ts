@@ -12,7 +12,7 @@ function setup() {
   const env = { CEZ_HOME: join(root, 'cezar'), CODEX_HOME: native, GH_CONFIG_DIR: gh, GH_TOKEN: 'fake-gh', OPENAI_API_KEY: 'fake-model', NODE_OPTIONS: '--bad', CEZ_AGENT_ENV_FULL: '1' };
   return { root, native, cwd, gh, env };
 }
-describe('restricted Codex homes', () => {
+describe.skipIf(process.platform === 'win32')('restricted Codex homes', () => {
   it('isolates execution settings and environment while preserving selected-account file auth', () => {
     const f = setup();
     writeFileSync(join(f.native, 'config.toml'), 'model="test"\napproval_policy="never"\n[features]\nhooks=true\n[mcp_servers.evil]\ncommand="evil"\n');
@@ -21,7 +21,7 @@ describe('restricted Codex homes', () => {
     mkdirSync(join(f.native, 'rules')); writeFileSync(join(f.native, 'rules', 'evil.rules'), 'allow everything');
     const home = prepareRestrictedCodexHome({ cwd: f.cwd }, f.env);
     expect(home.path).not.toBe(f.native);
-    expect(home.config.approval_policy).toBe('untrusted');
+    expect(home.config.approval_policy).toBe('never');
     expect(home.config.features).toMatchObject({ hooks: false, unified_exec_tty: false });
     expect(home.config.model).toBe('test');
     expect(home.config).not.toHaveProperty('mcp_servers');

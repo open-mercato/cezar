@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { planChain } from '../planner.ts';
 import { generateRunName } from '../runs/auto-name.ts';
@@ -14,6 +15,7 @@ afterEach(() => {
 
 it('explains tool-policy refusal when planning and naming fall back', async () => {
   vi.stubEnv('CEZ_DRY_RUN', '1');
+  vi.stubEnv('CEZ_CODEX_BIN', fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url)));
   vi.stubEnv('CEZ_AUTONAME', '1');
   const root = mkdtempSync(join(tmpdir(), 'cez-policy-diagnostics-'));
   dirs.push(root);

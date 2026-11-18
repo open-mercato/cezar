@@ -3177,3 +3177,19 @@ describe('RunStore — index lock failures', () => {
     expect(existsSync(leftover)).toBe(false);
   });
 });
+
+describe('step tool-policy persistence', () => {
+  it('round-trips effective grants while keeping older steps without a policy readable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const store = RunStore.open(dir);
+      const record = store.createRun({ title: 'restricted', workflow: 'nested', task: 'read', steps: [{ id: 'nested::read', name: 'Read', kind: 'agent' }] });
+      const policy = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'], enforceReadOnly: true };
+      store.updateStep(record.id, 'nested::read', { toolPolicy: policy });
+      store.flush();
+      const reopened = RunStore.open(dir);
+      expect(reopened.getRun(record.id)?.steps[0]?.toolPolicy).toEqual(policy);
+      reopened.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

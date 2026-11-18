@@ -75,7 +75,7 @@ export function missingWorkingDirectoryMessage(backend: string, cwd: string): st
 const READ_ONLY_ENFORCED: Record<AgentBackend, boolean> = {
   claude: true,
   'claude-cli': true,
-  codex: false,
+  codex: true,
   opencode: true,
   cursor: true,
   pi: true,

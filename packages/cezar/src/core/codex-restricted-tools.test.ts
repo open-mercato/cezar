@@ -14,19 +14,21 @@ function setup(tools = ['Read', 'Grep', 'Glob', 'Bash']) {
   const cwd = join(root, 'repo'); mkdirSync(cwd);
   const native = join(root, 'native'); mkdirSync(native);
   writeFileSync(join(cwd, 'a.txt'), 'one\ntwo\n');
-  const home = prepareRestrictedCodexHome({ cwd }, { CEZ_HOME: join(root, 'cezar'), CODEX_HOME: native });
+  const home = prepareRestrictedCodexHome({ cwd }, { HOME: root, CEZ_HOME: join(root, 'cezar'), CODEX_HOME: native });
   const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: tools, bashAllowlist: [...CODEX_READ_PREFIXES] })!, { cwd }, home.toolEnv);
   brokers.push(broker);
   const call = (arguments_: unknown, tool = 'cezar_read') => broker.call({ tool, arguments: arguments_ });
   return { root, cwd, home, broker, call };
 }
-describe('cezar executes restricted reads', () => {
+describe.skipIf(process.platform === 'win32')('cezar executes restricted reads', () => {
   it('reads regular files and refuses symlink escapes, devices and write-shaped payloads', async () => {
     const f = setup();
     expect((await f.call({ tool: 'Read', path: 'a.txt', offset: 2, limit: 1 })).contentItems[0]?.text).toBe('two');
     writeFileSync(join(f.root, 'outside'), 'secret'); symlinkSync(join(f.root, 'outside'), join(f.cwd, 'link'));
     for (const payload of [{ tool: 'Read', path: 'link' }, { tool: 'Read', path: '../outside' }, { tool: 'Read', path: '.' }, { tool: 'Write', path: 'a.txt', content: 'bad' }, { tool: 'Read', path: 'a.txt', command: 'touch x' }]) expect((await f.call(payload)).success).toBe(false);
     expect(readFileSync(join(f.cwd, 'a.txt'), 'utf8')).toBe('one\ntwo\n');
+    execFileSync('mkfifo', [join(f.cwd, 'pipe')], { timeout: 5_000 });
+    expect((await f.call({ tool: 'Read', path: 'pipe' })).success).toBe(false);
   });
   it('executes approved GitHub reads as argv and never invokes the binary for a mutation', async () => {
     const f = setup();
@@ -38,8 +40,14 @@ describe('cezar executes restricted reads', () => {
     const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'] })!, { cwd: f.cwd }, { ...f.home.toolEnv, PATH: bin, PROBE_LOG: log });
     brokers.push(broker);
     expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command: 'gh pr diff 3' } })).contentItems[0]?.text).toBe('read-only diff');
-    for (const command of ['gh pr merge 3', 'gh pr diff 3; gh pr merge 3', 'gh pr diff 3 --web', 'gh api repos/o/r -X DELETE']) expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).success).toBe(false);
+    for (const command of ['gh pr merge 3', 'gh pr diff 3; gh pr merge 3', 'gh pr diff 3 --web', 'gh api repos/o/r -X DELETE', 'gh pr diff https://evil.example/o/r/pull/3', 'gh pr diff 3 -R evil.example/o/r']) expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).success).toBe(false);
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['["pr","diff","3"]']);
+  });
+  it('honors the existing network-off setting for brokered GitHub reads', async () => {
+    const f = setup();
+    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'] })!, { cwd: f.cwd }, f.home.toolEnv, false);
+    brokers.push(broker);
+    expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command: 'gh pr diff 3' } })).contentItems[0]?.text).toContain('CEZ_CODEX_NETWORK=0');
   });
   it('keeps real git status read-only and prevents a configured fsmonitor from executing', async () => {
     const f = setup();

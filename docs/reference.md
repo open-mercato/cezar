@@ -221,18 +221,28 @@ held for queued tasks until that time, even if the original task is completed or
 While choosing a successor, the task shows “switching agent” without a failure notification.
 The transcript records skips and handovers, and identifies the automatic continuation message.
 The next provider receives the task and repository context and may bill its own plan. Existing
-task budgets apply; tool restrictions depend on the backend. Codex refuses restricted tool
-grants before starting, including on retries and Continue. Only the omitted or exact historical
-default (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, with unrestricted shell) is supported.
-An empty list is a restriction. Read-only workflows such as `review-pr` must use Claude Code
-or Pi. A Codex filesystem sandbox cannot enforce GitHub, MCP or shell tool permissions.
-This also affects internal calls: a Codex manager refuses chat and watch turns with a diagnostic.
-The Codex planner returns a single-step fallback with the policy reason. Automatic titles and
-branch names keep their heuristic fallback and record the policy reason in the task transcript;
-explicit branch naming instructions cannot be applied by Codex. Landing commit messages keep
-their file-list fallback and explain why model naming was unavailable. Ask and manager-created
-read-only Codex tasks fail before the agent starts. Choose Claude Code or Pi for restricted tasks.
-OpenCode and Cursor do not enforce Claude's `allowedTools`.
+task budgets apply; tool restrictions depend on the backend. Codex supports explicit subsets of
+`Read`, `Grep`, `Glob` and a read-only `Bash` allowlist, including an empty tool grant, through an
+isolated runtime. `review-pr` can use Codex when the installed protocol passes verification.
+The omitted or exact historical default (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, with
+unrestricted shell) keeps its existing behavior. Unsupported write/MCP grants, shell hooks and
+unknown Bash prefixes refuse; they never become unrestricted.
+
+Restricted Codex steps omit native execution settings and run approved reads through cezar.
+Native execution environments and native network access stay disabled on every turn, including
+resume/fork. Supported file-backed account authentication and model/provider settings follow
+the selected account. Keyring-only authentication, active managed/system policy, Windows and
+unverified Codex versions are unavailable for this path. The verified protocol is 0.169.0;
+unsupported controls fail before a model turn. Grep and Glob need `rg`; missing tools return a
+named read error. `CEZ_CODEX_NETWORK=0` also blocks brokered GitHub reads.
+
+Continue and restart preserve each step’s recorded tools and mutation policy. Old unrestricted
+Codex sessions are kept separate; missing-session recovery can open a fresh restricted session.
+A legacy graph step with no recoverable policy refuses with a diagnostic. Dispatch preserves an
+explicit empty tool list. Codex managers still refuse their unsupported `cez-manager` shell grant;
+planning and naming can use the isolated no-tools path and keep their existing fallbacks when
+unavailable. OpenCode and Cursor do not enforce Claude’s `allowedTools`.
+
 
 **Settings changes apply to new tasks.** Existing tasks retain their saved list; tasks created
 with fallback off do not acquire it later. Turning it off cancels unstarted handovers, but does
@@ -793,7 +803,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
 | **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` selects `acceptEdits`, but cezar cannot answer permission prompts). |
-| **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
+| **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Explicit read-only grants use an isolated, verified runtime and cezar’s read broker. Omitted/exact-default grants retain `danger-full-access` with `approvalPolicy: never`. `CEZ_CODEX_NETWORK=0` selects network-blocked `workspace-write` for unrestricted tasks and denies brokered GitHub reads for restricted steps. |
 | **Junie** _(experimental)_ | [`junie`](https://junie.jetbrains.com/cli) | `junie --acp=true` — the real Agent Client Protocol over stdio, the same transport JetBrains IDEs use. | Ignores `allowedTools`; every permission is auto-approved. |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; OpenCode's own permission config applies; a prompt it raises shows up as a card to allow or reject in a non-autonomous cockpit run, and is refused in autonomous and headless (`cezar run`) runs. |
 | **Cursor** | [`agent`](https://cursor.com/docs/cli/overview) (Cursor Agent CLI) | Headless print mode: `agent -p --force --trust --output-format stream-json`. Continue is fresh-session in v1 (print mode exits per turn). Its documented output carries no token/cost figures, so a Cursor run's header always reads zero tokens and no cost — that is the backend not reporting usage, not the run using nothing. | Ignores `allowedTools`; `--force` / `--trust` auto-approves tool use for unattended runs. |

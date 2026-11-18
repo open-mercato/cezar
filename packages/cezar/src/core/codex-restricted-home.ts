@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
+import { CodexToolPolicyError } from './codex-tool-policy.ts';
 
 const PROVIDER_KEYS = new Set(['name', 'base_url', 'wire_api', 'env_key', 'requires_openai_auth', 'http_headers', 'env_http_headers', 'query_params', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'supports_websockets']);
 const AUTH_ENV = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'];
@@ -15,6 +16,7 @@ export interface RestrictedCodexHome {
   readonly env: NodeJS.ProcessEnv;
   readonly config: Record<string, unknown>;
   readonly toolEnv: NodeJS.ProcessEnv;
+  readonly githubReadsAllowed: boolean;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -23,7 +25,8 @@ function record(value: unknown): Record<string, unknown> {
 
 /** Only model transport settings travel from the selected account. No instruction or execution config does. */
 export function restrictedCodexModelConfig(text: string): { config: Record<string, unknown>; authEnv: string[] } {
-  const root = record(parse(text));
+  let root: Record<string, unknown>;
+  try { root = record(parse(text)); } catch { throw new Error('codex: cannot parse the selected account config for restricted execution'); }
   const profile = typeof root.profile === 'string' ? record(record(root.profiles)[root.profile]) : {};
   const selected = { ...root, ...profile };
   const config: Record<string, unknown> = {};
@@ -67,8 +70,11 @@ export function prepareRestrictedCodexHome(
   spec: Pick<AgentRunSpec, 'cwd' | 'env'>,
   hostEnv: NodeJS.ProcessEnv = process.env,
 ): RestrictedCodexHome {
+  if (existsSync('/etc/codex') && readdirSync('/etc/codex').length) throw new CodexToolPolicyError('system Codex policies cannot be isolated');
   const inherited = { ...hostEnv, ...spec.env };
-  const nativeHome = resolve(inherited.CODEX_HOME || join(homedir(), '.codex'));
+  const dry = hostEnv.CEZ_DRY_RUN === '1';
+  const originalHome = inherited.HOME || homedir();
+  const nativeHome = dry ? join(cezarHomeDir(hostEnv), 'codex-restricted-dry-source') : resolve(inherited.CODEX_HOME || join(originalHome, '.codex'));
   const cwd = realpathSync(spec.cwd);
   const key = createHash('sha256').update(`${nativeHome}\0${cwd}`).digest('hex').slice(0, 32);
   const directory = join(cezarHomeDir(hostEnv), 'codex-restricted', key);
@@ -77,6 +83,10 @@ export function prepareRestrictedCodexHome(
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (lstatSync(directory).isSymbolicLink()) throw new Error('codex: isolated state must not be symlinked');
   const path = realpathSync(directory);
+  for (const name of ['rules', 'hooks', 'hooks.json', 'mcp.json', 'plugins', 'agents', 'managed_config.toml', 'requirements.toml']) {
+    const item = join(path, name);
+    if (existsSync(item) && (!lstatSync(item).isDirectory() || readdirSync(item).length)) throw new CodexToolPolicyError('unexpected execution settings in isolated Codex state');
+  }
   const shellHome = join(path, 'shell-home');
   mkdirSync(shellHome, { recursive: true, mode: 0o700 });
   if (lstatSync(shellHome).isSymbolicLink()) throw new Error('codex: isolated shell home must not be symlinked');
@@ -88,17 +98,20 @@ export function prepareRestrictedCodexHome(
   const config: Record<string, unknown> = {
     ...model.config,
     cli_auth_credentials_store: 'file',
-    approval_policy: 'untrusted',
+    approval_policy: 'never',
     sandbox_mode: 'read-only',
     web_search: 'disabled',
-    features: { hooks: false, multi_agent: false, goals: false, unified_exec_tty: false, shell_snapshot: false },
+    check_for_update_on_startup: false,
+    agents: { enabled: false },
+    features: { hooks: false, multi_agent: false, goals: false, unified_exec_tty: false, shell_snapshot: false, shell_tool: false, view_image: false, remote_plugin: false, remote_control: false, tool_suggest: false, image_generation: false, js_repl: false, code_mode: false },
     projects: { [cwd]: { trust_level: 'untrusted' } },
     shell_environment_policy: { inherit: 'none', set: {
       HOME: shellHome, PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin',
-      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_COUNT: '4',
       GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: 'false',
       GIT_CONFIG_KEY_1: 'core.pager', GIT_CONFIG_VALUE_1: 'cat',
       GIT_CONFIG_KEY_2: 'core.hooksPath', GIT_CONFIG_VALUE_2: '/dev/null',
+      GIT_CONFIG_KEY_3: 'protocol.allow', GIT_CONFIG_VALUE_3: 'never',
       GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0',
       GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat', GH_BROWSER: 'false',
       RIPGREP_CONFIG_PATH: '',
@@ -110,7 +123,7 @@ export function prepareRestrictedCodexHome(
   credentialLink(join(nativeHome, 'auth.json'), join(path, 'auth.json'));
   // Build this environment from scratch: a host opt-in to full inheritance cannot widen it.
   const env: NodeJS.ProcessEnv = {};
-  for (const name of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', ...AUTH_ENV, ...model.authEnv]) {
+  for (const name of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', ...(!dry ? AUTH_ENV : []), ...model.authEnv]) {
     if (inherited[name] !== undefined) env[name] = inherited[name];
   }
   env.HOME = shellHome;
@@ -122,12 +135,12 @@ export function prepareRestrictedCodexHome(
   const ghHome = join(path, 'gh');
   mkdirSync(ghHome, { recursive: true, mode: 0o700 });
   if (lstatSync(ghHome).isSymbolicLink()) throw new Error('codex: isolated GitHub config must not be symlinked');
-  const nativeGh = resolve(inherited.GH_CONFIG_DIR || join(inherited.XDG_CONFIG_HOME || join(homedir(), '.config'), 'gh'));
+  const nativeGh = dry ? join(nativeHome, 'gh') : resolve(inherited.GH_CONFIG_DIR || join(inherited.XDG_CONFIG_HOME || join(originalHome, '.config'), 'gh'));
   credentialLink(join(nativeGh, 'hosts.yml'), join(ghHome, 'hosts.yml'));
   const shellEnv = record(record(config.shell_environment_policy).set) as Record<string, string>;
   const toolEnv: NodeJS.ProcessEnv = { ...shellEnv, GH_CONFIG_DIR: ghHome };
   for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_HOST', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'LANG', 'LC_ALL']) {
-    if (inherited[name] !== undefined) toolEnv[name] = inherited[name];
+    if (!dry && inherited[name] !== undefined) toolEnv[name] = inherited[name];
   }
-  return { path, env, config, toolEnv };
+  return { path, env, config, toolEnv, githubReadsAllowed: hostEnv.CEZ_CODEX_NETWORK !== '0' };
 }

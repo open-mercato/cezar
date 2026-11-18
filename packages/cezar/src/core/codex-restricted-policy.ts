@@ -10,6 +10,7 @@ export const CODEX_READ_PREFIXES = [
 ] as const;
 
 export interface CodexRestrictedPolicy {
+  readonly mutation: 'read-only';
   readonly tools: ReadonlySet<string>;
   readonly bashPrefixes: readonly string[];
 }
@@ -18,16 +19,16 @@ export interface CodexRestrictedPolicy {
 export function compileCodexRestrictedPolicy(spec: Pick<AgentRunSpec,
   'allowedTools' | 'bashAllowlist' | 'bashHookCommand' | 'enforceReadOnly'
 >): CodexRestrictedPolicy | undefined {
-  const tools = spec.allowedTools;
+  const explicit = spec.allowedTools;
+  const tools = explicit ?? (spec.enforceReadOnly ? ['Read', 'Grep', 'Glob'] : undefined);
   const legacy = tools === undefined || (tools.length === DEFAULT_ALLOWED_TOOLS.length && DEFAULT_ALLOWED_TOOLS.every(t => tools.includes(t)));
   if (legacy && !spec.enforceReadOnly && spec.bashAllowlist === undefined && spec.bashHookCommand === undefined) return undefined;
-  // view_image is native and cannot be individually approved in this protocol. Its Read grant is required.
-  if (spec.bashHookCommand !== undefined || !tools?.includes('Read') || tools.some(t => !READ_TOOLS.has(t))) throw new CodexToolPolicyError();
-  if (tools.includes('Bash') && (!spec.bashAllowlist || spec.bashAllowlist.some(p => !(CODEX_READ_PREFIXES as readonly string[]).includes(p)))) throw new CodexToolPolicyError();
-  return { tools: new Set(tools), bashPrefixes: [...(spec.bashAllowlist ?? [])] };
+  if (spec.bashHookCommand !== undefined || !tools || tools.some(t => !READ_TOOLS.has(t))) throw new CodexToolPolicyError();
+  if ((tools.includes('Bash') && !spec.bashAllowlist) || spec.bashAllowlist?.some(p => !(CODEX_READ_PREFIXES as readonly string[]).includes(p))) throw new CodexToolPolicyError();
+  return { mutation: 'read-only', tools: new Set(tools), bashPrefixes: [...(spec.bashAllowlist ?? [])] };
 }
 
-const ONE_VALUE = new Set(['--json', '--jq', '-q', '--template', '-t', '--repo', '-R', '--limit', '-L', '--state', '-s', '--base', '-B', '--head', '-H', '--author', '-A', '--assignee', '-a', '--label', '-l', '--search', '-S', '--color']);
+const ONE_VALUE = new Set(['--json', '--repo', '-R', '--limit', '-L', '--state', '-s', '--base', '-B', '--head', '-H', '--author', '-A', '--assignee', '-a', '--label', '-l', '--search', '-S', '--color']);
 const GH_FLAGS = new Set(['--comments', '-c', '--patch', '--name-only', '--required', '--draft']);
 const GIT_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
   status: new Set(['--short', '-s', '--porcelain', '--porcelain=v1', '--porcelain=v2', '--branch', '-b', '--untracked-files=no', '--untracked-files=all', '--ignored']),

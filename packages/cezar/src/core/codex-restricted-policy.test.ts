@@ -17,7 +17,7 @@ describe('restricted Codex command approvals', () => {
     const read = compileCodexRestrictedPolicy({ allowedTools: ['Read'] })!;
     for (const cmd of ['gh pr diff 3', 'git status', 'rg x', 'rg --files']) expect(codexBashArgv(cmd, read)).toBeUndefined();
   });
-  it.each([{ allowedTools: [] }, { allowedTools: ['Grep'] }, { allowedTools: ['Read', 'Bash'] }, { allowedTools: ['Read', 'Write'] }, { allowedTools: ['Read', 'mcp__x'] }, { allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh api'] }])('refuses unavailable grants %j', spec => {
+  it.each([{ allowedTools: ['Read', 'Bash'] }, { allowedTools: ['Read', 'Write'] }, { allowedTools: ['Read', 'mcp__x'] }, { allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh api'] }])('refuses unavailable grants %j', spec => {
     expect(() => compileCodexRestrictedPolicy(spec)).toThrow('tool-policy enforcement unavailable');
   });
 });

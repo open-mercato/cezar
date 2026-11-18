@@ -39,6 +39,22 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (packages/cezar/src/server/server.ts)
 
+Codex step restrictions (additive policy metadata, safety correction): run steps may include
+`toolPolicy` with `allowedTools`, optional `bashAllowlist` and optional `enforceReadOnly`.
+Old records without it remain readable. Continue uses the recorded grant before reconstructing
+one from a workflow, so nested and synthetic steps cannot inherit a wider tail grant. A legacy
+graph step whose grant is ambiguous refuses on Codex; a record without a workflow definition
+keeps the historical unrestricted default.
+
+An explicit dispatch `allowed_tools: []` is retained instead of converted to defaults. Codex
+executes that grant without broker capabilities. Other backends keep their own permission
+semantics. Omitted/exact-default unrestricted Codex grants are unchanged; supported read grants
+use isolated account/cwd state, while unsupported write/MCP/hook grants refuse. Native rules,
+hooks, plugins and keyring-only authentication are not imported into the restricted runtime.
+The selected file-backed account and supported provider settings are preserved. Unknown CLI
+protocols and active system policies refuse before any model call; no opt-out widens the grant.
+
+
 Issue ownership metadata (#1620, additive): `GET /api/v1/github` and
 `GET /api/v1/github/search`, including their project aliases, may add issue-only
 `assignees: string[]`, `assigneesTruncated: boolean`,

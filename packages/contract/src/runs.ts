@@ -89,6 +89,14 @@ export type StepStatus = z.infer<typeof stepStatusSchema>;
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
+/** Effective grants captured at launch, including nested/synthetic steps. Optional on old records. */
+export const stepToolPolicySchema = z.object({
+  allowedTools: z.array(z.string()),
+  bashAllowlist: z.array(z.string()).optional(),
+  enforceReadOnly: z.boolean().optional(),
+}).strict();
+export type StepToolPolicy = z.infer<typeof stepToolPolicySchema>;
+
 /** One model's share of a step's turns, as the agent reported it (`turn.completed.models`). */
 export const modelUsageSchema = z.object({
   model: z.string(),
@@ -129,6 +137,7 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),

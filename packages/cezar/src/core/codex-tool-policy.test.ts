@@ -5,16 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_ALLOWED_TOOLS, type AgentRunSpec, type AgentSession } from './agent-runner.ts';
 import { CodexAppServerRunner } from './codex-app-server-runner.ts';
-import { assertCodexToolPolicy } from './codex-tool-policy.ts';
+import { compileCodexRestrictedPolicy as assertCodexToolPolicy } from './codex-restricted-policy.ts';
 
 const mock = fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url));
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 const policies: Array<Partial<AgentRunSpec>> = [
-  { allowedTools: [] },
-  { allowedTools: ['Read'] },
-  { allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff'] },
   { allowedTools: ['Read', 'Edit'] },
   { allowedTools: ['Bash'] },
   { allowedTools: [...DEFAULT_ALLOWED_TOOLS, 'mcp__private__publish'] },
@@ -24,7 +21,6 @@ const policies: Array<Partial<AgentRunSpec>> = [
   { bashAllowlist: ['git status; git push'] },
   { bashHookCommand: 'custom-hook' },
   { bashHookCommand: '' },
-  { enforceReadOnly: true },
 ];
 
 describe('Codex fails closed at the runner boundary', () => {
@@ -44,7 +40,7 @@ describe('Codex fails closed at the runner boundary', () => {
     for (const resume of [false, true]) {
       const spec: AgentRunSpec = {
         cwd, userPrompt, resume, sessionId: 'old-unrestricted-thread',
-        allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff'],
+        allowedTools: ['Read', 'Write'], bashAllowlist: ['gh pr diff'],
         env: { CEZ_MOCK_CODEX_REQUESTS_FILE: log },
       };
       // Repetition represents a caller retry; direct sessions and one-shot launches share the gate.
