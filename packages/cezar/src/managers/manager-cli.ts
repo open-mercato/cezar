@@ -352,11 +352,13 @@ export async function runManagerCommand(
    */
   const propose = async (body: { action: Record<string, unknown>; reason?: string }, what: string) => {
     const before = await call<{ messages: Array<{ id: string; at: string }> }>('/messages?pending=1&limit=500');
-    const proposed = await call<{ actionId: string }>('/actions', { method: 'POST', body });
+    const proposed = await call<{ actionId: string; replaced?: string[]; alsoWaitingIn?: string[] }>('/actions', { method: 'POST', body });
     const waiting = before.messages.find((message) => message.id === proposed.actionId);
     io.log(waiting
       ? `already pending ${proposed.actionId} (proposed ${waiting.at}): ${what} still waits for the user's approval on that card, earlier in the chat. No new card was added; point the user to it instead of asking again.`
       : `proposed ${proposed.actionId}: ${what} waits for the user's approval in the chat`);
+    if (proposed.replaced?.length) io.log(`replaced ${proposed.replaced.join(', ')}: the older card for the same target was closed, only the new one waits.`);
+    if (proposed.alsoWaitingIn?.length) io.log(`also waiting in ${proposed.alsoWaitingIn.join(', ')}: another manager's chat has a card for the same target. Either approval does it; say so to the user.`);
   };
   const printJson = (value: unknown) => io.log(JSON.stringify(value, null, 2));
 
