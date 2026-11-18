@@ -241,7 +241,7 @@ export function TrackerSection() {
         >
           {pickable.map(item => (
             <FormRow key={item.id} label={item.label} description={TRACKER_PROVIDERS[item.kind].label}>
-              <Button variant="outline" size="sm" disabled={credentialBusy || connection.isPending || connection.isError} onClick={() => {
+              <Button variant="outline" size="sm" aria-label={`Use ${item.label}`} disabled={credentialBusy || connection.isPending || connection.isError} onClick={() => {
                 // Using one deletes this project's own credentials; shared ones are only unlinked.
                 if (connection.data?.connection && !shared) setReplacing(item)
                 else pickShared.mutate(item.id)

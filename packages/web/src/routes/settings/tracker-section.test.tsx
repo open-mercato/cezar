@@ -350,7 +350,7 @@ describe('shared tracker connections', () => {
     }))
     render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><TrackerSection /></QueryClientProvider></MemoryRouter>)
     expect(await screen.findByText('acme.atlassian.net — d…@acme.test')).toBeTruthy()
-    const use = screen.getByRole('button', { name: 'Use' }) as HTMLButtonElement
+    const use = screen.getByRole('button', { name: 'Use acme.atlassian.net — d…@acme.test' }) as HTMLButtonElement
     await waitFor(() => expect(use.disabled).toBe(false))
     fireEvent.click(use)
     await waitFor(() => expect(links).toEqual([{ url: '/api/v1/p/project-b/tracker/connection/shared', body: { id: sharedId } }]))
@@ -388,7 +388,7 @@ describe('shared tracker connections', () => {
       return json({ association: null })
     }))
     render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><TrackerSection /></QueryClientProvider></MemoryRouter>)
-    const use = await screen.findByRole('button', { name: 'Use' }) as HTMLButtonElement
+    const use = await screen.findByRole('button', { name: 'Use Linear API key · saved 2026-11-18 · 2222' }) as HTMLButtonElement
     await waitFor(() => expect(use.disabled).toBe(false))
     fireEvent.click(use)
     expect(await screen.findByText("Replace this project's credentials?")).toBeTruthy()
