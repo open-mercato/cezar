@@ -47,8 +47,8 @@ const address = server.address(); assert(address && typeof address !== 'string')
 writeFileSync(join(native, 'config.toml'), `model="gpt-5.5"\nmodel_provider="stub"\n[model_providers.stub]\nname="Local test"\nbase_url="http://127.0.0.1:${address.port}/v1"\nwire_api="responses"\nenv_key="STUB_KEY"\nrequires_openai_auth=false\n`);
 const oldHome = process.env.CEZ_HOME;
 process.env.CEZ_HOME = join(root, 'cezar');
-const runner = new CodexAppServerRunner({ bin: process.argv[2] ?? 'codex', resumeLockRetryMs: [] });
-const spec: AgentRunSpec = { cwd, model: 'gpt-5.5', timeoutMs: 20_000, userPrompt: 'Exercise the test tool calls.', allowedTools: ['Read', 'Bash'], bashAllowlist: ['git status'],
+const runner = new CodexAppServerRunner({ bin: process.argv[2] ?? 'codex' });
+const spec: AgentRunSpec = { cwd, model: 'gpt-5.5', timeoutMs: 45_000, userPrompt: 'Exercise the test tool calls.', allowedTools: ['Read', 'Bash'], bashAllowlist: ['git status'],
   env: { HOME: root, CODEX_HOME: native, GH_CONFIG_DIR: join(root, 'gh'), STUB_KEY: 'FAKE', OPENAI_API_KEY: '', CODEX_API_KEY: '', GH_TOKEN: '', GITHUB_TOKEN: '' } };
 const deadline = setTimeout(() => { for (const session of sessions) session.end(); }, 90_000);
 try {

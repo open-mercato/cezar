@@ -496,13 +496,15 @@ class CodexSession implements AgentSession {
     let model: string | undefined;
     if (this.restrictedHome) {
       let timer: NodeJS.Timeout | undefined;
+      // Preserve the writer-lock recovery window inside the bounded preflight.
+      const startupMs = 15_000 + (this.spec.resume ? this.resumeLockRetryMs.reduce((sum, delay) => sum + delay, 0) : 0);
       try {
         model = await Promise.race([identity.then(value => this.bootstrapRestricted(value)).catch(err => {
           if (err instanceof CodexToolPolicyError) throw err;
           if (err instanceof Error && /no rollout found/i.test(err.message)) throw new Error(`no rollout found for thread id ${this.spec.sessionId ?? ''}`);
           throw new CodexToolPolicyError('isolated startup could not be verified; check the selected account and model provider');
         }), new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new CodexToolPolicyError('isolated startup verification timed out; check the selected account and model provider')), 15_000);
+          timer = setTimeout(() => reject(new CodexToolPolicyError('isolated startup verification timed out; check the selected account and model provider')), startupMs);
         })]);
       } finally { if (timer) clearTimeout(timer); }
     } else {
