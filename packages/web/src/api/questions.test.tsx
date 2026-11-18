@@ -77,6 +77,23 @@ describe('the questions topic', () => {
     expect(topics.released).toEqual(['questions'])
   })
 
+  // A re-ask closes one card and opens another: the counts hold, only the revision says so.
+  it('re-reads the list when the revision moves at equal counts, and not when it holds', () => {
+    client.setQueryData(queryKeys.health, { capabilities: { localHandoff: true } })
+    renderHook(() => useQuestionsSubscription(), { wrapper })
+    client.setQueryData(questionKeys.all, response([item('m:global:1')]))
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    act(() => topics.listeners.get('questions')!({ live: 1, older: 0, revision: 'aaa' }))
+    act(() => topics.listeners.get('questions')!({ live: 1, older: 0, revision: 'aaa' }))
+    expect(invalidate).not.toHaveBeenCalled()
+    act(() => topics.listeners.get('questions')!({ live: 1, older: 0, revision: 'bbb' }))
+    expect(invalidate).toHaveBeenCalledTimes(1)
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: questionKeys.all })
+    // An older server sends counts alone: equal counts stay quiet.
+    act(() => topics.listeners.get('questions')!({ live: 1, older: 0 }))
+    expect(invalidate).toHaveBeenCalledTimes(1)
+  })
+
   it('a remote cockpit re-reads the list after a run or manager frame, batched; a local one leaves it to the topic', async () => {
     vi.useFakeTimers()
     const invalidate = vi.spyOn(client, 'invalidateQueries')
@@ -120,14 +137,26 @@ describe('dismiss with undo', () => {
 
   it('a failed dismissal comes back with its error instead of looking done', async () => {
     vi.useFakeTimers()
-    fetchMock.mockResolvedValue(Response.json({ error: 'already closed' }, { status: 409 }))
+    fetchMock.mockResolvedValue(Response.json({ error: 'disk full' }, { status: 500 }))
     const { result } = renderHook(() => usePendingDismissals(), { wrapper })
     act(() => scheduleDismiss(client, 'm:global:1', 'Design'))
     await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS) })
-    await act(async () => { await vi.waitFor(() => expect(result.current[0]?.error).toBe('already closed')) })
-    expect(result.current).toEqual([{ key: 'm:global:1', label: 'Design', paused: true, error: 'already closed' }])
+    await act(async () => { await vi.waitFor(() => expect(result.current[0]?.error).toBe('disk full')) })
+    expect(result.current).toEqual([{ key: 'm:global:1', label: 'Design', paused: true, error: 'disk full' }])
     // An errored entry no longer hides its card or its count.
     expect(liveQuestionCount(response([item('m:global:1')]), result.current)).toBe(1)
+  })
+
+  it('a 409 (closed meanwhile) drops the dismissal and re-reads the list: no Retry that cannot succeed', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockResolvedValue(Response.json({ error: 'already closed' }, { status: 409 }))
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { result } = renderHook(() => usePendingDismissals(), { wrapper })
+    act(() => scheduleDismiss(client, 'm:global:1', 'Design'))
+    expect(result.current).toHaveLength(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS) })
+    await act(async () => { await vi.waitFor(() => expect(result.current).toEqual([])) })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: questionKeys.all })
   })
 
   it('the badge counts live questions less those inside their undo window; Older never counts', () => {

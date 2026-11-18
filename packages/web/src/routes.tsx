@@ -433,8 +433,6 @@ export function pageTitleContext(pathname: string): PageTitleContext {
   return { pageLabel: route?.pageLabel ?? null, taskId: null }
 }
 
-/** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. The
- *  fallback is the route's own skeleton, so a cold chat never flashes the list's first. */
 /** One Questions page, two URLs: `/manager/questions` with managers on, `/questions` without (§ F). */
 function QuestionsGate({ managersRoute }: { managersRoute: boolean }) {
   const health = useHealth()
@@ -445,6 +443,8 @@ function QuestionsGate({ managersRoute }: { managersRoute: boolean }) {
   return <Suspense fallback={<ScreenLoading label="Loading questions…" />}><QuestionsRoute /></Suspense>
 }
 
+/** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. The
+ *  fallback is the route's own skeleton, so a cold chat never flashes the list's first. */
 function ManagersGate({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const health = useHealth()
   if (health.data && health.data.capabilities.managers !== true) return <Navigate to="/" replace />

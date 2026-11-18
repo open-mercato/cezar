@@ -1,7 +1,7 @@
 import {
-  questionCountsSchema,
   questionMutationResponseSchema,
   questionsResponseSchema,
+  questionsTopicFrameSchema,
   type HealthResponse,
   type QuestionCounts,
   type QuestionItem,
@@ -71,8 +71,8 @@ export function settleQuestion(queryClient: QueryClient, item: QuestionItem): vo
 
 /**
  * The ONE `questions` topic subscription, at the root like health's (spec § Counts): local mode
- * only, since a browser WebSocket cannot carry a remote proxy's credentials. A frame is the counts;
- * the list behind them is re-read only while something shows it.
+ * only, since a browser WebSocket cannot carry a remote proxy's credentials. A frame is the counts
+ * and a revision of the open list; the list is re-read only while something shows it.
  */
 export function useQuestionsSubscription(): void {
   const queryClient = useQueryClient()
@@ -81,10 +81,14 @@ export function useQuestionsSubscription(): void {
     const sync = (): void => {
       const local = queryClient.getQueryData<HealthResponse>(queryKeys.health)?.capabilities?.localHandoff === true
       if (local && release === undefined) {
+        let revision: string | undefined
         release = subscribeTopic('questions', (data) => {
-          const counts = questionCountsSchema.safeParse(data)
-          if (!counts.success) return
-          applyQuestionCounts(queryClient, counts.data)
+          const frame = questionsTopicFrameSchema.safeParse(data)
+          if (!frame.success) return
+          const { revision: next, ...counts } = frame.data
+          const listChanged = next !== undefined && revision !== undefined && next !== revision
+          revision = next
+          applyQuestionCounts(queryClient, counts, listChanged)
         })
       } else if (!local && release !== undefined) {
         release()
@@ -100,9 +104,10 @@ export function useQuestionsSubscription(): void {
   }, [queryClient])
 }
 
-export function applyQuestionCounts(queryClient: QueryClient, counts: QuestionCounts): void {
+/** `listChanged`: the frame's revision moved, so the list is re-read even at equal counts (a re-ask). */
+export function applyQuestionCounts(queryClient: QueryClient, counts: QuestionCounts, listChanged = false): void {
   const before = queryClient.getQueryData<QuestionsResponse>(questionKeys.all)
-  if (before && before.counts.live === counts.live && before.counts.older === counts.older) return
+  if (!listChanged && before && before.counts.live === counts.live && before.counts.older === counts.older) return
   queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => (data ? { ...data, counts } : data))
   void queryClient.invalidateQueries({ queryKey: questionKeys.all })
 }
@@ -163,6 +168,13 @@ async function commit(key: string): Promise<void> {
     publish()
     settleQuestion(entry.queryClient, item)
   } catch (failure) {
+    // 409: it closed meanwhile (answered, replaced, ended). Nothing to retry; the refetch shows why.
+    if (failure instanceof ApiError && failure.status === 409) {
+      dismissals.delete(key)
+      publish()
+      void entry.queryClient.invalidateQueries({ queryKey: questionKeys.all })
+      return
+    }
     // The card comes back with the reason: a dismissal that did not land must not look done.
     entry.error = failure instanceof Error ? failure.message : String(failure)
     entry.paused = true
@@ -205,6 +217,11 @@ export function resumeDismiss(key: string): void {
   entry.paused = false
   arm(entry)
   publish()
+}
+
+/** The toasts unmounted (navigation) with focus inside: no blur will come, so restart their clocks. */
+export function resumePausedDismissals(): void {
+  for (const entry of [...dismissals.values()]) if (entry.paused && !entry.error) resumeDismiss(entry.key)
 }
 
 /** Test seam. */
