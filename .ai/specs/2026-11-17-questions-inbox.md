@@ -16,6 +16,9 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
 - Rows are grouped by source (manager or task + project). Each row shows its age, header and question, and is
   answered inline with the existing `AskForm` (one-tap, multi-select, Other…, Need more info). Each row also has
   **Open in context** (`#decision-<id>`) and **Dismiss** (6 s undo).
+- A manager question whose card names tasks (`[[task:…]]`, as `decision-sources.tsx` reads today) shows the same
+  **Source task** block as in the chat: title, project · status, **Inspect task** and **Reports and assets**. A task's
+  own question already sits under its task's group header (**Open task**). Closed rows link the source task too.
 - **Closed** (collapsed, last 7 days) lists answered, dismissed, replaced, withdrawn and task-ended questions, each
   with its reason. **Older** (toggle, on at 7 days by default) moves stale open questions out of the badges without
   closing them.

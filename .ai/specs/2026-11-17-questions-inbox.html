@@ -174,6 +174,15 @@ textarea.other{width:100%;min-height:56px;resize:vertical;border:1px solid var(-
 .reason.retracted{color:var(--pending-strong)}
 .reason.ended{color:var(--closed)}
 .older .q{opacity:.82}
+.srcbox{display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);background:color-mix(in srgb,var(--muted) 30%,transparent);border-radius:var(--r);padding:8px 10px}
+.srcbox .st{font-size:12px;font-weight:500;color:var(--muted-foreground)}
+.srcrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.srcrow .tt{font-size:13px;font-weight:600;min-width:0}
+.srcrow .mm{font-size:12px;color:var(--muted-foreground)}
+.srcrow .lk{display:flex;gap:12px;margin-left:auto}
+.srcrow .lk a{font-size:12px;font-weight:500;text-decoration:underline;text-underline-offset:4px}
+.phone .srcrow .lk{margin-left:0;width:100%}
+.phone .srcrow .lk a{min-height:44px;display:inline-flex;align-items:center}
 .stale{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--pending-strong);border:1px solid color-mix(in srgb,var(--pending) 35%,transparent);background:color-mix(in srgb,var(--pending) 7%,transparent);border-radius:var(--r);padding:6px 10px}
 .stale .btn{color:var(--foreground)}
 .older-note{font-size:12px;color:var(--soft-foreground)}
@@ -582,17 +591,17 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
     t2:  { kind: 'task', name: 'Migrate push tokens', project: 'cezar-mobile', meta: 'task · running' },
   }
   const seed = () => [
-    { id: 'q1', src: 'mob', age: 14 * MIN, qs: [{ header: 'Design', question: 'Which onboarding layout should ship in 0.2?', options: [
+    { id: 'q1', src: 'mob', age: 14 * MIN, tasks: [{ title: 'Onboarding redesign', project: 'cezar-mobile', status: 'review' }], qs: [{ header: 'Design', question: 'Which onboarding layout should ship in 0.2?', options: [
       { label: 'v3: two screens, no account step', description: 'Notifications asked after the first finished task.' },
       { label: 'v2: three screens, deferred permissions' } ] }] },
-    { id: 'q2', src: 'mob', age: 52 * MIN, qs: [{ header: 'Platforms', multi: true, question: 'Which platforms should the 0.2 beta build target?', options: [
+    { id: 'q2', src: 'mob', age: 52 * MIN, tasks: [{ title: 'Beta build pipeline', project: 'cezar-mobile', status: 'running' }], qs: [{ header: 'Platforms', multi: true, question: 'Which platforms should the 0.2 beta build target?', options: [
       { label: 'iOS' }, { label: 'Android' }, { label: 'iPadOS' }, { label: 'macOS (Catalyst)' } ] }] },
     { id: 'q3', src: 't1', age: 25 * MIN, alsoIn: 'rel', qs: [{ header: 'Backoff', question: 'The relay reconnects in a tight loop after sleep. Which backoff should I use?', options: [
       { label: 'Exponential, capped at 30 s', description: 'Matches the iOS client.' }, { label: 'Fixed 5 s' }, { label: 'Jittered exponential, capped at 60 s' } ] }] },
-    { id: 'q4', src: 'rel', age: 3 * 60 * MIN, qs: [
+    { id: 'q4', src: 'rel', age: 3 * 60 * MIN, tasks: [{ title: 'Cut release 0.13.0', project: 'cezar', status: 'waiting' }, { title: 'Release notes draft', project: 'cezar', status: 'review' }], qs: [
       { header: 'Version', question: 'Is the next cut 0.13.0 or 0.12.4?', options: [{ label: '0.13.0' }, { label: '0.12.4' }] },
       { header: 'Notes', question: 'Include the managers redesign in the highlights?', options: [{ label: 'Yes, lead with it' }, { label: 'Mention it briefly' }, { label: 'Leave it out' }] } ] },
-    { id: 'q5', src: 'qa', age: 9 * DAY, qs: [{ header: 'Flaky', question: 'Quarantine the three flaky e2e specs until someone owns them?', options: [{ label: 'Quarantine' }, { label: 'Keep them running' }] }] },
+    { id: 'q5', src: 'qa', age: 9 * DAY, tasks: [{ title: 'Nightly e2e run', project: 'cezar', status: 'failed' }], qs: [{ header: 'Flaky', question: 'Quarantine the three flaky e2e specs until someone owns them?', options: [{ label: 'Quarantine' }, { label: 'Keep them running' }] }] },
     { id: 'q6', src: 'rel', age: 12 * DAY, qs: [{ header: 'Cadence', question: 'Move release cuts from weekly to every two weeks?', options: [{ label: 'Every two weeks' }, { label: 'Keep weekly' }] }] },
     // flagged "may be out of date": still counted, sorted last in its group, with the reason
     { id: 'p1', src: 'mob', age: 40 * MIN, suspect: 'you replied in this chat 4m after it was asked', qs: [{ header: 'Base', question: 'Branch the mobile work off main or release/v0.12.x?', options: [{ label: 'main' }, { label: 'release/v0.12.x' }] }] },
@@ -601,7 +610,7 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
     { id: 'c0', src: 'rel', age: 2 * 60 * MIN, closed: { reason: 'expired', at: 20 * MIN, detail: 'PR #2290 merged, and the card was waiting on it' }, qs: [{ header: 'Merge', question: 'Merge #2290 now or wait for the QA run?', options: [] }] },
     { id: 'c1', src: 'mob', age: 3 * 60 * MIN, closed: { reason: 'replaced', at: 31 * MIN, detail: 'Replaced by the newer “Design” card (v3)' }, qs: [{ header: 'Design', question: 'Approve onboarding layout v2?', options: [] }] },
     { id: 'c2', src: 'mob', age: 5 * 60 * MIN, closed: { reason: 'replaced', at: 2 * 60 * MIN, detail: 'Replaced by the newer “Design” card (v2)' }, qs: [{ header: 'Design', question: 'Approve onboarding layout v1?', options: [] }] },
-    { id: 'c3', src: 'rel', age: 6 * 60 * MIN, closed: { reason: 'retracted', at: 35 * MIN, detail: 'Withdrawn: “#2280 merged, so the question is moot.”' }, qs: [{ header: 'Release', question: 'Cut 0.13.0 today or wait for #2280?', options: [] }] },
+    { id: 'c3', src: 'rel', tasks: [{ title: 'Cut release 0.13.0', project: 'cezar', status: 'waiting' }], age: 6 * 60 * MIN, closed: { reason: 'retracted', at: 35 * MIN, detail: 'Withdrawn: “#2280 merged, so the question is moot.”' }, qs: [{ header: 'Release', question: 'Cut 0.13.0 today or wait for #2280?', options: [] }] },
     { id: 'c4', src: 't1', age: 26 * 60 * MIN, closed: { reason: 'ended', at: 20 * 60 * MIN, detail: '“Bump Expo SDK” was cancelled', srcName: 'Bump Expo SDK' }, qs: [{ header: 'Retry', question: 'Retry the flaky e2e or skip it?', options: [] }] },
     { id: 'c5', src: 't1', age: 30 * 60 * MIN, closed: { reason: 'ended', at: 22 * 60 * MIN, detail: '“Docs: relay page” was archived', srcName: 'Docs: relay page' }, qs: [{ header: 'Scope', question: 'Document the keep-awake toggle too?', options: [] }] },
     { id: 'c6', src: 'qa', age: 4 * 60 * MIN, closed: { reason: 'dismissed', at: 2 * 60 * MIN, detail: 'Dismissed by you · the manager was told' }, qs: [{ header: 'Budget', question: 'Raise the nightly QA budget to $8?', options: [] }] },
@@ -633,6 +642,12 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
     return s.kind === 'manager' ? `<span class="av ${size} ${s.avc}" aria-hidden="true">${s.av}</span>` : `<span class="task-glyph" aria-hidden="true">${icon('task', 's14')}</span>`
   }
 
+  // The chat's "Source task" block (decision-sources.tsx), so a question jumps to its task in one click.
+  function sources(q) {
+    if (!q.tasks?.length) return ''
+    return `<div class="srcbox"><span class="st">Source ${q.tasks.length === 1 ? 'task' : 'tasks'}</span>${q.tasks.map((t) => `<div class="srcrow"><span style="min-width:0"><span class="tt" style="display:block">${esc(t.title)}</span><span class="mm">${esc(t.project)} · ${esc(t.status)}</span></span><span class="lk"><a href="#chat">Inspect task<span class="sr-only">: ${esc(t.title)}</span></a><a href="#chat">Reports and assets</a></span></div>`).join('')}</div>`
+  }
+
   function card(q, mobile) {
     if (S.pendingDismiss[q.id]) {
       return `<div class="dismissed-row" data-q="${q.id}">${icon('skip', 's14')}<span style="flex:1">Dismissed <b>${esc(q.qs[0].header)}</b>. ${SOURCES[q.src].kind === 'manager' ? 'The manager' : 'The task'} will be told you skipped it.</span><span class="bar" aria-hidden="true"><i></i></span><button class="btn btn-outline btn-sm" data-act="undo" data-q="${q.id}">${icon('undo', 's14')}Undo</button></div>`
@@ -658,7 +673,7 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
     return `<article class="q ${sending ? 'sending' : ''}" data-q="${q.id}" aria-busy="${!!sending}">
       <div class="q-h"><span class="dot dot-info ${sending ? '' : 'pulse'}" aria-hidden="true"></span><span class="t-label" style="font-weight:600">${sending ? 'Sending…' : 'Open'}</span><span class="age">· asked ${ago(q.age)} ago</span>${q.alsoIn ? `<span class="xlink" style="padding:1px 8px" title="One question, shown once. Answering here also closes the copy in that chat."><span aria-hidden="true">${SOURCES[q.alsoIn].av}</span>also in ${esc(SOURCES[q.alsoIn].name)}’s chat</span>` : ''}
         <span class="acts"><a class="btn btn-ghost btn-sm" href="#chat" data-act="ctx" title="Open in ${s.kind === 'manager' ? 'chat' : 'task'}">${icon('out', 's14')}${mobile ? '' : 'Open in context'}</a><button class="btn btn-ghost btn-sm" data-act="dismiss" data-q="${q.id}" aria-label="Dismiss question ${esc(q.qs[0].header)}">${icon('x', 's14')}${mobile ? '' : 'Dismiss'}</button></span></div>
-      <div class="q-b">${q.suspect ? `<div class="stale">${icon('hour', 's14')}<span style="flex:1">May be out of date: ${esc(q.suspect)}. The agent is asked to confirm on its next turn.</span><button class="btn btn-ghost btn-sm" data-act="dismiss" data-q="${q.id}">Dismiss as out of date</button></div>` : ''}${blocks}${footer}</div>
+      <div class="q-b">${sources(q)}${q.suspect ? `<div class="stale">${icon('hour', 's14')}<span style="flex:1">May be out of date: ${esc(q.suspect)}. The agent is asked to confirm on its next turn.</span><button class="btn btn-ghost btn-sm" data-act="dismiss" data-q="${q.id}">Dismiss as out of date</button></div>` : ''}${blocks}${footer}</div>
     </article>`
   }
 
@@ -688,7 +703,7 @@ CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
     const ic = { answered: 'check', dismissed: 'skip', replaced: 'swap', retracted: 'undo', ended: 'stop', expired: 'hour' }
     const rows = c.map((q) => `<div class="crow"><span class="reason ${q.closed.reason}">${icon(ic[q.closed.reason], 's14')}${label[q.closed.reason]}</span>
       <div class="ctext"><div class="l1"><span class="hdr static">${esc(q.qs[0].header)}</span><span class="qq">${esc(q.qs[0].question)}</span></div>
-      <div class="l2">${esc(q.closed.srcName ?? SOURCES[q.src].name)} · ${esc(q.closed.detail)} · ${ago(q.closed.at)} ago</div></div>
+      <div class="l2">${esc(q.closed.srcName ?? SOURCES[q.src].name)}${q.tasks?.length ? ` · task <a href="#chat">${esc(q.tasks[0].title)}</a>` : ''} · ${esc(q.closed.detail)} · ${ago(q.closed.at)} ago</div></div>
       <a class="btn btn-ghost btn-sm" href="#chat" aria-label="Open in context">${icon('out', 's14')}</a></div>`).join('')
     return `<div class="fold"><button class="fold-btn" data-act="toggle-closed" aria-expanded="${S.showClosed}">${icon('chev', 's14 chev')}Closed · ${c.length}<span class="why">answered, dismissed, replaced, withdrawn, expired or task ended · last 7 days</span></button>
       ${S.showClosed ? `<div class="closed-list">${rows}</div>` : ''}</div>`
