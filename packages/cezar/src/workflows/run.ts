@@ -6258,6 +6258,7 @@ export class RunManager {
       continueProfile.trackerContext,
       expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend),
       continueSkills.missingShared.length ? missingSharedSkillsNote(continueSkills.missingShared) : undefined,
+      continueSkills.extensions.length ? continueSkills.extensions.join('\n') : undefined,
     ].filter(Boolean).join('\n\n');
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
@@ -7981,8 +7982,8 @@ export class RunManager {
   private async provisionTaskSkills(
     state: ActiveRun,
     wantedSkills: { stepSkill?: string; slash?: string; text?: string },
-  ): Promise<{ installed: string[]; missingShared: string[] }> {
-    const none = { installed: [], missingShared: [] };
+  ): Promise<{ installed: string[]; missingShared: string[]; extensions: string[] }> {
+    const none = { installed: [], missingShared: [], extensions: [] };
     const stepSkill = wantedSkills.stepSkill?.trim() || undefined;
     const named = [stepSkill, wantedSkills.slash].filter((name): name is string => Boolean(name));
     const text = wantedSkills.text?.trim() || undefined;
@@ -8073,7 +8074,11 @@ export class RunManager {
         label: stepSkillMissing || missingShared.length ? 'root_not_found' : installed.length ? 'installed' : 'already_present',
         value: installed.length,
       });
-      return { installed, missingShared };
+      // A skill named only in prose gets no system prompt naming its repo extension: say it here.
+      const extensions = roots
+        .filter((skill) => skill.extension && !named.includes(skill.name))
+        .map((skill) => repoExtensionNote(skill.name, skill.extension!.path));
+      return { installed, missingShared, extensions };
     } catch {
       return none;
     }
@@ -8111,7 +8116,7 @@ export class RunManager {
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
-    const { installed, missingShared } = await this.provisionTaskSkills(state, {
+    const { installed, missingShared, extensions } = await this.provisionTaskSkills(state, {
       stepSkill: step.skill,
       slash: leadingSlashSkillName(rawPrompt),
       text: rawPrompt,
@@ -8148,6 +8153,7 @@ export class RunManager {
     userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], step.runner ?? taskBackend);
     // The agent must stop and say so rather than improvise the skill from its extension.
     if (missingShared.length) userPrompt = `${userPrompt}\n\n${missingSharedSkillsNote(missingShared)}`;
+    if (extensions.length) userPrompt = `${userPrompt}\n\n${extensions.join('\n')}`;
     if (resumeStep) {
       const resumePrompt = autoResumeReasonFor(resumeStep.error) === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT;
       userPrompt = `${resumePrompt}\n\nCurrent task and queued updates:\n\n${userPrompt}`;
@@ -10490,9 +10496,7 @@ export function skillSystemPrompt(
         `It is the current installed copy — use it even though your working directory is a separate worktree that does not contain the skill.`,
     );
   }
-  if (skill.extension) {
-    lines.push('', `This repository extends the skill: apply ${skill.extension.path} (also at the same repo-relative path in your working directory) on top of the instructions below.`);
-  }
+  if (skill.extension) lines.push('', repoExtensionNote(skill.name, skill.extension.path));
   if (skill.missingShared) lines.push('', missingSharedSkillsNote([skill.name]));
   const body = command ? commandBody(skill, options.runner) : skill.body;
   lines.push('', command ? 'Command instructions:' : 'Skill instructions:', command ? substituteArguments(body, options.args) : body.trim());
@@ -10531,6 +10535,11 @@ export function isUnknownSkillFailure(event: UiEvent): boolean {
 const TEAM_SKILLS_WAIT_MS = 10_000;
 /** Bound on the clone/fetch a missing shared skill triggers before its agent starts. */
 const TEAM_SKILLS_REPAIR_MS = 30_000;
+
+/** How the agent learns a repo extends a skill it runs. */
+export function repoExtensionNote(name: string, path: string): string {
+  return `This repository extends the \`${name}\` skill: apply ${path} (also at the same repo-relative path in your working directory) on top of the skill's instructions.`;
+}
 
 /** What the agent and the transcript are told when only a repo extension of a skill is present. */
 export function missingSharedSkillsNote(names: readonly string[]): string {

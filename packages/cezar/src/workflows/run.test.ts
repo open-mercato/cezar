@@ -4135,6 +4135,32 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     }
   }, 40_000);
 
+  it('installs a repo skill whose text says it "extends the shared" something else, and never stalls on it', async () => {
+    mkdirSync(join(repoRoot, '.ai/skills/button-rules'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.ai/skills/button-rules/SKILL.md'),
+      '---\nname: button-rules\ndescription: Use when a change extends the shared Button component.\n---\n\nRules.\n',
+    );
+    const record = manager.startRun(SINGLE_STEP, { task: '/button-rules 12', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    const wt = store.getRun(record.id)!.worktreePath!;
+    expect(readFileSync(join(wt, '.claude/skills/button-rules/SKILL.md'), 'utf8')).toContain('Rules.');
+    expect(eventsOf(record.id).some((e) => e.type === 'note' && String((e as { message?: unknown }).message).includes('not installed'))).toBe(false);
+  }, 40_000);
+
+  it('names the repo extension to the agent when the extended skill is only mentioned in prose', async () => {
+    // The shared body never points at `.ai/skills/om-quiet/`, so nothing else would tell the agent.
+    mkdirSync(join(repoRoot, '.ai/skills/om-quiet'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/skills/om-quiet/SKILL.md'), '---\nname: om-quiet\n---\n\nThis file extends the shared `om-quiet` skill.\n');
+    mkdirSync(join(repoRoot, '.agents/skills/om-quiet'), { recursive: true });
+    writeFileSync(join(repoRoot, '.agents/skills/om-quiet/SKILL.md'), '---\nname: om-quiet\n---\n\nShared workflow.\n');
+    const record = manager.startRun(SINGLE_STEP, { task: 'run om-quiet for PR 3', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    expect(eventsOf(record.id).some((e) => e.type === 'text' && e.text?.includes('This repository extends the `om-quiet` skill'))).toBe(true);
+  }, 40_000);
+
   it('tells the agent and the transcript when only the extension of a shared skill exists', async () => {
     // No team repo to repair from: the run must say so instead of letting the agent improvise.
     writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));

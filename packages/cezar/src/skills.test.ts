@@ -387,6 +387,13 @@ describe('layerSkillExtensions (repo extensions of shared skills)', () => {
     expect(winner([[local]], [skill('om-x', 'team', 'Workflow.')])).toMatchObject({ source: 'team', extension: { path: local.path } });
   });
 
+  it('a repo skill extending some other shared thing is not an extension of a shared skill', () => {
+    const local = skill('button-rules', 'ai', 'Use when a change extends the shared Button component.');
+    expect(winner([[local]])).toBe(local);
+    // Naming another skill is not naming itself either.
+    expect(winner([[skill('om-x', 'ai', 'This file extends the shared `om-xy` skill.')]])?.missingShared).toBeUndefined();
+  });
+
   it('a plain repo override of the same name still wins', () => {
     const local = skill('om-x', 'ai', 'My own version.');
     expect(winner([[local], [skill('om-x', 'team', 'Workflow.')]])).toBe(local);
