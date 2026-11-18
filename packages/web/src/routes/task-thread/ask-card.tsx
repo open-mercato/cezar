@@ -157,8 +157,7 @@ export function AskForm({
   const { hash } = useLocation()
   useEffect(() => {
     if (hash !== '#ask' || !card.current) return
-    card.current.scrollIntoView?.({ block: 'center' })
-    card.current.querySelector<HTMLElement>('button, input, textarea')?.focus()
+    revealAskCard(card.current)
   }, [hash])
 
   return (
@@ -477,4 +476,16 @@ function AskExtraChoice({
       {children}
     </button>
   )
+}
+
+/** Bring an open question card into view and hand it the focus (the `#ask` deep link, the header's Answer). */
+export function revealAskCard(card: HTMLElement): void {
+  card.scrollIntoView?.({ block: 'center' })
+  card.querySelector<HTMLElement>('button, input, textarea')?.focus()
+}
+
+/** The latest unresolved question card inside `root`, or null when none is mounted. */
+export function latestOpenAskCard(root: ParentNode): HTMLElement | null {
+  const cards = root.querySelectorAll<HTMLElement>('[data-slot="ask-card"][data-resolved="false"]')
+  return cards.length > 0 ? cards[cards.length - 1]! : null
 }
