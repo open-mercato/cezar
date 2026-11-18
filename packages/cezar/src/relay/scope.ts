@@ -25,7 +25,7 @@ export const outsideRelayScope = <T>(fn: () => T): T => storage.exit(fn);
 /** The one place capabilities narrow; `createApp`'s `capabilities()` closure routes through it. */
 export function narrowForRelay(capabilities: Capabilities, env: NodeJS.ProcessEnv = process.env): Capabilities {
   if (!inRelayScope()) return capabilities;
-  // A relay request is a hosted request: extensions stay off, as on a hosted cockpit.
+  // Extensions follow the hosted gate (spec 2026-11-12-hosted-extensions): off unless CEZ_REMOTE_EXTENSIONS=1.
   const extensionsOff = extensionsOffReason(env, false);
   const { extensionsUnavailableReason: _reason, ...rest } = capabilities;
   return {

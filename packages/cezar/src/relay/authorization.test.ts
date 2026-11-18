@@ -78,10 +78,13 @@ describe('a relay request is a hosted request', () => {
       expect(narrowed).toMatchObject({ managers: local.managers, automations: local.automations, dispatch: local.dispatch });
     });
 
-    it('narrows extensions to the hosted gate', () => {
+    it('narrows extensions to the hosted gate unless CEZ_REMOTE_EXTENSIONS=1', () => {
       expect(local).toMatchObject({ extensions: true });
       const narrowed = runInRelayScope({ deviceId: DEVICE }, () => narrowForRelay(local, {}));
       expect(narrowed).toMatchObject({ extensions: false, extensionsUnavailableReason: 'hosted' });
+      const remote = runInRelayScope({ deviceId: DEVICE }, () => narrowForRelay(local, { CEZ_REMOTE_EXTENSIONS: '1' }));
+      expect(remote.extensions).toBe(true);
+      expect(remote).not.toHaveProperty('extensionsUnavailableReason');
       const off = runInRelayScope({ deviceId: DEVICE }, () => narrowForRelay(local, { CEZ_EXTENSIONS: '0' }));
       expect(off).toMatchObject({ extensions: false, extensionsUnavailableReason: 'flag_off' });
     });

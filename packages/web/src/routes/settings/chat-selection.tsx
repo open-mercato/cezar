@@ -124,7 +124,7 @@ function SelectionDialog({ provider, label, input, commit, projectId, projectNam
           <p>Current capabilities: {preview.current?.manifest.capabilities?.join(', ') || 'None'}</p>
           <p>Target capabilities: {preview.candidate.manifest.capabilities?.join(', ') || 'None'}</p>
           <p>Added capabilities: {preview.addedCapabilities.join(', ') || 'None'}</p>
-          <p>Only approve code you trust. Extensions run locally as your user; worker isolation is not a security sandbox.</p>
+          <p>Only approve code you trust. Extensions run on the machine that runs Cezar, as the user that runs it; worker isolation is not a security sandbox.</p>
         </>}
         {error && <p role="alert">{error}</p>}
         {!preview && !loading && <Button disabled={pending} onClick={() => setGeneration(value => value + 1)}>Review again</Button>}

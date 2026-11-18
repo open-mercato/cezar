@@ -4,8 +4,8 @@ Status: implemented (2026-11-13). Scope: install from npm and from a local folde
 approval, commands, panels, forms/settings, task events and chat adapters; the public SDK
 `@open-mercato/cezar-extension-sdk` ships in the release set. Placements outside Settings →
 Extensions: `2026-11-07-extension-placements.md`. Telegram/Slack/Discord as ordinary extensions:
-`2026-11-09-independent-chat-plugins.md`. A hosted cockpit refuses to install or run extensions.
-User guide: `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; author guide:
+`2026-11-09-independent-chat-plugins.md`. Hosted mode: `2026-11-12-hosted-extensions.md`. User
+guide: `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; author guide:
 `docs/authoring-extensions.md`.
 
 ## Goal and boundaries
@@ -163,8 +163,8 @@ This limits accidental leaks; it is not a sandbox.
 Panel events are informational updates without durable delivery; after a restart a panel reads a
 snapshot. Automatic task starts must never depend on them. When the bounded queue overflows the host
 sends `resyncRequired`. Chat integrations keep a durable journal and the rules against repeating
-uncertain effects. Every subscription has an owner and a dispose; the cockpit uses the shared
-WebSocket.
+uncertain effects. Every subscription has an owner and a dispose; the local cockpit uses the shared
+WebSocket, a hosted one SSE.
 
 ## Success criterion
 

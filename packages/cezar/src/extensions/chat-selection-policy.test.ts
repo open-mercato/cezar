@@ -27,11 +27,11 @@ async function setup(){
 it.each(['flag','hosted'] as const)('selection policy is rechecked after drain: %s',async mode=>{
  const {root,home,data,manager,record}=await setup();await manager.close()
  const {vi}=await import('vitest'),{Hono}=await import('hono'),{RunStore}=await import('../runs/store.ts')
- const {extensionRoutes,closeProjectExtensions}=await import('../server/extensions.ts')
+ const {extensionRoutes,closeProjectExtensions,localExtensionHost}=await import('../server/extensions.ts')
  const {watchChatAdapterSelection,watchChatExtensions}=await import('../chat/registry.ts')
  vi.stubEnv('CEZ_HOME',home);vi.stubEnv('CEZ_EXTENSIONS','1')
  let local=true;const store=RunStore.open(data),project={id:'p',root,dataDir:data,store} as ProjectContext
- const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=> !local?'hosted':process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,()=>local))
+ const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=> !local?'hosted':process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,{...localExtensionHost,local:()=>local,runtimeAllowed:()=>local}))
  const post=(op:string,body:unknown)=>app.request('/api/v1/extensions/chat-selections/telegram/'+op,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})
  const unwatch=watchChatAdapterSelection(root,async(_id,enabled)=>{if(!enabled){if(mode==='flag')vi.stubEnv('CEZ_EXTENSIONS','0');else local=false}})
  try{
@@ -48,11 +48,11 @@ it.each(['flag','hosted'] as const)('selection policy is rechecked after drain: 
 it.each(['flag','hosted'].flatMap(mode=>['drain','consent','activation','publication'].map(stage=>({mode,stage}))))('revoked $mode policy prevents rollback restart after $stage',async({mode,stage})=>{
  const {root,home,data,manager,record}=await setup();await manager.close()
  const {vi}=await import('vitest'),{Hono}=await import('hono'),{RunStore}=await import('../runs/store.ts')
- const {extensionRoutes,closeProjectExtensions}=await import('../server/extensions.ts')
+ const {extensionRoutes,closeProjectExtensions,localExtensionHost}=await import('../server/extensions.ts')
  const {watchChatAdapterSelection,watchChatExtensions}=await import('../chat/registry.ts')
  vi.stubEnv('CEZ_HOME',home);vi.stubEnv('CEZ_EXTENSIONS','1')
  let local=true,armed=false;const revoke=()=>{if(mode==='flag')vi.stubEnv('CEZ_EXTENSIONS','0');else local=false};const store=RunStore.open(data),project={id:'p',root,dataDir:data,store} as ProjectContext
- const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=> !local?'hosted':process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,()=>local))
+ const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=> !local?'hosted':process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,{...localExtensionHost,local:()=>local,runtimeAllowed:()=>local}))
  const post=(op:string,body:unknown)=>app.request('/api/v1/extensions/chat-selections/telegram/'+op,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})
  const unwatch=watchChatAdapterSelection(root,async(_id,enabled)=>{if(armed&&((stage==='drain'&&!enabled)||(stage==='consent'&&enabled)))revoke()})
  const unpublish=watchChatExtensions(root,async()=>{if(armed&&stage==='publication'&&chatTransport(root,'telegram','token'))revoke()})
@@ -75,11 +75,11 @@ it('switches an explicitly selected shipped artifact to the facade when the flag
  const mode='flag'
  const {root,home,data,manager,record}=await setup();await manager.close()
  const {vi}=await import('vitest'),{Hono}=await import('hono'),{RunStore}=await import('../runs/store.ts')
- const {extensionRoutes,closeProjectExtensions}=await import('../server/extensions.ts')
+ const {extensionRoutes,closeProjectExtensions,localExtensionHost}=await import('../server/extensions.ts')
  const {watchChatAdapterSelection,watchChatExtensions}=await import('../chat/registry.ts')
  vi.stubEnv('CEZ_HOME',home);vi.stubEnv('CEZ_EXTENSIONS','1')
  let local=true;const store=RunStore.open(data),project={id:'p',root,dataDir:data,store} as ProjectContext
- const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=> !local?'hosted':process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,()=>local))
+ const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=> !local?'hosted':process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,{...localExtensionHost,local:()=>local,runtimeAllowed:()=>local}))
  const post=(op:string,body:unknown)=>app.request('/api/v1/extensions/chat-selections/telegram/'+op,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})
  const activate=vi.spyOn(ExtensionHost.prototype,'activate')
  const unwatch=watchChatAdapterSelection(root,async(_id,enabled)=>{if(!enabled){if(mode==='flag')vi.stubEnv('CEZ_EXTENSIONS','0');else local=false}})
@@ -93,4 +93,22 @@ it('switches an explicitly selected shipped artifact to the facade when the flag
   expect(activate.mock.calls.at(-1)?.[0].trustedInProcess).toBeDefined()
   expect(response.status,await response.clone().text()).toBe(200)
  }finally{activate.mockRestore();await closeProjectExtensions(project);store.flush();unwatch();vi.unstubAllEnvs()}
+})
+
+it('a hosted chat-selection preview never carries an absolute server path (spec 2026-11-12 §3)',async()=>{
+ const {root,home,data,manager,record}=await setup();await manager.close()
+ const {Hono}=await import('hono'),{RunStore}=await import('../runs/store.ts')
+ const {extensionRoutes,closeProjectExtensions}=await import('../server/extensions.ts')
+ vi.stubEnv('CEZ_HOME',home);vi.stubEnv('CEZ_EXTENSIONS','1')
+ const store=RunStore.open(data),project={id:'p',root,dataDir:data,store} as ProjectContext
+ const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=>undefined,{local:()=>false,runtimeAllowed:()=>true,browseRoot:()=>root}))
+ try{
+  const input={target:{kind:'installed',extensionId:record.manifest.id,localProviderId:'telegram',integrity:record.integrity},enabled:true}
+  const response=await app.request('/api/v1/extensions/chat-selections/telegram/preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(input)})
+  expect(response.status,await response.clone().text()).toBe(200)
+  const preview=extensionChatSelectionPreviewSchema.parse(await response.json())
+  expect([preview.current?.source,preview.candidate.source]).toEqual(['source','source'])
+  const inventory=await (await app.request('/api/v1/extensions/inventory')).text()
+  expect(inventory).toContain(record.manifest.id);expect(inventory).not.toContain(root)
+ }finally{await closeProjectExtensions(project);store.flush();vi.unstubAllEnvs()}
 })

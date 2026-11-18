@@ -75,7 +75,8 @@ selected installed artifact stays pinned independently.
 | --- | --- |
 | Local, extensions on (default) | Verified shipped public artifacts, or explicitly selected installed artifacts, through the ordinary extension worker host. Configured bots need no npm download or new installation. |
 | Local, `CEZ_EXTENSIONS=0` | Only verified shipped public artifacts through the trusted in-process SDK facade; no child worker. Installed selections stay unavailable with saved metadata retained. |
-| Hosted | No chat adapter. Extension inventory is hidden; install/enable/disable/invoke and chat selection are refused. |
+| Hosted, `CEZ_REMOTE_EXTENSIONS=1` | Same as local with extensions on: shipped or selected installed artifacts through the extension worker host. Everyone the reverse proxy admits can install, enable and select chat sources. |
+| Hosted (default) | No chat adapter. Extension inventory is hidden; install/enable/disable/invoke and chat selection are refused. |
 | Dry-run / explicitly injected test transports | Deterministic mock/test seams, not live-platform evidence. |
 
 Chat remains opt-in: `CEZ_WEBHOOKS=1` enables receivers/setup and `CEZ_CHAT_INBOUND=1` enables

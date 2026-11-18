@@ -53,9 +53,9 @@ it('keys the bot directory, the extension chat scope and the project runtime by 
   const home = join(long, 'home');
   expect(new ExtensionManager(join(short, '.ai/cezar'), 'spelling', short, { home }).projectRoot)
     .toBe(new ExtensionManager(join(long, '.ai/cezar'), 'spelling', long, { home }).projectRoot);
-  const a = await retainProjectExtensions({ root: short, dataDir: join(short, '.ai/cezar'), projectId: 'spelling' });
+  const a = await retainProjectExtensions({ root: short, dataDir: join(short, '.ai/cezar'), projectId: 'spelling', mode: 'local', runtimeAllowed: false });
   cleanups.push(() => a.release());
-  const b = await retainProjectExtensions({ root: long, dataDir: join(long, '.ai/cezar'), projectId: 'spelling' });
+  const b = await retainProjectExtensions({ root: long, dataDir: join(long, '.ai/cezar'), projectId: 'spelling', mode: 'local', runtimeAllowed: false });
   cleanups.push(() => b.release());
   expect(b.manager).toBe(a.manager);
 });
