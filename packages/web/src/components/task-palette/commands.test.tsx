@@ -72,6 +72,7 @@ function workspace(overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceB
     splitView: null,
     terminal: { allowed: true, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
     focusComposer: vi.fn(),
+    focusQuestion: null,
     openFile: vi.fn(),
     markedUnread: vi.fn(),
     ...overrides,

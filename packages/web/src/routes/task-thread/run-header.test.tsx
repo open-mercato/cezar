@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectScopeProvider } from '@/api/project-scope-context'
@@ -113,6 +113,11 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
+/** The router's current hash, so a test can see where a header action sent the user. */
+function HashProbe() {
+  return <div data-slot="hash-probe">{useLocation().hash}</div>
+}
+
 function renderHeader(
   record: ApiRun,
   onMarkedUnread?: () => void,
@@ -137,6 +142,7 @@ function renderHeader(
           {/* Delete lands on the task list (\`/tasks\`), not Now (\`/\`). */}
           <Route path="/tasks" element={<div data-slot="home-probe" />} />
         </Routes>
+        <HashProbe />
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -180,6 +186,7 @@ const bridge = (overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBrid
   splitView: null,
   terminal: { allowed: false, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
   focusComposer: vi.fn(),
+  focusQuestion: null,
   openFile: vi.fn(),
   markedUnread: vi.fn(),
   ...overrides,
@@ -477,6 +484,24 @@ describe('the primary action follows the state (design 2026-11, Proposal 3)', ()
     renderHeader(run('done'))
     fireEvent.click(primaryRow().getByRole('button', { name: 'Continue' }))
     expect(workspace.focusComposer).toHaveBeenCalledTimes(2)
+  })
+
+  it('"Answer" focuses the open question card, not the composer (#2297)', () => {
+    stubFetch()
+    const focusQuestion = vi.fn()
+    const workspace = { ...bridge(), focusQuestion }
+    publishTaskWorkspace(workspace)
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(focusQuestion).toHaveBeenCalledTimes(1)
+    expect(workspace.focusComposer).not.toHaveBeenCalled()
+  })
+
+  it('"Answer" outside a workspace deep-links to the question card (#2297)', () => {
+    stubFetch()
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(document.querySelector('[data-slot="hash-probe"]')?.textContent).toBe('#ask')
   })
 
   it('"Open PR" is the primary once the PR exists and nothing is left to push', async () => {
