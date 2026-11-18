@@ -4,6 +4,8 @@ import type { ProjectContext, ProjectContexts } from './project-context.ts';
 
 export interface AuthResumeDeps {
   contexts: Pick<ProjectContexts, 'ids' | 'peek' | 'onContextBuilt'>;
+  /** The project this server was started in: it never enters the lazy map. */
+  boot?: { context: ProjectContext; projectId: () => Promise<string> };
   managers?: { resumeAuthFailed(provider: string, profileId: string): ReconnectResumed['managers'] };
 }
 
@@ -16,13 +18,14 @@ export interface AuthResumeDeps {
  */
 export function registerAuthResume(deps: AuthResumeDeps): () => void {
   const reconnectedAt = new Map<string, { event: AccountReconnected; at: string }>();
-  const resumeIn = (ctx: ProjectContext, event: AccountReconnected, parkedBefore?: string): ReconnectResumed['runs'] =>
+  const resumeIn = (ctx: ProjectContext, event: AccountReconnected, parkedBefore?: string, projectId = ctx.id): ReconnectResumed['runs'] =>
     ctx.manager.resumeAuthParked(event.provider, event.profileId, parkedBefore)
-      .map(({ runId, title }) => ({ projectId: ctx.id, runId, title }));
+      .map(({ runId, title }) => ({ projectId, runId, title }));
 
-  const offReconnected = onAccountReconnected((event) => {
+  const offReconnected = onAccountReconnected(async (event) => {
     reconnectedAt.set(`${event.provider}:${event.profileId}`, { event, at: new Date().toISOString() });
     const runs: ReconnectResumed['runs'] = [];
+    if (deps.boot) runs.push(...resumeIn(deps.boot.context, event, undefined, await deps.boot.projectId().catch(() => deps.boot!.context.id)));
     for (const id of deps.contexts.ids()) {
       const ctx = deps.contexts.peek(id);
       if (ctx) runs.push(...resumeIn(ctx, event));

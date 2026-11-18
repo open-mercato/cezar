@@ -8942,6 +8942,7 @@ export function createApp(deps: ServerDeps) {
   // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
   deps.onDispose?.(registerAuthResume({
     contexts,
+    boot: { context: bootContext, projectId: () => resolveBootProject() },
     managers: { resumeAuthFailed: (provider, profileId) => (capabilities().managers !== false ? managerEngine.resumeAuthFailed(provider, profileId) : []) },
   }));
   // The Questions inbox (spec 2026-11-17-questions-inbox): every open manager and task question. With

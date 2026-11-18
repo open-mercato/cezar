@@ -64,4 +64,13 @@ describe('registerAuthResume', () => {
     expect(await emitAccountReconnected({ provider: 'claude', profileId: 'default' })).toEqual({ runs: [], managers: [] });
     expect(fake.resumer('alpha')).not.toHaveBeenCalled();
   });
+
+  it('resumes the boot project, which never enters the lazy map', async () => {
+    const fake = fakeContexts([]);
+    const boot = { id: 'default', manager: { resumeAuthParked: vi.fn(() => [{ runId: 'b1', title: 'Boot task' }]) } } as unknown as ProjectContext;
+    offs.push(registerAuthResume({ contexts: fake.contexts, boot: { context: boot, projectId: async () => 'demo-shop' } }));
+
+    const resumed = await emitAccountReconnected({ provider: 'claude', profileId: 'default' });
+    expect(resumed.runs).toEqual([{ projectId: 'demo-shop', runId: 'b1', title: 'Boot task' }]);
+  });
 });
