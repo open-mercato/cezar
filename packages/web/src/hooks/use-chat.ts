@@ -3,12 +3,16 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 export const chatKey = (projectId: string, providerId: string) => [projectId, `${providerId}-inbound`] as const
+/** Keyed by provider id: callers rebuild the descriptor on every inventory change, which must not resubscribe. */
 export function useChatSubscription(projectId: string, enabled: boolean, provider: ChatProviderDescriptor) {
  const client = useQueryClient()
+ const subscribe = useRef(provider.bot.subscribe)
+ useEffect(() => { subscribe.current = provider.bot.subscribe })
+ const id = provider.id
  useEffect(() => {
   if (!enabled) return
-  return provider.bot.subscribe(() => { void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) })
- }, [client, projectId, enabled, provider])
+  return subscribe.current(() => { void client.invalidateQueries({ queryKey: chatKey(projectId, id) }) })
+ }, [client, projectId, enabled, id])
 }
 
 /** One subscription per bot provider for views that list several (the integrations gallery). Keyed by

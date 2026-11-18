@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import { WebhookService } from '../webhooks/service.ts'
 import { WebhookScheduler } from '../webhooks/scheduler.ts'
-import { artifactIntegrity } from './installer.ts'
+import { shippedArtifactIntegrity } from './delivery-catalog.ts'
 import { ExtensionManager } from './manager.ts'
 import { chatTransport, projectChatExtensions } from '../chat/registry.ts'
 
@@ -150,7 +150,7 @@ it.each([
     const target=join(directory,provider);await mkdir(target,{recursive:true})
     await cp(source,target,{recursive:true})
     const manifest=JSON.parse(await readFile(join(target,'cezar-extension.json'),'utf8'))
-    stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await artifactIntegrity(target)})
+    stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await shippedArtifactIntegrity(target)})
    }
    await writeFile(join(root,'distribution','package.json'),JSON.stringify({version:'0.20.0-test'}))
    await writeFile(join(directory,'catalog.json'),JSON.stringify(stamps))

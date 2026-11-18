@@ -699,6 +699,14 @@ describe('errors', () => {
     expect(error.manual).toBe('git merge cez/abc')
     expect(error.command).toBeUndefined()
     expect(error.exists).toBeUndefined()
+    expect(error.code).toBeUndefined()
+  })
+
+  it('carries the machine-readable code beside the prose (chat routes)', async () => {
+    fail(429, JSON.stringify({ error: 'Telegram rate limit; try again later.', code: 'rate_limited' }))
+    const error = (await createRun({ task: 't', workflow: 'quick-task' }).catch((e: unknown) => e)) as ApiError
+    expect(error.message).toBe('Telegram rate limit; try again later.')
+    expect(error.code).toBe('rate_limited')
   })
 
   it.each([

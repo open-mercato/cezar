@@ -391,7 +391,7 @@ export class ChatConversation {
     if (this.answerRefusal(project, run.id, grant, correlation)) return undefined;
     const labels = options.map(option => option.label);
     const pending = actions.create({ kind: 'answer', replyTo, receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId: run.id,
-      choices: labels.length, ttlMs: 15 * 60_000,
+      choices: labels.length, ttlMs: 15 * 60_000, key: JSON.stringify(['answer', grant.receiverId, grant.chatId, grant.userId, run.id, request.requestId]),
       valid: () => !this.answerRefusal(project, run.id, grant, correlation), responseValid: () => this.valid(grant),
       perform: ({ epoch, updateId, entry }, check, choice) => this.deliverAnswer(project, grant, run.id, labels[choice]!,
         () => check() ?? this.answerRefusal(project, run.id, grant, correlation), entry, this.tapFinish(grant, epoch, updateId, entry, replyTo),

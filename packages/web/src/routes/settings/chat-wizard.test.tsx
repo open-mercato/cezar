@@ -7,7 +7,9 @@ import { withSetupApi } from './chat-provider-fixture'
 
 const revision = 'a'.repeat(64)
 const activatedRevision = 'b'.repeat(64)
-const mocks = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn().mockResolvedValue(undefined) }))
+const mocks = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn().mockResolvedValue(undefined),
+  subscribe: vi.fn(), topic: undefined as undefined | ((data: unknown) => void) }))
+vi.mock('@/api/ws', () => ({ subscribeTopic: (topic: string, listener: (data: unknown) => void) => { mocks.subscribe(topic, listener); mocks.topic = listener; return () => { if (mocks.topic === listener) mocks.topic = undefined } } }))
 const list = vi.hoisted(() => vi.fn())
 vi.mock('@/api/client', () => ({ telegramApi: { setup: mocks, list }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
 const Wizard = ({ setupApi = mocks, ...props }: Omit<Parameters<typeof ChatWizard>[0], 'provider'> & { setupApi?: ChatSetupApi }) =>
@@ -198,13 +200,59 @@ it.each([
   ['hosted', /hosted cockpit/],
   ['chat_conflict', /already connected to this bot/],
   ['pairing_limit', /Too many Telegram setups/],
-  ['Bot is owned elsewhere or its binding changed.', /connected to another project/],
 ])('maps the %s setup failure to friendly text', async (message, expected) => {
   api.begin.mockRejectedValueOnce(new Error(message))
   openWizard()
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toMatch(expected)
   if (message.includes('_')) expect(alert.textContent).not.toContain(message)
+})
+
+// chat-routes.ts pairs prose `error` with a `code` for these; the code decides the copy.
+it.each([
+  ['Bot is owned elsewhere or its binding changed.', 'bot_conflict', /connected to another project/],
+  ['Telegram rate limit; try again later.', 'rate_limited', /rate limiting this bot/],
+  ['Telegram is temporarily unavailable.', 'unavailable', /unavailable right now/],
+])('maps "%s" by its %s code', async (message, code, expected) => {
+  api.begin.mockRejectedValueOnce(Object.assign(new Error(message), { code }))
+  openWizard()
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(expected)
+  expect(alert.textContent).not.toContain(message)
+})
+
+it('forgets the bot token once setup has begun and when the wizard closes', async () => {
+  api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000071'))
+  api.status.mockResolvedValue({ status: 'waiting', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision })
+  const view = render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await screen.findByRole('link', { name: 'Private chat with the bot' })
+  // Expiry returns to the token step: the field must come back empty, not pre-filled.
+  api.status.mockResolvedValue({ status: 'expired', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision })
+  mocks.topic?.({ changed: true })
+  expect(await screen.findByLabelText('Bot token')).toHaveProperty('value', '')
+  // Closing mid-entry drops what was typed.
+  fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  view.rerender(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  expect(screen.getByLabelText('Bot token')).toHaveProperty('value', '')
+})
+
+it('re-reads setup status when the chat topic publishes, before the fallback poll', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000072'))
+    api.status.mockResolvedValue({ status: 'waiting', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision })
+    openWizard()
+    await waitFor(() => expect(api.status).toHaveBeenCalledTimes(1))
+    expect(mocks.subscribe).toHaveBeenCalledWith('telegram-inbound', expect.any(Function))
+    api.status.mockResolvedValue({ status: 'candidate', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision, candidate: { userId: '456', label: 'Private person' } })
+    await act(async () => { mocks.topic?.({ changed: true }) })
+    expect(await screen.findByText(/Connected as/)).toBeTruthy()
+    expect(api.status).toHaveBeenCalledTimes(2)
+  } finally { vi.useRealTimers() }
 })
 
 it('shows the token format problem instead of silently disabling Continue', () => {
@@ -248,7 +296,7 @@ it('keeps one live region and does not re-render it when a poll returns the same
     const observed: MutationRecord[] = []
     const observer = new MutationObserver(records => observed.push(...records))
     observer.observe(region, { childList: true, characterData: true, subtree: true })
-    await vi.advanceTimersByTimeAsync(4_100)
+    await vi.advanceTimersByTimeAsync(20_100)
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3))
     observer.disconnect()
     expect(observed).toHaveLength(0)
@@ -265,7 +313,7 @@ it('returns to the token step and stops polling when the setup is gone after a r
     expect(await screen.findByText('This setup link expired. Start again.')).toBeTruthy()
     await waitFor(() => expect(screen.getByLabelText('Bot token')).toBeTruthy())
     const calls = api.status.mock.calls.length
-    await vi.advanceTimersByTimeAsync(6_100)
+    await vi.advanceTimersByTimeAsync(30_100)
     expect(api.status).toHaveBeenCalledTimes(calls)
   } finally { vi.useRealTimers() }
 })
@@ -301,7 +349,7 @@ for (const [label, expire] of [
     expect(screen.queryByText(/Start again/)).toBeNull()
     expect(screen.getByText(/Notifications are active/).textContent).toContain('task control is off')
     const calls = api.status.mock.calls.length
-    await vi.advanceTimersByTimeAsync(6_100)
+    await vi.advanceTimersByTimeAsync(30_100)
     expect(api.status).toHaveBeenCalledTimes(calls)
   } finally { vi.useRealTimers() }
 })
@@ -478,7 +526,7 @@ it('preserves approval success across consumed-status polling', async () => {
     expect(screen.getByRole('button', { name: 'Skip task control' })).toHaveProperty('disabled', true)
     // Backend has consumed the approved setup, but the activation response is delayed.
     api.status.mockRejectedValue(new Error('pairing_expired'))
-    await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_100) })
     await act(async () => { pending.resolve({ inboundRevision: revision }); await pending.promise })
     expect(screen.getByRole('status').textContent).toContain('Notifications are active and task control is enabled')
   } finally { vi.useRealTimers() }
@@ -500,7 +548,7 @@ it.each(['success', 'failure'] as const)('ignores pre-approval status replies af
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /compared the code sent privately/ }))
     api.status.mockReturnValueOnce(statusReply.promise)
-    await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_100) })
     api.activate.mockReturnValueOnce(approval.promise)
     fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
     if (outcome === 'failure') {
@@ -515,7 +563,7 @@ it.each(['success', 'failure'] as const)('ignores pre-approval status replies af
       expect(screen.getByRole('button', { name: 'Activate task control' })).toHaveProperty('disabled', false)
       expect(screen.getByRole('button', { name: 'Skip task control' })).toHaveProperty('disabled', false)
       api.status.mockRejectedValue(new Error('pairing_expired'))
-      await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_100) })
       expect(screen.getByRole('status').textContent).toContain('Notifications are active; task control is off')
     }
   } finally { vi.useRealTimers() }
@@ -563,10 +611,10 @@ it('ends the setup when the server no longer holds it, and keeps polling through
     api.status.mockRejectedValueOnce(new Error('bot_busy')).mockRejectedValue(new Error('not_found'))
     openWizard()
     expect((await screen.findByRole('alert')).textContent).toMatch(/busy/)
-    await vi.advanceTimersByTimeAsync(2_100)
+    await vi.advanceTimersByTimeAsync(10_100)
     expect(await screen.findByText('This setup link expired. Start again.')).toBeTruthy()
     const calls = api.status.mock.calls.length
-    await vi.advanceTimersByTimeAsync(6_100)
+    await vi.advanceTimersByTimeAsync(30_100)
     expect(api.status).toHaveBeenCalledTimes(calls)
   } finally { vi.useRealTimers() }
 })

@@ -250,7 +250,8 @@ export function ChatSettings({
     queryFn: ({ signal }) => setupApi.status(projectId, setup!.setupId, signal),
     enabled: !!setup && wizard === 'waiting',
     retry: false,
-    refetchInterval: 2_000,
+    // The chat topic (useChatSubscription above, live whenever setup is offered) invalidates this key; the poll is the fallback.
+    refetchInterval: 10_000,
   })
   const activity = useInfiniteQuery({
     queryKey: [...key, 'activity'],

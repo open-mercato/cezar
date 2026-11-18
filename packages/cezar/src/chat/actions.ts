@@ -18,6 +18,8 @@ export interface ActionPreview {
   /** Buttons sharing this one-time action, one callback id each (option buttons); default 1. */
   choices?: number;
   ttlMs?: number;
+  /** A new action with the same key replaces the pending one, so re-offering a question takes no extra slot. */
+  key?: string;
 }
 interface Pending extends ActionPreview { ids: string[]; expiresAt: number; messageId?: string }
 export interface PendingAction { data: string; choices: string[]; valid(): boolean; sent(raw: unknown): Promise<void>; release(): void }
@@ -47,9 +49,12 @@ export class ChatActions {
   private drop(action: Pending): void { for (const id of action.ids) if (this.pending.get(id)?.action === action) this.pending.delete(id); }
   create(preview: ActionPreview): PendingAction | undefined {
     this.prune();
-    const choices = preview.choices ?? 1, actions = this.actions();
+    const choices = preview.choices ?? 1;
+    if ((preview.replyTo && preview.replyTo.chatId !== preview.chatId) || !preview.valid() || choices < 1 || choices > 10) return;
+    if (preview.key !== undefined) for (const action of this.actions()) if (action.key === preview.key) this.drop(action);
     // Limits count actions, not buttons: one question's option row is one pending answer.
-    if ((preview.replyTo && preview.replyTo.chatId !== preview.chatId) || !preview.valid() || choices < 1 || choices > 10 || actions.length >= 100 || actions.filter(row => row.userId === preview.userId).length >= 5) return;
+    const actions = this.actions();
+    if (actions.length >= 100 || actions.filter(row => row.userId === preview.userId).length >= 5) return;
     const ids = Array.from({ length: choices }, () => randomBytes(24).toString('base64url'));
     const action: Pending = { ...preview, ids, expiresAt: this.now() + Math.min(preview.ttlMs ?? 120_000, 15 * 60_000) };
     ids.forEach((id, choice) => this.pending.set(id, { action, choice }));

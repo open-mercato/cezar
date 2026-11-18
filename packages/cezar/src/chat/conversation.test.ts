@@ -315,6 +315,19 @@ it('does not expose an unknown lifecycle code in task status', async () => {
   expect(x.responses.join(' ')).toContain('Status unavailable');
   expect(x.responses.join(' ')).not.toContain('future_state');
 });
+it('repeated /status on one waiting question replaces its option buttons instead of exhausting confirmation slots', async () => {
+  const x = fixture();
+  x.run.attentionRequest = { requestId: 'question', askedAt: new Date().toISOString(), questions: [{ question: 'Pick', options: [{ label: 'A' }, { label: 'B' }] }] };
+  for (let id = 1; id <= 6; id++) await x.conversation.process(x.update('/status 12345678', id), x.state.snapshot().epoch);
+  expect(x.keyboards).toHaveLength(6);
+  await x.conversation.process(x.update('/task investigate', 7), x.state.snapshot().epoch);
+  expect(x.responses.at(-1)).toContain('Start a new task?');
+  // Only the newest /status message's buttons answer; the replaced ones are gone.
+  await x.tap(0, 50, 456, x.keyboards[0]);
+  expect(x.delivered).toEqual([]);
+  await x.tap(1, 51, 456, x.keyboards[5]);
+  expect(x.delivered).toEqual(['[via Telegram] B']);
+});
 it('accepts 4000 UTF-16 units of /reply content without counting the command and task reference', async () => {
   const x = fixture(), text = 'a'.repeat(4000);
   await x.conversation.process(x.update(`/reply ${x.run.id} ${text}`), x.state.snapshot().epoch);

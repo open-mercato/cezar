@@ -503,6 +503,20 @@ it('refuses damaged-state reset if the bytes change after the displayed revision
   const refreshed = reopened.list().bots[0]!.inboundRevision!; expect(refreshed).not.toBe(revision);
   await reopened.reset(botId, refreshed);
 });
+it('flags state that turns corrupt after boot as damaged on open, so reset can repair it', async () => {
+  const { writeFile, readFile } = await import('node:fs/promises');
+  const { service, receiver, botId, options, directory } = await fixture();
+  await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true }); await service.dispose();
+  const reopened = new TelegramInbound(options); cleanups.unshift(() => reopened.dispose()); await reopened.load();
+  const loaded = reopened.list().bots.find(row => row.botId === botId)!;
+  expect(loaded.health.state).not.toBe('blocked');
+  const path = join(directory, `${botId}.json`); await writeFile(path, '{broken');
+  await expect(reopened.reset(botId, loaded.inboundRevision!)).rejects.toMatchObject({ code: 'reset_required' });
+  const row = reopened.list().bots.find(row => row.botId === botId)!;
+  expect(row.health.state).toBe('blocked'); expect(row.inboundRevision).toMatch(/^[a-f0-9]{64}$/);
+  await reopened.reset(botId, row.inboundRevision!);
+  expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ grants: [], receivers: [], phase: 'probing' });
+});
 it('can explicitly reset a live store blocked by a failed write without releasing ownership early', async () => {
   const { service, receiver, botId } = await fixture();
   await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
@@ -932,6 +946,15 @@ it('swaps transport generations while retaining the same bot lease, grants and r
   expect(x.call.mock.calls.map(([method]) => method)).toContain('getMe');
   expect(serviceSnapshot(x.service, x.botId)).toEqual(before);
   await expect(BotLease.acquire(x.botId)).rejects.toThrow('owner_conflict');
+});
+it('retries a transport swap whose runtime would not stop in time instead of pausing replies until restart', async () => {
+  const x = await fixture(); await paired(x);
+  const bot = internals(x.service).bots.get(x.botId)!;
+  expect(bot.runtime).toBeDefined();
+  vi.spyOn(bot.runtime as unknown as { stop(): Promise<boolean> }, 'stop').mockResolvedValueOnce(false);
+  await expect(x.service.replaceTransport(true)).rejects.toMatchObject({ code: 'bot_busy' });
+  x.call.mockClear(); await x.service.start();
+  expect(x.call.mock.calls.map(([method]) => method)).toContain('getMe');
 });
 function serviceSnapshot(service: TelegramInbound, botId: string) {
   const state = internals(service).bots.get(botId)!.state.snapshot();

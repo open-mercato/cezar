@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ChatSelectionStore } from './chat-selection-store.ts'
-import { artifactIntegrity } from './installer.ts'
+import { shippedArtifactIntegrity } from './delivery-catalog.ts'
 import { ExtensionManager } from './manager.ts'
 import { chatManagementOwner } from './project-runtime.ts'
 import { closeProjectExtensions, extensionRoutes } from '../server/extensions.ts'
@@ -37,7 +37,7 @@ async function shippedCatalog(directory: string) {
     await writeFile(join(artifact, 'cezar-extension.json'), JSON.stringify(manifest))
     await writeFile(join(artifact, 'package.json'), JSON.stringify({ name: `@open-mercato/cezar-chat-${provider}`, version: manifest.version, type: 'module' }))
     await writeFile(join(artifact, 'dist', 'index.js'), `export default { activate(context) { context.chat.register('${provider}', () => ({})) } }`)
-    stamps.push({ provider, extensionId: manifest.id, version: manifest.version, integrity: await artifactIntegrity(artifact) })
+    stamps.push({ provider, extensionId: manifest.id, version: manifest.version, integrity: await shippedArtifactIntegrity(artifact) })
   }
   await writeFile(join(directory, 'catalog.json'), JSON.stringify(stamps))
 }

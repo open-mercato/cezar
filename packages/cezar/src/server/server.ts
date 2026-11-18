@@ -30,7 +30,8 @@ import { trackerTaskContext, executeTrackerOperation } from './tracker/task-acce
 import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { canonicalPath } from '../canonical-path.ts';
 import {
   detectedUrlsSchema, discoveredCommandsSchema, projectTerminalSessionParamsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
@@ -1720,7 +1721,8 @@ export function createApp(deps: ServerDeps) {
   webhooks?.setChatInteractions({
     context: async (projectId, root) => {
       const project = await resolveVisibleProject(projectId).catch(() => undefined);
-      if (!project || realpathSync(project.root) !== root) throw new Error('Chat project unavailable');
+      // The coordinator keys roots by canonicalPath (native realpath): Windows 8.3 names differ from realpathSync.
+      if (!project || canonicalPath(project.root) !== root) throw new Error('Chat project unavailable');
       return project.boot ? bootContext : contexts.context(project.id);
     },
     prepareControl: (project, run, kind, text, providerLabel) => prepareChatControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }, providerLabel),

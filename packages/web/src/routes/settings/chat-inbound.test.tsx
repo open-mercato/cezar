@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ChatSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
@@ -175,7 +175,18 @@ it('keeps waiting through a transient poll failure, like the setup dialog', asyn
     await createLink()
     expect((await screen.findByRole('alert')).textContent).toMatch(/busy/)
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
-    await vi.advanceTimersByTimeAsync(2_100)
+    await vi.advanceTimersByTimeAsync(10_100)
+    expect(await screen.findByRole('heading', { name: 'Confirm task control' })).toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+it('re-reads the inline setup status when the chat topic publishes, before the fallback poll', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    const api = setupMocks(); vi.mocked(api.status).mockRejectedValueOnce(new Error('bot_busy'))
+    mount(true, receiver, { entries: [] }, api)
+    await createLink()
+    expect((await screen.findByRole('alert')).textContent).toMatch(/busy/)
+    await act(async () => { mocks.listener?.({ changed: true }) })
     expect(await screen.findByRole('heading', { name: 'Confirm task control' })).toBeTruthy()
   } finally { vi.useRealTimers() }
 })
@@ -741,6 +752,24 @@ it.each(['minimal', 'excerpt opt-out'] as const)('keeps the options draft revisi
   fireEvent.click(screen.getByRole('button', { name: 'Save options' }))
   await waitFor(() => expect(mocks.webhook.update).toHaveBeenLastCalledWith('project', receiver.id, expect.objectContaining({ expectedRevision: 2, profile: latest.profile, graceSeconds: 600 })))
   expect(mocks.webhook.update.mock.calls.at(-1)![2]).not.toHaveProperty('includeAgentExcerpt')
+})
+
+it.each([
+  ['a revision race', Object.assign(new Error('Receiver revision changed; refresh and try again'), { status: 409 }), true],
+  ['a revision_conflict code', Object.assign(new Error('revision_conflict'), { status: 409, code: 'revision_conflict' }), true],
+  ['another 409', Object.assign(new Error('Destination belongs to another bot'), { status: 409 }), false],
+  ['a conflict word that is not a revision', Object.assign(new Error('bot_conflict'), { status: 409, code: 'bot_conflict' }), false],
+] as const)('marks the options editor stale only for %s', async (_label, cause, stale) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><ChatList provider={telegramDescriptor} projectId="project" receivers={[receiver]} controlled={() => false} bound={() => false} /></QueryClientProvider>)
+  fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+  await choose(screen.getByLabelText(/Waiting and review delay/), '1 minute')
+  mocks.webhook.update.mockRejectedValueOnce(cause)
+  fireEvent.click(screen.getByRole('button', { name: 'Save options' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent?.includes('changed in the meantime')).toBe(stale)
+  expect(!!screen.queryByRole('button', { name: 'Reload latest settings' })).toBe(stale)
+  if (cause.message === 'bot_conflict') expect(alert.textContent).toMatch(/connected to another project/)
 })
 
 it('tells a paused chat without a passing test to send one before resuming', async () => {

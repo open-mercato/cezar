@@ -47,12 +47,16 @@ if (result.id !== 1) throw new Error('packed Telegram consumer failed');`
   // Also install the packed service: this catches accidental workspace-only imports and proves
   // the public tarballs can activate the Telegram worker through the real ExtensionHost.
   run(['run', 'build'], service)
+  // The service build alone leaves no shipped catalog; restamp it so the checkout and the packed host keep one.
+  execFileSync(process.execPath, [join(service, 'scripts/build-chat-delivery.mjs')], { cwd: service, timeout: 120_000, stdio: 'inherit' })
   const servicePack = JSON.parse(run(['pack', '--ignore-scripts', '--json', '--pack-destination', temp], service))[0]
   const cockpit = join(temp, 'cockpit'); mkdirSync(cockpit)
   writeFileSync(join(cockpit, 'package.json'), JSON.stringify({ name: 'telegram-host-consumer', private: true, type: 'module' }))
   run(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--omit=optional', join(temp, servicePack.filename), join(temp, sdkPack.filename)], cockpit)
   const hostCheck = `import assert from 'node:assert/strict'
 import { ExtensionManager } from './node_modules/@open-mercato/cezar/dist/extensions/manager.js'
+import { loadChatDeliveryCatalog } from './node_modules/@open-mercato/cezar/dist/extensions/delivery-catalog.js'
+assert.deepEqual((await loadChatDeliveryCatalog('./node_modules/@open-mercato/cezar', 'telegram')).map(item => item.provider), ['telegram'])
 const manager = new ExtensionManager(${JSON.stringify(join(temp, 'host-data'))}, 'external', ${JSON.stringify(temp)}, { home: ${JSON.stringify(join(temp, 'host-home'))} })
 try {
  const record = await manager.install(${JSON.stringify(installedPlugin)})

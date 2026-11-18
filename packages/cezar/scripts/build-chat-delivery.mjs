@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { cp, mkdir, open, readFile, readdir, lstat, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const output = join(root,'packages/cezar/dist/chat-plugins')
@@ -17,6 +17,8 @@ for (const provider of ['telegram']) {
  if (manifest.version !== pkg.version) throw Error(`Independent adapter version mismatch: ${provider}`)
  const hash = createHash('sha512')
  // Hash file bytes through the handle that was stat'ed, never a re-opened path (CodeQL fs race).
+ // `/` paths and no mode bits: the installer's umask and platform decide those (shippedArtifactIntegrity).
+ const portable = file => relative(target,file).split(sep).join('/')
  async function visit(directory) {
   const entries = (await readdir(directory,{withFileTypes:true})).sort((a,b)=>a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
   for (const entry of entries) {
@@ -24,14 +26,14 @@ for (const provider of ['telegram']) {
    if (entry.isDirectory()) {
     const stat = await lstat(file)
     if (!stat.isDirectory()) throw Error('Invalid artifact file')
-    hash.update(JSON.stringify([relative(target,file),'directory',stat.mode & 0o777]))
+    hash.update(JSON.stringify([portable(file),'directory']))
     await visit(file)
    } else if (entry.isFile()) {
     const handle = await open(file,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
     try {
      const stat = await handle.stat()
      if (!stat.isFile()) throw Error('Invalid artifact file')
-     hash.update(JSON.stringify([relative(target,file),'file',stat.mode & 0o777]))
+     hash.update(JSON.stringify([portable(file),'file']))
      hash.update(await handle.readFile())
     } finally { await handle.close() }
    } else throw Error('Invalid artifact file')

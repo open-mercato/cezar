@@ -75,6 +75,8 @@ export class ChatInbound {
   private readonly setup: ChatSetups;
   private closed = false;
   private transportPaused = false;
+  /** Availability a timed-out replacement still owes; `start()` retries it (#2168 review). */
+  private transportRetry: boolean | undefined;
   private transportGeneration = 0;
   private transportChanges: Promise<void> = Promise.resolve();
   private readonly now: () => number;
@@ -293,7 +295,7 @@ export class ChatInbound {
       try {
         this.gateStateOpen(selectionOnly);
         assertNoSymlink(this.deps.directory); await mkdir(this.deps.directory, { recursive: true, mode: 0o700 }); await chmod(this.deps.directory, 0o700);
-        let saved = await readInboundState(this.deps.directory, botId);
+        let saved = await readInboundState(this.deps.directory, botId).catch(error => this.markUnreadable(botId, lease, error));
         // State without a binding is an interrupted disconnect; pairing starts over instead of stranding the bot.
         if (saved && create && !await lease.binding()) saved = undefined;
         if (saved && saved.provider !== this.deps.provider.id) throw new ChatInboundFailure(409, 'binding_conflict');
@@ -319,6 +321,14 @@ export class ChatInbound {
     this.opening.set(botId, work);
     try { return await work; } finally { this.opening.delete(botId); }
   }
+  /** State that went unreadable after boot is damaged exactly as load() would find it, so reset can repair it. */
+  private async markUnreadable(botId: string, lease: BotLease, error: unknown): Promise<never> {
+    const binding = await lease.binding().catch(() => undefined);
+    if (!binding || !this.ownBinding(binding)) throw error;
+    const revision = await stateFingerprint(this.deps.directory, botId, binding).catch(() => undefined);
+    this.damaged.set(botId, { binding, ...(revision ? { revision } : {}) }); this.snapshots.delete(botId); this.deps.changed();
+    throw new ChatInboundFailure(409, 'reset_required');
+  }
   /** Passive startup demand; transport availability must not hide persisted consent. */
   needsTransport(): boolean { return !this.reason() && this.resumableBots().length > 0; }
   private resumableBots(): string[] {
@@ -331,6 +341,10 @@ export class ChatInbound {
     });
   }
   async start(): Promise<void> {
+    if (this.transportPaused && this.transportRetry !== undefined) {
+      const available = this.transportRetry;
+      return this.replaceTransport(available).catch(() => undefined);
+    }
     if (this.reason() || this.transportPaused) return;
     for (const botId of this.resumableBots()) {
       try {
@@ -809,13 +823,20 @@ export class ChatInbound {
   /** Replace implementation only: retain ownership, grants and journal generations. */
   replaceTransport(available: boolean): Promise<void> {
     this.transportPaused = true;
+    this.transportRetry = undefined;
     const generation = ++this.transportGeneration;
     const operation = this.transportChanges.then(async () => {
-      for (const bot of this.bots.values()) {
-        if (bot.runtime && !await bot.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
-        await bot.starting?.catch(() => undefined);
-        await bot.state.drain();
-        bot.runtime = undefined;
+      try {
+        for (const bot of this.bots.values()) {
+          if (bot.runtime && !await bot.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
+          await bot.starting?.catch(() => undefined);
+          await bot.state.drain();
+          bot.runtime = undefined;
+        }
+      } catch (error) {
+        // A runtime that would not stop in time must not leave replies paused until restart.
+        if (!this.closed && generation === this.transportGeneration) this.transportRetry = available;
+        throw error;
       }
       if (this.closed || generation !== this.transportGeneration || !available) return;
       this.transportPaused = false;

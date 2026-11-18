@@ -58,7 +58,8 @@ it.each(['invalid_token', 'slack_invalid_token', 'SLACK-invalid_token', 'slack i
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(provider.bot.setupErrorMessages.invalid_token))
 })
 it.each(['group_ineligible', 'bot owned elsewhere'])('uses provider guidance for other setup failures: %s', async code => {
-  api.begin.mockRejectedValue(new Error(code))
+  // chat-routes.ts answers an ownership conflict with prose and its `bot_conflict` code.
+  api.begin.mockRejectedValue(code === 'group_ineligible' ? new Error(code) : Object.assign(new Error('Bot is owned elsewhere or its binding changed.'), { code: 'bot_conflict' }))
   open(); start()
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(code === 'group_ineligible' ? provider.bot.setupErrorMessages.group_ineligible : provider.bot.setupErrorMessages.bot_conflict))
 })

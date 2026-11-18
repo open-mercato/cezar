@@ -14,6 +14,7 @@ export function chatUnavailableMessages(name: string): Readonly<Record<'flag_off
 export function chatSetupErrorMessages(name: string): Record<string, string> {
   return {
     ...chatUnavailableMessages(name),
+    rate_limited: `${name} is rate limiting this bot. Wait a minute, then try again.`,
     blocked: `${name} blocked this bot. Unblock or recreate it, then try again.`,
     conflict: `${name} settings changed. Start setup again.`,
     damaged_state: `${name} access is damaged. Reset access, then start setup again.`,
@@ -41,6 +42,7 @@ export function chatSetupErrorMessages(name: string): Record<string, string> {
 export function chatSettingsErrorMessages(name: string): Record<string, string> {
   return {
     ...chatUnavailableMessages(name),
+    rate_limited: `${name} is rate limiting this bot. Wait a minute, then try again.`,
     blocked: `${name} blocked this bot. Unblock or recreate it, then try again.`,
     conflict: `${name} settings changed. Refresh the receiver and start setup again.`,
     damaged_state: `${name} access is damaged. Reset access below, then start setup again.`,
@@ -74,16 +76,31 @@ export function chatSettingsErrorMessages(name: string): Record<string, string> 
   }
 }
 
-export function chatErrorCode(providerId: string, cause: unknown): string {
-  const code = (cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '').toLowerCase()
+const stripProvider = (providerId: string, value: string) => {
+  const code = value.toLowerCase()
   return code.startsWith(providerId) ? code.slice(providerId.length).replace(/^[_ -]/, '') : code
+}
+const causeText = (cause: unknown) => cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : ''
+const causeCode = (cause: unknown) =>
+  cause && typeof cause === 'object' && 'code' in cause && typeof cause.code === 'string' ? cause.code : undefined
+
+/** The server's `code` when it sent one; its `error` text only otherwise (some answers pair prose with the code). */
+export function chatErrorCode(providerId: string, cause: unknown): string {
+  return stripProvider(providerId, causeCode(cause) ?? causeText(cause))
+}
+
+/** Codes to look copy up by, `code` first, then the `error` text. */
+export function chatErrorCodes(providerId: string, cause: unknown): string[] {
+  const code = causeCode(cause)
+  return [...(code ? [stripProvider(providerId, code)] : []), stripProvider(providerId, causeText(cause))]
 }
 
 /** Only descriptor-owned copy may cross this boundary, never server prose or credentials. */
 export function chatErrorMessage(provider: ChatProviderDescriptor, cause: unknown): string {
-  const code = chatErrorCode(provider.id, cause)
-  for (const messages of [provider.bot.settingsErrorMessages, provider.bot.setupErrorMessages]) {
-    if (Object.hasOwn(messages, code)) return messages[code]!
+  for (const code of chatErrorCodes(provider.id, cause)) {
+    for (const messages of [provider.bot.settingsErrorMessages, provider.bot.setupErrorMessages]) {
+      if (Object.hasOwn(messages, code)) return messages[code]!
+    }
   }
   return `${provider.name} could not complete that action. Refresh and try again.`
 }

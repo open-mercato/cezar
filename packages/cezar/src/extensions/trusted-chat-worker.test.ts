@@ -12,8 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach } from 'vitest';
-import { loadChatDeliveryCatalog } from './delivery-catalog.ts';
-import { artifactIntegrity } from './installer.ts';
+import { loadChatDeliveryCatalog, shippedArtifactIntegrity } from './delivery-catalog.ts';
 const roots: string[]=[];
 afterEach(async()=>{await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
 async function fixture(source:string) {
@@ -26,7 +25,7 @@ async function fixture(source:string) {
   await writeFile(join(target,'cezar-extension.json'),JSON.stringify(manifest));
   await writeFile(join(target,'package.json'),JSON.stringify({type:'module',version:manifest.version}));
   await writeFile(join(target,'dist/index.js'),source);
-  stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await artifactIntegrity(target)});
+  stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await shippedArtifactIntegrity(target)});
  }
  await writeFile(join(directory,'catalog.json'),JSON.stringify(stamps));
  const [artifact]=await loadChatDeliveryCatalog(root);

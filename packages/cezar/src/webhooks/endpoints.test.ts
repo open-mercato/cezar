@@ -24,7 +24,21 @@ describe('webhook endpoint configuration and activation fences', () => {
     await x.registry.delete(receiver.id, receiver.revision);
     const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
     expect(reopened.list().notice).toMatchObject({ receiverId: receiver.id, format });
-    expect(reopened.historical()[0]).toMatchObject({ id: receiver.id, format });
+    // 0.17–0.20 read endpoints.json strictly: a released format is derived on read, never stored.
+    const stored = JSON.parse(readFileSync(join(x.dir, 'endpoints.json'), 'utf8'));
+    expect(stored.notice).not.toHaveProperty('format');
+    expect(stored.history[0]).not.toHaveProperty('format');
+  });
+
+  it.each(['slack.v1', 'discord.v1', 'cezar.json.v1'] as const)('keeps a %s receiver readable by released strict builds after edits', async format => {
+    const x = await setup();
+    const url = format === 'slack.v1' ? 'https://hooks.slack.com/services/TA/BB/secret' : format === 'discord.v1' ? `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}` : 'https://example.com/hook';
+    const { receiver } = await x.registry.create({ name: 'Chat', format, url });
+    const current = x.registry.live()[0]!;
+    await x.registry.update(receiver.id, { name: 'Chat', format, url, graceSeconds: 600, expectedRevision: current.revision });
+    const stored = JSON.parse(readFileSync(join(x.dir, 'endpoints.json'), 'utf8'));
+    expect(stored.receivers[0]).not.toHaveProperty('payloadSinceRevision');
+    expect(stored.notice).not.toHaveProperty('format');
   });
 
   it('preserves an entirely unreadable receiver list through create/delete and counts its storage', async () => {
@@ -71,7 +85,8 @@ describe('webhook endpoint configuration and activation fences', () => {
     const { registry, dir } = await setup();
     const read = () => JSON.parse(readFileSync(join(dir, 'endpoints.json'), 'utf8'));
     await registry.create({ format: 'slack.v1', name: 'Slack', url: 'https://hooks.slack.com/services/TA/BB/secret' });
-    expect(read().notice).toHaveProperty('format', 'slack.v1');
+    expect(read().notice).not.toHaveProperty('format');
+    expect(registry.list().notice).toHaveProperty('format', 'slack.v1');
     const json = await registry.create({ name: 'Json', url: 'https://example.com' });
     await registry.delete(json.receiver.id, json.receiver.revision);
     expect(read().notice).not.toHaveProperty('format');

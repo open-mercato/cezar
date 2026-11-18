@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -263,12 +263,9 @@ test('--dist-tag publishes an older line without moving latest', { timeout: 120_
   }
 });
 
-test('independent publication is idempotent and rebuilds stamped inputs before publishing', { timeout: 30_000 }, async () => {
-  const root = await makeFixture('0.20.0');
-  try {
-    await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, scripts: { build: 'synthetic build' } }));
-    const npm = join(root, 'fake-npm.cjs');
-    await writeFile(npm, `
+async function writeFakeNpm(root: string): Promise<string> {
+  const npm = join(root, 'fake-npm.cjs');
+  await writeFile(npm, `
       const fs = require('node:fs'); const path = require('node:path');
       const root = ${JSON.stringify(root)};
       const args = process.argv.slice(2);
@@ -293,8 +290,27 @@ test('independent publication is idempotent and rebuilds stamped inputs before p
         if (state[id]) throw Error('duplicate publish');
         log('publish ' + id); state[id] = true;
         fs.writeFileSync(statePath, JSON.stringify(state));
+      } else if (args[0] === 'pack' && args.includes('--dry-run')) {
+        const files = fs.readdirSync('.').filter(file => fs.statSync(file).isFile()).map(file => ({ path: file }));
+        console.log(JSON.stringify([{ files }]));
+      } else if (args[0] === 'pack') {
+        // The registry copy is registry/<spec> when a test planted one, else what the adapter holds now.
+        const dest = args[args.indexOf('--pack-destination') + 1], stage = fs.mkdtempSync(path.join(dest, 'stage-'));
+        const planted = path.join(root, 'registry', args[1]), source = fs.existsSync(planted) ? planted : path.join(root, 'packages/chat-plugins/telegram');
+        fs.mkdirSync(path.join(stage, 'package'));
+        for (const file of fs.readdirSync(source)) if (fs.statSync(path.join(source, file)).isFile()) fs.copyFileSync(path.join(source, file), path.join(stage, 'package', file));
+        require('node:child_process').execFileSync('tar', ['-czf', path.join(dest, 'registry.tgz'), '-C', stage, 'package']);
+        fs.rmSync(stage, { recursive: true, force: true });
       } else { throw Error('unexpected npm command: ' + args); }
-    `);
+  `);
+  return npm;
+}
+
+test('independent publication is idempotent and rebuilds stamped inputs before publishing', { timeout: 30_000 }, async () => {
+  const root = await makeFixture('0.20.0');
+  try {
+    await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, scripts: { build: 'synthetic build' } }));
+    const npm = await writeFakeNpm(root);
     const env = { NODE_AUTH_TOKEN: 'synthetic-only', npm_execpath: npm };
     await runScript(root, ['patch', '--reconcile-tag'], env);
     const first = await readFile(join(root, 'npm.log'), 'utf8');
@@ -304,6 +320,20 @@ test('independent publication is idempotent and rebuilds stamped inputs before p
     await runScript(root, ['existing'], env);
     const second = await readFile(join(root, 'npm.log'), 'utf8');
     assert.equal(second.match(/^publish /gm)?.length, first.match(/^publish /gm)?.length);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('an adapter whose published version changed contents stops the release (#2168)', { timeout: 30_000 }, async () => {
+  const root = await makeFixture('0.20.0');
+  try {
+    await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, scripts: { build: 'synthetic build' } }));
+    const npm = await writeFakeNpm(root);
+    const adapter = join(root, 'packages/chat-plugins/telegram'), planted = join(root, 'registry', '@scope/fake-telegram@0.1.0');
+    await mkdir(planted, { recursive: true });
+    for (const file of await readdir(adapter)) await writeFile(join(planted, file), await readFile(join(adapter, file)));
+    await writeFile(join(planted, 'README.md'), 'older adapter bytes');
+    await assert.rejects(runScript(root, ['patch', '--reconcile-tag'], { NODE_AUTH_TOKEN: 'synthetic-only', npm_execpath: npm }), /contents changed/);
+    assert.doesNotMatch(await readFile(join(root, 'npm.log'), 'utf8').catch(() => ''), /^publish /m);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

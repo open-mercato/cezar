@@ -21,7 +21,7 @@ import {
   type ExtensionTaskProposal,
 } from '@open-mercato/cezar-contract'
 import { ChatTransportError } from '../chat/provider.ts'
-import { chatDeliveryPackageRoot, loadChatDeliveryCatalog, isVerifiedChatDelivery, type ChatDeliveryArtifact } from './delivery-catalog.ts'
+import { chatDeliveryPackageRoot, loadChatDeliveryCatalog, isVerifiedChatDelivery, shippedArtifactIntegrity, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import { cezarHomeDir } from '../paths.ts'
 import { SecretStore } from '../workspace/secrets.ts'
 import { registerChat } from './chat-registration.ts'
@@ -608,7 +608,9 @@ export class ExtensionManager {
     }
     const slot = this.slots.get(id)?.artifact
     const root = await realpath(slot?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
-    if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
+    // A shipped slot is stamped with the umask/platform-independent digest (delivery-catalog.ts).
+    const integrity = slot && isVerifiedChatDelivery(slot) ? shippedArtifactIntegrity : artifactIntegrity
+    if (await integrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
     const entry = await realpath(resolve(root, record.manifest.entry))
     if (!contained(root, entry)) throw new Error('extension entry must stay inside its installed directory')
     if (this.isClosed) throw new Error('extension manager is closed')

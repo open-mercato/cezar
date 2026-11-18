@@ -42,8 +42,9 @@ workspace root itself is `private` and is not in the release at all.
 
 Stable host releases preserve each adapter's version and declared SDK compatibility
 range. Adapter changes require their own semver release; a host version bump does
-not bump adapters or rewrite an already published adapter artifact. Extension
-manifest versions follow their adapter package versions.
+not bump adapters or rewrite an already published adapter artifact, and it fails
+when an adapter's packed contents differ from the same version already on npm (bump
+the adapter first). Extension manifest versions follow their adapter package versions.
 
 **Private ≠ excluded.** The api-client is stamped like everything else — its
 version moves in lockstep and the service's pin against it is rewritten — it is

@@ -21,6 +21,14 @@ function rememberCredential(name: string, credential: string): void {
 }
 const timestamp = z.iso.datetime();
 const BOT_DESTINATION = new Set<string>(['format', 'url', 'chatId', 'allowLocalNetwork']);
+// Released builds (0.17–0.20) read notices and history strictly; only formats they cannot hold anyway carry `format`.
+const unreleasedFormat = (format: string) => format !== 'cezar.json.v1' && format !== 'slack.v1' && format !== 'discord.v1';
+// …so a released Slack/Discord notice's owner is recovered from its masked destination on read.
+function releasedChatFormat(destination: string | undefined): 'slack.v1' | 'discord.v1' | undefined {
+  const host = destination && /^https:\/\/([^/]+)\//.exec(destination)?.[1];
+  if (host === 'hooks.slack.com') return 'slack.v1';
+  return host && ['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com'].includes(host) ? 'discord.v1' : undefined;
+}
 const counter = z.number().int().nonnegative();
 const definitionSchema = webhookStoredSettingsSchema.strip();
 export const privateReceiverSchema = webhookStoredSettingsSchema.safeExtend({
@@ -189,7 +197,7 @@ export class EndpointRegistry {
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
     // Notices retain provider ownership even after the receiver has been deleted; absent = generic.
-    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, ...noticeDestination(receiver), ...(receiver.format !== 'cezar.json.v1' ? { format: receiver.format } : {}) } : {}) };
+    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, ...noticeDestination(receiver), ...(unreleasedFormat(receiver.format) ? { format: receiver.format } : {}) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     for (const item of next.receivers) {
       if (item.state !== 'paused') delete item.pauseReason;
@@ -228,9 +236,13 @@ export class EndpointRegistry {
   }
   list(): WebhookList {
     return { receivers: this.state.receivers.map(item => this.public(item)), webhookHealth: this.unreadableReceivers.length ? { status: 'degraded', reason: `${this.unreadableReceivers.length} webhook receiver record(s) could not be loaded and remain preserved in endpoints.json. Other receivers are available.` } : this.unavailableTokens.size ? { status: 'degraded', reason: new TelegramSecretError().message } : { status: 'ready' }, changeSequence: this.state.changeSequence,
-      ...(this.state.notice ? { notice: { ...this.state.notice } } : {}), history: structuredClone(this.state.history.slice(0, 100)), historyCount: this.state.history.length };
+      ...(this.state.notice ? { notice: this.publicNotice(this.state.notice) } : {}), history: structuredClone(this.state.history.slice(0, 100)), historyCount: this.state.history.length };
   }
   historical() { return structuredClone(this.state.history); }
+  private publicNotice(notice: NonNullable<State['notice']>): NonNullable<State['notice']> {
+    const format = notice.format ?? releasedChatFormat(notice.destination);
+    return { ...notice, ...(format ? { format } : {}) };
+  }
   pruneHistory(retained: ReadonlySet<string>): Promise<void> {
     return this.serial(async () => {
       const next = structuredClone(this.state); next.history = next.history.filter(item => retained.has(item.id));
@@ -289,7 +301,10 @@ export class EndpointRegistry {
       const bot = old.format === settings.format && (settings.format === 'telegram.v1' || old.chatSecret !== undefined);
       const retest = changed && !(bot && fields.every(key => !BOT_DESTINATION.has(key)));
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
-      if (changed) receiver.payloadSinceRevision = receiver.revision;
+      // Only a bot keeps its deliveryRevision across a payload-policy change; elsewhere the retest
+      // bump already fences older admissions, and the key would break 0.17–0.20 strict readers.
+      if (changed && bot && !retest) receiver.payloadSinceRevision = receiver.revision;
+      else if (retest || !bot) delete receiver.payloadSinceRevision;
       // A spread cannot remove a key: leaving Telegram must not keep its chat ID.
       if (settings.chatId === undefined && !(old.chatSecret && old.format === settings.format)) delete receiver.chatId;
       if (settings.includeAgentExcerpt === undefined) delete receiver.includeAgentExcerpt;
@@ -352,7 +367,7 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision); const next = structuredClone(this.state);
       next.receivers = next.receivers.filter(item => item.id !== id);
-      next.history.unshift({ kind: 'history', id, name: old.name, ...(old.format !== 'cezar.json.v1' ? { format: old.format } : {}), deletedAt: this.time() });
+      next.history.unshift({ kind: 'history', id, name: old.name, ...(unreleasedFormat(old.format) ? { format: old.format } : {}), deletedAt: this.time() });
       await this.commit(next, 'deleted', id, old.revision + 1);
       this.unavailableTokens.delete(id);
     });

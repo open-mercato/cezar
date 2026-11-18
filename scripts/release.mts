@@ -41,7 +41,8 @@
 // Env override for tests: CEZ_RELEASE_ROOT (defaults to the repo root).
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adapterManifestWrites, writeAdapterManifests, rebuildReleaseArtifacts } from '../packages/cezar/src/release/artifacts.ts';
@@ -179,6 +180,33 @@ const alreadyPublished = (name: string, version: string) => {
     throw error;
   }
 };
+const npmOutput = (args: string[], cwd: string) => execFileSync(npmExecpath ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm', [...(npmExecpath ? [npmExecpath] : []), ...args], {
+  cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: !npmExecpath && process.platform === 'win32', timeout: 120_000,
+});
+/** Files an independently released adapter version already has on npm that differ from what
+ *  would ship now: a changed adapter must bump its own version, or npm and the host disagree (#2168). */
+const adapterDrift = (dir: string, name: string, version: string): string[] => {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'adapter-release-'));
+  try {
+    npmOutput(['pack', `${name}@${version}`, '--pack-destination', tmp], tmp);
+    const tarball = readdirSync(tmp).find(file => file.endsWith('.tgz'));
+    if (!tarball) throw new Error(`npm pack ${name}@${version} produced no tarball`);
+    execFileSync('tar', ['-xzf', path.join(tmp, tarball), '-C', tmp], { timeout: 60_000 });
+    const remoteRoot = path.join(tmp, 'package');
+    const remote = new Set<string>();
+    const walk = (dirPath: string) => {
+      for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+        const full = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) walk(full); else remote.add(path.relative(remoteRoot, full).split(path.sep).join('/'));
+      }
+    };
+    walk(remoteRoot);
+    const local = (JSON.parse(npmOutput(['pack', '--dry-run', '--json', '--ignore-scripts'], dir)) as { files: { path: string }[] }[])[0]!.files.map(file => file.path);
+    const drift = local.filter(file => !remote.has(file) || !readFileSync(path.join(dir, file)).equals(readFileSync(path.join(remoteRoot, file))));
+    for (const file of remote) if (!local.includes(file) && statSync(path.join(remoteRoot, file)).isFile()) drift.push(file);
+    return drift;
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+};
 const publish = (dir: string, label: string, version: string) => {
   const args = [
     'publish',
@@ -209,6 +237,14 @@ const publish = (dir: string, label: string, version: string) => {
 // Dependency order — see the header. `ReleaseManifests` declares its fields in this order for
 // exactly this reason. A `private` manifest is stamped above but never published: it is part of
 // the release (its version moves, its pins are rewritten) without being on the registry.
+// Before anything publishes: a changed adapter must bump its own version, never half-release the set.
+for (const key of KEYS) {
+  if (!isAdapterKey(key) || !isPublishable(stamped[key]) || !alreadyPublished(stamped[key].name, stamped[key].version)) continue;
+  const drift = adapterDrift(dirs[key], stamped[key].name, stamped[key].version);
+  if (drift.length) {
+    throw new Error(`release: ${stamped[key].name}@${stamped[key].version} is already on npm but its contents changed (${drift.slice(0, 5).join(', ')}) — bump the adapter's version (package.json and cezar-extension.json) before releasing.`);
+  }
+}
 const published: string[] = [];
 for (const key of KEYS) {
   if (!isPublishable(stamped[key])) {

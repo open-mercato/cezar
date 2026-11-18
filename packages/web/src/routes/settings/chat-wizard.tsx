@@ -10,25 +10,19 @@ import { taskControlCostNote } from './chat-list'
 import { beginChatSetup, setupGone } from './chat-pairing'
 import { QueryClientContext } from '@tanstack/react-query'
 import { withOwnWebhookChange } from '@/lib/own-webhook-changes'
+import { chatErrorCode, chatErrorCodes } from '@/lib/chat-providers/messages'
 
 type Step = 'token' | 'connect' | 'activate' | 'control' | 'done'
 type Permission = ChatInboundGrant['permissions'][number]
 const risk = 'Task control lets a person answer and instruct agents that run shell commands on this machine.'
 type SetupCandidate = NonNullable<ChatSetupStatus['candidate']>
 
-/** Map a setup error to a friendly message; the raw server detail (which may carry the token) is never echoed. */
-function setupErrorCode(message: string, providerId: string): string {
-  const code = message.toLowerCase()
-  return code.startsWith(providerId) ? code.slice(providerId.length).replace(/^[_ -]/, '') : code
-}
-
+/** Map a setup error to a friendly message by its `code`; the raw server detail (which may carry the token) is never echoed. */
 function wizardError(provider: ChatProviderDescriptor, cause: unknown, fallback: string): string {
   if (!(cause instanceof Error)) return fallback
   const messages = provider.bot.setupErrorMessages
-  // The ownership conflict answers with prose rather than its code.
-  if (/owned elsewhere/i.test(cause.message)) return messages.bot_conflict ?? fallback
-  const code = setupErrorCode(cause.message, provider.id)
-  return Object.hasOwn(messages, code) ? messages[code] ?? fallback : fallback
+  const code = chatErrorCodes(provider.id, cause).find(code => Object.hasOwn(messages, code))
+  return code ? messages[code] ?? fallback : fallback
 }
 
 /** The first free "Telegram notifications", "Telegram notifications 2", … among existing receiver names. */
@@ -142,7 +136,7 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
       current.setupId = undefined
     }
   }
-  const setupCode = (cause: unknown) => cause instanceof Error ? setupErrorCode(cause.message, provider.id) : ''
+  const setupCode = (cause: unknown) => cause instanceof Error ? chatErrorCode(provider.id, cause) : ''
   const isCurrent = (current: typeof session.current): current is NonNullable<typeof session.current> => !!current?.active && session.current === current
 
   useEffect(() => {
@@ -182,12 +176,14 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
       } catch (cause) {
         if (cancelled || !isCurrent(current) || current.setupId !== setup.setupId || current.activating || current.activationGeneration !== generation) return
         // A restarted cezar no longer knows the setup; the server answers 404 pairing_expired.
-        if (cause instanceof Error && setupGone(setupErrorCode(cause.message, provider.id))) expire()
+        if (setupGone(setupCode(cause))) expire()
         else setPollError(wizardError(provider, cause, `Could not read ${provider.name} setup status.`))
       }
     }
-    void poll(); const timer = window.setInterval(() => void poll(), 2_000)
-    return () => { cancelled = true; window.clearInterval(timer) }
+    // A setup exists only while notifications work, so the server publishes its chat topic; the timer is the fallback.
+    const unsubscribe = provider.bot.subscribe(() => void poll())
+    void poll(); const timer = window.setInterval(() => void poll(), 10_000)
+    return () => { cancelled = true; unsubscribe(); window.clearInterval(timer) }
   }, [api, projectId, open, setup, step, provider])
 
   const begin = async (input: ChatSetupBegin) => {
@@ -199,7 +195,8 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
       if (!begun) return
       if (!isCurrent(current)) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
       current.setupId = begun.setupId
-      setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setStep('connect')
+      // The server holds the token now; keep no copy in memory.
+      setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setCredentials({}); setStep('connect')
     } catch (cause) { if (isCurrent(current)) setError(wizardError(provider, cause, `Could not start ${provider.name} setup.`)) } finally { if (isCurrent(current)) setBusy(false) }
   }
   const start = () => {
@@ -267,7 +264,7 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
       setControlEnabled(true); setStep('done'); onComplete?.()
     } catch (cause) { if (isCurrentAttempt()) setError(wizardError(provider, cause, 'Could not activate task control.')) } finally { current.activating = false; if (isCurrent(current)) setActivating(false); if (isCurrentAttempt()) setBusy(false) }
   }
-  const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
+  const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; setCredentials({}); onOpenChange(false) }
   const title = useMemo(() => ({ token: repairing ? `Repair ${provider.name} connection` : addingChat ? `Add a ${provider.name} chat` : `Connect ${provider.name}`, connect: `Connect your ${provider.name} chat`, activate: `${provider.name} notifications are active`, control: 'Optional task control', done: `${provider.name} is ready` }[step]), [step, repairing, addingChat, provider.name])
   const stepDescriptions: Record<Step, string> = {
     token: repairing ? `Paste fresh credentials from the same ${provider.name} bot. You will confirm the chat and its permissions again.` : addingChat ? `Paste the same bot ${provider.bot.fields.length > 1 ? 'tokens' : 'token'} to connect another chat. Nothing is sent until you activate notifications.` : provider.bot.credentialHint,

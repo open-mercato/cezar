@@ -1,4 +1,4 @@
-import { chatErrorMessage } from '@/lib/chat-providers/messages'
+import { chatErrorCodes, chatErrorMessage } from '@/lib/chat-providers/messages'
 import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -43,7 +43,15 @@ function optionsUpdate(receiver: WebhookReceiver, options: Options): UpdateWebho
     ...(receiver.format === 'telegram.v1' && receiver.chatId ? { chatId: receiver.chatId } : {}), ...(options.profile === 'standard' && options.excerpt ? { includeAgentExcerpt: true } : {}) }
 }
 
-type Removal = { receiver: WebhookReceiver; duplicateOf?: WebhookReceiver }
+const revisionCodes = new Set(['revision_conflict', 'receiver_changed'])
+/** Only a lost revision race makes the editor stale; every other 409 (state, credentials, destination) is a plain error. */
+export function revisionConflict(provider: ChatProviderDescriptor, cause: unknown): boolean {
+  if (chatErrorCodes(provider.id, cause).some(code => revisionCodes.has(code))) return true
+  // The webhook routes ChatList calls answer prose without a code (server/webhooks.ts).
+  return cause instanceof Error && 'status' in cause && cause.status === 409 && /revision changed/i.test(cause.message)
+}
+
+type Removal ={ receiver: WebhookReceiver; duplicateOf?: WebhookReceiver }
 /** One row per chat: what it sends, whether it is on, and the actions to test, pause, tune and remove it. */
 export function ChatList({ provider, projectId, receivers, controlled, bound }: { provider: ChatProviderDescriptor; projectId: string; receivers: WebhookReceiver[]; controlled: (id: string) => boolean; bound: (id: string) => boolean }) {
   const client = useQueryClient()
@@ -57,7 +65,7 @@ export function ChatList({ provider, projectId, receivers, controlled, bound }: 
     if (busy) return false
     setBusy(id); setError(undefined)
     try { await withOwnWebhookChange(client, projectId, [id], work); return true } catch (cause) {
-      const conflict = cause instanceof Error && ('status' in cause && cause.status === 409 || /conflict/i.test(cause.message))
+      const conflict = revisionConflict(provider, cause)
       setError({ id, conflict, text: conflict ? 'This chat changed in the meantime, so nothing was applied. Review the latest settings and try again.' : chatErrorMessage(provider, cause) })
       return false
     }

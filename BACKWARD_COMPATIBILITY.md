@@ -69,11 +69,14 @@ No configuration, network, enabled-state default, or existing task setting chang
   no plaintext fallback is written, and a `telegram.v1` entry without `chatSecret` is
   credentials-unavailable. Slack/Discord receivers keep their released format and delivery path.
   Webhooks shipped opt-in
-  in 0.17.0, and 0.17.x–0.19.x read `endpoints.json` and the outbox with strict schemas. A project
+  in 0.17.0, and 0.17.x–0.20.x read `endpoints.json` and the outbox with strict schemas. A project
   with a `telegram.v1` receiver, a retained deleted-Telegram history row, or `includeAgentExcerpt`
   consent cannot be opened by those builds: their webhook service for that project stays
   unavailable until you upgrade again. No data is lost. Deleting `.ai/cezar/webhooks/` (which
   removes every receiver) is the only downgrade path. Projects containing only released webhook receiver state remain readable.
+  Editing or deleting a released (JSON, Slack, Discord) receiver writes no new key: notice and history
+  `format` is stored only for formats those builds cannot read anyway (a Slack/Discord notice's owner is
+  derived from its masked destination on read), and `payloadSinceRevision` only on a bot receiver.
   Telegram receivers require a successful delivery test before activation. A delivery that disables
   a Telegram receiver (a gone response) clears its last test, so reactivation needs a fresh one.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
@@ -149,7 +152,7 @@ No configuration, network, enabled-state default, or existing task setting chang
   Receivers accept an optional `includeAgentExcerpt` (additive): `true` requires
   `profile: 'standard'` (400 otherwise); the receiver response carries `includeAgentExcerpt: true`
   only while it is on, and the registry stores the key only then, so a registry without consent
-  stays readable by 0.17.x–0.19.x (for any format, see the downgrade note above). Edits are full submissions: omitting it turns consent off.
+  stays readable by 0.17.x–0.20.x (for any format, see the downgrade note above). Edits are full submissions: omitting it turns consent off.
   Delivery/history pages are bounded to 100 with opaque scope-bound cursors. Deleted receiver IDs
   serve a read-only `kind: history` identity until retained history expires; mutations return 404.
   Project SSE emits `change`/`resync` invalidations with `{changeSequence}` and `ping` keepalives
@@ -355,7 +358,7 @@ Breaking: removing/renaming a route; making a previously optional body field req
   additive, `schemaVersion` stays 1), only for a Standard receiver with `includeAgentExcerpt` and
   `reason: 'turn_end'`. Without that consent every format's body is byte-identical to before.
   A question may carry the additive `multiSelect: true` in cockpit and run responses only
-  (`attentionRequest`); the webhook payload and the outbox never carry it, so 0.17.x–0.19.x can
+  (`attentionRequest`); the webhook payload and the outbox never carry it, so 0.17.x–0.20.x can
   still read the outbox. The guide, JSON
   Schema are repository documentation assets, not service runtime imports.
 
@@ -1069,7 +1072,7 @@ transient failure, not an invalid binding.
 ### Chat providers
 
 Slack/Discord incoming-webhook receivers keep their released shapes. A `telegram.v1` receiver
-writes optional bot fields (`chatId`, `chatSecret`, `chatBotId`) that the strict 0.17.x–0.19.x endpoint schemas
+writes optional bot fields (`chatId`, `chatSecret`, `chatBotId`) that the strict 0.17.x–0.20.x endpoint schemas
 cannot read; see the webhook `format` entry in §2 for the downgrade path. The provider id
 recorded on a run's `chatSource` and the per-bot ownership directories under
 `~/.cezar/chat/<encodedProvider>/[dry-run/]bots/` (§9) are written state. See

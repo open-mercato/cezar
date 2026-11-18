@@ -1,12 +1,12 @@
-import { readFile, realpath, stat } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { lstat, opendir, readFile, realpath, stat } from 'node:fs/promises'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { isVouchedChatArtifact, vouchChatArtifact } from '../chat/registry.ts'
 import { canonicalChatProviderSchema } from './chat-selection-store.ts'
-import { contained } from './install-files.ts'
-import { artifactIntegrity } from './installer.ts'
+import { contained, InstallBudget, INSTALL_LIMITS, readRegular } from './install-files.ts'
 
 export function chatDeliveryPackageRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -27,6 +27,33 @@ function freezeVerified<T>(value: T): T {
   return value
 }
 export function isVerifiedChatDelivery(value: object): value is ChatDeliveryArtifact { return isVouchedChatArtifact('delivery', value) }
+
+/** Digest of a shipped artifact as npm installs it: `/` paths and no mode bits, because the
+ *  installing user's umask and platform decide those (#2168 review). Mirrors build-chat-delivery.mjs. */
+export async function shippedArtifactIntegrity(root: string): Promise<string> {
+  const rootStat = await lstat(root)
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('extension artifact must be a directory without symbolic links')
+  const hash = createHash('sha512')
+  const budget = new InstallBudget(INSTALL_LIMITS)
+  async function visit(dir: string, depth: number): Promise<void> {
+    const names: string[] = []
+    for await (const entry of await opendir(dir)) { budget.entry(depth + 1); names.push(entry.name) }
+    for (const name of names.sort((a, b) => a < b ? -1 : a > b ? 1 : 0)) {
+      const path = join(dir, name)
+      const info = await lstat(path)
+      if (info.isSymbolicLink() || (!info.isFile() && !info.isDirectory())) throw new Error('extension artifact contains a symbolic link or special file')
+      hash.update(JSON.stringify([relative(root, path).split(sep).join('/'), info.isDirectory() ? 'directory' : 'file']))
+      if (info.isDirectory()) await visit(path, depth + 1)
+      else {
+        const contents = await readRegular(path, INSTALL_LIMITS.bytes - budget.bytes)
+        budget.data(contents.length)
+        hash.update(contents)
+      }
+    }
+  }
+  await visit(root, 0)
+  return `sha512-${hash.digest('base64')}`
+}
 
 /** Whole-catalog reads are metadata (inventory, route guards): one verification per catalog file. */
 const verifiedCatalogs = new Map<string, { stamp: string; artifacts: readonly ChatDeliveryArtifact[] }>()
@@ -49,7 +76,7 @@ export async function loadChatDeliveryCatalog(packageRoot = chatDeliveryPackageR
   }
   const results = await Promise.allSettled(stamps.filter(stamp => !provider || stamp.provider === provider).map(async stamp => {
     const root = join(directory, stamp.provider)
-    if (await artifactIntegrity(root) !== stamp.integrity) throw Error('Chat delivery artifact integrity mismatch')
+    if (await shippedArtifactIntegrity(root) !== stamp.integrity) throw Error('Chat delivery artifact integrity mismatch')
     const manifest = extensionManifestSchema.parse(JSON.parse(await readFile(join(root, 'cezar-extension.json'), 'utf8')))
     const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { version?: unknown }
     if (
