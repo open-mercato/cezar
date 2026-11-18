@@ -1408,6 +1408,65 @@ describe('ManagerEngine', () => {
       expect((await engine.summary(id))?.pendingQuestions).toBe(0);
     });
 
+    it('drops a duplicate answer for an already answered card without waking the manager', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const card = (messageId: string, header: string): ManagerMessage => ({
+        id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '',
+        ask: { questions: [{ header, question: `${header}?`, options: [{ label: 'A' }, { label: 'B' }] }] },
+      } as ManagerMessage);
+      store.persistMessage(id, card('ask-1', 'PR 2225'));
+      backend.scripts.push(say('First response'));
+      engine.send(id, 'PR 2225: A', [], 'ask-1');
+      await settled(engine);
+      expect(assistants(id)[0]?.askAnswer).toBe('PR 2225: A');
+
+      // Resending for the same ask-1: should be dropped, no new user message, no turn executed
+      const userMessagesBefore = store.messages(id).filter((m) => m.kind === 'user').length;
+      const turnCountBefore = backend.scripts.length;
+      const ok = engine.send(id, 'PR 2225: A', [], 'ask-1');
+      expect(ok).toBe(true);
+      await settled(engine);
+      const userMessagesAfter = store.messages(id).filter((m) => m.kind === 'user').length;
+      expect(userMessagesAfter).toBe(userMessagesBefore);
+      expect(backend.scripts.length).toBe(turnCountBefore);
+    });
+
+    it('leaves a superseded card out of pendingQuestions and the composer, but still takes its own answer', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const card = (messageId: string, header: string): ManagerMessage => ({
+        id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '',
+        ask: { questions: [{ header, question: `${header}?`, options: [{ label: 'A' }, { label: 'B' }] }] },
+      } as ManagerMessage);
+      store.persistMessage(id, card('ask-old', 'PR 2225'));
+      store.persistMessage(id, card('ask-new', 'PR 2225'));
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+
+      backend.scripts.push(say('Understood'));
+      engine.send(id, 'rebase it');
+      await settled(engine);
+      expect(assistants(id).find((m) => m.id === 'ask-new')?.askAnswer).toBe('rebase it');
+      expect(assistants(id).find((m) => m.id === 'ask-old')?.askAnswer).toBeUndefined();
+      expect((await engine.summary(id))?.pendingQuestions).toBe(0);
+
+      // Sent from the old card while the new one arrived: the user's choice is still delivered.
+      backend.scripts.push(say('Noted'));
+      engine.send(id, 'PR 2225: A', [], 'ask-old');
+      await settled(engine);
+      expect(assistants(id).find((m) => m.id === 'ask-old')?.askAnswer).toBe('PR 2225: A');
+      expect(store.messages(id).filter((m) => m.kind === 'user').map((m) => m.text)).toEqual(['rebase it', 'PR 2225: A']);
+    });
+
+    it('delivers an answer for a card the chat does not hold as a plain message', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('Got it'));
+      engine.send(id, 'Shell: Tauri', [], 'gone');
+      await settled(engine);
+      expect(store.messages(id).filter((m) => m.kind === 'user').map((m) => m.text)).toEqual(['Shell: Tauri']);
+    });
+
     it('leaves a malformed marker readable rather than losing the question', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);

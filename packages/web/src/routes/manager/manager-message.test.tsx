@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workspaceQueryKeys } from '@/api/queries'
-import type { ManagerMessage } from '@open-mercato/cezar-api-client'
+import { supersededAskIds, type ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
 import { answersShownOnCard, askAnswerLines, CommandsRow, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
@@ -16,23 +16,23 @@ function Probe() {
   return <span data-testid="at">{`${location.pathname}|${JSON.stringify(location.state)}`}</span>
 }
 
-function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: ReadonlyArray<{ id: string; name?: string; repoUrl?: string }>) {
+function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: ReadonlyArray<{ id: string; name?: string; repoUrl?: string }>, superseded = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(workspaceQueryKeys.projects, { projects: projects ?? [], bootProject: 'alpha', projectsDir: '' })
   client.setQueryData(workspaceQueryKeys.runsIndex, {
     runs: [{ projectId: 'alpha', id: 'run-1', title: 'Session 123123', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', diffStat: { adds: 87, dels: 12, files: 3 } }],
   })
-  const ui = (next: ManagerMessage) => (
+  const ui = (next: ManagerMessage, nextSuperseded = superseded) => (
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/manager/global']}>
         <Routes>
-          <Route path="*" element={<><ManagerMessageRow message={next} origin={origin} onDecide={onDecide} {...(projects ? { projects } : {})} /><Probe /></>} />
+          <Route path="*" element={<><ManagerMessageRow message={next} origin={origin} onDecide={onDecide} superseded={nextSuperseded} {...(projects ? { projects } : {})} /><Probe /></>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
   )
   const { rerender } = render(ui(message))
-  return Object.assign(onDecide, { rerender: (next: ManagerMessage) => rerender(ui(next)), client })
+  return Object.assign(onDecide, { rerender: (next: ManagerMessage, nextSuperseded = superseded) => rerender(ui(next, nextSuperseded)), client })
 }
 
 beforeEach(() => {
@@ -141,7 +141,7 @@ describe('ManagerMessageRow', () => {
         { text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
         { text: 'Shell: Capacitor (recommended)\nDefault: No', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
       ])
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer' })).toBeTruthy())
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-ask"][data-resolved="true"]')).not.toBeNull())
       expect(document.body.textContent).not.toContain('Unrecognized key')
     })
 
@@ -227,6 +227,30 @@ describe('ManagerMessageRow', () => {
       expect(chosen).toEqual(['Capacitor (recommended) (chosen)', 'No (chosen)'])
       expect([...card.querySelectorAll('[data-slot="chip"]:not([data-active])')].map((chip) => chip.textContent)).toEqual(['Tauri', 'Yes'])
       expect(screen.queryAllByRole('button')).toHaveLength(0)
+    })
+
+    it('renders superseded state with topic chips and no buttons when superseded by a newer card', () => {
+      renderMessage(assistantMessage(2, { text: 'Older decision.', ask }), vi.fn(), undefined, true)
+      const card = document.querySelector('[data-slot="manager-ask"]')!
+      expect(card.getAttribute('data-resolved')).toBe('true')
+      expect(card.getAttribute('data-superseded')).toBe('true')
+      expect(card.textContent).toContain('Superseded')
+      expect([...card.querySelectorAll('[data-slot="manager-ask-topics"] [data-slot="chip"]')].map((chip) => chip.textContent)).toEqual(['Shell', 'Default'])
+      expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
+      expect(screen.queryAllByRole('button')).toHaveLength(0)
+    })
+
+    it('locks the card immediately on send so it cannot send again', async () => {
+      renderMessage(assistantMessage(2, { text: 'Choose now.', ask }))
+      vi.mocked(fetch).mockResolvedValueOnce(Response.json({ ok: true, attachments: 0 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      const sendButton = screen.getByRole('button', { name: 'Send answer' })
+      fireEvent.click(sendButton)
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+      const resolved = document.querySelector('[data-slot="manager-ask"][data-resolved="true"]')
+      expect(resolved).not.toBeNull()
+      expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
     })
 
     describe('which answers the card draws', () => {
@@ -564,5 +588,24 @@ describe('light-theme contrast', () => {
     cleanup()
     renderMessage({ id: 'n', seq: 2, at: '2026-10-31T09:00:00Z', kind: 'notice', text: 'Turn limit reached' } as ManagerMessage)
     expect(screen.getByText('Turn limit reached').className).toContain('text-muted-foreground')
+  })
+})
+
+describe('supersededAskIds', () => {
+  const card = (seq: number, headers: string[], askAnswer?: string) => assistantMessage(seq, {
+    text: `Q${seq}`,
+    ask: { questions: headers.map((header) => ({ header, question: `${header}?`, options: [{ label: 'Yes' }] })) },
+    ...(askAnswer ? { askAnswer } : {}),
+  })
+
+  it('supersedes an older unanswered card a newer card re-asks, answered or not', () => {
+    const older = card(1, ['PR 2225'])
+    expect([...supersededAskIds([older, card(2, ['PR 2225'])])]).toEqual([older.id])
+    expect([...supersededAskIds([card(2, ['PR 2225'], 'Yes'), older])]).toEqual([older.id])
+  })
+
+  it('keeps a card open when a newer card shares only some of its headers', () => {
+    expect(supersededAskIds([card(1, ['Shell', 'Default']), card(2, ['Shell'])]).size).toBe(0)
+    expect(supersededAskIds([card(1, ['PR 100']), card(2, ['PR 200'])]).size).toBe(0)
   })
 })
