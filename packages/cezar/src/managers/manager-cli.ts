@@ -102,7 +102,7 @@ const HELP: Record<string, string> = {
   task: `cez manager task <run> [--project <id>]
 cez manager task create|say|cancel|retry|follow|unfollow …   (each takes --help)
 
-One task as JSON: status, startedBy, runner, model, effort, prNumber/prUrl, its last message and its children.
+One task as JSON: status, startedBy, runner, model, actualModel (what the agent reported running), effort, prNumber/prUrl, its last message and its children.
   --project <id>   the task's project; found from the snapshot when omitted`,
   'task create': `cez manager task create --project <id> [flags] "<objective>"
 
@@ -404,7 +404,8 @@ export async function runManagerCommand(
           for (const project of projects) for (const task of project.tasks) {
             const facts = [
               task.startedBy === 'manager' ? `by ${task.startedByManager ?? 'a manager'}` : 'by the user',
-              task.model && `${task.model}${task.effort ? `/${task.effort}` : ''}`,
+              (task.model || task.actualModel) &&
+                `${[...new Set([task.model, task.actualModel].filter(Boolean))].join(' → ')}${task.effort ? `/${task.effort}` : ''}`,
               task.prNumber !== undefined && `PR #${task.prNumber}`,
               task.childCount > 0 && `${task.childCount} dispatched`,
             ].filter(Boolean).join(', ');

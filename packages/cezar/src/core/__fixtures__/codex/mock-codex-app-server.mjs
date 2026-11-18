@@ -145,7 +145,7 @@ rl.on('line', (line) => {
       rl.close();
     } else if (msg.method === 'thread/start') {
       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
-      emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+      emit({ id: msg.id, result: { thread: { id: 'th_mock_1' }, model: 'gpt-mock-codex' } });
     } else if (msg.method === 'thread/fork') {
       emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` } } });
     } else if (resumeLocked()) {

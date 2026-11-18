@@ -54,10 +54,12 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
   const backend = ran.length > 1 ? 'mixed' : (ran[0] ?? run.runner ?? 'unknown');
   const costUsd = projectCostTask(projectId, run).costUsd;
   const automationId = run.deferredBinding ? undefined : run.automation?.automationId ?? run.automationTrigger?.automationId;
+  // The model the agent REPORTED running wins over the request: "auto" and aliases group under
+  // what they resolved to. Older runs and silent backends fall back to the request.
   const model =
     backend === 'mixed'
       ? undefined
-      : (run.modelIdentity ?? (backend === run.runner ? run.model : undefined));
+      : (run.actualModel ?? run.modelIdentity ?? (backend === run.runner ? run.model : undefined));
   return {
     projectId,
     id: run.id,

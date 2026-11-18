@@ -566,7 +566,7 @@ export function ThreadView({
             pick here is exactly what the next submission sends. */}
         {!lifecycleGate ? (
           <div data-slot="session-usage" className="flex justify-end px-1">
-            <RunUsage run={run} continuationEngine={continuable ? continueAction.pills : undefined} />
+            <RunUsage run={run} continuationEngine={continuable ? continueAction.pills : undefined} reportedModel={thread.sessionModel} />
           </div>
         ) : null}
       </TaskDock>

@@ -59,6 +59,9 @@ export interface CodexUiMapperState {
    *  the runner's `codexSessionStarted` after the thread/start result —
    *  whichever lands first wins; the other is deduplicated). */
   readonly sessionStarted: boolean;
+  /** The thread's resolved model, from the thread/* result; echoed on every `turn.completed`
+   *  because the `thread/started` notification that may open the session first carries none. */
+  readonly model?: string;
   /** Fallback counter for turn frames that arrive without a wire turn id. */
   readonly turnSeq: number;
   readonly currentTurnId: string | null;
@@ -141,11 +144,12 @@ export function createCodexUiState(): CodexUiMapperState {
  * once the thread id is known. Deduplicated against the `thread/started`
  * notification — whichever arrives first emits `session.started`.
  */
-export function codexSessionStarted(threadId: string, state: CodexUiMapperState): CodexUiMapping {
-  if (state.sessionStarted || threadId === '') return { events: [], state };
+export function codexSessionStarted(threadId: string, state: CodexUiMapperState, model?: string): CodexUiMapping {
+  const withModel = model ? { ...state, model } : state;
+  if (state.sessionStarted || threadId === '') return { events: [], state: withModel };
   return {
-    events: [{ type: 'session.started', sessionId: threadId, backend: 'codex' }],
-    state: { ...state, sessionStarted: true },
+    events: [{ type: 'session.started', sessionId: threadId, backend: 'codex', ...(model ? { model } : {}) }],
+    state: { ...withModel, sessionStarted: true },
   };
 }
 
@@ -263,6 +267,7 @@ function mapTurnEnd(
   if (turnId === state.currentTurnId && state.pendingTurnUsage !== null) {
     completed.usage = state.pendingTurnUsage;
   }
+  if (state.model) completed.models = [{ model: state.model }];
   events.push(completed);
   return {
     events,

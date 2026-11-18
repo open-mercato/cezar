@@ -472,18 +472,21 @@ class CodexSession implements AgentSession {
     await this.rpc.initialize();
 
     const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
+    // The thread/* results name the model the thread actually runs on — what "auto" resolved to.
+    let model: string | undefined;
     if (this.spec.resume && this.spec.sessionId) {
-      this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
+      ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, clean(overrides)));
     } else {
       const res = await this.rpc.request('thread/start', clean(overrides));
       this.threadId = threadIdOf(res) ?? this.spec.sessionId;
+      model = threadModelOf(res);
     }
     if (this.threadId) {
       this.emit({ type: 'session', sessionId: this.threadId });
       // The result path (thread/start response, or thread/resume which sends
       // no thread/started notification) — deduplicated inside the mapper.
       const threadId = this.threadId;
-      this.emitUi((state) => codexSessionStarted(threadId, state));
+      this.emitUi((state) => codexSessionStarted(threadId, state, model));
     }
 
     // Native developerInstructions replaces config guidance and stays stale on resume/fork.
@@ -497,11 +500,11 @@ class CodexSession implements AgentSession {
    * for it to let go; if it never does, fork the stored thread (forking takes no writer lock)
    * so the run keeps its history instead of failing on a lock it cannot break.
    */
-  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<string> {
+  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<{ threadId: string; model?: string }> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await this.rpc.request('thread/resume', { threadId, ...overrides });
-        return threadId;
+        const res = await this.rpc.request('thread/resume', { threadId, ...overrides });
+        return { threadId, model: threadModelOf(res) };
       } catch (err) {
         if (!isActiveWriterError(err) || !this.stdinOpen) throw err;
         const delay = this.resumeLockRetryMs[attempt];
@@ -517,7 +520,7 @@ class CodexSession implements AgentSession {
       type: 'note',
       message: `codex: thread ${threadId} is still open in another Codex process — continuing in a fork of it (${forkedId})`,
     });
-    return forkedId;
+    return { threadId: forkedId, model: threadModelOf(res) };
   }
 
   private async startOrSteerTurn(text: string): Promise<void> {
@@ -863,6 +866,12 @@ function isActiveWriterError(err: unknown): boolean {
 function threadIdOf(res: Record<string, unknown>): string | undefined {
   const thread = res.thread as { id?: unknown } | undefined;
   return typeof thread?.id === 'string' ? thread.id : stringField(res, 'threadId');
+}
+
+/** `thread/start`/`thread/resume`/`thread/fork` results carry the thread's resolved `model`. */
+function threadModelOf(res: Record<string, unknown>): string | undefined {
+  const model = stringField(res, 'model');
+  return model === '' ? undefined : model;
 }
 
 function turnIdOf(obj: Record<string, unknown>): string | undefined {

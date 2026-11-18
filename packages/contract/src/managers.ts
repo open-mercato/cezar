@@ -594,6 +594,8 @@ export const managerSnapshotTaskSchema = z.object({
   runner: z.string().optional(),
   /** The model the run uses: the resolved identity when known, else what was asked for. */
   model: z.string().optional(),
+  /** The model the agent reported actually running — what "auto" or an alias resolved to. */
+  actualModel: z.string().optional(),
   effort: z.string().optional(),
   /** The pull request the task opened, else the one it declared it is about. */
   prNumber: z.number().int().optional(),
