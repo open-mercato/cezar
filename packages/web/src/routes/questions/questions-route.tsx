@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronRightIcon, MessageCircleQuestionIcon, SquareTerminalIcon } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Link } from 'react-router'
 
 import { ApiError, putWorkspaceUiState } from '@/api/client'
@@ -11,6 +11,7 @@ import {
   pauseDismiss,
   questionKeys,
   resumeDismiss,
+  resumePausedDismissals,
   scheduleDismiss,
   settleQuestion,
   undoDismiss,
@@ -448,6 +449,7 @@ function ClosedRow({ item, now, managerById }: { item: QuestionItem; now: number
  */
 function DismissToasts({ pending, heading }: { pending: readonly PendingDismissal[]; heading: RefObject<HTMLHeadingElement | null> }) {
   const queryClient = useQueryClient()
+  useEffect(() => resumePausedDismissals, [])
   if (pending.length === 0) return null
   return (
     <div data-slot="questions-toasts" className="pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-50 flex flex-col items-center gap-2 px-4">

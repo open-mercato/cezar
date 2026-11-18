@@ -206,6 +206,19 @@ describe('the Questions page', () => {
     await waitFor(() => expect(posts).toHaveLength(1))
   })
 
+  // Leaving the page while focus is in the toast fires no blur: the paused clock must restart.
+  it('a dismissal paused by focus still lands after the page unmounts', async () => {
+    data.open = [managerItem('m1', 'Design')]
+    renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
+    fireEvent.focus(screen.getByRole('button', { name: 'Undo' }))
+    cleanup()
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS) })
+    await waitFor(() => expect(posts).toEqual([{ path: 'dismiss m:global:m1', body: undefined }]))
+  })
+
   it('a stale card sorts last in its group with the amber note and Dismiss as out of date', async () => {
     data.open = [
       managerItem('m1', 'Base', { askedAt: ago(3 * HOUR), stale: { why: 'replied-in-chat', detail: 'you replied 4m after it was asked', since: ago(HOUR) } }),

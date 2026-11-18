@@ -98,6 +98,13 @@ export const questionCountsSchema = z.object({
 });
 export type QuestionCounts = z.infer<typeof questionCountsSchema>;
 
+/** A `questions` topic frame: the counts, plus a digest of the open list that changes even when
+ *  they do not (one card replaced by another). Optional: an older server sends counts alone. */
+export const questionsTopicFrameSchema = questionCountsSchema.extend({
+  revision: z.string().max(64).optional(),
+});
+export type QuestionsTopicFrame = z.infer<typeof questionsTopicFrameSchema>;
+
 export const questionsResponseSchema = z.object({
   open: z.array(questionItemSchema),
   /** Closed in the last 7 days, newest first, at most 50. */
