@@ -11,7 +11,6 @@ export function isFinished(status: ManagerActionStatus): boolean {
   return status !== 'pending' && status !== 'running'
 }
 
-export const lingerEnded = (finishedAt: number | undefined, now: number) => finishedAt !== undefined && finishedAt + LINGER_MS <= now
 export const lingerFading = (finishedAt: number | undefined, now: number) => finishedAt !== undefined && finishedAt + LINGER_MS - FADE_MS <= now
 
 /**
@@ -22,23 +21,17 @@ export function useLingerClock(rows: ReadonlyArray<{ finishedAt?: number }>, pru
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const at = Date.now()
-    // A tick can land past an end (a throttled background tab): prune now rather than never.
-    if (rows.some((row) => lingerEnded(row.finishedAt, at))) {
-      setNow(at)
-      prune(at)
-      return
-    }
     const due = rows
       .flatMap((row) => (row.finishedAt === undefined ? [] : [row.finishedAt + LINGER_MS - FADE_MS, row.finishedAt + LINGER_MS]))
       .filter((when) => when > at)
-    if (due.length === 0) return
-    const timer = setTimeout(() => {
+    // Every boundary armed at once: the end must not wait for the fade's re-render to schedule it.
+    const timers = [...new Set(due)].map((when) => setTimeout(() => {
       const tick = Date.now()
       setNow(tick)
       prune(tick)
-    }, Math.min(...due) - at)
-    return () => clearTimeout(timer)
-  }, [rows, prune, now])
+    }, when - at))
+    return () => timers.forEach(clearTimeout)
+  }, [rows, prune])
   return now
 }
 
@@ -51,6 +44,7 @@ export function useStableOrder<T extends { id: string }>(items: readonly T[]): T
   const rank = new Map(seen.current.map((id, index) => [id, index]))
   const known = items.filter((item) => rank.has(item.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!)
   const ordered = [...known, ...items.filter((item) => !rank.has(item.id))]
-  seen.current = ordered.map((item) => item.id)
+  // An id briefly missing from a list keeps its slot for when it comes back.
+  seen.current = [...ordered.map((item) => item.id), ...seen.current.filter((id) => !items.some((item) => item.id === id))]
   return ordered
 }

@@ -11,17 +11,17 @@ import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { actionTitle } from '@/lib/managers'
 import { cn } from '@/lib/utils'
-import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
+import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { QuestionsCrossLink } from '@/routes/questions/questions-route'
 
+import { isFinished, LINGER_MS, lingerFading, useLingerClock, useStableOrder } from './approvals-linger'
 import { ActionCard, useDismissStaleMerges, type DecideAction } from './manager-approval'
-import { isFinished, lingerEnded, lingerFading, useLingerClock, useStableOrder } from './approvals-linger'
 import { ManagerAvatar } from './manager-avatar'
 import { ManagerProjectsContext } from './manager-reference'
 
 type Action = Extract<ManagerMessage, { kind: 'action' }>
-/** `finishedAt`: when this page saw it finish; the card lingers 30 s from then (this mount only). */
+/** `finishedAt`: when this mount saw it finish; the card lingers from then (approvals-linger). */
 type DecisionResult = { managerId: string; message: Action; readError?: string; finishedAt?: number }
 type SaveResult = (managerId: string, actionId: string, message?: Action, readError?: string) => void
 
@@ -44,11 +44,11 @@ function ManagerApprovals({ manager, heading, results, saveResult, now }: {
     queryFn: ({ signal }) => getPendingManagerActions(manager.id, signal),
     enabled: manager.pendingActions > 0,
   })
-  // Stable: a decided card stays where it was instead of joining the end of the list.
-  const messages = useStableOrder([
+  // By seq, so a decided card keeps its slot instead of moving below the cards still waiting.
+  const messages = [
     ...(manager.pendingActions > 0 ? pending.data ?? [] : []).filter((message) => !results.some((row) => row.message.id === message.id)),
     ...results.map((row) => row.message),
-  ])
+  ].sort((a, b) => a.seq - b.seq)
   const readResult = useCallback(async (message: Action) => {
     const ownsFocus = document.activeElement?.closest('[data-result-id]')?.getAttribute('data-result-id') === message.id
     saveResult(manager.id, message.id, { ...message, status: 'running', result: undefined })
@@ -73,11 +73,21 @@ function ManagerApprovals({ manager, heading, results, saveResult, now }: {
     }
     // Keep decisions at page scope: the summary can reach zero and unmount the pending list
     // before the HTTP response or its final failed/done message arrives.
-    if (!opts?.onlyIfStale) saveResult(manager.id, actionId, { ...message, status: 'running', result: undefined })
-    const result = await decideManagerAction(manager.id, actionId, decision, opts).catch((error: unknown) => {
+    if (!opts?.onlyIfStale) {
+      saveResult(manager.id, actionId, { ...message, status: 'running', result: undefined })
+      // The count and the sidebar badge drop now, not when the merge returns; the summary corrects it.
+      client.setQueryData<ManagerListResponse>(managerKeys.list, (list) => list && {
+        ...list,
+        managers: list.managers.map((row) => row.id === manager.id ? { ...row, pendingActions: Math.max(0, row.pendingActions - 1) } : row),
+      })
+    }
+    const result = await decideManagerAction(manager.id, actionId, decision, opts).catch(async (error: unknown) => {
       // A stale check's 409 means "still open": the card stays, so focus inside it stays too.
       if (!opts?.onlyIfStale) {
-        saveResult(manager.id, actionId)
+        void client.invalidateQueries({ queryKey: managerKeys.list })
+        // A lost response can hide a decision the server already ran: show that card, never drop it.
+        const settled = await getManagerActionResult(manager.id, message).catch(() => undefined)
+        saveResult(manager.id, actionId, settled)
         restoreFocus()
       }
       throw error
@@ -118,20 +128,22 @@ function ManagerApprovals({ manager, heading, results, saveResult, now }: {
           if (message.kind !== 'action') return null
           const row = results.find((entry) => entry.message.id === message.id)
           const error = row?.readError
-          return error ? (
-            <div key={message.id} data-result-id={message.id} role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/45 bg-card p-3.5 text-sm">
-              <p>Couldn’t load the result for {actionTitle(message.action)}. Your decision may have completed.</p>
-              <p>{error}</p>
-              <Button variant="outline" className="self-start max-md:min-h-11" onClick={() => void readResult(message)}>Retry result</Button>
-            </div>
-          ) : (
+          // One wrapper for every card, so a card moving between pending and decided keeps its state.
+          return (
             <div
               key={message.id}
-              data-slot="approval-row"
-              data-lingering={row?.finishedAt === undefined ? undefined : 'true'}
-              className={cn('transition-opacity duration-300 motion-reduce:transition-none', lingerFading(row?.finishedAt, now) && 'opacity-0')}
+              data-slot="approval-slot"
+              data-approval-id={message.id}
+              data-lingering={row?.finishedAt === undefined ? undefined : lingerFading(row.finishedAt, now) ? 'leaving' : 'shown'}
+              className={cn('motion-safe:transition-opacity motion-safe:duration-300', row && lingerFading(row.finishedAt, now) && 'motion-safe:opacity-0')}
             >
-              <ActionCard origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />
+              {error ? (
+                <div data-result-id={message.id} role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/45 bg-card p-3.5 text-sm">
+                  <p>Couldn’t load the result for {actionTitle(message.action)}. Your decision may have completed.</p>
+                  <p>{error}</p>
+                  <Button variant="outline" className="self-start max-md:min-h-11" onClick={() => void readResult(message)}>Retry result</Button>
+                </div>
+              ) : <ActionCard origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />}
             </div>
           )
         })}
@@ -146,21 +158,30 @@ export function ManagerApprovalsRoute() {
   const enabled = useHealth().data?.capabilities.managers === true
   const managers = useManagers(enabled)
   const heading = useRef<HTMLHeadingElement>(null)
+  // Page-scoped on purpose: a decided card lingers only in the mount that decided it.
   const [results, setResults] = useState<DecisionResult[]>([])
   const saveResult = useCallback<SaveResult>((managerId, actionId, message, readError) => {
     setResults((rows) => {
-      const same = (row: DecisionResult) => row.managerId === managerId && row.message.id === actionId
-      const finishedAt = message && !readError && isFinished(message.status) ? rows.find(same)?.finishedAt ?? Date.now() : undefined
-      const others = rows.filter((row) => !same(row))
-      return message ? [...others, { managerId, message, ...(readError ? { readError } : {}), ...(finishedAt !== undefined ? { finishedAt } : {}) }] : others
+      const previous = rows.find((row) => row.managerId === managerId && row.message.id === actionId)
+      const others = rows.filter((row) => row !== previous)
+      if (!message) return others
+      const finishedAt = readError || !isFinished(message.status) ? undefined : previous?.finishedAt ?? Date.now()
+      return [...others, { managerId, message, ...(readError ? { readError } : {}), ...(finishedAt === undefined ? {} : { finishedAt }) }]
     })
   }, [])
-  // A finished card stays 30 s, then leaves; results live in this mount, so re-entry starts empty.
   const prune = useCallback((at: number) => {
-    setResults((rows) => rows.filter((row) => !lingerEnded(row.finishedAt, at)))
+    setResults((rows) => {
+      const kept = rows.filter((row) => row.finishedAt === undefined || row.finishedAt + LINGER_MS > at)
+      if (kept.length === rows.length) return rows
+      // The decided card holds focus (ActionCard's focusCard): don't drop it to <body> with the card.
+      const holder = document.activeElement?.closest('[data-slot="approval-slot"]')?.getAttribute('data-approval-id')
+      if (holder && rows.some((row) => !kept.includes(row) && row.message.id === holder)) {
+        heading.current?.focus({ preventScroll: true })
+      }
+      return kept
+    })
   }, [])
   const now = useLingerClock(results, prune)
-  // A decision bumps its manager's activity; re-sorting would move the card from under the reader.
   const ordered = useStableOrder(orderManagers(managers.data?.managers ?? []))
   const visibleResults = results.filter((row) => ordered.some((manager) => manager.id === row.managerId))
   const count = ordered.reduce((sum, manager) => sum + manager.pendingActions, 0)
@@ -172,6 +193,7 @@ export function ManagerApprovalsRoute() {
           <QuestionsCrossLink />
         </div>
         <p role="status" className="text-sm text-muted-foreground">{managers.data ? `${count} pending ${count === 1 ? 'approval' : 'approvals'} across all managers` : managers.isError ? 'Pending approvals across all managers' : 'Loading approvals…'}</p>
+        {/* Lingering cards leave on their own after 30 s; this sends them now. */}
         {visibleResults.some((row) => row.message.status !== 'running' || row.readError) ? (
           <Button variant="ghost" className="mt-1 self-start max-md:min-h-11" onClick={() => {
             setResults((rows) => rows.filter((row) => row.message.status === 'running' && !row.readError))

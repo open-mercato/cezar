@@ -67,7 +67,7 @@ beforeEach(() => {
     return Response.json({ ok: true })
   }))
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 function renderApprovals(entry = '/manager/approvals', seedManagers = true, projects: Array<{ id: string; name: string; repoUrl?: string }> = []) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
@@ -352,6 +352,78 @@ it('also reconciles a summary received during the follow-up manager-list read', 
   await waitFor(() => expect(reads).toBe(3))
   expect(await screen.findByRole('link', { name: 'Approvals, 2 pending approvals' })).toBeTruthy()
   expect(await screen.findByText('Job 2')).toBeTruthy()
+})
+
+const sectionNames = () => [...document.querySelectorAll('[data-route="manager-approvals"] > section')].map((section) => section.getAttribute('aria-label'))
+const actionIds = () => [...document.querySelectorAll('[data-slot="manager-action"]')].map((card) => card.getAttribute('data-action-id'))
+
+it('keeps a decided card in its slot even when its manager’s activity re-sorts the list', async () => {
+  managers = [managerFixture({ pendingActions: 1, lastActivityAt: '2026-11-02T00:00:00.000Z' }), managerFixture({ id: 'shop', name: 'Shop', pendingActions: 2, lastActivityAt: '2026-11-01T00:00:00.000Z' })]
+  messages = { global: [job(1)], shop: [job(2), job(3)] }
+  const client = renderApprovals()
+  await screen.findByText('Job 3')
+  await screen.findByText('Job 2')
+  expect([sectionNames(), actionIds()]).toEqual([['Global Manager', 'Shop'], ['a1', 'a2', 'a3']])
+  // The decision's note makes Shop the newest manager: re-sorting moved the card out from under the reader.
+  onDecision = () => {
+    managers = managers.map((manager) => manager.id === 'shop' ? { ...manager, lastActivityAt: '2026-11-03T00:00:00.000Z' } : manager)
+    act(() => applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'shop', manager: managers.find((manager) => manager.id === 'shop') })))
+  }
+  fireEvent.click(within(document.querySelector<HTMLElement>('[data-action-id="a2"]')!).getByRole('button', { name: 'Dismiss' }))
+  await screen.findByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })
+  expect([sectionNames(), actionIds()]).toEqual([['Global Manager', 'Shop'], ['a1', 'a2', 'a3']])
+})
+
+it('drops the count and the badge on the click, while the decided card stays', async () => {
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1 })]
+  renderApprovals()
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  onDecision = () => held
+  fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }))
+  try {
+    expect(await screen.findByText('0 pending approvals across all managers')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Approvals, 0 pending approvals' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="manager-action"][data-status="running"]')).not.toBeNull()
+    expect(within(document.querySelector<HTMLElement>('[data-slot="manager-action"]')!).getAllByText('Working on it').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
+  } finally { release() }
+  await screen.findByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })
+  expect(screen.getByRole('link', { name: 'Approvals, 0 pending approvals' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
+})
+
+it('lingers a finished card, with its failure reason, for 30 seconds and then shows the empty state', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, confirm: { 'merge-pr': false } })]
+  messages = { shop: [actionMessage(2)] }
+  onDecision = () => { messages.shop = [actionMessage(2, { status: 'failed', result: 'Required checks are failing.' })] }
+  renderApprovals()
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+  expect(await screen.findByText('Required checks are failing.')).toBeTruthy()
+  expect(document.querySelector('[data-slot="manager-action"][data-status="failed"]')).not.toBeNull()
+  await act(async () => { vi.advanceTimersByTime(29_000) })
+  expect(screen.getByText('Required checks are failing.')).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'No pending approvals' })).toBeNull()
+  await act(async () => { vi.advanceTimersByTime(1_100) })
+  expect(document.querySelector('[data-slot="manager-action"]')).toBeNull()
+  expect(screen.getByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Clear results' })).toBeNull()
+})
+
+it('does not bring finished cards back when the reader leaves and returns', async () => {
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 2 })]
+  messages = { shop: [job(2), job(3)] }
+  renderApprovals()
+  const card = (await screen.findByText('Job 2')).closest<HTMLElement>('[data-slot="manager-action"]')!
+  fireEvent.click(within(card).getByRole('button', { name: 'Dismiss' }))
+  await screen.findByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })
+  fireEvent.click(screen.getByRole('link', { name: 'Open chat with Shop' }))
+  await screen.findByRole('heading', { name: 'Chat' })
+  fireEvent.click(screen.getByRole('link', { name: 'Approvals, 1 pending approval' }))
+  await screen.findByText('Job 3')
+  expect(screen.queryByText('Job 2')).toBeNull()
+  expect(screen.queryByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })).toBeNull()
 })
 
 describe('a decided card lingers for 30 seconds on this page only', () => {
