@@ -678,9 +678,9 @@ unknown ui-state keys. It does not touch per-repo files.
 ## Workflows — typed replies answer a human gate (#2318), 2026-11-18
 
 - **Changed outcome**: a `gate.human` reply that is not a clear reject (`Reject`, "request
-  changes", "no, stop", "don't open a PR"…) now leaves by `approve`. Free text is applied first, by
-  an agent turn on the task branch; if that turn does not confirm with `CEZ:VERDICT applied`, the
-  gate asks again. Such a reply used to leave by `reject`. This applies to saved copies too, so a
+  changes", "stop here", "not yet", "don't push", "don't open a PR"…) now leaves by `approve`. Free
+  text is applied first, by an agent turn on the task branch; `CEZ:VERDICT declined` from that turn
+  takes `reject`, and anything but `applied` makes the gate ask again. Such a reply used to leave by `reject`. This applies to saved copies too, so a
   custom graph whose `approve` port pushes, comments or calls a webhook now does so after a free-text
   reply.
 - **Additive outputs**: `gate.human` may also set `instructions` (the reply to apply) and

@@ -491,9 +491,10 @@ whose counter never resets within a run, so every run is finite.
   next to `quick-task` (still the default). Open one in the editor; it saves as your copy.
 - **Human gates.** Choose **Approve** or **Reject**, or reply in the task composer or
   through `cez-manager task say`. Plain replies such as “approve” and “reject” take the
-  corresponding path. “Request changes” takes the reject path. Other text, such as
+  corresponding path. “Request changes”, “stop here”, “not yet” and “don’t push” take the reject path. Other text, such as
   “rebase first”, approves with instructions. An agent applies them on the task branch
-  before the workflow advances. If the agent cannot confirm completion, the gate asks again.
+  before the workflow advances. If the agent cannot confirm completion, the gate asks again; if it
+  reads the reply as “do not continue”, the gate takes the reject path.
   In `implement-review-pr`, `review-council`, and custom graphs whose approve port leads
   directly to a PR node, **Approve** opens a draft. Choose **Approve, open a full PR** or
   include “open a full PR” in your reply to open it ready for review.

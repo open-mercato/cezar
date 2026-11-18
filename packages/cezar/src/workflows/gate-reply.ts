@@ -28,7 +28,10 @@ const BARE_FULL_PR = new Set([
 const BARE_REJECT = new Set(['no', 'nope', 'stop', 'cancel', 'abort', 'skip', "don't", 'do not', 'no pr', 'rejected', 'declined']);
 const REJECT_FIRST = /^(?:please\s+)?(?:reject|decline|request changes|changes requested)(?:$|\s*[.!?,:;—–-]|\s+(?:it|this|the pr|the pull request)\b)/i;
 const STOP = /^no[,!\s]+(?:stop|cancel|abort|skip|don't|do not)\b/i;
-const DO_NOT_PUBLISH = /^(?:please\s+)?(?:don't|do not|never)\s+(?:publish\b|(?:open|create)\s+(?:it|(?:(?:a|the)\s+)?(?:pr|pull request))\b)/i;
+// A whole reply that only says "stop", "not yet" or "wait" (#2318 review): never an approval.
+const HOLD =
+  /^(?:please |ok |okay )?(?:n|nah|stop|halt|cancel|abort|skip|wait|hold(?: off| on)?|not (?:yet|now)|never ?mind|no thanks|later)(?: (?:here|it|this|that|the pr|the pull request|for now|now|please|for a (?:moment|minute|bit)|a (?:moment|minute|sec(?:ond)?)))*$/i;
+const DO_NOT_PUBLISH = /^(?:please\s+)?(?:don't|do not|never)\s+(?:publish\b|push(?:\s+(?:it|this|that|anything|the branch|yet))*\s*$|(?:open|create)\s+(?:it|(?:(?:a|the)\s+)?(?:pr|pull request))\b)/i;
 const FULL_PR =
   /\b(?:open|create|make|mark)\s+(?:it\s+)?(?:as\s+)?(?:a\s+|the\s+)?(?:full|non-?draft|regular|normal|ready[- ]for[- ]review)\s+(?:pr|pull request)\b|\b(?:open|create|make|mark)\b[^.!?,;]*\bready for review\b/i;
 const DRAFT_NEGATION = /\b(?:not|no|never|don't|do not)\s+(?:(?:open|create|publish)\s+)?(?:it\s+)?(?:as\s+)?(?:a\s+)?draft\b/i;
@@ -40,7 +43,7 @@ export function classifyGateReply(reply: string, opensPr: boolean): GateDecision
   const text = reply.trim();
   if (!text) return undefined;
   const plain = normalize(text);
-  if (BARE_REJECT.has(plain) || REJECT_FIRST.test(plain) || STOP.test(plain)) return { decision: 'reject' };
+  if (BARE_REJECT.has(plain) || REJECT_FIRST.test(plain) || STOP.test(plain) || HOLD.test(plain)) return { decision: 'reject' };
   const clauses = plain.split(/[.!?,;]/).map((clause) => clause.trim());
   if (clauses.some((clause) => DO_NOT_PUBLISH.test(clause) && !DRAFT_NEGATION.test(clause))) return { decision: 'reject' };
   if (opensPr && BARE_FULL_PR.has(plain)) return { decision: 'approve', fullPr: true };
@@ -67,6 +70,7 @@ export function gateInstructionsPrompt(gate: string, instructions: string, next:
       : `When you finish, the workflow goes on to "${next.name}".`;
   return `The user approved "${gate}", with these instructions:\n\n${instructions}\n\n` +
     `Apply them now on this task's branch and commit any changes. ${after}\n\n` +
-    'End your final message with CEZ:VERDICT applied only after completing the instructions, or CEZ:VERDICT blocked if you could not apply them.\n\n' +
+    'End your final message with CEZ:VERDICT applied only after completing the instructions, or CEZ:VERDICT blocked if you could not apply them. ' +
+    'If the instructions ask the workflow to stop, wait or not publish, change nothing and end with CEZ:VERDICT declined.\n\n' +
     'Original task: {{task}}';
 }

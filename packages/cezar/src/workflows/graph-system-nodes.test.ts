@@ -132,6 +132,16 @@ describe('graph system nodes', () => {
     expect(readFileSync(join(repoRoot, 'gate.txt'), 'utf8')).toBe(`rejected: ${reply}\n`);
   }, 30_000);
 
+  it('takes the reject path when the apply turn declines the reply', async () => {
+    const id = manager.startRun(def(GATE), { task: 'x', worktree: true }).id;
+    await until(id, parkedAt('gate'));
+    const reply = 'Leave it for tomorrow. mock:verdict=declined';
+    expect(manager.sendMessage(id, [{ type: 'text', text: reply }])).toBe(true);
+    const final = await until(id, terminal);
+    expect(final.steps.find((s) => s.id === 'yes')?.status).toBe('pending');
+    expect(final.steps.find((s) => s.id === 'no')?.status).toBe('done');
+  }, 30_000);
+
   it('asks again when instructions cannot be applied, then resumes the same gate on approval', async () => {
     const id = manager.startRun(def(GATE), { task: 'x', worktree: true }).id;
     const original = (await until(id, parkedAt('gate'))).attentionRequest?.requestId;

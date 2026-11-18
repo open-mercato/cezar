@@ -7085,6 +7085,12 @@ export class RunManager {
             break;
           }
           if (applied === null) break;
+          if (applied === 'declined') {
+            // The agent read the reply as "do not go on": take the reject path, never publish.
+            emit({ type: 'note', stepId: node.id, message: 'your reply asked not to continue — rejected' });
+            outcome = 'reject';
+            break;
+          }
           // Could not apply them: the gate waits again, saying why, instead of failing the run.
           gateNote = `Your instructions could not be applied (${applied.failed}). Review the branch, then reply again or choose an option.`;
           emit({ type: 'note', stepId: node.id, message: gateNote, tone: 'danger' });
@@ -8064,7 +8070,7 @@ export class RunManager {
       taskBackend: RunnerId;
       extraSystemPrompt: string | undefined;
     },
-  ): Promise<null | 'finished' | { failed: string }> {
+  ): Promise<null | 'finished' | 'declined' | { failed: string }> {
     const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
     const steps = this.store.getRun(runId)?.steps ?? [];
     const worker = graph.nodes.find(
@@ -8103,8 +8109,9 @@ export class RunManager {
       return { failed: 'the agent session closed while waiting for a reply' };
     }
     if (failure) return { failed: failure };
-    const verdict = parseVerdict(lastTurn.text, ['applied', 'blocked']);
+    const verdict = parseVerdict(lastTurn.text, ['applied', 'blocked', 'declined']);
     if (verdict === 'applied') return null;
+    if (verdict === 'declined') return 'declined';
     return { failed: verdict === 'blocked' ? 'the agent reported a blocker' : 'the agent did not confirm completion' };
   }
 
