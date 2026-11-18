@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { attachmentListSchema } from './runs.ts';
 import { runnerSchema } from './runners.ts';
+import { questionAboutSchema, questionCardReplaces, questionClosedSchema, questionStaleSchema } from './questions.ts';
 
 /**
  * Managers (spec `.ai/specs/2026-10-31-managers.md`): global, long-lived agents the user talks to
@@ -386,6 +387,9 @@ export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;
 
 /** The questions of a `CEZ:ASK` line, the same shape a task's ask card shows. */
 export const managerAskSchema = z.object({
+  /** The card's stable name; re-asking with it replaces the older card (Questions inbox spec). */
+  id: z.string().optional(),
+  about: questionAboutSchema.optional(),
   questions: z.array(z.object({
     id: z.string().optional(),
     header: z.string(),
@@ -438,6 +442,10 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     ask: managerAskSchema.optional(),
     /** What the user answered; the next message they send answers an open card. */
     askAnswer: z.string().optional(),
+    /** Closed without a card answer: dismissed, replaced, withdrawn, expired, or answered on its linked copy. */
+    askClosed: questionClosedSchema.optional(),
+    /** Suspected out of date: still open and counted, with the reason shown on the card. */
+    askStale: questionStaleSchema.optional(),
     commands: z.array(managerCommandSchema),
     stopped: z.boolean().optional(),
     error: z.string().optional(),
@@ -477,20 +485,20 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
 ]);
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;
 
-/**
- * Unanswered question cards a newer card re-asks: every one of their headers appears on a later
- * `ask`. A card sharing only some headers stays open — its other questions still need an answer.
- */
+/** Close rule "replaced" for manager cards; the one definition lives in `questions.ts`. */
+export const askReplaces = (newer: ManagerAsk, older: ManagerAsk): boolean => questionCardReplaces(newer, older);
+
+/** Unanswered, still-open question cards a later card replaces (`askReplaces`). Covers history written before
+ *  the engine persisted `askClosed: replaced` (#2307). */
 export function supersededAskIds(messages: readonly ManagerMessage[]): ReadonlySet<string> {
   const superseded = new Set<string>();
-  const later = new Set<string>();
-  const newestFirst = [...messages].sort((a, b) => b.seq - a.seq);
-  for (const message of newestFirst) {
-    if (message.kind !== 'assistant' || !message.ask) continue;
-    const headers = message.ask.questions.map((question) => question.header.trim()).filter(Boolean);
-    if (message.askAnswer === undefined && headers.length > 0 && headers.every((header) => later.has(header))) superseded.add(message.id);
-    for (const header of headers) later.add(header);
-  }
+  const cards = [...messages]
+    .filter((message): message is Extract<ManagerMessage, { kind: 'assistant' }> & { ask: ManagerAsk } => message.kind === 'assistant' && message.ask !== undefined)
+    .sort((a, b) => a.seq - b.seq);
+  cards.forEach((older, index) => {
+    if (older.askAnswer !== undefined || older.askClosed !== undefined) return;
+    if (cards.slice(index + 1).some((newer) => askReplaces(newer.ask, older.ask))) superseded.add(older.id);
+  });
   return superseded;
 }
 

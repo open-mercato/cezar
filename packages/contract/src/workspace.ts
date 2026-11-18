@@ -317,6 +317,8 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
    *  project. One bad entry drops the list rather than the whole file. */
   savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** Questions inbox: days before an open question moves to Older (absent = 7, 0 = off). */
+  questions: z.looseObject({ olderAfterDays: z.number().int().min(0).max(365).optional() }).optional(),
   /** Which approval types ask for confirmation; one value per server (mobile spec, Q13). */
   managerConfirm: managerConfirmSchema.optional(),
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same

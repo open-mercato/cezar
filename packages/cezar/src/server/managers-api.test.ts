@@ -298,6 +298,17 @@ describe('the managers routes', () => {
     expect(response.status).toBe(403);
   });
 
+  it('refuses a second answer to a card that is already closed (Questions inbox)', async () => {
+    const { id } = await createManager();
+    const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+    const ask = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'next' }] }] };
+    log.persistMessage(id, { id: 'closed', seq: 0, at: 't', kind: 'assistant', turn: 'chat', text: '', streaming: false, commands: [], ask, askClosed: { reason: 'dismissed', at: 't' } } as ManagerMessage);
+    const send = (askId: string) => request(`${BASE}/${id}/messages`, { method: 'POST', body: { text: 'Base: main', askId } });
+    const refused = await send('closed');
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'question already closed' });
+  });
+
   it('pages history oldest-first within the page, newest page by default', async () => {
     const { id } = await createManager();
     const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));

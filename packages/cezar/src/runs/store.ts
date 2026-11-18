@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -33,6 +33,8 @@ import { track } from '../telemetry.ts';
 import { reportAgentError } from './agent-error-telemetry.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
 import { MAX_REF } from './task-refs.ts';
+import { ASK_ENDING_STATUSES, asksReplacedBy, asksPartlyReasked, capTaskAsks, isOpenAsk } from './task-asks.ts';
+import { askClosedEvent } from '../core/ui-events.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
@@ -64,6 +66,8 @@ export type StepStatus =
   | 'skipped';
 
 const usageCounterSchema = z.number().finite().nonnegative();
+/** Pending dismiss notes kept for the next Continue (Questions inbox spec § Telling the agent). */
+export const TASK_ASK_NOTES_MAX = 5;
 
 /**
  * A runner id as it may appear in a PERSISTED record, normalized to the
@@ -145,6 +149,14 @@ const queuedMessageSchema = z.object({
 
 /** One authoritative PR association for a task. Older records project their scalar fields
  * into this list on first append, so no migration is needed. */
+/** Per-entry salvage for `RunRecord.asks`: one unreadable ask costs only itself, never the list. */
+function salvageTaskAsks(list: unknown[]): TaskAskRecord[] {
+  return list.flatMap((entry) => {
+    const parsed = taskAskRecordSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 const prRefSchema = z.object({
   number: z.number().int().positive().max(MAX_REF),
   url: z.string().url().optional(),
@@ -294,6 +306,11 @@ export const runRecordSchema = z.object({
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
   completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
+  /** The run's `CEZ:ASK` questions (Questions inbox spec). An older cezar's `z.object` strips the
+   *  unknown key rather than rejecting the run, so this lives on the record, not in a sidecar. */
+  asks: z.array(z.unknown()).transform(salvageTaskAsks).optional().catch(undefined),
+  /** Dismiss notes waiting for the next Continue (the session was closed when the user skipped). */
+  askNotes: z.array(z.string().max(1000)).max(TASK_ASK_NOTES_MAX).optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
@@ -1877,6 +1894,116 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  /**
+   * Record a task's `CEZ:ASK` (Questions inbox spec), closing the open asks it replaces: the same
+   * card id, or every header covered. Returns the asks it closed.
+   */
+  recordTaskAsk(runId: string, ask: TaskAskRecord): TaskAskRecord[] {
+    const run = this.runs.get(runId);
+    if (!run) return [];
+    const redacted: TaskAskRecord = {
+      ...ask,
+      questions: ask.questions.map((question) => ({
+        ...question,
+        question: this.redactText(question.question, runId),
+        options: question.options.map((option) => ({
+          ...option,
+          label: this.redactText(option.label, runId),
+          ...(option.description ? { description: this.redactText(option.description, runId) } : {}),
+        })),
+      })),
+    };
+    const replaced = new Set(asksReplacedBy(run.asks, redacted).map((old) => old.requestId));
+    const at = new Date().toISOString();
+    const closed: TaskAskRecord[] = [];
+    const asks = (run.asks ?? []).map((old) => {
+      if (!replaced.has(old.requestId)) return old;
+      const next = { ...old, closed: { reason: 'replaced' as const, at, replacedBy: ask.cardId ?? ask.requestId } };
+      closed.push(next);
+      return next;
+    });
+    const partly = asksPartlyReasked(run.asks, redacted);
+    const capped = capTaskAsks([...asks, redacted], { reason: 'expired', at, detail: 'Too many newer questions in this task' });
+    run.asks = capped.kept;
+    closed.push(...capped.evicted);
+    for (const old of closed) this.appendEvent(runId, { ...askClosedEvent(old.requestId, old.closed!) });
+    // Partly re-asked: its other questions still need an answer, so it stays open, flagged.
+    for (const { ask: old, headers } of partly) {
+      this.flagTaskAsks(runId, (open) => open.requestId === old.requestId, {
+        why: 'partly-reasked', detail: `a newer question asked ${headers.map((header) => `«${header}»`).join(', ')} again`, since: at,
+      });
+    }
+    this.touch(run);
+    this.emit('asks', { runId, closed });
+    return closed;
+  }
+
+  /** Close the run's open asks that `select` picks, with an `ask.closed` event each. */
+  closeTaskAsks(runId: string, select: (ask: TaskAskRecord) => boolean, closed: QuestionClosed): TaskAskRecord[] {
+    const run = this.runs.get(runId);
+    if (!run?.asks?.some((ask) => isOpenAsk(ask) && select(ask))) return [];
+    const bounded: QuestionClosed = {
+      ...closed,
+      ...(closed.detail ? { detail: this.redactText(closed.detail, runId).slice(0, 300) } : {}),
+      ...(closed.answer ? { answer: this.redactText(closed.answer, runId).slice(0, 4000) } : {}),
+    };
+    const done: TaskAskRecord[] = [];
+    run.asks = run.asks.map((ask) => {
+      if (!isOpenAsk(ask) || !select(ask)) return ask;
+      const next = { ...ask, closed: bounded, stale: undefined };
+      done.push(next);
+      return next;
+    });
+    for (const ask of done) this.appendEvent(runId, { ...askClosedEvent(ask.requestId, bounded) });
+    this.touch(run);
+    this.emit('asks', { runId, closed: done });
+    return done;
+  }
+
+  /** Flag open asks "may be out of date" (still open, still counted). A flagged ask keeps its first reason. */
+  flagTaskAsks(runId: string, select: (ask: TaskAskRecord) => boolean, stale: QuestionStale): TaskAskRecord[] {
+    const run = this.runs.get(runId);
+    // The first flag stays, except that a partial re-ask names what changed more precisely than any other.
+    const flaggable = (ask: TaskAskRecord) => isOpenAsk(ask) && (!ask.stale || stale.why === 'partly-reasked') && select(ask);
+    if (!run?.asks?.some(flaggable)) return [];
+    const flagged: TaskAskRecord[] = [];
+    run.asks = run.asks.map((ask) => {
+      if (!flaggable(ask)) return ask;
+      const next = { ...ask, stale: { ...stale, detail: stale.detail.slice(0, 300) } };
+      flagged.push(next);
+      return next;
+    });
+    this.touch(run);
+    this.emit('asks', { runId, closed: [] });
+    return flagged;
+  }
+
+  /** Queue a note for the next Continue, or take (and clear) every queued one. */
+  pushAskNote(runId: string, note: string): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    run.askNotes = [...(run.askNotes ?? []), note.slice(0, 1000)].slice(-TASK_ASK_NOTES_MAX);
+    this.touch(run);
+  }
+
+  takeAskNotes(runId: string): string[] {
+    const run = this.runs.get(runId);
+    const notes = run?.askNotes ?? [];
+    if (!run || notes.length === 0) return [];
+    run.askNotes = undefined;
+    this.touch(run);
+    return notes;
+  }
+
+  /** A run that reached done, review or cancelled, or was archived, ends its open asks. `failed`
+   *  does not: idle-closed and awaiting-answer runs can still be answered (#2286). */
+  private endTaskAsks(run: RunRecord): void {
+    if (!run.asks?.some(isOpenAsk)) return;
+    const how = run.archived ? 'archived' : ASK_ENDING_STATUSES.has(run.status) ? run.status : undefined;
+    if (!how) return;
+    this.closeTaskAsks(run.id, () => true, { reason: 'ended', at: new Date().toISOString(), detail: `Task ${how === 'review' ? 'ready for review' : how}` });
+  }
+
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run: ${runId}`);
@@ -2314,6 +2441,8 @@ export class RunStore extends EventEmitter {
   }
 
   private touch(run: RunRecord): void {
+    // Every status and archive write passes here, so no settle path can forget to end a question.
+    this.endTaskAsks(run);
     this.observeLifecycle(run.id, run);
     this.scheduleSave();
     this.emit('run', run);

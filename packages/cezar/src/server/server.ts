@@ -6,6 +6,7 @@ import { listServerInstances } from '../server-install/state.ts';
 import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred-reset.ts';
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
+import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -55,6 +56,12 @@ import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts
 import { ManagerStore } from '../managers/store.ts';
 import { watchAutomationReports } from '../managers/automation-reports.ts';
 import { watchTaskReports } from '../managers/task-reports.ts';
+import { createManagerQuestionProvider, openAsk } from '../managers/questions.ts';
+import { createTaskQuestionProvider } from '../runs/questions.ts';
+import { askAlreadyClosed, QUESTION_ALREADY_CLOSED } from '../runs/task-asks.ts';
+import { createQuestionInbox } from '../questions/inbox.ts';
+import { questionsTopic } from '../questions/topic.ts';
+import type { QuestionProvider } from '../questions/types.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
 import { automationReportSchema, setAutomationReportInputSchema, automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
@@ -496,6 +503,8 @@ export interface ServerDeps {
   relay?: RelayService;
   /** Test seam: the agent backend a manager turn talks to (spec 2026-10-31-managers). */
   managerRunnerFor?: ManagerEngineDeps['runnerFor'];
+  /** Test seam: the Questions inbox's providers (spec 2026-11-17-questions-inbox); default the real ones. */
+  questionProviders?: { task?: QuestionProvider; manager?: QuestionProvider };
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
    *  route's guards, cleanup and error surfacing are exercised for real
@@ -1063,15 +1072,8 @@ const openInSchema = z.object({
 // Attachment-carrying bodies validate with the CONTRACT's `attachmentListSchema` (#950) —
 // images plus the short PDF/TXT/MD allowlist, ~5 MB each once base64-decoded. Imported rather
 // than mirrored here, so the wire cannot drift from what the cockpit compiles against.
-const messageSchema = z
-  .object({
-    text: z.string().max(100_000).default(''),
-    images: attachmentListSchema.default([]),
-    idempotencyKey: z.string().uuid().optional(),
-  })
-  .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one attachment',
-  });
+// The contract's own schema: a hand-kept copy here missed `askRequestId` (Questions inbox spec).
+const messageSchema = messageInputSchema;
 
 // Run ids are unique across projects, so one workspace-wide receipt book serves every mount.
 const messageReceipts = new MessageReceipts<MessageResponse>();
@@ -2084,6 +2086,8 @@ export function createApp(deps: ServerDeps) {
   // a phone in the relay scope or a hosted cockpit — and added per response, never to the cache or
   // the CORS-open `health` topic. `waiting` is set once the manager engine exists, below.
   let waitingOnUser: () => Promise<number> = async () => 0;
+  // The Older setting lives in workspace ui-state; its PUT re-counts the `questions` topic. Set below.
+  let refreshQuestions: () => void = () => {};
   const attentionForReader = async (caps: ReturnType<typeof capabilities>): Promise<{ attention?: { waiting: number; failed: number } }> => {
     if (!inRelayScope() && caps.localHandoff) return {};
     const waiting = Math.max(0, Math.floor(await waitingOnUser().catch(() => 0)));
@@ -4042,7 +4046,7 @@ export function createApp(deps: ServerDeps) {
           await mergeWriteWorkspaceUiState((state) => ({
             ...state,
             ...parsed.data,
-          })),
+          })).finally(() => refreshQuestions()),
         );
       } catch (err) {
         // A read-only home degrades to an unsaved pref, never a crash.
@@ -5505,6 +5509,8 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: MessageResponse | undefined;
       try {
+        // A card answered from a stale tab (Questions inbox spec); inside the try so the receipt settles.
+        if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
         // Stacking onto a queued prompt mutates an existing task and invokes no provider.
         // Provider availability still gates live delivery after the record leaves `queued`, but
         // must not strand prompt authoring just because an unrelated fallback provider is
@@ -5528,7 +5534,9 @@ export function createApp(deps: ServerDeps) {
         // (the record is written a tick later), the engine can.
         //   live session → delivered · still queued → folded into the prompt
         //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
-        if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
+        // Sent from an ask card it answers that card; typed, it flags open cards (Questions inbox spec).
+        const reply = parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {};
+        if (manager.sendMessage(id, content, reply)) return c.json((answered = { delivered: true as const }));
 
         const currentRun = store.getRun(id);
         // Bounds apply only to a message that is actually about to be stacked. Without this
@@ -5543,7 +5551,7 @@ export function createApp(deps: ServerDeps) {
 
         const queued = manager.enqueueMessage(id, content);
         if (queued) return c.json((answered = { queued: true as const, message: queued }));
-        if (manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
+        if (manager.deferMessage(id, content, { ...reply, userReply: true })) return c.json((answered = { deferred: true as const }));
         return c.json({ error: 'session closed' }, 409);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
@@ -5656,6 +5664,7 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: ContinueResponse | undefined;
       try {
+        if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
         if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
           return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
         }
@@ -5684,6 +5693,8 @@ export function createApp(deps: ServerDeps) {
           model: parsed.data.model,
           reasoningEffort: parsed.data.reasoningEffort,
           agentProfile: parsed.data.agentProfile,
+          // The user's own Continue: answers its card, or flags open cards as replied in chat.
+          reply: parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {},
         });
         if (!result.ok) return c.json({ error: result.error }, 409);
         return c.json((answered = { continued: true as const }));
@@ -8859,13 +8870,56 @@ export function createApp(deps: ServerDeps) {
       timing: recordTiming,
     },
     pushSignal: (managerId) => phonePairing.signalPush(managerId),
+    // An open card older than this stops counting (spec 2026-11-17-questions-inbox, Older).
+    olderAfterDays: async () => (await readWorkspaceUiState()).questions?.olderAfterDays,
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
-  // The badge, read when a push goes out: what waits on the user across managers that notify.
-  waitingOnUser = async () =>
-    (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0);
+  // The Questions inbox (spec 2026-11-17-questions-inbox): every open manager and task question. With
+  // managers off the manager provider is gated out and the inbox serves task questions only.
+  const taskQuestions = createTaskQuestionProvider({
+    contexts,
+    // The gate the messages and Continue routes meet before an answer reaches the agent.
+    providerBlocked: (ctx, run) => {
+      const live = ['running', 'waiting'].includes(run.status) && run.idleClosedAt === undefined && run.awaitingAnswerSince === undefined;
+      return providerActionError([live ? providerForActiveRun(run) : providerForExistingRun(run)], {
+        repoRoot: ctx.root,
+        profileFor: (provider) => recordedProfileFor(run, provider),
+      });
+    },
+  });
+  deps.onDispose?.(() => taskQuestions.dispose());
+  const questionInbox = createQuestionInbox({
+    task: deps.questionProviders?.task ?? taskQuestions,
+    manager: deps.questionProviders?.manager ?? createManagerQuestionProvider(managerEngine),
+    managersEnabled: () => capabilities().managers !== false,
+    olderAfterDays: async () => (await readWorkspaceUiState()).questions?.olderAfterDays,
+  });
+  refreshQuestions = () => questionInbox.refresh();
+  deps.onDispose?.(() => questionInbox.dispose());
+  // Trusted-only like `host`: attention counts are never readable by a foreign local page (BACKWARD_COMPATIBILITY.md).
+  deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox));
+  // The badge, read when a push goes out: approvals across managers that notify, plus the live questions
+  // (spec § Counts: one live count everywhere).
+  waitingOnUser = async () => {
+    const approvals = (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0);
+    const { live } = await questionInbox.counts().catch(() => ({ live: 0 }));
+    return approvals + live;
+  };
   phonePairing.attachPush(waitingOnUser);
+
+  // ---- chained family: Questions inbox (workspace-level, single-mount) ----
+  // Spec 2026-11-17-questions-inbox. A manager copy folded into its task's item answers the task.
+  const questionsRoutes = new Hono()
+    .get('/workspace/questions', async (c) => c.json(await questionInbox.list()))
+    .post('/workspace/questions/:key/answer', paramZodValidator(questionKeyParamSchema), jsonZodValidator(answerQuestionInputSchema), async (c) => {
+      const result = await questionInbox.answer(c.req.valid('param').key, c.req.valid('json').text);
+      return result.ok ? c.json({ ok: true as const, item: result.item }) : c.json({ error: result.error }, result.status);
+    })
+    .post('/workspace/questions/:key/dismiss', paramZodValidator(questionKeyParamSchema), async (c) => {
+      const result = await questionInbox.dismiss(c.req.valid('param').key);
+      return result.ok ? c.json({ ok: true as const, item: result.item }) : c.json({ error: result.error }, result.status);
+    });
   deps.onDispose?.(() => managerEngine.dispose());
   // A GitHub read that sees a PR merged or closed closes its waiting merge cards (#2241 follow-up).
   const stopPrClosed = onPrClosed((root, number, state, verify) => {
@@ -8946,6 +9000,11 @@ export function createApp(deps: ServerDeps) {
       try {
         const attachments = readAttachments(images ?? []);
         if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
+        // A card answered, dismissed or closed elsewhere (another tab, the Questions page) takes no second answer.
+        if (askId !== undefined && managerStore.get(id)) {
+          const card = managerStore.message(id, askId);
+          if (card && !openAsk(card)) return c.json({ error: 'question already closed' }, 409);
+        }
         if (!managerEngine.send(id, text, attachments, askId)) return c.json(MANAGER_NOT_FOUND, 404);
         return c.json((answered = { ok: true as const, attachments: attachments.length }));
       } finally {
@@ -9215,6 +9274,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
     .route('/', managersRoutes)
+    .route('/', questionsRoutes)
     .route('/', phonesRoutes)
     .route('/', phonePushRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))

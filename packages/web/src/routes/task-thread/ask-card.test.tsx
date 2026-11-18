@@ -1,8 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import { questionKeys, resetDismissals } from '@/api/questions'
 import { deriveAttention } from '@/lib/attention'
 import { AskCard, AskForm, latestOpenAskCard, revealAskCard } from './ask-card'
 import { readAskSelections, resetAskSelections } from './ask-selections'
@@ -21,6 +24,7 @@ vi.mock('@/api/queries', () => ({
 afterEach(() => {
   cleanup()
   resetAskSelections()
+  resetDismissals()
   mutateAsync.mockClear().mockResolvedValue({})
   continueAsync.mockClear().mockResolvedValue({})
   providerStatus = {
@@ -63,11 +67,16 @@ const closedRun: ApiRun = {
   steps: [step({ sessionId: 'sess-1' })],
 }
 
-const renderAsk = (ask: ThreadAsk, run: ApiRun = activeRun) => render(
-  <MemoryRouter>
-    <AskCard ask={ask} run={run} />
-  </MemoryRouter>,
+let queryClient = new QueryClient()
+const wrap = (node: ReactNode, entry = '/') => (
+  <QueryClientProvider client={queryClient}>
+    <MemoryRouter initialEntries={[entry]}>{node}</MemoryRouter>
+  </QueryClientProvider>
 )
+const renderAsk = (ask: ThreadAsk, run: ApiRun = activeRun, entry?: string) => {
+  queryClient = new QueryClient()
+  return render(wrap(<AskCard ask={ask} run={run} />, entry))
+}
 
 const singleAsk: ThreadAsk = {
   kind: 'ask',
@@ -150,11 +159,12 @@ describe('AskCard', () => {
     expect(screen.getByText(description).className).toContain('break-words')
   })
 
-  it('a single single-select question sends "header: label" on one tap (no Send button)', () => {
+  it('a single single-select question sends "header: label" on one tap (no Send button), naming its card', () => {
     renderAsk(singleAsk)
     expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
+    // askRequestId closes exactly this card server-side; a composer reply sends none (Questions inbox).
+    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', askRequestId: 'ask_1' })
   })
 
   it('gives Other… and Need more info a 44 px target on a touch screen', () => {
@@ -180,7 +190,7 @@ describe('AskCard', () => {
     expect(send.disabled).toBe(false)
     fireEvent.click(send)
     expect(mutateAsync).toHaveBeenCalledTimes(1)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns\nStyle: Relative' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: date-fns\nStyle: Relative' })
   })
 
   it('multi-select: Send is disabled until options are picked, then sends the comma-joined labels', () => {
@@ -191,7 +201,7 @@ describe('AskCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Billing/ }))
     expect(send.disabled).toBe(false)
     fireEvent.click(send)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Sections: Profile, Billing' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Sections: Profile, Billing' })
   })
 
   it('a resolved ask collapses to answer chips with no option buttons', () => {
@@ -254,7 +264,7 @@ describe('AskCard — picks survive the row unmounting', () => {
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
     expect(send.disabled).toBe(false)
     fireEvent.click(send)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns\nStyle: ISO' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: date-fns\nStyle: ISO' })
   })
 
   it('never carries picks to another run or another ask', () => {
@@ -274,11 +284,7 @@ describe('AskCard — picks survive the row unmounting', () => {
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: { labels: ['date-fns'] } })
 
-    rerender(
-      <MemoryRouter>
-        <AskCard ask={{ ...twoQuestionAsk, resolved: true, answer: 'free-form reply' }} run={activeRun} />
-      </MemoryRouter>,
-    )
+    rerender(wrap(<AskCard ask={{ ...twoQuestionAsk, resolved: true, answer: 'free-form reply' }} run={activeRun} />))
     expect(readAskSelections('r1', twoQuestionAsk)).toEqual({})
   })
 
@@ -322,8 +328,9 @@ describe('AskCard — answering after the session has ended', () => {
     renderAsk(singleAsk, closedRun)
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
-    // No runner override: answering a question must not silently switch the run's engine.
-    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
+    // No runner override: answering a question must not silently switch the run's engine. The
+    // reopened session still answers exactly this card (Questions inbox).
+    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', askRequestId: 'ask_1' })
     expect(mutateAsync).not.toHaveBeenCalled()
   })
 
@@ -357,6 +364,7 @@ describe('AskCard — answering after the session has ended', () => {
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
     expect(continueAsync).toHaveBeenCalledWith({
       text: 'Library: date-fns\nStyle: Relative',
+      askRequestId: expect.any(String),
     })
   })
 
@@ -366,7 +374,7 @@ describe('AskCard — answering after the session has ended', () => {
     renderAsk(singleAsk, { ...activeRun, steps: [step({ sessionId: 'sess-1' })] })
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(1))
-    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
+    expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', askRequestId: 'ask_1' })
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -388,8 +396,8 @@ describe('AskCard — answering after the session has ended', () => {
     fireEvent.click(option)
 
     await waitFor(() => expect(continueAsync).toHaveBeenCalledTimes(2))
-    expect(continueAsync).toHaveBeenNthCalledWith(1, { text: 'Library: date-fns' })
-    expect(continueAsync).toHaveBeenNthCalledWith(2, { text: 'Library: date-fns' })
+    expect(continueAsync).toHaveBeenNthCalledWith(1, { text: 'Library: date-fns', askRequestId: 'ask_1' })
+    expect(continueAsync).toHaveBeenNthCalledWith(2, { text: 'Library: date-fns', askRequestId: 'ask_1' })
     expect(mutateAsync).toHaveBeenCalledTimes(1)
     resolveContinuation?.({ continued: true })
     await waitFor(() => expect((option as HTMLButtonElement).disabled).toBe(false))
@@ -451,7 +459,7 @@ describe('AskCard — Other… and Need more info', () => {
     expect(send.disabled).toBe(true)
     fireEvent.change(ownAnswer(), { target: { value: '  Temporal,\nonce it ships  ' } })
     fireEvent.click(send)
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Temporal, once it ships' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: Temporal, once it ships' })
   })
 
   it('one-tap card: Enter in the field sends, Shift+Enter does not', () => {
@@ -461,13 +469,14 @@ describe('AskCard — Other… and Need more info', () => {
     fireEvent.keyDown(ownAnswer(), { key: 'Enter', shiftKey: true })
     expect(mutateAsync).not.toHaveBeenCalled()
     fireEvent.keyDown(ownAnswer(), { key: 'Enter' })
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Day.js' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: Day.js' })
   })
 
   it('one-tap card: Need more info sends the request at once', () => {
     renderAsk(singleAsk)
     fireEvent.click(moreInfoButton())
     expect(mutateAsync).toHaveBeenCalledWith({
+      askRequestId: expect.any(String),
       text: 'Library: I need more information to answer this — please explain the context and ask again.',
     })
   })
@@ -488,6 +497,7 @@ describe('AskCard — Other… and Need more info', () => {
     fireEvent.click(send)
     expect(mutateAsync).toHaveBeenCalledTimes(1)
     expect(mutateAsync).toHaveBeenCalledWith({
+      askRequestId: expect.any(String),
       text:
         'Library: Temporal\n' +
         'Style: I need more information to answer this — please explain the context and ask again.',
@@ -517,7 +527,7 @@ describe('AskCard — Other… and Need more info', () => {
     fireEvent.click(otherButton())
     fireEvent.change(ownAnswer(), { target: { value: 'Notifications' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
-    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Sections: Profile, Notifications' })
+    expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Sections: Profile, Notifications' })
   })
 
   it('keeps the typed text across an unmount and remount of the card', () => {
@@ -562,7 +572,7 @@ describe('AskForm — phones, screen readers and a pending send', () => {
       expect(fireEvent.keyDown(ownAnswer(), { key: 'Enter' })).toBe(true)
       expect(mutateAsync).not.toHaveBeenCalled()
       fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
-      expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Day.js' })
+      expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: Day.js' })
     } finally {
       vi.unstubAllGlobals()
     }
@@ -587,6 +597,18 @@ describe('AskForm — phones, screen readers and a pending send', () => {
     render(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" /></MemoryRouter>)
     expect(screen.getByRole('status').textContent).toBe('Sending…')
     expect(document.querySelector('[data-slot="ask-card"]')?.getAttribute('aria-busy')).toBe('true')
+  })
+
+  it('unframed (a manager card, a Questions row) draws no box, no asker and no stray dot, but still says Sending…', () => {
+    const delivery = { mode: 'live' as const, isPending: false, send: vi.fn() }
+    const { rerender } = render(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" framed={false} /></MemoryRouter>)
+    const card = document.querySelector<HTMLElement>('[data-slot="ask-card"]')!
+    expect(card.className).toBe('')
+    expect(card.querySelector('[data-slot="status-dot"]')).toBeNull()
+    expect(card.querySelector('[data-slot="ask-asker"]')).toBeNull()
+    rerender(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={{ ...delivery, isPending: true }} asker="Your decision" framed={false} /></MemoryRouter>)
+    expect(screen.getByRole('status').textContent).toBe('Sending…')
+    expect(card.querySelector('[data-slot="status-dot"]')).toBeNull()
   })
 })
 
@@ -632,5 +654,75 @@ describe('latestOpenAskCard / revealAskCard (#2297)', () => {
     revealAskCard(latestOpenAskCard(root)!)
     expect(document.activeElement?.textContent).toBe('Yes')
     root.remove()
+  })
+})
+
+// Questions inbox: an `ask.closed` card redraws in the quiet closed state.
+describe('AskCard — closed by the server', () => {
+  it.each([
+    ['replaced', 'Closed: replaced'],
+    ['dismissed', 'Closed: dismissed by you'],
+    ['retracted', 'Closed: withdrawn by the agent'],
+    ['expired', 'Closed: expired'],
+    ['ended', 'Closed: task ended'],
+  ] as const)('draws a %s card as one quiet line with no chips', (reason, headline) => {
+    renderAsk({ ...singleAsk, resolved: true, closed: { reason, detail: reason === 'ended' ? 'The task was cancelled.' : undefined } })
+    const closed = document.querySelector('[data-slot="ask-closed"]')!
+    expect(closed.querySelector('[data-slot="ask-closed-reason"]')?.textContent).toBe(headline)
+    expect(closed.querySelector('s')?.textContent).toBe('Which date library should I standardize on?')
+    expect(screen.queryByRole('button', { name: /date-fns/ })).toBeNull()
+    if (reason === 'replaced') expect(screen.getByRole('link', { name: 'Go to the newer question ↓' }).getAttribute('href')).toBe('/#ask')
+    if (reason === 'ended') expect(closed.textContent).toContain('The task was cancelled.')
+  })
+
+  it('an answer from the card keeps the answered summary', () => {
+    renderAsk({ ...singleAsk, resolved: true, answer: 'Library: date-fns', closed: { reason: 'answered', answer: 'Library: date-fns' } })
+    expect(document.querySelector('[data-slot="ask-closed"]')).toBeNull()
+    expect(document.querySelector('[data-slot="ask-card"][data-resolved="true"]')?.textContent).toContain('Answered')
+  })
+
+  it('an answer on the manager’s linked copy says where it was answered', () => {
+    renderAsk({ ...singleAsk, resolved: true, answer: 'Library: Luxon', closed: { reason: 'answered', answer: 'Library: Luxon', answeredIn: 'manager:global' } })
+    const closed = document.querySelector('[data-slot="ask-closed"]')!
+    expect(closed.textContent).toContain('Answered in the manager’s chat')
+    expect(closed.textContent).toContain('Library: Luxon')
+  })
+})
+
+// Questions inbox: a typed reply flags a task's card on the run record instead of closing it.
+describe('AskCard — may be out of date', () => {
+  const staleRun: ApiRun = {
+    ...activeRun,
+    asks: [{
+      requestId: singleAsk.id,
+      askedAt: '2026-11-18T08:00:00.000Z',
+      questions: singleAsk.questions,
+      stale: { why: 'replied-in-chat', detail: 'you replied 4m after it was asked', since: '2026-11-18T08:04:00.000Z' },
+    }],
+  }
+
+  it('shows the record’s flag above the open card, and Dismiss as out of date starts the undo window', () => {
+    renderAsk(singleAsk, staleRun, '/p/alpha/tasks/r1/chat')
+    expect(screen.getByText(/May be out of date: you replied 4m after it was asked/)).toBeTruthy()
+    expect(document.querySelector('[data-slot="ask-card"][data-resolved="false"]')).not.toBeNull()
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Dismiss as out of date' })))
+    expect(screen.getByText('Dismissed «Library»')).toBeTruthy()
+  })
+
+  it('prefers the inbox’s key for the card, so the dismissal names the listed question', () => {
+    queryClient = new QueryClient()
+    const key = 'r:alpha-id:r1:ask_1'
+    queryClient.setQueryData(questionKeys.all, {
+      open: [{ key, source: { kind: 'task', projectId: 'alpha-id', runId: 'r1', title: 'Task', status: 'waiting' }, askedAt: '2026-11-18T08:00:00.000Z', questions: singleAsk.questions, older: false }],
+      closed: [], counts: { live: 1, older: 0 }, olderAfterDays: 7,
+    })
+    render(wrap(<AskCard ask={singleAsk} run={staleRun} />))
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Dismiss as out of date' })))
+    expect(screen.getByText('Dismissed «Library»')).toBeTruthy()
+  })
+
+  it('no flag on the record, no note', () => {
+    renderAsk(singleAsk, activeRun, '/p/alpha/tasks/r1/chat')
+    expect(document.querySelector('[data-slot="question-stale"]')).toBeNull()
   })
 })

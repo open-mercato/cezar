@@ -14,12 +14,15 @@ import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import {
+  parseAskCloseMarkers,
   parseAskMarker,
   parseAskMarkerResult,
+  stripAskCloseMarkers,
   stripAskMarker,
   type AskMarkerParseResult,
   type AskRequest,
 } from '../core/ask.ts';
+import { askSkippedMessage, asksNamedBy, QUESTION_ALREADY_CLOSED, hasCommitsSince, openAsksBlock, openTaskAsks } from '../runs/task-asks.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { interruptAfterGrace, MISSING_SESSION_NOTE, ResumeFallback, trackFallbackOutcome } from './resume-fallback.ts';
 import {
@@ -448,6 +451,12 @@ interface DispatchTurnResult {
   rePrompted: boolean;
 }
 
+/** `CEZ:ASK-CLOSE` lines are protocol, not prose (Questions inbox spec). Only a chunk that holds
+ *  one is rewritten: the stripper trims, and an ordinary chunk must keep its whitespace. */
+function withoutAskCloseMarkers(text: string): string {
+  return text.includes('CEZ:ASK-CLOSE') ? stripAskCloseMarkers(text) : text;
+}
+
 /** Emit the v2 `ask.requested` event for a parsed marker (the cockpit renders
  *  it as an ask card, #473). Returns the minted request id. */
 function emitAskRequested(sink: UiEventSink, ask: AskRequest): string {
@@ -557,7 +566,18 @@ const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
 
 const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
 
+interface SendMessageOptions {
+  /** Sent from an ask card: answers that card (Questions inbox spec). */
+  askRequestId?: string;
+  /** The reply was already recorded when the message was accepted (a deferred flush). */
+  replyNoted?: boolean;
+  /** Typed by the user: a buffered message flags open cards replied-in-chat; an engine one never does. */
+  userReply?: boolean;
+}
+
 interface ContinueRunOptions {
+  /** The user's own Continue (the route): it answers `askRequestId`, or flags open cards as replied-in-chat. */
+  reply?: { askRequestId?: string };
   text?: string;
   images?: PastedContent[];
   runner?: RunnerId;
@@ -3279,6 +3299,20 @@ export class RunManager {
   private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): WebhookAttentionRequest {
     const requestId = emitAskRequested(sink, ask);
     const attention = this.recordAttention(requestId, ask.questions);
+    // The Questions inbox's copy (spec 2026-11-17-questions-inbox); a newer card replaces older ones.
+    this.store.recordTaskAsk(runId, {
+      requestId,
+      askedAt: attention.askedAt,
+      ...(ask.id ? { cardId: ask.id } : {}),
+      ...(ask.about ? { about: ask.about } : {}),
+      questions: ask.questions.map((question) => ({
+        ...(question.id ? { id: question.id } : {}),
+        header: question.header,
+        question: question.question,
+        ...(question.multiSelect ? { multiSelect: true } : {}),
+        options: question.options.map((option) => ({ label: option.label, ...(option.description ? { description: option.description } : {}) })),
+      })),
+    });
     const dispatch = this.dispatchOf(runId);
     if (!dispatch) return attention;
     const questions = ask.questions.map((question) => question.question.slice(0, 400));
@@ -3312,6 +3346,72 @@ export class RunManager {
       // best effort
     }
     return attention;
+  }
+
+  /**
+   * A task turn ended (Questions inbox spec), in BOTH turn-end handlers: `CEZ:ASK-CLOSE` lines
+   * withdraw the agent's own cards, and an earlier question still open without an answer is
+   * flagged "may be out of date" — `new-commits` when HEAD moved since it was asked, else
+   * `task-moved-on`. A compaction boundary is not a turn of its own, so it flags nothing.
+   */
+  private reviewTaskAsksAtTurnEnd(runId: string, state: ActiveRun, turnText: string, compacted: boolean): void {
+    const at = new Date().toISOString();
+    for (const marker of parseAskCloseMarkers(turnText)) {
+      const named = new Set(asksNamedBy(this.store.getRun(runId)?.asks, marker).map((ask) => ask.requestId));
+      if (named.size === 0) continue;
+      this.store.closeTaskAsks(runId, (ask) => named.has(ask.requestId), { reason: 'retracted', at, ...(marker.reason ? { detail: marker.reason } : {}) });
+    }
+    if (compacted) return;
+    const pending = openTaskAsks(this.store.getRun(runId)?.asks).filter((ask) => !ask.stale);
+    for (const ask of pending) {
+      void hasCommitsSince(state.cwd, ask.askedAt).then((moved) => {
+        this.store.flagTaskAsks(runId, (open) => open.requestId === ask.requestId, moved
+          ? { why: 'new-commits', detail: 'the task committed since it asked', since: at }
+          : { why: 'task-moved-on', detail: 'the task had another turn without an answer', since: at });
+      });
+    }
+  }
+
+  /**
+   * A user message reached the run (Questions inbox spec): sent from an ask card it answers that
+   * card; typed in the composer it closes nothing and flags every open card `replied-in-chat`.
+   * Public for the Continue route, which delivers through `continueRun`.
+   */
+  noteAskReply(runId: string, text: string, askRequestId?: string): void {
+    const at = new Date().toISOString();
+    if (askRequestId) {
+      const answer = text.trim();
+      this.store.closeTaskAsks(runId, (ask) => ask.requestId === askRequestId, { reason: 'answered', at, ...(answer ? { answer } : {}) });
+      return;
+    }
+    this.store.flagTaskAsks(runId, () => true, { why: 'replied-in-chat', detail: 'you replied in the chat after it was asked', since: at });
+  }
+
+  /**
+   * Dismiss a task's question from the inbox (spec § Telling the agent on dismiss). Parked on that
+   * question with its session open: the agent is told, which wakes it for one turn. Its session
+   * closed (idle or awaiting an answer): the note waits for the next Continue. Otherwise the
+   * question just closes.
+   */
+  dismissAsk(runId: string, requestId: string, options: { holdNote?: boolean } = {}): { ok: true; delivered: 'session' | 'next-continue' | 'none' } | { ok: false; status: 404 | 409; error: string } {
+    const run = this.store.getRun(runId);
+    const ask = run?.asks?.find((candidate) => candidate.requestId === requestId);
+    if (!run || !ask) return { ok: false, status: 404, error: 'question not found' };
+    if (ask.closed) return { ok: false, status: 409, error: QUESTION_ALREADY_CLOSED };
+    const parkedOnIt = run.status === 'waiting' && run.attentionRequest?.requestId === requestId;
+    const sessionClosed = isIdleParked(run) || run.awaitingAnswerSince !== undefined;
+    this.store.closeTaskAsks(runId, (candidate) => candidate.requestId === requestId, { reason: 'dismissed', at: new Date().toISOString() });
+    const note = askSkippedMessage(ask);
+    if (parkedOnIt && !sessionClosed && !options.holdNote && this.deliverMessage(runId, [{ type: 'text', text: note }], false)) {
+      this.store.appendEvent(runId, { type: 'note', message: 'question skipped in the Questions inbox — the agent was told' });
+      return { ok: true, delivered: 'session' };
+    }
+    // A parked session that refused the note (lifecycle blocked, provider unavailable) hears it on the next Continue.
+    if (sessionClosed || parkedOnIt) {
+      this.store.pushAskNote(runId, note);
+      return { ok: true, delivered: 'next-continue' };
+    }
+    return { ok: true, delivered: 'none' };
   }
 
   /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
@@ -5062,7 +5162,7 @@ export class RunManager {
    * The buffer lives on the manager rather than the `ActiveRun` because the
    * `ActiveRun` does not exist yet for part of this window.
    */
-  deferMessage(runId: string, content: PastedContent[]): boolean {
+  deferMessage(runId: string, content: PastedContent[], options: SendMessageOptions = {}): boolean {
     // The window spans two sub-states: `starting` (no `ActiveRun` yet) and the
     // longer stretch where the `ActiveRun` exists but the backend is still being
     // spawned. `execute()` deletes the run from `starting` as soon as it builds
@@ -5081,6 +5181,8 @@ export class RunManager {
       && (!this.waiting.has(runId) || state.turnSettled === true) && !this.lifecycle.isBlocked(runId);
     if (!startingUp && !sessionGap) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
+    // Accepted is the reply's moment; the later flush must not count it twice.
+    if (!options.replyNoted && (options.userReply || options.askRequestId)) this.noteAskReply(runId, messageText(content), options.askRequestId);
     return true;
   }
 
@@ -5092,7 +5194,7 @@ export class RunManager {
     // answers false when the session is not open yet — and silently losing a message
     // here would be precisely the failure `deferMessage` exists to prevent. Anything
     // left over is retried by the next session that opens on this run.
-    const unsent = pending.filter((content) => !this.sendMessage(runId, content));
+    const unsent = pending.filter((content) => !this.sendMessage(runId, content, { replyNoted: true }));
     this.setDeferred(runId, unsent);
   }
 
@@ -5101,9 +5203,10 @@ export class RunManager {
    * while `waiting`). Returns false when there is no open session — the GUI
    * then offers "Continue" instead.
    */
-  sendMessage(runId: string, content: PastedContent[]): boolean {
-    const delivered = this.deliverMessage(runId, content, true) || this.reopenIdleParked(runId, content);
+  sendMessage(runId: string, content: PastedContent[], options: SendMessageOptions = {}): boolean {
+    const delivered = this.deliverMessage(runId, content, true, undefined, options.askRequestId) || this.reopenIdleParked(runId, content, options.askRequestId);
     if (delivered) {
+      if (!options.replyNoted) this.noteAskReply(runId, messageText(content), options.askRequestId);
       const state = this.active.get(runId);
       if (state) {
         state.monitoringWakeups = 0;
@@ -5121,11 +5224,13 @@ export class RunManager {
    * A message to an idle park reopens its session exactly as Continue does: to the user the
    * session never closed (spec 2026-11-04-idle-closed-attention-state § Revision).
    */
-  private reopenIdleParked(runId: string, content: PastedContent[]): boolean {
+  private reopenIdleParked(runId: string, content: PastedContent[], askRequestId?: string): boolean {
     const run = this.store.getRun(runId);
     if (!run || !isIdleParked(run) || this.active.has(runId) || this.starting.has(runId)) return false;
     const text = messageText(content);
     if (continuePromptRefusal(text, content)) return false;
+    // Close the answered card BEFORE the continuation lists the open ones in its opening prompt.
+    if (askRequestId) this.noteAskReply(runId, text, askRequestId);
     return this.continueRun(runId, { text, images: content.filter((block) => block.type !== 'text') }).ok;
   }
 
@@ -5136,6 +5241,8 @@ export class RunManager {
     content: PastedContent[],
     userAuthored: boolean,
     preparedUserMessage?: PreparedUserMessage,
+    /** The ask this message answers: left out of the open-questions block it carries. */
+    answering?: string,
   ): boolean {
     if (this.lifecycle.isBlocked(runId)) return false;
     const state = this.active.get(runId);
@@ -5188,9 +5295,10 @@ export class RunManager {
         // be stale. Delivered as its own engine message, ahead of the one the run woke for, so a
         // user-authored wake-up stays verbatim in the transcript.
         this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
-        if (this.deliverMessage(runId, content, userAuthored, prepared)) return;
+        if (this.deliverMessage(runId, content, userAuthored, prepared, answering)) return;
         // The session closed while we waited: keep the message the way the ladder would.
-        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
+        // `sendMessage` already recorded the reply when this was accepted.
+        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content, { replyNoted: true });
       });
       return true;
     }
@@ -5216,10 +5324,13 @@ export class RunManager {
       const first = blocks.find((block) => block.type === 'text');
       void this.provisionTaskSkills(state, { slash: first?.type === 'text' ? leadingSlashSkillName(first.text) : undefined });
     }
-    const deliverable = persisted.length
+    const withAttachments = persisted.length
       ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
           (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
       : expanded;
+    // Every turn names the run's open questions so the agent can close stale ones (Questions inbox spec).
+    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks, answering);
+    const deliverable = asksBlock ? [...withAttachments, { type: 'text' as const, text: asksBlock }] : withAttachments;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       for (const write of imageLibraryWrites) write();
@@ -5343,6 +5454,19 @@ export class RunManager {
    * messages via sendMessage, closed by finish/idle/cancel.
    */
   continueRun(
+    runId: string,
+    opts: ContinueRunOptions = {},
+    deferForCapacity = false,
+    internal: { freshSessionAllowed?: boolean } = {},
+  ): { ok: boolean; error?: string } {
+    const result = this.startContinuation(runId, opts, deferForCapacity, internal);
+    // Recorded only once accepted (a refused Continue answers nothing), and still before the
+    // continuation's opening prompt lists the open cards: that prompt is built after its awaits.
+    if (result.ok && opts.reply) this.noteAskReply(runId, opts.text ?? '', opts.reply.askRequestId);
+    return result;
+  }
+
+  private startContinuation(
     runId: string,
     opts: ContinueRunOptions = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
@@ -5793,7 +5917,7 @@ export class RunManager {
         // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
-        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(withoutAskCloseMarkers(event.text)))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -5839,6 +5963,8 @@ export class RunManager {
         // working again, so the anti-spin budget is restored. Before the early returns below,
         // because a turn that finished or dispatched is progress too.
         if (!compacted) state.compactionContinues = 0;
+        // Before this turn's own `CEZ:ASK` is recorded: the twin of `runAgentStep`'s call.
+        this.reviewTaskAsksAtTurnEnd(runId, state, turnText, compacted);
         const done = sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
         // turn-end handlers call. Inert for a run with no `dispatch`.
@@ -6130,7 +6256,10 @@ export class RunManager {
     // what they said. Delivery-only, like the `/skill` rewrite above.
     const treeReports = this.flushPendingReports(runId);
     const treeInbox = this.flushInbox(runId);
-    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    // Questions the user skipped while the session was closed, then the ones still open (Questions inbox spec).
+    const askNotes = this.store.takeAskNotes(runId);
+    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
+    const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
     // blocks above, then the instruction that prompted this continuation.
@@ -7986,7 +8115,10 @@ export class RunManager {
     // so a leading `/skill` still matched, and before the failure/attachment suffixes.
     const treeReports = this.flushPendingReports(runId);
     const treeInbox = this.flushInbox(runId);
-    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    // Questions the user skipped while the session was closed, then the ones still open (Questions inbox spec).
+    const askNotes = this.store.takeAskNotes(runId);
+    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
+    const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
     if (treeBlocks.length) userPrompt = `${treeBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
       userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
@@ -8064,7 +8196,7 @@ export class RunManager {
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
         const text = stripVerdictMarker(
-          stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text)))),
+          stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(withoutAskCloseMarkers(event.text))))),
         );
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
@@ -8104,6 +8236,8 @@ export class RunManager {
         const compacted = event.reason === 'context-compaction';
         const markerless = compacted && markerlessTurn(turnText);
         if (!compacted) state.compactionContinues = 0;
+        // Before this turn's own `CEZ:ASK` is recorded: the twin of `runContinuation`'s call.
+        this.reviewTaskAsksAtTurnEnd(runId, state, turnText, compacted);
         const done = interactive && sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch

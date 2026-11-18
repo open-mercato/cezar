@@ -76,7 +76,7 @@ The switch sits under the brand in the sidebar, and the mode comes from the URL:
 
 A dot on **Manager** and on each manager's row means it wants you: amber when an approval or a question waits on you, blue when there is only an unread message. **Manager** takes you back to the chat or list you left in that browser tab, and the tab's title names the manager you have open. The command palette also lists **Manager**, **New manager**, and each manager by name.
 
-Choose **Workspace → Approvals** in the Manager sidebar to review pending approval cards from all managers, grouped by manager. You can also open `/manager/approvals` directly. The count includes pending approvals; questions still appear in each manager’s chat and attention indicator. The page stays available when there are no pending approvals. **Open chat** jumps to that manager’s waiting cards. On a phone, open the menu to reach **Approvals**.
+Choose **Workspace → Approvals** in the Manager sidebar to review pending approval cards from all managers, grouped by manager. You can also open `/manager/approvals` directly. The count includes pending approvals; questions have their own page, **Questions**. The page stays available when there are no pending approvals. **Open chat** jumps to that manager’s waiting cards. On a phone, open the menu to reach **Approvals**.
 
 After you decide, the card stays visible while the action runs and shows its final result, including a refusal. Choose **Clear results** to remove completed cards from the view. If the result could not be loaded, **Retry result** reads it again without repeating your decision.
 
@@ -284,7 +284,15 @@ Cezar refuses a task or message whose text is a placeholder such as `[transcript
 
 ## Answer a manager's questions
 
-When a manager needs a decision from you, it shows a question card with clickable choices, its recommended choice first. Every question also offers **Other…** and **Need more info**. A reply typed in the chat answers the card too. Once answered from the card, it collapses to each question with your answer. A reply you type in the chat shows as your own message.
+When a manager needs a decision from you, it shows a question card with clickable choices, its recommended choice first. Every question also offers **Other…** and **Need more info**. Once answered from the card, it collapses to each question with your answer. A reply you type in the chat shows as your own message and leaves open cards open, marked **May be out of date**; the manager closes them on its next turn if your reply covered them.
+
+A card closes on its own when a newer card asks the same thing again (the same card name, or every one of its questions), when the manager withdraws it, or when the pull request or task it declares it is about is finished. A closed card shrinks to one line that says why. To answer every open question in one place, see [Questions](#questions).
+
+## Questions
+
+Choose **Workspace → Questions** in the Manager sidebar, or open `/manager/questions`, to see every open question from your managers and tasks in one list, grouped by where it was asked. Answer it there, **Dismiss** it (the agent is told you skipped it; **Undo** is offered for a few seconds), or use **Open in context** to jump to the card in its chat. A manager card that relays a task's question appears once, under the task, and answering either copy closes both.
+
+The count beside **Questions** includes only questions that still need you. A card marked **May be out of date** still counts until you dismiss it or the agent closes it. A question left unanswered for longer than the **Move to Older after** setting (7 days by default) moves to **Older** and stops counting; it is not closed. **Closed** lists the last seven days with the reason each closed. With managers turned off, **Questions** sits in the project sidebar and lists task questions.
 
 ## Choose read-only or write access
 

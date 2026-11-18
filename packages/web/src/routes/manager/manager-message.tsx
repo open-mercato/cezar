@@ -1,7 +1,11 @@
 import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, MessageCircleQuestionIcon, PaperclipIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps, type ReactNode } from 'react'
+import { Link } from 'react-router'
+
+import { useQueryClient } from '@tanstack/react-query'
 
 import { checkManager, managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
+import { scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
@@ -27,8 +31,12 @@ import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
 import { AskForm } from '@/routes/task-thread/ask-card'
 import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
 import { AskAnswerSummary, askAnswerLines } from '@/routes/task-thread/ask-answer-summary'
+import { DismissingNote, QuietClosedAsk, StaleNote } from '@/routes/questions/question-states'
 import {
   isImageAttachmentName,
+  questionKey,
+  type QuestionClosed,
+  type QuestionStale,
   type ManagerAsk,
   type ManagerAttachment,
   type ManagerCommand,
@@ -39,7 +47,7 @@ import { ActionCard, type DecideAction } from './manager-approval'
 import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
 import { ForgeReference, ManagerAskText, ManagerProjectsContext, TaskReference } from './manager-reference'
-import { SessionCard } from './manager-session-card'
+import { SessionCard, taskPath } from './manager-session-card'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
@@ -137,6 +145,8 @@ function ManagerQuestions({
   answer,
   answerOnCard,
   source,
+  closed: closedOnServer,
+  stale,
   superseded = false,
 }: {
   origin: ManagerOrigin
@@ -144,11 +154,17 @@ function ManagerQuestions({
   ask: ManagerAsk
   source: ReactNode
   answer: string | undefined
+  /** Closed without a card answer (Questions inbox): one quiet line instead of the form. */
+  closed?: QuestionClosed | undefined
+  /** Suspected out of date: the card stays open, with the amber note. */
+  stale?: QuestionStale | undefined
   /** The next row is this answer and is not drawn: the card says it instead. */
   answerOnCard: boolean
+  /** Re-asked in full by a later card, in history written before the server closed it (#2307). */
   superseded?: boolean
 }) {
   const managerId = origin.id
+  const closed = closedOnServer ?? (superseded ? { reason: 'replaced' as const, at: '' } : undefined)
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const [localAnswer, setLocalAnswer] = useState<string | undefined>()
@@ -166,7 +182,27 @@ function ManagerQuestions({
     const active = document.activeElement
     if (!active || active === document.body || !active.isConnected) answered.current?.focus({ preventScroll: true })
   }, [effectiveAnswer, card, managerId])
+  const queryClient = useQueryClient()
+  const key = questionKey({ kind: 'manager', managerId, messageId })
+  const dismissing = usePendingDismissals().find((entry) => entry.key === key && !entry.error)
   const lines = effectiveAnswer !== undefined && effectiveAnswerOnCard ? askAnswerLines(ask, effectiveAnswer) : null
+  if (effectiveAnswer === undefined && closed) {
+    const answeredIn = closed.answeredIn?.startsWith('task:') ? closed.answeredIn.slice('task:'.length).split('/') : undefined
+    return (
+      <QuietClosedAsk
+        id={`decision-${messageId}`}
+        closed={closed}
+        questions={ask.questions}
+        asker="manager"
+        link={closed.reason === 'replaced' && closed.replacedBy ? (
+          <Link to={{ hash: `#decision-${encodeURIComponent(closed.replacedBy)}` }} data-slot="ask-closed-newer" className="font-medium text-foreground underline underline-offset-4">Go to the newer question ↓</Link>
+        ) : answeredIn?.length === 2 ? (
+          <Link to={`${taskPath(answeredIn[0]!, answeredIn[1]!)}/chat`} className="font-medium text-foreground underline underline-offset-4">Open task</Link>
+        ) : undefined}
+      />
+    )
+  }
+  if (effectiveAnswer === undefined && dismissing) return <DismissingNote label={dismissing.label} onUndo={() => undoDismiss(key)} />
   if (lines) {
     return (
       <div
@@ -206,24 +242,6 @@ function ManagerQuestions({
       </div>
     )
   }
-  if (superseded) {
-    return (
-      <div
-        id={`decision-${messageId}`}
-        tabIndex={-1}
-        data-slot="manager-ask"
-        data-resolved="true"
-        data-superseded="true"
-        className="inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      >
-        <StatusDot tone="neutral" />
-        <span>Superseded<span className="sr-only">:</span></span>
-        <ul data-slot="manager-ask-topics" className="flex min-w-0 flex-wrap gap-1.5">
-          {ask.questions.map((question, index) => <li key={index} className="flex min-w-0 max-w-full"><StaticChip>{question.header}</StaticChip></li>)}
-        </ul>
-      </div>
-    )
-  }
   const send = async (text: string) => {
     sentHere.current = true
     setPending(true)
@@ -253,19 +271,19 @@ function ManagerQuestions({
       title="Your decision"
       status={<><StatusDot tone="info" />Open</>}
     >
+      {stale ? <StaleNote detail={stale.detail} disabled={isPending} onDismiss={() => scheduleDismiss(queryClient, key, ask.questions[0]?.header ?? 'Question')} /> : null}
       {source}
-      {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
-          chips per question are the design's ghost actions. */}
-      <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
-        <ManagerAskText ask={ask} origin={origin}>
-          <AskForm
-            ask={card}
-            ownerId={managerId}
-            delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
-            asker="Your decision"
-          />
-        </ManagerAskText>
-      </div>
+      {/* The card draws the box and the status, so the form is unframed; its "Other…" and "Need more
+          info" chips per question are the design's ghost actions. */}
+      <ManagerAskText ask={ask} origin={origin}>
+        <AskForm
+          ask={card}
+          ownerId={managerId}
+          delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
+          asker="Your decision"
+          framed={false}
+        />
+      </ManagerAskText>
     </ManagerCard>
   )
 }
@@ -337,7 +355,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} origin={origin} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} superseded={superseded} />
+          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} origin={origin} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} closed={message.askClosed} stale={message.askStale} superseded={superseded} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}

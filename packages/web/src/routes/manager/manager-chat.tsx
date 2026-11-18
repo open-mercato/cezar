@@ -547,7 +547,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     revealAt: scroll.revealAt,
   })
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
-  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && !superseded.has(message.id))
+  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && message.askClosed === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
   const subline = watchingLine({

@@ -1,8 +1,9 @@
-import { CheckCheckIcon, ClockIcon, PlusIcon, SettingsIcon } from 'lucide-react'
+import { CheckCheckIcon, ClockIcon, MessageCircleQuestionIcon, PlusIcon, SettingsIcon } from 'lucide-react'
 import { lazy, memo, Suspense, useMemo, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 
 import { managerKeys, orderManagers, useManagers, useUpdateManager } from '@/api/managers'
+import { useLiveQuestionCount } from '@/api/questions'
 import { CacheStatusChip } from '@/components/cache-status'
 import { useHealth } from '@/api/queries'
 import { Button } from '@/components/ui/button'
@@ -228,7 +229,7 @@ function SidebarJobs({ manager }: { manager: ManagerSummary }) {
       >
         <ClockIcon className="size-4 shrink-0" aria-hidden="true" />
         Jobs
-        {manager.jobs.length > 0 ? <span className={WORKSPACE_COUNT_CLASS}>{manager.jobs.length}</span> : null}
+        {manager.jobs.length > 0 ? <span className={workspaceCountClass(0)}>{manager.jobs.length}</span> : null}
       </button>
       {open ? (
         <Suspense fallback={null}>
@@ -248,12 +249,42 @@ function SidebarJobs({ manager }: { manager: ManagerSummary }) {
   )
 }
 
-const WORKSPACE_COUNT_CLASS = 'ml-auto rounded-full bg-muted px-1.5 py-px text-micro font-semibold text-muted-foreground tabular-nums'
+/** Info fill while something waits on the user, the muted pill at zero (Questions inbox design § 01). */
+export function workspaceCountClass(count: number): string {
+  return cn('ml-auto rounded-full px-1.5 py-px text-micro font-semibold tabular-nums', count > 0 ? 'bg-info text-background' : 'bg-muted text-muted-foreground')
+}
+
+/** The Workspace group's Questions row: every open question, managers' and tasks' (spec
+ *  2026-11-17-questions-inbox). Also the project sidebar's row when managers are off. */
+export function QuestionsNavLink({ to, onNavigate, className }: { to: string; onNavigate?: (() => void) | undefined; className?: string }) {
+  const { pathname } = useLocation()
+  const count = useLiveQuestionCount()
+  const active = pathname === to
+  return (
+    <Link
+      to={to}
+      data-slot="sidebar-questions"
+      aria-label={count === undefined ? 'Questions' : `Questions, ${count} waiting`}
+      aria-current={active ? 'page' : undefined}
+      onClick={onNavigate}
+      className={cn(NAV_ROW_CLASS, className, active && 'bg-muted text-foreground')}
+    >
+      <MessageCircleQuestionIcon className="size-4 shrink-0" aria-hidden="true" />
+      Questions
+      {count !== undefined ? <span data-slot="sidebar-questions-count" data-count={count} className={workspaceCountClass(count)}>{count}</span> : null}
+    </Link>
+  )
+}
+
+/** The project sidebar's Questions row, for a cockpit with managers off. */
+export function ProjectQuestionsLink() {
+  return <QuestionsNavLink to="/questions" onNavigate={useSidebarNavigate()} />
+}
 
 /**
  * Manager mode's sidebar body, between the switch and the footer (design 2026-11 "Manager mode"):
  * New manager, the managers with their latest line, and a small Workspace group — workspace
- * Approvals, the active chat's Jobs, and the global Manager settings.
+ * Approvals and Questions, the active chat's Jobs, and the global Manager settings.
  */
 export function ManagerSidebar() {
   const { pathname } = useLocation()
@@ -301,11 +332,12 @@ export function ManagerSidebar() {
           >
             <CheckCheckIcon className="size-4 shrink-0" aria-hidden="true" />
             Approvals
-            {hasData ? <span className={WORKSPACE_COUNT_CLASS}>
+            {hasData ? <span data-slot="sidebar-approvals-count" className={workspaceCountClass(waiting)}>
               {waiting}
               <span className="sr-only"> pending approvals</span>
             </span> : null}
           </Link>
+          <QuestionsNavLink to="/manager/questions" onNavigate={onNavigate} />
           {active ? <SidebarJobs key={active.id} manager={active} /> : null}
           <Link
             to="/settings/global/manager"

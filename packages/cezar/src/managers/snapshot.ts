@@ -8,6 +8,7 @@ import type {
   ManagerSnapshotTask,
   ManagerTaskReportState,
 } from '@open-mercato/cezar-contract';
+import { taskAskRecordSchema } from '@open-mercato/cezar-contract';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -197,6 +198,22 @@ export interface TaskEvent {
   /** The watch's keys for it, marked reported once the card is posted. */
   attentionKeys: string[];
   detail?: string;
+}
+
+/**
+ * The question a waiting task is parked on, as a manager's relayed card names it (`about.ask`,
+ * Questions inbox spec): the newest open `RunRecord.asks` entry's card id, else its `requestId`,
+ * else the dispatch Guard's. `asks` is read defensively: older records have none.
+ */
+export function openTaskAskId(run: RunRecord): string | undefined {
+  const asks = (run as { asks?: unknown }).asks;
+  if (Array.isArray(asks)) {
+    for (let index = asks.length - 1; index >= 0; index -= 1) {
+      const parsed = taskAskRecordSchema.safeParse(asks[index]);
+      if (parsed.success && !parsed.data.closed) return parsed.data.cardId ?? parsed.data.requestId;
+    }
+  }
+  return run.dispatch?.pendingAsk?.requestId;
 }
 
 /** Pure, so the live listener, the boot sweep and the watch agree on what one event is. */

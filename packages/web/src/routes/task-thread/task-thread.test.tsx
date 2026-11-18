@@ -2141,6 +2141,7 @@ describe('Manager source task arrivals', () => {
     const earlier = answeredCard ? [
       line(8, 'ask.requested', { requestId: 'old-ask', questions }),
       line(9, 'user-message', { text: 'Publish: Hold report' }),
+      line(9.5, 'ask.closed', { requestId: 'old-ask', reason: 'answered', answer: 'Publish: Hold report' }),
     ] : []
     renderSourceTask([...EVENTS, ...earlier, line(10, 'text', { text: 'Please review the updated report before I publish it.' })])
     expect(screen.queryByRole('button', { name: 'Publish report' })).toBeNull()

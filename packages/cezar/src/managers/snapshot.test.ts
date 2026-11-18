@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { GithubData, ManagerSnapshot } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
-import { buildSnapshot, findRun, gateAttention, prAttention, readColdRuns, snapshotTasks, taskAttention, taskDetailRows, taskEventOf, type ManagerProjectSource } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, openTaskAskId, prAttention, readColdRuns, snapshotTasks, taskAttention, taskDetailRows, taskEventOf, type ManagerProjectSource } from './snapshot.ts';
 
 const NOW = Date.parse('2026-10-31T12:00:00.000Z');
 const NOW_ISO = new Date(NOW).toISOString();
@@ -296,5 +296,15 @@ describe('buildSnapshot', () => {
     const github = { list: async () => empty, refStatus: async () => { throw new Error('not reached'); } };
     const snapshot = await buildSnapshot([source({ automationFailures: () => [{ id: 'a', name: 'nightly', at: 't1', reason: 'x' }] })], github, NOW);
     expect(snapshot.attention[0]).toMatchObject({ key: 'automation-failing:p:a:t1', kind: 'automation-failing', detail: 'x' });
+  });
+});
+
+describe('openTaskAskId (Questions inbox spec)', () => {
+  const ask = (requestId: string, over: Record<string, unknown> = {}) => ({ requestId, askedAt: NOW_ISO, questions: [], ...over });
+  it("names a waiting task's newest open question: its card id, else its requestId, else the Guard's", () => {
+    expect(openTaskAskId(run({ id: 'a', asks: [ask('r1', { cardId: 'base' }), ask('r2', { closed: { reason: 'answered', at: NOW_ISO } })] } as never))).toBe('base');
+    expect(openTaskAskId(run({ id: 'b', asks: [ask('r1')] } as never))).toBe('r1');
+    expect(openTaskAskId(run({ id: 'c', asks: [{ bogus: true }], dispatch: { pendingAsk: { requestId: 'guard', questions: [], askedAt: NOW_ISO } } } as never))).toBe('guard');
+    expect(openTaskAskId(run({ id: 'd' }))).toBeUndefined();
   });
 });

@@ -578,7 +578,8 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
     case 'image':
       return previous.kind === 'image' && sameFields(previous, next, IMAGE_COMPARE_FIELDS)
     case 'ask':
-      return previous.kind === 'ask' && sameFields(previous, next, ASK_COMPARE_FIELDS)
+      return previous.kind === 'ask' && sameFields<Omit<ThreadAsk, 'closed'>>(previous, next, ASK_COMPARE_FIELDS) &&
+        (previous.closed === next.closed || (previous.closed !== undefined && next.closed !== undefined && sameFields(previous.closed, next.closed, ASK_CLOSED_COMPARE_FIELDS)))
     case 'provider-auth-required':
       return previous.kind === 'provider-auth-required' &&
         sameFields(previous, next, PROVIDER_AUTH_COMPARE_FIELDS)
@@ -627,7 +628,18 @@ const ASK_COMPARE_FIELDS = {
   resolved: true,
   answer: true,
   fromWorkflow: true,
-} satisfies Record<keyof ThreadAsk, true>
+} satisfies Record<Exclude<keyof ThreadAsk, 'closed'>, true>
+
+// `closed` is a fresh object per reduce, so it is compared by its fields.
+
+const ASK_CLOSED_COMPARE_FIELDS = {
+  reason: true,
+  detail: true,
+  replacedBy: true,
+  answer: true,
+  answeredIn: true,
+  at: true,
+} satisfies Record<keyof NonNullable<ThreadAsk['closed']>, true>
 
 const PROVIDER_AUTH_COMPARE_FIELDS = {
   kind: true,

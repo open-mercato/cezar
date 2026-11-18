@@ -66,6 +66,7 @@ import {
 import {
   latestPlanEntries,
   reduceThread,
+  trackedAsks,
   threadFilePaths,
   threadFooter,
   type ThreadAsk,
@@ -89,13 +90,14 @@ export function TaskThreadRoute() {
   const run = useRun(id)
   const history = useRunHistory(id)
   const runStatus = run.data?.status
+  const asks = trackedAsks(run.data)
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
-    [history.visibleEvents, runStatus, run.data?.runner],
+    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner, trackedAsks: asks }),
+    [history.visibleEvents, runStatus, run.data?.runner, asks],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
-    [history.currentEvents, runStatus, run.data?.runner],
+    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner, trackedAsks: asks }),
+    [history.currentEvents, runStatus, run.data?.runner, asks],
   )
 
   // Read receipt (#unread-done-items): opening a finished task's thread marks it read — the same
