@@ -27,6 +27,7 @@ import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
 import { narrowForRelay } from './relay/scope.ts';
+import { installExitDiagnostics } from './exit-diagnostics.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
 import { registerRunningInstance } from './worktree-in-use.ts';
 import {
@@ -316,6 +317,7 @@ async function serveCommand(
   openBrowser: boolean,
   bindHost?: string,
 ): Promise<void> {
+  installExitDiagnostics();
   const runtimeId = newRuntimeId();
   let cockpitLease: CockpitLease | undefined;
   let runtimeReleased = false;
