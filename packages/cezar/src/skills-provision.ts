@@ -115,15 +115,16 @@ export async function ignoreProvisioned(cwd: string, skillsDir: string, name: st
 }
 
 /** One skill into one skills dir. An existing entry (tracked, or the user's own) is never touched. */
-async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promise<boolean> {
+async function provisionOne(cwd: string, skillsDir: string, skill: Skill, allowDirectoryLinks: boolean): Promise<boolean> {
   // The name is frontmatter verbatim; it becomes a path segment, so it must be exactly one.
   if (!isSafeSkillName(skill.name)) return false;
   const dest = join(cwd, skillsDir, skill.name);
   // Team copies are rewritten so a Continue picks up a fetched update; everything else stays put.
   if (skill.source === 'team' && skill.team?.dir) {
-    return materializeSkillDir(cwd, skill, skillsDir, () => ignoreProvisioned(cwd, skillsDir, skill.name)).catch(
-      () => false,
-    );
+    return materializeSkillDir(cwd, skill, skillsDir, {
+      allowDirectoryLinks,
+      ignore: (directory, name) => ignoreProvisioned(cwd, directory, name),
+    }).catch(() => false);
   }
   const onDisk = skill.source !== 'team' && skill.source !== 'builtin' && isAbsolute(skill.path);
   // A skill directory cezar ships in its package (`skills/change-impact`), references/ included.
@@ -168,6 +169,7 @@ export async function provisionSkills(
   cwd: string,
   roots: readonly Skill[],
   catalog: readonly Skill[],
+  { allowDirectoryLinks = true }: { allowDirectoryLinks?: boolean } = {},
 ): Promise<string[]> {
   const installed: string[] = [];
   // Commands are delivered inline: a link would point the task at the main checkout's file.
@@ -175,7 +177,7 @@ export async function provisionSkills(
   for (const skill of skillClosure(skills(roots), skills(catalog))) {
     let any = false;
     for (const dir of PROVISION_SKILL_DIRS) {
-      const ok = await provisionOne(cwd, dir, skill).catch((err: unknown) => {
+      const ok = await provisionOne(cwd, dir, skill, allowDirectoryLinks).catch((err: unknown) => {
         const errno = (err as { code?: unknown }).code;
         const code = typeof errno === 'string' ? errno : 'unknown';
         reportError(

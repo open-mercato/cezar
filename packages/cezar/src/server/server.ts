@@ -5921,9 +5921,6 @@ export function createApp(deps: ServerDeps) {
       }
 
       const fallback = parsed.data.runner ?? cezarConfig.defaultRunner;
-      const requiredProviders = new Set<ProviderId>(
-        providersRequiredByWorkflow(workflow, fallback),
-      );
       if (harnessInput) {
         const agentic = await loadAgenticConfig(repoRoot);
         if (harnessInput.roles) {
@@ -5950,9 +5947,6 @@ export function createApp(deps: ServerDeps) {
           }
           harnessInput = { ...harnessInput, roles };
         }
-        for (const provider of providersRequiredByHarness(harnessInput)) {
-          requiredProviders.add(provider);
-        }
         const plan = harnessInput.roles ?? {
           orchestrator: { runner: 'claude' as const, model: '' },
           implementer: { runner: 'claude' as const, model: '' },
@@ -5963,8 +5957,8 @@ export function createApp(deps: ServerDeps) {
         if (planSeating) {
           return c.json({ error: `harness start blocked: ${planSeating}` }, 409);
         }
-        // A disabled provider is refused before any billed probe of it.
-        const providersBlocked = await providerActionError([...requiredProviders], {
+        // Harness workflow steps only seed the rail. The lineup owns execution and readiness.
+        const providersBlocked = await providerActionError(providersRequiredByHarness(harnessInput), {
           repoRoot,
           profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
         });
@@ -5999,7 +5993,7 @@ export function createApp(deps: ServerDeps) {
       // A harness start ran this gate before its probes.
       const blocked = harnessInput
         ? null
-        : await providerActionError([...requiredProviders], {
+        : await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
             repoRoot,
             profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
           });
@@ -6032,7 +6026,10 @@ export function createApp(deps: ServerDeps) {
         task: parsed.data.task,
         model: parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
-        runner: parsed.data.runner,
+        // Named account overrides still belong to the request's runner.
+        runner: harnessInput && parsed.data.agentProfile === undefined
+          ? harnessInput.roles?.orchestrator.runner ?? 'claude'
+          : parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
         images,
         systemPrompt: parsed.data.systemPrompt,

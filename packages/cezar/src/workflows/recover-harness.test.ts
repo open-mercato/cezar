@@ -67,6 +67,52 @@ describe('recover() and harness runs', () => {
     expect(events.some((e) => typeof e.message === 'string' && /ledger/.test(e.message as string))).toBe(true);
   });
 
+  it.each(['setup', 'checks', 'authorized setup'] as const)(
+    'recovers a harness waiting on %s using the recorded operator decision',
+    async (pause) => {
+      const def = harnessWorkflowDefs().find((w) => w.name === HARNESS_FIX_ISSUE)!;
+      const task = 'Fix issue #642';
+      const { id } = store.createRun({ title: 't', workflow: def.name, task, steps: [] });
+      store.updateRun(id, {
+        status: 'waiting',
+        workflowDef: def,
+        harness: { profile: 'standard', workflow: def.name, issueId: '642' },
+      });
+      const ledger = createLedger({
+        workflow: def.name,
+        requestedProfile: 'standard',
+        subject: { kind: 'issue', id: '642', text: task },
+      });
+      const authorized = pause === 'authorized setup';
+      const actionId = '22222222-2222-4222-8222-222222222222';
+      ledger.outcome = authorized
+        ? { status: 'pending', blockingReasons: [] }
+        : { status: 'blocked', blockingReasons: ['Operator action needed'] };
+      if (pause === 'checks') {
+        ledger.validation = [{ command: 'npm test', status: 'failed', exitCode: 1, evidence: 'One test failed.' }];
+        ledger.phases.push({
+          id: `operator-validate-${actionId}`, name: 'Validate', kind: 'op', status: 'done', attempts: 1, artifacts: {},
+        });
+      } else {
+        ledger.environment = { status: 'needs-setup', manager: 'npm', detail: 'Dependencies are missing.' };
+      }
+      if (pause !== 'setup') {
+        ledger.reviewAction = {
+          id: actionId, action: authorized ? 'prepare' : 'verify', status: authorized ? 'pending' : 'failed',
+          round: 1, findingIds: [], requestedAt: new Date().toISOString(), subjectSha256: 'test',
+        };
+      }
+      saveLedger(store.getDataDir(), id, ledger);
+
+      const manager = new RunManager(store, repoRoot, { semaphore: frozen() });
+      await manager.recover();
+
+      expect(store.getRun(id)?.status).toBe(authorized ? 'queued' : 'waiting');
+      expect(store.readEvents(id).some((event) => String(event.message).includes('harness run re-queued'))).toBe(authorized);
+      if (!authorized) expect(manager.continueRun(id)).toEqual({ ok: true });
+    },
+  );
+
   it('Continue re-queues a failed harness from its ledger instead of resuming a model transcript', () => {
     const def = harnessWorkflowDefs().find((w) => w.name === HARNESS_FIX_ISSUE)!;
     const { id } = store.createRun({

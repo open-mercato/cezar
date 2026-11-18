@@ -58,7 +58,9 @@ async function materializeOne(cwd: string, skill: Skill): Promise<boolean> {
       excludeFromGit(cwd, `.claude/skills/${skill.name}/`),
     );
   if (skill.source === 'team') {
-    return skill.team?.dir ? materializeSkillDir(cwd, skill, '.claude/skills', ignoreHere).catch(() => false) : true;
+    return skill.team?.dir
+      ? materializeSkillDir(cwd, skill, '.claude/skills', { allowDirectoryLinks: false, ignore: ignoreHere }).catch(() => false)
+      : true;
   }
   if (!skill.path.endsWith('SKILL.md')) return true;
   let srcDir: string;

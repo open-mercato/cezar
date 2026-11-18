@@ -1120,6 +1120,51 @@ describe('harness API', () => {
       expect(captured?.harness?.roles).toEqual(roles);
     });
 
+    it('starts a ready Codex and OpenCode lineup even when the legacy runner is disabled', async () => {
+      const codex = { runner: 'codex', model: 'gpt-5.6-sol' };
+      const lineup = {
+        orchestrator: codex,
+        implementer: codex,
+        reviewers: [codex, { runner: 'opencode', model: 'opencode/glm-5.3' }],
+      };
+      const gated = createApp({
+        repoRoot,
+        store,
+        version: '0.0.0-test',
+        providerAuth: connectedProviderAuth(),
+        workspaceConfig: {
+          load: async () => ({ ...defaultWorkspaceConfig(), disabledProviders: ['claude'] }),
+        } as Parameters<typeof createApp>[0]['workspaceConfig'],
+        manager: {
+          startRun: (_workflow: WorkflowDef, input: StartRunInput) => {
+            captured = input;
+            return store.createRun({ title: 't', workflow: HARNESS_FIX_ISSUE, task: input.task, steps: [] });
+          },
+          isActive: () => false,
+        } as unknown as RunManager,
+        harnessProber: {
+          probe: async () => ({ status: 'ready', detail: 'test binding' }),
+          probeAll: async (refs) => new Map(refs.map((ref) => [
+            `${ref.runner}/${ref.model}`, { status: 'ready' as const, detail: 'test binding' },
+          ])),
+          clearCache: () => undefined,
+        },
+      });
+      const send = (path: string, body: unknown) =>
+        apiRequest(gated, path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+      const probe = await send('/api/v1/harness/probe', { roles: lineup });
+      expect(await probe.json()).toMatchObject({ ready: true });
+      const started = await send('/api/v1/runs', {
+        task: 'Fix issue #642',
+        workflow: HARNESS_FIX_ISSUE,
+        runner: 'claude',
+        harness: { roles: lineup },
+      });
+      expect(started.status, await started.text()).toBe(201);
+      expect(captured).toMatchObject({ runner: 'codex', harness: { roles: lineup } });
+    });
+
     // probes are live, billed calls; a provider the user disabled was probed (and
     // reported ready) before the provider gate refused the start.
     it('never probes a provider the user disabled', async () => {

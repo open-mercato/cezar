@@ -6,7 +6,8 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Skill } from './skills.js';
 import { ensureSkillOnDisk } from './skills-materialize.js';
-import { bareDirFor } from './skills-remote.js';
+import { bareDirFor, materializeSkillDir } from './skills-remote.js';
+import { provisionSkills } from './skills-provision.js';
 
 const run = promisify(execFile);
 const tempDirs: string[] = [];
@@ -38,6 +39,24 @@ function dirSkill(name: string, skillDir: string, overrides: Partial<Skill> = {}
     path: join(skillDir, 'SKILL.md'),
     source: 'bundled',
     ...overrides,
+  };
+}
+
+async function cacheTeamSkill(): Promise<Skill> {
+  vi.stubEnv('HOME', await tmp('cez-mat-home-'));
+  const repo = 'https://example.invalid/org/team-skills';
+  const src = await tmp('cez-mat-team-src-');
+  await run('git', ['init', '-q', '-b', 'main'], { cwd: src });
+  await writeDirSkill(src, 'team-skill');
+  await run('git', ['add', '-A'], { cwd: src });
+  await run('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'skill'], { cwd: src });
+  await run('git', ['clone', '-q', '--bare', src, bareDirFor(repo)]);
+  return {
+    name: 'team-skill',
+    body: 'team-skill body',
+    path: `${repo}@main:team-skill/SKILL.md`,
+    source: 'team',
+    team: { repo, ref: 'main', path: 'team-skill/SKILL.md', dir: true },
   };
 }
 
@@ -80,24 +99,10 @@ describe('ensureSkillOnDisk', () => {
   // team skills took materializeSkillDir's default ignore, the
   // shared info/exclude — on the default path of every worktree run with a team step skill.
   it('ignores a team skill copy in this worktree only, never the shared info/exclude', async () => {
-    vi.stubEnv('HOME', await tmp('cez-mat-home-'));
     try {
-      const repo = 'https://example.invalid/org/team-skills';
-      const src = await tmp('cez-mat-team-src-');
-      await run('git', ['init', '-q', '-b', 'main'], { cwd: src });
-      await writeDirSkill(src, 'team-skill');
-      await run('git', ['add', '-A'], { cwd: src });
-      await run('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'skill'], { cwd: src });
-      await run('git', ['clone', '-q', '--bare', src, bareDirFor(repo)]);
+      const skill = await cacheTeamSkill();
       const cwd = await tmp('cez-mat-cwd-');
       await run('git', ['init', '-q'], { cwd });
-      const skill: Skill = {
-        name: 'team-skill',
-        body: 'team-skill body',
-        path: `${repo}@main:team-skill/SKILL.md`,
-        source: 'team',
-        team: { repo, ref: 'main', path: 'team-skill/SKILL.md', dir: true },
-      };
 
       expect(await ensureSkillOnDisk(cwd, skill, [skill])).toBe(true);
       expect((await stat(join(cwd, '.claude', 'skills', 'team-skill', 'references', 'a.md'))).isFile()).toBe(true);
@@ -105,6 +110,48 @@ describe('ensureSkillOnDisk', () => {
       expect(exclude).not.toContain('team-skill');
       const { stdout } = await run('git', ['status', '--porcelain', '--untracked-files=all'], { cwd });
       expect(stdout).toBe('');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('materializes ordinary team skills through an in-checkout directory link', async () => {
+    try {
+      const skill = await cacheTeamSkill();
+      for (const worktree of [false, true]) {
+        const cwd = await tmp('cez-mat-cwd-');
+        await run('git', ['init', '-q'], { cwd });
+        await mkdir(join(cwd, 'local-settings'));
+        await symlink('local-settings', join(cwd, '.claude'), 'dir');
+        await run('git', ['add', '.claude'], { cwd });
+
+        expect(await ensureSkillOnDisk(cwd, skill, [skill])).toBe(false);
+        if (worktree) {
+          // A skill sent to a running harness can also reach the ordinary provisioner.
+          await provisionSkills(cwd, [skill], [skill], { allowDirectoryLinks: false });
+          await expect(stat(join(cwd, 'local-settings/skills'))).rejects.toThrow(/ENOENT/);
+          expect(await provisionSkills(cwd, [skill], [skill])).toEqual(['team-skill']);
+        } else {
+          expect(await materializeSkillDir(cwd, skill)).toBe(true);
+        }
+        expect(await readFile(join(cwd, 'local-settings/skills/team-skill/references/a.md'), 'utf8')).toBe('reference');
+        const { stdout } = await run('git', ['ls-files', '--others', '--exclude-standard'], { cwd });
+        expect(stdout).toBe('');
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses an ordinary team skill directory link outside the checkout', async () => {
+    try {
+      const skill = await cacheTeamSkill();
+      const cwd = await tmp('cez-mat-cwd-');
+      const outside = await tmp('cez-mat-outside-');
+      await symlink(outside, join(cwd, '.claude'), 'dir');
+
+      await expect(materializeSkillDir(cwd, skill)).rejects.toThrow('outside the checkout');
+      await expect(stat(join(outside, 'skills'))).rejects.toThrow(/ENOENT/);
     } finally {
       vi.unstubAllEnvs();
     }

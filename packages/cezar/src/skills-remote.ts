@@ -1,13 +1,13 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, posix, relative, sep } from 'node:path';
 import { loadConfig, projectGatedSkillsRepos, type SkillsRepoSource } from './config.ts';
 import { parseFrontmatter, type Skill } from './skills.ts';
 import { workspaceConfigPath } from './paths.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
-import { writeSkillFile } from './skill-destination.ts';
+import { linkedTeamSkillDestination, skillDestination, writeSkillFile } from './skill-destination.ts';
 
 /**
  * Team skills from remote git repos (spec 005), janitor-style: a bare clone
@@ -375,8 +375,10 @@ export async function materializeSkillDir(
   repoRoot: string,
   skill: Skill,
   skillsDir = '.claude/skills',
-  /** Keeps the copy out of git; defaults to the shared `info/exclude`. */
-  ignore: () => Promise<void> = () => excludeFromGit(repoRoot, `${skillsDir}/${skill.name}/`),
+  { allowDirectoryLinks = true, ignore }: {
+    allowDirectoryLinks?: boolean;
+    ignore?: (canonicalSkillsDir: string, installedName: string) => Promise<void>;
+  } = {},
 ): Promise<boolean> {
   if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md')) return false;
   const bareDir = bareDirFor(skill.team.repo);
@@ -386,6 +388,9 @@ export async function materializeSkillDir(
   const srcDir = skill.team.path.slice(0, -'/SKILL.md'.length);
   const ls = await git(['ls-tree', '-r', '--name-only', ref, '--', srcDir], LIST_TIMEOUT_MS, bareDir);
   if (!ls.ok) return false;
+  const destination = (allowDirectoryLinks ? linkedTeamSkillDestination : skillDestination)(
+    repoRoot, join(skillsDir, skill.name),
+  );
 
   let wrote = 0;
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
@@ -395,11 +400,14 @@ export async function materializeSkillDir(
     if (!rel || rel.split(/[\\/]/).includes('..')) continue;
     const show = await git(['show', `${ref}:${file}`], LIST_TIMEOUT_MS, bareDir);
     if (!show.ok) continue;
-    writeSkillFile(repoRoot, join(skillsDir, skill.name, rel), show.stdout);
+    writeSkillFile(repoRoot, join(destination, rel), show.stdout);
     wrote++;
   }
   if (wrote === 0) return false;
-  await ignore();
+  // Git sees the real directory, even when the agent opens it through a link.
+  const installed = relative(realpathSync(repoRoot), destination).split(sep).join('/');
+  if (ignore) await ignore(posix.dirname(installed), posix.basename(installed));
+  else await excludeFromGit(repoRoot, installed.includes('/') ? `${installed}/` : `/${installed}/`);
   return true;
 }
 

@@ -196,6 +196,7 @@ import {
   HARNESS_PROFILES,
   harnessProfileFor,
   HARNESS_SKILL_PROFILES,
+  type HarnessLedger,
   type HarnessProfile,
   type HarnessSkillProfile,
 } from '../harness/types.ts';
@@ -984,6 +985,12 @@ export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
 export const QUEUE_WATCHDOG_MS = 60_000;
 /** Shared empty holds for the common "nothing is held" pump — avoids allocating per sweep. */
 const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
+
+function harnessNeedsOperatorAction(ledger: HarnessLedger): boolean {
+  return ledger.outcome.status === 'blocked' &&
+    ((ledger.environment !== undefined && ledger.environment.status !== 'ready') ||
+      harnessValidationNeedsAttention(ledger));
+}
 
 /**
  * May this run start, given what its account is holding?
@@ -2818,6 +2825,14 @@ export class RunManager {
       // the run; the driver skips completed phases and restarts the
       // interrupted one in a fresh session — which is the design, not a loss.
       if (run.harness && (run.status === 'running' || run.status === 'waiting')) {
+        if (run.status === 'waiting') {
+          const read = readLedger(this.dataDir, run.id);
+          if (read.status === 'valid' && harnessNeedsOperatorAction(read.ledger)) {
+            const action = read.ledger.reviewAction?.status;
+            // Project setup and failed checks park for a user decision (harness spec).
+            if (action !== 'pending' && action !== 'running') continue;
+          }
+        }
         const workflow = await this.reviveWorkflow(run);
         if (workflow) {
           for (const step of run.steps) {
@@ -7369,9 +7384,7 @@ export class RunManager {
       emit({ type: 'lifecycle', message: 'run cancelled' });
     } else if (runError && isHarnessWorkflow(workflow) && (() => {
       const read = readLedger(this.dataDir, runId);
-      return read.status === 'valid' && read.ledger.outcome.status === 'blocked' &&
-        ((read.ledger.environment !== undefined && read.ledger.environment.status !== 'ready') ||
-          harnessValidationNeedsAttention(read.ledger));
+      return read.status === 'valid' && harnessNeedsOperatorAction(read.ledger);
     })()) {
       this.store.updateRun(runId, { status: 'waiting', error: undefined, finishedAt: undefined, currentStepId: undefined });
       emit({ type: 'lifecycle', message: 'multi-model paused — project setup or checks need attention; choose the next review action' });
@@ -8720,7 +8733,9 @@ export class RunManager {
           if (await materializeSkillDir(state.cwd, skill).catch(() => false)) installed.push(skill.name);
         }
       } else {
-        installed = await provisionSkills(state.cwd, roots, catalog);
+        installed = await provisionSkills(state.cwd, roots, catalog, {
+          allowDirectoryLinks: !state.includeHarnessSkills,
+        });
       }
       track('skills_provisioned', {
         label: stepSkillMissing ? 'root_not_found' : installed.length ? 'installed' : 'already_present',

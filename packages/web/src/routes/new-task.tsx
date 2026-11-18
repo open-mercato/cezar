@@ -806,7 +806,7 @@ export function NewTaskRoute() {
           task: text,
           source: multiSource,
           model: '',
-          runner: 'claude',
+          runner: start.harnessRoles.orchestrator.runner,
           defaultRunner,
           variants: 1,
           images: [],
