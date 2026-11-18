@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore, isIdleParked, reconcileLoadedRun, type RunRecord } from '../runs/store.ts';
@@ -22,6 +23,7 @@ describe('auth park and reconnect resume', () => {
   let store: RunStore;
   let manager: RunManager | undefined;
   const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedCodexBin = process.env.CEZ_CODEX_BIN;
 
   const record = (id: string): RunRecord => store.getRun(id)!;
   async function until(check: () => boolean, timeout = 20_000): Promise<void> {
@@ -35,6 +37,8 @@ describe('auth park and reconnect resume', () => {
 
   beforeEach(async () => {
     process.env.CEZ_DRY_RUN = '1';
+    // The account-switch case continues on Codex: pin its fixture app-server, like the other Codex tests.
+    process.env.CEZ_CODEX_BIN = fileURLToPath(new URL('../core/__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url));
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-auth-park-'));
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
@@ -49,15 +53,18 @@ describe('auth park and reconnect resume', () => {
     vi.restoreAllMocks();
     if (manager) {
       for (const { id } of store.listRuns()) manager.cancel(id);
-      await until(() => store.listRuns().every(({ id }) => !manager?.isActive(id)), 10_000);
+      await until(() => store.listRuns().every(({ id }) => !manager?.isActive(id)), 25_000);
       manager.dispose();
       manager = undefined;
     }
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
+    if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN;
+    else process.env.CEZ_CODEX_BIN = savedCodexBin;
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  });
+    // A Codex session stopping under load outlasts the default 10 s hook limit.
+  }, 40_000);
 
   it('a rejected login on a workflow step parks the run at waiting, keeping its session', async () => {
     const id = await parkedRun();
