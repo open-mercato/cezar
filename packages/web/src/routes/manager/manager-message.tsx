@@ -277,16 +277,15 @@ function ManagerQuestions({
     >
       {stale ? <StaleNote detail={stale.detail} disabled={isPending} onDismiss={() => scheduleDismiss(queryClient, key, ask.questions[0]?.header ?? 'Question')} /> : null}
       {source}
-      {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
-          chips per question are the design's ghost actions. */}
-      <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
-        <AskForm
-          ask={card}
-          ownerId={managerId}
-          delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
-          asker="Your decision"
-        />
-      </div>
+      {/* The card draws the box and the status, so the form is unframed; its "Other…" and "Need more
+          info" chips per question are the design's ghost actions. */}
+      <AskForm
+        ask={card}
+        ownerId={managerId}
+        delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
+        asker="Your decision"
+        framed={false}
+      />
     </ManagerCard>
   )
 }

@@ -593,6 +593,18 @@ describe('AskForm — phones, screen readers and a pending send', () => {
     expect(screen.getByRole('status').textContent).toBe('Sending…')
     expect(document.querySelector('[data-slot="ask-card"]')?.getAttribute('aria-busy')).toBe('true')
   })
+
+  it('unframed (a manager card, a Questions row) draws no box, no asker and no stray dot, but still says Sending…', () => {
+    const delivery = { mode: 'live' as const, isPending: false, send: vi.fn() }
+    const { rerender } = render(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" framed={false} /></MemoryRouter>)
+    const card = document.querySelector<HTMLElement>('[data-slot="ask-card"]')!
+    expect(card.className).toBe('')
+    expect(card.querySelector('[data-slot="status-dot"]')).toBeNull()
+    expect(card.querySelector('[data-slot="ask-asker"]')).toBeNull()
+    rerender(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={{ ...delivery, isPending: true }} asker="Your decision" framed={false} /></MemoryRouter>)
+    expect(screen.getByRole('status').textContent).toBe('Sending…')
+    expect(card.querySelector('[data-slot="status-dot"]')).toBeNull()
+  })
 })
 
 describe('the ask card wears the attention tone for "waiting on a person" (redesign 2026-11)', () => {

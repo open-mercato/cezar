@@ -409,8 +409,8 @@ function QuestionCard({ item, now, managerById, onDismiss, onAnswered }: {
           returnHint={false}
         />
       ) : null}
-      <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
-        <AskForm ask={card} ownerId="questions" delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }} asker="Your decision" composerBelow={false} />
+      <div>
+        <AskForm ask={card} ownerId="questions" delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }} asker="Your decision" composerBelow={false} framed={false} />
       </div>
     </div>
   )

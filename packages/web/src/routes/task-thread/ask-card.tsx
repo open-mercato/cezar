@@ -142,6 +142,7 @@ export function AskForm({
   delivery,
   asker,
   composerBelow = true,
+  framed = true,
 }: {
   ask: Pick<ThreadAsk, 'id' | 'questions'>
   /** Keys the held picks, so they outlive a virtualized row. */
@@ -150,6 +151,8 @@ export function AskForm({
   asker: string
   /** A composer sits under the card (a chat): the hint offers it. The Questions inbox has none. */
   composerBelow?: boolean
+  /** The host draws its own frame and status (a manager card, a Questions row): no box, no asker row. */
+  framed?: boolean
 }) {
   const blocked = delivery.blockedBy !== undefined
   const questions = ask.questions
@@ -201,19 +204,25 @@ export function AskForm({
       data-delivery={delivery.mode}
       aria-busy={delivery.isPending || undefined}
       data-tone={ASKING.tone}
-      className="rounded-lg border border-info/30 bg-info/5 px-4 pt-3.5 pb-3.5"
+      className={framed ? 'rounded-lg border border-info/30 bg-info/5 px-4 pt-3.5 pb-3.5' : undefined}
     >
-      <div className="mb-2.5 flex items-center gap-2">
-        <StatusDot tone={ASKING.tone} pulse={ASKING.pulse} />
-        {/* Ink, not the accent: a tinted word on the tinted card is under 2:1 as small text. */}
-        <span data-slot="ask-asker" className="text-label font-semibold text-foreground">{asker}</span>
-        {/* A one-tap pick disables every chip at once; say why. */}
-        {delivery.isPending ? (
-          <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-muted-foreground">
-            Sending…
-          </span>
-        ) : null}
-      </div>
+      {framed || delivery.isPending ? (
+        <div className="mb-2.5 flex items-center gap-2">
+          {framed ? (
+            <>
+              <StatusDot tone={ASKING.tone} pulse={ASKING.pulse} />
+              {/* Ink, not the accent: a tinted word on the tinted card is under 2:1 as small text. */}
+              <span data-slot="ask-asker" className="text-label font-semibold text-foreground">{asker}</span>
+            </>
+          ) : null}
+          {/* A one-tap pick disables every chip at once; say why. */}
+          {delivery.isPending ? (
+            <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-muted-foreground">
+              Sending…
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex flex-col gap-4">
         {questions.map((question, index) => (
           <AskQuestionBlock
