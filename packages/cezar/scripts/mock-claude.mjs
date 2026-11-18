@@ -545,7 +545,9 @@ async function respond(userText, imageCount) {
   // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
   // the credential failure in an `is_error` result even though its subtype is
   // `success`, rather than emitting a dedicated error frame.
-  if (userText.includes('mock:auth-error')) {
+  // A reconnect's continuation answers (spec 2026-11-18-inline-account-reconnect): it quotes the
+  // original task text, so the trigger alone would re-park the task forever.
+  if (userText.includes('mock:auth-error') && !userText.includes('Your sign-in was renewed')) {
     emit({
       type: 'result',
       subtype: 'success',
