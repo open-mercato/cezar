@@ -102,6 +102,7 @@ import {
   namesWork,
   openAsk,
   openCardsBlock,
+  aboutPrProjects,
   prRefs,
   replaces,
   taskSources,
@@ -949,6 +950,9 @@ export class ManagerEngine {
       const written = this.publish(id, { ...message, askAnswer: text || 'Sent attachments' }, true);
       // Asked from a session the chat never saw: `Header: choice` alone answers nothing.
       if (message.turn !== 'chat') this.addNote(id, askNote(message));
+      // The inbox hands this answer to the task question it copies (`about.ask`); a relay would send it twice.
+      const relayed = (message.ask.about ?? []).flatMap((ref) => ('task' in ref && ref.ask ? [`[[task:${ref.task}]]`] : []));
+      if (relayed.length > 0) this.addNote(id, `cezar already delivers the user's answer to «${cardHeaders(message.ask)}» to ${relayed.join(', ')}: do not pass it on with \`cez-manager task say\`.`.slice(0, 2_000));
       if (written.kind === 'assistant') this.askChanged(id, written, true);
     }
     const replied = askId === undefined ? open.filter((message) => !superseded.has(message.id)) : [];
@@ -1416,16 +1420,36 @@ export class ManagerEngine {
     }
   }
 
-  /** Every manager's cards, open or not; a card answered on itself carries the reply's time. */
-  askCards(): ManagerAskCard[] {
+  /**
+   * Every manager's cards, open or closed since `closedSince` (ms); a card answered on itself carries the
+   * reply's time. A card a newer one re-asked before `askClosed: replaced` was persisted reads as replaced (#2307).
+   */
+  askCards(closedSince = 0): ManagerAskCard[] {
     return this.deps.store.list().flatMap((manager) => {
       const messages = this.deps.store.messages(manager.id);
-      return messages.flatMap((message): ManagerAskCard[] => {
-        if (message.kind !== 'assistant' || !message.ask) return [];
-        const reply = message.askAnswer === undefined || message.askClosed
-          ? undefined
-          : messages.find((other) => other.kind === 'user' && other.seq > message.seq && (other.text || 'Sent attachments') === message.askAnswer);
-        return [{ managerId: manager.id, managerName: manager.name, message: message as AskMessage, ...(reply ? { answeredAt: reply.at } : {}) }];
+      const cards = messages.filter((message): message is AskMessage => message.kind === 'assistant' && message.ask !== undefined)
+        .sort((a, b) => a.seq - b.seq);
+      const superseded = supersededAskIds(cards);
+      // Indexed by text once: a per-card scan of the whole chat is O(cards × messages).
+      const replies = new Map<string, ManagerMessage[]>();
+      for (const other of messages) {
+        if (other.kind !== 'user') continue;
+        const text = other.text || 'Sent attachments';
+        replies.set(text, [...(replies.get(text) ?? []), other]);
+      }
+      return cards.flatMap((message, index): ManagerAskCard[] => {
+        const card = { managerId: manager.id, managerName: manager.name };
+        if (message.askClosed) return msOf(message.askClosed.at) >= closedSince ? [{ ...card, message }] : [];
+        if (message.askAnswer !== undefined) {
+          const reply = replies.get(message.askAnswer)?.find((other) => other.seq > message.seq);
+          return msOf(reply?.at ?? message.at) >= closedSince ? [{ ...card, message, ...(reply ? { answeredAt: reply.at } : {}) }] : [];
+        }
+        if (superseded.has(message.id)) {
+          const newer = cards.slice(index + 1).find((other) => replaces(other.ask, message.ask))!;
+          if (msOf(newer.at) < closedSince) return [];
+          return [{ ...card, message: { ...message, askClosed: { reason: 'replaced', at: newer.at, replacedBy: newer.id } } }];
+        }
+        return [{ ...card, message }];
       });
     });
   }
@@ -1480,7 +1504,8 @@ export class ManagerEngine {
   private closeCard(id: string, message: AskMessage, closed: QuestionClosed): void {
     const current = this.deps.store.message(id, message.id);
     if (!current || !openAsk(current)) return;
-    const written = this.publish(id, { ...current, askClosed: closed }, true);
+    // The schema caps `detail` at 300: a longer one fails it, and the store drops the whole message on reload.
+    const written = this.publish(id, { ...current, askClosed: closed.detail === undefined ? closed : { ...closed, detail: closed.detail.slice(0, 300) } }, true);
     this.emitChange(id);
     if (written.kind === 'assistant') this.askChanged(id, written, true);
   }
@@ -1490,7 +1515,7 @@ export class ManagerEngine {
     const current = this.deps.store.message(id, message.id);
     // The first flag stays, except that a partial re-ask names what changed more precisely than any other.
     if (!current || !openAsk(current) || (current.askStale && stale.why !== 'partly-reasked')) return;
-    const written = this.publish(id, { ...current, askStale: stale }, true);
+    const written = this.publish(id, { ...current, askStale: { ...stale, detail: stale.detail.slice(0, 300) } }, true);
     if (written.kind === 'assistant') this.askChanged(id, written, false);
   }
 
@@ -1520,7 +1545,7 @@ export class ManagerEngine {
       } else if (questionCardPartlyReasked(ask, older.ask)) {
         // Partly re-asked: its other questions still need an answer, so it stays open, flagged.
         const headers = questionCardSharedHeaders(ask, older.ask).map((header) => `«${header}»`).join(', ');
-        this.flagAsk(id, older, { why: 'partly-reasked', detail: `a newer question asked ${headers} again`, since: this.iso() });
+        this.flagAsk(id, older, { why: 'partly-reasked', detail: `a newer question asked ${headers} again`.slice(0, 300), since: this.iso() });
       }
     }
     this.askChanged(id, written, false);
@@ -1553,15 +1578,23 @@ export class ManagerEngine {
    * `failed`, #2286): a card declaring it in `about` expires, one only mentioning it is flagged.
    */
   taskEnded(projectId: string, runId: string, run: RunRecord | undefined): void {
+    this.endAsks(projectId, runId, run, false);
+  }
+
+  /** `replayed`: read from the run list, not seen live; a card asked after that end is about the ended run. */
+  private endAsks(projectId: string, runId: string, run: RunRecord | undefined, replayed: boolean): void {
     if (this.disposed) return;
     const end = !run ? 'was deleted' : run.archived ? 'was archived'
       : run.status === 'done' ? 'finished' : run.status === 'review' ? 'finished, ready for review'
         : run.status === 'cancelled' ? 'was cancelled' : undefined;
     if (!end) return;
+    // Deleted, or an end without a stamp: unknown, so it counts as after the card.
+    const endedAt = run?.archived ? run.archivedAt : run?.finishedAt;
     const key = `${projectId}/${runId}`;
     for (const manager of this.deps.store.list()) {
       if (!connectedTo(manager, projectId)) continue;
       for (const message of this.deps.store.messages(manager.id).filter(openAsk)) {
+        if (replayed && endedAt !== undefined && msOf(endedAt) <= msOf(message.at)) continue;
         const named = namedWork(message);
         if (named.aboutTasks.has(key)) this.closeCard(manager.id, message, { reason: 'expired', at: this.iso(), detail: `Task ${end}` });
         else if (named.mentionedTasks.has(key)) this.flagAsk(manager.id, message, { why: 'mentioned-work-ended', detail: `a task it mentions ${end}`, since: this.iso() });
@@ -1580,7 +1613,7 @@ export class ManagerEngine {
         for (const key of [...work.aboutTasks, ...work.mentionedTasks]) if (key.startsWith(`${projectId}/`)) named.add(key.slice(projectId.length + 1));
       }
     }
-    for (const runId of named) this.taskEnded(projectId, runId, byId.get(runId));
+    for (const runId of named) this.endAsks(projectId, runId, byId.get(runId), true);
   }
 
   /** `pullRequestClosed`'s half for cards: `about: [{pr}]` expires, a `[[pr:…]]` mention is flagged. */
@@ -1590,7 +1623,8 @@ export class ManagerEngine {
       .map((message) => ({ manager, message })));
     if (candidates.length === 0) return;
     const target = resolve(root);
-    const projects = (await this.deps.projects()).filter((project) => resolve(project.root) === target).map((project) => project.id);
+    const all = await this.deps.projects();
+    const projects = all.filter((project) => resolve(project.root) === target).map((project) => project.id);
     const confirmed = new Map<string, boolean>();
     // An automation poll reads `origin`: in a fork clone that is another repo's number, so ask the card's own route.
     const closedIn = async (projectId: string): Promise<boolean> => {
@@ -1603,7 +1637,14 @@ export class ManagerEngine {
       if (reached.length === 0) continue;
       const named = namedWork(message);
       if (named.aboutPrs.has(number)) {
-        if (await someAsync(reached, closedIn)) this.closeCard(manager.id, message, { reason: 'expired', at: this.iso(), detail: `PR #${number} ${state}` });
+        // `{pr}` names no project: pin it from the card's own [[pr:…]] or its tasks, else a reach of one.
+        const pinned = aboutPrProjects(message, number);
+        if (!await someAsync(pinned.size > 0 ? reached.filter((projectId) => pinned.has(projectId)) : reached, closedIn)) continue;
+        if (pinned.size > 0 || all.filter((project) => connectedTo(manager, project.id)).length <= 1) {
+          this.closeCard(manager.id, message, { reason: 'expired', at: this.iso(), detail: `PR #${number} ${state}` });
+        } else {
+          this.flagAsk(manager.id, message, { why: 'mentioned-work-ended', detail: `a PR #${number} was ${state} in ${reached.join(', ')}`, since: this.iso() });
+        }
         continue;
       }
       const mentioned = named.mentionedPrs.filter((ref) => ref.number === number && ref.projectId !== undefined && reached.includes(ref.projectId));

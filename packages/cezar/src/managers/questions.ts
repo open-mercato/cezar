@@ -91,6 +91,14 @@ export function namedWork(message: AskMessage): NamedWork {
   return { aboutTasks, aboutPrs, mentionedTasks, mentionedPrs };
 }
 
+/** The projects a card's `{pr: number}` can be in: its own `[[pr:<project>/number]]`, else the tasks it names. */
+export function aboutPrProjects(message: AskMessage, number: number): Set<string> {
+  const mentioned = prRefs(message.text).filter((ref) => ref.number === number).map((ref) => ref.projectId!);
+  if (mentioned.length > 0) return new Set(mentioned);
+  const tasks = (message.ask.about ?? []).flatMap((ref) => ('task' in ref ? [ref.task.split('/')[0]!] : []));
+  return new Set([...tasks, ...[...taskSources(message.text), ...(message.sourceTasks ?? [])].map((source) => source.projectId)]);
+}
+
 /** A task or PR the card names, declared or mentioned. */
 export function namesWork(message: AskMessage, work: { tasks?: string[]; prs?: PrRef[] }): boolean {
   const named = namedWork(message);
@@ -172,7 +180,7 @@ export function createManagerQuestionProvider(engine: ManagerEngine): QuestionPr
   return {
     list: async () => {
       const cutoff = engine.clock() - QUESTIONS_CLOSED_WINDOW_DAYS * DAY_MS;
-      return engine.askCards()
+      return engine.askCards(cutoff)
         .map(questionItemOf)
         .filter((item) => !item.closed || msOf(item.closed.at) >= cutoff);
     },
