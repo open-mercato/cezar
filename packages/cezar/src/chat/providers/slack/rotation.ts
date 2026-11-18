@@ -5,7 +5,7 @@ import type { SlackCredentials } from '@open-mercato/cezar-contract';
 import { slackAppTokenPattern, slackBotTokenPattern, slackRefreshTokenPattern } from '@open-mercato/cezar-contract';
 import { SecretStore, type SecretScopeRef } from '../../../workspace/secrets.ts';
 import { cezarHomeDir } from '../../../paths.ts';
-import { withLifecycleFileLock } from '../../../worktree-lifecycle/store.ts';
+import { LifecycleConflictError, withLifecycleFileLock } from '../../../worktree-lifecycle/store.ts';
 import { ChatTransportError } from '../../provider.ts';
 
 const stateSchema = z.discriminatedUnion('phase', [
@@ -29,8 +29,15 @@ export function slackRotationStorage(scope: Extract<SecretScopeRef, { kind: 'pro
    return entry?.value;
   },
   async write(key, value) { await store.set(scope, key, value, ['cezar']); },
-  lock: (key, action) => withLifecycleFileLock(join(home, 'slack-token-locks', key), action),
+  lock: (key, action) => lockOutlastingRefresh(path => withLifecycleFileLock(path, action), join(home, 'slack-token-locks', key)),
  };
+}
+/** A holder may keep the lock through a whole 15 s refresh; wait past it instead of failing the second wire. */
+export async function lockOutlastingRefresh<T>(acquire: (path: string) => Promise<T>, path: string, deadline = Date.now() + 20_000): Promise<T> {
+ for (;;) {
+  // Only acquisition throws LifecycleConflictError; the guarded action never runs twice.
+  try { return await acquire(path); } catch (error) { if (!(error instanceof LifecycleConflictError) || Date.now() > deadline) throw error; }
+ }
 }
 const PRE_CONNECT = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'UND_ERR_CONNECT_TIMEOUT']);
 /** Connection-phase failures carry their code on `cause`; anything else may have reached Slack. */
@@ -67,7 +74,8 @@ export class SlackTokenRotation {
     let response: Response;
     try {
      response = await this.fetcher('https://slack.com/api/oauth.v2.access', {
-      method: 'POST', redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]),
+      // Never the caller's signal: an abort after sending leaves the single-use token unknowable (spec: shutdown awaits renewal).
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'refresh_token', client_id: clientId, client_secret: clientSecret, refresh_token: stored?.refresh ?? refresh }).toString(),
      });

@@ -113,3 +113,20 @@ it('bounds refresh responses and preserves pending uncertainty after an oversize
  await expect(h.rotation().token(credentials,'app')).rejects.toMatchObject({failure:{kind:'auth'}})
  expect(h.fetcher).toHaveBeenCalledTimes(1)
 })
+it('finishes an in-flight exchange when the caller aborts (shutdown awaits renewal)', async () => {
+ const h = harness(), controller = new AbortController();
+ h.fetcher.mockImplementationOnce(async (_url, init) => {
+  controller.abort();
+  if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  return new Response(JSON.stringify({ ok: true, token_type: 'app_level', access_token: 'xoxe.xapp-renewed-token', refresh_token: 'xoxe-renewed-refresh', expires_in: 43200 }));
+ });
+ await expect(h.rotation().token(credentials, 'app', controller.signal)).rejects.toMatchObject({ failure: { kind: 'blocked' } });
+ expect(await h.rotation().token(credentials, 'app')).toBe('xoxe.xapp-renewed-token'); expect(h.fetcher).toHaveBeenCalledTimes(1);
+});
+it('waits for a lock holder that outlasts the lifecycle lock budget instead of failing the second wire', async () => {
+ const { LifecycleConflictError } = await import('../../../worktree-lifecycle/store.ts');
+ const { lockOutlastingRefresh } = await import('./rotation.ts');
+ let attempts = 0;
+ expect(await lockOutlastingRefresh(async () => { if (++attempts < 3) throw new LifecycleConflictError('busy'); return 'held'; }, 'lock')).toBe('held');
+ await expect(lockOutlastingRefresh(async () => { throw new LifecycleConflictError('busy'); }, 'lock', Date.now() - 1)).rejects.toBeInstanceOf(LifecycleConflictError);
+});

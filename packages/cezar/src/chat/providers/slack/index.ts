@@ -6,4 +6,6 @@ export const slackServiceDescriptor: ChatServiceDescriptor = {
  limits: { maxText: 4000, buttonsPerMessage: 25, perChatPerSecond: 1, perBotPerSecond: 10 },
  destination(credential) { decodeSlackCredentials(credential); return 'https://slack.com/api/chat.postMessage'; },
  credentialBotId: () => undefined, textFormat: 'slack-mrkdwn',
+ // Refresh material and the Client Secret stay in the host, even for an installed adapter without slack-oauth-v1.
+ adapterCredential(stored) { const { appToken, botToken } = decodeSlackCredentials(stored); return JSON.stringify({ appToken, botToken }); },
 };
