@@ -284,6 +284,7 @@ describe('shortcuts', () => {
       splitView: null,
       terminal: { allowed: true, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
       focusComposer: null,
+      focusQuestion: null,
       openFile: vi.fn(),
       markedUnread: vi.fn(),
       ...overrides,

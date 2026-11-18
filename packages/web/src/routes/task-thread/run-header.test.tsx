@@ -180,6 +180,7 @@ const bridge = (overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBrid
   splitView: null,
   terminal: { allowed: false, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
   focusComposer: vi.fn(),
+  focusQuestion: null,
   openFile: vi.fn(),
   markedUnread: vi.fn(),
   ...overrides,
@@ -477,6 +478,17 @@ describe('the primary action follows the state (design 2026-11, Proposal 3)', ()
     renderHeader(run('done'))
     fireEvent.click(primaryRow().getByRole('button', { name: 'Continue' }))
     expect(workspace.focusComposer).toHaveBeenCalledTimes(2)
+  })
+
+  it('"Answer" focuses the open question card, not the composer (#2297)', () => {
+    stubFetch()
+    const focusQuestion = vi.fn()
+    const workspace = { ...bridge(), focusQuestion }
+    publishTaskWorkspace(workspace)
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(focusQuestion).toHaveBeenCalledTimes(1)
+    expect(workspace.focusComposer).not.toHaveBeenCalled()
   })
 
   it('"Open PR" is the primary once the PR exists and nothing is left to push', async () => {

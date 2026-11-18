@@ -44,6 +44,7 @@ import { useDesignNotes } from '../task-preview/design-notes'
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
 import { FilesView } from '../task-git/task-files'
+import { latestOpenAskCard, revealAskCard } from '../task-thread/ask-card'
 import { useDiffComments } from '../task-thread/diff-comments'
 import { RunHeader, type RunTab } from '../task-thread/run-header'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
@@ -630,6 +631,10 @@ function WorkspaceView({
       },
       get focusComposer() {
         return composer() ? () => composer()?.focus() : null
+      },
+      get focusQuestion() {
+        const card = stage() ? latestOpenAskCard(stage()!) : null
+        return card ? () => revealAskCard(card) : null
       },
       openFile: (path: string) => openReference({ view: 'files', value: path }),
       markedUnread,
