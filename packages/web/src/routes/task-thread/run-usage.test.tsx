@@ -94,6 +94,73 @@ async function tooltipOf(trigger: HTMLElement): Promise<string | null> {
   return (await screen.findByRole('tooltip')).textContent
 }
 
+describe('the model that actually ran', () => {
+  it('reads "auto → <model>" on the badge and names it in the details', async () => {
+    stubFetch()
+    renderUsage(run('done', { costUsd: 0.04, actualModel: 'claude-opus-5-5', modelsUsed: ['claude-opus-5-5'] }))
+    const badge = within(usage()).getByRole('button', { name: 'Agent: claude, model auto → claude-opus-5-5' })
+    expect(badge.querySelector('[data-slot="agent-badge-model"]')?.textContent).toBe('· auto → claude-opus-5-5')
+    const details = within(await openDetails())
+    expect(details.getByText('Model').nextElementSibling?.textContent).toBe('auto')
+    expect(details.getByText('Ran as').nextElementSibling?.textContent).toBe('claude-opus-5-5')
+    expect(details.queryByText('Also used')).toBeNull()
+  })
+
+  it('shows an alias resolving, and hides the arrow when request and actual match', () => {
+    stubFetch()
+    renderUsage(run('done', { inputTokens: undefined, outputTokens: undefined, model: 'opus', actualModel: 'claude-opus-5-5' }))
+    expect(document.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('claude · opus → claude-opus-5-5')
+    cleanup()
+    renderUsage(run('done', { inputTokens: undefined, outputTokens: undefined, model: 'claude-opus-5-5', actualModel: 'claude-opus-5-5[1m]' }))
+    expect(document.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('claude · claude-opus-5-5')
+  })
+
+  it('lists per-step models and the earlier ones after a switch', async () => {
+    stubFetch()
+    renderUsage(
+      run('done', {
+        actualModel: 'claude-opus-5-5',
+        modelsUsed: ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'],
+        steps: [
+          step({
+            id: 'plan',
+            name: 'Plan',
+            actualModel: 'claude-sonnet-5-5',
+            modelsUsed: [{ model: 'claude-sonnet-5-5' }, { model: 'claude-haiku-5-5', costUsd: 0.01 }],
+          }),
+          step({ id: 'build', name: 'Build', actualModel: 'claude-opus-5-5', modelsUsed: [{ model: 'claude-opus-5-5' }] }),
+        ],
+      }),
+    )
+    const details = await openDetails()
+    expect(within(details).getByText('Also used').nextElementSibling?.textContent).toBe('claude-sonnet-5-5, claude-haiku-5-5')
+    const rows = details.querySelectorAll('[data-slot="agent-badge-step-models"] li')
+    expect([...rows].map((row) => row.textContent)).toEqual([
+      'Planclaude-sonnet-5-5 + claude-haiku-5-5 ($0.01)',
+      'Buildclaude-opus-5-5',
+    ])
+  })
+
+  it('falls back to the thread\'s reported model on a run recorded before the field', () => {
+    stubFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <RunUsage run={run('done', { inputTokens: undefined, outputTokens: undefined })} reportedModel="claude-fable-5" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(document.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('claude · auto → claude-fable-5')
+  })
+
+  it('an old run with neither renders exactly as before', () => {
+    stubFetch()
+    renderUsage(run('done', { costUsd: 0.04 }))
+    expect(usage().querySelector('[data-slot="agent-badge-model"]')).toBeNull()
+    expect(within(usage()).getByRole('button', { name: 'Agent: claude, model auto' })).not.toBeNull()
+  })
+})
+
 describe('the usage chip', () => {
   it('reads time · in · out · cost, and opens the exact numbers and the agent', async () => {
     stubFetch()

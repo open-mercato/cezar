@@ -204,6 +204,20 @@ describe('dashboard insights', () => {
     ]);
   });
 
+  it('groups by the model the agent reported running when known, else by the request', () => {
+    const result = build([
+      // "auto" and an alias both resolved to the same model: one group.
+      run({ runner: 'claude', actualModel: 'claude-opus-5-5' }),
+      run({ runner: 'claude', model: 'opus', modelIdentity: 'anthropic/opus', actualModel: 'claude-opus-5-5' }),
+      // Nothing reported (an older run): still grouped by what was asked for.
+      run({ runner: 'claude', model: 'opus' }),
+    ]);
+    expect(result.backends.map((b) => [b.backend, b.model, b.finished])).toEqual([
+      ['claude', 'claude-opus-5-5', 2],
+      ['claude', 'opus', 1],
+    ]);
+  });
+
   it('keeps a task parked on a usage limit active, not vanished', () => {
     const result = build([
       run({

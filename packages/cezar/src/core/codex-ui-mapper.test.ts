@@ -816,6 +816,8 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
       turnId: 'turn_mock_1',
       stopReason: 'end_turn',
       usage: { input: 1200, output: 300, total: 1500 },
+      // The thread/start result names the model "auto" resolved to; every turn echoes it.
+      models: [{ model: 'gpt-mock-codex' }],
     });
   }, 30_000);
 
@@ -860,7 +862,9 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
     const v2Started = v2.filter((event) => event.type === 'turn.started');
     const v2Completed = v2.filter((event) => event.type === 'turn.completed');
     expect(v2Started).toEqual([{ type: 'turn.started', turnId: 'turn_mock_1' }]);
-    expect(v2Completed).toEqual([{ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' }]);
+    expect(v2Completed).toEqual([
+      { type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn', models: [{ model: 'gpt-mock-codex' }] },
+    ]);
   }, 30_000);
 
   it('keeps autonomous full-access permissions when resuming a thread', async () => {

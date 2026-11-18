@@ -304,6 +304,16 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(turns.flatMap((turn) => turn.items)).toHaveLength(5)
   })
 
+  it('keeps the newest session.started model for runs recorded before RunRecord.actualModel', () => {
+    expect(reduceThread([line(1, 'session.started', { sessionId: 'a', backend: 'claude' })]).sessionModel).toBeUndefined()
+    const { sessionModel } = reduceThread([
+      line(1, 'session.started', { sessionId: 'a', backend: 'claude', model: 'claude-sonnet-5-5' }),
+      line(2, 'session.started', { sessionId: 'b', backend: 'claude', model: 'claude-opus-5-5' }),
+      line(3, 'session.started', { sessionId: 'c', backend: 'claude' }),
+    ])
+    expect(sessionModel).toBe('claude-opus-5-5')
+  })
+
   it('does not pair identical errors across turns or sessions', () => {
     const { turns } = reduceThread([
       line(1, 'error', { message: 'quota' }),
