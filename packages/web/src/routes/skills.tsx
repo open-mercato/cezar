@@ -1,14 +1,15 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftIcon, ListChevronsUpDownIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { Link, useActiveProjectId } from '@/lib/project-router'
 
-import { putUiState, refreshSkills } from '@/api/client'
+import { putUiState } from '@/api/client'
 import {
   queryKeys,
   useImportableSkills,
+  useRefreshSkillCatalog,
   useSkills,
   useSkillsUpdate,
   useUiState,
@@ -135,14 +136,9 @@ function SkillsCatalog() {
     })
   }, [allImportableNames, projectId, queryClient])
 
-  const refresh = useMutation({
-    mutationFn: () => refreshSkills(),
-    onSuccess: (catalog) => {
-      // The POST answers the merged catalog — seed the shared query instead of refetching.
-      queryClient.setQueryData(queryKeys.skills, catalog)
-      queryClient.setQueryData(queryKeys.skillsReady, catalog)
-      toast('Team skills refreshed.')
-    },
+  const refresh = useRefreshSkillCatalog()
+  const refreshTeamSkills = () => refresh.mutate(undefined, {
+    onSuccess: () => toast('Team skills refreshed.'),
     onError: (error) => toast(error.message, { tone: 'danger' }),
   })
 
@@ -231,7 +227,7 @@ function SkillsCatalog() {
               type="button"
               data-slot="skills-refresh"
               disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
+              onClick={refreshTeamSkills}
               className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-label font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
             >
               <RefreshCwIcon
@@ -262,7 +258,7 @@ function SkillsCatalog() {
               data-action="skills-install-shared"
               className="self-start"
               disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
+                onClick={refreshTeamSkills}
             >
               Install skills
             </Button>

@@ -2,8 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { PackageCheckIcon } from 'lucide-react'
 import { useState } from 'react'
 
-import { putWorkspaceConfig, refreshSkills } from '@/api/client'
-import { queryKeys, useAgentProfiles, useSkills, useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
+import { putWorkspaceConfig } from '@/api/client'
+import { queryKeys, useAgentProfiles, useRefreshSkillCatalog, useSkills, useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
 import { agentAccountRouteId, type SetWorkspaceConfigInput, type WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Badge } from '@/components/ui/badge'
@@ -93,9 +93,8 @@ function SkillsForm({ config }: { config: WorkspaceConfigResponse }) {
           label="Organisation skills repositories"
           description={
             <>
-              Git repositories whose skills are available in every project, kept up to date from the
-              remote. A project's own skills with the same name win. Use <code>owner/name</code>, a git
-              URL or a local path; access uses your existing git credentials.
+              Git repositories whose skills are available in every project. Use <code>owner/name</code>, a git
+              URL or a local path with your existing git credentials.
             </>
           }
         >
@@ -166,7 +165,6 @@ function SkillsForm({ config }: { config: WorkspaceConfigResponse }) {
           Use default
         </Button>
       </div>
-      {repos.length === 0 ? null : <CardNote>A project's own skill of the same name wins over a repository's.</CardNote>}
       <AccountSkillAvailability />
     </SettingsCard>
   )
@@ -175,27 +173,10 @@ function SkillsForm({ config }: { config: WorkspaceConfigResponse }) {
 const OPEN_MERCATO_REPO = /^(?:(?:https?:\/\/|(?:ssh:\/\/)?git@)github\.com[/:])?open-mercato\/skills(?:\.git)?\/?$/i
 
 function AccountSkillAvailability() {
-  const queryClient = useQueryClient()
   const accounts = useAgentProfiles()
   const skills = useSkills()
   const catalogProject = queryKeys.skills[0] === 'default' ? 'the default project' : 'this project'
-  const refresh = useMutation({
-    mutationFn: async () => {
-      // Capture the project's keys before the request in case the user navigates while it runs.
-      const catalogKey = queryKeys.skills
-      const readyKey = queryKeys.skillsReady
-      return { catalogKey, readyKey, catalog: await refreshSkills() }
-    },
-    onSuccess: async ({ catalogKey, readyKey, catalog }) => {
-      // A read started before the repair could otherwise replace the refreshed catalog.
-      await Promise.all([
-        queryClient.cancelQueries({ queryKey: catalogKey, exact: true }),
-        queryClient.cancelQueries({ queryKey: readyKey, exact: true }),
-      ])
-      queryClient.setQueryData(catalogKey, catalog)
-      queryClient.setQueryData(readyKey, catalog)
-    },
-  })
+  const refresh = useRefreshSkillCatalog()
 
   // Local catalog entries don't carry repository metadata. Open Mercato's om- names also
   // identify local definitions and extension entries whose shared body couldn't be loaded.
@@ -239,7 +220,11 @@ function AccountSkillAvailability() {
       {accounts.isError ? (
         <CardNote tone="danger"><span role="alert">Could not load agent accounts. {accounts.error.message}</span></CardNote>
       ) : null}
-      {accounts.isSuccess && accounts.data.profiles.length === 0 ? <CardNote>No agent accounts found.</CardNote> : null}
+      {accounts.isSuccess && accounts.data.profiles.length === 0 ? (
+        <CardNote>
+          {accounts.data.editable ? 'No agent accounts found.' : 'Account details are hidden on this cockpit.'} {status}
+        </CardNote>
+      ) : null}
       {accounts.isSuccess && accounts.data.profiles.length > 0 ? (
         <ul className="divide-y divide-border">
           {accounts.data.profiles.map((account) => (

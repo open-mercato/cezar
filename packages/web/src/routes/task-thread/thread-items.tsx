@@ -20,10 +20,10 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { Link as GlobalLink } from 'react-router'
-import { ApiError, refreshSkills, updateProvider } from '@/api/client'
-import { queryKeys, useAgentProfiles } from '@/api/queries'
+import { ApiError, updateProvider } from '@/api/client'
+import { useAgentProfiles, useRefreshSkillCatalog } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
@@ -427,28 +427,15 @@ export function NoteLine({ note }: { note: ThreadNote }) {
     >
       {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
-      {note.action === 'install-skills' ? <InstallSkillsAction /> : null}
+      {note.action === 'install-skills' ? <InstallSkillsAction skillNames={note.skillNames} /> : null}
     </div>
   )
 }
 
-function InstallSkillsAction() {
-  const queryClient = useQueryClient()
-  const refresh = useMutation({
-    mutationFn: async () => {
-      // Capture the request's project keys before a navigation can change the active scope.
-      const { skills, skillsReady } = queryKeys
-      const catalog = await refreshSkills()
-      // Avoid an older catalog read overwriting the refresh result.
-      await Promise.all([
-        queryClient.cancelQueries({ queryKey: skills, exact: true }),
-        queryClient.cancelQueries({ queryKey: skillsReady, exact: true }),
-      ])
-      queryClient.setQueryData(skills, catalog)
-      queryClient.setQueryData(skillsReady, catalog)
-      return catalog
-    },
-  })
+function InstallSkillsAction({ skillNames }: { skillNames?: readonly string[] }) {
+  const refresh = useRefreshSkillCatalog()
+  const catalog = refresh.data ?? []
+  const stillMissing = skillNames?.filter((name) => !catalog.some((skill) => skill.name === name && !skill.kind && !skill.missingShared))
 
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -465,7 +452,8 @@ function InstallSkillsAction() {
       {refresh.isSuccess ? (
         <span role="status" className="text-soft-foreground">
           Skills catalog refreshed.
-          {refresh.data.some((skill) => skill.missingShared) ? ' Some shared skills are still unavailable.' : ''}
+          {stillMissing?.length ? ` The catalog is still missing ${stillMissing.join(', ')}.` : null}
+          {!skillNames && catalog.some((skill) => skill.missingShared) ? ' Some shared skills are still unavailable.' : null}
         </span>
       ) : null}
       {refresh.isError ? <span role="alert">Could not refresh skills. {refresh.error.message}</span> : null}

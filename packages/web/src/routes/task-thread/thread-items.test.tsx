@@ -53,7 +53,7 @@ describe('NoteLine skill recovery', () => {
       const renderNote = (projectId: string) => (
         <QueryClientProvider client={client}>
           <ProjectScopeProvider projectId={projectId}>
-            <NoteLine note={note} />
+            <NoteLine note={{ ...note, skillNames: ['om-review', 'om-engine'] }} />
           </ProjectScopeProvider>
         </QueryClientProvider>
       )
@@ -69,7 +69,7 @@ describe('NoteLine skill recovery', () => {
       rerender(renderNote('other'))
       respond(Response.json(catalog))
       expect((await screen.findByRole('status')).textContent)
-        .toBe('Skills catalog refreshed. Some shared skills are still unavailable.')
+        .toBe('Skills catalog refreshed. The catalog is still missing om-review, om-engine.')
       expect(client.getQueryData(skills)).toEqual(catalog)
       expect(client.getQueryData(skillsReady)).toEqual(catalog)
       expect(client.getQueryData(queryKeys.skills)).toBeUndefined()

@@ -46,6 +46,7 @@ export interface ThreadNote {
   /** `info`: an event the user should notice without alarm — another agent taking a task over. */
   tone: 'dim' | 'danger' | 'info'
   action?: 'install-skills'
+  skillNames?: string[]
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -669,13 +670,16 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
         const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
+        const installSkills = event.type === 'note' && event.action === 'install-skills'
+        const names = installSkills && Array.isArray(event.skillNames)
+          ? event.skillNames.filter((name): name is string => typeof name === 'string') : undefined
         currentTurn().entries.push({
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
             ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
           entry: {
             kind: 'note', id: `v1:${event.seq}`, text, tone,
-            ...(event.type === 'note' && event.action === 'install-skills' ? { action: event.action } : {}),
+            ...(installSkills ? { action: 'install-skills', ...(names?.length ? { skillNames: names } : {}) } : {}),
           },
         })
         break

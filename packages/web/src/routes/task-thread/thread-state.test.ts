@@ -949,11 +949,11 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
 
   it('keeps the install-skills action on notes and ignores unsupported actions', () => {
     expect(allItems([
-      line(1, 'note', { message: 'Shared skill unavailable', tone: 'danger', action: 'install-skills' }),
+      line(1, 'note', { message: 'Shared skill unavailable', tone: 'danger', action: 'install-skills', skillNames: ['om-review'] }),
       line(2, 'note', { message: 'Unknown action', tone: 'danger', action: 'unknown' }),
       line(3, 'lifecycle', { message: 'Run started', action: 'install-skills' }),
     ])).toEqual([
-      { kind: 'note', id: 'v1:1', text: 'Shared skill unavailable', tone: 'danger', action: 'install-skills' },
+      { kind: 'note', id: 'v1:1', text: 'Shared skill unavailable', tone: 'danger', action: 'install-skills', skillNames: ['om-review'] },
       { kind: 'note', id: 'v1:2', text: 'Unknown action', tone: 'danger' },
       { kind: 'note', id: 'v1:3', text: 'Run started', tone: 'dim' },
     ])

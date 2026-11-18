@@ -210,8 +210,16 @@ describe('Global settings → Agents → Skill repositories', () => {
     expect(region.getByText('Loading agent accounts…')).toBeTruthy()
     expect(region.queryByRole('listitem')).toBeNull()
     client.setQueryData(workspaceQueryKeys.agentProfiles, { ...accounts, profiles: [] })
-    expect(await region.findByText('No agent accounts found.')).toBeTruthy()
+    expect(await region.findByText(/No agent accounts found/)).toBeTruthy()
     expect((region.getByRole('button', { name: 'Repair skill catalog' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows the shared catalog status when hosted account details are hidden', async () => {
+    serve({ profiles: { ...accounts, profiles: [], editable: false }, skills: [review] })
+    renderSkills()
+    const region = await availability()
+    expect(await region.findByText('Account details are hidden on this cockpit. 1 skill available')).toBeTruthy()
+    expect(region.queryByRole('listitem')).toBeNull()
   })
 
   it('shows account loading errors within the skills card', async () => {
