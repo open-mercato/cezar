@@ -454,4 +454,13 @@ describe('liveAuthFailures (spec 2026-11-18-inline-account-reconnect)', () => {
     const live = liveAuthFailures([failed('a', 'claude', 'work'), failed('b', 'codex', 'default'), failed('c', 'claude', 'work')])
     expect([...live].sort()).toEqual(['b', 'c'])
   })
+
+  it('a reconnect retires the older failures of that account; watch and job turns never go live', () => {
+    const failed = (id: string, turn: 'chat' | 'watch' = 'chat'): ManagerMessage =>
+      ({ id, seq: 0, at: '', kind: 'assistant', text: '', turn, streaming: false, commands: [], error: 'x', authFailure: { provider: 'claude', profileId: 'work' } })
+    const reconnected: ManagerMessage = { id: 'r', seq: 0, at: '', kind: 'assistant', text: '', turn: 'chat', streaming: false, commands: [], reconnectedAt: 't', reconnectedFrom: { provider: 'claude', profileId: 'work' } }
+    expect([...liveAuthFailures([failed('a'), reconnected])]).toEqual([])
+    expect([...liveAuthFailures([failed('a'), reconnected, failed('b')])]).toEqual(['b'])
+    expect([...liveAuthFailures([failed('w', 'watch')])]).toEqual([])
+  })
 })

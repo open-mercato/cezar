@@ -1624,6 +1624,7 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly prWatchProbe: PrWatchProbe;
   private readonly hosted: () => boolean;
+  private readonly parkOnAuth: boolean;
 
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
@@ -1656,10 +1657,14 @@ export class RunManager {
       prWatchProbe?: PrWatchProbe;
       /** A hosted cockpit (`capabilities().localHandoff` false): `bypassPermissions` stays off. */
       hosted?: () => boolean;
+      /** Park a rejected login for a reconnect (spec 2026-11-18-inline-account-reconnect). Off for a
+       *  headless `cezar run`: no reconnect can reach it, so it fails as before. */
+      parkOnAuth?: boolean;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.hosted = options.hosted ?? (() => false);
+    this.parkOnAuth = options.parkOnAuth ?? true;
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
     this.projectId = options.projectId;
@@ -3953,6 +3958,8 @@ export class RunManager {
    */
   private authParkFor(run: RunRecord): RunParked | undefined {
     if (run.archived || this.disposed) return undefined;
+    // A dispatch parent waits on a settled child, never on a reconnect.
+    if (!this.parkOnAuth || run.dispatch?.parentRunId) return undefined;
     const failed = [...run.steps].reverse().find((step) => step.status === 'failed');
     if (!failed || failed.kind === 'check') return undefined;
     if (!run.steps.some((step) => step.sessionId)) return undefined;

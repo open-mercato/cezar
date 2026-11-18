@@ -81,6 +81,14 @@ describe('auth park and reconnect resume', () => {
     expect(lines.some((line) => line.startsWith('run failed'))).toBe(false);
   }, 40_000);
 
+  it('a headless `cezar run` fails on a rejected login: no reconnect can reach it', async () => {
+    manager!.dispose();
+    manager = new RunManager(store, repoRoot, { parkOnAuth: false });
+    const started = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:auth-error', worktree: false });
+    await until(() => record(started.id).status === 'failed' && !manager!.isActive(started.id));
+    expect(record(started.id).parked).toBeUndefined();
+  }, 40_000);
+
   it('a rejected login on a continuation parks the run too', async () => {
     const started = manager!.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:done first', worktree: false });
     await until(() => ['done', 'review'].includes(record(started.id).status) && !manager!.isActive(started.id));

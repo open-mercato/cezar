@@ -733,7 +733,7 @@ async function runCommand(
   // 2.5) — one refreshed semaphore, even with just one manager in play.
   const semaphore = new WorkspaceSemaphore();
   await semaphore.refresh();
-  const manager = new RunManager(store, repoRoot, { semaphore });
+  const manager = new RunManager(store, repoRoot, { semaphore, parkOnAuth: false });
   let shuttingDown = false;
   const shutdown = (exitCode: number) => {
     if (shuttingDown) return;

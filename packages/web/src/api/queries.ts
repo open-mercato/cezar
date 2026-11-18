@@ -955,6 +955,8 @@ export function writeLoginSession(queryClient: QueryClient, session: LoginSessio
   const current = queryClient.getQueryData<LoginSession | null>(key)
   // A late frame from an older session never overwrites the one the user just started.
   if (current && current.sessionId !== session.sessionId && isActiveLoginSession(current) && !isActiveLoginSession(session)) return
+  // The start route's answer can land after the SSE frame that moved the same session on.
+  if (current?.sessionId === session.sessionId && session.phase === 'starting' && current.phase !== 'starting') return
   queryClient.setQueryData(key, session)
   // A finished success must not greet the account's NEXT expiry; the quiet lines take over from here.
   if (session.phase === 'connected' || session.phase === 'cancelled') {

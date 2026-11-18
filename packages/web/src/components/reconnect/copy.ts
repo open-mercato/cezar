@@ -8,29 +8,37 @@ import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
 
 export const agentName = (provider: ProviderId): string => PROVIDER_LABELS[provider]
 
-/** Agents with no headless login: the card hands off to a terminal and watches it. */
-export const TERMINAL_ONLY: ReadonlySet<ProviderId> = new Set(['pi', 'gemini', 'antigravity', 'junie', 'omp'])
+/** Per-agent sign-in traits, one row per runner so a new runner must decide its own.
+ *  `terminal`: no headless login, the card hands off to a terminal and watches it.
+ *  `key`: stores a pasted API key itself (decision 4), the only ones offered a key field.
+ *  `tab`: the local sign-in opens a web page, so the card opens the tab inside the click and no
+ *  popup blocker stands between it and the URL that arrives a moment later.
+ *  `mono`/`ring`: the brand mark, as the design draws it; its colour is `--runner-mark-<id>`. */
+const RUNNER_TRAITS: Record<ProviderId, { terminal?: true; key?: true; tab?: true; mono: string; ring?: true }> = {
+  claude: { tab: true, mono: 'C' },
+  codex: { tab: true, key: true, mono: 'X', ring: true },
+  cursor: { tab: true, mono: 'Cu' },
+  copilot: { tab: true, mono: 'Co' },
+  opencode: { key: true, mono: 'O' },
+  kimi: { tab: true, mono: 'K', ring: true },
+  pi: { terminal: true, mono: 'π' },
+  gemini: { terminal: true, mono: 'G' },
+  antigravity: { terminal: true, mono: 'A' },
+  junie: { terminal: true, mono: 'J' },
+  omp: { terminal: true, mono: 'Ω' },
+}
 
-/** Agents that store a pasted API key themselves (decision 4): the only ones offered a key field. */
-export const KEY_CAPABLE: ReadonlySet<ProviderId> = new Set(['codex', 'opencode'])
+const runnersWith = (trait: 'terminal' | 'key' | 'tab'): ReadonlySet<ProviderId> =>
+  new Set((Object.keys(RUNNER_TRAITS) as ProviderId[]).filter((id) => RUNNER_TRAITS[id][trait]))
 
-/** Agents whose local sign-in opens a web page: the card opens the tab inside the click so no popup
- *  blocker stands between it and the URL that arrives a moment later. */
-export const OPENS_A_TAB: ReadonlySet<ProviderId> = new Set(['claude', 'codex', 'cursor', 'copilot', 'kimi'])
+export const TERMINAL_ONLY = runnersWith('terminal')
+export const KEY_CAPABLE = runnersWith('key')
+export const OPENS_A_TAB = runnersWith('tab')
 
-/** The agents' brand marks, as the design draws them. */
-export const RUNNER_MARK: Record<ProviderId, { mono: string; color: string; ring?: boolean }> = {
-  claude: { mono: 'C', color: '#D97757' },
-  codex: { mono: 'X', color: '#0f0f0f', ring: true },
-  cursor: { mono: 'Cu', color: '#3b3b3b' },
-  copilot: { mono: 'Co', color: '#8250df' },
-  opencode: { mono: 'O', color: '#2563eb' },
-  kimi: { mono: 'K', color: '#111827', ring: true },
-  pi: { mono: 'π', color: '#0d9488' },
-  gemini: { mono: 'G', color: '#1a73e8' },
-  antigravity: { mono: 'A', color: '#ea4335' },
-  junie: { mono: 'J', color: '#21d789' },
-  omp: { mono: 'Ω', color: '#7c3aed' },
+/** The agents' brand marks: monogram, an optional light ring, and the theme-stable colour token. */
+export function runnerMark(provider: ProviderId): { mono: string; color: string; ring: boolean } {
+  const { mono, ring } = RUNNER_TRAITS[provider]
+  return { mono, color: `var(--runner-mark-${provider})`, ring: ring === true }
 }
 
 /** The host of a sign-in URL, for "We opened claude.ai" and "Open github.com ↗". */

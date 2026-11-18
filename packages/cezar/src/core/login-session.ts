@@ -7,7 +7,7 @@ import type {
   LoginSessionStartInput,
   ReconnectResumed,
 } from '@open-mercato/cezar-contract';
-import type { AccountIdentity } from '../agent-config/account-identity.ts';
+import { readsAccountIdentity, type AccountIdentity } from '../agent-config/account-identity.ts';
 import type { ResolvedAgentProfile } from '../workspace/agent-profiles.ts';
 import { emitAccountReconnected } from './account-reconnected.ts';
 import { buildChildEnv } from './agent-env.ts';
@@ -81,7 +81,6 @@ const RECONNECT_COALESCE_MS = 60_000;
 export const DRY_RUN_USER_CODE = 'DRYR-UN00';
 
 const KEY_PROVIDERS = new Set<ProviderId>(['codex', 'opencode']);
-const IDENTITY_PROVIDERS = new Set<ProviderId>(['claude', 'codex', 'cursor']);
 const ENDED = new Set<LoginSession['phase']>(['connected', 'failed', 'cancelled']);
 
 const DEFAULT_DRIVERS: Partial<Record<ProviderId, StartDriver>> = {
@@ -115,6 +114,13 @@ let exitHookInstalled = false;
 function emailOf(identity: AccountIdentity | undefined): string | undefined {
   if (!identity?.available) return undefined;
   return identity.fields.find((field) => field.label === 'Email')?.value.trim().toLowerCase();
+}
+
+/** A session as a paired phone may see it: a named account's command carries its folder path. */
+export function phoneSafeSession(session: LoginSession): LoginSession {
+  if (session.profileId === 'default' || session.command === undefined) return session;
+  const { command: _command, ...rest } = session;
+  return rest;
 }
 
 export class LoginSessionManager {
@@ -181,7 +187,7 @@ export class LoginSessionManager {
         return { ok: true, session: this.view(entry) };
       }
     }
-    if (this.deps.readIdentity && IDENTITY_PROVIDERS.has(provider)) {
+    if (this.deps.readIdentity && readsAccountIdentity(provider)) {
       const read = this.deps.readIdentity;
       entry.previousEmail = read(provider, profile.path).then(emailOf, () => undefined);
     }
@@ -236,6 +242,7 @@ export class LoginSessionManager {
 
   /** Kill every live sign-in (server shutdown). */
   dispose(): void {
+    liveManagers.delete(this);
     for (const entry of this.sessions.values()) {
       if (!ENDED.has(entry.session.phase)) this.finish(entry, 'cancelled');
     }

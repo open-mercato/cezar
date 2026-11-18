@@ -7,9 +7,9 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -194,9 +194,17 @@ function writeHandoffAndTodo() {
 /** True the first time this message fails on auth in this cezar home; later replays succeed. */
 function firstAuthFailure(text) {
   const home = process.env.CEZ_HOME ?? process.env.HOME ?? '';
-  const marker = join(tmpdir(), `cez-mock-auth-${createHash('sha256').update(`${home}\0${text}`).digest('hex').slice(0, 16)}`);
-  if (existsSync(marker)) return false;
-  try { writeFileSync(marker, ''); } catch { /* read-only tmp: fail every time, as before */ }
+  // A private cache dir, not the shared tmp (CodeQL js/insecure-temporary-file), and an exclusive
+  // create so the check and the write are one step.
+  const dir = join(homedir(), '.cache', 'cez', 'mock-auth');
+  const marker = join(dir, createHash('sha256').update(`${home}\0${text}`).digest('hex').slice(0, 16));
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(marker, '', { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error?.code === 'EEXIST') return false;
+    /* unwritable cache: fail every time, as before */
+  }
   return true;
 }
 

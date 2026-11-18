@@ -14,6 +14,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { toast } from '@/components/ui/toaster'
@@ -51,7 +52,8 @@ export function ReconnectCard({ provider, profileId, place, compact = false, inS
   const { session, news, profiles, profile, account, who, remote, narrow, view, startError, start, recheck, reconnect: begin, checkAgain, stop } = useReconnect(provider, profileId)
   const surface = useReconnectSurface()
   const [more, setMore] = useState(false)
-  const [sheetOpen, setSheetOpen] = useState(true)
+  // Only the card that started the sign-in opens its sheet: two cards for one account must not stack two.
+  const [sheetOpen, setSheetOpen] = useState(false)
   const reconnect = (method?: LoginMethod) => {
     setMore(false)
     setSheetOpen(true)
@@ -142,10 +144,14 @@ export function ReconnectCard({ provider, profileId, place, compact = false, inS
           <CheckIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-success-strong" />
           <div className="min-w-0 flex-1">
             <div className={TITLE}>{who} is signed in again</div>
-            <div className={cn(SUB, 'flex items-center gap-1.5')}>
-              <Spinner className="size-3" />
-              {place === 'task' ? 'Continuing the run from the same session…' : place === 'manager' ? 'Resuming this turn…' : 'Resuming what waited on it…'}
-            </div>
+            {place === 'task' && surface?.parked === null ? (
+              <div className={SUB}>Continue the task to pick up where it stopped.</div>
+            ) : (
+              <div className={cn(SUB, 'flex items-center gap-1.5')}>
+                <Spinner className="size-3" />
+                {place === 'task' ? 'Continuing the run from the same session…' : place === 'manager' ? 'Resuming this turn…' : 'Resuming what waited on it…'}
+              </div>
+            )}
           </div>
         </div>
         {resumed ? <ResumedList account={account} resumed={resumed} compact={compact} /> : null}
@@ -186,7 +192,10 @@ export function ReconnectCard({ provider, profileId, place, compact = false, inS
             <span data-slot="reconnect-pill" className={cn(PILL, 'border-danger/35 bg-danger/10 text-danger-strong')}>Login expired</span>
           </div>
           <div className={SUB}>
-            {place === 'task'
+            {place === 'task' && surface?.parked === null
+              // A task that is no longer parked (it failed, finished or was stopped) resumes nothing on its own.
+              ? 'The run stopped when the login expired. Reconnect, then Continue the task.'
+              : place === 'task'
               ? 'The run paused at its first request after the login expired. Reconnect and it continues from the same session.'
               : place === 'manager'
                 ? 'This turn stopped before answering. Reconnect and it picks up where it stopped.'
@@ -218,7 +227,7 @@ const BUSY = 'border-border bg-card'
 const TITLE = 'flex flex-wrap items-center gap-1.5 text-ui font-semibold text-foreground'
 const SUB = 'mt-0.5 text-xs text-muted-foreground'
 const ACTIONS = 'mt-2.5 flex flex-wrap items-center gap-1.5'
-const PILL = 'inline-flex h-[18px] items-center rounded-full border px-1.5 text-[10px] font-semibold tracking-[.02em] whitespace-nowrap'
+const PILL = 'inline-flex h-[18px] items-center rounded-full border px-1.5 text-micro font-semibold tracking-[.02em] whitespace-nowrap'
 
 /** The quiet line every other blocked surface shows once the account is back, or, for an older
  *  occurrence of a still-signed-out account, where the live card is (design: one card per account). */
@@ -233,7 +242,7 @@ export function ReconnectedLine({ provider, profileId, at, signedOutHere = false
   const time = at ? new Date(at) : undefined
   const clock = time && Number.isFinite(time.getTime()) ? time.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : undefined
   return (
-    <p data-slot="reconnected-line" data-state={signedOutHere ? 'older' : 'reconnected'} className="mt-1.5 flex items-center gap-1.5 text-xs text-soft-foreground">
+    <p data-slot="reconnected-line" data-state={signedOutHere ? 'older' : 'reconnected'} className="mt-1.5 flex items-center gap-1.5 text-label text-muted-foreground">
       {signedOutHere ? (
         <><span aria-hidden="true">·</span>{who.trim()} was signed out here</>
       ) : (
@@ -397,10 +406,10 @@ function DeviceCode({ code, expiresAt }: { code: string; expiresAt: string | und
   const left = useCountdown(expiresAt)
   return (
     <div data-slot="reconnect-device" className="mt-2.5 flex flex-wrap items-center gap-2.5">
-      <span aria-label="One-time code" className="rounded-lg border border-border bg-background px-3 py-1.5 font-mono text-[22px] font-semibold tracking-[.18em]">{code}</span>
+      <span aria-label="One-time code" className="rounded-lg border border-border bg-background px-3 py-1.5 font-mono text-xl font-semibold tracking-[.18em]">{code}</span>
       <CopyButton text={code} label="Copy code" variant="outline" />
       {left !== undefined ? (
-        <span className="text-xs text-soft-foreground">Expires in <span data-slot="reconnect-countdown" className="font-mono">{left}</span></span>
+        <span className="text-label text-muted-foreground">Expires in <span data-slot="reconnect-countdown" className="font-mono">{left}</span></span>
       ) : null}
     </div>
   )
@@ -434,7 +443,8 @@ function SecretForm({ session, kind, placeholder, submitLabel, keyProviders, onA
   onAnswer: (session: LoginSession) => void
 }) {
   const input = useRef<HTMLInputElement>(null)
-  const select = useRef<HTMLSelectElement>(null)
+  const [picked, setKeyProvider] = useState<string | undefined>()
+  const keyProvider = picked !== undefined && keyProviders?.includes(picked) ? picked : keyProviders?.[0]
   const [sending, setSending] = useState(false)
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -442,7 +452,6 @@ function SecretForm({ session, kind, placeholder, submitLabel, keyProviders, onA
     const value = field?.value.trim() ?? ''
     if (field) field.value = ''
     if (!value) return
-    const keyProvider = select.current?.value
     setSending(true)
     sendLoginSessionInput(session.sessionId, kind === 'code' ? { code: value } : { apiKey: value, ...(keyProvider ? { keyProvider } : {}) })
       .then(onAnswer)
@@ -452,14 +461,14 @@ function SecretForm({ session, kind, placeholder, submitLabel, keyProviders, onA
   return (
     <form data-slot="reconnect-secret" onSubmit={submit} className="mt-2 flex flex-wrap gap-1.5">
       {keyProviders && keyProviders.length > 0 ? (
-        <select
-          ref={select}
-          aria-label="Provider"
-          data-slot="reconnect-key-provider"
-          className="h-[30px] rounded-sm border border-border bg-muted px-2 text-xs text-foreground"
-        >
-          {keyProviders.map((id) => <option key={id} value={id}>{id}</option>)}
-        </select>
+        <Select value={keyProvider} onValueChange={setKeyProvider}>
+          <SelectTrigger size="sm" aria-label="Provider" data-slot="reconnect-key-provider" className="h-[30px] text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {keyProviders.map((id) => <SelectItem key={id} value={id}>{id}</SelectItem>)}
+          </SelectContent>
+        </Select>
       ) : null}
       <input
         ref={input}
@@ -565,13 +574,13 @@ function SwitchAccount({ provider, profileId, profiles, kind, onSwitch }: {
       ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button type="button" variant="outline" size="sm" aria-label="Accounts to switch to" disabled={busy} className={cn(healthy && 'rounded-l-none px-1.5')}>
+          <Button type="button" variant="outline" size="sm" aria-label={healthy ? 'Accounts to switch to' : undefined} disabled={busy} className={cn(healthy && 'rounded-l-none px-1.5')}>
             {healthy ? null : 'Use another account'}
             <ChevronDownIcon aria-hidden="true" className="size-3.5" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-60">
-          <DropdownMenuLabel className="text-[10px] tracking-[.06em] text-soft-foreground uppercase">Accounts this {kind} may use</DropdownMenuLabel>
+          <DropdownMenuLabel className="text-micro tracking-[.06em] text-soft-foreground uppercase">Accounts this {kind} may use</DropdownMenuLabel>
           {mine.map((row) => {
             const state = row.id === profileId ? 'disconnected' : row.status?.status
             return (

@@ -191,7 +191,9 @@ describe('ReconnectCard — signing in', () => {
     api.sendLoginSessionInput.mockResolvedValue(session({ provider: 'opencode', profileId: 'default', method: 'key', phase: 'verifying' }))
     renderCard({ provider: 'opencode', profileId: 'default' })
     await seedSession(session({ provider: 'opencode', profileId: 'default', method: 'key', phase: 'needs-input', keyProviders: ['anthropic', 'openai'] }))
-    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'openai' } })
+    Element.prototype.scrollIntoView = vi.fn() // Radix Select in jsdom
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Provider' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'openai' }))
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save & sign in' }))
     await waitFor(() => expect(api.sendLoginSessionInput).toHaveBeenCalledWith('s1', { apiKey: 'sk-test', keyProvider: 'openai' }))
@@ -232,6 +234,9 @@ describe('ReconnectCard — signing in', () => {
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(max-width: 767px)', media: query, addEventListener() {}, removeEventListener() {} }))
     renderCard()
     await seedSession(session({ method: 'device', url: 'https://github.com/login/device', userCode: 'AAAA-BBBB' }))
+    // Started elsewhere (another card for this account): this one does not stack a second sheet.
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show sign-in' }))
     const sheet = await screen.findByRole('dialog')
     expect(sheet.getAttribute('data-slot')).toBe('reconnect-sheet')
     expect(sheet.textContent).toContain('AAAA-BBBB')

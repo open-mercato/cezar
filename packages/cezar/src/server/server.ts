@@ -110,8 +110,8 @@ import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { getAgentFallbackPolicyQuerySchema, putAgentFallbackPolicySchema } from '@open-mercato/cezar-contract';
-import { providerConnectSchema, loginSessionStartSchema, loginSessionInputSchema } from '@open-mercato/cezar-contract';
-import { LoginSessionManager, type LoginSessionResult } from '../core/login-session.ts';
+import { providerConnectSchema, loginSessionStartSchema, loginSessionInputSchema, type LoginSession } from '@open-mercato/cezar-contract';
+import { LoginSessionManager, phoneSafeSession, type LoginSessionResult } from '../core/login-session.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -832,8 +832,8 @@ export interface UpdateProjectResponse {
 }
 
 /** One reply shape for the login-session routes: the session, or `{ error, command? }`. */
-function loginSessionReply(c: Context, result: LoginSessionResult) {
-  if (result.ok) return c.json(result.session, 200);
+function loginSessionReply(c: Context, result: LoginSessionResult, phone: boolean) {
+  if (result.ok) return c.json(phone ? phoneSafeSession(result.session) : result.session, 200);
   return c.json({ error: result.error, ...(result.command ? { command: result.command } : {}) }, result.status);
 }
 
@@ -2383,13 +2383,16 @@ export function createApp(deps: ServerDeps) {
       providerAuth.forgetProfileStatus(provider, profile.id);
       return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
     },
-    remoteAccountsEnabled: () => agentAccountsEnabled(process.env, bindHost),
+    // Consulted only off a phone, where it is exactly the Connect gate.
+    remoteAccountsEnabled: accountsEnabled,
     emit: (event, payload) => workspaceEvents.emit(event, payload),
     openTerminal: (command) => openTerminal(bootRoot, command),
     watchTerminal: (provider, profile) => watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }),
     readIdentity: (provider, configDir) => readAccountIdentity(provider, configDir),
     dryRun: () => process.env.CEZ_DRY_RUN === '1',
   });
+
+  deps.onDispose?.(() => loginSessions.dispose());
 
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -2543,18 +2546,18 @@ export function createApp(deps: ServerDeps) {
     // relayed to the card instead of a terminal. Tokens and pasted keys never reach a response.
     .post('/providers/login', jsonZodValidator(loginSessionStartSchema, { message: `provider must be one of ${RUNNER_IDS.join(', ')}` }), async (c) => {
       const result = await loginSessions.start(c.req.valid('json'), { local: capabilities().localHandoff, phone: inRelayScope() });
-      return loginSessionReply(c, result);
+      return loginSessionReply(c, result, inRelayScope());
     })
     .post(
       '/providers/login/:sessionId/input',
       paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
       jsonZodValidator(loginSessionInputSchema, { message: 'code or apiKey is required' }),
-      async (c) => loginSessionReply(c, await loginSessions.input(c.req.valid('param').sessionId, c.req.valid('json'))),
+      async (c) => loginSessionReply(c, await loginSessions.input(c.req.valid('param').sessionId, c.req.valid('json')), inRelayScope()),
     )
     .delete(
       '/providers/login/:sessionId',
       paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
-      async (c) => loginSessionReply(c, await loginSessions.cancel(c.req.valid('param').sessionId)),
+      async (c) => loginSessionReply(c, await loginSessions.cancel(c.req.valid('param').sessionId), inRelayScope()),
     )
 
     // Offered next to an "X or newer is required" agent error: hands the CLI's own self-update to
@@ -2962,14 +2965,14 @@ export function createApp(deps: ServerDeps) {
         // invalidated by asking about this one. Only `recheck` (the pane's button) may lift a dead
         // login; New task's verify-before-refuse re-probes with `refresh` alone (telemetry 9e4a95db).
         if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
-        const hadIncident = recheck && providerAuth.peekProfileStatus(account.provider, account.id)?.authFailureId !== undefined;
         if (recheck) providerAuth.recheckProfileAuthFailure(account.provider, account.id);
         const status = await providerAuth.profileStatus(account.provider, {
           id: account.id,
           configDir: account.path,
         });
-        // Check again lifted this account's incident: resume what was parked on it.
-        if (hadIncident && status.status === 'connected') void loginSessions.accountConnected(account.provider, account.id);
+        // Check again confirmed the login: resume what was parked on it. Not gated on the in-memory
+        // incident, which a restart forgets while the parks survive (same as the default retry route).
+        if (recheck && status.status === 'connected') void loginSessions.accountConnected(account.provider, account.id);
         return c.json({ status });
       },
     )
@@ -7145,6 +7148,10 @@ export function createApp(deps: ServerDeps) {
         // already-open stream.
         const offWorkspace = workspaceEvents.on((event, data) => {
           if (relayReader && event === 'phone-pairing') return;
+          if (relayReader && event === 'agent-login') {
+            void stream.writeSSE({ event, data: JSON.stringify(phoneSafeSession(data as LoginSession)) });
+            return;
+          }
           if (event === 'project-removed') {
             const removed = (data as { id?: string }).id;
             if (removed !== undefined && attached.has(removed)) {

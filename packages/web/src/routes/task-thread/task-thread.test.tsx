@@ -142,6 +142,9 @@ describe('ThreadView', () => {
     const card = screen.getByRole('group', { name: /Codex · .* is signed out/ })
     expect(card.closest('[data-slot="provider-auth-required"]')).not.toBeNull()
     expect(screen.getByRole('button', { name: /^Reconnect/ })).toBeTruthy()
+    // Not parked, so a reconnect resumes nothing by itself: the card says to Continue.
+    expect(card.textContent).toContain('Reconnect, then Continue the task.')
+    expect(card.textContent).not.toContain('continues from the same session')
   })
 
   it('a run parked on an expired login carries the reconnect card in its dock when the transcript has none', () => {

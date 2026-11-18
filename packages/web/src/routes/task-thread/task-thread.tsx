@@ -371,14 +371,15 @@ export function ThreadView({
   // "Use <other> instead" on a reconnect card: Continue on that account, a fresh session (spec
   // 2026-11-18-inline-account-reconnect; 2026-07-29-agent-profiles § sessionId and profileId).
   const continueOn = useContinueRun(run.id)
+  // The park is the source of truth: a rejection the runtime observer could not latch leaves no
+  // card in the transcript, so the dock carries it instead.
+  const parked = run.status === 'waiting' && run.parked?.kind === 'auth' ? run.parked : undefined
   const reconnectSurface = useMemo<ReconnectSurface>(() => ({
     kind: 'task',
     ownId: run.id,
     switchTo: (agentProfile: string) => continueOn.mutateAsync({ agentProfile }),
-  }), [continueOn.mutateAsync, run.id])
-  // The park is the source of truth: a rejection the runtime observer could not latch leaves no
-  // card in the transcript, so the dock carries it instead.
-  const parked = run.status === 'waiting' && run.parked?.kind === 'auth' ? run.parked : undefined
+    parked: parked ? { provider: parked.provider, profileId: parked.profileId } : null,
+  }), [continueOn.mutateAsync, run.id, parked?.provider, parked?.profileId])
   const transcriptCard = useMemo(
     () => parked !== undefined && thread.turns.some((turn) => turn.items.some((item) =>
       item.kind === 'provider-auth-required' && item.state === undefined

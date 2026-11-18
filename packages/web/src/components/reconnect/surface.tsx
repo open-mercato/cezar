@@ -10,6 +10,8 @@ export interface ReconnectSurface {
   /** The manager or run this card belongs to: "Also resuming" lists only the others. */
   ownId?: string
   switchTo?: (profileId: string) => Promise<unknown>
+  /** A task's current auth park; `null` when it is not parked, so an old rejection stays quiet. */
+  parked?: { provider: string; profileId: string } | null
 }
 
 export const ReconnectSurfaceContext = createContext<ReconnectSurface | undefined>(undefined)

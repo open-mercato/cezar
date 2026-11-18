@@ -96,7 +96,7 @@ export function useReconnect(provider: ProviderId, profileId: string) {
   }
 
   const checkAgain = () => {
-    recheck.mutate(profile?.isDefault === false ? profileId : `default:${provider}`, {
+    recheck.mutate(profileId !== 'default' ? profileId : `default:${provider}`, {
       onSuccess: (answer) => {
         if (answer.status.status === 'connected') toast(`${who} is signed in. Resuming what waited on it…`)
         else toast(`${who} is still signed out. Finish the sign-in, then check again.`)

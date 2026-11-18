@@ -34,7 +34,8 @@ export const startClaudeLogin: StartDriver = (ctl) => {
   };
 
   void (async () => {
-    if (!ctl.remote) shim = await ctl.browserShim();
+    // Remote too: the shim swallows the CLI's `open`, so no tab pops up on the unattended host.
+    shim = await ctl.browserShim();
     if (disposed) {
       await shim?.dispose();
       return;
@@ -56,7 +57,7 @@ export const startClaudeLogin: StartDriver = (ctl) => {
         else later(CLAUDE_SHIM_GRACE_MS, offerPaste);
       },
     });
-    if (shim) {
+    if (shim && !ctl.remote) {
       const poll = async () => {
         if (disposed || ctl.done() || mode !== 'pending' || !shim) return;
         for (const candidate of await shim.urls()) {

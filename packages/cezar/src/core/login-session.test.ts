@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoginSession } from '@open-mercato/cezar-contract';
 import { onAccountReconnected } from './account-reconnected.ts';
 import type { LoginChild, LoginFetch, SpawnLogin } from './login-drivers/types.ts';
-import { DRY_RUN_USER_CODE, LOGIN_SESSION_TTL_MS, LoginSessionManager, type LoginSessionDeps } from './login-session.ts';
+import { DRY_RUN_USER_CODE, LOGIN_SESSION_TTL_MS, LoginSessionManager, phoneSafeSession, type LoginSessionDeps } from './login-session.ts';
 import type { ProviderId } from './provider-auth.ts';
 import type { ResolvedAgentProfile } from '../workspace/agent-profiles.ts';
 
@@ -83,6 +83,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('phoneSafeSession', () => {
+  const base = { sessionId: 's', provider: 'cursor', method: 'terminal', phase: 'waiting', command: 'CURSOR_CONFIG_DIR=/home/u/.cezar/accounts/work agent login' } as const;
+  it("drops a named account's command (its folder path) and keeps the default login's", () => {
+    expect(phoneSafeSession({ ...base, profileId: 'work' } as LoginSession).command).toBeUndefined();
+    expect(phoneSafeSession({ ...base, profileId: 'default' } as LoginSession).command).toBe(base.command);
+  });
+});
+
 describe('hosted gate', () => {
   it('allows a local cockpit and a paired phone', async () => {
     const h = harness();
@@ -161,6 +169,17 @@ describe('claude', () => {
     expect(h.children[0]!.env.PATH?.startsWith('/tmp/shim')).toBe(true);
     await flush();
     expect(h.last()).toMatchObject({ method: 'browser', phase: 'waiting', url: urls[0] });
+  });
+
+  it('swallows the browser remotely: the shim is on PATH, but the phone gets the paste flow', async () => {
+    const urls = ['https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A5555%2Fcallback'];
+    const h = harness({ browserShim: async () => ({ dir: '/tmp/shim', urls: async () => urls, dispose: async () => {} }) });
+    await h.manager.start({ provider: 'claude' }, PHONE);
+    await flush();
+    expect(h.children[0]!.env.PATH?.startsWith('/tmp/shim')).toBe(true);
+    h.children[0]!.print('visit: https://claude.com/cai/oauth/authorize?code=true\n');
+    await flush();
+    expect(h.last()).toMatchObject({ method: 'paste', phase: 'needs-input' });
   });
 
   it('refuses a page outside the allow-list and falls back to the terminal', async () => {

@@ -364,7 +364,7 @@ function AssistantMessage({
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.resumeAt ? <ResumeHint managerId={origin.id} at={message.resumeAt} /> : null}
-      {message.authFailure ? (
+      {message.authFailure && message.turn === 'chat' ? (
         // The reconnect card replaces the red line (spec 2026-11-18-inline-account-reconnect).
         authLive ? (
           <ReconnectCard provider={message.authFailure.provider} profileId={message.authFailure.profileId} place="manager" />
