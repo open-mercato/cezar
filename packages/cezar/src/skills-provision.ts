@@ -1,7 +1,7 @@
 import { copyFile, cp, lstat, mkdir, readFile, realpath, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Skill } from './skills.ts';
-import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
+import { excludeFromGit, materializeSkillDir, skillPathIsUntracked, TASK_SKILL_IGNORE_MARK } from './skills-remote.ts';
 import { reportError } from './telemetry.ts';
 
 /**
@@ -82,9 +82,6 @@ function skillMarkdown(skill: Skill): string {
   return `---\n${front.join('\n')}\n---\n\n${skill.body.trim()}\n`;
 }
 
-/** First line of the `.gitignore` cezar owns inside a worktree's skills dir. */
-const IGNORE_MARK = '# cezar: skills installed for this task, not part of the repository';
-
 /**
  * Keep `<skillsDir>/<name>` out of git in THIS worktree only. The shared `info/exclude` would also
  * hide that path in the user's main checkout, so a self-ignoring `.gitignore` in the skills dir is
@@ -92,14 +89,15 @@ const IGNORE_MARK = '# cezar: skills installed for this task, not part of the re
  */
 async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
   const file = join(cwd, skillsDir, '.gitignore');
+  if ((await lstat(file).catch(() => undefined))?.isSymbolicLink()) return excludeFromGit(cwd, `${skillsDir}/${name}`);
   let prev: string | undefined;
   try {
     prev = await readFile(file, 'utf8');
   } catch {
     // absent: cezar creates and owns it
   }
-  if (prev !== undefined && !prev.startsWith(IGNORE_MARK)) return excludeFromGit(cwd, `${skillsDir}/${name}`);
-  const lines = prev?.split('\n').filter(Boolean) ?? [IGNORE_MARK, '/.gitignore'];
+  if (prev !== undefined && !prev.startsWith(TASK_SKILL_IGNORE_MARK)) return excludeFromGit(cwd, `${skillsDir}/${name}`);
+  const lines = prev?.split('\n').filter(Boolean) ?? [TASK_SKILL_IGNORE_MARK, '/.gitignore'];
   if (lines.includes(`/${name}`)) return;
   await writeFile(file, [...lines, `/${name}`].join('\n') + '\n', 'utf8');
 }
@@ -117,7 +115,8 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promi
     ]);
     // Older cezar versions linked the extension as the skill. Replace links we own without
     // touching their targets, which still hold the project's extension instructions.
-    if (extension && linked === extension && ignore.startsWith(IGNORE_MARK) && ignore.split('\n').includes(`/${skill.name}`)) {
+    if (extension && linked === extension && ignore.startsWith(TASK_SKILL_IGNORE_MARK) && ignore.split('\n').includes(`/${skill.name}`)
+      && await skillPathIsUntracked(cwd, `${skillsDir}/${skill.name}`)) {
       await unlink(dest);
     }
   }

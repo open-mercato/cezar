@@ -4232,8 +4232,11 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(eventsOf(record.id)).toContainEqual(expect.objectContaining({ action: 'install-skills', skillNames: ['om-quoted-fixture'] }));
   }, 40_000);
 
-  it('offers repair when an installed skill requires an absent Open Mercato companion', async () => {
-    writeFileSync(join(repoRoot, '.ai/cezar/skills/om-root-fixture.md'), 'Run the `om-engine-fixture` skill.');
+  it.each([
+    'Run the `om-engine-fixture` skill.',
+    'Companion skills, each invoked verbatim: `om-engine-fixture` (the handoff).',
+  ])('offers repair for a missing Open Mercato companion named as %s', async (body) => {
+    writeFileSync(join(repoRoot, '.ai/cezar/skills/om-root-fixture.md'), body);
     const record = manager.startRun(SINGLE_STEP, { task: 'Use om-root-fixture', worktree: true });
     runId = record.id;
     await waitFor(() => eventsOf(record.id).some((event) => event.type === 'text' && event.text?.includes('looking into')));

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { constants, existsSync, readFileSync } from 'node:fs';
 import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -364,6 +364,34 @@ export async function listRemoteSkills(
 
 // ---- materialization (directory skills) ---------------------------------------
 
+export const TASK_SKILL_IGNORE_MARK = '# cezar: skills installed for this task, not part of the repository';
+const MATERIALIZATION_MARK = '.cezar-skill';
+
+async function regularFileText(path: string): Promise<string> {
+  const entry = await lstat(path).catch(() => undefined);
+  return entry?.isFile() ? readFile(path, 'utf8').catch(() => '') : '';
+}
+
+export async function skillPathIsUntracked(repoRoot: string, path: string): Promise<boolean> {
+  const tracked = await git(['ls-files', '-z', '--', path], LIST_TIMEOUT_MS, repoRoot);
+  return tracked.ok ? tracked.stdout === '' : /not a git repository/i.test(tracked.stderr);
+}
+
+/** Walk from the worktree root without following existing links. */
+async function ensureSkillDirectory(root: string, segments: readonly string[]): Promise<string | undefined> {
+  let dir = root;
+  for (const segment of segments) {
+    dir = join(dir, segment);
+    try {
+      await mkdir(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    if (!(await lstat(dir)).isDirectory()) return undefined;
+  }
+  return dir;
+}
+
 /**
  * Copy a directory skill (SKILL.md + references/…) out of the bare clone into
  * `<repoRoot>/.claude/skills/<name>/` so claude sees the references on disk,
@@ -377,7 +405,9 @@ export async function materializeSkillDir(
   /** Keeps the copy out of git; defaults to the shared `info/exclude`. */
   ignore: () => Promise<void> = () => excludeFromGit(repoRoot, `${skillsDir}/${skill.name}/`),
 ): Promise<boolean> {
-  if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md')) return false;
+  if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md') || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(skill.name)) return false;
+  const segments = skillsDir.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment.includes('\\'))) return false;
   const bareDir = bareDirFor(skill.team.repo);
   if (!existsSync(join(bareDir, 'HEAD'))) return false;
   const ref = await resolveRef(bareDir, skill.team.commit ?? skill.team.ref);
@@ -386,24 +416,46 @@ export async function materializeSkillDir(
   const ls = await git(['ls-tree', '-r', '--name-only', ref, '--', srcDir], LIST_TIMEOUT_MS, bareDir);
   if (!ls.ok) return false;
 
-  const destDir = join(repoRoot, skillsDir, skill.name);
-  const isSymlink = (path: string) => lstat(path).then((entry) => entry.isSymbolicLink(), () => false);
-  if (await isSymlink(destDir) || await isSymlink(join(destDir, 'SKILL.md'))) return false;
-  let wrote = 0;
+  const parent = await ensureSkillDirectory(repoRoot, segments);
+  if (!parent) return false;
+  const destDir = join(parent, skill.name);
+  const marker = join(destDir, MATERIALIZATION_MARK);
+  const existing = await lstat(destDir).catch(() => undefined);
+  if (existing) {
+    if (!existing.isDirectory()) return false;
+    const ignoreText = await regularFileText(join(parent, '.gitignore'));
+    const legacy = ignoreText.startsWith(TASK_SKILL_IGNORE_MARK) && ignoreText.split('\n').includes(`/${skill.name}`);
+    const managed = (await regularFileText(marker)) === `${skill.name}\n`;
+    if ((!legacy && !managed) || !(await skillPathIsUntracked(repoRoot, `${skillsDir}/${skill.name}`))) return false;
+  } else {
+    await mkdir(destDir);
+    await writeFile(marker, `${skill.name}\n`, { flag: 'wx' });
+    await ignore();
+  }
+
+  const targets: Array<{ file: string; rel: string; target: string }> = [];
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
     const rel = file.slice(srcDir.length + 1);
-    // git paths are repo-relative and normalized, but never trust them blindly.
-    if (!rel || rel.split('/').includes('..')) continue;
-    const show = await git(['show', `${ref}:${file}`], LIST_TIMEOUT_MS, bareDir);
-    if (!show.ok) continue;
-    const target = join(destDir, rel);
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, show.stdout, 'utf8');
-    wrote++;
+    const targetSegments = rel.split('/');
+    if (rel === MATERIALIZATION_MARK || targetSegments.some((segment) => !segment || segment === '.' || segment === '..' || segment.includes('\\'))) continue;
+    const targetName = targetSegments.pop()!;
+    const targetDir = await ensureSkillDirectory(destDir, targetSegments);
+    if (!targetDir) return false;
+    const target = join(targetDir, targetName);
+    const entry = await lstat(target).catch(() => undefined);
+    if (entry && !entry.isFile()) return false;
+    targets.push({ file, rel, target });
   }
-  if (wrote === 0) return false;
-  await ignore();
-  return true;
+  let entryWritten = false;
+  for (const { file, rel, target } of targets) {
+    const show = await git(['show', `${ref}:${file}`], LIST_TIMEOUT_MS, bareDir);
+    if (!show.ok) return false;
+    await writeFile(target, show.stdout, {
+      encoding: 'utf8', flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0),
+    });
+    entryWritten ||= rel === 'SKILL.md';
+  }
+  return entryWritten;
 }
 
 /** Append a pattern to git's `info/exclude` (idempotent, non-fatal). */

@@ -8029,7 +8029,7 @@ export class RunManager {
     const missingFrom = (roots: readonly Skill[], catalog: readonly Skill[]): string[] => {
       const available = new Set(catalog.filter((skill) => !skill.missingShared && !skill.kind).map((skill) => skill.name));
       const dependencies = skillClosure(roots.filter((skill) => !skill.kind && !skill.missingShared), catalog)
-        .flatMap((skill) => requestedOpenMercatoSkills([], skill.body));
+        .flatMap((skill) => openMercatoCompanions(skill.body));
       return [...new Set([
         ...roots.filter((skill) => skill.missingShared).map((skill) => skill.name),
         ...requested.filter((name) => !roots.some((skill) => skill.name === name)),
@@ -8129,7 +8129,7 @@ export class RunManager {
         const paths = PROVISION_SKILL_DIRS.map((dir) => `${dir}/${skill.name}/SKILL.md`);
         const relative = paths.find((path) => {
           const file = join(state.cwd, path);
-          if (!skill.extension) return existsSync(file);
+          if (!skill.extension && skill.source !== 'team') return existsSync(file);
           try {
             return parseFrontmatter(readFileSync(file, 'utf8')).body.trim() === skill.body.trim();
           } catch {
@@ -10621,6 +10621,15 @@ function requestedOpenMercatoSkills(named: readonly string[], text?: string): st
   const names = new Set(named.filter(isOpenMercatoSkillName));
   const invocation = /(?:^\s*|\b(?:run|use|apply|load|invoke)\s+(?:the\s+)?)`?\/?(om-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w/-]|\.[\w-])/gim;
   for (const match of (text ?? '').matchAll(invocation)) names.add(match[1]!.toLowerCase());
+  return [...names];
+}
+
+function openMercatoCompanions(body: string): string[] {
+  const names = new Set(requestedOpenMercatoSkills([], body));
+  const declared = /\bcompanion skills\b[^:\n]*:\s*([^\n]+)/gi;
+  for (const declaration of body.matchAll(declared)) {
+    for (const match of declaration[1]!.matchAll(/`\/?(om-[a-z0-9]+(?:-[a-z0-9]+)*)`/g)) names.add(match[1]!);
+  }
   return [...names];
 }
 
