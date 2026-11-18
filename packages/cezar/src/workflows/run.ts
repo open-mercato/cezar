@@ -4575,8 +4575,6 @@ export class RunManager {
     return true;
   }
 
-  /** Retire a pending resume — timer, deadline and counter. The counter goes too because every
-   *  caller is a fresh epoch: a human Continue, or a resume that re-stamps its own count. */
   /**
    * An agent account is signed in again (spec 2026-11-18-inline-account-reconnect): continue every
    * run parked on that login, once — the park is cleared before the Continue, so a repeated
@@ -4609,6 +4607,8 @@ export class RunManager {
     return resumed;
   }
 
+  /** Retire a pending resume — timer, deadline and counter. The counter goes too because every
+   *  caller is a fresh epoch: a human Continue, or a resume that re-stamps its own count. */
   private clearAutoResume(runId: string): void {
     const timer = this.autoResumeTimers.get(runId);
     if (timer) clearTimeout(timer);
