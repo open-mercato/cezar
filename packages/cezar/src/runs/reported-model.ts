@@ -10,13 +10,15 @@ export interface ReportedModelState {
   modelsUsed?: ModelUsage[];
 }
 
-/** `claude-opus-4-8[1m]` (init) and `claude-opus-4-8` (modelUsage) name one model. */
+/** `claude-opus-4-8[1m]` (init), `claude-opus-4-8` (modelUsage) and `anthropic/claude-opus-4-8`
+ *  (a request's identity) name one model. */
 export function sameModel(a: string, b: string): boolean {
   return baseModel(a) === baseModel(b);
 }
 
-function baseModel(model: string): string {
-  return model.replace(/\[[^\]]*\]$/, '').trim().toLowerCase();
+/** One model's name with its provider prefix and `[1m]`-style suffix dropped, lowercased. */
+export function baseModel(model: string): string {
+  return model.trim().replace(/\[[^\]]*\]$/, '').replace(/^[^/]+\//, '').trim().toLowerCase();
 }
 
 function finite(value: unknown): number | undefined {

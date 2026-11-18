@@ -199,9 +199,20 @@ describe('dashboard insights', () => {
     ]);
     expect(result.backends.map((b) => [b.backend, b.model])).toEqual([
       ['claude', 'opus'],
-      ['codex', 'openai/gpt-5'],
+      ['codex', 'gpt-5'],
       ['mixed', undefined],
     ]);
+  });
+
+  it('puts one model under one row whether a run requested it or reported it', () => {
+    const result = build([
+      // An older run, grouped by its request identity …
+      run({ runner: 'claude', model: 'claude-opus-4-8', modelIdentity: 'anthropic/claude-opus-4-8' }),
+      // … and newer ones by what the agent reported: init's `[1m]` and modelUsage's bare id.
+      run({ runner: 'claude', actualModel: 'claude-opus-4-8[1m]' }),
+      run({ runner: 'claude', actualModel: 'Claude-Opus-4-8' }),
+    ]);
+    expect(result.backends.map((b) => [b.backend, b.model, b.finished])).toEqual([['claude', 'claude-opus-4-8', 3]]);
   });
 
   it('groups by the model the agent reported running when known, else by the request', () => {

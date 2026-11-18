@@ -10,6 +10,7 @@ import { managerAccessOf, managerTaskEffortSchema, type Manager } from '@open-me
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { sameModel } from '../runs/reported-model.ts';
 
 export interface ManagerCliEnv {
   CEZ_API_URL?: string;
@@ -244,6 +245,12 @@ function workflowLine(workflow: WorkflowRow): string {
   return `${workflow.name}  ${workflow.description?.replace(/\s+/g, ' ').trim() || '-'}  ${tag}`;
 }
 
+/** "opus → claude-opus-5-5", "auto → …" when no model was asked for; one name when the two agree. */
+export function taskModelLabel(requested: string | undefined, actual: string | undefined): string {
+  const asked = requested || 'auto';
+  return actual && !sameModel(asked, actual) ? `${asked} → ${actual}` : asked;
+}
+
 /** A long paste never has to fit a shell argument: Claude Code refuses commands over ~10k characters. */
 const CONTENT_OPTIONS = {
   'attach-last-user-message': { type: 'boolean' },
@@ -404,8 +411,7 @@ export async function runManagerCommand(
           for (const project of projects) for (const task of project.tasks) {
             const facts = [
               task.startedBy === 'manager' ? `by ${task.startedByManager ?? 'a manager'}` : 'by the user',
-              (task.model || task.actualModel) &&
-                `${[...new Set([task.model, task.actualModel].filter(Boolean))].join(' → ')}${task.effort ? `/${task.effort}` : ''}`,
+              (task.model || task.actualModel) && `${taskModelLabel(task.model, task.actualModel)}${task.effort ? `/${task.effort}` : ''}`,
               task.prNumber !== undefined && `PR #${task.prNumber}`,
               task.childCount > 0 && `${task.childCount} dispatched`,
             ].filter(Boolean).join(', ');
