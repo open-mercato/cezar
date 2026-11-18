@@ -97,6 +97,13 @@ describe('parseManagerText', () => {
     ])
   })
 
+  it('keeps a markdown link target intact, but links a parenthesised project/N', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }]
+    expect(parseManagerText('[see](frontends/12) or (frontends/2902)', [], named)).toEqual([
+      { kind: 'markdown', text: '[see](frontends/12) or ([#2902](#cez-issue/fe-1/2902))' },
+    ])
+  })
+
   it('makes a task alone on its line a card, and keeps the text around it', () => {
     expect(parseManagerText('Before\n\n[[task:alpha/run-1]]\n\nAfter')).toEqual([
       { kind: 'markdown', text: 'Before' },
@@ -463,5 +470,15 @@ describe('parseInlineReferences', () => {
     for (const text of ['Assess other/2902', 'see src/frontends/2902', 'https://x.dev/frontends/12', 'on 2026/11', 'frontends/2902/files']) {
       expect(parseInlineReferences(text, named)).toEqual([{ kind: 'text', text }])
     }
+  })
+
+  it('leaves a name two connected projects share as words, unless an id says which', () => {
+    const clones = [{ id: 'fe-1', name: 'frontends' }, { id: 'fe-2', name: 'frontends' }]
+    expect(parseInlineReferences('Assess frontends/2902', clones)).toEqual([{ kind: 'text', text: 'Assess frontends/2902' }])
+    expect(parseManagerText('Assess frontends/2902', [], clones)).toEqual([{ kind: 'markdown', text: 'Assess frontends/2902' }])
+    expect(parseInlineReferences('Assess fe-2/2902', clones)).toEqual([
+      { kind: 'text', text: 'Assess ' },
+      { kind: 'issue', projectId: 'fe-2', number: 2902 },
+    ])
   })
 })
