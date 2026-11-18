@@ -325,6 +325,8 @@ Every task the manager names or starts appears as a card in the chat. A card sho
 
 Select a card to open that task's own thread and keep working there. The task then shows a `Back to <manager>` link, which stays for the browser session as you move between the task's tabs. A pull request chip opens the pull request in the GitHub tab.
 
+Pull requests and issues become chips in replies, question cards and on the Questions page when the manager names the project: a `[[pr:…]]` marker, a GitHub link, or a connected project's id or name followed by `/` or `#` and the number (`frontends/2902`). A bare `#12` resolves to the project a marker in the same reply or card names, else to the only connected project, and a number with no `#` and no project stays plain text. Card headers are always plain text.
+
 ## Tool limits by agent
 
 Cezar gives a manager `Read`, `Grep`, `Glob`, and a `Bash` allowlist of `cez-manager` plus read-only `gh` commands. **Only Claude enforces those limits.** Choose Claude for a manager that reads pull requests from people you do not trust.
