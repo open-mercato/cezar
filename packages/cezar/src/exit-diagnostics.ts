@@ -50,7 +50,7 @@ let installed = false;
 
 /** Install once per process; returns whether it did. */
 export function installExitDiagnostics(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (installed)
+  if (installed) return false;
   installed = true;
   const path = exitLogPath(env);
   const write = (reason: string, detail?: Record<string, unknown>): void =>

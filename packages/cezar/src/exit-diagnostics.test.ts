@@ -70,6 +70,12 @@ installExitDiagnostics(); ${body}`);
     expect(runChild(`process.exitCode = 0;`).lines).toEqual([]);
   });
 
+  it('installs once: a second call returns false and records each exit once', () => {
+    const { lines, r } = runChild(`console.log(installExitDiagnostics()); process.exitCode = 4;`);
+    expect(r.stdout.trim()).toBe('false');
+    expect(lines.map((l) => l.code)).toEqual([4]);
+  });
+
   it.skipIf(process.platform === 'win32')('records a lone SIGHUP and still dies from it', () => {
     const { r, lines } = runChild(`process.kill(process.pid, 'SIGHUP'); setTimeout(() => {}, 5000);`);
     expect(r.signal).toBe('SIGHUP');
