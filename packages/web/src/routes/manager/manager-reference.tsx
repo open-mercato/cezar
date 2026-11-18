@@ -107,7 +107,7 @@ export function ManagerReferenceText({ text, origin }: { text: string; origin: M
 }
 
 /** Every text a `CEZ:ASK` card shows, so its bare `#12`s resolve against one project. */
-function askTexts(ask: ManagerAsk): string[] {
+function askTexts(ask: Pick<ManagerAsk, 'questions'>): string[] {
   return ask.questions.flatMap((question) => [
     question.question,
     ...question.options.flatMap((option) => [option.label, ...(option.description ? [option.description] : [])]),
@@ -115,7 +115,7 @@ function askTexts(ask: ManagerAsk): string[] {
 }
 
 /** A manager's `CEZ:ASK` card paints PR, issue and task references as the chat's chips. */
-export function ManagerAskText({ ask, origin, children }: { ask: ManagerAsk; origin: ManagerOrigin; children: ReactNode }) {
+export function ManagerAskText({ ask, origin, children }: { ask: Pick<ManagerAsk, 'questions'>; origin: ManagerOrigin; children: ReactNode }) {
   const projects = useContext(ManagerProjectsContext)
   const { renderer, requests } = useMemo(() => {
     const texts = askTexts(ask)
