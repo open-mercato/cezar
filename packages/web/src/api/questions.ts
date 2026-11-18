@@ -1,5 +1,7 @@
 import {
   questionCountsSchema,
+  questionMutationResponseSchema,
+  questionsResponseSchema,
   type HealthResponse,
   type QuestionCounts,
   type QuestionItem,
@@ -8,7 +10,7 @@ import {
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect, useSyncExternalStore } from 'react'
 
-import { cez, unwrap } from './client'
+import { ApiError, cez, unwrap } from './client'
 import { queryKeys } from './queries'
 import { subscribeTopic } from './ws'
 
@@ -23,16 +25,26 @@ export const questionKeys = {
 
 const questions = () => cez.api.v1.workspace.questions
 
+// Checked against the contract: an older server, or one answering something else, must fail the query, not the page.
+const checked = <T>(schema: { safeParse: (value: unknown) => { success: true; data: T } | { success: false } }, path: string, body: unknown): T => {
+  const result = schema.safeParse(body)
+  if (!result.success) throw new ApiError(200, `the cezar server answered ${path} with an unexpected body`)
+  return result.data
+}
+
 export async function getQuestions(opts?: { signal?: AbortSignal }): Promise<QuestionsResponse> {
-  return unwrap(await questions().$get({}, opts?.signal ? { init: { signal: opts.signal } } : undefined), '/workspace/questions')
+  const path = '/workspace/questions'
+  return checked(questionsResponseSchema, path, await unwrap(await questions().$get({}, opts?.signal ? { init: { signal: opts.signal } } : undefined), path))
 }
 
 export async function answerQuestion(key: string, text: string): Promise<QuestionItem> {
-  return (await unwrap(await questions()[':key'].answer.$post({ param: { key: encodeURIComponent(key) }, json: { text } }), '/workspace/questions/:key/answer')).item
+  const path = '/workspace/questions/:key/answer'
+  return checked(questionMutationResponseSchema, path, await unwrap(await questions()[':key'].answer.$post({ param: { key: encodeURIComponent(key) }, json: { text } }), path)).item
 }
 
 export async function dismissQuestion(key: string): Promise<QuestionItem> {
-  return (await unwrap(await questions()[':key'].dismiss.$post({ param: { key: encodeURIComponent(key) } }), '/workspace/questions/:key/dismiss')).item
+  const path = '/workspace/questions/:key/dismiss'
+  return checked(questionMutationResponseSchema, path, await unwrap(await questions()[':key'].dismiss.$post({ param: { key: encodeURIComponent(key) } }), path)).item
 }
 
 /** Every reader shares one cache: the sidebar badge keeps it observed, the topic keeps it fresh. */
