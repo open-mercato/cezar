@@ -60,7 +60,7 @@ export function ChatSetupHelp({ providerId, connecting = false, help }: { provid
       <li>In Slack app settings, enable Socket Mode and Event Subscriptions. Subscribe to message.im for direct messages and app_mention for channels. Save and reinstall the app if Slack asks.</li>
       <li>For a channel, invite the bot first and select it from the @ picker before the command. Send a new message using the current code.</li>
     </ol> : <ol className="mt-2 list-decimal space-y-2 pl-5">
-      <li>Use “Add to a group” to invite the bot to a server you belong to. The invite already includes the required permissions.</li>
+      <li>Use “Invite the bot to your server” to add the bot to a server you belong to. The invite already includes the required permissions.</li>
       <li>Open the bot from that server’s member list → Message. Allow direct messages in the server’s privacy settings. A rejection by Clyde means Discord did not deliver your message.</li>
       <li>In Developer Portal → Bot, enable Message Content Intent. Leave Interactions Endpoint URL empty. If you changed these settings, cancel and restart setup.</li>
       <li>Alternatively, send the channel command in a text channel the bot can view and send messages in.</li>
@@ -79,7 +79,7 @@ export function ChatSetupHelp({ providerId, connecting = false, help }: { provid
       <details className="mt-2"><summary className="cursor-pointer">Show manifest</summary><pre className="max-h-48 overflow-auto whitespace-pre-wrap text-xs">{slackAppManifest}</pre></details>
       <p className="mt-2 text-muted-foreground">Already have an app? Apply these settings in App Manifest, save, and reinstall if Slack requests it.</p>
     </> : <ol className="mt-2 list-decimal space-y-2 pl-5">
-      <li><a className="underline" href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Open Discord Developer Portal</a> → New Application → Bot.</li>
+      <li><a className="underline" href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Open Discord Developer Portal</a> → New Application → Bot. Use a new application: Cezar replaces its slash commands with /tasks.</li>
       <li>Enable Message Content Intent under Privileged Gateway Intents. Leave Interactions Endpoint URL empty.</li>
       <li>Copy the bot token into the field below. Reset Token if Discord no longer shows it.</li>
       <li>Next, Cezar generates your server invitation with the required permissions. You do not need Administrator or a separate webhook.</li>

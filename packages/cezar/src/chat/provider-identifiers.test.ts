@@ -35,6 +35,8 @@ import type { ChatEvent } from './provider.ts';
 it.each([
  ['slack', 'TTEAM:UBOT', 'private:TTEAM:UBOT:DCHAN', 'UACTOR', '123.000001', 'private'],
  ['slack', 'TTEAM:UBOT', 'group:TTEAM:UBOT:CCHAN', 'UACTOR', '123.000001', 'group'],
+ // Enterprise Grid bot users carry W ids; the adapter already accepts them from auth.test.
+ ['slack', 'TTEAM:WBOT', 'private:TTEAM:WBOT:DCHAN', 'WACTOR', '123.000001', 'private'],
  ['discord', '456', 'discord:dm:123', '789', '111', 'private'],
  ['discord', '456', 'discord:guild:222:123', '789', '111', 'group'],
 ] as const)('pins %s %s destination privacy at receipt persistence and ingress', async (provider, botId, chatId, userId, messageId, kind) => {
@@ -50,6 +52,6 @@ it.each([
  expect(processed).toBe(0); expect(store.snapshot().receivedEvents).toEqual([]);
  if (provider === 'slack') {
   expect(inboundStateSchema.safeParse({ ...state, botId: 'TTEAM:UOTHER', correlations: [correlation] }).success).toBe(false);
-  await expect(inbox.accept({ ...event, chat: { id: chatId.replace('UBOT', 'UOTHER'), kind } })).rejects.toThrow('identity');
+  await expect(inbox.accept({ ...event, chat: { id: chatId.replace(/[UW]BOT/, 'UOTHER'), kind } })).rejects.toThrow('identity');
  }
 });

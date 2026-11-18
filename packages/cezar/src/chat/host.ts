@@ -227,7 +227,10 @@ export class ChatHost implements ChatDelivery {
         const receiver = this.webhooks.endpoints.privateReceiver(receiverId);
         if (!receiver) throw new ChatTransportError({ kind: 'auth' });
         const credential = id === 'telegram' ? await this.telegramToken(receiverId) : await this.liveCredential(id, receiverId);
-        return this.credentialTransport(id, credential, { id: receiver.chatBotId ?? credential.split(':')[0]!, revision: receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision) });
+        // Only a Telegram token embeds its bot id; Slack/Discord rely on the attached chatBotId.
+        const botId = receiver.chatBotId ?? (id === 'telegram' ? credential.split(':')[0] : undefined);
+        if (!botId) throw new ChatTransportError({ kind: 'auth' });
+        return this.credentialTransport(id, credential, { id: botId, revision: receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision) });
       }, () => !this.webhooks.stopped()),
       credentialTransport: credential => this.credentialTransport(id, credential),
     };

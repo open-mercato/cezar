@@ -158,7 +158,7 @@ const discordIdentifier = z.string().regex(/^[1-9][0-9]{0,19}$/);
 const discordChatIdentifier = z.string().regex(/^discord:(?:dm:[1-9][0-9]{0,19}|guild:[1-9][0-9]{0,19}:[1-9][0-9]{0,19})$/);
 export const chatIdentifierSchemas = {
  telegram: { bot: telegramPositiveIdentifier, user: telegramPositiveIdentifier, chat: telegramIdentifier, message: telegramPositiveIdentifier },
- slack: { bot: z.string().regex(/^T[A-Z0-9]+:U[A-Z0-9]+$/), user: z.string().regex(/^[UW][A-Z0-9]+$/), chat: z.string().regex(/^(?:private|group):T[A-Z0-9]+:U[A-Z0-9]+:[DCG][A-Z0-9]+$/), message: z.string().regex(/^[0-9]+\.[0-9]+$/) },
+ slack: { bot: z.string().regex(/^T[A-Z0-9]+:[UW][A-Z0-9]+$/), user: z.string().regex(/^[UW][A-Z0-9]+$/), chat: z.string().regex(/^(?:private|group):T[A-Z0-9]+:[UW][A-Z0-9]+:[DCG][A-Z0-9]+$/), message: z.string().regex(/^[0-9]+\.[0-9]+$/) },
  discord: { bot: discordIdentifier, user: discordIdentifier, chat: discordChatIdentifier, message: discordIdentifier },
 } as const;
 const opaqueIdentifierSchemas = { bot: chatOpaqueIdSchema, user: chatOpaqueIdSchema, chat: chatOpaqueIdSchema, message: chatOpaqueIdSchema };

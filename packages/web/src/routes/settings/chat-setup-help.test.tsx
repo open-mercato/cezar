@@ -31,3 +31,9 @@ it('copies the exact Discord discovery command and retains manual fallback on fa
   expect(clipboard).toHaveBeenCalledWith('/start example-code')
   expect(screen.getByLabelText('Command for private chat')).toHaveProperty('value', '/start example-code')
 })
+
+it('names the Discord invite button the wizard actually shows', () => {
+  render(<ChatSetupHelp providerId="discord" connecting />)
+  expect(screen.getByText(/Invite the bot to your server/)).toBeTruthy()
+  expect(screen.queryByText(/Add to a group/)).toBeNull()
+})

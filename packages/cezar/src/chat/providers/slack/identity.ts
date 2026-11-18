@@ -10,9 +10,9 @@ export const slackCredentials = [
  { name: 'clientSecret', label: 'Client Secret', pattern: /^[A-Za-z0-9]{16,256}$/, optional: true },
 ] as const;
 export const slackIds = {
- bot: z.string().regex(/^T[A-Z0-9]+:U[A-Z0-9]+$/),
+ bot: z.string().regex(/^T[A-Z0-9]+:[UW][A-Z0-9]+$/),
  user: z.string().regex(/^[UW][A-Z0-9]+$/),
- chat: z.string().regex(/^(private|group):T[A-Z0-9]+:U[A-Z0-9]+:[CDG][A-Z0-9]+$/),
+ chat: z.string().regex(/^(private|group):T[A-Z0-9]+:[UW][A-Z0-9]+:[CDG][A-Z0-9]+$/),
  message: z.string().regex(/^\d{10,16}\.\d{6}$/),
 };
 export const decodeSlackCredentials = (value: string) => {

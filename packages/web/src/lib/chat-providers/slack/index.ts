@@ -18,7 +18,7 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
    { name: 'clientId', label: 'Client ID', placeholder: '123456.789012', pattern: /^\d{1,60}\.\d{1,60}$/, invalid: 'Copy Client ID from Basic Information → App Credentials.', visibleWhen: rotating, hint: 'In Slack app settings, open Basic Information → App Credentials → Client ID.' },
    { name: 'clientSecret', label: 'Client Secret', placeholder: 'Client Secret', pattern: /^[A-Za-z0-9]{16,256}$/, invalid: 'Copy Client Secret from Basic Information → App Credentials.', visibleWhen: rotating, hint: 'On the same page, reveal and copy Client Secret. These credentials let Cezar renew access without asking you again.' },
   ],
-  validChatId: id => /^(private|group):T[A-Z0-9]+:U[A-Z0-9]+:[CDG][A-Z0-9]+$/.test(id ?? ''),
+  validChatId: id => /^(private|group):T[A-Z0-9]+:[UW][A-Z0-9]+:[CDG][A-Z0-9]+$/.test(id ?? ''),
   isGroup: id => id?.startsWith('group:') === true,
   begin: (credentials, name) => ({ token: JSON.stringify(slackCredentialRecordSchema.parse({
    appToken: credentials.appToken, botToken: credentials.botToken,
