@@ -2316,7 +2316,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
   }, 30_000);
 
   it('a real runner error is a failure, not an idle close', async () => {
-    const record = manager.startRun(SINGLE_STEP, { task: 'mock:auth-error', worktree: false });
+    // Not an auth rejection: that parks the run instead (spec 2026-11-18-inline-account-reconnect).
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:credit', worktree: false });
     currentId = record.id;
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();

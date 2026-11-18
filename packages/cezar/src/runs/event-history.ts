@@ -109,6 +109,7 @@ const STANDALONE_TYPES = new Set([
   'ask.requested',
   'ask.closed',
   'provider-auth-required',
+  'account-reconnected',
 ]);
 
 function stringField(event: RunEvent, key: string): string | undefined {

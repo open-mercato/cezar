@@ -40,7 +40,7 @@ import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
 import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
-import { dispatchSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, runParkedSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -407,6 +407,9 @@ export const runRecordSchema = z.object({
   /** Which automatic resume `autoResumeAt`/`autoResumeAttempts` belong to: a usage limit's reset
    *  window, or a retry after a transient provider failure — which holds no account. Absent = limit. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional().catch(undefined),
+  /** Why a `waiting` run with no process waits: an agent login was rejected and a reconnect resumes
+   *  it (spec 2026-11-18-inline-account-reconnect). Only a `waiting` run carries it. */
+  parked: runParkedSchema.optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -1001,7 +1004,8 @@ function createdPrUrl(haystack: string): string | undefined {
 
 /**
  * A `waiting` run whose session the inactivity timer closed: no process and no slot, but the same
- * state to the user, and a message reopens it (spec 2026-11-04-idle-closed-attention-state).
+ * state to the user, and a message reopens it (spec 2026-11-04-idle-closed-attention-state). An
+ * auth park (`parked`, spec 2026-11-18-inline-account-reconnect) is this rest state too.
  */
 export function isIdleParked(run: Pick<RunRecord, 'status' | 'idleClosedAt'>): boolean {
   return run.status === 'waiting' && run.idleClosedAt !== undefined;
@@ -1059,6 +1063,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
   if (run.status !== 'failed' && run.status !== 'waiting') run.idleClosedAt = undefined;
+  if (run.status !== 'waiting') run.parked = undefined;
   if (run.status !== 'waiting' && run.awaitingAnswerSince === undefined) run.waitingSince = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
@@ -1580,9 +1585,15 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
-      // An idle park keeps its marker through its own `waiting` writes; a reopen retires it.
-      if (normalized.status !== 'waiting' || run.status !== 'waiting') normalized.idleClosedAt = undefined;
+      // An idle park keeps its marker through its own `waiting` writes; a reopen retires it. An auth
+      // park closes its session as it parks, so it stamps the marker in its own transition.
+      if ((normalized.status !== 'waiting' || run.status !== 'waiting') && !(normalized.status === 'waiting' && normalized.parked)) {
+        normalized.idleClosedAt = undefined;
+      }
     }
+    // An auth park (spec 2026-11-18-inline-account-reconnect) lasts exactly as long as its wait:
+    // a Continue, a cancel or a resume retires it without the caller's help.
+    if (normalized.status && normalized.status !== 'waiting') normalized.parked = undefined;
     // Stamped here so no park site can forget it; every wait reaches the record through this line.
     if (resultingStatus === 'waiting') {
       const requestId = 'attentionRequest' in normalized ? normalized.attentionRequest?.requestId : run.attentionRequest?.requestId;

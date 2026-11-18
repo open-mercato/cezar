@@ -261,6 +261,25 @@ describe('automatic agent fallback', () => {
     expect(messages(id).some((m) => m.startsWith('claude · Second could not start'))).toBe(true);
   }, 40_000);
 
+  it('a successor whose login is rejected stays with fallback instead of parking for a reconnect', async () => {
+    registerAccounts(['second', 'third']);
+    await enable([{ provider: 'claude', profileId: 'second' }, { provider: 'claude', profileId: 'third' }]);
+    manager = new RunManager(store, repoRoot);
+    const id = await failedRun({ status: 'running', error: undefined });
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateStep(id, 'continue-1', { status: 'failed', sessionId: 'pinned-up-front', backend: 'claude', profileId: 'second' });
+    store.updateRun(id, {
+      runner: 'claude', agentProfile: 'second',
+      fallbackEpisode: { attempted: ['claude:default', 'claude:second'], current: { key: 'claude:second', stepId: 'continue-1' } },
+    });
+    const parked = (manager as unknown as { publishRunFailure(id: string, patch: object): boolean }).publishRunFailure(id, {
+      status: 'failed', error: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+    });
+    expect(parked).toBe(false);
+    expect(store.getRun(id)).toMatchObject({ status: 'queued', fallbackEpisode: { pending: true } });
+    expect(store.getRun(id)?.parked).toBeUndefined();
+  }, 40_000);
+
   it('skips a provider the user disabled in Settings instead of sending it the task', async () => {
     writeFileSync(join(cezarHomeDir(), 'config.json'), JSON.stringify({ disabledProviders: ['opencode'] }));
     await enable([{ provider: 'opencode', profileId: 'default' }]);

@@ -549,6 +549,9 @@ export const runIndexEntrySchema = z.object({
   awaitingAnswerSince: z.string().optional(),
   /** The inactivity timer closed the run's session: housekeeping on `waiting`, a quiet "idle" on legacy `failed`. */
   idleClosedAt: z.string().optional(),
+  /** The run waits on an expired agent login, so a cross-project row can say "needs sign-in"
+   *  (spec 2026-11-18-inline-account-reconnect). */
+  parked: runParkedSchema.optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so

@@ -638,6 +638,61 @@ describe('ManagerEngine', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(SIGNED_OUT));
     });
 
+    describe('reconnect (spec 2026-11-18-inline-account-reconnect)', () => {
+      it('a rejected login marks the chat turn, and a reconnect of that account re-runs it once', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        backend.scripts.push(cliFails(SIGNED_OUT));
+        engine.send(id, 'ship the release notes');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ turn: 'chat', authFailure: { provider: 'claude', profileId: 'default' } });
+
+        expect(engine.resumeAuthFailed('claude', 'work')).toEqual([]);
+        expect(engine.resumeAuthFailed('codex', 'default')).toEqual([]);
+        backend.scripts.push(say('Done'));
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([{ managerId: id, title: store.get(id)!.name }]);
+        // The same reconnect seen twice restarts nothing more.
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([]);
+        await settled(engine);
+
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('ship the release notes');
+        const [failed, retried] = assistants(id);
+        expect(failed).not.toHaveProperty('authFailure');
+        expect(failed?.reconnectedAt).toBeDefined();
+        expect(retried).toMatchObject({ turn: 'chat', text: 'Done' });
+        expect(store.state(id).authRetry).toBeUndefined();
+      });
+
+      it('only the latest chat turn counts: a job turn that failed on the login is not re-run', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        store.persistMessage(id, {
+          id: 'job-1', seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'job', jobName: 'Digest',
+          text: '', streaming: false, commands: [], error: 'Sign in again', authFailure: { provider: 'claude', profileId: 'default' },
+        });
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([]);
+        await settled(engine);
+        expect(backend.specs).toHaveLength(0);
+      });
+
+      it('switching the account re-runs the failed chat turn on the new one', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        backend.scripts.push(cliFails(SIGNED_OUT));
+        engine.send(id, 'hi there');
+        await settled(engine);
+        backend.scripts.push(say('Hello'));
+        const updated = await engine.update(id, { agentProfile: 'work' });
+        expect(updated).not.toHaveProperty('error');
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('hi there');
+        expect(assistants(id)[0]).not.toHaveProperty('authFailure');
+        expect(assistants(id)[1]).toMatchObject({ text: 'Hello' });
+      });
+    });
+
     it('a passing network failure is retried once, after a pause, and the user never sees it', async () => {
       const engine = makeEngine();
       const id = await create(engine);

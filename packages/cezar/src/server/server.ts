@@ -428,6 +428,7 @@ import {
   type TelemetryConsentPayload,
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
+import { registerAuthResume } from './auth-resume.ts';
 import { MessageReceipts } from './message-receipts.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
@@ -8639,6 +8640,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
+    ...(run.parked !== undefined ? { parked: run.parked } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.diffStat !== undefined ? { diffStat: run.diffStat } : {}),
@@ -8937,6 +8939,11 @@ export function createApp(deps: ServerDeps) {
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
+  // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
+  deps.onDispose?.(registerAuthResume({
+    contexts,
+    managers: { resumeAuthFailed: (provider, profileId) => (capabilities().managers !== false ? managerEngine.resumeAuthFailed(provider, profileId) : []) },
+  }));
   // The Questions inbox (spec 2026-11-17-questions-inbox): every open manager and task question. With
   // managers off the manager provider is gated out and the inbox serves task questions only.
   const taskQuestions = createTaskQuestionProvider({

@@ -45,6 +45,7 @@ import {
   questionCardSharedHeaders,
 } from '@open-mercato/cezar-contract';
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
+import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -893,6 +894,9 @@ export class ManagerEngine {
     const updated = this.deps.store.update(id, () => next);
     if (!updated) return { error: 'manager not found', status: 404 };
     if (input.clearBashDenials) this.deps.store.updateState(id, (state) => ({ ...state, bashDenials: [] }));
+    // "Use another account" (spec 2026-11-18-inline-account-reconnect): the chat turn the old login
+    // failed re-runs on the new one, in a fresh session (the session key follows the account).
+    if (current.agentProfile !== updated.agentProfile || current.runner !== updated.runner) this.retryAuthFailedChat(id);
     for (const field of changedSettingFields(current, updated)) this.deps.telemetry?.track('manager_settings_changed', field, ctx);
     if (JSON.stringify(current.projects) !== JSON.stringify(updated.projects)) {
       const names = (await this.sources(updated)).map((source) => source.name);
@@ -994,6 +998,41 @@ export class ManagerEngine {
     this.interrupt(runtime);
     // Also "Don't resume": the limit still holds, but nothing replays when it lifts.
     this.clearResume(id, true);
+    return true;
+  }
+
+  /**
+   * An agent account is signed in again (spec 2026-11-18-inline-account-reconnect): every manager
+   * whose latest chat turn failed on that login re-runs it, once. Watch and job turns wait for
+   * their next tick.
+   */
+  resumeAuthFailed(provider: string, profileId: string): Array<{ managerId: string; title: string }> {
+    const resumed: Array<{ managerId: string; title: string }> = [];
+    for (const manager of this.deps.store.list()) {
+      const failed = this.latestAuthFailedChat(manager.id);
+      if (!failed?.authFailure || failed.authFailure.provider !== provider || failed.authFailure.profileId !== profileId) continue;
+      if (this.retryAuthFailedChat(manager.id)) resumed.push({ managerId: manager.id, title: manager.name });
+    }
+    return resumed;
+  }
+
+  private latestAuthFailedChat(id: string): Extract<ManagerMessage, { kind: 'assistant' }> | undefined {
+    const latest = [...this.deps.store.messages(id)].reverse().find((message) => message.kind === 'assistant' && message.turn === 'chat');
+    return latest?.kind === 'assistant' && latest.authFailure && !latest.streaming ? latest : undefined;
+  }
+
+  /** Drops the card and replays the cut-off chat. Cleared before the enqueue, so a repeat finds nothing. */
+  private retryAuthFailedChat(id: string): boolean {
+    const { store } = this.deps;
+    const failed = this.latestAuthFailedChat(id);
+    if (!failed || this.runtime(id).deleted) return false;
+    const { authFailure: _authFailure, ...rest } = failed;
+    this.publish(id, { ...rest, reconnectedAt: this.iso() }, true);
+    const retry = store.state(id).authRetry;
+    store.updateState(id, (state) => ({ ...state, authRetry: undefined }));
+    // A follow-up's events already moved to the notes: the next chat hears them.
+    if (retry?.messageId !== failed.id) return true;
+    this.enqueue(id, { kind: 'chat', ...retry.chat, images: [] });
     return true;
   }
 
@@ -1303,6 +1342,16 @@ export class ManagerEngine {
     const resetAt = this.usageLimit(result, turn);
     const cause = result.error ? failureCause(result.error, result.text) : undefined;
     const failed = cause && !turn.stopped && !resetAt ? this.recordFailure(id, kind, cause, result.runner) : undefined;
+    // A rejected login renders the reconnect card, and a reconnect of that account re-runs the chat.
+    const authFailure = failed && !turn.timedOut && classifyManagerFailure(cause!) === 'auth'
+      ? { provider: result.runner ?? await this.runnerOf(manager), profileId: manager.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID }
+      : undefined;
+    if (kind === 'chat' && chat) {
+      store.updateState(id, (state) => ({
+        ...state,
+        authRetry: authFailure ? { messageId: base.id, chat: { text: chat.text, paths: chat.paths, messageIds: chat.messageIds } } : undefined,
+      }));
+    }
     // The CLI's own error line, echoed as the reply, is the cause the human line replaces.
     const reply = failed && result.text.trim() === cause?.trim() ? '' : result.text;
     const judgement = judged(reply.replace(QUIET_LINE, '').trim());
@@ -1315,6 +1364,7 @@ export class ManagerEngine {
       commands: result.commands,
       ...(turn.timedOut ? { error: TURN_LIMIT_ERROR } : turn.stopped ? { stopped: true } : {}),
       ...(resetAt ? { resumeAt: resetAt.toISOString() } : failed ? { error: failed } : {}),
+      ...(authFailure ? { authFailure } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
     this.settleAsks(id, final, judgement.closes);

@@ -2,7 +2,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
-import type { RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
@@ -1028,6 +1028,7 @@ function deferredBindingActive(run: Pick<RunRecord, 'id' | 'deferredBinding' | '
 const AUTO_RESUME_PROMPT =
   'The provider usage limit that interrupted this task has reset. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 type AutoResumeReason = NonNullable<RunRecord['autoResumeReason']>;
+const AUTH_RECONNECTED_PROMPT = 'Your sign-in was renewed. Continue where you stopped.';
 const TRANSIENT_RETRY_PROMPT =
   'Your previous turn stopped on a temporary provider error (overloaded, unreachable or a login refresh race), not on anything in the task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 
@@ -3912,19 +3913,62 @@ export class RunManager {
     return { failed, successorFailedToStart };
   }
 
-  /** Publish one honest state: either a final failure, or a durable wait for agent selection.
-   * The successor starts only after dropActive releases the old session and worktree leases. */
-  private publishRunFailure(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): void {
+  /** Publish one honest state: a final failure, a durable wait for agent selection, or an auth
+   * park. The successor starts only after dropActive releases the old session and worktree leases.
+   * Returns true when the run parked on a rejected login instead of failing. */
+  private publishRunFailure(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): boolean {
     const run = this.store.getRun(runId);
-    if (!run) return;
+    if (!run) return false;
     if (!this.disposed && !run.archived && this.fallbackFailure({ ...run, ...patch })) {
       this.store.updateRun(runId, {
         ...patch, status: 'queued', finishedAt: undefined, currentStepId: undefined,
         fallbackEpisode: { ...run.fallbackEpisode, attempted: run.fallbackEpisode?.attempted ?? [], pending: true, done: undefined },
       });
-    } else {
-      this.store.updateRun(runId, patch);
+      return false;
     }
+    const parked = patch.status === 'failed' && patch.idleClosedAt === undefined ? this.authParkFor({ ...run, ...patch }) : undefined;
+    if (!parked) {
+      this.store.updateRun(runId, patch);
+      return false;
+    }
+    // Waiting with its session closed, exactly like an idle park: no slot, survives a restart, and
+    // Continue resumes the same session. Autonomous runs park too: a login is not a question the
+    // nudge could answer. A reconnect resumes it (`server/auth-resume.ts`).
+    this.store.updateRun(runId, {
+      ...(patch.error !== undefined ? { error: patch.error } : {}),
+      status: 'waiting', activity: undefined, finishedAt: undefined, currentStepId: undefined,
+      idleClosedAt: parked.at, parked,
+    });
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: 'agent sign-in expired — the task resumes once the account is reconnected',
+    });
+    return true;
+  }
+
+  /**
+   * The park for a failure that is a rejected login (spec 2026-11-18-inline-account-reconnect):
+   * the runtime-auth observer's `provider-auth-required` on the failed step, or an auth-shaped
+   * error. Undefined when there is no session a Continue could resume — that run fails as before.
+   */
+  private authParkFor(run: RunRecord): RunParked | undefined {
+    if (run.archived || this.disposed) return undefined;
+    const failed = [...run.steps].reverse().find((step) => step.status === 'failed');
+    if (!failed || failed.kind === 'check') return undefined;
+    if (!run.steps.some((step) => step.sessionId)) return undefined;
+    const provider = (failed.backend ?? run.runner ?? 'claude') as ProviderId;
+    const required = [...this.store.readEvents(run.id)].reverse().find((event) =>
+      event.type === 'provider-auth-required' && event.stepId === failed.id && event.provider === provider);
+    if (!required && classifyAgentFailure(run.error) !== 'auth') return undefined;
+    const authFailureId = typeof required?.authFailureId === 'string' ? required.authFailureId : undefined;
+    return {
+      kind: 'auth',
+      provider,
+      profileId: failed.profileId ?? recordedProfileFor(run, provider) ?? DEFAULT_AGENT_ACCOUNT_ID,
+      ...(authFailureId ? { authFailureId } : {}),
+      stepId: failed.id,
+      at: new Date().toISOString(),
+    };
   }
 
   private claimAgentFallback(run: RunRecord): boolean {
@@ -4533,6 +4577,38 @@ export class RunManager {
 
   /** Retire a pending resume — timer, deadline and counter. The counter goes too because every
    *  caller is a fresh epoch: a human Continue, or a resume that re-stamps its own count. */
+  /**
+   * An agent account is signed in again (spec 2026-11-18-inline-account-reconnect): continue every
+   * run parked on that login, once — the park is cleared before the Continue, so a repeated
+   * reconnect finds nothing — on the same session, queued under `maxParallel`. A stopped or
+   * archived task is no longer blocked and stays put.
+   */
+  resumeAuthParked(provider: string, profileId: string, parkedBefore?: string): Array<{ runId: string; title: string }> {
+    const resumed: Array<{ runId: string; title: string }> = [];
+    if (this.disposed) return resumed;
+    for (const run of this.store.listRuns()) {
+      const parked = run.parked;
+      if (run.status !== 'waiting' || run.archived || parked?.kind !== 'auth') continue;
+      if (parked.provider !== provider || parked.profileId !== profileId) continue;
+      // A project opened after the reconnect: only what parked before it is still blocked on it.
+      if (parkedBefore !== undefined && parked.at >= parkedBefore) continue;
+      if (this.active.has(run.id) || this.starting.has(run.id)) continue;
+      this.store.updateRun(run.id, { parked: undefined });
+      this.store.appendEvent(run.id, { type: 'account-reconnected', provider, profileId });
+      const continued = this.continueRun(run.id, { text: AUTH_RECONNECTED_PROMPT }, true);
+      if (!continued.ok) {
+        // Still blocked on something else: the card stays, and a Continue says why.
+        this.store.updateRun(run.id, { parked });
+        this.store.appendEvent(run.id, { type: 'note', message: `automatic resume could not start — ${continued.error ?? 'unknown'}` });
+        continue;
+      }
+      resumed.push({ runId: run.id, title: run.title });
+    }
+    // A deferred continuation only enqueues itself; this is the pump for it (as `fireAutoResume`).
+    if (resumed.length > 0) void this.pump();
+    return resumed;
+  }
+
   private clearAutoResume(runId: string): void {
     const timer = this.autoResumeTimers.get(runId);
     if (timer) clearTimeout(timer);
@@ -6400,7 +6476,7 @@ export class RunManager {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
         const failedAt = finishedAt();
-        this.publishRunFailure(runId, {
+        const parked = this.publishRunFailure(runId, {
           status: 'failed',
           error: `continue failed: ${message}`,
           finishedAt: failedAt,
@@ -6408,7 +6484,7 @@ export class RunManager {
           // A session that crashed while parked on a question leaves that question unanswered.
           ...(state.askPark === 'waiting' ? { awaitingAnswerSince: failedAt } : {}),
         });
-        this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
+        if (!parked) this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
     } finally {
       this.recordUsagePeaks(runId, state);
@@ -6842,7 +6918,7 @@ export class RunManager {
       emit({ type: 'lifecycle', message: 'run cancelled' });
     } else if (runError) {
       const idleClosed = askPark !== 'waiting' && state.idleFailed === true;
-      this.publishRunFailure(runId, {
+      const parked = this.publishRunFailure(runId, {
         status: 'failed',
         error: runError,
         finishedAt,
@@ -6852,7 +6928,7 @@ export class RunManager {
         // Keyed on where the walk failed, never the message (spec 2026-11-04-idle-closed-attention-state).
         ...(idleClosed ? { idleClosedAt: finishedAt } : {}),
       });
-      emit({ type: 'lifecycle', message: idleClosed ? IDLE_CLOSED_LIFECYCLE : `run failed — ${runError}` });
+      if (!parked) emit({ type: 'lifecycle', message: idleClosed ? IDLE_CLOSED_LIFECYCLE : `run failed — ${runError}` });
     } else if (this.idleParks(runId, state)) {
       this.parkIdleClosed(runId, finishedAt);
     } else if (askPark === 'waiting') {
