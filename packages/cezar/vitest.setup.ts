@@ -86,6 +86,9 @@ for (const name of RUN_SCOPED_ENV) delete process.env[name]
 delete process.env.CEZ_DESKTOP
 delete process.env.CEZ_DISCLAIM_EXEC
 
+// Feature flags and supervisor state a cockpit's own session carries; health/route cases assert their defaults.
+for (const name of ['CEZ_WEBHOOKS', 'CEZ_CHAT_INBOUND', 'CEZ_SUPERVISED', 'CEZ_SUPERVISOR_PID']) delete process.env[name]
+
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants
 // a host sets `GH_CONFIG_DIR` itself.

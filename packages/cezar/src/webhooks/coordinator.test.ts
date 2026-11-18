@@ -1,15 +1,20 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { WebhookService } from './service.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { WebhookCoordinator } from './coordinator.ts';
+import { canonicalPath } from '../canonical-path.ts';
+import { installShortName } from '../test-support/short-name.testkit.ts';
+
+// Windows' 8.3 tmpdir spelling, simulated on every platform (see the testkit).
+const spelling = installShortName(); afterAll(() => spelling.uninstall());
 const roots: string[] = [];
 const instances: WebhookCoordinator[] = [];
-function root() { const value = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-coordinator-')); roots.push(value); execFileSync('git', ['init', '-q'], { cwd: value }); return value; }
+function root() { const value = mkdtempSync(join(canonicalPath(tmpdir()), 'webhook-coordinator-')); roots.push(value); execFileSync('git', ['init', '-q'], { cwd: value }); return value; }
 afterEach(async () => { for (const coordinator of instances.splice(0)) await coordinator.dispose(); for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('lightweight project webhook enrollment', () => {
   it('reopens a broken cached service during discovery preserving its public slug', async () => {
@@ -112,4 +117,60 @@ it('throttles failed first opens across aliases and retries after failure cooldo
     await expect(coordinator.get('alias', project)).rejects.toThrow();
     expect(open).toHaveBeenCalledTimes(2);
   } finally { open.mockRestore(); clock.mockRestore(); }
+});
+it('keeps passive lookup separate from inbound lifecycle and lazy project interactions', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
+  const project = root(), context = vi.fn();
+  const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] }); instances.push(coordinator);
+  coordinator.setChatInteractions({ context, deliver: vi.fn() });
+  const service = await coordinator.get('project', project, true);
+  const inbound = vi.spyOn(service, 'startChat');
+  await coordinator.get('project', project);
+  expect(inbound).not.toHaveBeenCalled(); expect(context).not.toHaveBeenCalled();
+  await coordinator.discover();
+  expect(inbound).toHaveBeenCalled(); expect(context).not.toHaveBeenCalled();
+});
+it('subscribes to generic inbound invalidations only while a listener is present', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1');
+  const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] }); instances.push(coordinator);
+  const listener = vi.fn(), off = coordinator.onChatChange('telegram', listener);
+  const service = await coordinator.get('project', root());
+  service.emit('telegram-change');
+  expect(listener).toHaveBeenCalledWith();
+  off(); listener.mockClear(); service.emit('telegram-change');
+  expect(listener).not.toHaveBeenCalled();
+});
+it('starts chat once per project per discovery, even when it is both open and registered', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); const project = root();
+  const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ id: 'p', root: project, status: 'ok' }] });
+  instances.push(coordinator);
+  const service = await coordinator.get('p', project);
+  await service.create({ name: 'Ops', url: 'https://example.com' });
+  const start = vi.spyOn(service, 'startChat').mockResolvedValue();
+  await coordinator.discover();
+  expect(start).toHaveBeenCalledTimes(1);
+});
+it('keeps discovering later projects while one project open never settles', async () => {
+  // A stuck open must not hold other projects' bots or their HTTP routes.
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); const hung = root(), healthy = root();
+  const seed = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] }); instances.push(seed);
+  for (const project of [hung, healthy]) await (await seed.get(project, project)).create({ name: 'Ops', url: 'https://example.com' });
+  await seed.dispose();
+  const original = WebhookService.open.bind(WebhookService);
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void; const chatStarted = new Promise<void>(resolve => { started = resolve; });
+  const open = vi.spyOn(WebhookService, 'open').mockImplementation(async options => {
+    if (options.root === hung) { await gate; return undefined; }
+    const service = await original(options);
+    if (service) vi.spyOn(service, 'startChat').mockImplementation(async () => { started(); });
+    return service;
+  });
+  const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ id: 'hung', root: hung, status: 'ok' }, { id: 'healthy', root: healthy, status: 'ok' }] });
+  instances.push(coordinator);
+  try {
+    void coordinator.discover();
+    await chatStarted;
+    await expect(coordinator.get('healthy', healthy)).resolves.toBeDefined();
+    expect(coordinator.count()).toBe(1);
+  } finally { release(); open.mockRestore(); }
 });

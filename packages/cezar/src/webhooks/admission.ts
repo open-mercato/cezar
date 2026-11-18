@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { webhookFormatSchema, webhookDeliveryStatusSchema, webhookEventTypeSchema, webhookProfileSchema, type WebhookHealth } from '@open-mercato/cezar-contract';
@@ -9,6 +9,7 @@ import { selected } from './lifecycle.ts';
 import { renderPayload } from './payload.ts';
 import { maskDestination } from './destination.ts';
 import { assertNoSymlink, atomicWrite, readState, statePath, StateIntegrityError, syncDirectory } from './storage.ts';
+import { renameWithRetry } from '../fs-rename.ts';
 
 const time = z.iso.datetime();
 export const deliveryRecordSchema = z.strictObject({
@@ -111,7 +112,7 @@ export class AdmissionRepository {
       // The bytes are kept beside the original for inspection, as history quarantines do.
       if (!repository.quarantinedCount) await deps.beforeQuarantine?.();
       const quarantine = statePath(directory, `${name}.corrupt-${randomUUID()}`);
-      deps.assertOwner?.(); await rename(statePath(directory, name), quarantine);
+      deps.assertOwner?.(); await renameWithRetry(statePath(directory, name), quarantine);
       repository.quarantinedCount++;
       console.warn(`Webhook admission ${name} was unreadable and has been quarantined as ${quarantine}; receivers require activation.`);
     }
@@ -153,18 +154,22 @@ export class AdmissionRepository {
   }
 
   /** One owner mutation queue must serialize admission, claims, updates and retention. */
-  async admit(source: WebhookSource, receivers: readonly PrivateReceiver[]): Promise<Admission | undefined> {
+  /** `excerpt` runs at most once, and only when a selected receiver consented to one. */
+  async admit(source: WebhookSource, receivers: readonly PrivateReceiver[], excerpt?: () => Promise<string | undefined>): Promise<Admission | undefined> {
     const existing = this.records.get(source.id); if (existing) return structuredClone(existing);
     const now = this.deps.now(), expires = Date.parse(source.occurredAt) + 72 * 3600000;
     const targets = expires <= now ? [] : receivers.filter(receiver =>
       ['active', 'suspended'].includes(receiver.state) && receiver.activation?.installationId === source.installationId &&
       source.sequence > receiver.activation.sequence && selected(receiver, source.type, source.snapshot));
+    const wantsExcerpt = (receiver: PrivateReceiver) => receiver.includeAgentExcerpt === true && receiver.profile === 'standard'
+      && source.type === 'task.attention_required' && !source.snapshot.attentionRequest;
+    const agentExcerpt = excerpt && targets.some(wantsExcerpt) ? await excerpt().catch(() => undefined) : undefined;
     const deliveries: DeliveryRecord[] = targets.map(receiver => ({
       id: randomUUID(), receiverId: receiver.id, deliveryRevision: receiver.deliveryRevision, admittedRevision: receiver.revision,
-      format: receiver.format, profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url), createdAt: new Date(now).toISOString(),
+      format: receiver.format, profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url, receiver.chatId), createdAt: new Date(now).toISOString(),
       notBefore: new Date(Date.parse(source.occurredAt) + (source.type === 'task.failed' ? 30 : ['task.attention_required', 'task.review_ready'].includes(source.type) ? receiver.graceSeconds : 0) * 1000).toISOString(),
       expiresAt: new Date(expires).toISOString(), status: 'pending', attempts: 0,
-      ...(source.type === 'task.failed' ? {} : { body: renderPayload(source, receiver.profile, this.deps.secrets?.() ?? [], undefined, this.deps.repository) }),
+      ...(source.type === 'task.failed' ? {} : { body: renderPayload(source, receiver.profile, this.deps.secrets?.() ?? [], undefined, this.deps.repository, wantsExcerpt(receiver) ? agentExcerpt : undefined) }),
     }));
     let admission: Admission = { version: 1, id: source.id, createdAt: new Date(now).toISOString(), source, sourceSequence: source.sequence, deliveries, control: !deliveries.length,
       ...(!deliveries.length ? { decision: expires <= now ? 'expired' as const : 'empty' as const } : {}) };

@@ -144,6 +144,7 @@ describe('computeSnapshot', () => {
 describe('stampManifests', () => {
   const set = (): ReleaseManifests => ({
     extensionSdk: { name: '@open-mercato/cezar-extension-sdk', version: '0.1.5' },
+    telegram: { name: '@open-mercato/cezar-chat-telegram', version: '0.1.5', dependencies: { '@open-mercato/cezar-extension-sdk': '0.1.5' } },
     contract: { name: '@open-mercato/cezar-contract', version: '0.1.5', dependencies: { '@open-mercato/cezar-extension-sdk': '0.1.5' } },
     apiClient: { name: '@open-mercato/cezar-api-client', version: '0.1.5' },
     cezar: {
@@ -185,6 +186,7 @@ describe('stampManifests', () => {
     const stamped = stampManifests(
       {
         extensionSdk: { name: '@old/sdk', version: '0.1.5' },
+        telegram: { name: '@old/telegram', version: '0.1.5' },
         contract: { name: '@old/contract', version: '0.1.5' },
         apiClient: { name: '@old/client', version: '0.1.5' },
         cezar: { name: '@pat-lewczuk/cezar', version: '0.1.5', dependencies: { '@old/client': '^0.1.5' } },
@@ -242,3 +244,17 @@ describe('buildInstallLines', () => {
   });
 });
 
+it('snapshots each adapter from its own semver, pinned to the snapshot SDK', () => {
+  const manifests = {
+    extensionSdk: { name: 'sdk', version: '0.99.0' },
+    telegram: { name: 'telegram', version: '2.4.1', dependencies: { sdk: '^0.99.0' } },
+    contract: { name: 'contract', version: '0.99.0' },
+    apiClient: { name: 'client', version: '0.99.0' },
+    cezar: { name: 'host', version: '0.99.0' },
+    alias: { name: 'alias', version: '0.99.0' },
+    runAlias: { name: 'run', version: '0.99.0' },
+  };
+  const stamped = stampManifests(manifests, '0.99.0-pr77.5');
+  expect(stamped.telegram.version).toBe('2.4.1-pr77.5');
+  expect(stamped.telegram.dependencies).toEqual({ sdk: '0.99.0-pr77.5' });
+});

@@ -98,9 +98,41 @@ jobs:
       - name: Verify release packages
         run: |
           npm pack --dry-run --ignore-scripts -w @open-mercato/cezar-extension-sdk
+          (cd packages/chat-plugins/telegram && npm pack --dry-run --ignore-scripts)
           npm pack --dry-run --ignore-scripts -w @open-mercato/cezar
           (cd alias-cezar && npm pack --dry-run --ignore-scripts)
           (cd alias-cezar-run && npm pack --dry-run --ignore-scripts)
+
+  # Chat providers are standalone public packages. Keep their gates independent from the
+  # service suite and build the SDK first so each plugin test resolves the public SDK contract.
+  chat-plugins:
+    name: Chat plugin ${{ matrix.plugin }} tests and pack smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [telegram]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build standalone packages for pack smoke
+        run: npm run build:chat-plugins
+      - name: Run plugin tests
+        working-directory: packages/chat-plugins/${{ matrix.plugin }}
+        run: npm test
+      - name: Run plugin pack smoke without credentials
+        working-directory: packages/chat-plugins/${{ matrix.plugin }}
+        env:
+          TELEGRAM_BOT_TOKEN: ''
+        run: npm run test:pack
 
   # Exercise filesystem ownership/recovery on every supported OS. macOS and Windows also
   # build and test the installed release package; Linux does that in `verify` above.
@@ -159,7 +191,8 @@ jobs:
   # script degrades to a loud dry run, so this job stays green on unconfigured forks.
   publish-snapshot:
     name: Publish npm snapshot
-    needs: [verify, vitest, webhooks-cross-platform]
+    # A preview must not ship an adapter its own tests or pack check rejected.
+    needs: [verify, vitest, webhooks-cross-platform, chat-plugins]
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'pull_request' &&

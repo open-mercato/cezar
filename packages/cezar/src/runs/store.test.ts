@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { threadId } from 'node:worker_threads';
 import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readRunIndexFromDisk } from './run-index.ts';
 import { reconcileLoadedRun, RunStore } from './store.ts';
@@ -41,6 +42,36 @@ const LEGACY_RUN = {
   archived: false,
   steps: [],
 };
+
+describe('RunStore — Telegram creation provenance', () => {
+  it('durably finds a created run from its claimed Telegram source after restart', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cez-telegram-source-'));
+    try {
+      const store = RunStore.open(dataDir), runId = randomUUID(), epoch = randomUUID();
+      const chatSource = { provider: 'telegram' as const, id: randomUUID(), botId: '123', epoch, projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
+        grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: '7',
+        updateId: 42, episodeId: randomUUID(), requestId: randomUUID(), runId, state: 'claimed' as const, createdAt: 1, updatedAt: 1 };
+      const run = store.createRun({ id: runId, title: 'Telegram task', workflow: 'quick-task', task: 'private prompt', chatSource, steps: [] });
+      store.flushCreatedRun(run);
+      const recovered = RunStore.open(dataDir).listPersistedRuns().find(candidate =>
+        candidate.chatSource?.botId === '123' && candidate.chatSource.epoch === epoch
+          && candidate.chatSource.updateId === 42);
+      expect(recovered).toMatchObject({ id: runId, chatSource: { provider: 'telegram', id: chatSource.id, runId, state: 'claimed' } });
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
+describe('RunStore — caller-chosen run ids', () => {
+  it('refuses an id that is already taken instead of overwriting the run', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cez-run-id-collision-'));
+    try {
+      const store = RunStore.open(dataDir), id = randomUUID();
+      store.createRun({ id, title: 'first', workflow: 'quick-task', task: 't', steps: [] });
+      expect(() => store.createRun({ id, title: 'second', workflow: 'quick-task', task: 't', steps: [] })).toThrow(/already exists/);
+      expect(store.getRun(id)?.title).toBe('first');
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
 
 describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
   let parent: string;

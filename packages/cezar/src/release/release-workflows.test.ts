@@ -12,6 +12,12 @@ const RELEASE_WORKFLOWS = ['release.yml', 'release-cut.yml', 'release-publish.ym
 const steps = (wf: Record<string, any>) => Object.values(wf.jobs as Record<string, any>).flatMap((j) => j.steps as any[]);
 
 describe('release workflows', () => {
+  it('gates preview publication on the adapter tests and pack matrix', () => {
+    const wf = load('.github/workflows/ci.yml');
+    expect(wf.jobs['publish-snapshot'].needs).toContain('chat-plugins');
+    expect(wf.jobs['chat-plugins'].steps.some((step: any) => String(step.run).includes('test:pack'))).toBe(true);
+  });
+
   it.each(RELEASE_WORKFLOWS)('%s writes only with the release App token, never a fallback', (file) => {
     const src = text(`.github/workflows/${file}`);
     expect(src).not.toMatch(/secrets\.RELEASE_TOKEN/);

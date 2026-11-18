@@ -1,0 +1,253 @@
+### webhook: waiting questions private hint (312 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Project: project
+Status: Waiting for your answer (was running)
+Task: <code>abcdefgh-task</code>
+
+1. Which database?
+• Postgres — the default
+• SQLite
+2. Ship it &lt;today&gt; &amp; @​all?
+
+Reply to this message to answer the task, or just type your answer here.
+
+### webhook: waiting questions group hint (281 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Project: project
+Status: Waiting for your answer (was running)
+Task: <code>abcdefgh-task</code>
+
+1. Which database?
+• Postgres — the default
+• SQLite
+2. Ship it &lt;today&gt; &amp; @​all?
+
+Reply to this message to answer the task.
+
+### webhook: waiting questions no hint (238 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Project: project
+Status: Waiting for your answer (was running)
+Task: <code>abcdefgh-task</code>
+
+1. Which database?
+• Postgres — the default
+• SQLite
+2. Ship it &lt;today&gt; &amp; @​all?
+
+### webhook: waiting excerpt private hint (273 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Project: project
+Status: Waiting for your answer (was running)
+Task: <code>abcdefgh-task</code>
+
+Agent: I need the &lt;API&gt; key &amp; a decision.
+
+Reply to this message to answer the task, or just type your answer here.
+
+### webhook: finished (125 chars)
+<b>Task completed</b> · Fix the login test
+
+Project: project
+Status: Completed (was running)
+Task: <code>abcdefgh-task</code>
+
+### webhook: finished unchanged (147 chars)
+<b>Task completed</b> · Fix the login test
+
+Project: project
+Status: Completed (was running)
+Task: <code>abcdefgh-task</code>
+Repository: Unchanged
+
+### webhook: review with pull request (214 chars)
+<b>Task ready for review</b> · Fix the login test
+
+Project: project
+Status: Ready for review (was running)
+Task: <code>abcdefgh-task</code>
+
+<a href="https://github.com/o/r/pull/1?a=1&amp;b=2">Open pull request</a>
+
+### webhook: failed with error (160 chars)
+<b>Task failed</b> · Fix the login test
+
+Project: project
+Status: Failed (was running)
+Task: <code>abcdefgh-task</code>
+Error: Build &lt;failed&gt; &amp; @​here
+
+### webhook: cancelled hosted cockpit (180 chars)
+<b>Task cancelled</b> · Fix the login test
+
+Project: project
+Status: Cancelled (was running)
+Task: <code>abcdefgh-task</code>
+
+<a href="https://cezar.example/p/x">Open in cezar</a>
+
+### webhook: failed html heavy (4094 chars)
+<b>Task failed</b> · ⟪&lt;⟫×255…
+
+Project: project
+Status: Failed (was running)
+Task: <code>abcdefgh-task</code>
+Error: ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
+⟫×75&lt;div class="a"&gt;&amp;&lt;/div&gt;…
+
+### webhook: waiting long questions (4094 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Project: project
+Status: Waiting for your answer (was running)
+Task: <code>abcdefgh-task</code>
+
+1. Q0 ⟪&amp;⟫×773…
+
+Reply to this message to answer the task, or just type your answer here.
+
+### webhook: waiting near limit with issue (4096 chars)
+<b>Task needs your input</b> · ⟪x⟫×256
+
+Project: ⟪p⟫×128
+Status: Waiting for your answer (was running)
+Task: <code>⟪i⟫×128</code>
+
+1. ⟪q⟫×2000
+• ⟪l⟫×100 — ⟪d⟫×400
+• ⟪l⟫×100 — ⟪d⟫×400
+• ⟪l⟫×100 — ⟪d⟫×203…
+
+Reply to this message to answer the task, or just type your answer here.
+
+<a href="https://github.com/open-mercato/cezar/issues/123">Open issue</a>
+
+### webhook: connection test (72 chars)
+<b>Test message</b> · cezar is connected to this chat · Ops &lt;team&gt;
+
+### runtime: waiting questions private (281 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Status: Waiting for your answer
+Task: <code>abcdefgh-task</code>
+
+1. Which database?
+• Postgres — the default
+• SQLite
+2. Ship it &lt;today&gt; &amp; @​all?
+
+Reply to this message to answer the task, or just type your answer here.
+
+### runtime: waiting questions group (250 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Status: Waiting for your answer
+Task: <code>abcdefgh-task</code>
+
+1. Which database?
+• Postgres — the default
+• SQLite
+2. Ship it &lt;today&gt; &amp; @​all?
+
+Reply to this message to answer the task.
+
+### runtime: waiting questions not replyable (207 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Status: Waiting for your answer
+Task: <code>abcdefgh-task</code>
+
+1. Which database?
+• Postgres — the default
+• SQLite
+2. Ship it &lt;today&gt; &amp; @​all?
+
+### runtime: waiting excerpt private (242 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Status: Waiting for your answer
+Task: <code>abcdefgh-task</code>
+
+Agent: I need the &lt;API&gt; key &amp; a decision.
+
+Reply to this message to answer the task, or just type your answer here.
+
+### runtime: done answer and result (235 chars)
+<b>Task completed</b> · Fix the login test
+
+Status: Completed
+Task: <code>abcdefgh-task</code>
+Repository: Pull request opened
+
+Agent: Last commit: &lt;feat&gt; &amp; @​all
+
+<a href="https://github.com/o/r/pull/1">Open pull request</a>
+
+### runtime: done long answer (4095 chars)
+<b>Task completed</b> · Fix the login test
+
+Status: Completed
+Task: <code>abcdefgh-task</code>
+
+Agent:⟪ word⟫×779…
+The full reply is in the cockpit.
+
+<a href="https://github.com/o/r/pull/1">Open pull request</a>
+
+### runtime: review answer (137 chars)
+<b>Task ready for review</b> · Fix the login test
+
+Status: Ready for review
+Task: <code>abcdefgh-task</code>
+
+Agent: Ready, see the diff.
+
+### runtime: failed error group (129 chars)
+<b>Task failed</b> · Fix the login test
+
+Status: Failed
+Task: <code>abcdefgh-task</code>
+Error: Build &lt;failed&gt; &amp; @​here
+
+### runtime: cancelled (94 chars)
+<b>Task cancelled</b> · Fix the login test
+
+Status: Cancelled
+Task: <code>abcdefgh-task</code>
+
+### runtime: expired (97 chars)
+<b>Task update expired</b> · Fix the login test
+
+Status: Expired
+Task: <code>abcdefgh-task</code>
+
+### runtime: running (94 chars)
+<b>Task in progress</b> · Fix the login test
+
+Status: Running
+Task: <code>abcdefgh-task</code>
+
+### runtime: done html heavy with long link (4095 chars)
+<b>Task completed</b> · Fix the login test
+
+Status: Completed
+Task: <code>abcdefgh-task</code>
+Repository: ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
+⟫×85&lt;div class="a"…
+
+<a href="https://example.test/⟪p⟫×600">Open pull request</a>
+
+### runtime: waiting html heavy question private (4094 chars)
+<b>Task needs your input</b> · Fix the login test
+
+Status: Waiting for your answer
+Task: <code>abcdefgh-task</code>
+
+1. ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
+⟫×99&lt;div class="a"&gt;&amp;&lt;/div&gt;…
+
+Reply to this message to answer the task, or just type your answer here.

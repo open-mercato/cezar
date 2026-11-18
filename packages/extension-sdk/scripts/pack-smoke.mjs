@@ -34,6 +34,15 @@ try {
   // The example ships its own lifecycle tests (every placement, tasks.get, tasks.propose, dispose);
   // here they run against the packed SDK instead of the workspace symlink.
   run(process.execPath, ['--test', 'test/extension.test.mjs'], project)
+  const chatProject = join(temp, 'mattermost')
+  cpSync(resolve(sdk, '../../examples/extensions/mattermost'), chatProject, { recursive: true, filter: source => !source.includes('/node_modules') && !source.includes('/dist') })
+  const chatPkg = JSON.parse(readFileSync(join(chatProject, 'package.json'), 'utf8'))
+  chatPkg.dependencies['@open-mercato/cezar-extension-sdk'] = tarball
+  writeFileSync(join(chatProject, 'package.json'), JSON.stringify(chatPkg))
+  run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], chatProject)
+  run(process.execPath, [join(chatProject, 'node_modules/typescript/bin/tsc')], chatProject)
+  // Exercise the maintained adapter fixtures against the public tarball.
+  run(process.execPath, ['--test', 'test/adapter.test.mjs', 'test/cancellation.test.mjs'], chatProject)
   // Install the published-shape service too: private workspace packages must not
   // accidentally satisfy runtime imports in this external consumer.
   const service = resolve(sdk, '../cezar')
@@ -58,6 +67,7 @@ try {
 `)
   run(process.execPath, ['host-smoke.mjs'], cockpit)
   console.log('PASS: installed Cezar tarball activates the external SDK-built extension in a real worker without workspace dependencies')
+  console.log('PASS: Mattermost example built outside workspace and exercised identity, discovery, receiveSession, send and membership with the public SDK')
   console.log('PASS: packed SDK installed outside workspace; project-summary typechecked and its placement tests (Settings, sidebar, palette, task) passed')
 } catch (error) {
   if (error.stdout) process.stderr.write(error.stdout)

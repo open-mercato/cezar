@@ -1,9 +1,10 @@
-import { constants, closeSync, openSync, renameSync, writeSync } from 'node:fs';
+import { constants, closeSync, openSync, writeSync } from 'node:fs';
 import { open, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { atomicWrite, readState, statePath, syncDirectory, prepareText } from './storage.ts';
 import { webhookSourceSchema, type WebhookSource } from './source.ts';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 
 const headerSchema = z.strictObject({ version: z.literal(1), segment: z.string().uuid(), installationId: z.string(), highWater: z.number().int().nonnegative() });
 const cursorSchema = z.strictObject({ segment: z.string(), offset: z.number().int().nonnegative() });
@@ -142,7 +143,8 @@ export class Outbox {
         await rm(temporary, { force: true }); continue;
       }
       try {
-        renameSync(temporary, statePath(this.directory, 'outbox.ndjson'));
+        // Sync on purpose (nothing may yield here); win32 sharing violations retry (fs-rename.ts).
+        renameSyncWithRetry(temporary, statePath(this.directory, 'outbox.ndjson'));
         this.segment = nextSegment; this.headerEnd = Buffer.byteLength(header); this.offset = this.headerEnd; this.bytes = bytes.length;
         let start = this.headerEnd;
         this.entries = remaining.map(entry => { const end = start + Buffer.byteLength(JSON.stringify(entry.source) + '\n'); const next = { source: entry.source, start, end }; start = end; return next; });

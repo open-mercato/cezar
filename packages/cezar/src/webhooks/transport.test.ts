@@ -111,3 +111,9 @@ describe('chat transport', () => {
     expect(transport.redactWebhookDiagnostics({ kind: 'http', status: 404, providerCode: 10015, response: 'discard' }, [], true)).toEqual({ kind: 'http', status: 404, providerCode: 10015 });
   });
 });
+
+describe('late diagnostic redaction', () => {
+  it('keeps the gone flag through late diagnostic redaction', () => {
+    expect(transport.redactWebhookDiagnostics({ kind: 'http', status: 403, providerGone: true, response: 'discard' }, [], true)).toEqual({ kind: 'http', status: 403, providerGone: true });
+  });
+});

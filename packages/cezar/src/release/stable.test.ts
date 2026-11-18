@@ -46,6 +46,7 @@ describe('isReleaseBump', () => {
 describe('stampStableManifests', () => {
   const set = (): ReleaseManifests => ({
     extensionSdk: { name: '@scope/sdk', version: '0.1.5' },
+    telegram: { name: '@scope/telegram', version: '0.1.5', dependencies: { '@scope/sdk': '^0.1.5' } },
     contract: { name: '@scope/contract', version: '0.1.5', dependencies: { '@scope/sdk': '0.1.5' } },
     apiClient: { name: '@scope/client', version: '0.1.5' },
     cezar: {
@@ -70,6 +71,13 @@ describe('stampStableManifests', () => {
     expect(stamped.runAlias.version).toBe('0.1.6');
     expect(stamped.runAlias.dependencies).toEqual({ '@scope/impl': '^0.1.6' });
     expect(stamped.cezar.devDependencies).toEqual({ '@scope/client': '^0.1.6' });
+  });
+
+  it('preserves independent adapter semver and stable SDK compatibility', () => {
+    const manifests = set();
+    manifests.telegram.version = '2.4.1';
+    const stamped = stampStableManifests(manifests, '0.99.0');
+    expect(stamped.telegram).toEqual(manifests.telegram);
   });
 
   it('re-pins the api-client wherever it is declared, so the dev→runtime move is transparent', () => {

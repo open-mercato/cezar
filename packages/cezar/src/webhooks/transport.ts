@@ -1,3 +1,4 @@
+import { ChatTransportError, type ChatTransport, type ChatReceipt } from '../chat/provider.ts';
 import type { WebhookFormat } from '@open-mercato/cezar-contract';
 import type { Agent } from 'undici';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
@@ -10,9 +11,34 @@ export interface WebhookSend {
   diagnosticSecrets?: readonly string[];
   signal?: AbortSignal;
 }
-export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; contentType?: string; response?: string; retryAfter?: string }
+export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; providerGone?: true; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
 type HttpResult = Extract<SendResult, { kind: 'http' }>;
+const chatReceipts = new WeakMap<SendResult, ChatReceipt>();
+/** Internal correlation only; never serialize the echoed chat message into delivery history. */
+export function chatReceipt(result: SendResult): ChatReceipt | undefined { return chatReceipts.get(result); }
+/** Provider answers that mean the destination itself is gone (Discord unknown/invalid webhook, a revoked Telegram bot). */
+export function providerGone(format: string | undefined, result: Extract<SendResult, { kind: 'http' }>): boolean {
+  if (format === 'discord.v1') return (result.status === 404 && result.providerCode === 10015) || (result.status === 401 && result.providerCode === 50027);
+  return format === 'telegram.v1' && (result.status === 401 || result.providerGone === true);
+}
+export async function sendChatNotification(transport: ChatTransport, chatId: string, text: string, signal?: AbortSignal, valid?: () => boolean): Promise<SendResult> {
+  try {
+    const receipt: ChatReceipt = await transport.send(chatId, { text }, signal, valid);
+    if (receipt.chatId !== chatId || !receipt.messageId) return { kind: 'transient', reason: 'invalid_receipt' };
+    const result: SendResult = { kind: 'http', status: 200 };
+    chatReceipts.set(result, receipt); return result;
+  } catch (error) { return chatSendFailure(error); }
+}
+export function chatSendFailure(error: unknown): SendResult {
+  if (!(error instanceof ChatTransportError)) return { kind: 'transient', reason: 'transport_failed' };
+  switch (error.failure.kind) {
+    case 'auth': case 'gone': return { kind: 'http', status: 410, providerGone: true };
+    case 'rate_limited': return { kind: 'http', status: 429, retryAfter: String((error.failure.retryAfterMs ?? 1000) / 1000) };
+    case 'blocked': case 'conflict': return { kind: 'policy', reason: 'chat_blocked' };
+    default: return { kind: 'transient', reason: 'transport_failed' };
+  }
+}
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
 // RFC 9110 §5.6.7: IMF-fixdate, RFC850 and asctime only. Date.parse
 // alone accepts comments, arbitrary suffixes and non-HTTP date formats.
@@ -62,7 +88,8 @@ export function redactWebhookDiagnostics(result: SendResult, secrets: readonly s
   // Protocol timing is not display text: redaction or clipping can turn a
   // valid delay into an earlier retry. Share the bounded grammar on every path.
   const timing = validatedRetryAfter(raw.retryAfter)?.value;
-  const provider = raw.providerCode === 10015 || raw.providerCode === 50027 ? { providerCode: raw.providerCode } : {};
+  const provider = { ...(raw.providerCode === 10015 || raw.providerCode === 50027 ? { providerCode: raw.providerCode } : {}),
+    ...(raw.providerGone === true ? { providerGone: true as const } : {}) };
   if (omitText) {
     // Only validated timing survives incomplete secret coverage.
     return { kind: 'http', status: raw.status, ...provider, ...(timing ? { retryAfter: timing } : {}) };
@@ -137,6 +164,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
       ? input.format === 'slack.v1' && destination.hostname === 'hooks.slack.com' ? 'slack'
         : input.format === 'discord.v1' && discordHosts.has(destination.hostname) ? 'discord' : undefined
       : undefined;
+    // Discord echoes the posted message on success; never retain it.
     if ((!chat && (target.private || destination.pathname !== '/' || destination.search))
       || (chat === 'discord' && result.statusCode >= 200 && result.statusCode < 300)) {
       // An unread undici body has no iterator error handler. destroy() emits

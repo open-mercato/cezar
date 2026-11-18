@@ -250,7 +250,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
   it('resumes the recorded account after the project selects another login', async () => {
     const sessions = mockRunnerSessions();
     savedEnv.CEZ_HOME = process.env.CEZ_HOME;
-    process.env.CEZ_HOME = join(repoRoot, 'account-home');
+    process.env.CEZ_HOME = join(savedEnv.CEZ_HOME!, 'account-home');
     const originalConfig = join(process.env.CEZ_HOME, 'original');
     const nextConfig = join(process.env.CEZ_HOME, 'next');
     for (const dir of [originalConfig, nextConfig]) {

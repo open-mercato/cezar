@@ -20,9 +20,9 @@
 // the workspace long before it is offered to anyone else.
 //
 // Publishes with --ignore-scripts: the workflow ran `npm run build` (whose last
-// leg, check:pack, is the tarball-integrity gate) immediately before this, and
-// dist/ must exist for this script to even import. Stamping only rewrites the
-// version field, so no rebuild is needed.
+// leg, check:pack, is the tarball-integrity gate) immediately before this.
+// Artifacts are rebuilt after stamping so bundled adapter metadata and digests
+// describe the versions being published.
 //
 // Degrades loudly, never red: NPM_TOKEN missing → forces --dry-run so a
 // misconfigured repo produces a visible dry run instead of a failed release.
@@ -41,10 +41,12 @@
 // Env override for tests: CEZ_RELEASE_ROOT (defaults to the repo root).
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isPublishable, publishedManifest, type ManifestLike, type ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
+import { adapterManifestWrites, writeAdapterManifests, rebuildReleaseArtifacts } from '../packages/cezar/src/release/artifacts.ts';
+import { isAdapterKey, isPublishable, publishedManifest, type ManifestLike, type ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
 import {
   computeStableVersion,
   isReleaseBump,
@@ -52,7 +54,7 @@ import {
 } from '../packages/cezar/src/release/stable.ts';
 
 type SetKey = keyof ReleaseManifests;
-const KEYS: readonly SetKey[] = ['extensionSdk', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
+const KEYS: readonly SetKey[] = ['extensionSdk', 'telegram', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 
 const repoRoot = process.env.CEZ_RELEASE_ROOT
   ? path.resolve(process.env.CEZ_RELEASE_ROOT)
@@ -60,6 +62,7 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
 // The workspace root publishes nothing; every publishable manifest is named here explicitly.
 const dirs: Record<SetKey, string> = {
   extensionSdk: path.join(repoRoot, 'packages/extension-sdk'),
+  telegram: path.join(repoRoot, 'packages/chat-plugins/telegram'),
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
@@ -87,6 +90,7 @@ if (!isReleaseBump(bump)) {
 
 const manifests: ReleaseManifests = {
   extensionSdk: readManifest(dirs.extensionSdk),
+  telegram: readManifest(dirs.telegram),
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
@@ -120,11 +124,15 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampStableManifests(manifests, version);
-// What reaches the registry drops workspace-only exports (publishedManifest); this checkout is never committed.
-for (const key of KEYS) writeManifest(dirs[key], isPublishable(stamped[key]) ? publishedManifest(stamped[key]) : stamped[key]);
-const stampedNames = KEYS.map((key) => stamped[key].name);
+const adapterWrites = adapterManifestWrites(dirs, manifests, stamped);
+writeAdapterManifests(adapterWrites);
+for (const key of KEYS) writeManifest(dirs[key], stamped[key]);
+rebuildReleaseArtifacts(repoRoot);
+// What reaches the registry drops workspace-only exports (publishedManifest) — only after the
+// rebuild, which still resolves the SDK through `./source`; this checkout is never committed.
+for (const key of KEYS) if (isPublishable(stamped[key])) writeManifest(dirs[key], publishedManifest(stamped[key]));
 console.log(
-  `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,
+  `release: stamped ${KEYS.map((key) => `${stamped[key].name}@${stamped[key].version}`).join(' + ')} for host ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,
 );
 
 // Provenance needs the job's OIDC token (permissions: id-token: write); only
@@ -149,6 +157,7 @@ const runNpm = (args: string[], cwd: string) => {
     encoding: 'utf8',
     stdio: ['ignore', 'inherit', 'pipe'],
     shell: !npmExecpath && process.platform === 'win32',
+    timeout: 120_000,
   });
   process.stderr.write(result.stderr ?? '');
   if (result.error) throw result.error;
@@ -156,20 +165,49 @@ const runNpm = (args: string[], cwd: string) => {
 };
 const publishedOverAlready = (error: unknown) =>
   error instanceof NpmError && /EPUBLISHCONFLICT|previously published|cannot publish over/i.test(error.stderr);
-const alreadyPublished = (name: string) => {
+const alreadyPublished = (name: string, version: string) => {
   if (dryRun) return false;
   try {
-    const out = execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
+    const out = execFileSync(npmExecpath ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm', [...(npmExecpath ? [npmExecpath] : []), 'view', `${name}@${version}`, 'version'], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: !npmExecpath && process.platform === 'win32',
+      timeout: 30_000,
     });
     return out.trim() === version;
-  } catch {
-    return false;
+  } catch (error) {
+    if (/E404|404 Not Found/.test(String((error as { stderr?: unknown }).stderr))) return false;
+    throw error;
   }
 };
-const publish = (dir: string, label: string) => {
+const npmOutput = (args: string[], cwd: string) => execFileSync(npmExecpath ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm', [...(npmExecpath ? [npmExecpath] : []), ...args], {
+  cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: !npmExecpath && process.platform === 'win32', timeout: 120_000,
+});
+/** Files an independently released adapter version already has on npm that differ from what
+ *  would ship now: a changed adapter must bump its own version, or npm and the host disagree (#2168). */
+const adapterDrift = (dir: string, name: string, version: string): string[] => {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'adapter-release-'));
+  try {
+    npmOutput(['pack', `${name}@${version}`, '--pack-destination', tmp], tmp);
+    const tarball = readdirSync(tmp).find(file => file.endsWith('.tgz'));
+    if (!tarball) throw new Error(`npm pack ${name}@${version} produced no tarball`);
+    execFileSync('tar', ['-xzf', path.join(tmp, tarball), '-C', tmp], { timeout: 60_000 });
+    const remoteRoot = path.join(tmp, 'package');
+    const remote = new Set<string>();
+    const walk = (dirPath: string) => {
+      for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+        const full = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) walk(full); else remote.add(path.relative(remoteRoot, full).split(path.sep).join('/'));
+      }
+    };
+    walk(remoteRoot);
+    const local = (JSON.parse(npmOutput(['pack', '--dry-run', '--json', '--ignore-scripts'], dir)) as { files: { path: string }[] }[])[0]!.files.map(file => file.path);
+    const drift = local.filter(file => !remote.has(file) || !readFileSync(path.join(dir, file)).equals(readFileSync(path.join(remoteRoot, file))));
+    for (const file of remote) if (!local.includes(file) && statSync(path.join(remoteRoot, file)).isFile()) drift.push(file);
+    return drift;
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+};
+const publish = (dir: string, label: string, version: string) => {
   const args = [
     'publish',
     '--tag', distTag,
@@ -185,7 +223,7 @@ const publish = (dir: string, label: string) => {
     if (dryRun) throw error;
     console.log(`release: publishing ${label} failed (${(error as Error).message}) — retrying once in 15s.`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15_000);
-    if (alreadyPublished(label)) return;
+    if (alreadyPublished(label, version)) return;
     try {
       runNpm(args, dir);
     } catch (retryError) {
@@ -199,20 +237,29 @@ const publish = (dir: string, label: string) => {
 // Dependency order — see the header. `ReleaseManifests` declares its fields in this order for
 // exactly this reason. A `private` manifest is stamped above but never published: it is part of
 // the release (its version moves, its pins are rewritten) without being on the registry.
+// Before anything publishes: a changed adapter must bump its own version, never half-release the set.
+for (const key of KEYS) {
+  if (!isAdapterKey(key) || !isPublishable(stamped[key]) || !alreadyPublished(stamped[key].name, stamped[key].version)) continue;
+  const drift = adapterDrift(dirs[key], stamped[key].name, stamped[key].version);
+  if (drift.length) {
+    throw new Error(`release: ${stamped[key].name}@${stamped[key].version} is already on npm but its contents changed (${drift.slice(0, 5).join(', ')}) — bump the adapter's version (package.json and cezar-extension.json) before releasing.`);
+  }
+}
 const published: string[] = [];
 for (const key of KEYS) {
   if (!isPublishable(stamped[key])) {
     console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
     continue;
   }
-  if (alreadyPublished(stamped[key].name)) {
-    console.log(`release: ${stamped[key].name}@${version} is already on the registry — skipped.`);
-    if (reconcileTag) {
-      console.log(`release: npm dist-tag add ${stamped[key].name}@${version} ${distTag}`);
-      runNpm(['dist-tag', 'add', `${stamped[key].name}@${version}`, distTag], dirs[key]);
+  if (alreadyPublished(stamped[key].name, stamped[key].version)) {
+    console.log(`release: ${stamped[key].name}@${stamped[key].version} is already on the registry — skipped.`);
+    // A host backport must never move an independently released adapter tag backwards.
+    if (reconcileTag && !isAdapterKey(key)) {
+      console.log(`release: npm dist-tag add ${stamped[key].name}@${stamped[key].version} ${distTag}`);
+      runNpm(['dist-tag', 'add', `${stamped[key].name}@${stamped[key].version}`, distTag], dirs[key]);
     }
   } else {
-    publish(dirs[key], stamped[key].name);
+    publish(dirs[key], stamped[key].name, stamped[key].version);
   }
   published.push(stamped[key].name);
 }
