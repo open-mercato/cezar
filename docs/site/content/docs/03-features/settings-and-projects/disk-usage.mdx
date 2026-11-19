@@ -1,0 +1,127 @@
+---
+title: "Disk usage and worktrees"
+description: "See what takes disk space, how Cezar frees it on its own, and how to clean up from a terminal."
+related:
+  links:
+    - features/settings-and-projects/worktree-reclaim
+    - architecture/cli-and-configuration
+sources:
+  - label: "Design record"
+    path: .ai/specs/2026-11-19-worktree-disk-usage.md
+    line: 1
+    commit: e668883ece5f41a992e47fb92616d5f372c8d5ef
+  - label: "Retention rules"
+    path: packages/cezar/src/runs/retention.ts
+    line: 193
+    commit: e668883ece5f41a992e47fb92616d5f372c8d5ef
+  - label: "Global settings"
+    path: packages/web/src/routes/settings/resources-section.tsx
+    line: 253
+    commit: e668883ece5f41a992e47fb92616d5f372c8d5ef
+  - label: "Project settings"
+    path: packages/web/src/routes/settings/worktrees-section.tsx
+    line: 104
+    commit: e668883ece5f41a992e47fb92616d5f372c8d5ef
+---
+Every task runs in its own worktree: a full checkout of the repository under `.ai/cezar/worktrees/<runId>`. A worktree often holds `node_modules` or build output, so one task can take 1–2 GB. Cezar frees that space in four ways: a count limit, an age limit, archiving, and a disk guard. You can also clean up by hand with `cez worktrees`.
+
+Freeing a worktree (reclaiming it) removes only the directory. The task's branch stays, and **Continue** on the task restores the worktree from it. A worktree with uncommitted changes is never reclaimed.
+
+## What takes space
+
+| Path | What it holds | How it is freed |
+| --- | --- | --- |
+| `<repo>/.ai/cezar/worktrees/` | One checkout per task. Usually the largest part by far. | Count limit, age limit, archive, disk guard, `cez worktrees` |
+| `<repo>/.ai/cezar/artifacts/<runId>`, `attachments/<runId>`, `dispatch/<runId>` | A task's reports, pasted files and dispatch notes. | Deleted with the task |
+| `<repo>/.ai/cezar/runs.json`, `runs/*.ndjson` | The task index and event logs. Small. | Old runs are pruned past the run-count cap |
+| `~/.cezar/versions/` | Installed Cezar versions. | Old versions are pruned after an update and on startup |
+
+## Where to find it
+
+- Settings → Resources → Worktrees: the age default for every project and the disk guard thresholds.
+- Project settings → Worktrees: this project's count and age limits, and every worktree on disk with its size, last activity and whether it can be reclaimed.
+
+## How to use it
+
+1. Open Project settings → Worktrees and check the total size and the **Last activity** column.
+2. Choose **Reclaim now** to free every worktree past the count or age limit, or **Delete** on one row.
+3. Adjust **Reclaim idle worktrees after** (per project, or for every project in Settings → Resources) so the space stays free.
+
+## Age retention
+
+A task that is not running gives back its worktree after a number of days without activity. The default is **7 days**. Set `0` to turn it off.
+
+- It covers tasks in **review**, **waiting**, **done**, **failed** and **cancelled**.
+- It skips running, queued and parked tasks, pinned tasks, tasks with a scheduled auto-resume or monitoring wake-up, and worktrees a running process uses.
+- Last activity is the newest of the task's own timestamps and its event log.
+- A reclaimed task in review keeps its diff and its draft pull request button: the diff comes from the kept branch, and opening a pull request restores the worktree first.
+
+Retention runs when Cezar starts, after a task finishes, once an hour, and when you choose **Reclaim now**.
+
+The count limit (**Keep last N worktrees**, default 10) still applies to done, failed and cancelled tasks.
+
+## Archive
+
+Archiving a task, or choosing **Archive finished**, also frees the task's worktree. The branch stays. Restore the task from the archived list and choose **Continue** to get the worktree back. When a terminal or process still uses the worktree, the hourly sweep frees it later.
+
+## Disk guard
+
+The disk guard watches free space on the disk that holds the worktrees. It acts when either:
+
+- free space falls below the smaller of **10%** and **5 GB**, or
+- task worktrees across every project take more than **20 GB**.
+
+It reclaims the oldest idle worktrees first, across all projects, until it is back under the threshold. When that is not enough, the cockpit shows the warning **Disk almost full** with the space the worktrees take, adds an attention item and sends a notification. The guard never stops a running task.
+
+Set the thresholds in Settings → Resources → Worktrees. Set a threshold to `0` to turn that trigger off.
+
+## Task files and old versions
+
+- Deleting a task also deletes its `artifacts`, `attachments` and `dispatch` folders. The same happens when old runs are pruned past the run-count cap. A sweep at startup removes folders whose task no longer exists. A file that a live task or an unsent draft still uses is never deleted.
+- After a successful update and on startup, Cezar keeps the running version plus the 2 most recent previous ones in `~/.cezar/versions` and deletes the rest. Set `versionRetention` in `~/.cezar/config.json` to keep a different number, or `0` to turn pruning off. The running, pinned, in-use and mid-install versions are never deleted.
+
+## Command line: `cez worktrees`
+
+`cez worktrees` uses the running cockpit when one serves the project. Without one, it works on the project directory directly. Pass `--project <path>` to pick a project other than the current directory's repository.
+
+| Command | What it does |
+| --- | --- |
+| `cez worktrees list [--json]` | Every task worktree: task, status, last activity, size, and whether it can be reclaimed. |
+| `cez worktrees reclaim` | Applies the configured count and age limits now. |
+| `cez worktrees reclaim --older-than 7d` | Reclaims every inactive worktree idle for at least that long (`d` or `h`). |
+| `cez worktrees reclaim --all-inactive` | Reclaims every inactive worktree. |
+| `cez worktrees reclaim --dry-run` | Lists what would be reclaimed and changes nothing. Combine it with the options above. |
+| `cez worktrees prune` | Removes worktree directories no task owns and runs `git worktree prune`. |
+| `cez worktrees remove <runId>` | Reclaims one task's worktree (branch kept). Refuses a task that is running. |
+
+Old Cezar versions have their own command: `cez versions prune [--keep N] [--dry-run] [--backups]`. Leftover `versions.backup-*` folders are removed only with `--backups`.
+
+## Manual cleanup on a server
+
+On a machine you reach only over SSH, run these from the repository:
+
+```bash title="Terminal"
+# 1. See what is on disk
+cez worktrees list
+du -sh .ai/cezar/worktrees
+
+# 2. Preview, then free every inactive worktree (branches are kept)
+cez worktrees reclaim --all-inactive --dry-run
+cez worktrees reclaim --all-inactive
+
+# 3. Remove directories no task owns, and stale git worktree records
+cez worktrees prune
+git worktree list
+git worktree prune
+```
+
+A reclaimed task keeps its branch, so its work is still recoverable. `cez worktrees list` and the task page show the branch name (`cez/<id8>` unless the project names branches itself). Delete that branch only when you no longer need the task's work:
+
+```bash title="Terminal"
+git branch --list 'cez/*'
+git branch -D <branch>
+```
+
+> **Good to know**: Deleting a branch cannot be undone from Cezar. **Continue** on that task fails afterwards, because there is nothing left to restore the worktree from.
+
+> **Good to know**: Pinned tasks are never reclaimed automatically. Unpin or archive a task to free its worktree.
