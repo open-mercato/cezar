@@ -1,4 +1,4 @@
-import type { ManagerSummary, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { HealthResponse, ManagerSummary, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import type { To } from 'react-router'
 import { deriveAttention, wantsAttention } from './attention'
 
@@ -164,5 +164,27 @@ export function describeManagerNotification(manager: ManagerSummary): RunNotific
       : manager.pendingQuestions > 0 ? 'Has a question for you' : (manager.headline ?? manager.preview ?? 'New message'),
     tag: `cezar-manager-${manager.id}`,
     path: `/manager/${encodeURIComponent(manager.id)}`,
+  }
+}
+
+// ---- the disk guard (spec 2026-11-19-worktree-disk-usage) -----------------------------------
+
+/**
+ * The guard's warning when it has just appeared. `previous` is the last observed warning, `null`
+ * for none, `undefined` before the first observation — which only records: a cockpit opened onto a
+ * warning already shows it in the sidebar.
+ */
+export function enteringDiskGuardWarning(previous: string | null | undefined, health: HealthResponse): string | null {
+  const current = health.disk?.guardWarning ?? null
+  return previous === null && current !== null ? current : null
+}
+
+export function describeDiskGuardNotification(warning: string): RunNotificationContent {
+  return {
+    title: 'Disk almost full',
+    body: warning,
+    tag: 'cezar-disk-guard',
+    // Workspace-wide: the thresholds live in global Behaviour, not in any one project.
+    path: '/settings/global/behaviour#resources',
   }
 }

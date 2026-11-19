@@ -23,12 +23,13 @@ const fixtures: [string, RunEvent[]][] = [
 ]
 
 // Exact reducer/row fingerprints, including every prefix and suffix; ordinary items
-// carry no scoped source keys.
+// carry no scoped source keys. Includes main's sessionModel metadata; removing that
+// field reproduces the pre-merge fingerprints without changing turns, rows or clocks.
 const baselines: Record<string, string> = {
-  bashAndScreenshot: '91fd0a357a79d1ac9e9335510140c7f961a2af124d9fd70780453218d1df4ab6',
-  failedAndDenied: 'e351dc037b037ed9e8c5b85b507d0e0481497f75f63e6fca15378159872ce560',
-  textTurn: 'e90e54b2576e89d382c71fe5fbb5df6aaaf946dfc878766bbc72d3be75456874',
-  thinkingEditWriteTodo: '3948ee5283116cdbebf29bdf899e63dbec66cc3de4dc0772e30d90ea9e8a1bc6',
+  bashAndScreenshot: 'f2fc913a0e4a0e27e4a3f01ad1225c0eab409826010ee046adf0347a903598ff',
+  failedAndDenied: 'eaf60948e943cef9419e375eccda330cea8c9b158cc3fbca42daa480c7c1b528',
+  textTurn: 'b1c8c2f0853be81c96a86519cd944716fc1f18b48eec712c2ccd1d1d940235ed',
+  thinkingEditWriteTodo: '9e506f91683a5b7953ddec4a2309e9cd5c9c7b132755939086856faaa9ad3aa1',
   'thread-run': '5a57c9f529bd6038234f3795dead57dbf85e31730a06e7b32c66c5ef18acd9d9',
   'subagents-run': '88896b056e963f098f635dbe8166e50e2563837f12a4bdcf89cf2df74d9a3530',
 }

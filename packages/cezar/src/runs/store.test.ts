@@ -3322,3 +3322,30 @@ describe('RunStore — index lock failures', () => {
     expect(existsSync(leftover)).toBe(false);
   });
 });
+
+describe('step tool-policy persistence', () => {
+  it('round-trips effective grants while keeping older steps without a policy readable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const store = RunStore.open(dir);
+      const record = store.createRun({ title: 'restricted', workflow: 'nested', task: 'read', steps: [{ id: 'nested::read', name: 'Read', kind: 'agent' }] });
+      const policy = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'], enforceReadOnly: true };
+      store.updateStep(record.id, 'nested::read', { toolPolicy: policy });
+      store.flush();
+      const reopened = RunStore.open(dir);
+      expect(reopened.getRun(record.id)?.steps[0]?.toolPolicy).toEqual(policy);
+      reopened.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('keeps a run whose stored policy carries a key from a newer cezar, dropping only that key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const step = { id: 'read', name: 'Read', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, toolPolicy: { allowedTools: ['Read'], futureKey: true } };
+      writeFileSync(join(dir, 'runs.json'), JSON.stringify([{ ...LEGACY_RUN, steps: [step] }]), 'utf8');
+      const store = RunStore.open(dir);
+      expect(store.getRun(LEGACY_RUN.id)?.steps[0]?.toolPolicy).toEqual({ allowedTools: ['Read'] });
+      store.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

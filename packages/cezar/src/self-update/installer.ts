@@ -20,6 +20,7 @@ import { z } from 'zod';
 
 import { cezarHomeDir } from '../paths.ts';
 import { assertSafeId, installId, PACKAGE_NAME, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
+import { acquireVersionsLock } from './versions-prune.ts';
 
 const packageJsonSchema = z.object({ name: z.string(), version: z.string().min(1) }).passthrough();
 
@@ -149,11 +150,19 @@ async function installSpec(
     }
     const entry = join(staging, 'node_modules', ...PACKAGE_NAME.split('/'), 'dist', 'index.js');
     if (!existsSync(entry)) throw new Error('install finished but the entry file is missing');
-    // A stale complete install of the same id (registry re-install after a manual delete of
-    // the manifest, say) is replaced wholesale.
-    rmSync(versionDir(id, env), { recursive: true, force: true });
-    renameSync(staging, versionDir(id, env));
-    writeManifest(id, { ...manifest, installedAt: new Date().toISOString() }, env);
+    // The commit runs under the prune's lock, so a prune never trashes the id mid-swap. A lock
+    // still held after the wait is not worth failing an update over.
+    const release = await acquireVersionsLock({ env, waitMs: 30_000 });
+    if (!release) opts.onLog?.('versions/.lock is still held — installing anyway');
+    try {
+      // A stale complete install of the same id (registry re-install after a manual delete of
+      // the manifest, say) is replaced wholesale.
+      rmSync(versionDir(id, env), { recursive: true, force: true });
+      renameSync(staging, versionDir(id, env));
+      writeManifest(id, { ...manifest, installedAt: new Date().toISOString() }, env);
+    } finally {
+      release?.();
+    }
     opts.onLog?.(`installed ${id}`);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });

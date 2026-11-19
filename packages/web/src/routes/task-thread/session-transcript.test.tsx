@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -372,6 +372,30 @@ describe('SessionTranscript', () => {
     const note = document.querySelector('[data-slot="note-line"]')
     expect(note?.textContent).toContain('Updated response')
     expect(note?.textContent).not.toContain('Initial response')
+  })
+
+  it('renders the install action when it arrives on an existing danger note', () => {
+    const client = createQueryClient()
+    const transcript = (action?: 'install-skills') => {
+      const events = asRunEvents([{ type: 'note', message: 'Shared skill unavailable', tone: 'danger', action }])
+      return (
+        <QueryClientProvider client={client}>
+          <SessionTranscript
+            runId="r1"
+            viewId="memo-note-action"
+            sections={mainTranscriptSections(run(), reduceThread(events))}
+            mode="document"
+            renderMode="flat"
+          />
+        </QueryClientProvider>
+      )
+    }
+
+    const { rerender } = render(transcript())
+    expect(screen.queryByRole('button', { name: 'Install skills' })).toBeNull()
+    rerender(transcript('install-skills'))
+    expect(screen.getByRole('button', { name: 'Install skills' }).closest('[data-slot="note-line"]')?.textContent)
+      .toContain('Shared skill unavailable')
   })
 
   it('updates a memoized tool block when its live output and status change', () => {

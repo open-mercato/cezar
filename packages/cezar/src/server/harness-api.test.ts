@@ -52,6 +52,7 @@ describe('harness API', () => {
       enqueueMessage: () => null,
       deferMessage: () => false,
       continueRun: () => ({ ok: true }),
+      reclaimWorktreesOf: () => undefined,
     } as unknown as RunManager;
     app = createApp({
       repoRoot,

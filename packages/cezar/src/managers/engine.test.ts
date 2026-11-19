@@ -267,7 +267,7 @@ describe('ManagerEngine', () => {
       expect(watch?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
       // Elsewhere the rules are no fence, and Pi reads tool names only.
       backend.scripts.push(say('ok'));
-      await engine.update(id, { runner: 'codex' });
+      await engine.update(id, { runner: 'pi' });
       engine.send(id, 'again');
       await settled(engine);
       expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
@@ -352,7 +352,7 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.resume).toBeUndefined();
     });
 
-    it('uses the selected account environment after switching agent and account', async () => {
+    it('refuses Codex after switching agent and account before opening another session', async () => {
       const configDir = join(home, 'codex-work');
       mkdirSync(configDir);
       await mergeWriteAgentAccounts((accounts) => ({
@@ -367,9 +367,9 @@ describe('ManagerEngine', () => {
       await engine.update(id, { runner: 'codex', agentProfile: 'work' });
       engine.send(id, 'two');
       await settled(engine);
-      expect(runnerFor).toHaveBeenLastCalledWith('codex');
-      expect(backend.specs.at(-1)?.env?.CODEX_HOME).toBe(configDir);
-      expect(backend.specs.at(-1)?.resume).toBeUndefined();
+      expect(runnerFor).toHaveBeenCalledTimes(1);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
     });
 
     it('a turn that throws before its agent starts closes its message', async () => {
@@ -638,6 +638,62 @@ describe('ManagerEngine', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(SIGNED_OUT));
     });
 
+    describe('reconnect (spec 2026-11-18-inline-account-reconnect)', () => {
+      it('a rejected login marks the chat turn, and a reconnect of that account re-runs it once', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        backend.scripts.push(cliFails(SIGNED_OUT));
+        engine.send(id, 'ship the release notes');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ turn: 'chat', authFailure: { provider: 'claude', profileId: 'default' } });
+
+        expect(engine.resumeAuthFailed('claude', 'work')).toEqual([]);
+        expect(engine.resumeAuthFailed('codex', 'default')).toEqual([]);
+        backend.scripts.push(say('Done'));
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([{ managerId: id, title: store.get(id)!.name }]);
+        // The same reconnect seen twice restarts nothing more.
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([]);
+        await settled(engine);
+
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('ship the release notes');
+        const [failed, retried] = assistants(id);
+        expect(failed).not.toHaveProperty('authFailure');
+        expect(failed?.reconnectedAt).toBeDefined();
+        expect(failed?.reconnectedFrom).toEqual({ provider: 'claude', profileId: 'default' });
+        expect(retried).toMatchObject({ turn: 'chat', text: 'Done' });
+        expect(store.state(id).authRetry).toBeUndefined();
+      });
+
+      it('only the latest chat turn counts: a job turn that failed on the login is not re-run', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        store.persistMessage(id, {
+          id: 'job-1', seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'job', jobName: 'Digest',
+          text: '', streaming: false, commands: [], error: 'Sign in again', authFailure: { provider: 'claude', profileId: 'default' },
+        });
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([]);
+        await settled(engine);
+        expect(backend.specs).toHaveLength(0);
+      });
+
+      it('switching the account re-runs the failed chat turn on the new one', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        backend.scripts.push(cliFails(SIGNED_OUT));
+        engine.send(id, 'hi there');
+        await settled(engine);
+        backend.scripts.push(say('Hello'));
+        const updated = await engine.update(id, { agentProfile: 'work' });
+        expect(updated).not.toHaveProperty('error');
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('hi there');
+        expect(assistants(id)[0]).not.toHaveProperty('authFailure');
+        expect(assistants(id)[1]).toMatchObject({ text: 'Hello' });
+      });
+    });
+
     it('a passing network failure is retried once, after a pause, and the user never sees it', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -850,7 +906,7 @@ describe('ManagerEngine', () => {
     });
 
     it('a watch on a backend the allowlist does not fence runs read-only', async () => {
-      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
+      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'opencode' });
       const id = await create(engine);
       backend.scripts.push(say('PR 7 is ready'), say('ok'));
       due(id);
@@ -863,6 +919,22 @@ describe('ManagerEngine', () => {
       expect(watch?.env?.GH_TOKEN).toBe('');
       expect(chat?.env?.CEZ_MANAGER_TURN).toBe('chat');
       expect(chat?.enforceReadOnly).toBeUndefined();
+    });
+
+    it('refuses Codex watches and chats before opening an executor', async () => {
+      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
+      const id = await create(engine);
+      due(id);
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toEqual([]);
+      expect(store.state(id).lastFailure?.cause).toContain('tool-policy enforcement unavailable');
+      expect(store.state(id).lastFailure?.cause).toContain('Pick Claude Code for this manager.');
+      expect(store.state(id).lastFailure?.cause).not.toMatch(/\bPi\b/);
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.specs).toEqual([]);
+      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {
@@ -2146,7 +2218,7 @@ describe('ManagerEngine', () => {
     it('gives a non-Claude manager no rules and answers its list unavailable', async () => {
       const engine = makeEngine();
       const id = await granted(engine, { [CAL]: { level: 'read' } });
-      await engine.update(id, { runner: 'codex' });
+      await engine.update(id, { runner: 'pi' });
       backend.scripts.push(say('ok'));
       engine.send(id, 'hi');
       await settled(engine);

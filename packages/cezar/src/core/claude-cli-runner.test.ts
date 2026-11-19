@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -469,6 +469,36 @@ describe('prependSystemPrompt (codex/opencode delivery)', () => {
 
   it('leaves the user prompt untouched when no systemPrompt is set', () => {
     expect(prependSystemPrompt(undefined, 'do it')).toBe('do it');
+  });
+});
+
+describe('ClaudeCliRunner dry-run auth replay', () => {
+  it('rejects a manager prompt once and answers its replay with CEZ_HOME unset', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-auth-replay-'));
+    const home = join(cwd, 'home');
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    vi.stubEnv('CEZ_HOME', undefined);
+    vi.stubEnv('CEZ_CLAUDE_BIN', undefined);
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+
+    try {
+      const runner = new ClaudeCliRunner({ timeoutMs: 3_000 });
+      const spec = { cwd, userPrompt: '[cez-manager:watch]\nmock:auth-error' };
+      const firstEvents: AgentEvent[] = [];
+      await runner.run(spec, (event) => firstEvents.push(event));
+      expect(firstEvents).toContainEqual({
+        type: 'error',
+        message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      });
+
+      const replay = await runner.run(spec);
+      expect(replay.text).toBe('MANAGER:QUIET');
+      expect(readdirSync(join(home, '.cezar', 'mock-auth-once'))).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(cwd, { force: true, recursive: true });
+    }
   });
 });
 

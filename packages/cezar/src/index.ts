@@ -20,8 +20,8 @@ import { applyProviderEnablement } from './core/provider-availability.ts';
 import { ensureDataGitignore } from './data-gitignore.ts';
 import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
-import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
-import { reclaimWorktrees } from './runs/retention.ts';
+import { loadConfig } from './config.ts';
+import { enforceWorktreeRetention } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
@@ -44,7 +44,7 @@ import { SelfUpdateService } from './self-update/service.ts';
 import { runsFromCheckout } from './self-update/layout.ts';
 import { devVersion } from './self-update/semver.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
-import { runSelfUpdateCommand } from './self-update/cli.ts';
+import { runSelfUpdateCommand, runVersionsPruneCommand } from './self-update/cli.ts';
 import { writeLaunchers } from './self-update/launcher.ts';
 import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
@@ -61,6 +61,7 @@ import { pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { runWorktreesCommand } from './worktrees-cli.ts';
 import { runImpactCommand } from './impact/impact-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
@@ -91,6 +92,10 @@ Usage:
   cezar manager <status|tasks|merge|…>  the tools a manager's agent calls on a running cockpit (needs CEZ_MANAGER_ID)
   cezar handoff <log|resume>  update a running task's handoff file (CEZ_HANDOFF_FILE)
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar worktrees <list|reclaim|prune|remove>  task worktrees on disk: sizes, reclaim idle ones
+                            (reclaim [--older-than 7d] [--all-inactive] [--dry-run] · remove <runId> ·
+                            prune [--archived-older-than 90d] [--dry-run]);
+                            uses the running cockpit when one serves the project, else the repo directly
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
@@ -108,6 +113,8 @@ Usage:
   cezar update              update the managed install to the channel's newest version
                             (--channel stable|nightly, --version <x> to pin or downgrade)
   cezar versions            list installed versions and cezar worktrees (\`cezar use <id>\` switches)
+  cezar versions prune      remove old versions, keeping the running one + 2 previous
+                            (--keep <n>, --dry-run, --backups for ~/.cezar/versions.backup-*)
   cezar link [<dir>]        run a cezar checkout/worktree (default: cwd) as a version — a
                             link, not a copy, so rebuilds are live (--use to switch to it now);
                             the desktop app runs it after a restart or from Cezar ▸ Versions
@@ -178,6 +185,11 @@ async function main(): Promise<void> {
     process.exitCode = await runHandoffCommand(process.argv.slice(3));
     return;
   }
+  // `cez versions prune` has its own flags (--keep, --dry-run, --backups); no server, no repo.
+  if (process.argv[2] === 'versions' && process.argv[3] === 'prune') {
+    process.exitCode = await runVersionsPruneCommand(process.argv.slice(4), { entry: resolve(process.argv[1] ?? fileURLToPath(import.meta.url)) });
+    return;
+  }
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
   if (process.argv[2] === 'telemetry') {
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
@@ -186,6 +198,18 @@ async function main(): Promise<void> {
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   if (process.argv[2] === 'runs') {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez worktrees …` (spec 2026-11-19-worktree-disk-usage): the cockpit's API when one serves the
+  // project, else the project's store directly — for SSH-only installs.
+  if (process.argv[2] === 'worktrees') {
+    process.exitCode = await runWorktreesCommand(process.argv.slice(3), {
+      fetch,
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+      cwd: process.cwd(),
+      env: process.env,
+    });
     return;
   }
   // `cez impact …` (spec 2026-10-22-html-artifacts-and-impact): local, no server, own flags.
@@ -448,6 +472,14 @@ async function serveCommand(
   const checks = await detectEnvironment();
   const repo = await getRepoInfo(repoRoot);
 
+  // Task files whose task is gone (spec 2026-11-19-worktree-disk-usage); never blocks boot.
+  setImmediate(() => {
+    try {
+      const swept = store.sweepOrphanTaskFiles();
+      const count = swept.artifacts.length + swept.dispatch.length;
+      if (count > 0) console.log(`  removed ${count} leftover task file set(s) of deleted tasks`);
+    } catch { /* best effort */ }
+  });
   // Startup reconcile (spec 006): sweep worktrees whose run no longer exists.
   if (repo) {
     const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
@@ -459,8 +491,9 @@ async function serveCommand(
     // Count-based worktree retention (#483): reclaim finished worktrees beyond
     // the keep-limit (directory only — `cez/<id8>` branch kept, so recoverable).
     // Best-effort; never blocks boot.
-    const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
-    const reclaimed = await reclaimWorktrees(repoRoot, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
+    const reclaimed = await enforceWorktreeRetention(repoRoot, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
+    // Archived-task deletion may ask `gh` per task: queued off the boot path, with the rest of a pass.
+    manager.scheduleRetention();
     if (reclaimed.length > 0) {
       console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
     }
@@ -515,6 +548,7 @@ async function serveCommand(
       });
     },
   });
+  selfUpdate.startVersionPruning((line) => console.log(`  ${line}`));
   void selfUpdate.updateAvailable().then((latest) => {
     if (!latest) return;
     update.latest = latest;
@@ -736,7 +770,7 @@ async function runCommand(
   // 2.5) — one refreshed semaphore, even with just one manager in play.
   const semaphore = new WorkspaceSemaphore();
   await semaphore.refresh();
-  const manager = new RunManager(store, repoRoot, { semaphore });
+  const manager = new RunManager(store, repoRoot, { semaphore, parkOnAuth: false });
   let shuttingDown = false;
   const shutdown = (exitCode: number) => {
     if (shuttingDown) return;

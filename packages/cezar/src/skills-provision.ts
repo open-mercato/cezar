@@ -1,7 +1,7 @@
-import { copyFile, cp, lstat, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, readFile, realpath, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Skill } from './skills.ts';
-import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
+import { excludeFromGit, materializeSkillDir, skillPathIsUntracked, TASK_SKILL_IGNORE_MARK } from './skills-remote.ts';
 import { reportError } from './telemetry.ts';
 import { readHarnessFsEntry } from './fs-read.ts';
 import { skillDestination, writeSkillFile } from './skill-destination.ts';
@@ -89,9 +89,6 @@ function skillMarkdown(skill: Skill): string {
   return `---\n${front.join('\n')}\n---\n\n${skill.body.trim()}\n`;
 }
 
-/** First line of the `.gitignore` cezar owns inside a worktree's skills dir. */
-const IGNORE_MARK = '# cezar: skills installed for this task, not part of the repository';
-
 /**
  * Keep `<skillsDir>/<name>` out of git in THIS worktree only. The shared `info/exclude` would also
  * hide that path in the user's main checkout, so a self-ignoring `.gitignore` in the skills dir is
@@ -99,6 +96,8 @@ const IGNORE_MARK = '# cezar: skills installed for this task, not part of the re
  */
 export async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
   const relativePath = join(skillsDir, '.gitignore');
+  const candidate = join(cwd, relativePath);
+  if ((await lstat(candidate).catch(() => undefined))?.isSymbolicLink()) return excludeFromGit(cwd, `${skillsDir}/${name}`);
   const file = skillDestination(cwd, relativePath);
   let prev: string | undefined;
   try {
@@ -108,8 +107,8 @@ export async function ignoreProvisioned(cwd: string, skillsDir: string, name: st
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  if (prev !== undefined && !prev.startsWith(IGNORE_MARK)) return excludeFromGit(cwd, `${skillsDir}/${name}`);
-  const lines = prev?.split('\n').filter(Boolean) ?? [IGNORE_MARK, '/.gitignore'];
+  if (prev !== undefined && !prev.startsWith(TASK_SKILL_IGNORE_MARK)) return excludeFromGit(cwd, `${skillsDir}/${name}`);
+  const lines = prev?.split('\n').filter(Boolean) ?? [TASK_SKILL_IGNORE_MARK, '/.gitignore'];
   if (lines.includes(`/${name}`)) return;
   writeSkillFile(cwd, relativePath, [...lines, `/${name}`].join('\n') + '\n');
 }
@@ -119,6 +118,19 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill, allowD
   // The name is frontmatter verbatim; it becomes a path segment, so it must be exactly one.
   if (!isSafeSkillName(skill.name)) return false;
   const dest = join(cwd, skillsDir, skill.name);
+  if (skill.extension && (await lstat(dest).catch(() => undefined))?.isSymbolicLink()) {
+    const [extension, linked, ignore] = await Promise.all([
+      realpath(skill.extension.path).catch(() => undefined),
+      realpath(join(dest, 'SKILL.md')).catch(() => undefined),
+      readFile(join(cwd, skillsDir, '.gitignore'), 'utf8').catch(() => ''),
+    ]);
+    // Older cezar versions linked the extension as the skill. Replace links we own without
+    // touching their targets, which still hold the project's extension instructions.
+    if (extension && linked === extension && ignore.startsWith(TASK_SKILL_IGNORE_MARK) && ignore.split('\n').includes(`/${skill.name}`)
+      && await skillPathIsUntracked(cwd, `${skillsDir}/${skill.name}`)) {
+      await unlink(dest);
+    }
+  }
   // Team copies are rewritten so a Continue picks up a fetched update; everything else stays put.
   if (skill.source === 'team' && skill.team?.dir) {
     return materializeSkillDir(cwd, skill, skillsDir, {

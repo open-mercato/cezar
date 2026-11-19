@@ -136,7 +136,9 @@ describe('Continue on a Codex or OpenCode session that is gone (#1193)', { timeo
     runner.failure = failure;
     const runId = seed(backend);
     expect(manager.continueRun(runId, { text: 'try it' })).toEqual({ ok: true });
-    await expect.poll(() => store.getRun(runId)?.status, { timeout: 15_000 }).toBe('failed');
+    // An auth rejection parks on its login instead of failing (spec 2026-11-18-inline-account-reconnect).
+    await expect.poll(() => store.getRun(runId)?.status, { timeout: 15_000 }).toBe(failure === 'auth' ? 'waiting' : 'failed');
+    if (failure === 'auth') expect(store.getRun(runId)?.parked).toMatchObject({ kind: 'auth', provider: backend });
     expect(runner.specs).toHaveLength(1);
     expect(events(runId)).not.toContain(MISSING_SESSION_NOTE);
   });

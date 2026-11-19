@@ -45,6 +45,7 @@ export const WORKSPACE_EXCLUDED: Record<string, string> = {
   browseRoot: 'machine path',
   projectsDir: 'machine path',
   updateChannel: 'per-install update policy',
+  versionRetention: 'per-install cleanup of installed cezar versions',
   cezarId: 'install identity',
   telemetry: 'consent is per machine and never granted by a file',
   lastActiveOn: 'telemetry bookkeeping',

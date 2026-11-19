@@ -44,6 +44,12 @@ export const skillSchema = z.object({
       commit: z.string().optional(),
     })
     .optional(),
+  /** A repo-local extension (`.ai/skills/<name>/SKILL.md`) layered on this shared skill: the
+   *  entry IS the shared skill, the extension is applied on top of it. */
+  extension: z.object({ path: z.string() }).optional(),
+  /** This entry is a repo extension whose shared skill cezar could not load: running it alone
+   *  would only half-run the skill, so the cockpit offers "Install skills". */
+  missingShared: z.literal(true).optional(),
 });
 export type Skill = z.infer<typeof skillSchema>;
 

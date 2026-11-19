@@ -645,6 +645,7 @@ describe('the status word (Proposal 7): open states only', () => {
     ['review', run('review'), 'Needs review'],
     ['waiting', run('waiting'), 'Asked'],
     ['a closed, unanswered question', run('failed', { awaitingAnswerSince: '2026-07-14T13:00:00.000Z' }), 'Asked'],
+    ['parked on an expired login', run('waiting', { parked: { kind: 'auth', provider: 'claude', profileId: 'work', at: '2026-07-14T13:00:00.000Z' } }), 'Needs sign-in'],
     ['budget stop', run('waiting', { costUsd: 12, dispatch: { rootRunId: 'p', parentRunId: 'p', budgetUsd: 10, overBudget: true } }), 'Budget reached'],
     ['running, one step', run('running'), 'Running'],
     ['running, several steps', run('running', { steps: [step({ id: 'a', name: 'Plan', status: 'done' }), step({ id: 'b', name: 'Verify', status: 'running' })] }), 'Running · Verify'],

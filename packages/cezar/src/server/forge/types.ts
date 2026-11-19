@@ -260,6 +260,8 @@ export interface DraftPrInput {
   draft?: boolean;
   /** Immutable commit authorized by the staged harness review. */
   reviewedSha?: string;
+  /** Push the task branch to its existing PR without trying to create a second PR. */
+  updateExisting?: boolean;
 }
 
 /** Purpose-specific creation feed; independent of open lists and relevance search. */

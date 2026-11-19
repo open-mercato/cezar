@@ -51,6 +51,8 @@ export interface ThreadNote {
   detailsLabel?: string
   /** Only a boundary arriving after completion follows this turn's finish. */
   afterTurnEnd?: boolean
+  action?: 'install-skills'
+  skillNames?: string[]
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -86,6 +88,11 @@ export interface ThreadProviderAuthRequired {
   authFailureId: string
   /** The named agent account the rejection came from; absent for the default login. */
   profileId?: string
+  /** Absent = the live reconnect card. `older`: a later rejection on the same account draws it;
+   *  `reconnected`: the account came back and the run resumed (spec 2026-11-18-inline-account-reconnect). */
+  state?: 'older' | 'reconnected'
+  /** When the run resumed after the reconnect. */
+  reconnectedAt?: string
 }
 
 /** Offered after an agent error saying its CLI is too old ("1.18.0 or newer is required"). */
@@ -146,6 +153,9 @@ export interface ThreadState {
   /** Wall clock of the newest stamped event — any kind, deltas included. The live Working…
    *  indicator reads it as "last activity", so a quiet session is told apart from a busy one. */
   lastEventAt?: string
+  /** The newest `session.started.model` — the actual model of a run recorded before
+   *  `RunRecord.actualModel` existed. */
+  sessionModel?: string
 }
 
 export interface ThreadReduceOptions {
@@ -498,6 +508,10 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  persisted event is stamped with its workflow step. Old recordings without a step id keep
    *  the historical bare-id lookup semantics. */
   const itemsById = new Map<string, { turn: DraftTurn; entry: DraftEntry }>()
+  // One live reconnect card per account: later rejections and reconnects restyle earlier ones.
+  const authEntries: ThreadProviderAuthRequired[] = []
+  const sameAccount = (entry: ThreadProviderAuthRequired, provider: string, profileId: string | undefined) =>
+    entry.provider === provider && (entry.profileId ?? 'default') === (profileId ?? 'default')
   let sessionEnded: ThreadState['sessionEnded']
   let turnSeq = 0
   /** The latest unresolved AskUser card (#473). The next `user-message` resolves
@@ -511,6 +525,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   // Graph gates and native asks are never tracked nor closed server-side, whatever closed before them.
   const serverClosed = new Set(events.flatMap((event) => event.type === 'ask.closed' && typeof event.requestId === 'string' ? [event.requestId] : []))
   let lastEventAt: string | undefined
+  let sessionModel: string | undefined
 
   const newTurn = (sourceSeq?: number, stepId?: string): DraftTurn => {
     turnSeq += 1
@@ -845,6 +860,9 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
         const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
+        const installSkills = event.type === 'note' && event.action === 'install-skills'
+        const names = installSkills && Array.isArray(event.skillNames)
+          ? event.skillNames.filter((name): name is string => typeof name === 'string') : undefined
         turnFor(event).entries.push({
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
@@ -853,6 +871,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
             ...(options.stepNames !== undefined && event.type === 'lifecycle' &&
               (FAILURE_PREFIX.test(text) || text.startsWith('run failed — ')) && text.length > 400
               ? { detailsLabel: 'Recorded failure details' } : {}),
+            ...(installSkills ? { action: 'install-skills', ...(names?.length ? { skillNames: names } : {}) } : {}),
           },
         })
         break
@@ -884,6 +903,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'session.started': {
         sessionBackend = providerId(event.backend) ?? sessionBackend
+        sessionModel = str(event.model)?.trim() || sessionModel
         const key = sessionOf(event)
         const turn = key !== undefined ? sessionTurns.get(key) : turns.at(-1)
         if (turn) errorTwins.delete(turn)
@@ -932,16 +952,31 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const authFailureId = str(event.authFailureId)
         if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
         const profileId = str(event.profileId)
-        turnFor(event).entries.push({
-          origin: 'meta',
-          entry: {
-            kind: 'provider-auth-required',
-            id: `v1:${event.seq}`,
-            provider,
-            authFailureId,
-            ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
-          },
-        })
+        const entry: ThreadProviderAuthRequired = {
+          kind: 'provider-auth-required',
+          id: `v1:${event.seq}`,
+          provider,
+          authFailureId,
+          ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
+        }
+        for (const earlier of authEntries) {
+          if (earlier.state === undefined && sameAccount(earlier, provider, entry.profileId)) earlier.state = 'older'
+        }
+        authEntries.push(entry)
+        turnFor(event).entries.push({ origin: 'meta', entry })
+        break
+      }
+      case 'account-reconnected': {
+        // The run was resumed after its account signed in again: its cards become quiet lines.
+        const provider = providerId(event.provider)
+        if (provider === undefined) break
+        const profileId = str(event.profileId)
+        const at = stamp(event.ts)
+        for (const earlier of authEntries) {
+          if (earlier.state === 'reconnected' || !sameAccount(earlier, provider, profileId)) continue
+          earlier.state = 'reconnected'
+          if (at !== undefined) earlier.reconnectedAt = at
+        }
         break
       }
       case 'image': {
@@ -1108,6 +1143,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
     ...(lastEventAt !== undefined ? { lastEventAt } : {}),
+    ...(sessionModel !== undefined ? { sessionModel } : {}),
   }
 }
 

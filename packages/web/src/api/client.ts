@@ -19,6 +19,7 @@ import type {
   WorkspaceLayoutsResponse,
 } from '@open-mercato/cezar-api-client'
 import type { TaskActionSurface, TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
+import type { LoginSession, LoginSessionInput, LoginSessionStartInput } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
   AgentConfigFileContent,
@@ -1531,6 +1532,27 @@ export async function connectProvider(
       json: { provider, ...(profileId ? { profileId } : {}), ...(reconnect ? { reconnect } : {}) },
     }),
     '/providers/connect',
+  )
+}
+
+/** Start an inline sign-in (spec 2026-11-18-inline-account-reconnect). A 4xx carries `command`
+ *  for the terminal fallback (hosted cockpit without `CEZ_REMOTE_AGENT_ACCOUNTS=1`). */
+export async function startLoginSession(input: LoginSessionStartInput): Promise<LoginSession> {
+  return unwrap(await cez.api.v1.providers.login.$post({ json: input }), '/providers/login')
+}
+
+/** A pasted code or API key, straight to the CLI. The caller must not keep `input` anywhere. */
+export async function sendLoginSessionInput(sessionId: string, input: LoginSessionInput): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].input.$post({ param: { sessionId }, json: input }),
+    '/providers/login/:sessionId/input',
+  )
+}
+
+export async function cancelLoginSession(sessionId: string): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].$delete({ param: { sessionId } }),
+    '/providers/login/:sessionId',
   )
 }
 

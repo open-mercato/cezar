@@ -15,6 +15,7 @@ import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled
 import { CEZAR_REPO, fetchOpenPulls, OpenPullsCache, type OpenPulls } from './pulls.ts';
 import { distTagFor, RegistryCache, type PackageDocument } from './registry.ts';
 import { classifyVersion, isNewer } from './semver.ts';
+import { autoPruneVersions, startVersionPruning } from './versions-prune.ts';
 
 const LOG_CAP = 200;
 /** How often a scheduled "update when idle" re-checks the workspace. */
@@ -75,6 +76,11 @@ export class SelfUpdateService {
   /** The raw running version — what update checks compare, never the shown `-dev` one. */
   get runningVersion(): string {
     return this.deps.version;
+  }
+
+  /** The running entry file — what decides which installed version is "running". */
+  get entry(): string {
+    return this.deps.entry;
   }
 
   /** The configured channel: workspace config wins, then `CEZ_UPDATE_CHANNEL`, then stable. */
@@ -284,6 +290,9 @@ export class SelfUpdateService {
         if (installed && !linked) log(`${id} is already installed`);
         activate(id, this.env);
         log(`activated ${id}`);
+        // Keep this (still running) version and the new one; a restart that cuts the delete
+        // short leaves `.trash-*` for the next prune.
+        void autoPruneVersions({ entry: this.deps.entry, env: this.env, onLog: log });
         job.status = 'restarting';
         job.finishedAt = new Date().toISOString();
         log('restarting…');
@@ -353,6 +362,12 @@ export class SelfUpdateService {
     }
     log(`linking ${checkout.packageRoot} (${checkout.branch})`);
     return linkCheckout(checkout.packageRoot, checkout.branch, this.env, checkout.id).id;
+  }
+
+  /** At boot: lease the running version and prune old installs in the background. */
+  startVersionPruning(onLog?: (line: string) => void): void {
+    if (this.deps.readOnly) return;
+    startVersionPruning({ entry: this.deps.entry, env: this.env, onLog });
   }
 
   /** `cezar install` from a checkout or the npx cache: pack the running package into the managed

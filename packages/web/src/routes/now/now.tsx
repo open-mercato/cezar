@@ -10,10 +10,12 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { FirstRun, SetupPill, WelcomeBack } from '@/components/first-run'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
+import { SignInRow } from '@/components/reconnect/reconnect-row'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { StatusDot } from '@/components/status-dot'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
@@ -35,6 +37,7 @@ import {
   NEEDS_YOU_ACTION_LABEL,
   finishedTodayRows,
   needsYouRows,
+  signInGroups,
   runningRows,
   todayLabel,
   type NeedsYouRow,
@@ -91,6 +94,7 @@ export function NowView({
   const at = now ?? clock
   const all = runs ?? NO_RUNS
   const needsYou = React.useMemo(() => needsYouRows(all), [all])
+  const signIn = React.useMemo(() => signInGroups(all), [all])
   const running = React.useMemo(() => runningRows(all), [all])
   const finished = React.useMemo(() => finishedTodayRows(all, at), [all, at])
   const positions = React.useMemo(() => queuePositions(all), [all])
@@ -158,6 +162,21 @@ export function NowView({
                   {setupPill}
                 </div>
               ) : null}
+              {signIn.length > 0 ? (
+                <Section slot="sign-in" title="Sign-in needed" count={signIn.length} empty="">
+                  <ul data-slot="sign-in-list" className="overflow-hidden rounded-xl border border-border bg-card">
+                    {signIn.map((group, index) => (
+                      <SignInRow
+                        key={`${group.provider}:${group.profileId}`}
+                        provider={group.provider}
+                        profileId={group.profileId}
+                        first={index === 0}
+                        blocks={group.runs.map((run) => `“${runTitle(run)}”`)}
+                      />
+                    ))}
+                  </ul>
+                </Section>
+              ) : null}
               <Section slot="needs-you" title="Needs you" count={needsYou.length} empty="Nothing needs you right now.">
                 {needsYou.map((row) => (
                   <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} />
@@ -175,10 +194,12 @@ export function NowView({
                 empty="Nothing finished today."
                 actions={
                   finished.length > 0 ? (
-                    <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
-                      <ArchiveIcon className="size-3.5" aria-hidden="true" />
-                      Archive all finished
-                    </Button>
+                    <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+                      <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
+                        <ArchiveIcon className="size-3.5" aria-hidden="true" />
+                        Archive all finished
+                      </Button>
+                    </IconTooltip>
                   ) : null
                 }
               >

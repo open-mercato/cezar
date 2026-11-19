@@ -1,13 +1,13 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { constants, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, posix, relative, sep } from 'node:path';
 import { loadConfig, projectGatedSkillsRepos, type SkillsRepoSource } from './config.ts';
 import { parseFrontmatter, type Skill } from './skills.ts';
 import { workspaceConfigPath } from './paths.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
-import { linkedTeamSkillDestination, skillDestination, writeSkillFile } from './skill-destination.ts';
+import { linkedTeamSkillDestination, skillDestination } from './skill-destination.ts';
 
 /**
  * Team skills from remote git repos (spec 005), janitor-style: a bare clone
@@ -365,6 +365,42 @@ export async function listRemoteSkills(
 
 // ---- materialization (directory skills) ---------------------------------------
 
+export const TASK_SKILL_IGNORE_MARK = '# cezar: skills installed for this task, not part of the repository';
+const MATERIALIZATION_MARK = '.cezar-skill';
+
+async function regularFileText(path: string): Promise<string> {
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+  const file = await open(path, flags).catch(() => undefined);
+  if (!file) return '';
+  try {
+    return (await file.stat()).isFile() ? await file.readFile('utf8') : '';
+  } catch {
+    return '';
+  } finally {
+    await file.close();
+  }
+}
+
+export async function skillPathIsUntracked(repoRoot: string, path: string): Promise<boolean> {
+  const tracked = await git(['ls-files', '-z', '--', path], LIST_TIMEOUT_MS, repoRoot);
+  return tracked.ok ? tracked.stdout === '' : /not a git repository/i.test(tracked.stderr);
+}
+
+/** Walk from the worktree root without following existing links. */
+async function ensureSkillDirectory(root: string, segments: readonly string[]): Promise<string | undefined> {
+  let dir = root;
+  for (const segment of segments) {
+    dir = join(dir, segment);
+    try {
+      await mkdir(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    if (!(await lstat(dir)).isDirectory()) return undefined;
+  }
+  return dir;
+}
+
 /**
  * Copy a directory skill (SKILL.md + references/…) out of the bare clone into
  * `<repoRoot>/.claude/skills/<name>/` so claude sees the references on disk,
@@ -380,50 +416,86 @@ export async function materializeSkillDir(
     ignore?: (canonicalSkillsDir: string, installedName: string) => Promise<void>;
   } = {},
 ): Promise<boolean> {
-  if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md')) return false;
+  if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md') || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(skill.name)) return false;
+  const segments = skillsDir.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment.includes('\\'))) return false;
   const bareDir = bareDirFor(skill.team.repo);
   if (!existsSync(join(bareDir, 'HEAD'))) return false;
-  const ref = await resolveRef(bareDir, skill.team.ref);
+  const ref = await resolveRef(bareDir, skill.team.commit ?? skill.team.ref);
   if (ref === null) return false;
   const srcDir = skill.team.path.slice(0, -'/SKILL.md'.length);
   const ls = await git(['ls-tree', '-r', '--name-only', ref, '--', srcDir], LIST_TIMEOUT_MS, bareDir);
   if (!ls.ok) return false;
-  const destination = (allowDirectoryLinks ? linkedTeamSkillDestination : skillDestination)(
-    repoRoot, join(skillsDir, skill.name),
-  );
+  if (!(await skillPathIsUntracked(repoRoot, `${skillsDir}/${skill.name}`))) return false;
 
-  let wrote = 0;
+  const destDir = (allowDirectoryLinks ? linkedTeamSkillDestination : skillDestination)(repoRoot, join(skillsDir, skill.name));
+  const installed = relative(realpathSync(repoRoot), destDir).split(sep).join('/');
+  if (!(await skillPathIsUntracked(repoRoot, installed))) return false;
+  const parent = await ensureSkillDirectory(realpathSync(repoRoot), installed.split('/').slice(0, -1));
+  if (!parent) return false;
+  const marker = join(destDir, MATERIALIZATION_MARK);
+  const existing = await lstat(destDir).catch(() => undefined);
+  if (existing) {
+    if (!existing.isDirectory()) return false;
+    const ignoreText = await regularFileText(join(parent, '.gitignore'));
+    const legacy = ignoreText.startsWith(TASK_SKILL_IGNORE_MARK) && ignoreText.split('\n').includes(`/${skill.name}`);
+    const managed = (await regularFileText(marker)) === `${skill.name}\n`;
+    // Released in-place copies were owned through `info/exclude` only (#2319 review).
+    const excluded = !legacy && !managed
+      && (await regularFileText(await gitExcludePath(repoRoot))).split('\n').includes(`${skillsDir}/${skill.name}/`);
+    if (!legacy && !managed && !excluded) return false;
+    if (!managed) await writeFile(marker, `${skill.name}\n`, { flag: 'wx' }).catch(() => undefined);
+  } else {
+    await mkdir(destDir);
+    await writeFile(marker, `${skill.name}\n`, { flag: 'wx' });
+  }
+  if (ignore) await ignore(posix.dirname(installed), posix.basename(installed));
+  else await excludeFromGit(repoRoot, `${installed}/`);
+
+  const targets: Array<{ file: string; rel: string; target: string }> = [];
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
     if (!file.startsWith(`${srcDir}/`)) continue;
     const rel = file.slice(srcDir.length + 1);
-    // git paths are repo-relative and normalized, but never trust them blindly.
-    if (!rel || rel.split(/[\\/]/).includes('..')) continue;
-    const show = await git(['show', `${ref}:${file}`], LIST_TIMEOUT_MS, bareDir);
-    if (!show.ok) continue;
-    writeSkillFile(repoRoot, join(destination, rel), show.stdout);
-    wrote++;
+    const targetSegments = rel.split('/');
+    if (rel === MATERIALIZATION_MARK || targetSegments.some((segment) => !segment || segment === '.' || segment === '..' || segment.includes('\\'))) continue;
+    const targetName = targetSegments.pop()!;
+    const targetDir = await ensureSkillDirectory(destDir, targetSegments);
+    if (!targetDir) return false;
+    const target = join(targetDir, targetName);
+    const entry = await lstat(target).catch(() => undefined);
+    if (entry && !entry.isFile()) return false;
+    targets.push({ file, rel, target });
   }
-  if (wrote === 0) return false;
-  // Git sees the real directory, even when the agent opens it through a link.
-  const installed = relative(realpathSync(repoRoot), destination).split(sep).join('/');
-  if (ignore) await ignore(posix.dirname(installed), posix.basename(installed));
-  else await excludeFromGit(repoRoot, installed.includes('/') ? `${installed}/` : `/${installed}/`);
-  return true;
+  const staging = await mkdtemp(join(destDir, '.cezar-copy-'));
+  try {
+    const staged = join(staging, 'file');
+    let entryWritten = false;
+    for (const { file, rel, target } of targets) {
+      const show = await git(['show', `${ref}:${file}`], LIST_TIMEOUT_MS, bareDir);
+      if (!show.ok) return false;
+      // Replace the directory entry so an existing hard link cannot mutate an external file.
+      await writeFile(staged, show.stdout, { encoding: 'utf8', flag: 'wx' });
+      await rename(staged, target);
+      entryWritten ||= rel === 'SKILL.md';
+    }
+    return entryWritten;
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+/** The real exclude file: in a linked worktree (spec 006) `.git` is a file and `info/exclude`
+ *  lives in the shared common dir — which also means one exclude entry covers every task worktree. */
+async function gitExcludePath(repoRoot: string): Promise<string> {
+  const probe = await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], LIST_TIMEOUT_MS, repoRoot);
+  const gitDir = probe.ok && probe.stdout.trim() ? probe.stdout.trim() : join(repoRoot, '.git');
+  return join(gitDir, 'info', 'exclude');
 }
 
 /** Append a pattern to git's `info/exclude` (idempotent, non-fatal). */
 export async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> {
   try {
-    // Resolve the real exclude file: in a linked worktree (spec 006) `.git`
-    // is a file and `info/exclude` lives in the shared common dir — which
-    // also means one exclude entry covers every task worktree.
-    const probe = await git(
-      ['rev-parse', '--path-format=absolute', '--git-common-dir'],
-      LIST_TIMEOUT_MS,
-      repoRoot,
-    );
-    const gitDir = probe.ok && probe.stdout.trim() ? probe.stdout.trim() : join(repoRoot, '.git');
-    const excludePath = join(gitDir, 'info', 'exclude');
+    const excludePath = await gitExcludePath(repoRoot);
     let prev = '';
     try {
       prev = await readFile(excludePath, 'utf8');

@@ -69,6 +69,9 @@ beforeAll(() => {
     bundle: true,
     platform: 'node',
     format: 'cjs',
+    // The reconnect UI imports query persistence, whose build ID uses import.meta.url.
+    // Supply the URL that CJS cannot preserve when bundling this browser projection.
+    define: { 'import.meta.url': JSON.stringify(import.meta.url) },
     write: false,
     logLevel: 'silent',
   });

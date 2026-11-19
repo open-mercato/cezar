@@ -1,5 +1,6 @@
 import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
+import { applyAccountReconnectedEvent, applyAgentLoginEvent } from './agent-login'
 import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerApprovalLists, refreshManagerChats } from './managers'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
@@ -977,6 +978,23 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           return
         }
         applyProviderStatusEvent(row)
+      })
+
+      // Inline account reconnect (spec 2026-11-18-inline-account-reconnect): host-wide, like
+      // provider-status, so neither event passes the project filter.
+      current.addEventListener('agent-login', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        applyAgentLoginEvent(queryClient, payload)
+      })
+      current.addEventListener('account-reconnected', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        applyAccountReconnectedEvent(queryClient, payload)
       })
 
       current.addEventListener('error', () => {

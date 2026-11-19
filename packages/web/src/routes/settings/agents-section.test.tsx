@@ -130,7 +130,7 @@ function serve({
     multiModel: false,
     maxParallel: 2,
     memoryLimitMb: null,
-    worktreeRetention: 10,
+    worktreeRetention: 10, worktreeIdleDays: 7, worktreeIdleDaysOwn: false, archivedTaskDeleteDays: 90, archivedTaskDeleteDaysOwn: false,
     liveTitleUpdates: null,
     reviewGate: null,
     profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,

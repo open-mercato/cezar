@@ -38,6 +38,7 @@ describe('per-task auto-resume cancellation', () => {
           store.updateRun(id, { autoResumeAt: undefined, autoResumeAttempts: undefined });
           return true;
         },
+        reclaimWorktreesOf: async () => [],
       } as unknown as RunManager,
       version: '0.0.0-test',
     });

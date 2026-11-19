@@ -359,6 +359,7 @@ export function Composer({
     label: string
     description?: string
     emphasized: boolean
+    missingShared?: true
   }
 
   const candidates = useMemo((): MenuCandidate[] => {
@@ -382,6 +383,7 @@ export function Composer({
         label: skill.name,
         description: skill.description,
         emphasized: isProjectSkill(skill),
+        missingShared: skill.missingShared,
       }))
     }
     const paths = getMentionCandidates?.() ?? []
@@ -1090,7 +1092,8 @@ export function Composer({
                 >
                   <span
                     className={cn(
-                      'shrink-0 truncate',
+                      'truncate',
+                      !candidate.missingShared && 'shrink-0',
                       candidate.emphasized && 'font-semibold',
                       trigger?.trigger === '@' && 'font-mono text-xs',
                     )}
@@ -1101,6 +1104,9 @@ export function Composer({
                     <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
                       {candidate.description}
                     </span>
+                  ) : null}
+                  {candidate.missingShared ? (
+                    <span className="shrink-0 text-xs text-warning">Shared skill missing</span>
                   ) : null}
                 </CommandItem>
               ))

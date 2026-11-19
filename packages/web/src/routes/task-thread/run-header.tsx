@@ -13,6 +13,7 @@ import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo
 import { Link, useNavigate } from '@/lib/project-router'
 
 import {
+  useConfig,
   useHealth,
   usePatchRun,
   useProjectRepoBase,
@@ -361,6 +362,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
       return 'Needs review'
     case 'waiting':
       if (harnessReviewPending(run)) return 'Review needed'
+      if (run.parked?.kind === 'auth') return 'Needs sign-in'
       return budgetStop(run) ? 'Budget reached' : 'Asked'
     case 'queued':
       return run.fallbackEpisode?.pending ? 'Switching agent' : `Queued${queuePosition !== undefined ? ` #${queuePosition}` : ''}`
@@ -438,6 +440,7 @@ function HeaderActions({
   const canTerminal = useCanOpenTerminal(run)
   const { choices, canResumeHere, open: openIn } = useRunOpenChoices(run, canTerminal)
   const terminalAvailable = useHealth().data?.capabilities?.terminal === true
+  const archivedDeleteDays = useConfig().data?.archivedTaskDeleteDays
   const navigate = useNavigate()
   const { bindings } = useKeybindings()
   const owned = ownedTaskPr(run)
@@ -460,6 +463,7 @@ function HeaderActions({
       terminalAvailable,
       openChoices: choices,
       ...(prUrl ? { prUrl } : {}),
+      ...(archivedDeleteDays !== undefined ? { archivedDeleteDays } : {}),
       taskUrl: '',
     },
     {

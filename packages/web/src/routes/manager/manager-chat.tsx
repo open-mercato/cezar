@@ -37,6 +37,7 @@ import {
   needsYouCount,
   needsYouLabel,
   parseManagerCommand,
+  liveAuthFailures,
   retryOf,
   streamingReply,
   turnKindLabel,
@@ -54,6 +55,7 @@ import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
+import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
 import { useManagerMyMessages } from './use-manager-my-messages'
 import type { ManagerPatch } from './manager-pickers'
@@ -596,6 +598,19 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
 
   // What a card can ask of the chat: the gear, opened on the account picker.
   const chatActions = useMemo<ManagerChatActions>(() => ({ switchAccount: () => settings.current?.openAccount() }), [])
+  const authLive = useMemo(() => liveAuthFailures(chat.messages), [chat.messages])
+  // "Use <other> instead" on a reconnect card: the manager's own account, then the failed turn again.
+  const latestMessages = useRef(chat.messages)
+  latestMessages.current = chat.messages
+  const reconnectSurface = useMemo<ReconnectSurface>(() => ({
+    kind: 'manager',
+    ownId: id,
+    switchTo: async (agentProfile: string) => {
+      await update.mutateAsync({ agentProfile })
+      const failed = retryOf(latestMessages.current)
+      if (failed) await sendManagerMessage(id, failed.text, [])
+    },
+  }), [id, update])
 
   const lastSent = useRef(0)
   const stop = useCallback(() => {
@@ -760,6 +775,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </p>
           ) : null}
           <ManagerChatActionsContext.Provider value={chatActions}>
+            <ReconnectSurfaceContext.Provider value={reconnectSurface}>
             <PrTitlesContext.Provider value={prTitles}>
               {chat.messages.map((message, index) => (onCard.has(message.id) ? null : (
                 <ManagerMessageRow
@@ -769,11 +785,13 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   onDecide={onDecide}
                   projects={connected}
                   superseded={superseded.has(message.id)}
+                  authLive={authLive.has(message.id)}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
                 />
               )))}
             </PrTitlesContext.Provider>
+            </ReconnectSurfaceContext.Provider>
           </ManagerChatActionsContext.Provider>
         </div>
       </section>

@@ -113,6 +113,25 @@ describe('provisionSkills', () => {
     expect(names).toEqual(['om-x']);
   });
 
+  it('replaces the provisioned links from an older task that installed a repo extension as its shared skill', async () => {
+    const extension = join(root, 'main/.ai/skills/om-x');
+    const shared = join(root, 'main/.agents/skills/om-x');
+    mkdirSync(extension, { recursive: true });
+    mkdirSync(shared, { recursive: true });
+    const extensionPath = join(extension, 'SKILL.md');
+    const sharedPath = join(shared, 'SKILL.md');
+    writeFileSync(extensionPath, 'Local extension');
+    writeFileSync(sharedPath, 'Shared workflow');
+    await provisionSkills(cwd, [skill('om-x', 'Local extension', { source: 'ai', path: extensionPath })], []);
+
+    const merged = skill('om-x', 'Shared workflow', { source: 'agents', path: sharedPath, extension: { path: extensionPath } });
+    expect(await provisionSkills(cwd, [merged], [])).toEqual(['om-x']);
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      expect(readFileSync(join(cwd, dir, 'om-x/SKILL.md'), 'utf8')).toBe('Shared workflow');
+    }
+    expect(readFileSync(extensionPath, 'utf8')).toBe('Local extension');
+  });
+
   it('reports a failed install as skill_provision_failed, grouped by errno, and carries on', async () => {
     // `.claude` is a FILE, so nothing can be created under it: ENOTDIR.
     writeFileSync(join(cwd, '.claude'), 'not a dir');

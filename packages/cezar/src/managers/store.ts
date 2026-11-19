@@ -96,6 +96,15 @@ const stateSchema = z
       })
       .optional()
       .catch(undefined),
+    /** The chat a rejected login cut off (spec 2026-11-18-inline-account-reconnect): a reconnect
+     *  of that account replays it once. Cleared by the next chat turn either way. */
+    authRetry: z
+      .object({
+        messageId: z.string(),
+        chat: z.object({ text: z.string(), paths: z.array(z.string()), messageIds: z.array(z.string()) }),
+      })
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 
