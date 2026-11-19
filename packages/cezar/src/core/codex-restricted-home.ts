@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { constants, openSync, closeSync, fstatSync, ftruncateSync, fchmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse, stringify } from 'smol-toml';
@@ -119,8 +119,13 @@ export function prepareRestrictedCodexHome(
     } },
   };
   const configPath = join(path, 'config.toml');
-  if (existsSync(configPath) && !lstatSync(configPath).isFile()) throw new Error('codex: invalid isolated config file');
-  writeFileSync(configPath, stringify(config as Parameters<typeof stringify>[0]), { mode: 0o600 });
+  const configFd = openSync(configPath, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  try {
+    if (!fstatSync(configFd).isFile()) throw new Error('codex: invalid isolated config file');
+    fchmodSync(configFd, 0o600);
+    ftruncateSync(configFd, 0);
+    writeFileSync(configFd, stringify(config as Parameters<typeof stringify>[0]));
+  } finally { closeSync(configFd); }
   credentialLink(join(nativeHome, 'auth.json'), join(path, 'auth.json'));
   // Build this environment from scratch: a host opt-in to full inheritance cannot widen it.
   const env: NodeJS.ProcessEnv = {};

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { symlinkSync, unlinkSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -39,6 +39,13 @@ describe.skipIf(process.platform === 'win32')('restricted Codex homes', () => {
     const other = join(f.root, 'other'); mkdirSync(other);
     expect(prepareRestrictedCodexHome({ cwd: other }, f.env).path).not.toBe(home.path);
     expect(realpathSync(f.native)).not.toBe(home.path);
+  });
+  it('refuses a replaced isolated config symlink without overwriting its target', () => {
+    const f = setup(); const home = prepareRestrictedCodexHome({ cwd: f.cwd }, f.env);
+    const victim = join(f.root, 'victim'); writeFileSync(victim, 'keep');
+    unlinkSync(join(home.path, 'config.toml')); symlinkSync(victim, join(home.path, 'config.toml'));
+    expect(() => prepareRestrictedCodexHome({ cwd: f.cwd }, f.env)).toThrow();
+    expect(readFileSync(victim, 'utf8')).toBe('keep');
   });
   it('copies only the selected model-provider transport settings', () => {
     const result = restrictedCodexModelConfig('model_provider="custom"\n[model_providers.custom]\nname="Custom"\nbase_url="http://127.0.0.1:1234"\nenv_key="MODEL_TOKEN"\n[model_providers.other]\ncommand="evil"');
