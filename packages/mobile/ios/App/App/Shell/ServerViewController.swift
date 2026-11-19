@@ -423,7 +423,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private func askAboutPush() {
         ShellServices.push.markAsked()
         let controller = UIAlertController(title: "Get notified?",
-                                           message: "Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off on the Devices list.",
+                                           message: "Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off in Your cezars.",
                                            preferredStyle: .alert)
         controller.addAction(UIAlertAction(title: "Not now", style: .cancel))
         controller.addAction(UIAlertAction(title: "Turn on", style: .default) { [weak self] _ in
