@@ -545,7 +545,8 @@ export function CommandPalette() {
   const [open, setOpen] = React.useState(false)
   const navigate = useNavigate()
 
-  useCommandShortcut('k', () => setOpen((current) => !current))
+  // inEditable: no text field binds ⌘K, and from the composer the browser's search would win (#2321).
+  useCommandShortcut('k', () => setOpen((current) => !current), { inEditable: true })
   const newTask = React.useCallback(() => {
     setOpen(false)
     navigate('/new')
