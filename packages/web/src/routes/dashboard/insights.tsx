@@ -15,6 +15,7 @@ import { compactTokens, shortAge } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useAutomationsGate } from '@/routes/automations/use-automations'
 import { useDashboardAutomations } from './automations-data'
+import { useAutomationNames } from './automation-names'
 import { ExportRows } from './export-rows'
 import { Coverage } from './rows'
 import { formatAmount, formatHours } from './format'
@@ -360,9 +361,10 @@ type AutomationRow = {
   automationId: string
   name: string
   enabled?: boolean
+  revision?: number
   /** `removed` only when the project's definitions were READ and it is not among them; a
-   *  failed or pending read is `unknown` — never report a deletion we did not observe. */
-  definition: 'known' | 'removed' | 'unknown'
+   *  failed or pending read stays explicit — never report a deletion we did not observe. */
+  definition: 'known' | 'removed' | 'loading' | 'unavailable'
   stat?: DashboardAutomationStat
 }
 
@@ -382,9 +384,11 @@ export function AutomationOutcomes() {
         projectId: project.id,
         automationId: a.id,
         name: a.name,
+        ...(a.revision !== undefined ? { revision: a.revision } : {}),
         enabled: a.enabled,
         definition: 'known',
       })
+  const lastName = useAutomationNames([...rows.values()])
   const read = new Set(
     (definitions.data ?? []).flatMap((project) => (project.data && !project.error ? [project.id] : [])),
   )
@@ -395,14 +399,27 @@ export function AutomationOutcomes() {
   for (const stat of data?.automations ?? []) {
     const key = `${stat.projectId}\u0000${stat.automationId}`
     const known = rows.get(key)
+    const failed =
+      definitions.isError || definitions.registry.isError ||
+      (definitions.data ?? []).some((project) => project.id === stat.projectId && project.error)
+    const definition = failed
+      ? 'unavailable'
+      : read.has(stat.projectId)
+        ? 'removed'
+        : definitions.isPending || definitions.registry.isPending || !definitions.data
+          ? 'loading'
+          : 'unavailable'
+    const fallback = definition === 'loading'
+      ? 'Loading automation…'
+      : definition === 'removed' ? 'Removed automation' : 'Automation unavailable'
     rows.set(
       key,
       known
         ? { ...known, stat }
         : {
             ...stat,
-            name: stat.automationId,
-            definition: read.has(stat.projectId) ? 'removed' : 'unknown',
+            name: lastName(stat.projectId, stat.automationId, stat.nameRevision) ?? stat.name ?? fallback,
+            definition,
             stat,
           },
     )
@@ -435,7 +452,7 @@ export function AutomationOutcomes() {
                 <Coverage coverage={data.coverage} retry={() => void query.refetch()} />
                 {detailsFailed && (
                   <p role="alert" className="text-sm">
-                    Some automation details could not be loaded. Their outcomes are shown by id.{' '}
+                    Some automation details could not be loaded. Their outcomes remain available below.{' '}
                     <Button variant="ghost" onClick={definitions.retry}>
                       Retry automations
                     </Button>
@@ -513,7 +530,7 @@ function AutomationOutcome({
   return (
     <tr className="border-t transition-colors hover:bg-muted/30">
       <td className="px-3 py-2.5">
-        {row.definition === 'removed' ? (
+        {row.definition !== 'known' ? (
           <span className="block font-medium">{row.name}</span>
         ) : (
           <Link
@@ -523,17 +540,24 @@ function AutomationOutcome({
             {row.name}
           </Link>
         )}
+        {row.definition !== 'known' && (
+          <span className={`block ${note}`} title={row.automationId}>
+            ID: {row.automationId.slice(0, 8)}
+          </span>
+        )}
         {/* Violet, not green: an enabled automation is cezar standing ready, not an outcome. */}
         <span className={`flex items-center gap-1.5 ${note}`}>
           <StatusDot tone={row.enabled ? 'violet' : 'neutral'} />
           {projectName(row.projectId)} ·{' '}
           {row.definition === 'removed'
             ? 'Removed'
-            : row.definition === 'unknown'
-              ? 'Details unavailable'
-              : row.enabled
-                ? 'Enabled'
-                : 'Disabled'}
+            : row.definition === 'loading'
+              ? 'Loading details…'
+              : row.definition === 'unavailable'
+                ? 'Details unavailable'
+                : row.enabled
+                  ? 'Enabled'
+                  : 'Disabled'}
         </span>
       </td>
       <td className={cell}>{zero(s?.tasks)}</td>

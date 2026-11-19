@@ -140,6 +140,7 @@ describe('dashboard insights', () => {
   it('attributes tasks to the automation that launched them, scheduled or event-driven', () => {
     const trigger = {
       automationId: 'nightly',
+      automationName: 'Nightly snapshot',
       automationRevision: 1,
       receiptId: 'x',
       trigger: 'schedule' as const,
@@ -158,6 +159,8 @@ describe('dashboard insights', () => {
       {
         projectId: 'p',
         automationId: 'nightly',
+        name: 'Nightly snapshot',
+        nameRevision: 1,
         tasks: 2,
         done: 1,
         failed: 0,
@@ -237,4 +240,17 @@ describe('dashboard insights', () => {
     ]);
     expect(result.automations[0]).toMatchObject({ tasks: 1, done: 0, failed: 0, active: 1 });
   });
+});
+
+it('recovers the most recent named snapshot even when the latest run is legacy, without crossing projects', () => {
+  const provenance = { automationId: 'same', automationRevision: 1, receiptId: 'x', event: 'issue', githubUrl: 'u' };
+  const records = [
+    projectInsightRow('p', run({ createdAt: '2026-09-28T10:00:00.000Z', automation: { ...provenance, automationName: 'Old name' } })),
+    projectInsightRow('p', run({ createdAt: '2026-09-29T10:00:00.000Z', automation: { ...provenance, automationName: 'New name' } })),
+    projectInsightRow('p', run({ createdAt: '2026-09-30T10:00:00.000Z', automation: provenance })),
+    projectInsightRow('other', run({ automation: provenance })),
+  ];
+  const result = buildDashboardInsights(records, coverage, { period: '7d', tzOffsetMinutes: 0 }, visible, NOW);
+  expect(result.automations.find((a) => a.projectId === 'p')).toMatchObject({ name: 'New name', tasks: 3 });
+  expect(result.automations.find((a) => a.projectId === 'other')).not.toHaveProperty('name');
 });
