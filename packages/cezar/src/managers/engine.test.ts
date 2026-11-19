@@ -4137,6 +4137,8 @@ describe('ManagerEngine', () => {
       await engine.update(id, { active: true });
       expect(store.get(id)?.inactive).toBeUndefined();
       expect(store.get(id)?.activeSince).toBe(new Date(now).toISOString());
+      // No check ran: the activeSince floor holds the next one back, so Watching must not claim a fresh check.
+      expect(store.state(id).lastCheckAt).toBeUndefined();
       expect(notices(id).at(-1)).toMatchObject({
         text: 'Reactivated by you. While inactive: 1 automation report; 20 checks and 5 job runs skipped.',
         activity: { change: 'reactivated', since, taskUpdates: 0, automationReports: 1, checksSkipped: 20, jobRunsSkipped: 5, catchUp: false },

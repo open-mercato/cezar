@@ -1816,6 +1816,17 @@ describe('an inactive manager\'s chat (spec 2026-11-19-manager-deactivate)', () 
     await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'wake up', reactivate: true, idempotencyKey: SEND_KEY }))
   })
 
+  it('/check asks first, then reactivates with Catch me up instead of a check the server would refuse', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    send('/check')
+    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and send\?/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and send' }))
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ active: true, catchUp: true }))
+    expect(posted('/global/check')).toHaveLength(0)
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
   it('draws the deactivate line as a divider and the reactivate line with its While inactive counts', async () => {
     server.managers = [managerFixture()]
     server.messages = [

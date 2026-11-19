@@ -209,7 +209,7 @@ function dialogBody(request: ActivityRequest, catchUp: boolean, setCatchUp: (nex
 }
 
 /** Ask with a confirm and wait for the answer: the choice, or null when cancelled. */
-export function useActivityConfirm(onCloseAutoFocus?: (event: Event) => void): { confirm: (request: ActivityRequest) => Promise<ActivityChoice | null>; dialog: ReactNode } {
+export function useActivityConfirm(onCloseAutoFocus?: (event: Event) => void): { confirmActivity: (request: ActivityRequest) => Promise<ActivityChoice | null>; dialog: ReactNode } {
   const [request, setRequest] = useState<ActivityRequest | null>(null)
   const resolver = useRef<((choice: ActivityChoice | null) => void) | undefined>(undefined)
   const settle = useCallback((choice: ActivityChoice | null) => {
@@ -217,43 +217,43 @@ export function useActivityConfirm(onCloseAutoFocus?: (event: Event) => void): {
     resolver.current = undefined
     setRequest(null)
   }, [])
-  const confirm = useCallback((next: ActivityRequest) => new Promise<ActivityChoice | null>((resolve) => {
+  const confirmActivity = useCallback((next: ActivityRequest) => new Promise<ActivityChoice | null>((resolve) => {
     resolver.current?.(null)
     resolver.current = resolve
     setRequest(next)
   }), [])
   const dialog = <ManagerActivityDialog request={request} onConfirm={(choice) => settle(choice)} onCancel={() => settle(null)} onCloseAutoFocus={onCloseAutoFocus} />
-  return { confirm, dialog }
+  return { confirmActivity, dialog }
 }
 
 /** The toggle every surface shares: confirm, PATCH, then say what happened. */
 export function useManagerActivityActions(onCloseAutoFocus?: (event: Event) => void) {
-  const { confirm, dialog } = useActivityConfirm(onCloseAutoFocus)
+  const { confirmActivity, dialog } = useActivityConfirm(onCloseAutoFocus)
   const one = useSetManagerActive()
   const many = useSetManagersActive()
   const deactivate = useCallback(async (manager: ManagerSummary) => {
-    if (!(await confirm({ kind: 'deactivate', manager }))) return
+    if (!(await confirmActivity({ kind: 'deactivate', manager }))) return
     await one.mutateAsync({ id: manager.id, active: false }).then(
       () => toast(`${manager.name} is inactive — nothing runs until you reactivate it.`),
       (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
     )
-  }, [confirm, one])
+  }, [confirmActivity, one])
   const reactivate = useCallback(async (manager: ManagerSummary) => {
-    const choice = await confirm({ kind: 'reactivate', manager })
+    const choice = await confirmActivity({ kind: 'reactivate', manager })
     if (!choice) return
     await one.mutateAsync({ id: manager.id, active: true, ...(choice.catchUp ? { catchUp: true } : {}) }).then(
       () => toast(choice.catchUp ? `${manager.name} is active again and is catching up.` : `${manager.name} is active again.`),
       (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
     )
-  }, [confirm, one])
+  }, [confirmActivity, one])
   const deactivateAll = useCallback(async (managers: readonly ManagerSummary[]) => {
     const active = managers.filter((manager) => !isInactive(manager))
-    if (active.length === 0 || !(await confirm({ kind: 'bulk', managers: active }))) return
+    if (active.length === 0 || !(await confirmActivity({ kind: 'bulk', managers: active }))) return
     await many.mutateAsync({ active: false }).then(
       () => toast('All managers are inactive. Nothing runs until you reactivate them.'),
       (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
     )
-  }, [confirm, many])
+  }, [confirmActivity, many])
   // Reactivating is quiet and costs nothing, so the bulk form needs no confirm (design § 02).
   const reactivateAll = useCallback(async (managers: readonly ManagerSummary[]) => {
     const inactive = managers.filter(isInactive)
@@ -264,7 +264,7 @@ export function useManagerActivityActions(onCloseAutoFocus?: (event: Event) => v
     )
   }, [many])
   const toggle = useCallback((manager: ManagerSummary) => (isInactive(manager) ? reactivate(manager) : deactivate(manager)), [deactivate, reactivate])
-  return useMemo(() => ({ deactivate, reactivate, toggle, deactivateAll, reactivateAll, confirm, dialog }), [deactivate, reactivate, toggle, deactivateAll, reactivateAll, confirm, dialog])
+  return useMemo(() => ({ deactivate, reactivate, toggle, deactivateAll, reactivateAll, confirmActivity, dialog }), [deactivate, reactivate, toggle, deactivateAll, reactivateAll, confirmActivity, dialog])
 }
 
 /** The menu row's words and icon for a manager's current state. */

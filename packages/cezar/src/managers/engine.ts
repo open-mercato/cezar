@@ -988,7 +988,6 @@ export class ManagerEngine {
     } else {
       const since = current.inactive!.since;
       store.update(id, ({ inactive: _inactive, ...manager }) => ({ ...manager, activeSince: at, updatedAt: at }));
-      store.updateState(id, (state) => ({ ...state, lastCheckAt: at }));
       const after = msOf(since);
       const missed = store.messages(id).filter((message) => message.kind === 'assistant' && msOf(message.at) >= after);
       const taskUpdates = missed.filter((message) => message.kind === 'assistant' && message.taskReport).length;

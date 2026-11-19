@@ -58,7 +58,7 @@ export function ManagerAvatar({ avatar, mascot, className, sizes = '44px', inact
   if (!inactive) return <AvatarFace avatar={avatar} mascot={mascot} className={className} sizes={sizes} />
   return (
     <span data-slot="manager-avatar-inactive" title="Inactive" className={cn('relative inline-flex size-11 shrink-0', className)}>
-      <AvatarFace avatar={avatar} mascot={mascot} sizes={sizes} className={cn(className, 'size-full grayscale opacity-50 dark:opacity-55')} />
+      <AvatarFace avatar={avatar} mascot={mascot} sizes={sizes} className={cn(className, 'size-full grayscale opacity-50')} />
       <span
         aria-hidden="true"
         data-slot="manager-avatar-pause"

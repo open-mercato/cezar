@@ -365,9 +365,9 @@ function QuestionCard({ item, now, managerById, onDismiss, onAnswered }: {
   // An inactive manager's answer is a chat turn: confirm waking it first (spec 2026-11-19-manager-deactivate).
   const owner = item.source.kind === 'manager' ? managerById(item.source.managerId) : undefined
   const inactive = owner?.inactive !== undefined
-  const { confirm, dialog } = useActivityConfirm()
+  const { confirmActivity, dialog } = useActivityConfirm()
   const send = async (text: string) => {
-    if (owner && inactive && !(await confirm({ kind: 'answer', manager: owner, answer: text }))) {
+    if (owner && inactive && !(await confirmActivity({ kind: 'answer', manager: owner, answer: text }))) {
       return `Not sent: ${owner.name} is still inactive. Dismiss closes the question without waking it.`
     }
     setPending(true)

@@ -1,7 +1,7 @@
 # Deactivate a manager without deleting it (2026-11-19)
 
 Extends `2026-10-31-managers.md`. Design page: `2026-11-19-manager-deactivate.html` (interactive mockups).
-Status: **design, awaiting approval** — nothing below is implemented yet.
+Status: **implemented** (PR #2339).
 
 ## Problem
 

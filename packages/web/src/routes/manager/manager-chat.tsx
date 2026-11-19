@@ -6,6 +6,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-route
 import {
   applyManagerChange,
   checkManager,
+  setManagerActive,
   decideManagerAction,
   getOldestPendingAction,
   managerChat,
@@ -618,7 +619,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   }, [wantsJump, needsYou.ready]) // once per arrival: the hash is cleared right after
 
   // What a card can ask of the chat: the gear, opened on the account picker.
-  const confirmActivity = activity.confirm
+  const confirmActivity = activity.confirmActivity
   const chatActions = useMemo<ManagerChatActions>(() => ({
     switchAccount: () => settings.current?.openAccount(),
     ...(inactive ? { confirmReactivate: async (answer: string) => (await confirmActivity({ kind: 'answer', manager, answer })) !== null } : {}),
@@ -648,14 +649,15 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     const command = attachments.length > 0 ? null : parseManagerCommand(text)
     // A message to an inactive manager wakes it, so it asks first; a cancel hands the draft back.
     const reactivate = inactive && command?.name !== 'stop'
-    if (reactivate && !(await activity.confirm({ kind: 'send', manager }))) {
+    if (reactivate && !(await activity.confirmActivity({ kind: 'send', manager }))) {
       throw new Error(`Not sent: ${manager.name} is still inactive.`)
     }
     scroll.jump()
     lastSent.current = Date.now()
     if (command?.name === 'stop') return stopManager(id)
     if (command?.name === 'check') {
-      await checkManager(id)
+      // Reactivating with Catch me up is exactly one forced check; a plain check would 409 while inactive.
+      await (reactivate ? setManagerActive(id, true, { catchUp: true }) : checkManager(id))
       toast('Check started')
       return undefined
     }
