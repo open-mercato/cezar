@@ -256,6 +256,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     await expectParity('/todos/t1/start', json('POST', {}));
     // 200 non-GET without observable side effects (no worktrees exist).
     await expectParity('/worktrees/reclaim', json('POST', {}));
+    await expectParity('/worktrees/prune', json('POST', {}));
     // Assess Impact (spec 2026-10-22): 400 on a bad body, 409 on a subject it refuses.
     await expectParity('/impact', json('POST', { subject: { kind: 'pr', number: -1 } }));
     await expectParity('/impact', json('POST', { subject: { kind: 'spec', path: 'README.md' } }));

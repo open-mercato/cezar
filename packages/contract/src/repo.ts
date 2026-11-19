@@ -294,3 +294,10 @@ export const reclaimWorktreesResponseSchema = z.object({
   dryRun: z.boolean().optional(),
 });
 export type ReclaimWorktreesResponse = z.infer<typeof reclaimWorktreesResponseSchema>;
+
+/** `POST /api/v1/worktrees/prune` (`cez worktrees prune`): `git worktree prune`, then the run ids
+ *  whose orphan directory under `.ai/cezar/worktrees/` (no task record) was removed. No body. */
+export const pruneWorktreesResponseSchema = z.object({
+  removed: z.array(z.string()),
+});
+export type PruneWorktreesResponse = z.infer<typeof pruneWorktreesResponseSchema>;
