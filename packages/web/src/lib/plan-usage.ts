@@ -22,3 +22,22 @@ export function consumerWindows(entries: PlanUsageConsumerWindow[] | undefined, 
 export function clockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
+
+// --- Task share helpers (task page chip + Tasks list column) ---
+
+/** Runners whose subscription logins report plan limits; every other tool is "not reported". */
+export const PLAN_LIMIT_RUNNERS: ReadonlySet<string> = new Set(['claude', 'codex'])
+
+/** A run's windows of one kind, newest first. Matched on the run id (a UUID) so the project's
+ *  `default` alias and its registry id find the same entries. */
+export function taskWindows(entries: PlanUsageConsumerWindow[] | undefined, runId: string, kind: PlanUsageWindowKind) {
+  return (entries ?? [])
+    .filter((e) => e.consumer.kind === 'task' && e.consumer.runId === runId && e.kind === kind)
+    .sort((a, b) => Date.parse(b.resetsAt) - Date.parse(a.resetsAt))
+}
+
+/** `/dashboard` details panel for one account and window (built by the Dashboard's Plan limits card). */
+export function planWindowHref(accountKey: string, windowId: string): string {
+  const query = new URLSearchParams({ view: 'costs', planAccount: accountKey, planWindow: windowId })
+  return `/dashboard?${query.toString()}`
+}
