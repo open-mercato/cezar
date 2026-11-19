@@ -36,7 +36,8 @@ Freeing a worktree (reclaiming it) removes only the directory. The task's branch
 | Path | What it holds | How it is freed |
 | --- | --- | --- |
 | `<repo>/.ai/cezar/worktrees/` | One checkout per task. Usually the largest part by far. | Count limit, age limit, archive, disk guard, `cez worktrees` |
-| `<repo>/.ai/cezar/artifacts/<runId>`, `attachments/<runId>`, `dispatch/<runId>` | A task's reports, pasted files and dispatch notes. | Deleted with the task |
+| `<repo>/.ai/cezar/artifacts/<runId>`, `dispatch/<runId>` | A task's reports and dispatch notes. | Deleted with the task |
+| `<repo>/.ai/cezar/attachments/` | A copy of every file you attached, under its own name. | Never deleted by Cezar |
 | `<repo>/.ai/cezar/runs.json`, `runs/*.ndjson` | The task index and event logs. Small. | Archived tasks are deleted after 90 days; old runs are pruned past the run-count cap |
 | `~/.cezar/versions/` | Installed Cezar versions. | Old versions are pruned after an update and on startup |
 
@@ -73,7 +74,7 @@ Archiving a task, or choosing **Archive finished**, also frees the task's worktr
 An archived task is deleted for good after a number of days. The default is **90 days**. Set `0` to never delete archived tasks.
 
 - The clock starts when the task was archived. For a task archived before Cezar recorded that time, it starts when the task finished, or else at its last activity.
-- Deleting a task removes its record, event log, handoff notes, images, drafts, artifacts, attachment copies, dispatch files, worktree and branch.
+- Deleting a task removes its record, event log, handoff notes, images, drafts, artifacts, dispatch files, worktree and branch.
 - The branch is kept, and only the task deleted, when the branch has an open pull request, when the task opened a pull request and `gh` cannot tell its state, or when it has commits that are neither merged into the default branch nor pushed to a remote.
 - It never touches an unarchived, running or pinned task. A task whose worktree has uncommitted changes, or whose worktree removal runs lifecycle scripts, is skipped and stays archived.
 
@@ -94,7 +95,7 @@ Set the thresholds in Settings → Behaviour. Set a threshold to `0` to turn tha
 
 ## Task files and old versions
 
-- Deleting a task also deletes its `artifacts`, `attachments` and `dispatch` folders. The same happens when old runs are pruned past the run-count cap. A sweep at startup removes folders whose task no longer exists. A file that a live task or an unsent draft still uses is never deleted.
+- Deleting a task also deletes its `artifacts` and `dispatch` folders. The same happens when old runs are pruned past the run-count cap. A sweep at startup removes folders whose task no longer exists. The `attachments` library holds your own files and is never deleted; remove files from it yourself.
 - After a successful update and on startup, Cezar keeps 3 versions in `~/.cezar/versions`, the running one included, and deletes the older ones. Set the top-level `versionRetention` in `~/.cezar/config.json` to keep a different number, or `0` to turn automatic pruning off. The active version (`cezar use`), a version a running Cezar uses and a linked checkout are never deleted, and nothing is deleted while an install is in progress.
 
 ## Command line: `cez worktrees`

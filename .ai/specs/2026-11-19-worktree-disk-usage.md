@@ -59,14 +59,14 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
      branch nor pushed.
    - It never touches an unarchived, live, running, queued or pinned task, nor a tree with
      uncommitted work.
-   - It runs at boot and with the hourly sweep, and logs a summary. The 500-archived cap stays as
+   - It runs with every retention pass (queued off the boot path) and the hourly sweep, and logs a summary. The 500-archived cap stays as
      the backstop.
    - CLI: `cez worktrees prune --archived-older-than 90d [--dry-run]`.
 6. **Task files go with the task.** `deleteRun` and the run-cap prune remove the task's
-   `artifacts/<id>` and its `dispatch/<root>` tree once no member remains. They also remove the
-   attachment-library copies no remaining task holds; ownership is decided by content, against
-   `runs/<id>-images`. A startup sweep removes the leftovers of tasks already gone. Library files
-   and directories younger than an hour are spared (`runs/task-files.ts`).
+   `artifacts/<id>` and its `dispatch/<root>` tree once no member remains. A startup sweep removes
+   the leftovers of tasks already gone; it skips an index that did not load or is empty, and
+   directories younger than an hour (`runs/task-files.ts`). The attachment library (#929) is never
+   swept: it holds the user's own files (BACKWARD_COMPATIBILITY.md §3).
 7. **Old cezar versions are pruned** (`self-update/versions-prune.ts`).
    - It keeps the running version plus the 2 most recently installed others. The setting is
      `versionRetention` in `~/.cezar/config.json`: default 3, and 0 turns the automatic prune off.

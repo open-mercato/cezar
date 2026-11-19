@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from './store.ts';
 import { attachmentLibraryPath, runImagesDir } from './task-files.ts';
 
-// Spec 2026-11-19-worktree-disk-usage: a task's artifacts, dispatch tree and attachment-library
+// Spec 2026-11-19-worktree-disk-usage: a task's artifacts and dispatch tree go with the task, and
+// the attachment library never does (BACKWARD_COMPATIBILITY.md §3: the user's own files).
 // copies go with the task, and a startup sweep removes leftovers of tasks already gone.
 describe('task files are cleaned up with the task', () => {
   let dataDir: string;
@@ -25,7 +26,7 @@ describe('task files are cleaned up with the task', () => {
   const library = (name: string) => join(attachmentLibraryPath(dataDir), name);
   const newRun = (store: RunStore, title: string) => store.createRun({ title, workflow: 'w', task: 't', steps: [] });
 
-  it('deleting a task removes its artifacts, its dispatch tree and the library copies only it held', () => {
+  it('deleting a task removes its artifacts and its dispatch tree, never a library file', () => {
     const store = RunStore.open(dataDir);
     const a = newRun(store, 'a');
     const b = newRun(store, 'b');
@@ -42,9 +43,9 @@ describe('task files are cleaned up with the task', () => {
 
     expect(existsSync(join(dataDir, 'artifacts', a.id))).toBe(false);
     expect(existsSync(join(dataDir, 'dispatch', a.id))).toBe(false);
-    expect(existsSync(library('mine.pdf'))).toBe(false);
-    expect(existsSync(library('shared.pdf'))).toBe(true); // b still holds it
-    expect(existsSync(library('unrelated.pdf'))).toBe(true); // not a's
+    expect(existsSync(library('mine.pdf'))).toBe(true);
+    expect(existsSync(library('shared.pdf'))).toBe(true);
+    expect(existsSync(library('unrelated.pdf'))).toBe(true);
   });
 
   it('keeps a dispatch tree while a member of it remains', () => {
@@ -96,11 +97,11 @@ describe('task files are cleaned up with the task', () => {
 
     expect(swept.artifacts).toEqual(['gone-run']);
     expect(swept.dispatch).toEqual(['gone-root']);
-    expect(swept.library).toEqual(['orphan.pdf']);
     expect(existsSync(join(dataDir, 'artifacts', live.id))).toBe(true);
     expect(existsSync(join(dataDir, 'artifacts', 'fresh-run'))).toBe(true);
     expect(existsSync(join(dataDir, 'dispatch', 'root-of-live'))).toBe(true);
     expect(existsSync(library('held.pdf'))).toBe(true);
+    expect(existsSync(library('orphan.pdf'))).toBe(true); // the user's file, whoever held it
   });
 
   it('the startup sweep removes nothing when the task index could not be loaded', () => {
@@ -112,17 +113,17 @@ describe('task files are cleaned up with the task', () => {
     file(library('held.pdf'), 'held');
     for (const dir of ['artifacts/some-run', 'dispatch/some-root']) aged(join(dataDir, dir));
 
-    expect(store.sweepOrphanTaskFiles()).toEqual({ artifacts: [], dispatch: [], library: [] });
+    expect(store.sweepOrphanTaskFiles()).toEqual({ artifacts: [], dispatch: [] });
     expect(existsSync(join(dataDir, 'artifacts', 'some-run'))).toBe(true);
     expect(existsSync(join(dataDir, 'dispatch', 'some-root'))).toBe(true);
     expect(existsSync(library('held.pdf'))).toBe(true);
   });
 
-  it('never deletes a library file filed moments ago', () => {
-    const store = RunStore.open(dataDir);
-    mkdirSync(attachmentLibraryPath(dataDir), { recursive: true });
-    writeFileSync(library('just-filed.pdf'), 'new');
-    expect(store.sweepOrphanTaskFiles().library).toEqual([]);
-    expect(existsSync(library('just-filed.pdf'))).toBe(true);
+  it('the startup sweep removes nothing behind an empty index', () => {
+    RunStore.open(dataDir);
+    file(join(dataDir, 'artifacts', 'some-run', 'a.html'), 'x');
+    aged(join(dataDir, 'artifacts', 'some-run'));
+    expect(RunStore.open(dataDir).sweepOrphanTaskFiles()).toEqual({ artifacts: [], dispatch: [] });
+    expect(existsSync(join(dataDir, 'artifacts', 'some-run'))).toBe(true);
   });
 });

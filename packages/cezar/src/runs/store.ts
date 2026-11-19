@@ -26,7 +26,7 @@ import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 import type { AgentUsageStatus } from '../core/agent-runner.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
-import { deleteLibraryCopies, sweepOrphanTaskFiles } from './task-files.ts';
+import { sweepOrphanTaskFiles } from './task-files.ts';
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
 import { failureKind, taskFailedLabel } from './failure-kind.ts';
@@ -2540,11 +2540,12 @@ export class RunStore extends EventEmitter {
     }
   }
 
-  /** Startup sweep: artifacts, dispatch trees and library copies whose task is gone (spec
+  /** Startup sweep: artifacts and dispatch trees whose task is gone (spec
    *  2026-11-19-worktree-disk-usage). Never throws. */
   sweepOrphanTaskFiles(): ReturnType<typeof sweepOrphanTaskFiles> {
-    // Behind an index that did not load, every task looks gone — the same guard as the layout prune.
-    if (this.indexReadHealth.state !== 'complete') return { artifacts: [], dispatch: [], library: [] };
+    // Behind an index that did not load (or is empty), every task looks gone — the same guard as
+    // the layout prune.
+    if (this.indexReadHealth.state !== 'complete' || this.runs.size === 0) return { artifacts: [], dispatch: [] };
     const known = new Set([...this.runs.keys(), ...this.salvaged.keys()]);
     const roots = new Set<string>();
     for (const run of this.runs.values()) if (run.dispatch?.rootRunId) roots.add(run.dispatch.rootRunId);
@@ -2554,8 +2555,6 @@ export class RunStore extends EventEmitter {
   /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
   private deleteRunFiles(id: string, root?: string): void {
     try {
-      // Library copies only this task held, read from its run folder before that folder goes.
-      deleteLibraryCopies(this.dataDir, [id], [...this.runs.keys(), ...this.salvaged.keys()]);
       // A dispatch tree outlives its root while a member remains (they share CEZ_TREE_DIR).
       const tree = root ?? id;
       if (![...this.runs.values()].some((run) => run.id === tree || run.dispatch?.rootRunId === tree)) {

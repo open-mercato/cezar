@@ -26,7 +26,7 @@ import {
   type WorktreesResponse,
 } from '@open-mercato/cezar-contract';
 import { resolveWorktreeIdleDays, resolveWorktreeRetention } from './config.ts';
-import { pruneOrphans, worktreeSizeBytes } from './git-worktree.ts';
+import { pruneOrphans, worktreeHasUnpreservedWork, worktreeSizeBytes } from './git-worktree.ts';
 import { deleteExpiredArchivedTasks } from './runs/archived-cleanup.ts';
 import {
   configuredReclaimCandidates,
@@ -362,8 +362,12 @@ function offlineBackend(root: string, io: WorktreesCliIo): Backend {
       const targets = selectManualReclaim(store.listRuns(), request, liveById, storeActivity(store), now());
       if (request.dryRun) {
         const candidates = targets ?? await configuredReclaimCandidates(root, store, liveById, now());
-        const inUse = await worktreesInUse(store.listRuns().filter((r) => candidates.includes(r.id)), io.holders);
-        return candidates.filter((id) => !inUse.has(id));
+        const runs = store.listRuns().filter((r) => candidates.includes(r.id));
+        const inUse = await worktreesInUse(runs, io.holders);
+        // As the server's preview: the real pass keeps a tree with uncommitted work (#2215).
+        const dirty = new Set<string>();
+        for (const run of runs) if (run.worktreePath && await worktreeHasUnpreservedWork(run.worktreePath)) dirty.add(run.id);
+        return candidates.filter((id) => !inUse.has(id) && !dirty.has(id));
       }
       const writeStore = await writable();
       const reclaimed = targets === null
