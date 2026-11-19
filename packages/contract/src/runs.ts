@@ -88,6 +88,15 @@ export type StepStatus = z.infer<typeof stepStatusSchema>;
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
+/** One model's share of a step's turns, as the agent reported it (`turn.completed.models`). */
+export const modelUsageSchema = z.object({
+  model: z.string(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  costUsd: z.number().optional(),
+});
+export type ModelUsage = z.infer<typeof modelUsageSchema>;
+
 /** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
@@ -124,6 +133,12 @@ export const stepStateSchema = z.object({
   modelIdentity: z.string().optional(),
   /** Raw model this turn was spawned with ('' = deliberately auto); absent on older records. */
   model: z.string().optional(),
+  /** The model the agent reported actually running (latest main one) — what "auto" or an alias
+   *  resolved to. Absent when the backend never reports it and on older records. */
+  actualModel: z.string().optional(),
+  /** Every model this step's turns used, first-seen order, with shares when the backend
+   *  reports them (claude's `modelUsage`). Absent when unreported. */
+  modelsUsed: z.array(modelUsageSchema).optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -203,6 +218,10 @@ export const runRecordSchema = z.object({
   reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
+  /** The latest main model any step reported actually running; absent until one does. */
+  actualModel: z.string().optional(),
+  /** Every model the run's steps reported, first-seen order (a model switch keeps the earlier). */
+  modelsUsed: z.array(z.string()).optional(),
   runner: runnerSchema.optional(),
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
@@ -602,6 +621,9 @@ export const runIndexEntrySchema = z.object({
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */
   costUsd: z.number().optional(),
+  /** The requested model and the one the agent reported running — the row's hover line. */
+  model: z.string().optional(),
+  actualModel: z.string().optional(),
   /** The persisted high-water marks a FINISHED run leaves behind. `usage` below stops existing
    *  the moment the process tree does, so without these a finished row could say nothing at all
    *  about what it took to run. */

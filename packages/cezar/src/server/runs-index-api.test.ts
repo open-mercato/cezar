@@ -85,8 +85,14 @@ describe('workspace runs index API', () => {
   it('merges the boot project’s live store with a cold project read off disk, newest first', async () => {
     const boot = await registerProject(repoRoot);
     const other = await registerProject(otherRoot);
-    const live = store.createRun({ title: 'Boot task', workflow: 'build', task: 't', steps: [] });
+    const live = store.createRun({
+      title: 'Boot task', workflow: 'build', task: 't', model: 'opus',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
     store.updateRun(live.id, { createdAt: '2026-07-10T10:00:00Z' });
+    store.appendEvent(live.id, {
+      type: 'session.started', stepId: 's1', sessionId: 'session-1', backend: 'claude', model: 'claude-opus-5',
+    });
     seedColdProject(otherRoot, [
       storedRun({ id: 'cold-1', title: 'Cold task', createdAt: '2026-07-15T10:00:00Z' }),
     ]);
@@ -95,6 +101,8 @@ describe('workspace runs index API', () => {
 
     expect(body.runs.map((run) => run.id)).toEqual(['cold-1', live.id]);
     expect(body.runs.map((run) => run.projectId)).toEqual([other.id, boot.id]);
+    expect(body.runs[1]).toMatchObject({ model: 'opus', actualModel: 'claude-opus-5' });
+    expect(body.runs[0]).not.toHaveProperty('actualModel');
     expect(body.truncated).toEqual([]);
   });
 

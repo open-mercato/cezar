@@ -280,6 +280,27 @@ describe('live cursor replay and compact context', () => {
     expect(context.contextEvents.map(({ seq }) => seq)).toEqual([2, 3, 4, 5]);
   });
 
+  it('keeps only the latest reported session model outside the visible transcript page', async () => {
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
+      { seq: 1, type: 'session.started', sessionId: 's1', backend: 'claude', model: 'claude-sonnet-5' },
+      { seq: 2, type: 'session.started', sessionId: 's2', backend: 'claude', model: 'claude-opus-5' },
+      { seq: 3, type: 'session.started', sessionId: 's3', backend: 'claude' },
+      { seq: 4, type: 'turn.started', turnId: 't1' },
+    ];
+    for (let seq = 5; seq <= 105; seq += 1) {
+      events.push({ seq, type: 'note', message: 'Progress' });
+    }
+    const file = fixture(events);
+    const page = await readRunHistoryPage(file);
+    expect(page.hasOlder).toBe(true);
+    expect(page.events.some(({ seq }) => seq === 2)).toBe(false);
+
+    const context = await deriveRunContextEvents(file);
+    expect(context.contextEvents.filter(({ type }) => type === 'session.started')).toEqual([
+      expect.objectContaining({ seq: 2, model: 'claude-opus-5' }),
+    ]);
+  });
+
   it('keeps an active root and its newest child after thousands of later context events', async () => {
     const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
       { seq: 1, type: 'turn.started', turnId: 't1' },
