@@ -25,7 +25,11 @@ export const CODEX_READ_TOOL = {
 };
 
 export type CodexReadResult = { success: boolean; contentItems: Array<{ type: 'inputText'; text: string }> };
-const result = (success: boolean, text: string): CodexReadResult => ({ success, contentItems: [{ type: 'inputText', text: text.slice(0, 64_000) }] });
+const RESULT_CAP = 64_000;
+const TRUNCATED = '\n[cezar: output truncated; narrow the pattern, path or range]';
+const result = (success: boolean, text: string): CodexReadResult => ({
+  success, contentItems: [{ type: 'inputText', text: text.length > RESULT_CAP ? text.slice(0, RESULT_CAP) + TRUNCATED : text }],
+});
 
 export class CodexReadBroker {
   private readonly allowedRoots: Promise<string[]>;
@@ -58,7 +62,9 @@ export class CodexReadBroker {
     return new Promise((done, fail) => {
       // stdin is closed; there is no shell, PTY or reusable interactive process.
       const child = execFile(bin!, args, { cwd, env: this.env, timeout: 15_000, maxBuffer: 256_000, encoding: 'utf8', signal: this.aborter.signal }, (err, stdout, stderr) => {
-        if (err && !(bin === 'rg' && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
+        // Over the buffer cap the child is killed; keep what arrived instead of failing a broad search.
+        if (err && 'code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') done(stdout + TRUNCATED);
+        else if (err && !(bin === 'rg' && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
         else done(stdout);
       });
       child.stdin?.end();

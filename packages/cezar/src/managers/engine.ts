@@ -2048,7 +2048,7 @@ export class ManagerEngine {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
     // Every manager turn requires a tool fence, including chats and unattended watches.
-    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError()), runner };
+    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError('a manager needs its cez-manager shell fence, which Codex cannot enforce; pick Claude Code or Pi for this manager')), runner };
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];

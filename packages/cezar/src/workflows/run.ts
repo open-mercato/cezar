@@ -8229,7 +8229,8 @@ export class RunManager {
         : undefined,
     );
     const step: WorkflowStepDef = {
-      ...(worker ? nodeToStep(worker) : { allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'] }),
+      // Codex enforces only the exact default or a read-only grant; a write subset would refuse (#2330).
+      ...(worker ? nodeToStep(worker) : { allowedTools: taskBackend === 'codex' ? [...DEFAULT_ALLOWED_TOOLS] : ['Read', 'Grep', 'Glob', 'Edit', 'Write'] }),
       id: gate.id, name: gate.name ?? gate.id, prompt,
     };
     const backend = step.runner ?? taskBackend;

@@ -5,10 +5,11 @@
  * prefix floor every fenced backend keeps when that hook cannot run, so it never names `gh api`.
  */
 import { existsSync } from 'node:fs';
-import { tokenizePlainShell as tokenizeManagerBash } from '../core/plain-shell.ts';
-export { tokenizePlainShell as tokenizeManagerBash } from '../core/plain-shell.ts';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tokenizePlainShell as tokenizeManagerBash } from '../core/plain-shell.ts';
+
+export { tokenizeManagerBash };
 
 export type BashVerdict = { ok: true } | { ok: false; reason: string };
 

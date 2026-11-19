@@ -47,6 +47,19 @@ describe.skipIf(process.platform === 'win32')('cezar executes restricted reads',
     expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command: 'gh pr diff 3' } })).success).toBe(false);
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['["pr","diff","3"]']);
   });
+  it('truncates an oversized read result instead of failing it', async () => {
+    const f = setup();
+    const bin = join(f.root, 'bin'); mkdirSync(bin);
+    writeFileSync(join(bin, 'gh'), `#!${process.execPath}\nprocess.stdout.write('x'.repeat(400_000));\n`);
+    chmodSync(join(bin, 'gh'), 0o755);
+    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'] })!, { cwd: f.cwd }, { ...f.home.toolEnv, PATH: `${bin}:${f.home.toolEnv.PATH}` });
+    brokers.push(broker);
+    execFileSync('git', ['init', '-q'], { cwd: f.cwd, timeout: 5_000 });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/o/r.git'], { cwd: f.cwd, timeout: 5_000 });
+    const res = await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command: 'gh pr diff 3' } });
+    expect(res.success).toBe(true);
+    expect(res.contentItems[0]?.text).toMatch(/^x{64000}\n\[cezar: output truncated/);
+  });
   it('honors the existing network-off setting for brokered GitHub reads', async () => {
     const f = setup();
     const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'] })!, { cwd: f.cwd }, f.home.toolEnv, false);

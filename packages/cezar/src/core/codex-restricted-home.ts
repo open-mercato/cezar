@@ -8,6 +8,9 @@ import type { AgentRunSpec } from './agent-runner.ts';
 import { CODEX_DISABLED_FEATURES } from './codex-restricted-policy.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 
+// System and package-manager bins only (Homebrew, Linuxbrew, Nix); never a user- or repo-writable dir.
+const SEALED_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin', '/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin', '/nix/var/nix/profiles/default/bin', '/run/current-system/sw/bin'].join(':');
+
 const PROVIDER_KEYS = new Set(['name', 'base_url', 'wire_api', 'env_key', 'requires_openai_auth', 'http_headers', 'env_http_headers', 'query_params', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'supports_websockets']);
 const AUTH_ENV = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'];
 const CONTROL_ENV = /^(PATH|HOME|SHELL|ENV|BASH_ENV|ZDOTDIR|USERPROFILE|APPDATA|SYSTEMROOT|CODEX_.*|NODE_.*|LD_.*|DYLD_.*|PYTHON.*|GIT_.*|GH_.*)$/i;
@@ -107,7 +110,7 @@ export function prepareRestrictedCodexHome(
     features: Object.fromEntries(CODEX_DISABLED_FEATURES.map(key => [key, false])),
     projects: { [cwd]: { trust_level: 'untrusted' } },
     shell_environment_policy: { inherit: 'none', set: {
-      HOME: shellHome, PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin',
+      HOME: shellHome, PATH: SEALED_PATH,
       GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_COUNT: '4',
       GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: 'false',
       GIT_CONFIG_KEY_1: 'core.pager', GIT_CONFIG_VALUE_1: 'cat',

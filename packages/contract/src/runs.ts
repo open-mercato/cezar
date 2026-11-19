@@ -94,7 +94,7 @@ export const stepToolPolicySchema = z.object({
   allowedTools: z.array(z.string()),
   bashAllowlist: z.array(z.string()).optional(),
   enforceReadOnly: z.boolean().optional(),
-}).strict();
+});
 export type StepToolPolicy = z.infer<typeof stepToolPolicySchema>;
 
 /** One model's share of a step's turns, as the agent reported it (`turn.completed.models`). */
