@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { scryptSync } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveCursorAgentBin } from '../core/cursor-agent-runner.ts';
@@ -160,6 +160,7 @@ async function readCodexIdentity(configDir: string): Promise<AccountIdentity> {
  * opaque ids only (Claude `oauthAccount` uuids, Codex `sub`/account id claims); undefined when
  * there is no such login. Never throws.
  */
+const fingerprints = new Map<string, string>();
 export async function accountLoginFingerprint(provider: 'claude' | 'codex', configDir: string): Promise<string | undefined> {
   try {
     let parts: unknown[] = [];
@@ -178,7 +179,16 @@ export async function accountLoginFingerprint(provider: 'claude' | 'codex', conf
     }
     const ids = parts.filter((p): p is string => typeof p === 'string' && p.length > 0 && p.length <= 200);
     if (ids.length === 0) return undefined;
-    return createHash('sha256').update(`${provider}\u0000${ids.join('\u0000')}`).digest('hex').slice(0, 16);
+    // A slow KDF, not a bare digest: the inputs are login ids, and the scanner treats them as
+    // credentials. Cached, so a session start pays it once per login per process.
+    const input = `${provider}\u0000${ids.join('\u0000')}`;
+    let fingerprint = fingerprints.get(input);
+    if (!fingerprint) {
+      fingerprint = scryptSync(input, 'cezar-plan-usage-login', 8).toString('hex');
+      if (fingerprints.size > 64) fingerprints.clear();
+      fingerprints.set(input, fingerprint);
+    }
+    return fingerprint;
   } catch {
     return undefined;
   }
