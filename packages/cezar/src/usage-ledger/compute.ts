@@ -142,7 +142,12 @@ function trackingGaps(markers: Array<Extract<LedgerRecord, { t: 'tracking' }>>, 
       open.to = m.at;
     } else if (m.state === 'start') {
       const before = (seen.get(m.account) ?? []).filter((at) => at < m.at);
-      const from = before.length ? Math.max(...before) : m.at;
+      // The very first record of an account has nothing before it to cut off.
+      if (before.length === 0) {
+        gaps.set(m.account, list);
+        continue;
+      }
+      const from = Math.max(...before);
       const last = list.at(-1);
       // Nothing recorded since the previous gap closed (the usual `on` then `start`): one gap.
       if (last && last.to !== null && from <= last.to) last.to = Math.max(last.to, m.at);
