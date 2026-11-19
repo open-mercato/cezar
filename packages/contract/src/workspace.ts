@@ -63,6 +63,10 @@ export const workspaceConfigResponseSchema = z.object({
     autoResumeOnUsageLimit: z.boolean(),
     memoryLimitMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
+    /** Age retention seed (days); 0 = off. */
+    worktreeIdleDaysDefault: z.number(),
+    /** Disk guard thresholds; each 0 = that trigger off. */
+    diskGuard: z.object({ minFreePercent: z.number(), minFreeGb: z.number(), maxWorktreesGb: z.number() }),
   }),
   /**
    * What a repo that has set none of its own runs (spec 2026-07-29-agent-profiles).
@@ -125,6 +129,14 @@ export const setWorkspaceConfigInputSchema = z.object({
       autoResumeOnUsageLimit: z.boolean().optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
+      worktreeIdleDaysDefault: z.number().int().min(0).max(365).optional(),
+      diskGuard: z
+        .object({
+          minFreePercent: z.number().min(0).max(50).optional(),
+          minFreeGb: z.number().min(0).max(10_000).optional(),
+          maxWorktreesGb: z.number().min(0).max(100_000).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });
@@ -443,6 +455,11 @@ export const configResponseSchema = z.object({
   /** Keep the last N finished worktrees on disk (#483); 0 = unlimited. Older ones are reclaimed
    *  (directory only — branch kept, so work is recoverable). */
   worktreeRetention: z.number(),
+  /** Reclaim a non-active task's worktree after N days without activity; 0 = off. The effective
+   *  value: the repo's own, else the workspace default. */
+  worktreeIdleDays: z.number(),
+  /** True when the repo sets its own `worktreeIdleDays` (false = inherits the workspace default). */
+  worktreeIdleDaysOwn: z.boolean(),
   /** Live title updates: null = no config key, the `CEZ_TITLE_UPDATES` env default (ON) decides. */
   liveTitleUpdates: z.boolean().nullable(),
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
@@ -506,6 +523,8 @@ export const setConfigInputSchema = z.object({
   memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
   /** Keep last N finished worktrees (#483); 0 = unlimited, null clears back to the default (10). */
   worktreeRetention: z.number().int().min(0).max(1000).nullable().optional(),
+  /** Age retention in days (0 = off); null clears back to the workspace default. */
+  worktreeIdleDays: z.number().int().min(0).max(365).nullable().optional(),
   /** null clears the key back to the env-default behavior. */
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */

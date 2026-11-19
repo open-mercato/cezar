@@ -2,10 +2,9 @@ import { ensureDataGitignore } from '../data-gitignore.ts';
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
-import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
 import { pruneOrphans } from '../git-worktree.ts';
 import { armRepoHandle } from '../runs/arm-repo-handle.ts';
-import { reclaimWorktrees } from '../runs/retention.ts';
+import { enforceWorktreeRetention } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -273,10 +272,7 @@ export class ProjectContexts {
         await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
           () => [] as string[],
         );
-        const keep = await resolveWorktreeRetention(project.root).catch(
-          () => DEFAULT_WORKTREE_RETENTION,
-        );
-        await reclaimWorktrees(project.root, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
+        await enforceWorktreeRetention(project.root, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
       }
       await manager.recover();
       // Which repository this project IS (#945), so the referenced tier stops adopting another

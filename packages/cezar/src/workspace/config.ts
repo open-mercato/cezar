@@ -84,6 +84,21 @@ export const DEFAULT_MONITORING_WAKE_MINUTES = 5;
 /** Plain user-wait sessions retain a bounded liveness safeguard by default (#992). */
 export const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
 
+/** Days without activity before a non-active task's worktree is reclaimed (age retention). */
+export const DEFAULT_WORKTREE_IDLE_DAYS = 7;
+
+/** The disk guard's shipped thresholds: act when free space drops below the SMALLER of
+ *  `minFreePercent` of the volume and `minFreeGb`, or when task worktrees exceed `maxWorktreesGb`. */
+export const DEFAULT_DISK_GUARD = { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 } as const;
+
+const diskGuardSchema = z
+  .object({
+    minFreePercent: z.number().min(0).max(50).default(DEFAULT_DISK_GUARD.minFreePercent).catch(DEFAULT_DISK_GUARD.minFreePercent),
+    minFreeGb: z.number().min(0).max(10_000).default(DEFAULT_DISK_GUARD.minFreeGb).catch(DEFAULT_DISK_GUARD.minFreeGb),
+    maxWorktreesGb: z.number().min(0).max(100_000).default(DEFAULT_DISK_GUARD.maxWorktreesGb).catch(DEFAULT_DISK_GUARD.maxWorktreesGb),
+  })
+  .passthrough();
+
 const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
@@ -127,6 +142,11 @@ const resourcesSchema = z
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
     /** Default worktree retention for projects that don't override it. */
     worktreeRetentionDefault: z.number().int().min(0).max(1000).default(10).catch(10),
+    /** Reclaim a non-active task's worktree after this many days without activity (branch kept,
+     *  Continue restores it); 0 = off. Seeds projects that set no `worktreeIdleDays`. */
+    worktreeIdleDaysDefault: z.number().int().min(0).max(365).default(DEFAULT_WORKTREE_IDLE_DAYS).catch(DEFAULT_WORKTREE_IDLE_DAYS),
+    /** Disk guard thresholds (runs/disk-guard.ts); each 0 = that trigger off. */
+    diskGuard: diskGuardSchema.prefault(() => ({})).catch(() => diskGuardSchema.parse({})),
   })
   .passthrough();
 

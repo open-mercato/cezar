@@ -247,8 +247,9 @@ const worktreeRunStatusSchema = z.enum([
 ]);
 
 /** One materialized task worktree in the management panel (#483). `sizeBytes` is null when `du`
- *  is unavailable (Windows / missing). `reclaimable` = finished, has a directory, not yet
- *  reclaimed and not in use (retention's rule). */
+ *  is unavailable (Windows / missing). `reclaimable` = not active, has a directory, not yet
+ *  reclaimed, not pinned and not in use — what archive, the disk guard and `cez worktrees reclaim`
+ *  may take. */
 export const worktreeInfoSchema = z.object({
   runId: z.string(),
   title: z.string(),
@@ -256,6 +257,8 @@ export const worktreeInfoSchema = z.object({
   branch: z.string().nullable(),
   sizeBytes: z.number().nullable(),
   finishedAt: z.string().nullable(),
+  /** Latest of the run's record stamps and its event log's mtime — age retention's clock. */
+  lastActivityAt: z.string(),
   reclaimable: z.boolean(),
   /** Present when a running cezar or node process uses this worktree: why it is protected from
    *  retention and explicit removal. Gone again once nothing runs from it. */
@@ -264,16 +267,30 @@ export const worktreeInfoSchema = z.object({
 export type WorktreeInfo = z.infer<typeof worktreeInfoSchema>;
 
 /** `GET /api/v1/worktrees` (#483): the worktrees on disk, their total size (null when any
- *  degraded), and the current keep-limit (0 = unlimited). */
+ *  degraded), the current keep-limit (0 = unlimited) and age limit in days (0 = off). */
 export const worktreesResponseSchema = z.object({
   worktrees: z.array(worktreeInfoSchema),
   totalBytes: z.number().nullable(),
   keep: z.number(),
+  idleDays: z.number(),
 });
 export type WorktreesResponse = z.infer<typeof worktreesResponseSchema>;
 
-/** `POST /api/v1/worktrees/reclaim` (#483): the run ids whose directory was reclaimed. */
+/** `POST /api/v1/worktrees/reclaim` body. Empty = the configured retention (count + age).
+ *  `olderThanDays` reclaims every reclaimable tree idle that long; `allInactive` every reclaimable
+ *  tree; `runIds` exactly those; `dryRun` reports what would go without touching anything. */
+export const reclaimWorktreesInputSchema = z.object({
+  olderThanDays: z.number().min(0).max(3650).optional(),
+  allInactive: z.boolean().optional(),
+  runIds: z.array(z.string().min(1)).max(1000).optional(),
+  dryRun: z.boolean().optional(),
+}).passthrough();
+export type ReclaimWorktreesInput = z.infer<typeof reclaimWorktreesInputSchema>;
+
+/** `POST /api/v1/worktrees/reclaim` (#483): the run ids whose directory was reclaimed (or, on a
+ *  dry run, would be). */
 export const reclaimWorktreesResponseSchema = z.object({
   reclaimed: z.array(z.string()),
+  dryRun: z.boolean().optional(),
 });
 export type ReclaimWorktreesResponse = z.infer<typeof reclaimWorktreesResponseSchema>;

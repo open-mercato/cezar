@@ -78,7 +78,7 @@ import { getTeamSkillsCached, materializeSkillDir, refreshTeamSkills, waitForTea
 import { mentionsSkill, PROVISION_SKILL_DIRS, provisionSkills, skillClosure } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
-import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
@@ -143,7 +143,7 @@ import {
   usd,
   withPendingReport,
 } from '../dispatch/engine.ts';
-import { isReclaimable, reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { enforceWorktreeRetention, isReclaimable, reclaimSelectedWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
   agentTmpEnv,
@@ -902,6 +902,12 @@ export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
  * in-memory checks), unref'd, and it only ever acts when idling has no justification left.
  */
 export const QUEUE_WATCHDOG_MS = 60_000;
+/** How often age retention re-checks idle worktrees. */
+const RETENTION_SWEEP_MS = 60 * 60_000;
+/** Archive stops the task's terminals first; give them a moment to release the tree. */
+export let ARCHIVE_RECLAIM_DELAY_MS = 1_000;
+/** Test seam. */
+export function setArchiveReclaimDelayForTests(ms: number): void { ARCHIVE_RECLAIM_DELAY_MS = ms; }
 /** Shared empty holds for the common "nothing is held" pump — avoids allocating per sweep. */
 const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
 
@@ -1605,6 +1611,8 @@ export class RunManager {
 
   /** The stalled-queue watchdog (see `rescueStalledQueue`). */
   private readonly queueWatchdog: ReturnType<typeof setInterval>;
+  /** Hourly retention sweep (age retention); cleared by dispose(). */
+  private readonly retentionTimer: ReturnType<typeof setInterval>;
 
   /** Set by the watchdog for exactly one sweep: ignore the usage-limit hold and make progress. */
   private forceNextPump = false;
@@ -1744,6 +1752,9 @@ export class RunManager {
     };
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
     this.queueWatchdog.unref?.();
+    // Age retention has no terminal transition to ride: an idle `review` run ages on its own.
+    this.retentionTimer = setInterval(() => this.scheduleRetention(), RETENTION_SWEEP_MS);
+    this.retentionTimer.unref?.();
     // Preserve holds written by older versions before a source task can be deleted.
     for (const run of this.store.listRuns()) {
       for (const hold of run.usageLimitHolds ?? []) this.usageHolds.remember(hold);
@@ -1771,6 +1782,7 @@ export class RunManager {
     this.offStoreLifecycle();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
+    clearInterval(this.retentionTimer);
     for (const [runId, state] of this.active) {
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
@@ -4647,11 +4659,26 @@ export class RunManager {
   private retentionPass: Promise<void> = Promise.resolve();
   private async enforceRetention(): Promise<void> {
     try {
-      const keep = await resolveWorktreeRetention(this.repoRoot);
-      await reclaimWorktrees(this.repoRoot, this.store, keep, {lifecycle: this.lifecycle});
+      await enforceWorktreeRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }
+  }
+
+  /**
+   * Reclaim these runs' worktrees now — archive frees disk (branch kept, Continue restores it).
+   * Queued behind the retention pass in flight, after a beat so the task's stopped terminals have
+   * exited; a tree still in use is retried by the hourly sweep (archived trees go regardless of age).
+   */
+  reclaimWorktreesOf(runIds: readonly string[]): Promise<string[]> {
+    if (this.disposed || runIds.length === 0) return Promise.resolve([]);
+    let out: string[] = [];
+    this.retentionPass = this.retentionPass.then(async () => {
+      if (this.disposed) return;
+      await new Promise((resolve) => setTimeout(resolve, ARCHIVE_RECLAIM_DELAY_MS));
+      out = await reclaimSelectedWorktrees(this.repoRoot, this.store, runIds, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+    }).catch(() => undefined);
+    return this.retentionPass.then(() => out);
   }
 
   private retentionScheduled = false;

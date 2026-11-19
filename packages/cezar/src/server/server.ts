@@ -7,6 +7,7 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
+import { reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -287,7 +288,7 @@ import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
-import { isReclaimable, reclaimWorktrees, worktreesInUse } from '../runs/retention.ts';
+import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
@@ -311,7 +312,7 @@ import {
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
-import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { gatedSkillsRepos, loadConfig, resolveWorktreeIdleDays, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { BYPASS_PERMISSIONS_HOSTED, bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
@@ -3912,6 +3913,12 @@ export function createApp(deps: ServerDeps) {
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
+      worktreeIdleDaysDefault: config.resources.worktreeIdleDaysDefault,
+      diskGuard: {
+        minFreePercent: config.resources.diskGuard.minFreePercent,
+        minFreeGb: config.resources.diskGuard.minFreeGb,
+        maxWorktreesGb: config.resources.diskGuard.maxWorktreesGb,
+      },
     },
     // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
     // `JSON.stringify` drops it, which is the exact drift `contract-parity` catches. And absent has
@@ -4025,6 +4032,15 @@ export function createApp(deps: ServerDeps) {
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
+          }
+          if (resources?.worktreeIdleDaysDefault !== undefined) {
+            config.resources.worktreeIdleDaysDefault = resources.worktreeIdleDaysDefault;
+          }
+          if (resources?.diskGuard) {
+            for (const key of ['minFreePercent', 'minFreeGb', 'maxWorktreesGb'] as const) {
+              const value = resources.diskGuard[key];
+              if (value !== undefined) config.resources.diskGuard[key] = value;
+            }
           }
           // `null` CLEARS back to "no opinion" — a partial patch cannot say that by omission,
           // and leaving a stale runner behind would keep overriding repos that never chose.
@@ -5282,11 +5298,16 @@ export function createApp(deps: ServerDeps) {
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
     .post('/runs/archive-finished', (c) => {
-      const { store } = c.get('project');
+      const { store, manager } = c.get('project');
       const open = store.listRuns().filter((run) => !run.archived).map((run) => run.id);
       const archived = store.archiveFinished();
-      // The sweep is an archive like any other: each task it took loses its terminals (spec §6).
-      if (archived > 0) for (const id of open) if (store.getRun(id)?.archived) stopTaskProcesses(id);
+      // The sweep is an archive like any other: each task it took loses its terminals (spec §6)
+      // and its worktree (branch kept, Continue restores it).
+      if (archived > 0) {
+        const taken = open.filter((id) => store.getRun(id)?.archived);
+        for (const id of taken) stopTaskProcesses(id);
+        manager.reclaimWorktreesOf(taken);
+      }
       // One event for the sweep, `value` = how many it archived (summed on the dashboard).
       if (archived > 0) track('task_archived', { label: 'bulk', value: archived }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ archived });
@@ -5307,7 +5328,10 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
-      if (run && parsed.data.archived !== false) stopTaskProcesses(id);
+      if (run && parsed.data.archived !== false) {
+        stopTaskProcesses(id);
+        manager.reclaimWorktreesOf([id]);
+      }
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
       if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
@@ -6768,6 +6792,9 @@ export function createApp(deps: ServerDeps) {
       // The keep-limit the panel reports is the one the enforcer will actually
       // apply — inherited from the workspace default when this repo sets none.
       const keep = await resolveWorktreeRetention(repoRoot);
+      const idleDays = await resolveWorktreeIdleDays(repoRoot);
+      const { manager } = c.get('project');
+      const activity = storeActivity(store);
       const runs = store.listRuns().filter((r) => r.worktreePath && existsSync(r.worktreePath));
       const inUse = await worktreesInUse(runs);
       const worktrees = await Promise.all(
@@ -6779,7 +6806,8 @@ export function createApp(deps: ServerDeps) {
           // POSIX `du` — degrades to null (Windows / du missing / error); never blocks.
           sizeBytes: await worktreeSizeBytes(r.worktreePath as string),
           finishedAt: r.finishedAt ?? null,
-          reclaimable: isReclaimable(r) && !inUse.has(r.id),
+          lastActivityAt: activity(r),
+          reclaimable: isIdleReclaimable(r) && !manager.isActive(r.id) && !inUse.has(r.id),
           // Spread, not `key: undefined` — the contract types it as optional on the wire.
           ...(inUse.has(r.id) ? { inUse: inUse.get(r.id)! } : {}),
         })),
@@ -6788,18 +6816,26 @@ export function createApp(deps: ServerDeps) {
       const totalBytes = worktrees.some((w) => w.sizeBytes === null)
         ? null
         : worktrees.reduce((sum, w) => sum + (w.sizeBytes ?? 0), 0);
-      return c.json({ worktrees, totalBytes, keep });
+      return c.json({ worktrees, totalBytes, keep, idleDays });
     })
 
-    .post('/worktrees/reclaim', jsonZodValidator(() => reclaimBodySchema, { absent: ({}), message: 'invalid body' }), async (c) => {
-      const { root: repoRoot, store } = c.get('project');
-      // The body is validated (an empty or `{}` one is accepted) but carries nothing this
-      // handler reads; retention is best-effort, so 200 always.
-      const reclaimed = await reclaimWorktrees(repoRoot, store, await resolveWorktreeRetention(repoRoot), { lifecycle: c.get('project').manager.lifecycle });
+    .post('/worktrees/reclaim', jsonZodValidator(reclaimWorktreesInputSchema, { absent: ({}), message: 'invalid body' }), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const body = c.req.valid('json');
+      const isLive = (id: string) => manager.isActive(id);
+      const opts = { lifecycle: manager.lifecycle, isLive };
+      // An empty body is "Reclaim now": the configured retention, count then age. Best-effort, 200 always.
+      const targets = selectManualReclaim(store.listRuns(), body, isLive, storeActivity(store));
+      if (body.dryRun) {
+        const candidates = targets ?? await configuredReclaimCandidates(repoRoot, store, isLive);
+        const inUse = await worktreesInUse(store.listRuns().filter((r) => candidates.includes(r.id)));
+        return c.json({ reclaimed: candidates.filter((id) => !inUse.has(id)), dryRun: true });
+      }
+      const reclaimed = targets === null
+        ? await enforceWorktreeRetention(repoRoot, store, opts)
+        : await reclaimSelectedWorktrees(repoRoot, store, targets, opts);
       return c.json({ reclaimed });
     });
-
-  const reclaimBodySchema = z.object({}).passthrough();
 
   /**
    * "The inbox is on and this entry exists" — the 409/404 half of `POST /todos/:id/start`, lifted
@@ -8009,6 +8045,8 @@ export function createApp(deps: ServerDeps) {
       // Count-based worktree retention (#483): keep the last N finished worktrees
       // on disk. 0 = unlimited. Always materialized (schema default 10).
       worktreeRetention: config.worktreeRetention,
+      worktreeIdleDays: await resolveWorktreeIdleDays(repoRoot),
+      worktreeIdleDaysOwn: config.worktreeIdleDays !== undefined,
       ...(lifecycle.configured ? { worktreeLifecycle: lifecycle.config, worktreeLifecycleRevision: lifecycle.revision! } : {}),
       // Live title updates (task auto-naming spec): tri-state — null means "no
       // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
@@ -8108,6 +8146,10 @@ export function createApp(deps: ServerDeps) {
             if (parsed.data.worktreeRetention === null) delete raw.worktreeRetention;
             else raw.worktreeRetention = parsed.data.worktreeRetention;
           }
+          if (parsed.data.worktreeIdleDays !== undefined) {
+            if (parsed.data.worktreeIdleDays === null) delete raw.worktreeIdleDays;
+            else raw.worktreeIdleDays = parsed.data.worktreeIdleDays;
+          }
           if (parsed.data.liveTitleUpdates !== undefined) {
             if (parsed.data.liveTitleUpdates === null) delete raw.liveTitleUpdates;
             else raw.liveTitleUpdates = parsed.data.liveTitleUpdates;
@@ -8188,7 +8230,7 @@ export function createApp(deps: ServerDeps) {
           await save(false);
         }
         // A new keep-limit applies now, not at the next finished task (#2003).
-        if (parsed.data.worktreeRetention !== undefined) c.get('project').manager.scheduleRetention();
+        if (parsed.data.worktreeRetention !== undefined || parsed.data.worktreeIdleDays !== undefined) c.get('project').manager.scheduleRetention();
         return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
       } catch (error) { return lifecycleError(c, error); }
     });

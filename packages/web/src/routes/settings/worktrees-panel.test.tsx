@@ -64,6 +64,7 @@ const sample: WorktreesResponse = {
       branch: 'cez/aaaaaaaa',
       sizeBytes: 5 * 1024 * 1024,
       finishedAt: '2026-07-01T00:00:00Z',
+      lastActivityAt: '2026-07-01T00:00:00.000Z',
       reclaimable: true,
     },
     {
@@ -73,11 +74,13 @@ const sample: WorktreesResponse = {
       branch: 'cez/bbbbbbbb',
       sizeBytes: null,
       finishedAt: null,
+      lastActivityAt: '2026-07-02T00:00:00.000Z',
       reclaimable: false,
     },
   ],
   totalBytes: null,
   keep: 10,
+  idleDays: 7,
 }
 
 describe('Settings → Resources: worktrees panel (#483)', () => {
@@ -135,7 +138,7 @@ describe('Settings → Resources: worktrees panel (#483)', () => {
   })
 
   it('shows the empty state when nothing is on disk', async () => {
-    serve({ worktrees: [], totalBytes: 0, keep: 0 })
+    serve({ worktrees: [], totalBytes: 0, keep: 0, idleDays: 7 })
     renderPanel()
     await waitFor(() => expect(document.querySelector('[data-slot="worktrees-empty"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="worktrees-footer"]')?.textContent).toContain('unlimited')
@@ -160,7 +163,7 @@ describe('Worktrees lifecycle management', () => {
     expect(document.body.textContent).toContain('Cleanup requested')
   })
   it('retains independent orphan attention and suppression explanations without a task page', async () => {
-    serve({worktrees: [], totalBytes: 0, keep: 10}, [{...managed, task: null, needsAttention: true, autoCleanupSuppressed: true, error: 'Lifecycle metadata is invalid; directory retained'}])
+    serve({worktrees: [], totalBytes: 0, keep: 10, idleDays: 7}, [{...managed, task: null, needsAttention: true, autoCleanupSuppressed: true, error: 'Lifecycle metadata is invalid; directory retained'}])
     renderPanel()
     await waitFor(() => expect(document.querySelector('[data-slot="lifecycle-worktree-row"]')).not.toBeNull())
     expect(document.body.textContent).toContain('Orphan worktree')

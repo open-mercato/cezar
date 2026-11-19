@@ -2457,6 +2457,11 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  /** The event log's mtime in ms, or undefined when it has none — age retention's activity clock. */
+  eventsMtimeMs(runId: string): number | undefined {
+    try { return statSync(this.eventsPath(runId)).mtimeMs; } catch { return undefined; }
+  }
+
   private eventsPath(runId: string): string {
     return join(this.dataDir, 'runs', `${runId}.ndjson`);
   }
