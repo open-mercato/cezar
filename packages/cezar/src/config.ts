@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { perRunner } from '@open-mercato/cezar-contract';
 import { worktreeLifecycleConfigSchema } from '@open-mercato/cezar-contract';
-import { DEFAULT_WORKTREE_IDLE_DAYS, loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
+import { DEFAULT_ARCHIVED_TASK_DELETE_DAYS, DEFAULT_WORKTREE_IDLE_DAYS, loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
 
 /**
@@ -49,6 +49,9 @@ export const configSchema = z.object({
   /** Age retention: reclaim a non-active task's worktree after N days without activity (branch
    *  kept); 0 = off. Absent = the workspace's `resources.worktreeIdleDaysDefault` (7). */
   worktreeIdleDays: z.number().int().min(0).max(365).optional().catch(undefined),
+  /** Delete archived tasks after N days; 0 = never. Absent = the workspace's
+   *  `resources.archivedTaskDeleteDaysDefault` (90). */
+  archivedTaskDeleteDays: z.number().int().min(0).max(3650).optional().catch(undefined),
   /**
    * Per-task memory ceiling in MiB (whole process tree). When a running task's
    * RSS crosses this the engine pauses it with a warning and lets the queue
@@ -317,4 +320,13 @@ export async function resolveWorktreeIdleDays(repoRoot: string): Promise<number>
   if (own !== undefined) return own;
   const workspace = await loadWorkspaceConfig().catch(() => null);
   return workspace?.resources.worktreeIdleDaysDefault ?? DEFAULT_WORKTREE_IDLE_DAYS;
+}
+
+/** Effective archived-task lifetime in days for a repo (0 = never), same precedence as
+ *  `resolveWorktreeIdleDays`. */
+export async function resolveArchivedTaskDeleteDays(repoRoot: string): Promise<number> {
+  const own = (await loadConfig(repoRoot).catch(() => null))?.archivedTaskDeleteDays;
+  if (own !== undefined) return own;
+  const workspace = await loadWorkspaceConfig().catch(() => null);
+  return workspace?.resources.archivedTaskDeleteDaysDefault ?? DEFAULT_ARCHIVED_TASK_DELETE_DAYS;
 }

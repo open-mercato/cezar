@@ -87,6 +87,9 @@ export const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
 /** Days without activity before a non-active task's worktree is reclaimed (age retention). */
 export const DEFAULT_WORKTREE_IDLE_DAYS = 7;
 
+/** Days an archived task is kept before it is deleted. */
+export const DEFAULT_ARCHIVED_TASK_DELETE_DAYS = 90;
+
 /** The disk guard's shipped thresholds: act when free space drops below the SMALLER of
  *  `minFreePercent` of the volume and `minFreeGb`, or when task worktrees exceed `maxWorktreesGb`. */
 export const DEFAULT_DISK_GUARD = { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 } as const;
@@ -146,6 +149,9 @@ const resourcesSchema = z
      *  Continue restores it); 0 = off. Seeds projects that set no `worktreeIdleDays`. */
     worktreeIdleDaysDefault: z.number().int().min(0).max(365).default(DEFAULT_WORKTREE_IDLE_DAYS).catch(DEFAULT_WORKTREE_IDLE_DAYS),
     /** Disk guard thresholds (runs/disk-guard.ts); each 0 = that trigger off. */
+    /** Delete archived tasks after this many days (record, files, worktree and a branch holding
+     *  nothing unique); 0 = never. Seeds projects that set no `archivedTaskDeleteDays`. */
+    archivedTaskDeleteDaysDefault: z.number().int().min(0).max(3650).default(DEFAULT_ARCHIVED_TASK_DELETE_DAYS).catch(DEFAULT_ARCHIVED_TASK_DELETE_DAYS),
     diskGuard: diskGuardSchema.prefault(() => ({})).catch(() => diskGuardSchema.parse({})),
   })
   .passthrough();

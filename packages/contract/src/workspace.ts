@@ -65,6 +65,8 @@ export const workspaceConfigResponseSchema = z.object({
     worktreeRetentionDefault: z.number(),
     /** Age retention seed (days); 0 = off. */
     worktreeIdleDaysDefault: z.number(),
+    /** Archived tasks are deleted after this many days; 0 = never. */
+    archivedTaskDeleteDaysDefault: z.number(),
     /** Disk guard thresholds; each 0 = that trigger off. */
     diskGuard: z.object({ minFreePercent: z.number(), minFreeGb: z.number(), maxWorktreesGb: z.number() }),
   }),
@@ -130,6 +132,7 @@ export const setWorkspaceConfigInputSchema = z.object({
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       worktreeIdleDaysDefault: z.number().int().min(0).max(365).optional(),
+      archivedTaskDeleteDaysDefault: z.number().int().min(0).max(3650).optional(),
       diskGuard: z
         .object({
           minFreePercent: z.number().min(0).max(50).optional(),
@@ -460,6 +463,11 @@ export const configResponseSchema = z.object({
   worktreeIdleDays: z.number(),
   /** True when the repo sets its own `worktreeIdleDays` (false = inherits the workspace default). */
   worktreeIdleDaysOwn: z.boolean(),
+  /** Delete archived tasks after N days; 0 = never. Effective value: the repo's own, else the
+   *  workspace default. */
+  archivedTaskDeleteDays: z.number(),
+  /** True when the repo sets its own `archivedTaskDeleteDays`. */
+  archivedTaskDeleteDaysOwn: z.boolean(),
   /** Live title updates: null = no config key, the `CEZ_TITLE_UPDATES` env default (ON) decides. */
   liveTitleUpdates: z.boolean().nullable(),
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
@@ -525,6 +533,8 @@ export const setConfigInputSchema = z.object({
   worktreeRetention: z.number().int().min(0).max(1000).nullable().optional(),
   /** Age retention in days (0 = off); null clears back to the workspace default. */
   worktreeIdleDays: z.number().int().min(0).max(365).nullable().optional(),
+  /** Archived-task lifetime in days (0 = never); null clears back to the workspace default. */
+  archivedTaskDeleteDays: z.number().int().min(0).max(3650).nullable().optional(),
   /** null clears the key back to the env-default behavior. */
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */

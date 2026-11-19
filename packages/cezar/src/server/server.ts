@@ -7,7 +7,8 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
-import { reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
+import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
+import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -312,7 +313,7 @@ import {
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
-import { gatedSkillsRepos, loadConfig, resolveWorktreeIdleDays, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { gatedSkillsRepos, loadConfig, resolveArchivedTaskDeleteDays, resolveWorktreeIdleDays, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { BYPASS_PERMISSIONS_HOSTED, bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
@@ -3914,6 +3915,7 @@ export function createApp(deps: ServerDeps) {
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
       worktreeIdleDaysDefault: config.resources.worktreeIdleDaysDefault,
+      archivedTaskDeleteDaysDefault: config.resources.archivedTaskDeleteDaysDefault,
       diskGuard: {
         minFreePercent: config.resources.diskGuard.minFreePercent,
         minFreeGb: config.resources.diskGuard.minFreeGb,
@@ -4035,6 +4037,9 @@ export function createApp(deps: ServerDeps) {
           }
           if (resources?.worktreeIdleDaysDefault !== undefined) {
             config.resources.worktreeIdleDaysDefault = resources.worktreeIdleDaysDefault;
+          }
+          if (resources?.archivedTaskDeleteDaysDefault !== undefined) {
+            config.resources.archivedTaskDeleteDaysDefault = resources.archivedTaskDeleteDaysDefault;
           }
           if (resources?.diskGuard) {
             for (const key of ['minFreePercent', 'minFreeGb', 'maxWorktreesGb'] as const) {
@@ -5297,6 +5302,19 @@ export function createApp(deps: ServerDeps) {
 
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
+    // Archived tasks past their lifetime (spec 2026-11-19-worktree-disk-usage); `cez worktrees
+    // prune --archived-older-than` calls it. Before the `/:id/...` routes, like the sweeps below.
+    .post('/runs/archived/delete-expired', jsonZodValidator(deleteExpiredArchivedInputSchema, { absent: ({}) }), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const body = c.req.valid('json');
+      const days = body.olderThanDays ?? await resolveArchivedTaskDeleteDays(repoRoot);
+      const result = await deleteExpiredArchivedTasks(repoRoot, store, days, {
+        isLive: (id) => manager.isActive(id), dryRun: body.dryRun === true, lifecycle: manager.lifecycle,
+        activity: storeActivity(store),
+      });
+      return c.json({ ...result, days, dryRun: body.dryRun === true });
+    })
+
     .post('/runs/archive-finished', (c) => {
       const { store, manager } = c.get('project');
       const open = store.listRuns().filter((run) => !run.archived).map((run) => run.id);
@@ -8063,6 +8081,8 @@ export function createApp(deps: ServerDeps) {
       worktreeRetention: config.worktreeRetention,
       worktreeIdleDays: await resolveWorktreeIdleDays(repoRoot),
       worktreeIdleDaysOwn: config.worktreeIdleDays !== undefined,
+      archivedTaskDeleteDays: await resolveArchivedTaskDeleteDays(repoRoot),
+      archivedTaskDeleteDaysOwn: config.archivedTaskDeleteDays !== undefined,
       ...(lifecycle.configured ? { worktreeLifecycle: lifecycle.config, worktreeLifecycleRevision: lifecycle.revision! } : {}),
       // Live title updates (task auto-naming spec): tri-state — null means "no
       // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
@@ -8166,6 +8186,10 @@ export function createApp(deps: ServerDeps) {
             if (parsed.data.worktreeIdleDays === null) delete raw.worktreeIdleDays;
             else raw.worktreeIdleDays = parsed.data.worktreeIdleDays;
           }
+          if (parsed.data.archivedTaskDeleteDays !== undefined) {
+            if (parsed.data.archivedTaskDeleteDays === null) delete raw.archivedTaskDeleteDays;
+            else raw.archivedTaskDeleteDays = parsed.data.archivedTaskDeleteDays;
+          }
           if (parsed.data.liveTitleUpdates !== undefined) {
             if (parsed.data.liveTitleUpdates === null) delete raw.liveTitleUpdates;
             else raw.liveTitleUpdates = parsed.data.liveTitleUpdates;
@@ -8246,7 +8270,7 @@ export function createApp(deps: ServerDeps) {
           await save(false);
         }
         // A new keep-limit applies now, not at the next finished task (#2003).
-        if (parsed.data.worktreeRetention !== undefined || parsed.data.worktreeIdleDays !== undefined) c.get('project').manager.scheduleRetention();
+        if (parsed.data.worktreeRetention !== undefined || parsed.data.worktreeIdleDays !== undefined || parsed.data.archivedTaskDeleteDays !== undefined) c.get('project').manager.scheduleRetention();
         return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
       } catch (error) { return lifecycleError(c, error); }
     });

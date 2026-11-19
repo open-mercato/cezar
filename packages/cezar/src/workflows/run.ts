@@ -143,6 +143,7 @@ import {
   usd,
   withPendingReport,
 } from '../dispatch/engine.ts';
+import { enforceArchivedTaskRetention } from '../runs/archived-cleanup.ts';
 import { enforceWorktreeRetention, isReclaimable, reclaimSelectedWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
@@ -4660,6 +4661,7 @@ export class RunManager {
   private async enforceRetention(): Promise<void> {
     try {
       await enforceWorktreeRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+      await enforceArchivedTaskRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }

@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { localBranchExists, removeWorktree, worktreeHasUnpreservedWork } from '../git-worktree.ts';
 import { isSafeGitRef } from '../git-refs.ts';
+import { resolveArchivedTaskDeleteDays } from '../config.ts';
 import { lastActivityAt } from './retention.ts';
 import type { RunRecord } from './store.ts';
 
@@ -170,6 +171,26 @@ export async function deleteExpiredArchivedTasks(
     } catch {
       // best effort: the next pass retries
     }
+  }
+  return result;
+}
+
+/**
+ * The configured pass — at boot and with the retention sweeps (hourly). Logs one summary line
+ * when it deleted anything. Never throws.
+ */
+export async function enforceArchivedTaskRetention(
+  repoRoot: string,
+  store: ArchivedCleanupStore & { eventsMtimeMs?(id: string): number | undefined },
+  opts: Omit<ArchivedCleanupOptions, 'dryRun'>,
+  log: (line: string) => void = (line) => console.log(line),
+): Promise<ArchivedCleanupResult> {
+  const days = await resolveArchivedTaskDeleteDays(repoRoot).catch(() => 0);
+  const result = await deleteExpiredArchivedTasks(repoRoot, store, days, { activity: (run) => lastActivityAt(run, store.eventsMtimeMs?.(run.id)), ...opts })
+    .catch(() => ({ deleted: [], keptBranches: [], skipped: [] }) as ArchivedCleanupResult);
+  if (result.deleted.length > 0) {
+    const kept = result.keptBranches.length > 0 ? `, ${result.keptBranches.length} branch(es) kept (unmerged work or open PR)` : '';
+    log(`  deleted ${result.deleted.length} task(s) archived over ${days} days${kept}`);
   }
   return result;
 }

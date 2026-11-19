@@ -301,3 +301,22 @@ export const pruneWorktreesResponseSchema = z.object({
   removed: z.array(z.string()),
 });
 export type PruneWorktreesResponse = z.infer<typeof pruneWorktreesResponseSchema>;
+
+/** `POST /api/v1/runs/archived/delete-expired` body: archived tasks older than `olderThanDays`
+ *  (default: the configured lifetime) are deleted; `dryRun` reports without deleting. */
+export const deleteExpiredArchivedInputSchema = z.object({
+  olderThanDays: z.number().min(0).max(36500).optional(),
+  dryRun: z.boolean().optional(),
+});
+export type DeleteExpiredArchivedInput = z.infer<typeof deleteExpiredArchivedInputSchema>;
+
+/** Its answer: the tasks deleted (or that would be), the branches kept and why, and the tasks
+ *  left in place and why. */
+export const deleteExpiredArchivedResponseSchema = z.object({
+  deleted: z.array(z.string()),
+  keptBranches: z.array(z.object({ runId: z.string(), branch: z.string(), reason: z.string() })),
+  skipped: z.array(z.object({ runId: z.string(), reason: z.string() })),
+  days: z.number(),
+  dryRun: z.boolean(),
+});
+export type DeleteExpiredArchivedResponse = z.infer<typeof deleteExpiredArchivedResponseSchema>;

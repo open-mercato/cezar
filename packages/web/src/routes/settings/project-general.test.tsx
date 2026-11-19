@@ -109,7 +109,7 @@ function seededClient({
       maxMonitoringSessions: 2,
       monitoringWakeIntervalMinutes: null,
       memoryLimitMb: null,
-      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
+      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
     },
   })
   return client

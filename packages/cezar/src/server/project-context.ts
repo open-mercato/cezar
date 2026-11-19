@@ -5,6 +5,7 @@ import { reconcileAutomationReceipts } from '../automations/task-template.ts';
 import { pruneOrphans } from '../git-worktree.ts';
 import { armRepoHandle } from '../runs/arm-repo-handle.ts';
 import { enforceWorktreeRetention } from '../runs/retention.ts';
+import { enforceArchivedTaskRetention } from '../runs/archived-cleanup.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -275,6 +276,7 @@ export class ProjectContexts {
           () => [] as string[],
         );
         await enforceWorktreeRetention(project.root, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
+        await enforceArchivedTaskRetention(project.root, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
       }
       await manager.recover();
       // Which repository this project IS (#945), so the referenced tier stops adopting another
