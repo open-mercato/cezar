@@ -615,7 +615,6 @@ function modeSwitchProps(props: NavProps, onNavigate?: () => void): ModeSwitchPr
     managerMode: props.managerMode,
     projectsTo: props.projectsTo,
     managerTo: props.managerSwitchTo,
-    projectsAttention: Boolean(props.nowCount),
     managerAttention: props.managerAttention,
     onNavigate,
   }
@@ -738,7 +737,7 @@ function SidebarIconRail({
           {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
         </span>
       )}
-      {/* The folded Projects | Manager switch: two stacked icons above the nav, each with its dot. */}
+      {/* The folded Projects | Manager switch: two stacked icons above the nav, Manager with its dot. */}
       {managersAvailable ? <ModeRailSwitch {...modeSwitchProps(props)} /> : null}
       {managerMode ? (
         // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
