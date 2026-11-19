@@ -110,6 +110,7 @@ function stubServer(kind: 'issue' | 'pr') {
           bootProject: 'boot',
         })
       }
+      if (path === '/api/v1/runs') return json([])
       if (path === '/api/v1/projects') {
         return json({ projects: [{ id: 'boot', name: 'r', root: '/r' }], bootProject: 'boot' })
       }
