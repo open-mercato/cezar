@@ -167,7 +167,10 @@ export const VERSIONS_PRUNE_USAGE = `usage: cezar versions prune [--keep <n>] [-
   --keep <n>   versions to keep, the running one included (default: versionRetention
                in ~/.cezar/config.json, else ${DEFAULT_VERSION_RETENTION})
   --dry-run    print what would be removed; remove nothing
-  --backups    also remove ~/.cezar/versions.backup-* directories (never automatic)`;
+  --backups    also remove ~/.cezar/versions.backup-* directories (never automatic)
+
+  exit status: 0 done, 1 a removal failed or bad arguments, 3 skipped (an install
+  in progress, or another prune or install holds the lock) — nothing was removed`;
 
 /** `cezar versions prune` — the manual twin of the startup/post-update prune. */
 export async function runVersionsPruneCommand(args: string[], opts: { entry: string; env?: NodeJS.ProcessEnv }): Promise<number> {
@@ -204,7 +207,8 @@ export async function runVersionsPruneCommand(args: string[], opts: { entry: str
   }
   const result = await pruneVersions({ keep, dryRun: values['dry-run'], backups: values.backups, entry: opts.entry, env: opts.env });
   printPruneResult(result);
-  return result.failed.length > 0 ? 1 : 0;
+  if (result.failed.length > 0) return 1;
+  return result.skipped && !result.dryRun ? 3 : 0;
 }
 
 export function printPruneResult(result: PruneResult): void {

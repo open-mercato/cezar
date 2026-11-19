@@ -133,7 +133,7 @@ export async function runWorktreesCommand(args: string[], io: WorktreesCliIo): P
     if (command !== 'remove' && positionals.length > 0) throw new CliError(`unexpected argument "${positionals[0]}"`, 2);
     const root = await projectRoot(values.project, io.cwd);
     const mutates = command !== 'list' && !((command === 'reclaim' || command === 'prune') && values['dry-run']);
-    backend = await openBackend(root, io, mutates);
+    backend = await openBackend(root, io, mutates, values.project !== undefined);
     switch (command) {
       case 'list':
         return await listCommand(backend, values.json, io);
@@ -186,16 +186,19 @@ async function projectRoot(explicit: string | undefined, cwd: string): Promise<s
   }
 }
 
-async function openBackend(root: string, io: WorktreesCliIo, mutates: boolean): Promise<Backend> {
+async function openBackend(root: string, io: WorktreesCliIo, mutates: boolean, explicitProject: boolean): Promise<Backend> {
   const scan = await (io.cockpits ?? (() => scanCockpits(io)))();
   const origins = [...new Set([io.env.CEZ_API_URL?.replace(/\/+$/, ''), ...scan.origins].filter((o): o is string => !!o))];
+  const unreachable = [...scan.unverified];
   for (const origin of origins) {
-    const scope = await servedScope(origin, root, io);
-    if (scope) return cockpitBackend(scope, io);
+    const scope = await servedScope(origin, root, io, explicitProject);
+    if (scope && scope !== 'unreachable') return cockpitBackend(scope.url, io);
+    // A verified cockpit whose project list failed may well serve this project.
+    if (scope === 'unreachable' && scan.origins.includes(origin)) unreachable.push(`${origin}: its project list did not answer`);
   }
   // A cockpit that is alive but did not answer may own this store: writing behind it is unsafe.
-  if (mutates && scan.unverified.length > 0) {
-    throw new CliError(`a cezar cockpit is running but could not be reached (${scan.unverified.join('; ')}), `
+  if (mutates && unreachable.length > 0) {
+    throw new CliError(`a cezar cockpit is running but could not be reached (${unreachable.join('; ')}), `
       + 'so it may own this project. Retry, or stop it and run the command again.');
   }
   return offlineBackend(root, io);
@@ -217,21 +220,24 @@ async function scanCockpits(io: WorktreesCliIo): Promise<CockpitScan> {
   return scan;
 }
 
-/** `<origin>/api/v1/p/<id>` when that cockpit serves `root`; `CEZ_PROJECT_ID` wins for its own cockpit. */
-async function servedScope(origin: string, root: string, io: WorktreesCliIo): Promise<string | null> {
-  if (io.env.CEZ_PROJECT_ID && origin === io.env.CEZ_API_URL?.replace(/\/+$/, '')) {
-    return `${origin}/api/v1/p/${encodeURIComponent(io.env.CEZ_PROJECT_ID)}`;
+/**
+ * `{ url: <origin>/api/v1/p/<id> }` when that cockpit serves `root`, null when it answered and does
+ * not, 'unreachable' when its project list failed. `CEZ_PROJECT_ID` wins for its own cockpit,
+ * unless `--project` named a repo explicitly.
+ */
+async function servedScope(origin: string, root: string, io: WorktreesCliIo, explicitProject: boolean): Promise<{ url: string } | 'unreachable' | null> {
+  if (!explicitProject && io.env.CEZ_PROJECT_ID && origin === io.env.CEZ_API_URL?.replace(/\/+$/, '')) {
+    return { url: `${origin}/api/v1/p/${encodeURIComponent(io.env.CEZ_PROJECT_ID)}` };
   }
   try {
     const response = await io.fetch(`${origin}/api/v1/projects`, { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
-    if (!response.ok) return null;
+    if (!response.ok) return 'unreachable';
     const parsed = projectsResponseSchema.safeParse(await response.json());
-    const project = parsed.success
-      ? parsed.data.projects.find((p) => p.status !== 'missing' && samePath(p.root, root))
-      : undefined;
-    return project ? `${origin}/api/v1/p/${encodeURIComponent(project.id)}` : null;
+    if (!parsed.success) return 'unreachable';
+    const project = parsed.data.projects.find((p) => p.status !== 'missing' && samePath(p.root, root));
+    return project ? { url: `${origin}/api/v1/p/${encodeURIComponent(project.id)}` } : null;
   } catch {
-    return null;
+    return 'unreachable';
   }
 }
 

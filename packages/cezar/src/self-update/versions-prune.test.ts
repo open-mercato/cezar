@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { runVersionsPruneCommand } from './cli.ts';
 import { installFromRegistry, type InstallOptions } from './installer.ts';
 import { activate, activeId, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
 import { acquireVersionsLock, listVersionBackups, pruneVersions, runningVersionId, type PruneOptions } from './versions-prune.ts';
@@ -50,6 +51,19 @@ describe('pruning old versions', () => {
     expect(runningVersionId(throughCurrent, env)).toBe('0.18.0');
     await prune({ keep: 1, entry: throughCurrent });
     expect(ids()).toEqual(['0.18.0']);
+  });
+
+  it('keeps the version this process runs after `current` flips to a new one', async () => {
+    eight();
+    activate('0.17.0', env);
+    // Started through `current`; this module realpaths into 0.17.0. Then `cezar update` activates 0.18.0.
+    const throughCurrent = join(versionsDir(env), 'current', 'node_modules', '@open-mercato', 'cezar', 'dist', 'index.js');
+    const modulePath = versionEntry('0.17.0', env);
+    activate('0.18.0', env);
+    expect(runningVersionId(throughCurrent, env, modulePath)).toBe('0.17.0');
+    const result = await prune({ keep: 1, entry: throughCurrent, modulePath });
+    expect(ids()).toEqual(['0.17.0', '0.18.0']);
+    expect(result.kept).toEqual(expect.arrayContaining([{ id: '0.17.0', reason: 'running' }, { id: '0.18.0', reason: 'current' }]));
   });
 
   it('never deletes the current version, even when it is old', async () => {
@@ -144,6 +158,20 @@ describe('pruning old versions', () => {
     expect(existsSync(versionEntry('0.19.0', env))).toBe(true);
   });
 
+  it('`cezar versions prune` exits 3 when the prune was skipped, 0 on a skipped dry run', async () => {
+    eight();
+    activate('0.18.0', env);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      mkdirSync(join(versionsDir(env), `.staging-0.19.0-${process.pid}`));
+      expect(await runVersionsPruneCommand(['--keep', '1'], { entry: versionEntry('0.18.0', env), env })).toBe(3);
+      expect(await runVersionsPruneCommand(['--keep', '1', '--dry-run'], { entry: versionEntry('0.18.0', env), env })).toBe(0);
+      expect(ids()).toHaveLength(8);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('breaks a lock its dead owner left behind', async () => {
     eight();
     activate('0.18.0', env);
@@ -151,6 +179,32 @@ describe('pruning old versions', () => {
     const result = await prune({ keep: 1, entry: versionEntry('0.18.0', env), isAlive: (pid) => pid === process.pid });
     expect(result.skipped).toBeUndefined();
     expect(ids()).toEqual(['0.18.0']);
+  });
+
+  it('never deletes a fresh lock another breaker took, and releases only its own', async () => {
+    mkdirSync(versionsDir(env), { recursive: true });
+    const lock = join(versionsDir(env), '.lock');
+    writeFileSync(lock, '999999');
+    let raced = false;
+    // Between our stale read and our break, another process breaks it and takes it (pid 4242).
+    const isAlive = (pid: number) => {
+      if (pid === 999999 && !raced) {
+        raced = true;
+        rmSync(lock);
+        writeFileSync(lock, '4242');
+      }
+      return pid === 4242 || pid === process.pid;
+    };
+    expect(await acquireVersionsLock({ env, isAlive })).toBeNull();
+    expect(readFileSync(lock, 'utf8')).toBe('4242');
+    expect(readdirSync(versionsDir(env)).filter((name) => name.includes('.stale-'))).toEqual([]);
+
+    rmSync(lock);
+    const release = await acquireVersionsLock({ env });
+    expect(release).not.toBeNull();
+    writeFileSync(lock, '4242'); // our lock was broken and re-taken by someone else
+    release!();
+    expect(readFileSync(lock, 'utf8')).toBe('4242');
   });
 
   it('removes versions.backup-* only when asked, and always lists them', async () => {

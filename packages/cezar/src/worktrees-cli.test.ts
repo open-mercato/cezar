@@ -191,6 +191,23 @@ describe('cez worktrees', () => {
       // Reading is still fine.
       expect(await runWorktreesCommand(['list'], io({ cockpits }))).toBe(0);
     });
+
+    it('refuses to write behind a verified cockpit whose project list fails, and still reads', async () => {
+      await seed('done');
+      const cockpits = async () => ({ origins: ['http://127.0.0.1:5555'], unverified: [] });
+      const answers: Array<() => Promise<Response>> = [
+        async () => new Response('boom', { status: 500 }),
+        async () => new Response('not json', { status: 200 }),
+        async () => { throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); },
+      ];
+      for (const answer of answers) {
+        err = [];
+        const fetcher = (() => answer()) as unknown as typeof fetch;
+        expect(await runWorktreesCommand(['prune'], io({ cockpits, fetch: fetcher }))).toBe(1);
+        expect(err.join('\n')).toContain('could not be reached');
+        expect(await runWorktreesCommand(['list'], io({ cockpits, fetch: fetcher }))).toBe(0);
+      }
+    });
   });
 
   describe('through a running cockpit', () => {
@@ -276,6 +293,26 @@ describe('cez worktrees', () => {
       expect(calls).toEqual(['POST /api/v1/p/default/runs/archived/delete-expired']);
       expect(out.join('\n')).toContain(`would delete 1 task archived over 90d: ${old.slice(0, 8)}`);
       expect(store.getRun(old)).toBeDefined();
+    });
+
+    it('--project skips the CEZ_PROJECT_ID shortcut and finds the project by its root', async () => {
+      const done = await seed('done');
+      const projects = {
+        projects: [{ id: 'abc', name: 'r', root: repoRoot, addedAt: 'x', lastOpenedAt: 'x', source: 'local', status: 'ok' }],
+        bootProject: 'default',
+        projectsDir: '/x',
+      };
+      const fetcher = (async (input: string | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
+        if (url.pathname === '/api/v1/projects') return Response.json(projects);
+        const headers = new Headers(init?.headers);
+        headers.set('host', '127.0.0.1:4321');
+        return app.request(url.pathname.replace('/p/abc/', '/p/default/'), { ...init, headers });
+      }) as typeof fetch;
+      expect(await runWorktreesCommand(['list', '--project', repoRoot], cockpitIo({ fetch: fetcher }))).toBe(0);
+      expect(calls).toEqual(['GET /api/v1/projects', 'GET /api/v1/p/abc/worktrees']);
+      expect(out.join('\n')).toContain(done.slice(0, 8));
     });
 
     it('prune goes through POST /worktrees/prune', async () => {
