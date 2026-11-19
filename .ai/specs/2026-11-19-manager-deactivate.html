@@ -249,7 +249,7 @@ pre .c{color:var(--soft-foreground)}pre .k{color:var(--violet)}pre .a{color:var(
       <tr><td>Tasks it already started</td><td><span class="rec">Rec</span>Keep running — they are independent runs. Their status cards keep posting into the manager's chat (server-written, no model). Anything waiting on you surfaces where any task's does: the Questions inbox task group and Now.</td><td>Pause them: stops work the user already approved, and a task paused by a manager that is "off" has no one to resume it.</td></tr>
       <tr><td>Follow-up wake-ups</td><td><span class="rec">Rec</span><b>Dropped as turns, kept as notes.</b> The card still posts; its line joins the manager's notes, so the first chat turn after reactivation hears it. This is the existing <code>followUp: false</code> path.</td><td>Queue them: N queued turns become a burst of N model calls on reactivation. The optional catch-up check covers the gap in one.</td></tr>
       <tr><td>Approval cards</td><td><span class="rec">Rec</span>Answerable, still counted in the Approvals badge, marked <i>Manager inactive</i>. A decision runs on the server (merge, enable) and leaves the manager a note, so it costs nothing.</td><td>Freeze them: blocks a merge the user can make without the manager.</td></tr>
-      <tr><td>Question cards</td><td><span class="rec">Rec</span>Visible, marked <i>Manager inactive</i>, <b>not</b> counted in the Questions badge. An answer is a chat turn, so the button reads <i>Reactivate and answer</i> and confirms first.</td><td>Count them: a badge that cannot go down without spending is noise.</td></tr>
+      <tr><td>Question cards</td><td><span class="rec">Rec</span>Visible, marked <i>Manager inactive</i>, <b>not</b> counted in the Questions badge. Two ways out: <i>Dismiss</i> closes the card on the server and leaves a note (no model call, the manager stays inactive); an answer is a chat turn, so that button reads <i>Reactivate and answer</i> and confirms first.</td><td>Count them: a badge that cannot go down without spending is noise.</td></tr>
       <tr><td>Automations that report to it</td><td><span class="rec">Rec</span>Keep running and keep posting their report into its chat (no model). The unread dot turns grey.</td><td>Reroute to Questions: duplicates; the chat is where the user looks for them on reactivation.</td></tr>
       <tr><td>Messaging an inactive manager</td><td><span class="rec">Rec</span>The composer stays usable; Send becomes <i>Reactivate and send</i> with a one-step confirm. The draft is kept if you cancel.</td><td>Blocked: hostile. Queued: a message waiting on a state with no exit.</td></tr>
       <tr><td>Reactivation</td><td><span class="rec">Rec</span>Quiet by default. The server posts one <i>While inactive</i> summary (counts, no model). An unticked <i>Catch me up</i> box runs one forced check. Timers restart from now, so overdue jobs never fire in a burst.</td><td>Always catch up: a model call the user did not ask for.</td></tr>
@@ -279,7 +279,7 @@ pre .c{color:var(--soft-foreground)}pre .k{color:var(--violet)}pre .a{color:var(
 
   <!-- ===================================================== inbox -->
   <h2><span class="num">05</span>Questions and Approvals source blocks</h2>
-  <p class="sub">The workspace pages group cards by source. An inactive manager's group keeps its cards, grey avatar and a flag; approvals stay one click, questions ask to reactivate first.</p>
+  <p class="sub">The workspace pages group cards by source. An inactive manager's group keeps its cards, grey avatar and a flag; approvals stay one click; a question can be dismissed as is, or answered after reactivating.</p>
   <div class="inbox" id="inbox"></div>
 
   <!-- ===================================================== matrix -->
@@ -303,6 +303,7 @@ pre .c{color:var(--soft-foreground)}pre .k{color:var(--violet)}pre .a{color:var(
         <li><svg class="i s14 go"><use href="#check"/></svg><span>Tasks it started<small>Run to the end; their cards post into its chat.</small></span></li>
         <li><svg class="i s14 go"><use href="#check"/></svg><span>Automations linked to it<small>Run on schedule; reports post into its chat.</small></span></li>
         <li><svg class="i s14 go"><use href="#check"/></svg><span>Approvals<small>Decided on the server; the manager hears the decision later.</small></span></li>
+        <li><svg class="i s14 go"><use href="#check"/></svg><span>Dismissing its questions<small><code>dismissAsk</code> closes the card and leaves a note; no turn.</small></span></li>
         <li><svg class="i s14 go"><use href="#check"/></svg><span>Everything it knows<small>Chat, memory, jobs, cadence, connectors, settings: untouched, so reactivation restores them exactly.</small></span></li>
       </ul>
     </div>
@@ -403,7 +404,7 @@ const MANAGERS = [
 ]
 const INITIAL_INACTIVE = { qa: { since: 'yesterday 23:40', events: { tasks: 2, automations: 1, checks: 5, jobs: 1 } } }
 
-const S = { theme: 'dark', selected: 'ops', inactive: clone(INITIAL_INACTIVE), menu: null, dialog: null, catchUp: false, draft: '', reactivatedFrom: {}, phone: { screen: 'index', id: 'qa', sheet: false } }
+const S = { dismissed: {}, theme: 'dark', selected: 'ops', inactive: clone(INITIAL_INACTIVE), menu: null, dialog: null, catchUp: false, draft: '', reactivatedFrom: {}, phone: { screen: 'index', id: 'qa', sheet: false } }
 function clone(v) { return JSON.parse(JSON.stringify(v)) }
 const $ = (sel) => document.querySelector(sel)
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
@@ -427,9 +428,10 @@ function ordered() {
   const idle = MANAGERS.filter((m) => isIdle(m.id))
   return { active, idle }
 }
+const qOf = (m) => (S.dismissed[m.id] ? 0 : m.questions)
 const approvalsCount = () => MANAGERS.reduce((n, m) => n + m.approvals, 0)
-const questionsCount = () => MANAGERS.filter((m) => !isIdle(m.id)).reduce((n, m) => n + m.questions, 0)
-const idleQuestions = () => MANAGERS.filter((m) => isIdle(m.id)).reduce((n, m) => n + m.questions, 0)
+const questionsCount = () => MANAGERS.filter((m) => !isIdle(m.id)).reduce((n, m) => n + qOf(m), 0)
+const idleQuestions = () => MANAGERS.filter((m) => isIdle(m.id)).reduce((n, m) => n + qOf(m), 0)
 
 function previewOf(m) {
   if (isIdle(m.id)) return `Inactive · since ${S.inactive[m.id].since}`
@@ -445,7 +447,7 @@ function sidebarRow(m) {
     ${avatar(m, 30)}
     <span style="min-width:0"><span class="nm ${att ? 'att' : ''}" style="display:block">${esc(m.name)}</span>
     <span class="pv ${att === 'needs-you' ? 'info' : ''}" style="display:block">${esc(previewOf(m))}</span></span>
-    <span class="meta">${att ? `<span class="dot" style="background:${att === 'needs-you' ? 'var(--info)' : 'var(--violet)'}"></span>` : idle && m.approvals + m.questions > 0 ? '<span class="dot" style="background:var(--soft-foreground)"></span>' : ''}<span>${idle ? '' : m.age}</span></span>
+    <span class="meta">${att ? `<span class="dot" style="background:${att === 'needs-you' ? 'var(--info)' : 'var(--violet)'}"></span>` : idle && m.approvals + qOf(m) > 0 ? '<span class="dot" style="background:var(--soft-foreground)"></span>' : ''}<span>${idle ? '' : m.age}</span></span>
     <button class="icon-btn more" data-more="${m.id}" aria-label="More for ${esc(m.name)}">${icon('more', 's14')}</button>
   </div>`
 }
@@ -591,7 +593,7 @@ function dialogHtml(d, isStatic = false) {
         <li>${icon('x', 's14 stop')}<span>Notifications from this manager</span></li></ul></div>
       <div class="grp"><span class="eyebrow go">Keeps going</span><ul>
         <li>${icon('check', 's14 go')}<span>${m.tasks} task${m.tasks === 1 ? '' : 's'} it started, and automations that report to it</span></li>
-        <li>${icon('check', 's14 go')}<span>Its approvals — you can still answer them</span></li></ul></div>
+        <li>${icon('check', 's14 go')}<span>Its approvals — you can still answer them; its questions can still be dismissed</span></li></ul></div>
       ${working ? `<div class="warn">${esc(m.name)} is working right now; that turn stops.</div>` : ''}
       ${acts('Cancel', `${icon('power', 's14')}Deactivate`)}</div>`
   }
@@ -639,7 +641,7 @@ function phoneShell(inner, tab, extra = '') {
 function dirCard(m) {
   const idle = isIdle(m.id)
   const status = idle ? 'Inactive' : m.id === 'ops' ? 'Working' : 'Up to date'
-  const waiting = idle ? 0 : m.approvals + m.questions
+  const waiting = idle ? 0 : m.approvals + qOf(m)
   if (idle) {
     return `<div class="dcard idle" data-pcard="${m.id}" role="link" tabindex="0" style="align-items:center;padding:8px 10px">${avatar(m, 32)}
       <span style="min-width:0;flex:1"><span class="nm" style="font-size:13px;display:block">${esc(m.name)}</span>
@@ -704,15 +706,16 @@ function renderPhones() {
 function renderInbox() {
   const group = (m, kind) => {
     const idle = isIdle(m.id)
-    const items = kind === 'q' ? m.questions : m.approvals
+    const items = kind === 'q' ? qOf(m) : m.approvals
     if (!items) return ''
     const head = `<div class="grp-h">${avatar(m, 32)}<div style="flex:1;min-width:0"><div class="n" style="${idle ? 'color:var(--muted-foreground)' : ''}">${esc(m.name)}</div><div class="s">Manager${idle ? ' · inactive' : ''}</div></div><button class="btn btn-sm btn-outline">Open chat</button></div>`
     const src = `<div class="srcblk"><div class="xs muted" style="font-weight:500">Source task</div><b>Fix flaky worktree prune test</b> <span class="badge">PR #2329</span><div class="xs muted">cezar · review</div></div>`
     const card = kind === 'q'
-      ? `<div class="qcard ${idle ? 'idle' : ''}">${idle ? `<span class="flag">${icon('pause', 's14')}Manager inactive — answering reactivates it</span>` : ''}
+      ? `<div class="qcard ${idle ? 'idle' : ''}">${idle ? `<span class="flag">${icon('pause', 's14')}Manager inactive — answering reactivates it; dismissing does not</span>` : ''}
           <div><b>Ship v0.14.2 tonight or wait for the prune fix?</b></div>
           <div class="opts"><span class="opt">Ship tonight</span><span class="opt">Wait for the fix</span></div>${src}
-          ${idle ? `<button class="btn btn-sm btn-primary" style="align-self:flex-start" data-act="reactivate" data-id="${m.id}" data-where="desk">${icon('play', 's14')}Reactivate and answer…</button>` : ''}</div>`
+          <div style="display:flex;gap:8px;flex-wrap:wrap">${idle ? `<button class="btn btn-sm btn-primary" data-act="reactivate" data-id="${m.id}" data-where="desk">${icon('play', 's14')}Reactivate and answer…</button>` : ''}<button class="btn btn-sm btn-outline" data-act="dismiss-q" data-id="${m.id}">${icon('x', 's14')}Dismiss</button></div>
+          ${idle ? `<div class="xs soft">Dismiss closes the card now, costs nothing, and ${esc(m.name)} stays inactive. It hears “you skipped this” on its next turn.</div>` : ''}</div>`
       : `<div class="qcard ${idle ? 'idle' : ''}">${idle ? `<span class="flag">${icon('pause', 's14')}Manager inactive — it hears your decision when reactivated</span>` : ''}
           <div style="display:flex;align-items:center;gap:8px"><b>Merge PR #2329</b><span class="badge">checks green</span></div>
           <div class="muted small">feat: keep task worktrees from filling the disk</div>${src}
@@ -786,6 +789,7 @@ document.addEventListener('click', (e) => {
     else if (d.type === 'bulk') { ordered().active.forEach((m) => deactivate(m.id)); toast(`${icon('pause', 's14')}All managers are inactive. Nothing runs until you reactivate them.`) }
     renderAll(); return
   }
+  if (act === 'dismiss-q') { S.dismissed[t.dataset.id] = true; toast(`${icon('x', 's14')}<span>Question dismissed${isIdle(t.dataset.id) ? ` — <b>${esc(byId(t.dataset.id).name)}</b> stays inactive` : ''}.</span>`); renderAll(); return }
   if (act === 'noop') { S.menu = null; renderAll() }
 })
 document.addEventListener('contextmenu', (e) => {
@@ -804,7 +808,7 @@ document.querySelectorAll('#theme button').forEach((b) => b.addEventListener('cl
   document.documentElement.dataset.theme = b.dataset.v
   document.querySelectorAll('#theme button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)))
 }))
-$('#reset').addEventListener('click', () => { S.inactive = clone(INITIAL_INACTIVE); S.reactivatedFrom = {}; S.selected = 'ops'; S.menu = null; S.dialog = null; S.draft = ''; S.phone = { screen: 'index', id: 'qa', sheet: false }; renderAll() })
+$('#reset').addEventListener('click', () => { S.dismissed = {}; S.inactive = clone(INITIAL_INACTIVE); S.reactivatedFrom = {}; S.selected = 'ops'; S.menu = null; S.dialog = null; S.draft = ''; S.phone = { screen: 'index', id: 'qa', sheet: false }; renderAll() })
 renderAll()
 })()
 </script>

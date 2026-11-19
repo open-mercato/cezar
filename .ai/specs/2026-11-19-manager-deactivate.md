@@ -45,8 +45,10 @@ a VPS saving cost, a manager they only need during a release.
 - **Approvals** stay answerable and keep counting in the Approvals badge: `decide` performs the merge
   or enable itself and only leaves a note, so it costs nothing. The card says "Manager inactive — it
   hears your decision when reactivated."
-- **Questions** stay visible, marked "manager inactive", but drop out of the Questions badge: an
-  answer is a chat turn, so the button reads **Reactivate and answer** and asks first.
+- **Questions** stay visible, marked "manager inactive", but drop out of the Questions badge. Two
+  ways out: **Dismiss** works as is — `dismissAsk` closes the card and leaves a note, no model call,
+  and the manager stays inactive; an answer is a chat turn, so it reads **Reactivate and answer**
+  and asks first.
 - **Automations that report to it** still run and still post their report into its chat (no model);
   the unread dot shows grey.
 - **Sending a message**: the composer stays usable; Send reads **Reactivate and send** and opens a
@@ -76,4 +78,5 @@ folded rail, manager index and CezarBot home, Questions and Approvals source blo
 - Chat and Check now return 409; chat with `reactivate: true` reactivates and runs one turn.
 - Reactivate: no immediate turn without `catchUp`; with it, exactly one forced watch; the next job
   fires at `activeSince + everyMinutes`, not at once.
+- Dismissing an inactive manager's question closes it with no turn and leaves it inactive.
 - Cockpit: the grey avatar and badge, the confirm flow, the Questions badge exclusion.
