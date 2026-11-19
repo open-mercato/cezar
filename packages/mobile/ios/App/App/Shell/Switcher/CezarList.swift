@@ -36,7 +36,8 @@ enum CezarList {
 }
 
 /// The page's `probe`: `DeviceProbes` once over every saved cezar, done when all answered or at the bound,
-/// each reading noted in the book as the switcher does, then the warm links let go. The readings outlive
+/// each reading noted in the book as the switcher does, then the warm links let go. A relay link reads online
+/// before its counts, so the round waits for them too, as Android's probe does, up to the bound. The readings outlive
 /// it, so the next listed outcome carries them. A probe while one runs joins it.
 final class CezarProbe {
     typealias Make = (@escaping (String, DeviceSwitch.Reading) -> Void) -> DeviceProbes
@@ -45,15 +46,20 @@ final class CezarProbe {
     private let book: DeviceBookStore
     private let clock: () -> Int64
     private let onBadge: (Int) -> Void
+    private let schedule: DeviceProbes.Scheduler
     private let lock = NSLock()
     private var running: DeviceProbes?
     private var waiters: [() -> Void] = []
     private var readings: [String: DeviceSwitch.Reading] = [:]
     private var currentId: String?
+    /// The relay cezars of the running round, whose online reading waits for its counts.
+    private var relayIds: Set<String> = []
 
     /// `onBadge`: the icon's sum, when a reading told counts.
-    init(make: @escaping Make, book: DeviceBookStore, clock: @escaping () -> Int64, onBadge: @escaping (Int) -> Void = { _ in }) {
+    init(make: @escaping Make, book: DeviceBookStore, clock: @escaping () -> Int64, onBadge: @escaping (Int) -> Void = { _ in },
+         schedule: @escaping DeviceProbes.Scheduler = DeviceProbes.background) {
         self.make = make
+        self.schedule = schedule
         self.book = book
         self.clock = clock
         self.onBadge = onBadge
@@ -69,6 +75,7 @@ final class CezarProbe {
         }
         waiters = [done]
         self.currentId = currentId
+        relayIds = Set(servers.filter { $0.relay != nil && $0.id != currentId }.map(\.id))
         let probes = make { [weak self] id, reading in self?.changed(id, reading) }
         running = probes
         lock.unlock()
@@ -78,6 +85,10 @@ final class CezarProbe {
             if let currentId { book.noted(currentId, online: true, waiting: nil, failed: nil, at: now) }
         }
         probes.start(servers, currentId: currentId)
+        schedule(DeviceProbes.boundMs) { [weak self, weak probes] in
+            guard let probes else { return }
+            self?.finishIfAnswered(probes, atBound: true)
+        }
         finishIfAnswered()
     }
 
@@ -97,14 +108,18 @@ final class CezarProbe {
         finishIfAnswered()
     }
 
-    private func finishIfAnswered() {
+    /// `only`: the round the bound belongs to, which may have ended already.
+    private func finishIfAnswered(_ only: DeviceProbes? = nil, atBound: Bool = false) {
         lock.lock()
-        guard let probes = running else {
+        guard let probes = running, only == nil || only === probes else {
             lock.unlock()
             return
         }
         let snapshot = probes.snapshot()
-        guard !snapshot.values.contains(where: { $0.status == .checking }) else {
+        let waiting = snapshot.contains { id, reading in
+            reading.status == .checking || (reading.status == .online && reading.attention == nil && relayIds.contains(id))
+        }
+        guard atBound || !waiting else {
             lock.unlock()
             return
         }

@@ -351,5 +351,33 @@ do {
     expect(done == 4, "nothing saved: done at once")
 }
 
+// CezarProbe: a relay link reads online before its counts arrive; the round waits for them, up to the bound
+do {
+    final class Memory: DeviceBookStorage {
+        var data: Data?
+        func read() -> Data? { data }
+        func write(_ data: Data) { self.data = data }
+    }
+    let manual = Manual()
+    var reports: [String: (DeviceSwitch.Reading) -> Void] = [:]
+    let store = DeviceBookStore(storage: Memory())
+    let cezars = CezarProbe(make: { onChange in
+        DeviceProbes(relay: { server, report in reports[server.id] = report }, direct: { server, report in reports[server.id] = report },
+                     release: { _ in }, schedule: manual.schedule, onChange: onChange)
+    }, book: store, clock: { noon }, schedule: manual.schedule)
+    var done = 0
+    cezars.probe([relayServer, directServer], currentId: nil) { done += 1 }
+    reports["d"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    reports["r"]!(.init(.online))
+    expect(done == 0, "an online relay link without counts keeps the round open")
+    reports["r"]!(.init(.online, attention: .init(waiting: 1, failed: 0)))
+    expect(done == 1 && cezars.rows([relayServer], now: noon)[0].need == 1, "the counts land, then the round ends")
+    cezars.probe([relayServer], currentId: nil) { done += 1 }
+    reports["r"]!(.init(.online))
+    expect(done == 1, "still waiting for counts")
+    manual.fire()
+    expect(done == 2, "the bound ends it without counts")
+}
+
 print("\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
