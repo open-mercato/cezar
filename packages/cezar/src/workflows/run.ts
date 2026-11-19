@@ -4681,6 +4681,33 @@ export class RunManager {
     return this.retentionPass.then(() => out);
   }
 
+  private restoresInFlight = new Map<string, Promise<boolean>>();
+  /**
+   * Bring back a reclaimed task's worktree for a surface that needs the tree — the diff, Changes,
+   * Commits and the draft-PR gate of a `review` run age retention reclaimed (spec
+   * 2026-11-19-worktree-disk-usage). The note it appends is activity, so the next sweep leaves the
+   * restored tree alone. True when the tree exists afterwards.
+   */
+  restoreReclaimedWorktree(runId: string): Promise<boolean> {
+    const run = this.store.getRun(runId);
+    if (!run?.worktreePath) return Promise.resolve(false);
+    if (existsSync(run.worktreePath)) return Promise.resolve(true);
+    if (!run.worktreeReclaimedAt) return Promise.resolve(false);
+    let pending = this.restoresInFlight.get(runId);
+    if (!pending) {
+      pending = rematerializeReclaimedWorktree(this.repoRoot, this.store, runId)
+        .then((restored) => {
+          if (restored) this.store.appendEvent(runId, { type: 'note', message: 'worktree restored from its branch' });
+          const now = this.store.getRun(runId);
+          return !!now?.worktreePath && existsSync(now.worktreePath);
+        })
+        .catch(() => false)
+        .finally(() => this.restoresInFlight.delete(runId));
+      this.restoresInFlight.set(runId, pending);
+    }
+    return pending;
+  }
+
   private retentionScheduled = false;
   /** One retention pass on the next tick, however many runs finished in this one (#2003). */
   scheduleRetention(): void {
@@ -7715,6 +7742,8 @@ export class RunManager {
         return 'failed';
       }
       case 'github.draft-pr': {
+        // A review gate idle long enough for age retention lost its tree; the branch brings it back.
+        if (record()?.worktreeReclaimedAt) await this.restoreReclaimedWorktree(runId);
         const run = record();
         if (!run) return 'failed';
         // A gate answered "open a full PR": ready for review instead of a draft.

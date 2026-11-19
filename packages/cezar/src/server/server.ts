@@ -6003,20 +6003,20 @@ export function createApp(deps: ServerDeps) {
     // Task diff (spec 006): what this run changed — its worktree vs its base.
     .get('/runs/:id/diff', async (c) => {
       const { store } = c.get('project');
-      const run = store.getRun(c.req.param('id'));
+      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
       if (!run) return c.json({ error: 'not found' }, 404);
       if (!run.worktreePath || !existsSync(run.worktreePath)) {
-        return c.text('(no worktree — this task ran directly in the repo working tree)');
+        return c.text(run.worktreeReclaimedAt ? `(${RECLAIMED_WORKTREE})` : '(no worktree — this task ran directly in the repo working tree)');
       }
       return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD'));
     })
 
     .get('/runs/:id/changes', async (c) => {
       const { root: repoRoot, store } = c.get('project');
-      const run = store.getRun(c.req.param('id'));
+      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectChanges(workingDirectory, run.baseBranch ?? 'HEAD', {
         taskBranch: run.branch,
         // Anchors a repointed worktree at the branch as this run found it (#751).
@@ -6032,10 +6032,10 @@ export function createApp(deps: ServerDeps) {
     // The run's own commits (<base>..HEAD on the worktree branch) — the Commits tab.
     .get('/runs/:id/commits', async (c) => {
       const { root: repoRoot, store } = c.get('project');
-      const run = store.getRun(c.req.param('id'));
+      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectRunCommits(workingDirectory, run.baseBranch ?? 'HEAD');
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ commits: result.commits });
@@ -6044,10 +6044,10 @@ export function createApp(deps: ServerDeps) {
     // One of the run's commits, structured like the Changes tab (reuses collectCommitChanges).
     .get('/runs/:id/commit/:sha', async (c) => {
       const { root: repoRoot, store } = c.get('project');
-      const run = store.getRun(c.req.param('id'));
+      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectCommitChanges(workingDirectory, c.req.param('sha'));
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.commit);
@@ -6327,9 +6327,9 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const draft = c.req.valid('json').draft ?? true;
       const id = c.req.param('id');
-      const run = store.getRun(id);
-      if (!run) return c.json({ error: 'not found' }, 404);
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
+      const run = (await withRestoredWorktree(c.get('project'), store.getRun(id)))!;
       // A pull-request head run's branch holds the whole foreign PR under this run's changes: a
       // draft PR from it into the default base would re-propose that PR (spec
       // 2026-10-06-agentic-e2e-checks Phase 3). Refused until publishing back is designed.
@@ -6342,7 +6342,7 @@ export function createApp(deps: ServerDeps) {
       if (!run.worktreePath || !existsSync(run.worktreePath) || !run.branch) {
         return c.json(
           {
-            error: 'no worktree/branch to publish — this task ran in the repo working tree',
+            error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : 'no worktree/branch to publish — this task ran in the repo working tree',
           },
           400,
         );
@@ -6770,6 +6770,14 @@ export function createApp(deps: ServerDeps) {
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
+  const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk and could not be restored — its branch is kept; Continue restores it';
+  /** A `review` run age retention reclaimed still shows its diff and opens its PR (spec
+   *  2026-11-19-worktree-disk-usage): the tree comes back from the kept branch on demand. */
+  const withRestoredWorktree = async (project: { store: RunStore; manager: RunManager }, run: RunRecord | undefined): Promise<RunRecord | undefined> => {
+    if (!run?.worktreeReclaimedAt || !run.worktreePath || existsSync(run.worktreePath) || project.manager.isActive(run.id)) return run;
+    await project.manager.restoreReclaimedWorktree?.(run.id);
+    return project.store.getRun(run.id) ?? run;
+  };
 
   /** Every pull request number this run points at — the one it created and the one it is about
    *  (#901), from whichever field carries it. Used to invalidate what the forge told us about
