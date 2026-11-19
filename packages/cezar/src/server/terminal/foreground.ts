@@ -141,8 +141,12 @@ function readProcessTable(): Promise<ProcessRow[] | null> {
   return new Promise((resolve) => {
     // Windows has no `ps`, and a hardened container can hide the table; both land on `null`,
     // which says "unknown" rather than "nothing running".
-    execFile('ps', ['-axo', 'pid=,ppid=,command='], { maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
-      resolve(error ? null : parseProcessRows(stdout));
-    });
+    try {
+      execFile('ps', ['-axo', 'pid=,ppid=,command='], { maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+        resolve(error ? null : parseProcessRows(stdout));
+      });
+    } catch {
+      resolve(null); // a synchronous spawn throw is "unknown" too (#2312)
+    }
   });
 }

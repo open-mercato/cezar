@@ -151,7 +151,11 @@ interface NodeProcess { pid: number; cwd?: string; args: string[] }
 
 function run(command: string, args: string[]): Promise<string> {
   return new Promise((done) => {
-    execFile(command, args, { timeout: PROBE_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' }, (_error, stdout) => done(stdout ?? ''));
+    try {
+      execFile(command, args, { timeout: PROBE_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' }, (_error, stdout) => done(stdout ?? ''));
+    } catch {
+      done(''); // a synchronous spawn throw degrades like a failed probe (#2312)
+    }
   });
 }
 
