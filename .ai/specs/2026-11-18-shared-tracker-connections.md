@@ -116,6 +116,8 @@ once its shared record is gone, so `status != valid` cleanup scripts never drop 
   credentials" rewrites the shared record and gives every link a fresh revision in one operation
   (links are local and can be scanned), so each project reconnects its scope once, without
   re-typing. The per-link revision design above is what makes this possible.
+  Until then: save the new token as a new shared connection, re-pick it in each project, then
+  `cez tracker-connections remove shared-<uuid>` the old one (documented in `docs/issue-trackers.md`).
 - A cockpit action to delete a shared connection (CLI only for now).
 - Align with the draft integration-providers spec (#1613), which generalizes the store to
   `integration-connections/<sha256(root)>/<connectionId>`; shared records would sit beside it

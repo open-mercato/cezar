@@ -142,6 +142,9 @@ The [GraphQL API](https://linear.app/developers/graphql) describes key authentic
 [rate limits](https://linear.app/developers/rate-limiting).
 
 Rotate or renew an expired token using Replace credentials in project Settings, then reconnect the scope.
+A shared connection cannot be edited. To rotate its token, save the new token as a new shared connection
+(untick **Visible only for this project**), pick it under **Use a shared connection** in each project that
+used the old one, then delete the old one with `cez tracker-connections remove shared-<uuid>`.
 Changing the Jira site or Linear organization requires explicitly reconnecting the project;
 saved IDs are never silently retargeted.
 

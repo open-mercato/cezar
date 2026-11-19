@@ -259,6 +259,7 @@ export class TrackerConnections {
         return { error: error instanceof SecretsError && /data key unavailable/.test(error.message) ? error.message : null };
       }
       // Picking the connection already in use keeps its revision, so a retry never disconnects the scope.
+      // Read outside the lock on purpose: a racing pick only commits a fresh revision under it (spec 2026-11-18-shared-tracker-connections).
       const current = await this.readEncrypted(this.id(projectRoot)).catch(() => null);
       if (current && isLink(current) && current.sharedId === shared.id) {
         return { record: { id: current.id, projectRoot, credentials: shared.credentials } };
