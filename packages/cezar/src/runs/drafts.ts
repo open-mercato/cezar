@@ -241,15 +241,6 @@ export function readRunDrafts(dataDir: string, runId: string): RunDraftsResponse
   return { surfaces };
 }
 
-/** One surface, or `undefined`. */
-export function readRunDraftSurface(
-  dataDir: string,
-  runId: string,
-  surface: string,
-): DraftEntry | undefined {
-  return readRunDrafts(dataDir, runId).surfaces[surface];
-}
-
 /** How many attachments one surface already holds — the per-draft cap, answered from `draft.json`
  *  alone so an upload never touches the blobs it is about to sit beside. Never throws. */
 export function countRunDraftImages(dataDir: string, runId: string, surface: string): number {

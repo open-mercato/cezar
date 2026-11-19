@@ -6,14 +6,12 @@ import {
   Controls,
   MarkerType,
   ReactFlow,
-  ReactFlowProvider,
   type Edge,
   type Node,
   type NodeProps,
 } from '@xyflow/react'
 import { ExternalLinkIcon, WorkflowIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
 
@@ -32,7 +30,6 @@ import {
   type NodeRunState,
 } from '@/lib/workflow-graph'
 
-import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
 import { backLanes, closedLabel, edgeStyle, edgeTypes, GraphNodeView } from './graph-node'
 import { FloatingPanel } from './workflow-graph'
@@ -94,18 +91,6 @@ function closingStepOf(run: ApiRun): { stepId: string; as: RunClosure } | undefi
   const as = runClosure(run)
   const stepId = as ? closingStepId(run.steps) : undefined
   return as && stepId ? { stepId, as } : undefined
-}
-
-export function TaskGraphRoute() {
-  const { id } = useParams<{ id: string }>()
-  const run = useRun(id)
-  if (run.isPending) return <GitTabLoading tab="changes" />
-  if (run.isError) return <GitTabLoadError tab="changes" error={run.error} />
-  return (
-    <ReactFlowProvider>
-      <TaskGraphView run={run.data} />
-    </ReactFlowProvider>
-  )
 }
 
 export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {

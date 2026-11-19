@@ -30,11 +30,6 @@ export function rememberViewState(key: string, value: unknown): void {
   for (const listener of listeners.get(key) ?? []) listener(value)
 }
 
-/** Read a remembered value from outside the view that owns it — to ask before overwriting it. */
-export function recallViewState(key: string): unknown {
-  return memory.get(key)
-}
-
 /** Forget everything remembered for a key prefix — for a task that was deleted. */
 export function forgetViewMemory(prefix: string): void {
   for (const key of [...memory.keys()]) if (key.startsWith(prefix)) memory.delete(key)

@@ -7,9 +7,6 @@
 
 export const DESIGN_PICKS_SURFACE = 'design-picks'
 
-/** More than this in one message is a page dump, not a selection. */
-export const DESIGN_PICKS_MAX = 12
-
 /** What `POST /runs/:id/messages` accepts — the same cap `messageWithReview` guards. */
 export const MESSAGE_TEXT_MAX = 100_000
 

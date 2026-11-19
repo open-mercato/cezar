@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
@@ -229,14 +229,6 @@ export function handoffProgressExcerpt(text: string, maxLines = 3): string {
     if (lines.length >= maxLines) break;
   }
   return lines.join('\n');
-}
-
-export function deleteHandoff(dataDir: string, runId: string): void {
-  try {
-    rmSync(handoffPath(dataDir, runId), { force: true });
-  } catch {
-    // best effort
-  }
 }
 
 /**

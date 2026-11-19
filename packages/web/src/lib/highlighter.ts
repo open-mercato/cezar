@@ -282,16 +282,6 @@ export async function highlight(code: string, lang: string, options: HighlightOp
   return highlightSync(code, lang, options) ?? plaintext(code)
 }
 
-/** Test seam: drop the singleton so a suite can assert cold-boot behavior. */
-export function resetHighlighterForTests(): void {
-  core = null
-  corePromise = null
-  loadedLangs.clear()
-  langPromises.clear()
-  resultCache.clear()
-  lastStored = null
-}
-
 /** Test seam: how many highlighted results are cached. */
 export function highlightCacheSizeForTests(): number {
   return resultCache.size

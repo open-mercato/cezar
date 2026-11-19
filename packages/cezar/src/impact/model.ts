@@ -210,11 +210,3 @@ export const reviewModelSchema = z.strictObject({
 });
 
 export type ReviewModel = z.infer<typeof reviewModelSchema>;
-export type ReviewEvidence = z.infer<typeof evidenceSchema>;
-export type ReviewNode = z.infer<typeof nodeSchema>;
-export type ReviewEdge = z.infer<typeof edgeSchema>;
-export type ReviewView = z.infer<typeof viewSchema>;
-export type ReviewCapability = z.infer<typeof capabilitySchema>;
-export type ReviewFlow = z.infer<typeof flowSchema>;
-export type ApiChange = z.infer<typeof apiChangeSchema>;
-export type SubjectKind = z.infer<typeof subjectKindSchema>;

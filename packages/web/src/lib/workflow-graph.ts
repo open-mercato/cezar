@@ -14,7 +14,6 @@ import type { RunClosure } from './attention'
  */
 
 export type GraphNodeType = WorkflowGraphNode['type']
-export type AgentNode = Extract<WorkflowGraphNode, { type: 'agent' }>
 export type PortTone = 'success' | 'failure' | 'verdict' | 'neutral'
 
 const PORTS: Record<GraphNodeType, readonly string[]> = {

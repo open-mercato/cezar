@@ -2301,15 +2301,6 @@ export async function putRunDraft(
   )
 }
 
-export async function deleteRunDraft(id: string, surface: string): Promise<DeleteDraftResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$delete({
-      param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
-    }),
-    runPath(id, `/drafts/${surface}`),
-  )
-}
-
 /** Upload one attachment. Called when the image is ATTACHED, not when the message is sent, so a
  *  draft record only ever references bytes the server already holds. */
 export async function postRunDraftImage(
