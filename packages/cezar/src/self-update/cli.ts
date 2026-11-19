@@ -5,6 +5,7 @@
  */
 
 import { resolve } from 'node:path';
+import { parseArgs } from 'node:util';
 
 import { branchOf, cezarPackageRoot, discoverCheckouts } from './checkouts.ts';
 import { activate, activeId, findInstalled, linkCheckout, listInstalled, listLinks, removeInstalled } from './layout.ts';
@@ -13,6 +14,7 @@ import { installFromRegistry } from './installer.ts';
 import { distTagFor, RegistryCache } from './registry.ts';
 import { compareVersions } from './semver.ts';
 import type { SelfUpdateService } from './service.ts';
+import { autoPruneVersions, configuredVersionRetention, DEFAULT_VERSION_RETENTION, listVersionBackups, pruneVersions, type PruneResult } from './versions-prune.ts';
 
 export interface SelfUpdateCliOptions {
   service: SelfUpdateService;
@@ -113,6 +115,8 @@ async function updateCommand(opts: SelfUpdateCliOptions): Promise<number> {
     const installed = findInstalled(target);
     const id = installed ? installed.id : (await installFromRegistry(target, { onLog: (line) => console.log(`  · ${line}`) })).id;
     activate(id);
+    const pruned = await autoPruneVersions({ entry: service.entry });
+    if (pruned && pruned.removed.length > 0) console.log(`  ✓ pruned ${pruned.removed.length} old version(s): ${pruned.removed.map((entry) => entry.id).join(', ')}`);
     const dir = writeLaunchers();
     console.log(`\n  ✓ ${id} is now current — start it with: ${isOnPath(dir) ? 'cezar' : `${dir}/cezar`}\n`);
     return 0;
@@ -140,12 +144,86 @@ async function versionsCommand(): Promise<number> {
       console.log(`    ${checkout.branch.padEnd(34)} ${checkout.built ? 'built    ' : 'not built'} ${checkout.worktree}`);
     }
   }
+  const backups = listVersionBackups();
+  if (backups.length > 0) {
+    console.log('\n  backups (remove with: cezar versions prune --backups):');
+    for (const backup of backups) console.log(`    ${backup.path}`);
+  }
   const registry = await new RegistryCache('@open-mercato/cezar').get();
   if (registry) {
     console.log(`\n  registry: stable ${registry.distTags[distTagFor('stable')] ?? '—'} · nightly ${registry.distTags[distTagFor('nightly')] ?? '—'}`);
   }
-  console.log('\n  switch with: cezar use <id>\n');
+  console.log('\n  switch with: cezar use <id>  ·  remove old ones with: cezar versions prune\n');
   return 0;
+}
+
+export const VERSIONS_PRUNE_USAGE = `usage: cezar versions prune [--keep <n>] [--dry-run] [--backups]
+
+  Remove old installs under ~/.cezar/versions, keeping the running version plus the
+  most recently installed others (n in total). Never removes the active (\`current\`)
+  version, one a running cezar uses, or a linked checkout, and does nothing while an
+  install is in progress.
+
+  --keep <n>   versions to keep, the running one included (default: versionRetention
+               in ~/.cezar/config.json, else ${DEFAULT_VERSION_RETENTION})
+  --dry-run    print what would be removed; remove nothing
+  --backups    also remove ~/.cezar/versions.backup-* directories (never automatic)`;
+
+/** `cezar versions prune` — the manual twin of the startup/post-update prune. */
+export async function runVersionsPruneCommand(args: string[], opts: { entry: string; env?: NodeJS.ProcessEnv }): Promise<number> {
+  let values: { keep?: string; 'dry-run'?: boolean; backups?: boolean; help?: boolean };
+  try {
+    ({ values } = parseArgs({
+      args,
+      options: {
+        keep: { type: 'string' },
+        'dry-run': { type: 'boolean', default: false },
+        backups: { type: 'boolean', default: false },
+        help: { type: 'boolean', short: 'h', default: false },
+      },
+      allowPositionals: false,
+    }));
+  } catch (error) {
+    console.error(`  ${error instanceof Error ? error.message : String(error)}\n\n${VERSIONS_PRUNE_USAGE}`);
+    return 1;
+  }
+  if (values.help) {
+    console.log(VERSIONS_PRUNE_USAGE);
+    return 0;
+  }
+  let keep: number;
+  if (values.keep !== undefined) {
+    keep = Number(values.keep);
+    if (!/^\d+$/.test(values.keep) || keep < 1) {
+      console.error(`  --keep must be a whole number of at least 1 (got ${values.keep})`);
+      return 1;
+    }
+  } else {
+    // A configured 0 turns off the AUTOMATIC prune; asking by hand still means the default.
+    keep = (await configuredVersionRetention()) || DEFAULT_VERSION_RETENTION;
+  }
+  const result = await pruneVersions({ keep, dryRun: values['dry-run'], backups: values.backups, entry: opts.entry, env: opts.env });
+  printPruneResult(result);
+  return result.failed.length > 0 ? 1 : 0;
+}
+
+export function printPruneResult(result: PruneResult): void {
+  const verb = result.dryRun ? 'would remove' : 'removed';
+  console.log(`\n  cezar versions prune — keep ${result.keep}${result.dryRun ? ' (dry run)' : ''}\n`);
+  if (result.skipped) console.log(`  ! skipped: ${result.skipped}\n`);
+  for (const entry of result.kept) console.log(`    keep    ${entry.id.padEnd(36)} ${entry.reason}`);
+  for (const entry of result.removed) console.log(`  - ${result.dryRun ? 'remove ' : 'removed'} ${entry.id.padEnd(36)} installed ${entry.installedAt.slice(0, 10)}`);
+  for (const failure of result.failed) console.log(`  ✗ failed  ${failure.id.padEnd(36)} ${failure.error}`);
+  if (result.backups.length > 0) {
+    console.log('\n  backups:');
+    for (const backup of result.backups) {
+      const state = backup.removed ? (result.dryRun ? 'would remove' : 'removed') : 'kept — remove with --backups';
+      console.log(`    ${backup.path}  (${state})`);
+    }
+  }
+  const backups = result.backups.filter((backup) => backup.removed).length;
+  const summary = `${verb} ${result.removed.length} version(s)${backups > 0 ? ` and ${backups} backup(s)` : ''}`;
+  console.log(`\n  ${result.dryRun ? '·' : '✓'} ${summary}${result.dryRun ? ' — run without --dry-run to delete' : ''}\n`);
 }
 
 async function useCommand(id: string | undefined): Promise<number> {
