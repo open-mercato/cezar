@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deactivate a manager without deleting it — design</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.1.0/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/jetbrains-mono@5.1.0/index.css">
+<style>
+/* Tokens copied from packages/web/src/styles/index.css */
+:root{
+  --background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--sidebar:#171717;--muted:#262626;
+  --muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;--input:#262626;
+  --primary:#6457e8;--primary-foreground:#fff;--violet:#8f86e8;--ring:#8f86e8;
+  --danger:#ef4444;--success:#10b981;--pending:#fbbf24;--info:#93c5fd;
+  --grad:linear-gradient(135deg,#b4f372 12%,#eefb63 58%,#bc9aff 100%);
+  --sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);
+  --idle-filter:grayscale(1) opacity(.5);
+}
+[data-theme=light]{
+  --background:#fff;--foreground:#171717;--card:#fff;--card-2:#fbfbfb;--sidebar:#fafafa;--muted:#f4f4f4;
+  --muted-foreground:#5c5c5c;--soft-foreground:#767676;--border:#ebebeb;--input:#ebebeb;
+  --primary:#5b52c7;--violet:#5b52c7;--ring:#5b52c7;--info:#1d4ed8;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.12);
+  --idle-filter:grayscale(1) opacity(.45);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--mono);font-size:12px}
+button{font:inherit;color:inherit;cursor:pointer}
+.wrap{max-width:1240px;margin:0 auto;padding:32px 24px 96px}
+h1{font-size:26px;letter-spacing:-.02em;margin:0 0 6px}
+h2{font-size:18px;margin:56px 0 6px;letter-spacing:-.01em}
+h2 .num{color:var(--soft-foreground);font-weight:500;margin-right:8px}
+h3{font-size:14px;margin:22px 0 8px}
+.lead{color:var(--muted-foreground);max-width:820px;margin:0}
+.sub{color:var(--muted-foreground);max-width:820px;margin:0 0 18px}
+.grad-rule{height:3px;border-radius:2px;background:var(--grad);width:96px;margin:14px 0 20px}
+.muted{color:var(--muted-foreground)}.soft{color:var(--soft-foreground)}
+.small{font-size:12px}.xs{font-size:11px}
+.controls{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--background) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);margin:24px -24px 0;padding:10px 24px;display:flex;flex-wrap:wrap;gap:12px 22px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px}
+.ctl>label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground)}
+.seg{display:inline-flex;background:var(--muted);border:1px solid var(--border);border-radius:10px;padding:2px}
+.seg button{border:0;background:transparent;padding:4px 10px;border-radius:8px;font-size:12px;color:var(--muted-foreground)}
+.seg button[aria-pressed=true]{background:var(--card);color:var(--foreground);box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.chipbtn{border:1px solid var(--border);background:var(--card);border-radius:999px;padding:3px 10px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+.chipbtn:hover{background:var(--muted)}
+
+/* shadcn-ish atoms */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:10px;border:1px solid transparent;font-size:13px;font-weight:500;height:32px;padding:0 12px;white-space:nowrap}
+.btn-sm{height:28px;padding:0 10px;font-size:12px;border-radius:8px}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-outline{border-color:var(--border);background:var(--background)}
+.btn-outline:hover{background:var(--muted)}
+.btn-ghost{background:transparent}.btn-ghost:hover{background:var(--muted)}
+.btn-danger{background:var(--danger);color:#fff}
+.icon-btn{width:32px;height:32px;padding:0;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:var(--muted-foreground)}
+.icon-btn:hover{background:var(--muted);color:var(--foreground)}
+svg.i{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+svg.i.s14{width:14px;height:14px}svg.i.s20{width:20px;height:20px}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.pill{margin-left:auto;border-radius:999px;padding:1px 6px;font-size:10px;font-weight:600;font-variant-numeric:tabular-nums}
+.pill.on{background:var(--info);color:var(--background)}.pill.off{background:var(--muted);color:var(--muted-foreground)}
+.badge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;border:1px solid var(--border);color:var(--muted-foreground);background:var(--muted)}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+.switch{width:30px;height:18px;border-radius:999px;background:var(--input);position:relative;flex-shrink:0;border:0;padding:0}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .15s}
+.switch[aria-checked=true]{background:var(--primary)}.switch[aria-checked=true]::after{transform:translateX(12px)}
+
+/* avatar */
+.av{position:relative;display:inline-flex;flex-shrink:0}
+.av svg{width:100%;height:100%;transition:filter .25s}
+.av.idle svg{filter:var(--idle-filter)}
+.av .pause{position:absolute;right:-2px;bottom:-2px;width:42%;height:42%;min-width:12px;min-height:12px;border-radius:50%;background:var(--muted);border:2px solid var(--card);display:none;align-items:center;justify-content:center;color:var(--muted-foreground)}
+.av.idle .pause{display:flex}
+.av .pause i{display:block;width:44%;height:44%;border-left:2px solid currentColor;border-right:2px solid currentColor}
+
+/* frame */
+.frame{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--background);box-shadow:0 1px 0 rgba(255,255,255,.02)}
+.frame-bar{display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--card)}
+.frame-bar i{width:10px;height:10px;border-radius:50%;background:var(--muted)}
+.frame-bar span{margin-left:10px;font-size:11px;color:var(--soft-foreground);font-family:var(--mono)}
+.desk{display:grid;grid-template-columns:256px minmax(0,1fr);height:640px;position:relative}
+.sb{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.sb-top{padding:12px 12px 8px;display:flex;flex-direction:column;gap:10px}
+.modeswitch{display:grid;grid-template-columns:1fr 1fr;background:var(--muted);border-radius:10px;padding:2px;font-size:12px}
+.modeswitch span{text-align:center;padding:4px;border-radius:8px;color:var(--muted-foreground)}
+.modeswitch span.on{background:var(--card);color:var(--foreground)}
+.sb-list{flex:1;overflow:auto;padding:0 10px 8px}
+.sb-h{display:flex;align-items:center;gap:6px;padding:4px 8px 4px}
+.sb-h .icon-btn{width:22px;height:22px;margin-left:auto}
+.mrow{display:grid;grid-template-columns:30px minmax(0,1fr) auto;align-items:center;gap:10px;border-radius:8px;padding:6px 8px;position:relative;cursor:pointer;user-select:none}
+.mrow:hover{background:var(--muted)}.mrow.sel{background:var(--muted)}
+.mrow .nm{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow .nm.att{font-weight:600}
+.mrow .pv{font-size:12px;color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow .pv.info{color:var(--info)}
+.mrow .meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:11px;color:var(--muted-foreground)}
+.mrow .more{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:none;background:var(--card);border:1px solid var(--border);width:24px;height:24px}
+.mrow:hover .more,.mrow.menu-open .more{display:inline-flex}
+.mrow:hover .meta,.mrow.menu-open .meta{visibility:hidden}
+.mrow.idle .nm{color:var(--muted-foreground)}
+.mrow.idle .pv{color:var(--soft-foreground)}
+.idle-div{display:flex;align-items:center;gap:8px;padding:8px 8px 2px;font-size:11px;color:var(--soft-foreground)}
+.idle-div::after{content:"";flex:1;height:1px;background:var(--border)}
+.nav-row{display:flex;align-items:center;gap:8px;border-radius:8px;padding:6px 12px;font-size:13px;color:var(--muted-foreground)}
+.nav-row:hover{background:var(--muted);color:var(--foreground)}
+.menu{position:absolute;z-index:15;background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-modal);padding:6px;min-width:220px;font-size:13px}
+.menu .mi{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;color:var(--muted-foreground);width:100%;border:0;background:transparent;text-align:left}
+.menu .mi:hover{background:var(--muted);color:var(--foreground)}
+.menu .mi.danger{color:var(--danger)}
+.menu .mi.hl{color:var(--foreground)}
+.menu .sep{height:1px;background:var(--border);margin:5px 2px}
+.menu .note{padding:4px 8px;font-size:11px;color:var(--soft-foreground)}
+
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+.ch-head{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)}
+.ch-head h4{margin:0;font-size:15px;font-weight:600}
+.ch-head .sl{font-size:12px;color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.banner{display:flex;align-items:center;gap:10px;padding:8px 20px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--muted) 70%,transparent);font-size:13px}
+.banner .t{font-weight:600}
+.banner .d{color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.banner .btn{margin-left:auto}
+.needs{display:flex;align-items:center;gap:10px;padding:8px 20px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--info) 10%,transparent);font-size:13px}
+.transcript{flex:1;overflow:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px}
+.msg-u{align-self:flex-end;max-width:70%;background:var(--muted);border-radius:14px;padding:8px 12px;font-size:13px}
+.msg-a{display:flex;gap:10px;max-width:92%}
+.msg-a .body{font-size:13px}
+.msg-a .who{font-size:12px;font-weight:600;margin-bottom:2px}
+.msg-a .who span{font-weight:400;color:var(--muted-foreground);margin-left:6px}
+.tcard{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:10px 12px;font-size:13px;margin-top:6px}
+.tcard .tt{display:flex;align-items:center;gap:8px;font-weight:600}
+.tcard .ft{margin-top:6px;font-size:11px;color:var(--soft-foreground);display:flex;align-items:center;gap:6px}
+.divider{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--soft-foreground)}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
+.summary{border:1px dashed var(--border);border-radius:12px;padding:10px 12px;font-size:12px;color:var(--muted-foreground);display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.summary b{color:var(--foreground);font-weight:600}
+.composer-wrap{padding:8px 24px 14px}
+.composer{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.composer textarea{border:0;background:transparent;color:var(--foreground);font:inherit;font-size:13px;resize:none;outline:none;min-height:40px}
+.composer .row{display:flex;align-items:center;gap:8px}
+.composer .hint{font-size:11px;color:var(--soft-foreground);display:flex;align-items:center;gap:6px}
+.composer.idle{background:var(--card-2)}
+.send{width:30px;height:30px;border-radius:50%;background:var(--primary);color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;margin-left:auto}
+
+/* dialog */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px}
+[data-theme=light] .scrim{background:rgba(0,0,0,.25)}
+.dialog{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-modal);width:min(440px,100%);padding:20px;display:flex;flex-direction:column;gap:12px}
+.dialog h5{margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:10px}
+.dialog p{margin:0;font-size:13px;color:var(--muted-foreground)}
+.dialog ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.dialog li{display:flex;gap:8px;align-items:flex-start}
+.dialog li svg{margin-top:2px}
+.dialog .grp{border:1px solid var(--border);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.dialog .grp .eyebrow{font-size:10px}
+.dialog .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.dialog .warn{font-size:12px;border-radius:8px;padding:6px 10px;background:color-mix(in srgb,var(--pending) 12%,transparent);color:var(--foreground)}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:13px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:pointer}
+.check input{margin-top:3px;accent-color:var(--primary)}
+.stop{color:var(--danger)}.go{color:var(--success)}
+.static-dialogs{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.static-dialogs .dialog{width:100%}
+.cap{font-size:12px;color:var(--soft-foreground);margin:8px 2px 0}
+
+/* phones */
+.phones{display:flex;flex-wrap:wrap;gap:28px;justify-content:flex-start}
+.phone{width:300px;height:700px;border-radius:40px;border:10px solid #000;background:var(--background);position:relative;overflow:hidden;box-shadow:0 0 0 1px var(--border),var(--shadow-modal);display:flex;flex-direction:column}
+.phone .notch{position:absolute;top:6px;left:50%;transform:translateX(-50%);width:90px;height:24px;border-radius:14px;background:#000;z-index:5}
+.phone .status{height:38px;flex-shrink:0;display:flex;align-items:flex-end;justify-content:space-between;padding:0 22px 4px;font-size:11px;font-weight:600}
+.phone .scr{flex:1;overflow:auto;min-height:0;position:relative}
+.phone .tabbar{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--border);padding:6px 0 16px;font-size:10px;color:var(--muted-foreground);flex-shrink:0}
+.phone .tabbar div{display:flex;flex-direction:column;align-items:center;gap:2px}
+.phone .tabbar .on{color:var(--foreground)}
+.ws{border:1px solid var(--border);border-radius:12px;background:var(--card);overflow:hidden}
+.ws a{display:flex;align-items:center;gap:10px;padding:0 12px;min-height:44px;font-size:13px;font-weight:500;text-decoration:none}
+.ws a+a{border-top:1px solid var(--border)}
+.dcard{display:flex;gap:10px;border:1px solid var(--border);border-radius:12px;background:var(--card);padding:10px;cursor:pointer;position:relative}
+.dcard .nm{font-weight:600;font-size:14px}
+.dcard .mt{font-size:11px;color:var(--muted-foreground)}
+.dcard .pv{font-size:12px;color:var(--muted-foreground);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:2px}
+.dcard.idle{background:var(--card-2)}
+.dcard.idle .nm{color:var(--muted-foreground)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--border);border-radius:18px 18px 0 0;padding:8px 14px 20px;box-shadow:var(--shadow-modal);z-index:6}
+.sheet .grab{width:36px;height:4px;border-radius:2px;background:var(--muted);margin:0 auto 10px}
+.sheet .mi{display:flex;align-items:center;gap:10px;min-height:44px;font-size:14px;color:var(--muted-foreground);border:0;background:transparent;width:100%;text-align:left;padding:0 4px}
+.sheet .mi.hl{color:var(--foreground);font-weight:500}
+
+/* questions / approvals */
+.inbox{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:900px){.inbox{grid-template-columns:1fr}.desk{grid-template-columns:1fr}.desk .sb{display:none}}
+.inbox .col{border:1px solid var(--border);border-radius:14px;background:var(--background);padding:16px;display:flex;flex-direction:column;gap:18px}
+.inbox .top{display:flex;align-items:center;gap:8px;font-weight:600}
+.grp-h{display:flex;align-items:center;gap:10px}
+.grp-h .n{font-weight:600}
+.grp-h .s{font-size:11px;color:var(--muted-foreground)}
+.qcard{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:12px;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.qcard .opts{display:flex;flex-wrap:wrap;gap:6px}
+.qcard .opt{border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:12px;background:var(--background)}
+.qcard.idle{background:var(--card-2)}
+.qcard.idle .opt{opacity:.6}
+.flag{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted-foreground);background:var(--muted);border-radius:999px;padding:2px 8px;align-self:flex-start}
+.srcblk{border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--muted) 30%,transparent);padding:8px;font-size:12px}
+
+/* decisions table */
+table.dec{width:100%;border-collapse:collapse;font-size:13px}
+table.dec th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--border)}
+table.dec td{padding:10px;border-bottom:1px solid var(--border);vertical-align:top}
+table.dec td:first-child{font-weight:600;width:20%}
+table.dec td:last-child{color:var(--muted-foreground);width:28%}
+.rec{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--success);margin-right:6px}
+.matrix{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:800px){.matrix{grid-template-columns:1fr}}
+.matrix .box{border:1px solid var(--border);border-radius:14px;padding:14px 16px;background:var(--card)}
+.matrix ul{margin:8px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.matrix li{display:flex;gap:8px}
+.matrix li small{display:block;color:var(--muted-foreground);font-size:12px}
+pre{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.6;margin:8px 0}
+pre .c{color:var(--soft-foreground)}pre .k{color:var(--violet)}pre .a{color:var(--success)}pre .r{color:var(--danger)}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;transition:all .2s;background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-modal);padding:10px 14px;font-size:13px;z-index:50;display:flex;gap:10px;align-items:center}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.choice{display:inline-flex;gap:4px;align-items:center;font-size:12px}
+.kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--border);border-radius:4px;padding:0 4px;color:var(--muted-foreground)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">cezar · design · 2026-11-19 · awaiting approval</div>
+  <h1>Deactivate a manager without deleting it</h1>
+  <p class="lead">An inactive manager keeps its chat, memory, jobs, connectors and automation links, but runs nothing and makes no model calls until you switch it back on. Everything below is live: deactivate and reactivate managers from any mock (gear menu, sidebar row <span class="kbd">⋯</span> or right-click, the phone's gear) and every other surface follows.</p>
+  <div class="grad-rule"></div>
+
+  <div class="controls">
+    <div class="ctl"><label>Theme</label><div class="seg" id="theme"><button aria-pressed="true" data-v="dark">Dark</button><button aria-pressed="false" data-v="light">Light</button></div></div>
+    <div class="ctl"><label>Inactive</label><span id="inactive-list" class="small muted"></span></div>
+    <div class="ctl" style="margin-left:auto"><button class="chipbtn" id="reset">Reset demo</button></div>
+  </div>
+
+  <!-- ===================================================== decisions -->
+  <h2><span class="num">01</span>Decisions</h2>
+  <p class="sub">One recommendation per open question. The rule behind all of them: <b>no model call happens without a click</b>, and nothing the manager did not need a model for stops working.</p>
+  <table class="dec">
+    <thead><tr><th>Question</th><th>Recommendation</th><th>Considered, not chosen</th></tr></thead>
+    <tbody>
+      <tr><td>Tasks it already started</td><td><span class="rec">Rec</span>Keep running — they are independent runs. Their status cards keep posting into the manager's chat (server-written, no model). Anything waiting on you surfaces where any task's does: the Questions inbox task group and Now.</td><td>Pause them: stops work the user already approved, and a task paused by a manager that is "off" has no one to resume it.</td></tr>
+      <tr><td>Follow-up wake-ups</td><td><span class="rec">Rec</span><b>Dropped as turns, kept as notes.</b> The card still posts; its line joins the manager's notes, so the first chat turn after reactivation hears it. This is the existing <code>followUp: false</code> path.</td><td>Queue them: N queued turns become a burst of N model calls on reactivation. The optional catch-up check covers the gap in one.</td></tr>
+      <tr><td>Approval cards</td><td><span class="rec">Rec</span>Answerable, still counted in the Approvals badge, marked <i>Manager inactive</i>. A decision runs on the server (merge, enable) and leaves the manager a note, so it costs nothing.</td><td>Freeze them: blocks a merge the user can make without the manager.</td></tr>
+      <tr><td>Question cards</td><td><span class="rec">Rec</span>Visible, marked <i>Manager inactive</i>, <b>not</b> counted in the Questions badge. An answer is a chat turn, so the button reads <i>Reactivate and answer</i> and confirms first.</td><td>Count them: a badge that cannot go down without spending is noise.</td></tr>
+      <tr><td>Automations that report to it</td><td><span class="rec">Rec</span>Keep running and keep posting their report into its chat (no model). The unread dot turns grey.</td><td>Reroute to Questions: duplicates; the chat is where the user looks for them on reactivation.</td></tr>
+      <tr><td>Messaging an inactive manager</td><td><span class="rec">Rec</span>The composer stays usable; Send becomes <i>Reactivate and send</i> with a one-step confirm. The draft is kept if you cancel.</td><td>Blocked: hostile. Queued: a message waiting on a state with no exit.</td></tr>
+      <tr><td>Reactivation</td><td><span class="rec">Rec</span>Quiet by default. The server posts one <i>While inactive</i> summary (counts, no model). An unticked <i>Catch me up</i> box runs one forced check. Timers restart from now, so overdue jobs never fire in a burst.</td><td>Always catch up: a model call the user did not ask for.</td></tr>
+      <tr><td>Where the toggle lives</td><td><span class="rec">Rec</span>Gear menu (above Delete…), sidebar row context menu and hover <span class="kbd">⋯</span>, the folded rail, the phone's gear sheet, Settings → Manager. Deactivating always confirms.</td><td>A banner-only toggle: undiscoverable.</td></tr>
+      <tr><td>Bulk</td><td><span class="rec">Rec</span>Yes — cheap. <i>Deactivate all…</i> / <i>Reactivate all</i> in the sidebar's Managers heading menu and Settings → Manager.</td><td>An env switch: <code>CEZ_MANAGERS=0</code> already exists for "off for good".</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ===================================================== desktop -->
+  <h2><span class="num">02</span>Desktop: sidebar and chat</h2>
+  <p class="sub">Manager mode. Click a row to open its chat. Hover a row for <span class="kbd">⋯</span>, or right-click it. The gear in the chat header carries the same item, and the sidebar's <i>Managers</i> heading holds the bulk action.</p>
+  <div class="frame">
+    <div class="frame-bar"><i></i><i></i><i></i><span id="desk-url">localhost:4319/manager/ops</span></div>
+    <div class="desk" id="desk"></div>
+  </div>
+  <p class="cap">Inactive managers sort after active ones under a thin divider; the grey avatar carries a pause badge so colour is never the only cue. The Approvals count still includes their cards (answering costs nothing); Questions does not.</p>
+
+  <!-- ===================================================== dialogs -->
+  <h2><span class="num">03</span>Confirm dialogs</h2>
+  <p class="sub">The deactivate confirm lists exactly what stops and what keeps going. The other three appear on reactivation, on sending to an inactive manager, and for the bulk action.</p>
+  <div class="static-dialogs" id="static-dialogs"></div>
+
+  <!-- ===================================================== mobile -->
+  <h2><span class="num">04</span>Phone: manager index, CezarBot home, chat</h2>
+  <p class="sub">The phone's manager index is also CezarBot's home. Tap a card to open its chat; the chat's gear opens a sheet with Deactivate / Reactivate.</p>
+  <div class="phones" id="phones"></div>
+
+  <!-- ===================================================== inbox -->
+  <h2><span class="num">05</span>Questions and Approvals source blocks</h2>
+  <p class="sub">The workspace pages group cards by source. An inactive manager's group keeps its cards, grey avatar and a flag; approvals stay one click, questions ask to reactivate first.</p>
+  <div class="inbox" id="inbox"></div>
+
+  <!-- ===================================================== matrix -->
+  <h2><span class="num">06</span>What stops, what keeps going</h2>
+  <div class="matrix">
+    <div class="box">
+      <div class="eyebrow stop">Stops (no model call, no process)</div>
+      <ul>
+        <li><svg class="i s14 stop"><use href="#x"/></svg><span>Watch checks<small>The timer is never armed for it: <code>nextDue</code> returns nothing, no snapshot is read.</small></span></li>
+        <li><svg class="i s14 stop"><use href="#x"/></svg><span>Saved jobs<small>Listed and editable; they do not fire.</small></span></li>
+        <li><svg class="i s14 stop"><use href="#x"/></svg><span>Follow-up turns<small>Kept as notes for the next chat turn.</small></span></li>
+        <li><svg class="i s14 stop"><use href="#x"/></svg><span>Chat turns, Check now, connector probes<small>409 <code>manager inactive</code> unless the cockpit sends <code>reactivate: true</code>.</small></span></li>
+        <li><svg class="i s14 stop"><use href="#x"/></svg><span>Account-reconnect restarts, crash recovery, usage-limit replay<small>Skip inactive managers; deactivating clears a pending replay.</small></span></li>
+        <li><svg class="i s14 stop"><use href="#x"/></svg><span>OS notifications and phone push for this manager</span></li>
+        <li><svg class="i s14 stop"><use href="#x"/></svg><span>A turn in flight<small>Stopped as Stop does; its queue is cleared.</small></span></li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="eyebrow go">Keeps going (costs nothing)</div>
+      <ul>
+        <li><svg class="i s14 go"><use href="#check"/></svg><span>Tasks it started<small>Run to the end; their cards post into its chat.</small></span></li>
+        <li><svg class="i s14 go"><use href="#check"/></svg><span>Automations linked to it<small>Run on schedule; reports post into its chat.</small></span></li>
+        <li><svg class="i s14 go"><use href="#check"/></svg><span>Approvals<small>Decided on the server; the manager hears the decision later.</small></span></li>
+        <li><svg class="i s14 go"><use href="#check"/></svg><span>Everything it knows<small>Chat, memory, jobs, cadence, connectors, settings: untouched, so reactivation restores them exactly.</small></span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===================================================== data model -->
+  <h2><span class="num">07</span>Data model and scheduler</h2>
+  <p class="sub">One new optional field, one gate. An older cezar ignores the field (it survives its writes through <code>mergeRow</code>'s extras) and would run the manager — acceptable for a downgrade.</p>
+<pre><span class="c">// packages/contract/src/managers.ts — managerSchema</span>
+<span class="a">+ inactive: z.object({ since: z.string() }).optional(),</span>   <span class="c">// absent = active; lives in managers.json, shared by every cockpit</span>
+<span class="a">+ activeSince: z.string().optional(),</span>                      <span class="c">// written on reactivation: the floor for every due time</span>
+
+<span class="c">// routes (chained into the managers family, validated as middleware)</span>
+PATCH /api/v1/managers/:id        { active: boolean, catchUp?: boolean }
+POST  /api/v1/managers/activity   { active: boolean }            <span class="c">// bulk; workspace-level, single-mount</span>
+POST  /api/v1/managers/:id/chat   { …, reactivate?: true }        <span class="c">// 409 "manager inactive" without it</span></pre>
+<pre><span class="c">// packages/cezar/src/managers/engine.ts</span>
+<span class="k">private</span> enqueue(id, item) {
+<span class="a">+  if (this.deps.store.get(id)?.inactive) return;</span>        <span class="c">// THE gate: every model call goes through here</span>
+   …
+}
+<span class="k">private</span> nextDue(manager, now) {
+<span class="a">+  if (manager.inactive) return undefined;</span>                <span class="c">// no timer is armed for it at all</span>
+<span class="a">+  const floor = msOf(manager.activeSince ?? manager.createdAt);</span>
+   jobs: max(lastRunAt ?? createdAt, floor) + everyMinutes   <span class="c">// no burst after a long sleep</span>
+}
+reportTaskEvent:  <span class="a">inactive → the followUp:false branch</span> (card + note, no scheduleFollowup, no alert)
+reportAutomationRun: posts as today, <span class="a">no alert</span> while inactive
+pushWaitingTasks / alert / recover / authRetry replay: <span class="a">skip inactive</span>
+setActive(id, false): stop the active turn, clear queue + followup timers + resume, store <span class="k">inactive.since</span>
+setActive(id, true):  clear <span class="k">inactive</span>, set <span class="k">activeSince</span> + state.lastCheckAt = now,
+                      post the "While inactive" summary (no model), <span class="k">catchUp</span> → enqueue one forced watch</pre>
+  <p class="sub">The summary counts what the chat file already holds since <code>inactive.since</code> (task-report and automation-report messages), plus skipped checks (<code>⌊duration / cronMinutes⌋</code>) and skipped job runs. No new state file.</p>
+
+  <h3>Tests (phase 2)</h3>
+  <ul class="small muted" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px">
+    <li>Fake clock, an inactive manager with a cadence and two jobs, the clock moved past every due time: <code>tick</code> enqueues nothing and the runner factory is never called.</li>
+    <li>A followed task settles while inactive: the card posts, the note is kept, no follow-up turn, no OS notification.</li>
+    <li>Chat and Check now answer 409; chat with <code>reactivate: true</code> reactivates and runs exactly one turn.</li>
+    <li>Reactivate: no immediate turn without <code>catchUp</code>; exactly one forced watch with it; the next job fires at <code>activeSince + everyMinutes</code>.</li>
+    <li>Cockpit: grey avatar and pause badge, the confirm flows, the Questions badge excluding inactive managers' cards.</li>
+  </ul>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- icons (lucide paths) -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></symbol>
+  <symbol id="pause" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></symbol>
+  <symbol id="play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+  <symbol id="refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></symbol>
+  <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+  <symbol id="reply" viewBox="0 0 24 24"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></symbol>
+  <symbol id="user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></symbol>
+  <symbol id="bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></symbol>
+  <symbol id="checks" viewBox="0 0 24 24"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></symbol>
+  <symbol id="q" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="term" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></symbol>
+  <symbol id="list" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4M3 7l2 2 4-4M13 6h8M13 12h8M13 18h8"/></symbol>
+  <symbol id="circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></symbol>
+  <symbol id="zap" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
+</svg>
+
+<script>
+(() => {
+'use strict'
+// Persona shapes and colours from packages/web/src/routes/manager/manager-avatar.tsx
+const SHAPES = [
+  ['M16 3a13 13 0 1 0 0 26 13 13 0 0 0 0-26Z', 18, 11],
+  ['M16 2c5 6 11 11 11 17a11 11 0 0 1-22 0C5 13 11 8 16 2Z', 17.5, 14],
+  ['M8.5 26A6.5 6.5 0 0 1 6 13.5a7 7 0 0 1 8-5.2 7.5 7.5 0 0 1 12.7 3.2A7.5 7.5 0 0 1 24 26Z', 18, 12.5],
+  ['M8 3h12a5 5 0 0 1 5 5v11a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5V8a5 5 0 0 1 5-5Z', 13, 9],
+  ['M16 3a13 13 0 1 0 0 26 13 13 0 0 0 0-26Z', 17, 9.5],
+  ['M16 3c6 0 10.5 8 10.5 15S22 29 16 29 5.5 25 5.5 18 10 3 16 3Z', 18, 10.5],
+  ['M10 7h12a9 9 0 0 1 0 18H10a9 9 0 0 1 0-18Z', 19, 12],
+  ['M16 4c1.5 0 2.7.8 3.5 2.2l8.6 15.6c1.3 2.5-.4 5.2-3.2 5.2H7.1c-2.8 0-4.5-2.7-3.2-5.2l8.6-15.6C13.3 4.8 14.5 4 16 4Z', 16, 13],
+  ['M9 3h14a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6H9a6 6 0 0 1-6-6V9a6 6 0 0 1 6-6Z', 18, 9.5],
+]
+const COLORS = ['oklch(0.60 0.20 295)','oklch(0.66 0.17 250)','oklch(0.72 0.15 152)','oklch(0.70 0.11 180)','oklch(0.55 0.07 55)','oklch(0.70 0.17 50)','oklch(0.62 0.20 22)','oklch(0.70 0.19 350)','oklch(0.55 0.17 275)']
+
+const MANAGERS = [
+  { id: 'ops', name: 'Ops', p: 0, c: 0, preview: 'PR #2329 is green — merge it?', age: '2m', needs: 1, approvals: 1, questions: 0, cron: 15, jobs: 2, unread: 'needs-you', tasks: 3 },
+  { id: 'release', name: 'Release captain', p: 1, c: 1, preview: 'v0.14.2 is tagged; changelog drafted', age: '18m', needs: 0, approvals: 0, questions: 1, cron: 30, jobs: 1, unread: 'unread', tasks: 1 },
+  { id: 'triage', name: 'Triage', p: 2, c: 2, preview: '4 new issues labelled, 1 needs a repro', age: '1h', needs: 0, approvals: 0, questions: 0, cron: 60, jobs: 3, unread: null, tasks: 0 },
+  { id: 'qa', name: 'Nightly QA', p: 5, c: 5, preview: 'Smoke suite passed on main', age: '9h', needs: 0, approvals: 1, questions: 1, cron: 120, jobs: 1, unread: null, tasks: 2 },
+]
+const INITIAL_INACTIVE = { qa: { since: 'yesterday 23:40', events: { tasks: 2, automations: 1, checks: 5, jobs: 1 } } }
+
+const S = { theme: 'dark', selected: 'ops', inactive: clone(INITIAL_INACTIVE), menu: null, dialog: null, catchUp: false, draft: '', reactivatedFrom: {}, phone: { screen: 'index', id: 'qa', sheet: false } }
+function clone(v) { return JSON.parse(JSON.stringify(v)) }
+const $ = (sel) => document.querySelector(sel)
+const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
+const icon = (name, cls = '') => `<svg class="i ${cls}" aria-hidden="true"><use href="#${name}"/></svg>`
+const byId = (id) => MANAGERS.find((m) => m.id === id)
+const isIdle = (id) => Boolean(S.inactive[id])
+const nowLabel = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
+
+function avatar(m, size = 30) {
+  const [d, ex, ey] = SHAPES[m.p]
+  const eye = (cx) => `<ellipse cx="${cx}" cy="${ey}" rx="0.95" ry="1.9" fill="white" transform="rotate(-10 ${cx} ${ey})"/>`
+  const gid = `g${Math.random().toString(36).slice(2, 8)}`
+  return `<span class="av ${isIdle(m.id) ? 'idle' : ''}" style="width:${size}px;height:${size}px" ${isIdle(m.id) ? 'title="Inactive"' : ''}>
+    <svg viewBox="0 0 32 32" aria-hidden="true"><defs><radialGradient id="${gid}" cx="0.35" cy="0.2" r="0.9"><stop offset="0" stop-color="white" stop-opacity="0.32"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient></defs>
+    <path d="${d}" fill="${COLORS[m.c]}"/><path d="${d}" fill="url(#${gid})"/>${eye(ex)}${eye(ex + 4.2)}</svg>
+    <span class="pause" aria-hidden="true"><i></i></span></span>`
+}
+
+function ordered() {
+  const active = MANAGERS.filter((m) => !isIdle(m.id))
+  const idle = MANAGERS.filter((m) => isIdle(m.id))
+  return { active, idle }
+}
+const approvalsCount = () => MANAGERS.reduce((n, m) => n + m.approvals, 0)
+const questionsCount = () => MANAGERS.filter((m) => !isIdle(m.id)).reduce((n, m) => n + m.questions, 0)
+const idleQuestions = () => MANAGERS.filter((m) => isIdle(m.id)).reduce((n, m) => n + m.questions, 0)
+
+function previewOf(m) {
+  if (isIdle(m.id)) return `Inactive · since ${S.inactive[m.id].since}`
+  return m.preview
+}
+
+// ------------------------------------------------------------------ desktop
+function sidebarRow(m) {
+  const idle = isIdle(m.id)
+  const att = idle ? null : m.unread
+  const open = S.menu && S.menu.kind === 'row' && S.menu.id === m.id
+  return `<div class="mrow ${S.selected === m.id ? 'sel' : ''} ${idle ? 'idle' : ''} ${open ? 'menu-open' : ''}" data-row="${m.id}" role="link" tabindex="0" aria-label="${esc(m.name)}${idle ? ', inactive' : ''}">
+    ${avatar(m, 30)}
+    <span style="min-width:0"><span class="nm ${att ? 'att' : ''}" style="display:block">${esc(m.name)}</span>
+    <span class="pv ${att === 'needs-you' ? 'info' : ''}" style="display:block">${esc(previewOf(m))}</span></span>
+    <span class="meta">${att ? `<span class="dot" style="background:${att === 'needs-you' ? 'var(--info)' : 'var(--violet)'}"></span>` : idle && m.approvals + m.questions > 0 ? '<span class="dot" style="background:var(--soft-foreground)"></span>' : ''}<span>${idle ? '' : m.age}</span></span>
+    <button class="icon-btn more" data-more="${m.id}" aria-label="More for ${esc(m.name)}">${icon('more', 's14')}</button>
+  </div>`
+}
+
+function rowMenu(m, x, y) {
+  const idle = isIdle(m.id)
+  return `<div class="menu" style="left:${x}px;top:${y}px" role="menu">
+    <button class="mi" data-act="open" data-id="${m.id}">${icon('reply', 's14')}Open chat</button>
+    <button class="mi" data-act="settings" data-id="${m.id}">${icon('gear', 's14')}Settings…</button>
+    <div class="sep"></div>
+    ${idle
+      ? `<button class="mi hl" data-act="reactivate" data-id="${m.id}">${icon('play', 's14')}Reactivate…</button>`
+      : `<button class="mi hl" data-act="deactivate" data-id="${m.id}">${icon('power', 's14')}Deactivate…</button>`}
+    <button class="mi danger" data-act="noop">${icon('trash', 's14')}Delete…</button>
+  </div>`
+}
+
+function headingMenu(x, y) {
+  const { active, idle } = ordered()
+  return `<div class="menu" style="left:${x}px;top:${y}px" role="menu">
+    <div class="note">${active.length} active · ${idle.length} inactive</div>
+    <button class="mi hl" data-act="bulk-off" ${active.length ? '' : 'disabled style="opacity:.5"'}>${icon('power', 's14')}Deactivate all…</button>
+    <button class="mi hl" data-act="bulk-on" ${idle.length ? '' : 'disabled style="opacity:.5"'}>${icon('play', 's14')}Reactivate all</button>
+    <div class="sep"></div>
+    <div class="note">Laptop going to sleep, or a VPS saving cost: nothing runs until you switch them back on.</div>
+  </div>`
+}
+
+function gearMenu(m) {
+  const idle = isIdle(m.id)
+  const sw = (on, label, ic) => `<label class="mi" style="cursor:default">${icon(ic, 's14')}<span style="flex:1">${label}</span><span class="switch" role="switch" aria-checked="${on}"></span></label>`
+  return `<div class="menu" style="right:16px;top:52px;width:256px" role="menu">
+    <button class="mi">${icon('bot', 's14')}Manager agent…</button>
+    <div class="mi" style="cursor:default">${icon('refresh', 's14')}<span style="flex:1">Check every</span><span class="soft">${m.cron} min</span></div>
+    ${sw(true, 'Notify me when important', 'bell')}
+    ${sw(true, 'Follow up on its tasks', 'reply')}
+    <div class="sep"></div>
+    <button class="mi">${icon('user', 's14')}Persona…</button>
+    <button class="mi">${icon('clock', 's14')}Jobs (${m.jobs})…</button>
+    <button class="mi" ${idle ? 'disabled style="opacity:.5" title="Reactivate to check"' : ''}>${icon('refresh', 's14')}Check now</button>
+    <div class="sep"></div>
+    ${idle
+      ? `<button class="mi hl" data-act="reactivate" data-id="${m.id}">${icon('play', 's14')}Reactivate…</button>`
+      : `<button class="mi hl" data-act="deactivate" data-id="${m.id}">${icon('power', 's14')}Deactivate…</button>`}
+    <button class="mi danger">${icon('trash', 's14')}Delete…</button>
+    <div class="note">Spent $4.18</div>
+  </div>`
+}
+
+function transcript(m) {
+  const idle = isIdle(m.id)
+  const st = S.inactive[m.id]
+  const parts = []
+  parts.push(`<div class="msg-u">How's the release branch looking?</div>`)
+  parts.push(`<div class="msg-a">${avatar(m, 26)}<div class="body"><div class="who">${esc(m.name)}<span>09:12</span></div>Two tasks are still running; I'll ping you when the smoke suite settles.
+    <div class="tcard"><div class="tt"><span class="dot" style="background:var(--pending)"></span>Fix flaky worktree prune test<span class="badge" style="margin-left:auto">running</span></div><div class="ft">cezar · started by ${esc(m.name)}</div></div></div></div>`)
+  const from = S.reactivatedFrom[m.id]
+  if (idle || from) {
+    const since = idle ? st.since : from.since
+    parts.push(`<div class="divider">${icon('power', 's14')} Deactivated by you · ${esc(since)}</div>`)
+    parts.push(`<div class="msg-a">${avatar(m, 26)}<div class="body"><div class="who">${esc(m.name)}<span>posted by cezar</span></div>
+      <div class="tcard" style="margin-top:0"><div class="tt"><span class="dot" style="background:var(--success)"></span>Fix flaky worktree prune test<span class="badge" style="margin-left:auto">review</span></div>
+      <div style="margin-top:4px;color:var(--muted-foreground)">Done — the prune now waits for the lease. Ready for review.</div>
+      <div class="ft">${icon('pause', 's14')} No follow-up: ${esc(m.name)} ${idle ? 'is' : 'was'} inactive. It hears this on its next turn.</div></div></div></div>`)
+    parts.push(`<div class="msg-a">${avatar(m, 26)}<div class="body"><div class="who">Nightly smoke<span>automation report · posted by cezar</span></div>Smoke suite passed on main (41 checks).</div></div>`)
+  }
+  if (!idle && from) {
+    const e = from.events
+    parts.push(`<div class="divider">${icon('play', 's14')} Reactivated by you · ${esc(from.at)}</div>`)
+    parts.push(`<div class="summary">${icon('clock', 's14')}<span><b>While inactive</b> (${esc(from.since)} → ${esc(from.at)})</span><span><b>${e.tasks}</b> task updates</span><span><b>${e.automations}</b> automation report</span><span><b>${e.checks}</b> checks and <b>${e.jobs}</b> job run skipped</span><span class="soft">posted by cezar · no model call</span></div>`)
+    if (from.catchUp) {
+      parts.push(`<div class="msg-a">${avatar(m, 26)}<div class="body"><div class="who">${esc(m.name)}<span>catch-up check · ${esc(from.at)}</span></div>While I was off: the prune fix is in review and the smoke suite is green. One thing needs you — PR #2329 can merge.</div></div>`)
+    }
+  }
+  return parts.join('')
+}
+
+function composer(m) {
+  const idle = isIdle(m.id)
+  if (!idle) {
+    return `<div class="composer"><textarea id="draft" placeholder="Message ${esc(m.name)}, or / for commands">${esc(S.draft)}</textarea>
+      <div class="row"><span class="hint">↵ to send</span><button class="send" aria-label="Send">${icon('send', 's14')}</button></div></div>`
+  }
+  return `<div class="composer idle"><textarea id="draft" placeholder="${esc(m.name)} is inactive — write anyway; sending reactivates it">${esc(S.draft)}</textarea>
+    <div class="row"><span class="hint">${icon('pause', 's14')} Inactive · no checks, jobs or follow-ups</span>
+    <button class="btn btn-sm btn-primary" style="margin-left:auto" data-act="send-idle" data-id="${m.id}">${icon('play', 's14')}Reactivate and send</button></div></div>`
+}
+
+function renderDesk() {
+  const m = byId(S.selected)
+  const idle = isIdle(m.id)
+  const { active, idle: idles } = ordered()
+  const q = questionsCount()
+  const a = approvalsCount()
+  const sb = `<aside class="sb">
+    <div class="sb-top"><div class="modeswitch"><span>Tasks</span><span class="on">Managers</span></div>
+      <button class="btn btn-primary" style="width:100%">${icon('plus', 's14')}New manager</button></div>
+    <div class="sb-list">
+      <div class="sb-h"><span class="eyebrow">Managers · ${MANAGERS.length}</span><button class="icon-btn" data-headmenu aria-label="Managers menu">${icon('more', 's14')}</button></div>
+      ${active.map(sidebarRow).join('')}
+      ${idles.length ? `<div class="idle-div">Inactive · ${idles.length}</div>${idles.map(sidebarRow).join('')}` : ''}
+      <div class="eyebrow" style="padding:14px 12px 4px">Workspace</div>
+      <div class="nav-row">${icon('checks')}Approvals<span class="pill ${a ? 'on' : 'off'}">${a}</span></div>
+      <div class="nav-row" title="${idleQuestions()} more from inactive managers">${icon('q')}Questions<span class="pill ${q ? 'on' : 'off'}">${q}</span></div>
+      <div class="nav-row">${icon('clock')}Jobs<span class="pill off">${m.jobs}</span></div>
+      <div class="nav-row">${icon('gear')}Manager settings</div>
+    </div></aside>`
+  const sub = idle ? `Inactive since ${S.inactive[m.id].since} · ${m.jobs} job${m.jobs === 1 ? '' : 's'} and ${m.cron}-min checks paused` : `Watching cezar · checks every ${m.cron} min · next 14:30`
+  const main = `<section class="main">
+    <header class="ch-head">${avatar(m, 32)}<div style="min-width:0;flex:1"><h4>${esc(m.name)}</h4><div class="sl">${esc(sub)}</div></div>
+      <button class="btn btn-sm btn-outline" ${idle ? 'disabled style="opacity:.45" title="Reactivate to check"' : ''}>${icon('refresh', 's14')}Check now</button>
+      <button class="icon-btn" aria-label="Watching panel">${icon('panel')}</button>
+      <button class="icon-btn" data-gear aria-label="Manager settings">${icon('gear', 's20')}</button></header>
+    ${idle ? `<div class="banner" role="status">${icon('pause', 's14')}<span class="t">Inactive</span><span class="d">No checks, jobs, follow-ups or model calls. Tasks it started keep running; their cards still arrive here.</span><button class="btn btn-sm btn-primary" data-act="reactivate" data-id="${m.id}">${icon('play', 's14')}Reactivate…</button></div>` : ''}
+    ${!idle && m.needs ? `<div class="needs"><span class="dot" style="background:var(--info)"></span><b>Needs you</b><span class="muted">1 approval</span><button class="btn btn-sm btn-outline" style="margin-left:auto">Jump to first</button></div>` : ''}
+    <div class="transcript">${transcript(m)}</div>
+    <div class="composer-wrap">${composer(m)}</div>
+  </section>`
+  let overlay = ''
+  if (S.menu?.kind === 'row') overlay = rowMenu(byId(S.menu.id), S.menu.x, S.menu.y)
+  else if (S.menu?.kind === 'head') overlay = headingMenu(S.menu.x, S.menu.y)
+  else if (S.menu?.kind === 'gear') overlay = gearMenu(m)
+  const dlg = S.dialog && S.dialog.where === 'desk' ? `<div class="scrim" data-scrim>${dialogHtml(S.dialog)}</div>` : ''
+  $('#desk').innerHTML = sb + main + overlay + dlg
+  $('#desk-url').textContent = `localhost:4319/manager/${m.id}`
+  const ta = $('#draft')
+  if (ta) ta.addEventListener('input', (e) => { S.draft = e.target.value })
+}
+
+// ------------------------------------------------------------------ dialogs
+function dialogHtml(d, isStatic = false) {
+  const m = d.id ? byId(d.id) : null
+  const acts = (cancel, ok, okCls = 'btn-primary') => `<div class="acts"><button class="btn btn-outline" ${isStatic ? '' : 'data-act="cancel"'}>${cancel}</button><button class="btn ${okCls}" ${isStatic ? '' : `data-act="confirm"`}>${ok}</button></div>`
+  if (d.type === 'deactivate') {
+    const working = m.id === 'ops'
+    return `<div class="dialog" role="alertdialog" aria-labelledby="dt">
+      <h5 id="dt">${avatar(m, 28)}Deactivate ${esc(m.name)}?</h5>
+      <p>It keeps its chat, memory, jobs and settings. Nothing runs and no model is called until you reactivate it.</p>
+      ${working && !isStatic ? '' : ''}
+      <div class="grp"><span class="eyebrow stop">Stops</span><ul>
+        <li>${icon('x', 's14 stop')}<span>Checks every ${m.cron} min and ${m.jobs} saved job${m.jobs === 1 ? '' : 's'}</span></li>
+        <li>${icon('x', 's14 stop')}<span>Follow-up turns on its tasks — their updates are kept for later</span></li>
+        <li>${icon('x', 's14 stop')}<span>Notifications from this manager</span></li></ul></div>
+      <div class="grp"><span class="eyebrow go">Keeps going</span><ul>
+        <li>${icon('check', 's14 go')}<span>${m.tasks} task${m.tasks === 1 ? '' : 's'} it started, and automations that report to it</span></li>
+        <li>${icon('check', 's14 go')}<span>Its approvals — you can still answer them</span></li></ul></div>
+      ${working ? `<div class="warn">${esc(m.name)} is working right now; that turn stops.</div>` : ''}
+      ${acts('Cancel', `${icon('power', 's14')}Deactivate`)}</div>`
+  }
+  if (d.type === 'reactivate' || d.type === 'send') {
+    const st = S.inactive[m.id] || { since: 'yesterday 23:40', events: { tasks: 2, automations: 1, checks: 5, jobs: 1 } }
+    const e = st.events
+    const send = d.type === 'send'
+    return `<div class="dialog" role="alertdialog" aria-labelledby="rt">
+      <h5 id="rt">${avatar(m, 28)}${send ? `Reactivate ${esc(m.name)} and send?` : `Reactivate ${esc(m.name)}?`}</h5>
+      <p>${send ? 'Your message starts its next turn. ' : ''}Checks and jobs restart from now — nothing overdue fires at once.</p>
+      <div class="grp"><span class="eyebrow">While inactive · since ${esc(st.since)}</span>
+        <div class="small muted">${e.tasks} task updates · ${e.automations} automation report · ${e.checks} checks and ${e.jobs} job run skipped</div></div>
+      ${send ? '' : `<label class="check"><input type="checkbox" ${isStatic ? '' : 'data-catchup'} ${S.catchUp && !isStatic ? 'checked' : ''}><span><b>Catch me up</b><br><span class="muted small">Run one check now and summarise what happened. One model call.</span></span></label>`}
+      ${acts('Cancel', send ? `${icon('send', 's14')}Reactivate and send` : `${icon('play', 's14')}Reactivate`)}</div>`
+  }
+  if (d.type === 'bulk') {
+    const n = ordered().active.length
+    return `<div class="dialog" role="alertdialog" aria-labelledby="bt">
+      <h5 id="bt">${icon('power', 's20')}Deactivate all ${n} active manager${n === 1 ? '' : 's'}?</h5>
+      <p>For a laptop going to sleep or a server saving cost. Each keeps its chat, memory and jobs; tasks they started keep running.</p>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${ordered().active.map((x) => `<span class="badge">${esc(x.name)}</span>`).join('')}</div>
+      <div class="grp"><span class="eyebrow stop">Stops for all of them</span><div class="small muted">Checks, jobs, follow-up turns, notifications, model calls.</div></div>
+      ${acts('Cancel', `${icon('power', 's14')}Deactivate all`)}</div>`
+  }
+  return ''
+}
+
+function renderStaticDialogs() {
+  const html = [
+    [{ type: 'deactivate', id: 'ops' }, 'Deactivate — from the gear, the sidebar menu or the phone sheet. Lists what stops and what keeps going; warns when a turn is in flight.'],
+    [{ type: 'reactivate', id: 'qa' }, 'Reactivate — quiet by default; "Catch me up" is the only way reactivation spends a model call.'],
+    [{ type: 'send', id: 'qa' }, 'Send to an inactive manager — one confirm; cancelling keeps the draft.'],
+    [{ type: 'bulk' }, 'Bulk — the sidebar\'s Managers heading menu and Settings → Manager.'],
+  ].map(([d, cap]) => `<div>${dialogHtml(d, true)}<p class="cap">${cap}</p></div>`).join('')
+  $('#static-dialogs').innerHTML = html
+}
+
+// ------------------------------------------------------------------ phones
+function phoneShell(inner, tab, extra = '') {
+  return `<div class="phone"><div class="notch"></div><div class="status"><span>9:41</span><span>●●● ▮</span></div>
+    <div class="scr">${inner}</div>${extra}
+    <nav class="tabbar">${[['Now', 'circle'], ['Tasks', 'list'], ['Managers', 'bot'], ['More', 'more']].map(([l, ic]) => `<div class="${l === tab ? 'on' : ''}">${icon(ic, 's20')}${l}</div>`).join('')}</nav></div>`
+}
+
+function dirCard(m) {
+  const idle = isIdle(m.id)
+  const status = idle ? 'Inactive' : m.id === 'ops' ? 'Working' : 'Up to date'
+  const waiting = idle ? 0 : m.approvals + m.questions
+  if (idle) {
+    return `<div class="dcard idle" data-pcard="${m.id}" role="link" tabindex="0" style="align-items:center;padding:8px 10px">${avatar(m, 32)}
+      <span style="min-width:0;flex:1"><span class="nm" style="font-size:13px;display:block">${esc(m.name)}</span>
+      <span class="mt" style="display:block">Inactive since ${esc(S.inactive[m.id].since)}${m.approvals ? ` · ${m.approvals} approval` : ''}</span></span>${icon('chev', 's14')}</div>`
+  }
+  return `<div class="dcard ${idle ? 'idle' : ''}" data-pcard="${m.id}" role="link" tabindex="0">${avatar(m, 40)}
+    <span style="min-width:0;flex:1"><span style="display:flex;gap:8px;align-items:baseline"><span class="nm" style="flex:1">${esc(m.name)}</span><span class="mt">${idle ? '' : m.age}</span></span>
+    <span class="mt" style="display:block">MacBook Pro · ${status}${idle ? ` since ${esc(S.inactive[m.id].since)}` : ''}</span>
+    <span class="pv">${esc(idle ? 'No checks, jobs or follow-ups. Tap to open; reactivate from the gear.' : m.preview)}</span>
+    ${waiting ? `<span style="display:block;margin-top:4px;font-size:13px;font-weight:600;color:var(--info)">${waiting} need${waiting === 1 ? 's' : ''} you</span>` : ''}
+    ${idle && m.approvals ? `<span style="display:block;margin-top:4px;font-size:12px;color:var(--muted-foreground)">${m.approvals} approval waiting · answerable</span>` : ''}</span></div>`
+}
+
+function phoneIndex(cezarbot) {
+  const { active, idle } = ordered()
+  const q = questionsCount(); const a = approvalsCount()
+  const head = cezarbot
+    ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 14px 10px"><span style="width:28px;height:28px;border-radius:50%;background:var(--grad);display:inline-block"></span><b style="font-size:16px">MacBook Pro</b><span class="badge" style="margin-left:auto">CezarBot</span></div>`
+    : `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 14px 10px"><b style="font-size:18px">Managers</b><span class="small muted">MacBook Pro</span></div>`
+  return `${head}<div style="padding:0 12px 16px;display:flex;flex-direction:column;gap:10px">
+    <div class="ws"><a>${icon('q', 's14')}<span style="flex:1">Questions</span><span class="pill ${q ? 'on' : 'off'}">${q}</span>${icon('chev', 's14')}</a>
+    <a>${icon('checks', 's14')}<span style="flex:1">Approvals</span><span class="pill ${a ? 'on' : 'off'}">${a}</span>${icon('chev', 's14')}</a></div>
+    ${active.map(dirCard).join('')}
+    ${idle.length ? `<div class="idle-div" style="padding:4px 2px 0">Inactive · ${idle.length}</div>${idle.map(dirCard).join('')}` : ''}
+    <button class="btn btn-ghost" style="justify-content:flex-start;color:var(--muted-foreground)">${icon('plus', 's14')}New manager</button></div>`
+}
+
+function phoneChat() {
+  const m = byId(S.phone.id)
+  const idle = isIdle(m.id)
+  const inner = `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px 8px;border-bottom:1px solid var(--border)">
+      <button class="icon-btn" data-pback aria-label="Back">${icon('back')}</button>${avatar(m, 30)}
+      <div style="min-width:0;flex:1"><b style="font-size:14px">${esc(m.name)}</b><div class="xs muted">${idle ? 'Inactive' : `Checks every ${m.cron} min`}</div></div>
+      <button class="icon-btn" data-psheet aria-label="Manager settings" style="width:44px;height:44px">${icon('gear', 's20')}</button></div>
+    ${idle ? `<div class="banner" style="padding:8px 12px;flex-wrap:wrap;position:sticky;top:0;z-index:2;background:var(--card)">${icon('pause', 's14')}<span class="t">Inactive</span><span class="d" style="white-space:normal;flex-basis:100%;font-size:12px">No checks, jobs or model calls. Task cards still arrive.</span><button class="btn btn-sm btn-primary" style="margin:4px 0 0;width:100%;height:40px" data-act="reactivate" data-id="${m.id}" data-where="phone">${icon('play', 's14')}Reactivate…</button></div>` : ''}
+    <div style="padding:12px;display:flex;flex-direction:column;gap:12px;font-size:13px">${transcript(m)}</div>`
+  const comp = `<div style="padding:6px 10px 6px;border-top:1px solid var(--border);background:var(--background)">${idle
+    ? `<div class="composer idle" style="padding:8px 10px"><div class="row"><span class="hint" style="flex:1">${icon('pause', 's14')}Inactive</span><button class="btn btn-sm btn-primary" style="height:36px" data-act="send-idle" data-id="${m.id}" data-where="phone">Reactivate and send</button></div></div>`
+    : `<div class="composer" style="padding:8px 10px"><div class="row"><span class="hint" style="flex:1">Message ${esc(m.name)}</span><button class="send" aria-label="Send">${icon('send', 's14')}</button></div></div>`}</div>`
+  const sheet = S.phone.sheet ? `<div class="sheet"><div class="grab"></div>
+      <button class="sheet-x mi">${icon('bot')}Manager agent…</button>
+      <button class="mi">${icon('clock')}Jobs (${m.jobs})…</button>
+      <button class="mi" ${idle ? 'disabled style="opacity:.5"' : ''}>${icon('refresh')}Check now</button>
+      ${idle ? `<button class="mi hl" data-act="reactivate" data-id="${m.id}" data-where="phone">${icon('play')}Reactivate…</button>` : `<button class="mi hl" data-act="deactivate" data-id="${m.id}" data-where="phone">${icon('power')}Deactivate…</button>`}
+      <button class="mi" style="color:var(--danger)">${icon('trash')}Delete…</button></div>` : ''
+  const dlg = S.dialog && S.dialog.where === 'phone' ? `<div class="scrim" data-scrim style="padding:10px">${dialogHtml(S.dialog)}</div>` : ''
+  return { inner, extra: comp + sheet + dlg }
+}
+
+function renderPhones() {
+  const a = phoneShell(phoneIndex(false), 'Managers')
+  const b = phoneShell(phoneIndex(true), 'Managers')
+  const chat = phoneChat()
+  const c = phoneShell(chat.inner, 'Managers', chat.extra)
+  const html = `<div><div class="cap" style="margin:0 0 8px">Manager index</div>${a}</div><div><div class="cap" style="margin:0 0 8px">CezarBot home</div>${b}</div><div><div class="cap" style="margin:0 0 8px">Chat — ${esc(byId(S.phone.id).name)} (tap a card to switch)</div>${c}</div>`
+  $('#phones').innerHTML = html
+  const scr = document.querySelectorAll('#phones .scr')[2]
+  if (scr) scr.scrollTop = scr.scrollHeight
+}
+
+// ------------------------------------------------------------------ inbox
+function renderInbox() {
+  const group = (m, kind) => {
+    const idle = isIdle(m.id)
+    const items = kind === 'q' ? m.questions : m.approvals
+    if (!items) return ''
+    const head = `<div class="grp-h">${avatar(m, 32)}<div style="flex:1;min-width:0"><div class="n" style="${idle ? 'color:var(--muted-foreground)' : ''}">${esc(m.name)}</div><div class="s">Manager${idle ? ' · inactive' : ''}</div></div><button class="btn btn-sm btn-outline">Open chat</button></div>`
+    const src = `<div class="srcblk"><div class="xs muted" style="font-weight:500">Source task</div><b>Fix flaky worktree prune test</b> <span class="badge">PR #2329</span><div class="xs muted">cezar · review</div></div>`
+    const card = kind === 'q'
+      ? `<div class="qcard ${idle ? 'idle' : ''}">${idle ? `<span class="flag">${icon('pause', 's14')}Manager inactive — answering reactivates it</span>` : ''}
+          <div><b>Ship v0.14.2 tonight or wait for the prune fix?</b></div>
+          <div class="opts"><span class="opt">Ship tonight</span><span class="opt">Wait for the fix</span></div>${src}
+          ${idle ? `<button class="btn btn-sm btn-primary" style="align-self:flex-start" data-act="reactivate" data-id="${m.id}" data-where="desk">${icon('play', 's14')}Reactivate and answer…</button>` : ''}</div>`
+      : `<div class="qcard ${idle ? 'idle' : ''}">${idle ? `<span class="flag">${icon('pause', 's14')}Manager inactive — it hears your decision when reactivated</span>` : ''}
+          <div style="display:flex;align-items:center;gap:8px"><b>Merge PR #2329</b><span class="badge">checks green</span></div>
+          <div class="muted small">feat: keep task worktrees from filling the disk</div>${src}
+          <div style="display:flex;gap:8px"><button class="btn btn-sm btn-primary">Merge</button><button class="btn btn-sm btn-outline">Dismiss</button></div></div>`
+    return `<section style="display:flex;flex-direction:column;gap:10px">${head}${card}</section>`
+  }
+  const order = [...ordered().active, ...ordered().idle]
+  const q = questionsCount(); const a = approvalsCount(); const iq = idleQuestions()
+  $('#inbox').innerHTML = `
+    <div class="col"><div class="top">${icon('q')}Questions<span class="pill ${q ? 'on' : 'off'}" style="margin-left:6px">${q}</span>${iq ? `<span class="xs muted" style="font-weight:400;margin-left:auto">+${iq} from inactive managers, not counted</span>` : ''}</div>
+      ${order.map((m) => group(m, 'q')).join('') || '<p class="muted">Nothing waiting.</p>'}</div>
+    <div class="col"><div class="top">${icon('checks')}Approvals<span class="pill ${a ? 'on' : 'off'}" style="margin-left:6px">${a}</span><span class="xs muted" style="font-weight:400;margin-left:auto">inactive managers' cards count: answering costs nothing</span></div>
+      ${order.map((m) => group(m, 'a')).join('') || '<p class="muted">Nothing waiting.</p>'}</div>`
+}
+
+// ------------------------------------------------------------------ actions
+function toast(text) {
+  const t = $('#toast'); t.innerHTML = text; t.classList.add('on')
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 2600)
+}
+
+function deactivate(id) {
+  S.inactive[id] = { since: `today ${nowLabel()}`, events: { tasks: 1, automations: 1, checks: 0, jobs: 0 } }
+  delete S.reactivatedFrom[id]
+  toast(`${icon('pause', 's14')}<span><b>${esc(byId(id).name)}</b> is inactive — nothing runs until you reactivate it.</span>`)
+}
+function reactivate(id, catchUp) {
+  const st = S.inactive[id]
+  if (!st) return
+  const events = st.since.startsWith('today') ? { tasks: 1, automations: 1, checks: 3, jobs: 1 } : st.events
+  S.reactivatedFrom[id] = { since: st.since, at: `today ${nowLabel()}`, events, catchUp }
+  delete S.inactive[id]
+  toast(`${icon('play', 's14')}<span><b>${esc(byId(id).name)}</b> is active again${catchUp ? ' — running one catch-up check' : ''}.</span>`)
+}
+
+function renderAll() {
+  renderDesk(); renderStaticDialogs(); renderPhones(); renderInbox()
+  const idle = MANAGERS.filter((m) => isIdle(m.id)).map((m) => m.name)
+  $('#inactive-list').textContent = idle.length ? idle.join(', ') : 'none'
+}
+
+function openDialog(type, id, where) { S.dialog = { type, id, where }; S.menu = null; S.phone.sheet = false; if (type !== 'send') S.catchUp = false; renderAll() }
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-act],[data-row],[data-more],[data-headmenu],[data-gear],[data-pcard],[data-pback],[data-psheet],[data-scrim],[data-catchup]')
+  if (!t) { if (S.menu || S.phone.sheet) { S.menu = null; S.phone.sheet = false; renderAll() } return }
+  if (t.hasAttribute('data-catchup')) { S.catchUp = t.checked; return }
+  if (t.hasAttribute('data-scrim')) { if (e.target === t) { S.dialog = null; renderAll() } return }
+  const where = t.dataset.where || (t.closest('.phone') ? 'phone' : 'desk')
+  if (t.dataset.more) { e.stopPropagation(); const r = t.closest('.mrow'); const box = $('#desk').getBoundingClientRect(); const rb = r.getBoundingClientRect(); S.menu = { kind: 'row', id: t.dataset.more, x: rb.right - box.left - 30, y: rb.bottom - box.top - 4 }; renderAll(); return }
+  if (t.hasAttribute('data-headmenu')) { const box = $('#desk').getBoundingClientRect(); const rb = t.getBoundingClientRect(); S.menu = { kind: 'head', x: rb.left - box.left - 4, y: rb.bottom - box.top + 4 }; renderAll(); return }
+  if (t.hasAttribute('data-gear')) { S.menu = S.menu?.kind === 'gear' ? null : { kind: 'gear' }; renderAll(); return }
+  if (t.dataset.row) { S.selected = t.dataset.row; S.menu = null; S.draft = ''; renderAll(); return }
+  if (t.dataset.pcard) { S.phone.id = t.dataset.pcard; S.phone.sheet = false; renderAll(); return }
+  if (t.hasAttribute('data-pback')) { S.phone.sheet = false; renderAll(); return }
+  if (t.hasAttribute('data-psheet')) { S.phone.sheet = !S.phone.sheet; renderAll(); return }
+  const act = t.dataset.act
+  if (act === 'open') { S.selected = t.dataset.id; S.menu = null; renderAll(); return }
+  if (act === 'settings') { S.selected = t.dataset.id; S.menu = { kind: 'gear' }; renderAll(); return }
+  if (act === 'deactivate') return openDialog('deactivate', t.dataset.id, where)
+  if (act === 'reactivate') return openDialog('reactivate', t.dataset.id, where)
+  if (act === 'send-idle') return openDialog('send', t.dataset.id, where)
+  if (act === 'bulk-off') return openDialog('bulk', null, 'desk')
+  if (act === 'bulk-on') { Object.keys(S.inactive).forEach((id) => reactivate(id, false)); S.menu = null; toast(`${icon('play', 's14')}All managers are active again.`); renderAll(); return }
+  if (act === 'cancel') { S.dialog = null; renderAll(); return }
+  if (act === 'confirm') {
+    const d = S.dialog; S.dialog = null
+    if (d.type === 'deactivate') deactivate(d.id)
+    else if (d.type === 'reactivate') reactivate(d.id, S.catchUp)
+    else if (d.type === 'send') { reactivate(d.id, false); S.draft = ''; toast(`${icon('send', 's14')}<span><b>${esc(byId(d.id).name)}</b> is active again; your message started its turn.</span>`) }
+    else if (d.type === 'bulk') { ordered().active.forEach((m) => deactivate(m.id)); toast(`${icon('pause', 's14')}All managers are inactive. Nothing runs until you reactivate them.`) }
+    renderAll(); return
+  }
+  if (act === 'noop') { S.menu = null; renderAll() }
+})
+document.addEventListener('contextmenu', (e) => {
+  const r = e.target.closest('.mrow')
+  if (!r) return
+  e.preventDefault()
+  const box = $('#desk').getBoundingClientRect()
+  S.menu = { kind: 'row', id: r.dataset.row, x: Math.min(e.clientX - box.left, 30), y: e.clientY - box.top }
+  renderAll()
+})
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && (S.menu || S.dialog || S.phone.sheet)) { S.menu = null; S.dialog = null; S.phone.sheet = false; renderAll() }
+  if (e.key === 'Enter' && e.target.matches('[data-row],[data-pcard]')) e.target.click()
+})
+document.querySelectorAll('#theme button').forEach((b) => b.addEventListener('click', () => {
+  document.documentElement.dataset.theme = b.dataset.v
+  document.querySelectorAll('#theme button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)))
+}))
+$('#reset').addEventListener('click', () => { S.inactive = clone(INITIAL_INACTIVE); S.reactivatedFrom = {}; S.selected = 'ops'; S.menu = null; S.dialog = null; S.draft = ''; S.phone = { screen: 'index', id: 'qa', sheet: false }; renderAll() })
+renderAll()
+})()
+</script>
+</body>
+</html>
