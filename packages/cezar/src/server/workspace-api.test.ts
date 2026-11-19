@@ -112,6 +112,9 @@ describe('the workspace settings API (step 2.7)', () => {
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
+        worktreeIdleDaysDefault: 7,
+        archivedTaskDeleteDaysDefault: 90,
+        diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
       // keys mean "this machine has no opinion", which is what makes them defaults a repo can be
@@ -320,6 +323,9 @@ describe('the workspace settings API (step 2.7)', () => {
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
+        worktreeIdleDaysDefault: 7,
+        archivedTaskDeleteDaysDefault: 90,
+        diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
       // unrelated questions, so one must never materialize the other.
@@ -381,6 +387,9 @@ describe('the workspace settings API (step 2.7)', () => {
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
+      worktreeIdleDaysDefault: 7,
+      archivedTaskDeleteDaysDefault: 90,
+      diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
     });
   });
 
