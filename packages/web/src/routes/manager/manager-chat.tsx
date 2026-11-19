@@ -496,7 +496,7 @@ function WorkingSpinner({ label }: { label: string }) {
 /** The header's sub line while inactive: since when, and what is paused. */
 function inactiveLine(manager: ManagerSummary): string {
   const jobs = manager.jobs.filter((job) => job.enabled).length
-  const paused = [jobs > 0 ? `${jobs} ${jobs === 1 ? 'job' : 'jobs'}` : '', manager.cronMinutes > 0 ? `${cronLabel(manager.cronMinutes)} checks` : ''].filter(Boolean).join(' and ')
+  const paused = [jobs > 0 ? `${jobs} ${jobs === 1 ? 'job' : 'jobs'}` : '', manager.cronMinutes > 0 ? `checks every ${cronLabel(manager.cronMinutes)}` : ''].filter(Boolean).join(' and ')
   return `${inactiveSinceLabel(manager).replace(' · since', ' since')}${paused ? ` · ${paused} paused` : ''}`
 }
 
@@ -740,7 +740,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <div data-slot="manager-inactive-banner" role="status" className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-border bg-muted/70 px-3 py-2 text-sm md:flex-nowrap md:px-5">
           <PauseIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="font-semibold">Inactive</span>
-          <span className="min-w-0 basis-full text-muted-foreground max-md:order-last md:basis-auto md:truncate">No checks, jobs, follow-ups or model calls. Tasks it started keep running; their cards still arrive here.</span>
+          <span className="min-w-0 basis-full text-muted-foreground max-md:order-last md:basis-auto md:truncate">No checks, jobs or model calls. Its tasks keep running; their cards still arrive here.</span>
           <Button size="sm" className="ml-auto shrink-0 pointer-coarse:min-h-11" data-slot="manager-reactivate" onClick={() => void activity.reactivate(manager)}>
             <PlayIcon aria-hidden="true" />
             Reactivate…

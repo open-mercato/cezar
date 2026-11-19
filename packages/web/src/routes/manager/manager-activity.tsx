@@ -70,7 +70,7 @@ function Title({ manager, children }: { manager?: ManagerSummary | undefined; ch
 function stopsLine(manager: ManagerSummary): string {
   const enabled = manager.jobs.filter((job) => job.enabled).length
   const checks = manager.cronMinutes > 0 ? `Checks every ${cronLabel(manager.cronMinutes)}` : 'Checks'
-  return `${checks} and ${plural(enabled, 'saved job')}`
+  return enabled > 0 ? `${checks} and ${plural(enabled, 'saved job')}` : checks
 }
 
 function WhileInactive({ manager }: { manager: ManagerSummary }) {
