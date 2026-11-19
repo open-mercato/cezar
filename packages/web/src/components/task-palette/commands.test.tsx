@@ -106,6 +106,13 @@ describe('the actions follow the header’s own rules (runActionFlags)', () => {
     expect(build(gated).byId.get('delete')?.unavailable).toBe('Resolve the worktree operation first')
   })
 
+  it('Archive says it frees the worktree, and the archived-task lifetime when the project has one', () => {
+    expect(build(run('done')).byId.get('archive')?.detail?.text).toBe('Frees its worktree on disk; the branch is kept and Continue restores it')
+    expect(build(run('done'), { archivedDeleteDays: 0 }).byId.get('archive')?.detail?.text).not.toMatch(/Deleted/)
+    expect(build(run('done'), { archivedDeleteDays: 90 }).byId.get('archive')?.detail?.text).toMatch(/Deleted after 90 days archived$/)
+    expect(build(run('done', { archived: true }), { archivedDeleteDays: 90 }).byId.get('archive')?.detail).toBeUndefined()
+  })
+
   it('pin flips its label and is unavailable on an archived run', () => {
     expect(build(run('done', { pinned: true })).byId.get('pin')).toMatchObject({ label: 'Unpin', pressed: true })
     expect(build(run('done', { archived: true })).byId.get('pin')?.unavailable).toBe('Archived tasks can’t be pinned')

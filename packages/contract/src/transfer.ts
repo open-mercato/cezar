@@ -147,6 +147,8 @@ export const bundleProjectConfigSchema = z
   .object({
     skillsRepos: jsonValue.optional(),
     worktreeRetention: jsonValue.optional(),
+    worktreeIdleDays: jsonValue.optional(),
+    archivedTaskDeleteDays: jsonValue.optional(),
     defaultRunner: jsonValue.optional(),
     plannerModel: jsonValue.optional(),
     namerModel: jsonValue.optional(),

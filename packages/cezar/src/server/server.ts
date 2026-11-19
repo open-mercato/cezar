@@ -7,6 +7,8 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
+import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
+import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -286,8 +288,10 @@ import {
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
-import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
-import { isReclaimable, reclaimWorktrees, worktreesInUse } from '../runs/retention.ts';
+import { DiskGuard, type DiskGuardStatus } from '../runs/disk-guard.ts';
+import { workspaceDiskGuardDeps } from '../runs/disk-guard-workspace.ts';
+import { branchDiff, branchesCheckedOutElsewhere, localBranchExists, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeHasUnpreservedWork, worktreeSizeBytes } from '../git-worktree.ts';
+import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
@@ -311,7 +315,7 @@ import {
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
-import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { gatedSkillsRepos, loadConfig, resolveArchivedTaskDeleteDays, resolveWorktreeIdleDays, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { BYPASS_PERMISSIONS_HOSTED, bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
@@ -501,6 +505,9 @@ export interface ServerDeps {
   workspaceEvents?: WorkspaceEventBus;
   /** Hands `startServer` the engine `createApp` built, which arms its timer and drains it. */
   onManagerEngine?: (engine: ManagerEngine) => void;
+  /** Hands `startServer` the disk guard `createApp` built (spec 2026-11-19-worktree-disk-usage),
+   *  which arms its timer; a bare app only reads it. */
+  onDiskGuard?: (guard: DiskGuard) => void;
   /** The phone relay client. `startServer` starts it; a bare app only answers the routes. */
   relay?: RelayService;
   /** Test seam: the agent backend a manager turn talks to (spec 2026-10-31-managers). */
@@ -1702,16 +1709,25 @@ export function createApp(deps: ServerDeps) {
   // count against the same workspace semaphore as the boot manager (step 2.5).
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
+  const contextProjects = async () => {
+    const selector = capabilities().singleProject
+      ? { projectId: await resolveBootProject() }
+      : undefined;
+    return listProjects(selector);
+  };
   const contexts = deps.contexts ?? new ProjectContexts({
-    listProjects: async () => {
-      const selector = capabilities().singleProject
-        ? { projectId: await resolveBootProject() }
-        : undefined;
-      return listProjects(selector);
-    },
+    listProjects: contextProjects,
     semaphore: deps.semaphore,
     hosted: () => !capabilities().localHandoff,
   });
+  // The disk guard (spec 2026-11-19-worktree-disk-usage, decision 3): health and its status route
+  // read it here; `startServer` arms its timer. Every registered project, since the disk is shared.
+  const diskGuard = new DiskGuard(
+    workspaceDiskGuardDeps({ boot: bootContext, contexts, listProjects: contextProjects, loadConfig: workspaceConfig.load }),
+    undefined,
+    (message) => console.log(`  ${message}`),
+  );
+  deps.onDiskGuard?.(diskGuard);
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
     ports: () => [deps.webhookPort ?? 4321, ...listServerInstances().map(instance => instance.state.primaryPort)],
@@ -2073,7 +2089,7 @@ export function createApp(deps: ServerDeps) {
       projects: workspace.projects,
       bootProject: workspace.bootProject,
       ...(process.env.CEZ_INSTANCE_ID ? { instanceId: process.env.CEZ_INSTANCE_ID } : {}),
-      ...diskHealth(bootRoot),
+      ...diskHealth(bootRoot, undefined, undefined, diskGuard.status()),
     };
   };
   // The scope-dependent fields, added per send: the cache below is process-wide, so a phone must
@@ -3912,6 +3928,13 @@ export function createApp(deps: ServerDeps) {
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
+      worktreeIdleDaysDefault: config.resources.worktreeIdleDaysDefault,
+      archivedTaskDeleteDaysDefault: config.resources.archivedTaskDeleteDaysDefault,
+      diskGuard: {
+        minFreePercent: config.resources.diskGuard.minFreePercent,
+        minFreeGb: config.resources.diskGuard.minFreeGb,
+        maxWorktreesGb: config.resources.diskGuard.maxWorktreesGb,
+      },
     },
     // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
     // `JSON.stringify` drops it, which is the exact drift `contract-parity` catches. And absent has
@@ -3939,6 +3962,13 @@ export function createApp(deps: ServerDeps) {
       const usage = hostSampler.sampleHostUsage();
       hostSampler.keepWarm();
       return c.json(usage);
+    })
+    // The disk guard's thresholds and last pass, for Settings → Worktrees. A read of what the
+    // guard already holds: never a `statfs` or `du` of its own.
+    .get('/workspace/disk-guard', async (c) => {
+      const config = await workspaceConfig.load();
+      const { minFreePercent, minFreeGb, maxWorktreesGb } = config.resources.diskGuard;
+      return c.json(diskGuardStatusBody(diskGuard.status(), { minFreePercent, minFreeGb, maxWorktreesGb }));
     })
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
@@ -4025,6 +4055,18 @@ export function createApp(deps: ServerDeps) {
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
+          }
+          if (resources?.worktreeIdleDaysDefault !== undefined) {
+            config.resources.worktreeIdleDaysDefault = resources.worktreeIdleDaysDefault;
+          }
+          if (resources?.archivedTaskDeleteDaysDefault !== undefined) {
+            config.resources.archivedTaskDeleteDaysDefault = resources.archivedTaskDeleteDaysDefault;
+          }
+          if (resources?.diskGuard) {
+            for (const key of ['minFreePercent', 'minFreeGb', 'maxWorktreesGb'] as const) {
+              const value = resources.diskGuard[key];
+              if (value !== undefined) config.resources.diskGuard[key] = value;
+            }
           }
           // `null` CLEARS back to "no opinion" — a partial patch cannot say that by omission,
           // and leaving a stale runner behind would keep overriding repos that never chose.
@@ -5281,12 +5323,33 @@ export function createApp(deps: ServerDeps) {
 
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
+    // Archived tasks past their lifetime (spec 2026-11-19-worktree-disk-usage); `cez worktrees
+    // prune --archived-older-than` calls it. Before the `/:id/...` routes, like the sweeps below.
+    .post('/runs/archived/delete-expired', jsonZodValidator(deleteExpiredArchivedInputSchema, { absent: ({}) }), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const body = c.req.valid('json');
+      const days = body.olderThanDays ?? await resolveArchivedTaskDeleteDays(repoRoot);
+      const result = await deleteExpiredArchivedTasks(repoRoot, store, days, {
+        isLive: (id) => manager.isActive(id), dryRun: body.dryRun === true, lifecycle: manager.lifecycle,
+        activity: storeActivity(store),
+        // The rest of what `DELETE /runs/:id` does: terminals stop, a PR head's ref goes with it.
+        onDeleted: (run) => stopTaskProcesses(run.id),
+      });
+      if (body.dryRun !== true && result.deleted.length > 0) await manager.sweepPrHeadRefs();
+      return c.json({ ...result, days, dryRun: body.dryRun === true });
+    })
+
     .post('/runs/archive-finished', (c) => {
-      const { store } = c.get('project');
+      const { store, manager } = c.get('project');
       const open = store.listRuns().filter((run) => !run.archived).map((run) => run.id);
       const archived = store.archiveFinished();
-      // The sweep is an archive like any other: each task it took loses its terminals (spec §6).
-      if (archived > 0) for (const id of open) if (store.getRun(id)?.archived) stopTaskProcesses(id);
+      // The sweep is an archive like any other: each task it took loses its terminals (spec §6)
+      // and its worktree (branch kept, Continue restores it).
+      if (archived > 0) {
+        const taken = open.filter((id) => store.getRun(id)?.archived);
+        for (const id of taken) stopTaskProcesses(id);
+        manager.reclaimWorktreesOf(taken);
+      }
       // One event for the sweep, `value` = how many it archived (summed on the dashboard).
       if (archived > 0) track('task_archived', { label: 'bulk', value: archived }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ archived });
@@ -5307,7 +5370,10 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
-      if (run && parsed.data.archived !== false) stopTaskProcesses(id);
+      if (run && parsed.data.archived !== false) {
+        stopTaskProcesses(id);
+        manager.reclaimWorktreesOf([id]);
+      }
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
       if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
@@ -5978,11 +6044,13 @@ export function createApp(deps: ServerDeps) {
 
     // Task diff (spec 006): what this run changed — its worktree vs its base.
     .get('/runs/:id/diff', async (c) => {
-      const { store } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const kept = await reclaimedBranchOf(run, repoRoot);
+      if (kept) return c.text(await branchDiff(repoRoot, run.baseBranch ?? 'HEAD', kept));
       if (!run.worktreePath || !existsSync(run.worktreePath)) {
-        return c.text('(no worktree — this task ran directly in the repo working tree)');
+        return c.text(run.worktreeReclaimedAt ? `(${RECLAIMED_WORKTREE})` : '(no worktree — this task ran directly in the repo working tree)');
       }
       return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD'));
     })
@@ -5992,7 +6060,7 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectChanges(workingDirectory, run.baseBranch ?? 'HEAD', {
         taskBranch: run.branch,
         // Anchors a repointed worktree at the branch as this run found it (#751).
@@ -6010,8 +6078,14 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const kept = await reclaimedBranchOf(run, repoRoot);
+      if (kept) {
+        const fromBranch = await collectRunCommits(repoRoot, run.baseBranch ?? 'HEAD', kept);
+        if (!fromBranch.ok) return c.json({ error: fromBranch.error }, 409);
+        return c.json({ commits: fromBranch.commits });
+      }
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectRunCommits(workingDirectory, run.baseBranch ?? 'HEAD');
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ commits: result.commits });
@@ -6022,8 +6096,9 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      // A reclaimed task's commits live on in the shared object store: read them from the repo.
+      const workingDirectory = (await reclaimedBranchOf(run, repoRoot)) ? repoRoot : workingDirectoryOf(run, repoRoot);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectCommitChanges(workingDirectory, c.req.param('sha'));
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.commit);
@@ -6303,9 +6378,9 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const draft = c.req.valid('json').draft ?? true;
       const id = c.req.param('id');
-      const run = store.getRun(id);
-      if (!run) return c.json({ error: 'not found' }, 404);
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
+      const run = (await withRestoredWorktree(c.get('project'), store.getRun(id)))!;
       // A pull-request head run's branch holds the whole foreign PR under this run's changes: a
       // draft PR from it into the default base would re-propose that PR (spec
       // 2026-10-06-agentic-e2e-checks Phase 3). Refused until publishing back is designed.
@@ -6318,7 +6393,7 @@ export function createApp(deps: ServerDeps) {
       if (!run.worktreePath || !existsSync(run.worktreePath) || !run.branch) {
         return c.json(
           {
-            error: 'no worktree/branch to publish — this task ran in the repo working tree',
+            error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : 'no worktree/branch to publish — this task ran in the repo working tree',
           },
           400,
         );
@@ -6746,6 +6821,18 @@ export function createApp(deps: ServerDeps) {
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
+  const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk and could not be restored — its branch is kept; Continue restores it';
+  /** A reclaimed task's kept branch, when its tree is gone and the branch still exists: the read
+   *  routes answer from it without a checkout (spec 2026-11-19-worktree-disk-usage). */
+  const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> =>
+    run.worktreeReclaimedAt && run.branch && !(run.worktreePath && existsSync(run.worktreePath))
+      && await localBranchExists(repoRoot, run.branch) ? run.branch : null;
+  /** Only the PR path restores a reclaimed tree: publishing needs a checkout (autosave, push). */
+  const withRestoredWorktree = async (project: { store: RunStore; manager: RunManager }, run: RunRecord | undefined): Promise<RunRecord | undefined> => {
+    if (!run?.worktreeReclaimedAt || !run.worktreePath || existsSync(run.worktreePath) || project.manager.isActive(run.id)) return run;
+    await project.manager.restoreReclaimedWorktree?.(run.id);
+    return project.store.getRun(run.id) ?? run;
+  };
 
   /** Every pull request number this run points at — the one it created and the one it is about
    *  (#901), from whichever field carries it. Used to invalidate what the forge told us about
@@ -6768,6 +6855,9 @@ export function createApp(deps: ServerDeps) {
       // The keep-limit the panel reports is the one the enforcer will actually
       // apply — inherited from the workspace default when this repo sets none.
       const keep = await resolveWorktreeRetention(repoRoot);
+      const idleDays = await resolveWorktreeIdleDays(repoRoot);
+      const { manager } = c.get('project');
+      const activity = storeActivity(store);
       const runs = store.listRuns().filter((r) => r.worktreePath && existsSync(r.worktreePath));
       const inUse = await worktreesInUse(runs);
       const worktrees = await Promise.all(
@@ -6779,7 +6869,8 @@ export function createApp(deps: ServerDeps) {
           // POSIX `du` — degrades to null (Windows / du missing / error); never blocks.
           sizeBytes: await worktreeSizeBytes(r.worktreePath as string),
           finishedAt: r.finishedAt ?? null,
-          reclaimable: isReclaimable(r) && !inUse.has(r.id),
+          lastActivityAt: activity(r),
+          reclaimable: isIdleReclaimable(r) && !manager.isActive(r.id) && !inUse.has(r.id),
           // Spread, not `key: undefined` — the contract types it as optional on the wire.
           ...(inUse.has(r.id) ? { inUse: inUse.get(r.id)! } : {}),
         })),
@@ -6788,18 +6879,38 @@ export function createApp(deps: ServerDeps) {
       const totalBytes = worktrees.some((w) => w.sizeBytes === null)
         ? null
         : worktrees.reduce((sum, w) => sum + (w.sizeBytes ?? 0), 0);
-      return c.json({ worktrees, totalBytes, keep });
+      return c.json({ worktrees, totalBytes, keep, idleDays });
     })
 
-    .post('/worktrees/reclaim', jsonZodValidator(() => reclaimBodySchema, { absent: ({}), message: 'invalid body' }), async (c) => {
-      const { root: repoRoot, store } = c.get('project');
-      // The body is validated (an empty or `{}` one is accepted) but carries nothing this
-      // handler reads; retention is best-effort, so 200 always.
-      const reclaimed = await reclaimWorktrees(repoRoot, store, await resolveWorktreeRetention(repoRoot), { lifecycle: c.get('project').manager.lifecycle });
+    .post('/worktrees/reclaim', jsonZodValidator(reclaimWorktreesInputSchema, { absent: ({}), message: 'invalid body' }), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const body = c.req.valid('json');
+      const isLive = (id: string) => manager.isActive(id);
+      const opts = { lifecycle: manager.lifecycle, isLive };
+      // An empty body is "Reclaim now": the configured retention, count then age. Best-effort, 200 always.
+      const targets = selectManualReclaim(store.listRuns(), body, isLive, storeActivity(store));
+      if (body.dryRun) {
+        const candidates = targets ?? await configuredReclaimCandidates(repoRoot, store, isLive);
+        const runs = store.listRuns().filter((r) => candidates.includes(r.id));
+        const inUse = await worktreesInUse(runs);
+        // The real pass keeps a tree with uncommitted work (#2215); the preview must not list it.
+        const dirty = new Set<string>();
+        for (const run of runs) if (run.worktreePath && await worktreeHasUnpreservedWork(run.worktreePath)) dirty.add(run.id);
+        return c.json({ reclaimed: candidates.filter((id) => !inUse.has(id) && !dirty.has(id)), dryRun: true });
+      }
+      const reclaimed = targets === null
+        ? await enforceWorktreeRetention(repoRoot, store, opts)
+        : await reclaimSelectedWorktrees(repoRoot, store, targets, opts);
       return c.json({ reclaimed });
-    });
+    })
 
-  const reclaimBodySchema = z.object({}).passthrough();
+    // `cez worktrees prune`: the boot-time orphan sweep on demand. Never throws; a tree in use stays.
+    .post('/worktrees/prune', async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const ids = new Set(store.listRuns().map((r) => r.id));
+      const removed = await pruneOrphans(repoRoot, ids, (id) => manager.lifecycle.allowOrphanPrune(id)).catch(() => [] as string[]);
+      return c.json({ removed });
+    });
 
   /**
    * "The inbox is on and this entry exists" — the 409/404 half of `POST /todos/:id/start`, lifted
@@ -8009,6 +8120,10 @@ export function createApp(deps: ServerDeps) {
       // Count-based worktree retention (#483): keep the last N finished worktrees
       // on disk. 0 = unlimited. Always materialized (schema default 10).
       worktreeRetention: config.worktreeRetention,
+      worktreeIdleDays: await resolveWorktreeIdleDays(repoRoot),
+      worktreeIdleDaysOwn: config.worktreeIdleDays !== undefined,
+      archivedTaskDeleteDays: await resolveArchivedTaskDeleteDays(repoRoot),
+      archivedTaskDeleteDaysOwn: config.archivedTaskDeleteDays !== undefined,
       ...(lifecycle.configured ? { worktreeLifecycle: lifecycle.config, worktreeLifecycleRevision: lifecycle.revision! } : {}),
       // Live title updates (task auto-naming spec): tri-state — null means "no
       // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
@@ -8108,6 +8223,14 @@ export function createApp(deps: ServerDeps) {
             if (parsed.data.worktreeRetention === null) delete raw.worktreeRetention;
             else raw.worktreeRetention = parsed.data.worktreeRetention;
           }
+          if (parsed.data.worktreeIdleDays !== undefined) {
+            if (parsed.data.worktreeIdleDays === null) delete raw.worktreeIdleDays;
+            else raw.worktreeIdleDays = parsed.data.worktreeIdleDays;
+          }
+          if (parsed.data.archivedTaskDeleteDays !== undefined) {
+            if (parsed.data.archivedTaskDeleteDays === null) delete raw.archivedTaskDeleteDays;
+            else raw.archivedTaskDeleteDays = parsed.data.archivedTaskDeleteDays;
+          }
           if (parsed.data.liveTitleUpdates !== undefined) {
             if (parsed.data.liveTitleUpdates === null) delete raw.liveTitleUpdates;
             else raw.liveTitleUpdates = parsed.data.liveTitleUpdates;
@@ -8188,7 +8311,7 @@ export function createApp(deps: ServerDeps) {
           await save(false);
         }
         // A new keep-limit applies now, not at the next finished task (#2003).
-        if (parsed.data.worktreeRetention !== undefined) c.get('project').manager.scheduleRetention();
+        if (parsed.data.worktreeRetention !== undefined || parsed.data.worktreeIdleDays !== undefined || parsed.data.archivedTaskDeleteDays !== undefined) c.get('project').manager.scheduleRetention();
         return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
       } catch (error) { return lifecycleError(c, error); }
     });
@@ -9408,6 +9531,19 @@ export function createApp(deps: ServerDeps) {
   return routed;
 }
 
+/** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */
+function diskGuardStatusBody(status: DiskGuardStatus, thresholds: { minFreePercent: number; minFreeGb: number; maxWorktreesGb: number }) {
+  return {
+    thresholds,
+    ...(status.checkedAt !== undefined ? { checkedAt: status.checkedAt } : {}),
+    ...(status.freeBytes !== undefined ? { freeBytes: status.freeBytes } : {}),
+    ...(status.totalBytes !== undefined ? { totalBytes: status.totalBytes } : {}),
+    ...(status.worktreesBytes !== undefined ? { worktreesBytes: status.worktreesBytes } : {}),
+    ...(status.lastAction !== undefined ? { lastAction: status.lastAction } : {}),
+    ...(status.warning !== undefined ? { warning: status.warning } : {}),
+  };
+}
+
 export function startServer(deps: ServerDeps, port: number): ServerType & { shutdownLifecycle(): Promise<void> } {
   let shutdownPromise: Promise<void> | undefined;
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
@@ -9446,11 +9582,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   let rescheduleAutomations = () => {};
   const appCleanups: Array<() => void> = [];
   let managerEngine: ManagerEngine | undefined;
+  let diskGuard: DiskGuard | undefined;
   const relay = deps.relay ?? new RelayService();
   const app = createApp({
     ...deps,
     relay,
     onManagerEngine: (engine) => { managerEngine = engine; deps.onManagerEngine?.(engine); },
+    onDiskGuard: (guard) => { diskGuard = guard; deps.onDiskGuard?.(guard); },
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
     webhookPort: port,
@@ -9561,6 +9699,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   });
   server.once('listening', () => {
     void relay.start();
+    // Boot already ran the retention sweep (src/index.ts), so the guard's first pass follows it.
+    diskGuard?.start();
     void listProjects().then((projects) => {
       if (shutdownPromise) return;
       // Spec 2026-10-31-managers: arms for a manager that exists, and only behind the flag.
@@ -9583,7 +9723,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); diskGuard?.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return Object.assign(server, {
     shutdownLifecycle(): Promise<void> {
@@ -9592,6 +9732,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       server.close();
       coordinator.stop();
       automationScheduler.stop();
+      diskGuard?.stop();
       shutdownPromise = (async () => {
         const results = await Promise.allSettled([managerEngine?.shutdown(), deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
         deps.manager.dispose();
