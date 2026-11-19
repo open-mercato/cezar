@@ -2842,6 +2842,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const { run } = input;
   const worktree = run.worktreePath;
   const branch = run.branch;
+  const existing = input.updateExisting ? run.pullRequestUrl : undefined;
   if (!worktree || !branch) {
     return { ok: false, error: 'this task has no worktree/branch to publish' };
   }
@@ -2865,7 +2866,9 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   // DRY-RUN (CEZ_DRY_RUN=1): no push, no gh — simulate success with a fake PR
   // URL so the whole review → PR flow is testable without GitHub.
   if (process.env.CEZ_DRY_RUN === '1') {
-    return { ok: true, url: 'https://github.com/open-mercato/demo/pull/777', dryRun: true };
+    return existing
+      ? { ok: true, url: existing, dryRun: true, updated: true }
+      : { ok: true, url: 'https://github.com/open-mercato/demo/pull/777', dryRun: true };
   }
 
   // Push to the push remote, open the PR on the base remote the task forked from (#1383).
@@ -2877,8 +2880,9 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): gh would only refuse after the
   // push, leaving a branch on the remote with nothing in it. Unknown base → let gh decide.
-  const { ahead } = await baseDivergence(worktree, run.baseBranch);
-  if (ahead === 0) return { ok: false, error: nothingToPropose(branch, prBase) };
+  if (!existing && (await baseDivergence(worktree, run.baseBranch)).ahead === 0) {
+    return { ok: false, error: nothingToPropose(branch, prBase) };
+  }
 
   let push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
@@ -2889,6 +2893,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
   }
+  if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
 
   const body = buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
@@ -3080,14 +3085,14 @@ interface ExecResult {
  *  throws; `CEZ_DRY_RUN=1` answers ok offline. */
 export async function updatePr(
   repoRoot: string,
-  number: number,
+  pr: number | string,
   changes: { ready?: boolean; addLabels?: string[]; reviewers?: string[] },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
   const fail = (res: ExecResult, what: string) =>
     res.notFound ? 'gh is not installed' : (res.stderr || res.stdout).trim().split('\n')[0] || `${what} failed`;
   if (changes.ready) {
-    const res = await execTool(['pr', 'ready', String(number)], repoRoot, 'gh', 60_000);
+    const res = await execTool(['pr', 'ready', String(pr)], repoRoot, 'gh', 60_000);
     if (!res.ok) return { ok: false, error: fail(res, 'gh pr ready') };
   }
   const edit = [
@@ -3095,7 +3100,7 @@ export async function updatePr(
     ...(changes.reviewers ?? []).flatMap((r) => ['--add-reviewer', r]),
   ];
   if (edit.length) {
-    const res = await execTool(['pr', 'edit', String(number), ...edit], repoRoot, 'gh', 60_000);
+    const res = await execTool(['pr', 'edit', String(pr), ...edit], repoRoot, 'gh', 60_000);
     if (!res.ok) return { ok: false, error: fail(res, 'gh pr edit') };
   }
   return { ok: true };
