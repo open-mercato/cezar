@@ -7,7 +7,6 @@ import { attachmentLibraryPath, runImagesDir } from './task-files.ts';
 
 // Spec 2026-11-19-worktree-disk-usage: a task's artifacts and dispatch tree go with the task, and
 // the attachment library never does (BACKWARD_COMPATIBILITY.md §3: the user's own files).
-// copies go with the task, and a startup sweep removes leftovers of tasks already gone.
 describe('task files are cleaned up with the task', () => {
   let dataDir: string;
   const old = new Date(Date.now() - 2 * 60 * 60_000); // past the library grace window
