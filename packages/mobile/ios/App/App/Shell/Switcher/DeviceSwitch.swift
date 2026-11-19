@@ -6,8 +6,8 @@ enum DeviceSwitch {
     enum Status: Equatable {
         /// Probing, inside the bound.
         case checking, online, offline
-        /// Reachable in no useful way until someone acts; the words say why.
-        case other(String)
+        /// Reachable in no useful way until someone acts; the reason says why.
+        case other(Reason)
 
         /// Online first, then offline (and still checking), then the rest.
         var group: Int {
@@ -15,6 +15,43 @@ enum DeviceSwitch {
             case .online: return 0
             case .offline, .checking: return 1
             case .other: return 2
+            }
+        }
+
+        /// The connect page's `status` (spec 2026-11-19-mobile-devices-screen, "Native ↔ page contract").
+        var key: String {
+            switch self {
+            case .checking: return "checking"
+            case .online: return "online"
+            case .offline: return "offline"
+            case .other: return "other"
+            }
+        }
+
+        /// The page's `reason`, for `other` only.
+        var reason: String? {
+            guard case .other(let reason) = self else { return nil }
+            return reason.rawValue
+        }
+    }
+
+    /// Why a cezar is blocked: the page's `reason`, and the words every list shows for it.
+    enum Reason: String, CaseIterable {
+        case signIn = "sign-in", removed, email, account, terms, suspended
+        case updateApp = "update-app", updateCezar = "update-cezar", quota, broken
+
+        var words: String {
+            switch self {
+            case .signIn: return "Sign in needed"
+            case .removed: return "This phone was removed"
+            case .email: return "Email not confirmed"
+            case .account: return "Relay account needed"
+            case .terms: return "Accept the terms"
+            case .suspended: return "Suspended"
+            case .updateApp: return "Update the app"
+            case .updateCezar: return "Update cezar"
+            case .quota: return "Relay limit reached"
+            case .broken: return DeviceSwitch.cantConnect
             }
         }
     }
@@ -63,15 +100,15 @@ enum DeviceSwitch {
         case .ready: return .online
         case .idle, .connecting: return .checking
         case .relayDown, .cezarOffline, .notAnswering: return .offline
-        case .emailUnconfirmed: return .other("Email not confirmed")
-        case .accountRequired: return .other("Relay account needed")
-        case .suspended: return .other("Suspended")
-        case .termsRequiredDevice: return .other("Accept the terms")
-        case .deviceRemoved: return .other("Removed from this computer")
-        case .updateApp: return .other("Update the app")
-        case .updateCezar: return .other("Update cezar")
-        case .quota: return .other("Relay limit reached")
-        case .broken: return .other(cantConnect)
+        case .emailUnconfirmed: return .other(.email)
+        case .accountRequired: return .other(.account)
+        case .suspended: return .other(.suspended)
+        case .termsRequiredDevice: return .other(.terms)
+        case .deviceRemoved: return .other(.removed)
+        case .updateApp: return .other(.updateApp)
+        case .updateCezar: return .other(.updateCezar)
+        case .quota: return .other(.quota)
+        case .broken: return .other(.broken)
         }
     }
 
@@ -80,16 +117,16 @@ enum DeviceSwitch {
         switch kind {
         case .cezar: return .online
         case .unreachable, .cezarOffline, .notAnswering, .relayDown: return .offline
-        case .basicGate, .loginPage: return .other("Sign in needed")
-        case .emailUnconfirmed: return .other("Email not confirmed")
-        case .accountRequired: return .other("Relay account needed")
-        case .suspended: return .other("Suspended")
-        case .termsRequiredDevice: return .other("Accept the terms")
-        case .deviceRemoved: return .other("Removed from this computer")
-        case .updateApp: return .other("Update the app")
-        case .updateCezar: return .other("Update cezar")
-        case .quota: return .other("Relay limit reached")
-        case .localMode, .tlsFailure, .notCezar: return .other(cantConnect)
+        case .basicGate, .loginPage: return .other(.signIn)
+        case .emailUnconfirmed: return .other(.email)
+        case .accountRequired: return .other(.account)
+        case .suspended: return .other(.suspended)
+        case .termsRequiredDevice: return .other(.terms)
+        case .deviceRemoved: return .other(.removed)
+        case .updateApp: return .other(.updateApp)
+        case .updateCezar: return .other(.updateCezar)
+        case .quota: return .other(.quota)
+        case .localMode, .tlsFailure, .notCezar: return .other(.broken)
         }
     }
 
@@ -98,7 +135,7 @@ enum DeviceSwitch {
         switch status {
         case .online: return "Online"
         case .checking: return "Checking…"
-        case .other(let words): return words
+        case .other(let reason): return reason.words
         case .offline:
             guard let seenAt, seenAt > 0 else { return "Offline" }
             let seen = Date(timeIntervalSince1970: Double(seenAt) / 1000)

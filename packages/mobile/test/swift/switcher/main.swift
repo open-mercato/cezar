@@ -86,15 +86,38 @@ expect(HealthAnswer.Attention(waiting: 2, failed: 1).need == 3, "need is waiting
 expect(DeviceSwitch.status(RelayStatus.Kind.ready) == .online, "a live session is online")
 for kind: RelayStatus.Kind in [.idle, .connecting] { expect(DeviceSwitch.status(kind) == .checking, "\(kind) is still checking") }
 for kind: RelayStatus.Kind in [.relayDown, .cezarOffline, .notAnswering] { expect(DeviceSwitch.status(kind) == .offline, "\(kind) is offline") }
-expect(DeviceSwitch.status(RelayStatus.Kind.emailUnconfirmed) == .other("Email not confirmed"), "email words")
-expect(DeviceSwitch.status(RelayStatus.Kind.suspended) == .other("Suspended"), "suspended words")
-expect(DeviceSwitch.status(RelayStatus.Kind.broken) == .other("Can't connect"), "broken words")
+expect(DeviceSwitch.status(RelayStatus.Kind.emailUnconfirmed) == .other(.email), "email words")
+expect(DeviceSwitch.status(RelayStatus.Kind.suspended) == .other(.suspended), "suspended words")
+expect(DeviceSwitch.status(RelayStatus.Kind.broken) == .other(.broken), "broken words")
 
 // Statuses: a direct server's health
 expect(DeviceSwitch.status(HealthAnswer.Kind.cezar) == .online, "health answered")
 for kind: HealthAnswer.Kind in [.unreachable, .relayDown] { expect(DeviceSwitch.status(kind) == .offline, "\(kind) is offline") }
-for kind: HealthAnswer.Kind in [.tlsFailure, .notCezar, .localMode] { expect(DeviceSwitch.status(kind) == .other("Can't connect"), "\(kind) can't connect") }
-expect(DeviceSwitch.status(HealthAnswer.Kind.basicGate) == .other("Sign in needed"), "a gate asks to sign in")
+for kind: HealthAnswer.Kind in [.tlsFailure, .notCezar, .localMode] { expect(DeviceSwitch.status(kind) == .other(.broken), "\(kind) can't connect") }
+expect(DeviceSwitch.status(HealthAnswer.Kind.basicGate) == .other(.signIn), "a gate asks to sign in")
+
+// The page's status and reason (spec 2026-11-19-mobile-devices-screen, "Native ↔ page contract")
+expect(DeviceSwitch.Status.checking.key == "checking" && DeviceSwitch.Status.online.key == "online" && DeviceSwitch.Status.offline.key == "offline",
+       "plain statuses keep their name")
+for status: DeviceSwitch.Status in [.checking, .online, .offline] { expect(status.reason == nil, "\(status) has no reason") }
+let relayReasons: [(RelayStatus.Kind, String)] = [(.deviceRemoved, "removed"), (.emailUnconfirmed, "email"), (.accountRequired, "account"),
+                                                  (.termsRequiredDevice, "terms"), (.suspended, "suspended"), (.updateApp, "update-app"),
+                                                  (.updateCezar, "update-cezar"), (.quota, "quota"), (.broken, "broken")]
+for (kind, reason) in relayReasons {
+    expect(DeviceSwitch.status(kind).key == "other" && DeviceSwitch.status(kind).reason == reason, "relay \(kind) is \(reason)")
+}
+let healthReasons: [(HealthAnswer.Kind, String)] = [(.basicGate, "sign-in"), (.loginPage, "sign-in"), (.deviceRemoved, "removed"),
+                                                    (.emailUnconfirmed, "email"), (.accountRequired, "account"), (.termsRequiredDevice, "terms"),
+                                                    (.suspended, "suspended"), (.updateApp, "update-app"), (.updateCezar, "update-cezar"),
+                                                    (.quota, "quota"), (.localMode, "broken"), (.tlsFailure, "broken"), (.notCezar, "broken")]
+for (kind, reason) in healthReasons {
+    expect(DeviceSwitch.status(kind).reason == reason, "health \(kind) is \(reason)")
+}
+expect(Set(DeviceSwitch.Reason.allCases.map(\.rawValue)) == ["sign-in", "removed", "email", "account", "terms", "suspended", "update-app",
+                                                              "update-cezar", "quota", "broken"], "the contract's reasons, no more")
+expect(DeviceSwitch.words(.other(.removed), seenAt: nil, now: 0) == "This phone was removed", "removed says the phone was removed")
+expect(DeviceSwitch.words(.other(.signIn), seenAt: nil, now: 0) == "Sign in needed" && DeviceSwitch.words(.other(.broken), seenAt: nil, now: 0) == "Can't connect",
+       "reason words")
 
 // Words: "Offline since" the last time it was online
 var utc = Calendar(identifier: .gregorian)
@@ -120,7 +143,7 @@ book.sync([relayServer, here, directServer, quiet, gone])
 book.noted("q", online: true, waiting: 4, failed: 0, at: noon)
 let rows = DeviceSwitch.rows([gone, relayServer, here, directServer, quiet], currentId: "h",
                              readings: ["r": .init(.online, attention: .init(waiting: 1, failed: 0)), "d": .init(.online, attention: .init(waiting: 2, failed: 3)),
-                                        "q": .init(.offline), "g": .init(.other("Suspended")), "h": .init(.offline, attention: .init(waiting: 9, failed: 9))],
+                                        "q": .init(.offline), "g": .init(.other(.suspended)), "h": .init(.offline, attention: .init(waiting: 9, failed: 9))],
                              book: book, now: at1402, calendar: utc, locale: gb)
 expect(rows.map(\.id) == ["h", "d", "r", "q", "g"], "spec order: \(rows.map(\.id))")
 expect(rows[0].current && rows[0].status == .online && rows[0].words == "Online" && rows[0].needWords == nil, "the page on screen is online and ticked")
@@ -213,14 +236,14 @@ do {
     expect(probes.status("d") == .offline && changes.last == "d offline -1", "not known by the bound is offline")
     reports["d"]!(.init(.checking))
     expect(probes.status("d") == .offline, "a late connecting does not undo offline")
-    reports["d"]!(.init(.other("Sign in needed")))
-    expect(probes.status("d") == .other("Sign in needed"), "a late answer still turns the row")
-    reports["r"]!(.init(.other("Suspended")))
-    expect(probes.status("r") == .other("Suspended") && probes.snapshot()["r"]?.attention == nil, "live: a link that moves on is told")
+    reports["d"]!(.init(.other(.signIn)))
+    expect(probes.status("d") == .other(.signIn), "a late answer still turns the row")
+    reports["r"]!(.init(.other(.suspended)))
+    expect(probes.status("r") == .other(.suspended) && probes.snapshot()["r"]?.attention == nil, "live: a link that moves on is told")
     probes.stop(keep: "r")
     expect(released == ["d"], "closing releases every warm link but the switch's target, never the current server's")
     reports["d"]!(.init(.online))
-    expect(probes.status("d") == .other("Sign in needed"), "nothing after the sheet closed")
+    expect(probes.status("d") == .other(.signIn), "nothing after the sheet closed")
     probes.stop()
     expect(released == ["d"], "stop is once")
 }
@@ -257,8 +280,75 @@ do {
     let unpaired = ServerRecord(id: "x", label: "Gone", url: nil, relay: server.relay)
     let none = Locked<DeviceSwitch.Status?>(nil)
     DeviceProbes.relayProbe(connections, userAgent: "ua")(unpaired) { none.value = $0.status }
-    expect(eventually { none.value == .other("Removed from this computer") }, "no device keys read as removed")
+    expect(eventually { none.value == .other(.removed) }, "no device keys read as removed")
     connections.release()
+}
+
+// Your cezars: a listed row's fields, rename, the version line
+do {
+    let fields = CezarList.fields(rows[3])
+    expect(fields["initials"] as? String == "Q" && fields["color"] as? String == DeviceIdentity.color("Quiet"), "the avatar")
+    expect(fields["status"] as? String == "offline" && fields["words"] as? String == "Offline since 12:00" && fields["reason"] == nil, "offline, no reason")
+    expect(fields["need"] as? Int == 4, "the book's count")
+    let blocked = CezarList.fields(rows[4])
+    expect(blocked["status"] as? String == "other" && blocked["reason"] as? String == "suspended" && blocked["words"] as? String == "Suspended", "blocked")
+    expect(blocked["need"] is NSNull, "never told is null, not zero")
+    let unknown = CezarList.fields(DeviceSwitch.rows([directServer], currentId: nil, readings: [:], book: DeviceBook(), now: 0)[0])
+    expect(unknown["status"] as? String == "checking" && unknown["words"] as? String == "Checking…", "no reading is checking")
+    let blank = CezarList.fields(DeviceSwitch.rows([ServerRecord(id: "e", label: "🍎", url: "https://e.example.com")], currentId: nil, readings: [:],
+                                                   book: DeviceBook(), now: 0)[0])
+    expect(blank["initials"] as? String == "" && (blank["color"] as? String)?.count == 7, "no initials: the page draws a glyph")
+
+    expect(CezarList.rename("  Studio  ", known: true) == .saved("Studio"), "trimmed")
+    expect(CezarList.rename(String(repeating: "a", count: 60), known: true) == .saved(String(repeating: "a", count: 60)), "60 is fine")
+    expect(CezarList.rename(String(repeating: "ż", count: 61), known: true) == .refused("Use 60 characters or fewer."), "61 is too long")
+    expect(CezarList.rename("   ", known: true) == .refused("Enter a name.") && CezarList.rename(nil, known: true) == .refused("Enter a name."), "empty")
+    expect(CezarList.rename("Studio", known: false) == .refused("This cezar is no longer on this phone."), "unknown id")
+
+    expect(CezarList.version(short: "0.1.1", build: "87") == "0.1.1 (87)", "version (build)")
+    expect(CezarList.version(short: "0.1.1", build: nil) == "0.1.1" && CezarList.version(short: "2", build: "2") == "2", "no build, or the same")
+    expect(CezarList.version(short: nil, build: "5") == "0 (5)", "no version")
+}
+
+// CezarProbe: once over every server, done when all answered or at the bound, noted, released, joined
+do {
+    final class Memory: DeviceBookStorage {
+        var data: Data?
+        func read() -> Data? { data }
+        func write(_ data: Data) { self.data = data }
+    }
+    let manual = Manual()
+    var reports: [String: (DeviceSwitch.Reading) -> Void] = [:]
+    var released: [String] = []
+    var badges: [Int] = []
+    let store = DeviceBookStore(storage: Memory())
+    var made = 0
+    let cezars = CezarProbe(make: { onChange in
+        made += 1
+        return DeviceProbes(relay: { server, report in reports[server.id] = report }, direct: { server, report in reports[server.id] = report },
+                            release: { released.append($0.id) }, schedule: manual.schedule, onChange: onChange)
+    }, book: store, clock: { noon }, onBadge: { badges.append($0) })
+    var done = 0
+    cezars.probe([relayServer, directServer, here], currentId: "h") { done += 1 }
+    cezars.probe([relayServer, directServer, here], currentId: "h") { done += 1 }
+    expect(made == 1 && done == 0, "a second probe joins the first")
+    expect(cezars.rows([relayServer, directServer], now: noon).allSatisfy { $0.status == .checking }, "nothing read yet: checking")
+    reports["r"]!(.init(.online, attention: .init(waiting: 2, failed: 1)))
+    reports["h"]!(.init(.online))
+    expect(done == 0 && released.isEmpty, "waits for every answer")
+    expect(store.load().entries["r"]?.need == 3 && store.load().entries["r"]?.seenAt == noon && badges == [2], "noted as the switcher does")
+    expect(store.load().entries["h"]?.seenAt == noon, "the current one counts online")
+    manual.fire()
+    expect(done == 2 && released == ["r", "d"], "the bound ends it, both callers answered, warm links released but the current one's")
+    let listed = cezars.rows([relayServer, directServer, here], now: noon)
+    expect(listed.map(\.id) == ["h", "r", "d"] && listed[0].current, "the switcher's order, current first")
+    expect(listed[1].status == .online && listed[1].need == 3 && listed[2].status == .offline, "the readings outlive the probe")
+    cezars.probe([relayServer], currentId: nil) { done += 1 }
+    expect(made == 2, "a later probe runs anew")
+    reports["r"]!(.init(.other(.signIn)))
+    expect(done == 3 && cezars.rows([relayServer], now: noon)[0].status == .other(.signIn), "all answered ends it at once")
+    cezars.probe([], currentId: nil) { done += 1 }
+    expect(done == 4, "nothing saved: done at once")
 }
 
 print("\(checks) checks, \(failures) failed")
