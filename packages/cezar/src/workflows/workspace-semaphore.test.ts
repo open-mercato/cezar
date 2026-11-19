@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore } from '../runs/store.ts';
 import { RegistryCache } from '../self-update/registry.ts';
 import { SelfUpdateService } from '../self-update/service.ts';
@@ -150,11 +151,14 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
       ).catch(() => undefined);
       store.flush();
     }
-    for (const manager of managers.splice(0)) manager.dispose();
-    stores.length = 0;
-    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-    if (savedEnv.CEZ_DRY_RUN === undefined) delete process.env.CEZ_DRY_RUN;
-    else process.env.CEZ_DRY_RUN = savedEnv.CEZ_DRY_RUN;
+    try {
+      for (const manager of managers.splice(0)) manager.dispose();
+      stores.length = 0;
+      await removeTempDir(...roots.splice(0));
+    } finally {
+      if (savedEnv.CEZ_DRY_RUN === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = savedEnv.CEZ_DRY_RUN;
+    }
   });
 
   it('caps concurrent runs across two projects: with cap 2, the third run queues', async () => {

@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRunSpec } from '../core/agent-runner.ts';
 import { autosaveCommit } from '../git-worktree.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 
@@ -59,13 +60,16 @@ describe('Continue posted while a settled continuation is still unwinding (telem
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    gate.release?.();
-    manager?.dispose();
-    manager = undefined;
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  afterEach(async () => {
+    try {
+      gate.release?.();
+      manager?.dispose();
+      manager = undefined;
+      store.flush();
+      await removeTempDir(repoRoot);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   async function terminalWorktreeRun(): Promise<string> {

@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import { track } from '../telemetry.ts';
@@ -74,11 +75,11 @@ describe('Continue on a Claude session whose transcript is gone', { timeout: 20_
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager?.dispose();
     manager = undefined;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeTempDir(repoRoot);
   });
 
   function terminalRun(): string {
