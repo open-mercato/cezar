@@ -111,6 +111,11 @@ which seeds from `exitCode`/`signalCode` and listens for `exit`.
   normalized `UiEvent` stream emitted alongside the v1 `AgentEvent`s passed to
   `onEvent`. A runner that omits `onUiEvent` support degrades to v1-only — but a
   first-class backend MUST wire it (see §7).
+- `canAskPermission?: () => boolean` — may a backend permission prompt become an
+  `ask.requested` card and park the run? RunManager answers `true` only for a
+  non-autonomous run with a cockpit (`CEZ_API_URL`); absent or `false`, the
+  runner must answer the prompt itself, because a mid-turn park has no nudge and
+  no idle timer to end it (#2042). Read it when the prompt arrives.
 
 ### `AgentRunSpec`
 
@@ -119,16 +124,32 @@ Notable fields (full doc-comments in the source):
 
 - `userPrompt` (required), `systemPrompt?`, `images?` (first-message content
   blocks — pasted screenshots), `cwd` (the run dir and the only writable root),
-  `model?`, `reasoningEffort?` (Codex only; every other runner must refuse it with
+  `model?`, `reasoningEffort?` (Codex `turn/start.effort` and Claude `--effort`, the
+  `REASONING_EFFORT_RUNNERS` set in `packages/contract`; every other runner must refuse it with
   `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
+  Codex sends the current `systemPrompt` with each invocation's opening user turn, preserving
+  native configured guidance. `developerInstructions` replaces native config and does not
+  refresh retained developer history on resume/fork; it is unsuitable for task instructions.
+- `enforceReadOnly?` — set only for a manager's read-only work (its read-only tasks and its
+  unattended watch turns, spec `2026-10-31-managers`); an Ask task never sets it and keeps only its
+  read-only `allowedTools`. When set, the task must not change the repository or publish anything, on every backend:
+  Claude through `allowedTools` plus `--disallowedTools` for the write tools (settings allow
+  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex `sandbox: read-only`,
+  OpenCode denied `edit`/`bash` in `OPENCODE_CONFIG_CONTENT` at the top level and in every agent, Cursor `--mode ask` without `--force`, Copilot
+  `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
+  refused, Gemini `--approval-mode default` with its prompts refused. Kimi, omp and Antigravity
+  cannot, so `runner-factory.ts` refuses a read-only run on them. `read-only-env.ts` is the shared floor (no `gh` login, no git credential). A new runner
+  that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes
   unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.
   Treat the default `auto` permission mode as full shell access, not a
   sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
-  OpenCode auto-approves every permission. Configurable restrictive modes are
+  OpenCode runs under its own permission config: a prompt it still raises is
+  an ask card in an attended run (`canAskPermission`, #2042) and refused in an
+  autonomous, headless or one-shot run, except this run's own files. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
@@ -142,6 +163,10 @@ prependSystemPrompt(spec.systemPrompt, spec.userPrompt)
 // claude:          --append-system-prompt   (native channel, do NOT prepend)
 // codex / opencode / gemini: prepended here
 ```
+
+The opt-in native Codex regression inspects model requests against an isolated loopback stub:
+`node --import tsx --test packages/cezar/test/native/codex-instructions.test.ts` from the repo root.
+It requires a local Codex CLI and makes no real model calls; the ordinary unit gate remains CLI-free.
 
 `ContentBlock` mirrors the Anthropic wire format (`text` | `image` base64) so it
 can be written to the claude CLI's stdin verbatim.
@@ -164,6 +189,7 @@ type AgentEvent =
   | { type: 'cost'; usd: number }
   | { type: 'usage-status'; status: AgentUsageStatus }        // live gauges; folded onto the run record, never persisted
   | { type: 'session'; sessionId: string }                    // backend's real session id, once known
+  | { type: 'mcp-servers'; servers: { name: string; status: string }[]; tools: string[] } // Claude's system/init; never persisted
   | { type: 'turn-end'; reason?: 'context-compaction' }       // optional, additive (#955)
   | { type: 'note'; message: string }
   | { type: 'done' }
@@ -175,6 +201,11 @@ usage windows (`limits`: `window`, `utilization` 0..1, ISO `resetsAt`) for the r
 run manager merges it onto `RunRecord.liveUsage` and never writes it to the NDJSON transcript.
 Claude emits it from the main agent's message usage, `result.modelUsage[model].contextWindow`
 and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it.
+
+`mcp-servers` is Claude's `system/init` `mcp_servers` and `tools`, emitted once per process. Only
+a manager reads it (connectors, spec `2026-11-12-manager-connectors`); the run manager drops it, and
+other runners never emit it. `AgentRunSpec.claudeSettings` is the matching Claude-only input: JSON
+for `--settings`, written to a `0600` temp file and removed when the process exits.
 
 `turn-end.reason` is optional and additive (#955), in the same shape as `note.tone`
 (#936): a runner emits the bare event unless it knows something the turn's text
@@ -271,6 +302,7 @@ type UiEvent =
   | UiPermissionRequestedEvent  // 'permission.requested' — RESERVED (types only; wired when approvals become optional)
   | UiPermissionResolvedEvent   // 'permission.resolved'  — RESERVED
   | UiAskRequestedEvent      // 'ask.requested'    — requestId, questions[] (AskUser; the cockpit renders option chips)
+  | UiAskClosedEvent         // 'ask.closed'       — requestId, reason, detail?, replacedBy?, answer? (the card closes)
   | UiUsageUpdatedEvent      // 'usage.updated'    — usage: TokenUsage, costUsd? (cumulative-for-session)
   | UiImageEvent;            // 'image'            — itemId?, mediaType, data (base64; manager re-emits URL)
 ```
@@ -285,9 +317,18 @@ work — validates the payload (`packages/cezar/src/core/ask.ts`, shaped after C
 2–`ASK_MAX_OPTIONS` options each — 20 and 10, finite for payload size and a
 scrollable card rather than for parity with that tool's 4 and 4), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
-chips; the user's pick (or a free-form reply) rides the normal reply seam
-(`POST /api/runs/:id/messages`), and the card resolves client-side when that
-message lands (no `ask.resolved` event). Codex additionally bridges its native
+chips; the user's pick rides the normal reply seam (`POST /api/v1/runs/:id/messages`
+with `askRequestId`). A `CEZ:ASK` card closes only with an **`ask.closed`** event in the
+run's NDJSON (Questions inbox spec, `.ai/specs/2026-11-17-questions-inbox.md`), so a replay
+draws the same closed card: `answered` (a message carrying its `askRequestId`), `dismissed`
+(the Questions inbox), `replaced` (a newer card with the same top-level `id`, or one whose
+headers cover every header of the old one; `replacedBy` names it), `retracted` (the agent's
+own `CEZ:ASK-CLOSE <id> [reason]` line, stripped from the transcript), `expired` (the card's
+declared `about` PR merged or closed, or its `{task}` finished) and `ended` (the run reached
+done, review or cancelled, or was archived; `failed` keeps it open for Continue). A free-form
+composer reply closes nothing: it flags the card "may be out of date" on the run record
+(`RunRecord.asks`). The run record keeps each card's state; the event only redraws the
+thread. Codex additionally bridges its native
 `item/tool/requestUserInput` server request onto the same event and routes the
 next answer back as the documented JSON-RPC response. Malformed or unsupported
 native requests receive an error response rather than hanging the turn. A

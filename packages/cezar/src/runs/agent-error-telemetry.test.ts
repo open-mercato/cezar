@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isOutdatedBackendError } from '../core/agent-errors.ts';
 import { reportAgentError, scrubAgentErrorMessage } from './agent-error-telemetry.ts';
+import { parseUsageLimit } from '../core/usage-limit.ts';
 import { RunStore } from './store.ts';
 import { reportError, telemetryEnabled } from '../telemetry.ts';
 
@@ -163,6 +164,40 @@ describe('reportAgentError', () => {
     reportAgentError('codex', { type: 'error', message: 'You have hit your usage limit. Upgrade to continue.' });
     reportAgentError('cursor', { type: 'error', message: "cursor agent exited with code 1 — ActionRequiredError: You've hit your usage limit Get Cursor Pro for more Agent usage, unlimited Tab, and more." });
     expect(vi.mocked(reportError).mock.calls.map((call) => call[2]?.code)).toEqual(['usage_limit_unparsed', 'usage_limit_unparsed']);
+  });
+
+  // The exact production phrasings, before the scrubber masked them.
+  it.each([
+    // 5432183c: limits that name no reset by design — nothing for the parser to read.
+    ['claude', "API Error: Request rejected (429) · All credentials for model claude-opus-5-5 are cooling down via provider claude (last error: rate_limit_error: This request would exceed your account's rate limit. Please try again later.)"],
+    ['claude', "API Error: Request rejected (429) · All credentials for model claude-fable-5 are cooling down via provider claude (last error: rate_limit_error: This request would exceed your account's rate limit. Please try again later.)"],
+    ['claude', "claude: API Error: Request rejected (429) · This request would exceed your account's rate limit. Please try again later."],
+    ['claude', 'step "task" failed: API Error: Request rejected (429) · This request would exceed your account’s rate limit. Please try again later.'],
+    ['codex', 'Your workspace is out of credits. Add credits to continue.'],
+    // d1523f7c: Claude's 5-hour window, unrecognised before #1827 (v0.18.0).
+    ['claude', "You've hit your 5-hour limit · resets 3pm (Europe/Warsaw)"],
+    ['claude', "claude: You've hit your 5-hour limit · resets 10:40pm (UTC)"],
+    // 81bdc692, 18a80628, b67965a5: a model the ChatGPT login cannot use, with any prefix.
+    ['codex', 'turn failed: 400 invalid_request_error: The \'gpt-5.5-pro\' model is not supported when using Codex with a ChatGPT account. — "gpt-5.5-pro" needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default), check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key'],
+    ['codex', '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.5-pro\' model is not supported when using Codex with a ChatGPT account."}}'],
+    ['codex', 'The \'o3-pro\' model is not supported when using Codex with a ChatGPT account. — "o3-pro" needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default), check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key'],
+    ['codex', 'The \'o3-pro\' model is not supported when using Codex with a ChatGPT account. — the model this task names needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default), check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key'],
+  ])('skips a recognised %s user/provider condition: %s', (backend, message) => {
+    reportAgentError(backend, { type: 'error', message });
+    reportAgentError(backend, { type: 'session.error', message, fatal: true });
+    expect(reported()).toEqual([]);
+  });
+
+  it('reads the reset of Claude\'s 5-hour limit, so auto-resume schedules it (d1523f7c)', () => {
+    expect(parseUsageLimit("You've hit your 5-hour limit · resets 3pm (Europe/Warsaw)")).not.toBeNull();
+    expect(parseUsageLimit("You've hit your 5-hour limit · resets 10:40pm (UTC)")).not.toBeNull();
+  });
+
+  it('still reports a rate limit or credit message it does not recognise', () => {
+    reportAgentError('claude', { type: 'error', message: 'API Error: Request rejected (429) · rate limit exceeded' });
+    reportAgentError('codex', { type: 'error', message: 'Your workspace is out of credits.' });
+    reportAgentError('codex', { type: 'error', message: 'The model is not supported for this request.' });
+    expect(vi.mocked(reportError).mock.calls.map((call) => call[2]?.code)).toEqual(['usage_limit_unparsed', 'usage_limit_unparsed', undefined]);
   });
 
   it('holds a transient failure back until the run engine says it will not be retried', () => {

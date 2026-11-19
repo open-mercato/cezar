@@ -40,7 +40,9 @@ let baseUrl = ''
 /** Set the service origin. `''` (the default) means "same origin as this page". */
 export function setApiBaseUrl(url: string): void {
   // A trailing slash would double up against the leading slash of every route.
-  baseUrl = url.replace(/\/+$/, '')
+  let end = url.length
+  while (end > 0 && url[end - 1] === '/') end -= 1
+  baseUrl = url.slice(0, end)
 }
 
 export function getApiBaseUrl(): string {

@@ -7,7 +7,9 @@ import { queryKeys, useGithub, useRepoSync } from '@/api/queries'
 import { BranchTrackingBadge } from './repo-sync-bar'
 import type { GithubItem, HealthResponse, RepoInfo, RepoResponse } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
 import { useActiveForge } from '@/lib/active-forge'
 import { cn, isHttpUrl } from '@/lib/utils'
@@ -24,6 +26,10 @@ import { cn, isHttpUrl } from '@/lib/utils'
  * component gate doubles as the fetch gate: `<ForgePullRequests>` mounts (and so queries
  * `/api/github`) only behind it.
  */
+/** The picker's "no base branch" value — Radix refuses an empty-string item, and `null` is
+ *  what `PUT /config` expects for "follow the checked-out branch". */
+const FOLLOW_CHECKED_OUT = '__follow__'
+
 export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: RepoInfo }) {
   const forge = useActiveForge()
   const sync = useRepoSync()
@@ -109,13 +115,16 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
                     current
                   </span>
                 ) : heldAt ? (
-                  <span
-                    data-slot="branch-elsewhere"
-                    title={`Checked out in ${heldAt}`}
-                    className="ml-auto shrink-0 text-meta text-soft-foreground"
-                  >
-                    in another worktree
-                  </span>
+                  <IconTooltip label={`Checked out in ${heldAt}`}>
+                    <span
+                      data-slot="branch-elsewhere"
+                      data-held-at={heldAt}
+                      tabIndex={0}
+                      className="ml-auto shrink-0 rounded-sm text-label text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                    >
+                      in another worktree
+                    </span>
+                  </IconTooltip>
                 ) : (
                   <Button
                     variant="ghost"
@@ -132,7 +141,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
             )
           })}
           {filteredBranches.length === 0 ? (
-            <li data-slot="branch-empty" className="py-3 text-xs text-soft-foreground">
+            <li data-slot="branch-empty" className="py-3 text-label text-muted-foreground">
               No branches match “{branchQuery.trim()}”.
             </li>
           ) : null}
@@ -165,24 +174,30 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
         >
           Agents’ base branch
         </label>
-        {/* A native <select>: a handful of branch names needs no popover machinery, and the
-            OS picker is the better control on phones. */}
-        <select
-          id="base-branch-picker"
-          data-slot="base-branch-picker"
-          value={repo.baseBranch ?? ''}
+        {/* The design system's one Select (redesign 2026-11): native pickers are retired. */}
+        <Select
+          value={repo.baseBranch ?? FOLLOW_CHECKED_OUT}
           disabled={setBase.isPending}
-          onChange={(event) => setBase.mutate(event.target.value === '' ? null : event.target.value)}
-          className="mt-1.5 block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          onValueChange={(value) => setBase.mutate(value === FOLLOW_CHECKED_OUT ? null : value)}
         >
-          <option value="">follow checked-out branch (default)</option>
-          {repo.branches.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <p className="mt-1 text-meta text-soft-foreground">New task worktrees branch from this.</p>
+          <SelectTrigger
+            id="base-branch-picker"
+            data-slot="base-branch-picker"
+            size="sm"
+            className="mt-1.5 w-full"
+          >
+            <SelectValue placeholder="follow checked-out branch (default)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={FOLLOW_CHECKED_OUT}>follow checked-out branch (default)</SelectItem>
+            {repo.branches.map((name) => (
+              <SelectItem key={name} value={name} className="font-mono text-ui">
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="mt-1 text-label text-muted-foreground">New task worktrees branch from this.</p>
       </div>
 
       {forge?.available ? <ForgePullRequests /> : null}
@@ -199,15 +214,15 @@ function ForgePullRequests() {
     <div data-slot="repo-prs" className="max-w-xl">
       <h2 className="eyebrow text-soft-foreground">Open pull requests</h2>
       {github.isPending ? (
-        <p className="mt-2 text-xs text-soft-foreground">Loading pull requests…</p>
+        <p className="mt-2 text-label text-soft-foreground">Loading pull requests…</p>
       ) : github.isError ? (
-        <p className="mt-2 text-xs text-soft-foreground">{github.error.message}</p>
+        <p className="mt-2 text-label text-muted-foreground">{github.error.message}</p>
       ) : !github.data.available ? (
-        <p data-slot="repo-prs-unavailable" className="mt-2 text-xs text-soft-foreground">
+        <p data-slot="repo-prs-unavailable" className="mt-2 text-label text-muted-foreground">
           {github.data.reason ?? 'The forge is unreachable right now.'}
         </p>
       ) : github.data.prs.length === 0 ? (
-        <p className="mt-2 text-xs text-soft-foreground">No open pull requests.</p>
+        <p className="mt-2 text-label text-muted-foreground">No open pull requests.</p>
       ) : (
         <ul className="mt-2 flex flex-col divide-y divide-border">
           {github.data.prs.map((pr) => (
@@ -250,7 +265,7 @@ function ChecksBadge({ checks }: { checks: 'passing' | 'failing' | 'pending' }) 
       data-slot="pr-checks"
       data-checks={checks}
       className={cn(
-        'shrink-0 text-micro font-medium',
+        'shrink-0 text-label font-medium',
         checks === 'passing' && 'text-success',
         checks === 'failing' && 'text-danger',
         checks === 'pending' && 'text-muted-foreground',

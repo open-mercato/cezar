@@ -12,12 +12,14 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { StatusDot } from '@/components/status-dot'
 import { compactTokens, shortAge } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { useAutomationsGate } from '@/routes/automations/use-automations'
 import { useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
 import { Coverage } from './rows'
 import { formatAmount, formatHours } from './format'
-import { FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
+import { FilterSelect, Freshness, PERIOD_OPTIONS, Timestamp, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
 
 type Period = DashboardInsights['period']
@@ -26,6 +28,8 @@ const bandLabel = 'eyebrow text-muted-foreground'
 const panel = 'min-w-0 rounded-lg border bg-card-2 p-4'
 const th =
   'whitespace-nowrap px-3 py-2 eyebrow text-soft-foreground'
+/** A count, reason or note under a title (type scale: `text-label` + muted). */
+const note = 'text-label text-muted-foreground'
 
 function useProjectName() {
   const projects = useProjects().data?.projects
@@ -43,15 +47,7 @@ function PeriodSelect({
   value: Period
   onChange: (value: Period) => void
 }) {
-  return (
-    <label className={filterLabel}>
-      {label}
-      <FilterSelect value={value} onChange={(e) => onChange(e.target.value === '30d' ? '30d' : '7d')}>
-        <option value="7d">Last 7 days</option>
-        <option value="30d">Last 30 days</option>
-      </FilterSelect>
-    </label>
-  )
+  return <FilterSelect label={label} value={value} onValueChange={onChange} options={PERIOD_OPTIONS} />
 }
 
 function InsightState({ query }: { query: ReturnType<typeof useDashboardInsights> }) {
@@ -90,15 +86,18 @@ export function OutcomeInsights({ period, active }: { period: Period; active: bo
   )
 }
 
-/** A quarter-width stat cell fits ~7 digits; past 10k show `193.7k` and keep the exact count in the tooltip. */
+/** A quarter-width stat cell fits ~7 digits; past 10k show `193.7k` and keep the exact count in
+ *  the tooltip — and in the accessible name, since a compacted figure is not the figure. */
 function Count({ value, prefix = '', className }: { value: number; prefix?: string; className?: string }) {
   const exact = `${prefix}${value.toLocaleString('en-US')}`
   if (value < 10_000) return <span className={className}>{exact}</span>
   return (
-    <span className={className} title={exact}>
-      {prefix}
-      {compactTokens(value)}
-    </span>
+    <IconTooltip label={exact}>
+      <span className={className} aria-label={exact}>
+        {prefix}
+        {compactTokens(value)}
+      </span>
+    </IconTooltip>
   )
 }
 
@@ -138,15 +137,15 @@ function Delivered({ data }: { data: DashboardInsights }) {
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
         {stats.map((s) => (
           <div key={s.label} className="min-w-0">
-            <dt className="text-xs text-soft-foreground">{s.label}</dt>
+            <dt className={note}>{s.label}</dt>
             <dd className="mt-1 truncate text-xl font-semibold tracking-tight tabular-nums">
               {s.value}
             </dd>
-            {s.note && <dd className="text-xs text-soft-foreground">{s.note}</dd>}
+            {s.note && <dd className={note}>{s.note}</dd>}
           </div>
         ))}
       </dl>
-      <span className="mt-3 block text-xs text-soft-foreground">
+      <span className={`mt-3 block ${note}`}>
         From {d.completedTasks} completed {d.completedTasks === 1 ? 'task' : 'tasks'} ·{' '}
         {d.measuredTasks} with a stored diff
       </span>
@@ -173,7 +172,7 @@ function FailureReasons({ data }: { data: DashboardInsights }) {
       <div className="flex items-baseline justify-between gap-2">
         <h3 className={bandLabel}>Why tasks failed</h3>
         {total > 0 && (
-          <span className="font-mono text-meta text-soft-foreground">{total} failed</span>
+          <span className={`${note} tabular-nums`}>{total} failed</span>
         )}
       </div>
       {total === 0 ? (
@@ -210,22 +209,24 @@ function FailureReason({
   return (
     <li className="min-w-0">
       <div className="flex items-baseline justify-between gap-3 text-sm">
-        <span className="min-w-0 truncate font-medium" title={reason.label}>
-          {reason.label}
-        </span>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">{reason.count}</span>
+        <span className="min-w-0 truncate font-medium">{reason.label}</span>
+        <span className="text-label tabular-nums text-muted-foreground">{reason.count}</span>
       </div>
       <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
         <div className="h-full rounded-full bg-danger/70" style={{ width: `${(reason.count / total) * 100}%` }} />
       </div>
-      <span className="mt-1.5 block truncate text-xs text-soft-foreground" title={latest.message}>
-        Latest:{' '}
-        <Link className="text-muted-foreground hover:text-foreground hover:underline" to={taskPath(latest.projectId, latest.id)}>
-          {latest.title}
-        </Link>{' '}
-        · {projectName(latest.projectId)}
-        {latest.step ? ` · ${latest.step}` : ''} · {shortAge(latest.at)} ago
-      </span>
+      {/* The failure's own message is the detail worth a hover; a popover would be too much for
+          one line, and a native title shows on neither keyboard focus nor touch. */}
+      <IconTooltip label={latest.message}>
+        <span className={`mt-1.5 block truncate ${note}`}>
+          Latest:{' '}
+          <Link className="hover:text-foreground hover:underline" to={taskPath(latest.projectId, latest.id)}>
+            {latest.title}
+          </Link>{' '}
+          · {projectName(latest.projectId)}
+          {latest.step ? ` · ${latest.step}` : ''} · {shortAge(latest.at)} ago
+        </span>
+      </IconTooltip>
     </li>
   )
 }
@@ -259,7 +260,7 @@ export function BackendComparison() {
         <InsightState query={query} />
         {data && (
           <>
-            <p className="text-xs text-muted-foreground">
+            <p className={note}>
               Tasks that finished done or failed in the period, by the backend and model their
               steps ran on. Includes subtasks. Cost is reported USD only.
             </p>
@@ -287,7 +288,7 @@ export function BackendComparison() {
             ) : (
               <p className="py-4 text-sm text-muted-foreground">No finished tasks in this period.</p>
             )}
-            <span className="block font-mono text-meta text-soft-foreground">
+            <span className={`block ${note}`}>
               <Freshness at={data.asOf} />
             </span>
             <ExportRows
@@ -317,7 +318,8 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
     <tr className="border-t transition-colors hover:bg-muted/30">
       <td className="px-3 py-2.5">
         <span className="block font-medium">{backendName(b.backend)}</span>
-        <span className="block font-mono text-meta text-soft-foreground">
+        {/* A model id is code; the two fallback sentences are not. */}
+        <span className={cn('block', note, b.backend !== 'mixed' && b.model ? 'font-mono text-meta' : '')}>
           {b.backend === 'mixed' ? 'steps ran on different backends' : (b.model ?? 'default model')}
         </span>
       </td>
@@ -327,9 +329,9 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
           <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-danger/40" aria-hidden="true">
             <span className="block h-full rounded-full bg-success" style={{ width: `${rate}%` }} />
           </span>
-          <span className="w-10 text-right font-mono text-xs tabular-nums">{rate}%</span>
+          <span className="w-10 text-right text-label tabular-nums">{rate}%</span>
         </span>
-        <span className="block text-xs text-soft-foreground">
+        <span className={`block ${note}`}>
           {b.done} done · {b.failed} failed
         </span>
       </td>
@@ -339,7 +341,7 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
       {cost && (
         <td className="px-3 py-2.5 text-right tabular-nums">
           {usd == null ? '—' : formatAmount(usd, true)}
-          <span className="block text-xs text-soft-foreground">
+          <span className={`block ${note}`}>
             {b.costUsd?.reportedTasks ?? 0}/{b.finished} reported
           </span>
         </td>
@@ -426,7 +428,7 @@ export function AutomationOutcomes() {
             <InsightState query={query} />
             {data && (
               <>
-                <p className="text-xs text-muted-foreground">
+                <p className={note}>
                   Tasks each automation created in the period and how they ended. Active means
                   still running, queued, waiting on you, or waiting to resume after a usage limit.
                 </p>
@@ -470,7 +472,7 @@ export function AutomationOutcomes() {
                     No automations yet. Create one in a project's Automations page.
                   </p>
                 )}
-                <span className="block font-mono text-meta text-soft-foreground">
+                <span className={`block ${note}`}>
                   <Freshness at={data.asOf} />
                 </span>
                 <ExportRows
@@ -521,8 +523,9 @@ function AutomationOutcome({
             {row.name}
           </Link>
         )}
-        <span className="flex items-center gap-1.5 text-xs text-soft-foreground">
-          <StatusDot tone={row.enabled ? 'success' : 'neutral'} />
+        {/* Violet, not green: an enabled automation is cezar standing ready, not an outcome. */}
+        <span className={`flex items-center gap-1.5 ${note}`}>
+          <StatusDot tone={row.enabled ? 'violet' : 'neutral'} />
           {projectName(row.projectId)} ·{' '}
           {row.definition === 'removed'
             ? 'Removed'
@@ -537,11 +540,11 @@ function AutomationOutcome({
       <td className={cell}>{zero(s?.done)}</td>
       <td className={`${cell} ${s?.failed ? 'text-danger' : ''}`}>{zero(s?.failed)}</td>
       <td className={cell}>{zero(s?.active)}</td>
-      <td className="whitespace-nowrap px-3 py-2.5 text-xs text-muted-foreground">
+      <td className={`whitespace-nowrap px-3 py-2.5 ${note}`}>
         {s?.lastRunAt ? (
-          <time dateTime={s.lastRunAt} title={new Date(s.lastRunAt).toLocaleString()}>
+          <Timestamp at={s.lastRunAt}>
             {shortAge(s.lastRunAt)} ago · {s.lastStatus}
-          </time>
+          </Timestamp>
         ) : (
           '—'
         )}

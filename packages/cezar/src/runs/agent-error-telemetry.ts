@@ -1,5 +1,10 @@
 import { classifyAgentFailure } from '../core/agent-failure-class.ts';
-import { isOutdatedBackendError, unwrapJsonErrorEnvelope } from '../core/agent-errors.ts';
+import {
+  isCodexChatGptModelError,
+  isOutdatedBackendError,
+  isResetlessLimitMessage,
+  unwrapJsonErrorEnvelope,
+} from '../core/agent-errors.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { reportError, telemetryEnabled } from '../telemetry.ts';
@@ -71,10 +76,12 @@ export function reportAgentError(
   if (!telemetryEnabled() || INTERRUPTED_RE.test(event.message)) return;
   const failure = classifyAgentFailure(event.message);
   if (failure === 'auth' || failure === 'billing' || failure === 'context_too_large' || failure === 'disk_full') return;
-  // A limit auto-resume can schedule is the account's state (#1438); one it cannot read a reset
-  // from still lands in ONE coded group — each phrasing there is a parser gap to close.
+  // A model the login cannot use: the thread already says which knob to turn (81bdc692).
+  if (isCodexChatGptModelError(event.message)) return;
+  // A limit auto-resume can schedule is the account's state (#1438), and so is one whose provider
+  // names no reset by design; any other lands in ONE coded group — a parser gap to close.
   const unparsedLimit = failure === 'usage_limit' && parseUsageLimit(event.message) === null;
-  if (failure === 'usage_limit' && !unparsedLimit) return;
+  if (failure === 'usage_limit' && (!unparsedLimit || isResetlessLimitMessage(event.message))) return;
   if (failure === 'transient' && opts.transientOutcome === undefined) return;
   const id = (RUNNER_IDS as readonly string[]).includes(backend ?? '') ? backend! : 'unknown';
   const masked = scrubAgentErrorMessage(event.message, id);

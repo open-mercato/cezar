@@ -20,6 +20,10 @@
  *  `test/unit/skill-dirs.test.ts`; keep the two in step. */
 const SKILL_PROJECT_DIRS = ['.ai/cezar/skills/', '.ai/skills/', '.agents/skills/'] as const
 
+/** Per-agent command dirs (spec-kit installs here) — `COMMAND_DIRS` in `src/skills.ts`, pinned
+ *  by `test/unit/skill-dirs.test.ts`. */
+const SKILL_COMMAND_DIRS = ['.claude/commands/', '.codex/prompts/', '.github/prompts/'] as const
+
 function Path({ children }: { children: string }) {
   return <span className="font-mono">{children}</span>
 }
@@ -45,7 +49,8 @@ export function SkillEmptyHint() {
       No skills yet. Drop Markdown files into <ProjectDirList /> (agent mirrors like{' '}
       <Path>.claude/skills/</Path> work too) — optional frontmatter: <Path>name</Path>,{' '}
       <Path>description</Path>. Global (<Path>~/.agents/skills</Path>) and team-repo skills
-      appear here too — try Refresh.
+      appear here too — try Refresh. Repo commands (spec-kit&apos;s <Path>{SKILL_COMMAND_DIRS[0]}</Path>,{' '}
+      <Path>{SKILL_COMMAND_DIRS[1]}</Path>, <Path>{SKILL_COMMAND_DIRS[2]}</Path>, …) are listed too.
     </>
   )
 }

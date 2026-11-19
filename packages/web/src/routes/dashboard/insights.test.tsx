@@ -163,9 +163,9 @@ it('compacts large line counts so both halves fit, keeping the exact count in th
   state.big = true
   show(<OutcomeInsights period="7d" active />)
   const delivered = screen.getByRole('region', { name: 'Delivered' })
-  expect(within(delivered).getByText('+193.7k').getAttribute('title')).toBe('+193,753')
-  expect(within(delivered).getByText('−21.4k').getAttribute('title')).toBe('−21,480')
-  expect(within(delivered).getByText('3,385').getAttribute('title')).toBeNull()
+  expect(within(delivered).getByText('+193.7k').getAttribute('aria-label')).toBe('+193,753')
+  expect(within(delivered).getByText('−21.4k').getAttribute('aria-label')).toBe('−21,480')
+  expect(within(delivered).getByText('3,385').getAttribute('aria-label')).toBeNull()
 })
 
 it('says so when nothing failed', () => {

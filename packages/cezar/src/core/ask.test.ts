@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ASK_MAX_OPTIONS,
+  parseAskCloseMarkers,
+  stripAskCloseMarkers,
   ASK_MAX_QUESTIONS,
+  askVisibleText,
   parseAskMarker,
   parseAskMarkerResult,
   parseAskRequest,
@@ -448,5 +451,92 @@ describe('parseAskMarker — backend-agnostic assembly (codex/opencode delta str
     const assembled = chunks.join('');
     expect(chunks.length).toBeGreaterThan(1);
     expect(parseAskMarker(assembled)).toEqual(valid);
+  });
+});
+
+describe('card id, about and CEZ:ASK-CLOSE (Questions inbox spec)', () => {
+  const q = { header: 'Merge', question: 'Merge it?', options: [{ label: 'Yes' }, { label: 'No' }] };
+
+  it('keeps a valid card id and about', () => {
+    const ask = parseAskMarker(`CEZ:ASK ${JSON.stringify({ id: 'merge-2891', about: [{ pr: 2891 }, { task: 'cezar/abc', ask: 'base' }], questions: [q] })}`);
+    expect(ask?.id).toBe('merge-2891');
+    expect(ask?.about).toEqual([{ pr: 2891 }, { task: 'cezar/abc', ask: 'base' }]);
+  });
+
+  it('drops an invalid id or about rather than the card', () => {
+    const ask = parseAskMarker(`CEZ:ASK ${JSON.stringify({ id: 'has spaces', about: [{ pr: 'x' }], questions: [q] })}`);
+    expect(ask?.questions).toHaveLength(1);
+    expect(ask?.id).toBeUndefined();
+    expect(ask?.about).toBeUndefined();
+  });
+
+  it('parses close markers on their own lines, with an optional reason', () => {
+    const text = 'Done.\nCEZ:ASK-CLOSE design-v2 superseded by v3\n  CEZ:ASK-CLOSE Release\nnot a marker: CEZ:ASK-CLOSE x';
+    expect(parseAskCloseMarkers(text)).toEqual([{ id: 'design-v2', reason: 'superseded by v3' }, { id: 'Release' }]);
+    expect(stripAskCloseMarkers(text)).toBe('Done.\n\nnot a marker: CEZ:ASK-CLOSE x');
+  });
+
+  it('a close marker is not an ask marker', () => {
+    expect(parseAskMarker('CEZ:ASK-CLOSE design-v2')).toBeNull();
+  });
+
+  it('a card followed by a close line still parses, and the close still applies', () => {
+    const text = `New card.\nCEZ:ASK ${JSON.stringify({ id: 'design-v3', questions: [q] })}\nCEZ:ASK-CLOSE design-v2 superseded\nCEZ:DONE`;
+    expect(parseAskMarkerResult(text).kind).toBe('valid');
+    expect(parseAskMarker(text)?.id).toBe('design-v3');
+    expect(parseAskCloseMarkers(text)).toEqual([{ id: 'design-v2', reason: 'superseded' }]);
+  });
+});
+
+describe('reference markers in card text', () => {
+  const pr = (n: number) => `[[pr:a-rather-long-project-slug/${n}]]`;
+  const ask = (q: string, label: string, description?: string): unknown => ({
+    questions: [{
+      header: 'Dependabot',
+      question: q,
+      options: [{ label, ...(description === undefined ? {} : { description }) }, { label: 'Skip' }],
+    }],
+  });
+
+  it('reads a marker as the chip it becomes', () => {
+    expect(askVisibleText(`Start ${pr(2897)} and [[issue:p/12]] in [[task:p/abcdef12-3456]]?`))
+      .toBe('Start #2897 and #12 in task abcdef12?');
+    expect(askVisibleText('[[issue:p/abc]] and [[pr:p/x1]]')).toBe('issue abc and PR x1');
+  });
+
+  it('accepts markers in the question, a label and a description', () => {
+    const request = ask(`Assess ${pr(2897)} and ${pr(2896)}?`, `Assess ${pr(2897)}`, `Opens a task for ${pr(2897)}`);
+    expect(parseAskRequest(request)).toEqual(request);
+  });
+
+  it('measures the limits on the visible text, not the raw markers', () => {
+    // 4 visible-char marker (#123) + 56 = 60: the raw label is far over 60 but reads as 60.
+    const label = `${pr(123)}${'x'.repeat(56)}`;
+    expect(label.length).toBeGreaterThan(60);
+    expect(parseAskRequest(ask('Which?', label))).not.toBeNull();
+    expect(parseAskRequest(ask('Which?', `${label}y`))).toBeNull();
+    const question = `${'q'.repeat(395)}${pr(1234)}`;
+    expect(parseAskRequest(ask(question, 'Go'))).not.toBeNull();
+    expect(parseAskRequest(ask(`${question}?`, 'Go'))).toBeNull();
+  });
+
+  it('still bounds the raw payload', () => {
+    expect(parseAskRequest(ask('Which?', `[[pr:${'p'.repeat(300)}/1]]`))).toBeNull();
+  });
+
+  it('clips an over-long description without cutting a marker in half', () => {
+    const description = `${'d'.repeat(275)}${pr(28970)} and more`;
+    const result = parseAskMarkerResult(`CEZ:ASK ${JSON.stringify(ask('Which?', 'Go', description))}`);
+    expect(result).toMatchObject({ kind: 'valid', normalized: true });
+    const clipped = result.kind === 'valid' ? result.request.questions[0]!.options[0]!.description : undefined;
+    expect(clipped).toBe('d'.repeat(275));
+  });
+
+  it('keeps a marker that fits whole when clipping', () => {
+    const description = `${'d'.repeat(270)}${pr(2897)}${'e'.repeat(20)}`;
+    const result = parseAskMarkerResult(`CEZ:ASK ${JSON.stringify(ask('Which?', 'Go', description))}`);
+    const clipped = result.kind === 'valid' ? result.request.questions[0]!.options[0]!.description : undefined;
+    expect(clipped).toBe(`${'d'.repeat(270)}${pr(2897)}${'e'.repeat(5)}`);
+    expect(askVisibleText(clipped!)).toHaveLength(280);
   });
 });

@@ -32,7 +32,7 @@ export function DashboardAutomations() {
           <CalendarClock className="ml-2 size-3.5 text-soft-foreground" aria-hidden="true" />
         </h2>
         {!gate.off && query.data && (
-          <span className="font-mono text-meta text-soft-foreground">
+          <span className="text-label text-muted-foreground tabular-nums">
             {rows.length} enabled{failed ? ' · partial' : ''}
           </span>
         )}
@@ -51,7 +51,7 @@ export function DashboardAutomations() {
             ]}
           />
           {query.dataUpdatedAt > 0 && (
-            <p className="px-4 pt-3 text-xs text-muted-foreground">
+            <p className="px-4 pt-3 text-label text-muted-foreground">
               <Freshness at={new Date(query.dataUpdatedAt).toISOString()} />
             </p>
           )}
@@ -104,22 +104,22 @@ export function DashboardAutomations() {
                 >
                   {a.name}
                 </Link>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-label text-muted-foreground">
                   {project.name} · {action}: {timing}
                 </p>
                 {at !== null && (
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-1 text-label text-muted-foreground">
                     <time dateTime={new Date(at).toISOString()}>
                       {dayTime(at, project.data!.timeZone)} · {project.data!.timeZone}
                     </time>
                   </p>
                 )}
                 {a.kind !== 'schedule' && (
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-1 text-label text-muted-foreground">
                     Checks for matching events; a task may not be started.
                   </p>
                 )}
-                {warning && <p className="mt-1 text-xs text-warning">{warning}</p>}
+                {warning && <p className="mt-1 text-label text-warning">{warning}</p>}
                 <ExportRows
                   rows={[
                     {
@@ -146,7 +146,7 @@ export function DashboardAutomations() {
             </Button>
           )}
           {!pending && (
-            <details className="border-t px-4 py-2 text-xs text-muted-foreground">
+            <details className="border-t px-4 py-2 text-label text-muted-foreground">
               <summary
                 className={`${disclosureSummary} min-h-11`}
                 data-export-heading="Project automations"

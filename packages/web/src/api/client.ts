@@ -1,3 +1,4 @@
+import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
@@ -45,8 +46,14 @@ import type {
   AutomationWork,
   AutomationCancelQueuedResponse,
   AutomationTemplatesResponse,
+  AutomationsFile,
+  AutomationImportInput,
+  AutomationImportPreview,
+  AutomationImportPreviewInput,
+  AutomationImportResult,
   CreateAutomationInput,
   UpdateAutomationInput,
+  SetAutomationReportInput,
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
@@ -201,16 +208,19 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  runUserMessagesSchema,
   artifactsBySubjectResponseSchema,
   githubOwnersResponseSchema,
   projectAssetsResponseSchema,
 } from '@open-mercato/cezar-api-client'
-import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
+import type { Ok, OkJson, RunUserMessages } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
 import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
+import { BUILD_HEADER, noteServerBuild } from '@/lib/build-identity'
+import { answeredByCezar, connectionStatus, nativeConnectionStatus } from './connection-status'
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -479,10 +489,14 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     const headers = new Headers(init?.headers)
     headers.set(SID_HEADER, sid())
     const res = await fetch(url, { ...init, headers, credentials: 'include' })
+    noteServerBuild(res.headers?.get(BUILD_HEADER) ?? null)
+    nativeConnectionStatus.fromResponse(res)
+    connectionStatus.requestSettled(answeredByCezar(res.status))
     if (!res.ok) noteFailedRequest(url, init?.method, res.status, init?.body)
     return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    connectionStatus.requestSettled(false)
     noteFailedRequest(url, init?.method, 0, init?.body, cause)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
@@ -762,6 +776,18 @@ export async function getRunHistory(
     ),
     `${runPath(id)}/history`,
     runHistoryPageSchema,
+  )
+}
+
+/** The user's own messages in a run, for the "your messages" list (spec 2026-11-17-my-message-navigation). */
+export async function getRunUserMessages(id: string, opts?: ReadOptions): Promise<RunUserMessages> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].runs[':id']['user-messages'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `${runPath(id)}/user-messages`,
+    runUserMessagesSchema,
   )
 }
 
@@ -1480,10 +1506,11 @@ export async function getGroup(groupId: string, opts?: ReadOptions): Promise<Gro
 export async function connectProvider(
   provider: ProviderId,
   profileId?: string,
+  reconnect?: boolean,
 ): Promise<ProviderConnectResponse> {
   return unwrap(
     await cez.api.v1.providers.connect.$post({
-      json: { provider, ...(profileId ? { profileId } : {}) },
+      json: { provider, ...(profileId ? { profileId } : {}), ...(reconnect ? { reconnect } : {}) },
     }),
     '/providers/connect',
   )
@@ -1645,6 +1672,7 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].cancel.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: {},
     }),
     runPath(id, '/cancel'),
   )
@@ -1852,6 +1880,8 @@ export interface ContinueOptions {
   agentProfile?: string
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey?: string
+  /** Sent from an ask card: the reopened session answers that card (Questions inbox spec). */
+  askRequestId?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1865,6 +1895,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+    ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
@@ -1891,6 +1922,7 @@ export async function continueProjectRun(
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
         ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+        ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
       },
     }),
     runPath(id, '/continue'),
@@ -2136,7 +2168,13 @@ export async function postMessageWithRetry(
   message: MessageInput,
   wait: (delayMs: number) => Promise<void> = delayMessageRetry,
 ): Promise<MessageResponse> {
-  const json = { text: message.text ?? '', images: message.images ?? [], idempotencyKey: message.idempotencyKey ?? uuidv7() }
+  const json = {
+    text: message.text ?? '',
+    images: message.images ?? [],
+    idempotencyKey: message.idempotencyKey ?? uuidv7(),
+    // An answer from an ask card names its card (Questions inbox); a composer reply does not.
+    ...(message.askRequestId ? { askRequestId: message.askRequestId } : {}),
+  }
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await post(json)
@@ -2412,6 +2450,17 @@ export async function createAutomation(input: CreateAutomationInput): Promise<Au
   )
 }
 
+/** Link to a manager, change the mode, or `null` to unlink. Bumps no revision. */
+export async function setAutomationReport(id: string, report: SetAutomationReportInput['report']): Promise<AutomationResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].report.$put({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { report },
+    }),
+    `/automations/${encodeURIComponent(id)}/report`,
+  )
+}
+
 /** Edit a definition. `expectedRevision` is the one the editor read — a stale one answers 409
  *  rather than overwriting an edit made elsewhere. */
 export async function updateAutomation(
@@ -2531,6 +2580,40 @@ export async function deleteAutomation(id: string, expectedRevision?: number): P
       query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
   if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
+}
+
+/** An automations file (spec 2026-11-04-automations-and-config-export-import); all when `ids`
+ *  is absent. Read as JSON so the cockpit names the download itself. */
+export async function exportAutomations(ids?: string[]): Promise<AutomationsFile> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.export.$get({
+      param: { projectId: queryScope() },
+      query: ids?.length ? { ids: ids.join(',') } : {},
+    }),
+    '/automations/export',
+  )
+}
+
+/** Plan an import — writes nothing. 400 carries the server's reason for an invalid/newer file. */
+export async function previewAutomationImport(input: AutomationImportPreviewInput): Promise<AutomationImportPreview> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.preview.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import/preview',
+  )
+}
+
+/** Apply the previewed plan. 409 when `planDigest` is stale or a row still has issues. */
+export async function importAutomations(input: AutomationImportInput): Promise<AutomationImportResult> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import',
+  )
 }
 
 /** The other registered projects' automations, as the editor's template palette lists them
@@ -3142,6 +3225,64 @@ export async function getRunTerminalCommands(id: string): Promise<DiscoveredComm
   )
 }
 
+/* ── The project terminal (#1526): the same shells, opened in the project root ──────────────── */
+
+export async function getProjectTerminal(): Promise<TerminalState> {
+  return unwrap(await cez.api.v1.p[':projectId'].terminal.$get({ param: { projectId: queryScope() } }), '/terminal')
+}
+
+export async function createProjectTerminal(body: TerminalCreateInput): Promise<TerminalSession> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.$post({ param: { projectId: queryScope() }, json: body }),
+    '/terminal',
+  )
+}
+
+export async function readProjectTerminal(sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].output.$get({
+      param: { projectId: queryScope(), sessionId },
+      query: { cursor: String(cursor) },
+    }),
+    `/terminal/${sessionId}/output`,
+  )
+}
+
+export async function writeProjectTerminal(sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].input.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { data },
+    }),
+    `/terminal/${sessionId}/input`,
+  )
+}
+
+export async function resizeProjectTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].resize.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { cols, rows },
+    }),
+    `/terminal/${sessionId}/resize`,
+  )
+}
+
+export async function stopProjectTerminal(sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].$delete({ param: { projectId: queryScope(), sessionId } }),
+    `/terminal/${sessionId}`,
+  )
+}
+
+/** Commands the project root defines, each with the file it came from. */
+export async function getProjectTerminalCommands(): Promise<DiscoveredCommandsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.commands.$get({ param: { projectId: queryScope() } }),
+    '/terminal/commands',
+  )
+}
+
 /** The project's start recipes, the team's and this user's (spec `2026-10-09-design-mode` §7c). */
 export async function getStartApp(): Promise<StartAppState> {
   return unwrap(
@@ -3202,4 +3343,11 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
   return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
+}
+
+/** Image data goes through the same credentials, API base and project scope as the thread. */
+export async function getGithubAsset(url: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GithubAssetResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
+    param: { projectId: projectScope }, json: { url },
+  }, init(opts)), '/github/asset')
 }

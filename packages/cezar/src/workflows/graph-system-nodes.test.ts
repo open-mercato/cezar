@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { childSettleReport } from '../dispatch/engine.ts';
+import { taskAttention } from '../managers/snapshot.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -209,6 +210,39 @@ describe('graph system nodes', () => {
     expect(readFileSync(join(repoRoot, 'resumed.txt'), 'utf8')).toBe('first-output / Approve\n');
   }, 40_000);
 
+  it('a restart mid-agent resumes the walk, so the later check still runs (#2001)', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'work', type: 'agent', prompt: '{{task}} mock:done' },
+        { id: 'verify', type: 'check', command: 'echo verified > verify.txt' },
+      ],
+      edges: [
+        { from: 'start', to: 'work' },
+        { from: 'work.done', to: 'verify' },
+      ],
+    };
+    const { id } = store.createRun({ title: 't', workflow: 'graph', task: 'x', steps: graphToSteps(graph).map((st) => ({ id: st.id, name: st.name ?? st.id, kind: st.command ? 'check' : 'agent' })) });
+    store.updateRun(id, {
+      workflowDef: def(graph),
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      currentStepId: 'work',
+      graphState: { loops: {}, taken: [], cursor: 'work', outputs: {} },
+    });
+    store.updateStep(id, 'work', { status: 'running', sessionId: 'sess-1', backend: 'claude' });
+
+    manager.dispose();
+    store.flush();
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+
+    const final = await until(id, terminal);
+    expect(final.status).not.toBe('failed');
+    expect(final.steps.find((st) => st.id === 'verify')?.status).toBe('done');
+  }, 40_000);
+
   it('ask-user feeds the answer into later nodes', async () => {
     const graph: WorkflowGraph = {
       nodes: [
@@ -226,6 +260,34 @@ describe('graph system nodes', () => {
     manager.sendMessage(id, [{ type: 'text', text: 'luxon' }]);
     await until(id, terminal);
     expect(readFileSync(join(repoRoot, 'answer.txt'), 'utf8')).toBe('luxon\n');
+  }, 30_000);
+
+  it('a manager hears about each gate and ask-user node once, through the real parks', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'ask', type: 'ask-user', question: 'Which library?', options: ['date-fns', 'luxon'] },
+        { id: 'gate', type: 'gate.human', message: 'Ship?' },
+        { id: 'done', type: 'check', command: 'true' },
+      ],
+      edges: [
+        { from: 'start', to: 'ask' },
+        { from: 'ask', to: 'gate' },
+        { from: 'gate.approve', to: 'done' },
+      ],
+    };
+    const id = manager.startRun(def(graph), { task: 'x', worktree: false }).id;
+    const asked = taskAttention('p', [await until(id, parkedAt('ask'))], Date.now());
+    expect(asked).toMatchObject([{ kind: 'task-needs-you', runId: id, detail: 'Which library?' }]);
+    expect(taskAttention('p', [store.getRun(id)!], Date.now())[0]?.key).toBe(asked[0]?.key);
+
+    manager.sendMessage(id, [{ type: 'text', text: 'luxon' }]);
+    const gated = taskAttention('p', [await until(id, parkedAt('gate'))], Date.now());
+    expect(gated).toMatchObject([{ kind: 'task-needs-you', runId: id }]);
+    expect(gated[0]?.key).not.toBe(asked[0]?.key);
+
+    manager.sendMessage(id, [{ type: 'text', text: 'Approve' }]);
+    await until(id, terminal);
   }, 30_000);
 
   it('git.commit commits the agent work with the rendered message, then reports nothing', async () => {
@@ -573,6 +635,8 @@ describe('graph system nodes', () => {
     const graph: WorkflowGraph = {
       nodes: [
         { id: 'start', type: 'start' },
+        // Something to propose: a branch with nothing on it opens no PR.
+        { id: 'work', type: 'check', command: 'echo two > b.txt' },
         { id: 'push', type: 'git.push' },
         { id: 'pr', type: 'github.draft-pr' },
         { id: 'update', type: 'github.pr-update', ready: true, addLabels: ['cezar'], reviewers: ['octocat'] },
@@ -580,7 +644,8 @@ describe('graph system nodes', () => {
         { id: 'ok', type: 'end', status: 'success' },
       ],
       edges: [
-        { from: 'start', to: 'push' },
+        { from: 'start', to: 'work' },
+        { from: 'work', to: 'push' },
         { from: 'push', to: 'pr' },
         { from: 'pr.created', to: 'update' },
         { from: 'update', to: 'issue' },
@@ -589,12 +654,41 @@ describe('graph system nodes', () => {
     };
     const final = await until(manager.startRun(def(graph), { task: 'x', worktree: true }).id, terminal, 30_000);
     expect(final.steps.map((st) => [st.id, st.status])).toEqual([
+      ['work', 'done'],
       ['push', 'done'],
       ['pr', 'done'],
       ['update', 'done'],
       ['issue', 'done'],
     ]);
     expect(final.graphState?.outputs?.issue).toEqual({ issue: 7 });
+  }, 40_000);
+
+  it('draft-pr with no commits ahead of the base opens nothing and leaves by "nothing"', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'look', type: 'check', command: 'true' },
+        { id: 'pr', type: 'github.draft-pr' },
+        { id: 'opened', type: 'check', command: 'echo opened > opened.txt' },
+        { id: 'quiet', type: 'end', name: 'Nothing', status: 'success' },
+      ],
+      edges: [
+        { from: 'start', to: 'look' },
+        { from: 'look', to: 'pr' },
+        { from: 'pr.created', to: 'opened' },
+        { from: 'pr.nothing', to: 'quiet' },
+      ],
+    };
+    const final = await until(manager.startRun(def(graph), { task: 'review only', worktree: true }).id, terminal, 30_000);
+    expect(final.status).not.toBe('failed');
+    expect(final.pullRequestUrl).toBeUndefined();
+    expect(final.prRefs ?? []).toEqual([]);
+    expect(final.steps.map((st) => [st.id, st.status])).toEqual([
+      ['look', 'done'],
+      ['pr', 'done'],
+      ['opened', 'pending'],
+    ]);
+    expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${final.id}.ndjson`), 'utf8')).toContain('no commits ahead of the base branch');
   }, 40_000);
 
   it('notify.webhook refuses without CEZ_WORKFLOW_WEBHOOKS=1, and runs (dry) with it', async () => {

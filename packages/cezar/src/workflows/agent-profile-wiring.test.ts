@@ -10,6 +10,7 @@ import { agentAccountsPath } from '../paths.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { RunManager } from './run.ts';
+import { RUN_SCOPED_ENV } from './run-env-keys.ts';
 
 const trackerAssociation = { kind: 'jira' as const, connectionId: 'c', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '1', externalName: 'Sam' };
 
@@ -258,6 +259,13 @@ describe('RunManager agent-profile resolution', () => {
     ]);
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(env.CODEX_HOME).toBeUndefined();
+  });
+
+  it('every CEZ_* key a run hands its agent is one the test suite drops at load', async () => {
+    // Else a suite run inside a task inherits it and a spawned mock writes into the outer run.
+    const { env } = await seam().agentEnvForStep(newRun().id, 'claude');
+    const keys = Object.keys(env).filter((key) => key.startsWith('CEZ_'));
+    expect(keys.filter((key) => !RUN_SCOPED_ENV.includes(key))).toEqual([]);
   });
 
   it('points the CLI at the project\'s account and reports the id to record', async () => {

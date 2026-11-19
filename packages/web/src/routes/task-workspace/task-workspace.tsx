@@ -10,6 +10,7 @@ import {
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigationType, useParams } from 'react-router'
 
+import { ManagerBackLink } from '@/routes/manager/manager-back-link'
 import { ApiError } from '@/api/client'
 import { useHealth, useMarkRunSeen, useRun, useRunArtifacts } from '@/api/queries'
 import { useRunHistory } from '@/api/run-history'
@@ -43,12 +44,13 @@ import { useDesignNotes } from '../task-preview/design-notes'
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
 import { FilesView } from '../task-git/task-files'
+import { latestOpenAskCard, revealAskCard } from '../task-thread/ask-card'
 import { useDiffComments } from '../task-thread/diff-comments'
 import { RunHeader, type RunTab } from '../task-thread/run-header'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { ThreadView } from '../task-thread/task-thread'
 import { ThreadLoading } from '../task-thread/thread-loading'
-import { reduceThread } from '../task-thread/thread-state'
+import { reduceThread, trackedAsks } from '../task-thread/thread-state'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
 import {
@@ -70,6 +72,7 @@ import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
+import { taskTerminalScope } from './terminal-scope'
 import { IMPACT_FILE, impactAssetsPath } from '../task-assets/impact-model'
 import { useImpactAutoSwitch } from '../task-assets/use-impact-auto-switch'
 
@@ -129,6 +132,7 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
     const notFound = run.error instanceof ApiError && run.error.status === 404
     return (
       <div data-route="task-workspace" className="flex min-h-full flex-col">
+        <div className="px-4"><ManagerBackLink runId={id ?? ''} /></div>
         <CenteredState
           icon={notFound ? <SearchXIcon /> : <MessageSquareTextIcon />}
           tone={notFound ? 'neutral' : 'danger'}
@@ -140,7 +144,7 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
           }
           actions={
             <Button asChild variant="outline">
-              <Link to="/">Back to tasks</Link>
+              <Link to="/tasks">Back to tasks</Link>
             </Button>
           }
         />
@@ -173,7 +177,7 @@ function WorkspaceView({
   const { openDeepLink, addLayout, closeLayout, selectLayout, setColumnBrowser, openInBrowser, applySaved, keepAs } = layouts
   // Layouts saved for every task: nothing is saved until the user names one (Layout menu).
   const savedLayouts = useSavedLayouts()
-  const { save: saveLayout, remove: deleteSavedLayout } = savedLayouts
+  const { save: saveLayout, remove: deleteSavedLayout, hideBuiltIn, showBuiltIns, hiddenBuiltIns } = savedLayouts
   const layoutState = layouts.state
   const canSaveLayout = (layouts.layout?.columns.length ?? 0) > 0
   const saveCurrentLayout = useCallback(
@@ -380,7 +384,15 @@ function WorkspaceView({
       : undefined,
     () => navigate(impactAssetsPath(run.id)),
   )
-  const badges = useMemo(() => (assetCount > 0 ? { assets: assetCount } : undefined), [assetCount])
+  // The Changes tab's count — the files the run's last turn touched (`diffStat`, a snapshot).
+  const changedFiles = run.diffStat?.files ?? 0
+  const badges = useMemo(
+    () =>
+      assetCount > 0 || changedFiles > 0
+        ? { ...(assetCount > 0 ? { assets: assetCount } : {}), ...(changedFiles > 0 ? { changes: changedFiles } : {}) }
+        : undefined,
+    [assetCount, changedFiles],
+  )
 
   // Memoized: `RunHeader` is memo'd on prop identity.
   const tabs = useMemo(
@@ -406,10 +418,16 @@ function WorkspaceView({
         keyHints={keyHints}
         showKeyHints={keysHeld}
         badges={badges}
+        onHideBuiltIn={hideBuiltIn}
+        hiddenBuiltIns={hiddenBuiltIns}
+        onShowBuiltIns={showBuiltIns}
       />
     ),
     [
       badges,
+      hideBuiltIn,
+      hiddenBuiltIns,
+      showBuiltIns,
       cardLayouts,
       layouts.state.active,
       fixedViews,
@@ -614,6 +632,10 @@ function WorkspaceView({
       get focusComposer() {
         return composer() ? () => composer()?.focus() : null
       },
+      get focusQuestion() {
+        const card = stage() ? latestOpenAskCard(stage()!) : null
+        return card ? () => revealAskCard(card) : null
+      },
       openFile: (path: string) => openReference({ view: 'files', value: path }),
       markedUnread,
     }
@@ -623,8 +645,8 @@ function WorkspaceView({
 
   // The layout name is part of each column's memory key, so two layouts never share a selection.
   const activeName = layouts.state.active
-  // The header's run controls (Continue, ■ Stop) live in the composer when a Chat column shows it.
-  const headerTab: RunTab = columns?.some((column) => column.view === 'session') ? 'session' : 'changes'
+  // What the header's primary action reads: "Review changes" steps aside while a Changes column shows.
+  const headerTab: RunTab = columns?.some((column) => column.view === 'changes') ? 'changes' : 'session'
 
   // Design Mode notes (spec 2026-10-09-design-mode) are the task's, shared by every Preview column.
   const designNotes = useDesignNotes(run)
@@ -690,7 +712,7 @@ function WorkspaceView({
         case 'terminal':
           return terminalAllowed ? (
             <Suspense fallback={<ColumnLoading title="Loading terminal…" />}>
-              <TerminalDrawer runId={run.id} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
+              <TerminalDrawer scope={taskTerminalScope(run.id)} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
             </Suspense>
           ) : (
             <CenteredState
@@ -846,7 +868,7 @@ function WorkspaceView({
       {drawerShown ? (
         <Suspense fallback={null}>
           <TerminalDrawer
-            runId={run.id}
+            scope={taskTerminalScope(run.id)}
             height={drawer.height}
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}
@@ -952,12 +974,12 @@ export function ConversationColumn({
 }) {
   const history = useRunHistory(run.id)
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.visibleEvents, run.status, run.runner],
+    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner, trackedAsks: trackedAsks(run) }),
+    [history.visibleEvents, run.status, run.runner, run.asks],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.currentEvents, run.status, run.runner],
+    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner, trackedAsks: trackedAsks(run) }),
+    [history.currentEvents, run.status, run.runner, run.asks],
   )
   useRunRecordReconcile(run, history.visibleEvents)
 

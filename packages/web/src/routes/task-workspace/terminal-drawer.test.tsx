@@ -48,6 +48,7 @@ vi.mock('./terminal-extras', () => ({
 }))
 
 const { TerminalDrawer } = await import('./terminal-drawer')
+const { taskTerminalScope } = await import('./terminal-scope')
 
 function session(id: string, overrides: Partial<TerminalSession> = {}): TerminalSession {
   return {
@@ -69,7 +70,7 @@ function session(id: string, overrides: Partial<TerminalSession> = {}): Terminal
 const drawer = (onClose = () => {}) =>
   render(
     <TerminalDrawer
-      runId="r1"
+      scope={taskTerminalScope('r1')}
       height={320}
       onHeightChange={() => {}}
       onClose={onClose}

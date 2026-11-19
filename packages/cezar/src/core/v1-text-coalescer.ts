@@ -34,9 +34,12 @@ export class V1TextCoalescer {
    * The item is final: emit its text exactly once — the wire snapshot when the
    * backend sent one (authoritative full text), else the accumulated deltas.
    */
-  complete(itemId: string | undefined, snapshotText?: string): void {
+  complete(itemId: string | undefined, snapshotText?: string, opts?: { drainOlder?: boolean }): void {
     const key = itemId ?? '';
     if (this.done.has(key)) return;
+    // #2197: an abandoned earlier item must not be flushed AFTER this final one, or it
+    // hides the trailing CEZ:* marker. The final's own id-less deltas stay put.
+    if (opts?.drainOlder) this.drainExcept(key);
     // The anonymous bucket is never latched: without an identity, "already
     // emitted" can't be told apart from "the next id-less item".
     if (key !== '') this.done.add(key);
@@ -49,6 +52,15 @@ export class V1TextCoalescer {
     }
     const text = snapshotText !== undefined && snapshotText !== '' ? snapshotText : (buffered ?? '');
     if (text !== '') this.emitText(text);
+  }
+
+  private drainExcept(keep: string): void {
+    for (const [key, text] of [...this.pending]) {
+      if (key === keep || (key === '' && keep !== '')) continue;
+      this.pending.delete(key);
+      if (key !== '') this.done.add(key);
+      if (text !== '') this.emitText(text);
+    }
   }
 
   /** Turn/session boundary: emit whatever never saw its item complete, in

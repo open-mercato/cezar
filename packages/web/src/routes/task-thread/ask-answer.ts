@@ -119,6 +119,8 @@ export function useAskAnswer(
   projectId?: string,
   /** `message_sent`'s label: what the message is, for telemetry's closed set. */
   surface: 'ask_answer' | 'git_step' = 'ask_answer',
+  /** The card being answered: the server closes exactly that ask (Questions inbox). */
+  askRequestId?: string,
 ): AskAnswerDelivery {
   // `projectId` only from a surface standing OUTSIDE the run's project — the global Tasks page.
   // Everywhere else the scope is already the run's own and naming it would be noise.
@@ -153,7 +155,7 @@ export function useAskAnswer(
     }
     // No runner override: the server keeps the run's own backend and model, so answering a
     // question cannot silently switch engines when another provider happens to be connected.
-    return resume.mutateAsync({ text }).then((result) => {
+    return resume.mutateAsync({ text, ...(askRequestId ? { askRequestId } : {}) }).then((result) => {
       trackMessageSent(surface)
       return result
     })
@@ -173,7 +175,7 @@ export function useAskAnswer(
         return undefined
       }
       try {
-        await sendMessage.mutateAsync({ text })
+        await sendMessage.mutateAsync({ text, ...(askRequestId ? { askRequestId } : {}) })
         trackMessageSent(surface)
       } catch (sendError) {
         // The cached record said "live" but the session had already closed — resume instead

@@ -5,10 +5,11 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
+import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import { RunStore } from '../runs/store.ts';
 
 const MOCK_BIN = fileURLToPath(
@@ -90,6 +91,41 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     ).toBe(true);
   }, 15_000);
 
+  // Telemetry 3ac6bbe3 parity: the same SIGTERM reaching cezar and the app-server at once.
+  describe('a 143 exit while cezar itself is being signalled', () => {
+    afterEach(() => resetOwnSignalsForTests());
+
+    async function killedFromOutside(cezarSignalled = false): Promise<{ outcome: Promise<string>; events: AgentEvent[] }> {
+      const events: AgentEvent[] = [];
+      let sawText: () => void = () => {};
+      const firstText = new Promise<void>((resolve) => { sawText = resolve; });
+      const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+        { userPrompt: 'check the working tree', cwd: process.cwd(), env: { MOCK_CODEX_IGNORE_EOF: '1' } },
+        (event) => {
+          events.push(event);
+          if (event.type === 'text') sawText();
+        },
+      );
+      await firstText;
+      // After the session started: a signal older than its `startedAt` is ignored by design.
+      if (cezarSignalled) recordOwnSignal('SIGTERM');
+      process.kill(session.pid!, 'SIGTERM');
+      return { outcome: session.result.then(() => 'resolved', (err: Error) => err.message), events };
+    }
+
+    it('settles as an interruption once the hold ends, not a crash', async () => {
+      resetOwnSignalsForTests(500);
+      const { outcome, events } = await killedFromOutside(true);
+      expect(await outcome).toBe('interrupted — cezar received SIGTERM and the codex app-server stopped with it (code 143)');
+      expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    }, 15_000);
+
+    it('still fails with the exit code when only the app-server was signalled', async () => {
+      const { outcome } = await killedFromOutside();
+      expect(await outcome).toMatch(/^codex app-server exited with code 143/);
+    }, 15_000);
+  });
+
   it('surfaces a failed turn as an AgentEvent error', async () => {
     const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
@@ -116,7 +152,43 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     await session.result;
 
-    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
+    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported [other]" });
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+
+  it.each([
+    ['mock:retry-error', 'model unavailable'],
+    ['mock:nested-error', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+    ['mock:nested-error mock:retry-error', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+    ['mock:nested-limit', "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]"],
+    ['mock:nested-error mock:usage-limit', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+  ])('prefers the terminal turn.error (%s)', async (scenario, message) => {
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: `mock:turn-failed mock:turn-completed-failed ${scenario}`, cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    expect(events.filter((event) => event.type === 'error')).toEqual([{ type: 'error', message }]);
+  }, 15_000);
+
+  it('preserves a standalone Codex usage-limit error before the failed turn', async () => {
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:turn-failed mock:usage-limit', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events).toContainEqual({
+      type: 'error',
+      message: "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]",
+    });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
 });
@@ -323,6 +395,27 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
     new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
   );
 
+  it('keeps the final answer last when abandoned commentary was never completed (#2197)', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    let ended: () => void = () => {};
+    const turnEnd = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    const session = runner.startSession(
+      { userPrompt: 'mock:abandoned-commentary go', cwd: process.cwd() },
+      (event) => {
+        events.push(event);
+        if (event.type === 'turn-end') ended();
+      },
+    );
+    await turnEnd;
+    const texts = events.filter((e) => e.type === 'text').map((e) => (e as { text: string }).text);
+    expect(texts).toEqual(['abandoned fragment', 'Still working.\nCEZ:MONITORING']);
+    session.end();
+    await session.result.catch(() => undefined);
+  }, 20_000);
+
   it('surfaces a refused follow-up turn/start as an error, not a quiet note', async () => {
     const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
     const events: AgentEvent[] = [];
@@ -411,6 +504,37 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
 
     expect(events.some((e) => e.type === 'error')).toBe(false);
   }, 20_000);
+});
+
+describe('Codex instruction App Server mapping', () => {
+  it.each([
+    { resume: false, instructions: 'Do not run the full test suite.', locked: undefined },
+    { resume: true, instructions: 'Do not run the full test suite.', locked: undefined },
+    { resume: true, instructions: 'Updated instructions: run only focused tests.', locked: 'always' },
+    { resume: true, instructions: undefined, locked: undefined },
+  ])('preserves native guidance and delivers current instructions once ($resume, $instructions, locked=$locked)', async ({ resume, instructions, locked }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cezar-codex-instructions-'));
+    const file = join(dir, 'requests.ndjson');
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0, resumeLockRetryMs: [1] }).startSession({
+      userPrompt: 'Fix the regression', systemPrompt: instructions, cwd: process.cwd(),
+      ...(resume ? { resume: true, sessionId: 'th_saved' } : {}),
+      env: { CEZ_MOCK_CODEX_REQUESTS_FILE: file, ...(locked ? { MOCK_CODEX_RESUME_LOCKED: locked } : {}) },
+    }, undefined, { autoEndAfterFirstTurn: true });
+    try {
+      await session.result;
+      const requests = requestsFrom(file);
+      expect(paramsFor(requests, resume ? 'thread/resume' : 'thread/start')).not.toHaveProperty('developerInstructions');
+      if (locked) expect(paramsFor(requests, 'thread/fork')).not.toHaveProperty('developerInstructions');
+      const turn = JSON.stringify(paramsFor(requests, 'turn/start'));
+      if (instructions) expect(turn.split(instructions)).toHaveLength(2);
+      else expect(turn).not.toContain('instructions');
+      expect(turn).toContain('Fix the regression');
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Codex reasoning effort App Server mapping', () => {
@@ -670,7 +794,7 @@ describe('the artifacts directory under the Codex sandbox (spec 2026-10-22-html-
     });
   });
 
-  it('leaves the default full-access overrides byte-identical', () => {
+  it('keeps the default full-access policy', () => {
     expect(codexThreadOverrides(spec, undefined, {})).toEqual({
       model: 'gpt-5',
       cwd: '/wt',

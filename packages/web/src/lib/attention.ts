@@ -1,4 +1,4 @@
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { RunRecord, StepState } from '@open-mercato/cezar-api-client'
 
 /**
  * The one canonical attention function (spec, "Design system" → status grammar).
@@ -29,9 +29,9 @@ export const ATTENTION_RANK = {
 export type AttentionBucket = keyof typeof ATTENTION_RANK
 
 /** The dot tones the design system defines (`--success`/`--pending`/`--danger`/`--violet`, the
- *  orange `--conflict` for an idle close, plus the neutral `--soft-foreground`). Named here rather than imported from `StatusDot` to keep
+ *  blue `--info` for "waiting on a person", plus the neutral `--soft-foreground`). Named here rather than imported from `StatusDot` to keep
  *  this module UI-free; `attention.test.ts` asserts the two sets stay identical. */
-export type AttentionTone = 'success' | 'pending' | 'danger' | 'violet' | 'neutral' | 'idle'
+export type AttentionTone = 'success' | 'pending' | 'danger' | 'violet' | 'info' | 'neutral'
 
 export interface Attention {
   bucket: AttentionBucket
@@ -113,11 +113,41 @@ export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswer
 }
 
 /**
- * A `failed` run the inactivity timer closed because nobody replied: not a failure, not a gate —
- * "closed · idle", and Continue still picks it up (spec 2026-11-04-idle-closed-attention-state).
+ * A legacy `failed` run the inactivity timer closed: housekeeping, not a failure — a quiet "idle",
+ * and a message still picks it up (spec 2026-11-04-idle-closed-attention-state).
  */
 export function isIdleClosed(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'idleClosedAt'>): boolean {
   return run.status === 'failed' && run.idleClosedAt !== undefined && !isAwaitingAnswer(run)
+}
+
+/** How a `failed` run closed without failing: the idle timer freed it, or it closed on an open
+ *  question. The step rail and the Graph tab paint the closing step by it (#2022, #2024, #2025). */
+export type RunClosure = 'idle' | 'answer'
+
+export function runClosure(
+  run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'idleClosedAt'>,
+): RunClosure | undefined {
+  if (isAwaitingAnswer(run)) return 'answer'
+  return isIdleClosed(run) ? 'idle' : undefined
+}
+
+/**
+ * The step that closed a run (#2022, #2025): the `failed` step that finished last, else the last
+ * `failed` one in order. Recency, not equality with `idleClosedAt` — the graph path stamps the
+ * step's own time first. Callers gate on `runClosure(run)`.
+ */
+export function closingStepId(
+  steps: ReadonlyArray<Pick<StepState, 'id' | 'status' | 'finishedAt'>>,
+): string | undefined {
+  let latest: { id: string; at: number } | undefined
+  let lastFailed: string | undefined
+  for (const step of steps) {
+    if (step.status !== 'failed') continue
+    lastFailed = step.id
+    const at = step.finishedAt === undefined ? NaN : Date.parse(step.finishedAt)
+    if (!Number.isNaN(at) && (latest === undefined || at >= latest.at)) latest = { id: step.id, at }
+  }
+  return latest?.id ?? lastFailed
 }
 
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
@@ -129,13 +159,13 @@ export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswer
  * `RunRecord` → attention.
  *
  * The chain below *is* the priority order — first match wins, so `error` can never be masked by a
- * lower rung. Tones follow the mockups (`mockups/tasks-home.html`):
+ * lower rung. Tones follow the status grammar (redesign 2026-11, Proposal 7): one meaning per hue.
  *
- *  - `waiting` → amber/pending: the agent stopped and is asking you something.
- *  - `review` → violet, matching the violet PR chip beside it: there is work to look at.
- *    (The legacy UI painted both amber; the redesign splits them, per the mockup.)
- *  - `running` → violet, pulsing.
- *  - `queued` → neutral and still: parked, not transitioning. Its row shows `#2` instead.
+ *  - waiting on a PERSON (`waiting`, `review`, an unanswered ask, a permission) → info blue.
+ *    Not violet: violet is the accent and the running pulse, and a state that waits on you must
+ *    not look like a button or like work in progress.
+ *  - `running` and every transition → violet, pulsing: the accent means cezar is working.
+ *  - parked (`queued`, scheduled) → amber or neutral, still.
  *  - `done`/`failed` → the green/red outcome, still.
  */
 export function deriveAttention(run: AttentionInput): Attention {
@@ -143,7 +173,7 @@ export function deriveAttention(run: AttentionInput): Attention {
   if (lifecycle?.needsAttention) return {bucket: 'waiting', tone: 'pending', pulse: false, label: lifecycle.phase === 'setup' ? 'setup needs attention' : 'cleanup needs attention'}
   if (lifecycle?.activeOperationId) return {bucket: 'running', tone: 'pending', pulse: true, label: lifecycle.phase === 'setup' ? 'preparing worktree' : 'cleaning up worktree'}
   if (hasPendingPermission(run)) {
-    return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
+    return { bucket: 'permission', tone: 'info', pulse: true, label: 'needs permission' }
   }
   // A run a provider usage limit stopped is `failed` on the record, but it is not an outcome —
   // it is a task with an appointment (spec 2026-08-03-auto-resume-after-usage-limit). Painting
@@ -159,17 +189,17 @@ export function deriveAttention(run: AttentionInput): Attention {
   // answer. Reporting it as a failure (or, before that, as done) hid a task that was waiting on
   // you; it wears the `waiting` rung instead, and the answer reopens the session.
   if (isAwaitingAnswer(run)) {
-    return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
+    return { bucket: 'waiting', tone: 'info', pulse: true, label: 'needs you' }
   }
   // A monitoring hand-off whose session closed (#1945) asked nothing: it is an outcome to look
   // at, amber rather than red because no work failed — never a pending question.
   if (run.status === 'failed' && run.monitorHandoff) {
     return { bucket: 'error', tone: 'pending', pulse: false, label: 'monitoring stopped' }
   }
-  // Nobody replied and the idle timer freed the process: an outcome, but not a failure — out of
-  // the error bucket and its notification, and out of "Needs you" (#690).
+  // Legacy idle close: invisible housekeeping — neutral, no error bucket, no notification (#690).
+  // New idle closes stay `waiting` and take the rung below.
   if (isIdleClosed(run)) {
-    return { bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' }
+    return { bucket: 'none', tone: 'neutral', pulse: false, label: 'idle' }
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
@@ -177,7 +207,7 @@ export function deriveAttention(run: AttentionInput): Attention {
   if (run.status === 'waiting') {
     return {
       bucket: 'waiting',
-      tone: 'pending',
+      tone: 'info',
       pulse: true,
       label: budgetStop(run)?.ceiling !== undefined
         ? 'budget reached'
@@ -187,7 +217,7 @@ export function deriveAttention(run: AttentionInput): Attention {
     }
   }
   if (run.status === 'review') {
-    return { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }
+    return { bucket: 'waiting', tone: 'info', pulse: true, label: 'needs review' }
   }
   if (run.status === 'running' && run.activity === 'monitoring') {
     // Still working, but on its OWN downstream work (a sub-agent / a monitored

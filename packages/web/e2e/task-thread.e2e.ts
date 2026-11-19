@@ -391,35 +391,28 @@ describe('task thread', () => {
     browser.screenshot(`${artifactsDir}/thread-desktop.png`)
   })
 
-  it('the header meta line reads workflow · branch chip · ± · tokens · cost off the record', () => {
+  it('the header meta line reads workflow · branch chip · ± off the record; tokens and cost sit under the composer', () => {
     const meta = browser.evaluate(
       `document.querySelector('[data-slot="run-meta"]').textContent`,
     ) as string
     expect(meta).toContain('quick-task')
     expect(meta).toContain('cez/fcd519dd')
     expect(meta).toContain('+1 −0')
-    // Tokens render as the DIRECTIONAL pair (`DirectionalUsage`), not one total — the header
-    // moved to input/output and the fixture never followed, so the token half of this line had
-    // quietly stopped rendering and the assertion was testing its own absence. The fixture now
-    // carries both (2900 + 720 = the 3620 it always claimed).
-    expect(meta).toContain('IN 2.9k')
-    expect(meta).toContain('OUT 720')
-    expect(meta).toContain('$0.04')
-    // The runner stays OUT of the metadata parts — the original claim here, kept rather than
-    // inverted. It does appear inside `run-meta`, but only within the agent badge that #750
-    // (spec 2026-07-29-agent-profiles) added as a right-aligned sibling of the parts, so a bare
-    // `toContain` over the whole container could no longer express it. Subtracting the badge
-    // asks the question the line was written to ask.
-    const parts = browser.evaluate(`(() => {
-      const box = document.querySelector('[data-slot="run-meta"]').cloneNode(true)
-      box.querySelector('[data-slot="agent-badge"]')?.remove()
-      return box.textContent
-    })()`) as string
-    expect(parts).not.toContain('claude')
-    // …and the badge is where naming the agent does belong. It is icon-only now (the chat box's
-    // engine pills carry the words), so the runner lives in its accessible name.
+    // The runner stays OUT of the metadata parts — and so does the usage chip that names it: the
+    // chip moved from the header to the dock (`RunUsage`), so a folded header keeps it on screen.
+    expect(meta).not.toContain('claude')
+    expect(browser.count('[data-slot="run-header"] [data-slot="agent-badge"]')).toBe(0)
+    // Tokens read as the directional pair on the chip, not one total; the fixture carries both
+    // (2900 + 720 = the 3620 it always claimed).
+    const usage = browser.evaluate(
+      `document.querySelector('[data-slot="thread-dock"] [data-slot="session-usage"] [data-slot="agent-badge"]').textContent`,
+    ) as string
+    expect(usage).toContain('2.9k in')
+    expect(usage).toContain('720 out')
+    expect(usage).toContain('$0.04')
+    // …and the badge is where naming the agent does belong: the runner lives in its accessible name.
     expect(
-      browser.evaluate(`document.querySelector('[data-slot="agent-badge"]').getAttribute('aria-label')`),
+      browser.evaluate(`document.querySelector('[data-slot="session-usage"] [data-slot="agent-badge"]').getAttribute('aria-label')`),
     ).toContain('claude')
     // Branch renders as the mono chip, not plain text.
     expect(
@@ -438,8 +431,8 @@ describe('task thread', () => {
       { text: 'Changes', active: false },
       { text: 'Commits', active: false },
       { text: 'Files', active: false },
-      { text: 'Graph', active: false },
       { text: 'Preview', active: false },
+      { text: 'Graph', active: false },
       { text: 'Terminal', active: false },
     ])
     // Notes keeps its own page, reached from the strip's trailing icon.

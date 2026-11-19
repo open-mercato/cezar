@@ -165,6 +165,60 @@ export class AutomationStore {
     } finally { this.loadDefinitions(); mutation.release(); }
   }
 
+  /** The manager link alone (spec 2026-10-31-managers § Automation reports): no revision bump, so
+   *  it never re-baselines a poll, stales a proposal, or conflicts with an open editor. */
+  setReport(id: string, report: AutomationDefinition['report']): AutomationDefinition {
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict: a launch is in progress');
+    try {
+      this.loadDefinitions();
+      const current = this.definitions.get(id);
+      if (!current) throw new Error('automation not found');
+      const { report: _previous, ...rest } = current;
+      const definition = automationDefinitionSchema.parse({ ...rest, ...(report ? { report } : {}), updatedAt: this.now().toISOString() });
+      this.definitions.set(id, definition);
+      this.persistDefinitions();
+      return definition;
+    } finally { this.loadDefinitions(); mutation.release(); }
+  }
+
+  /**
+   * An import (spec 2026-11-04-automations-and-config-export-import): every row validated first,
+   * then published in ONE definitions write under one mutation lease — all of it or none. Every
+   * row lands paused; created rows get fresh ids, a replaced row keeps its id with reset state.
+   */
+  importMany(input: {
+    creates: Array<Omit<AutomationDefinition, 'id' | 'revision' | 'createdAt' | 'updatedAt'>>;
+    replaces: Array<{ id: string; expectedRevision: number; input: Omit<AutomationDefinition, 'id' | 'revision' | 'createdAt' | 'updatedAt'> }>;
+  }): { created: AutomationDefinition[]; replaced: AutomationDefinition[] } {
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict: a launch is in progress');
+    try {
+      this.loadDefinitions();
+      const now = this.now().toISOString();
+      const replaced = input.replaces.map(({ id, expectedRevision, input: row }) => {
+        const current = this.definitions.get(id);
+        if (!current) throw new Error('automation not found');
+        if (current.revision !== expectedRevision) throw new Error('automation revision conflict');
+        const { deferredStart: _deferred, ...fields } = row;
+        return automationDefinitionSchema.parse({
+          ...fields, enabled: false, id, revision: current.revision + 1, createdAt: current.createdAt, updatedAt: now,
+        });
+      });
+      const created = input.creates.map((row) => {
+        let id = randomUUID();
+        while (this.definitions.has(id) || this.isTombstoned(id)) id = randomUUID();
+        const { deferredStart: _deferred, ...fields } = row;
+        return automationDefinitionSchema.parse({ ...fields, enabled: false, id, revision: 1, createdAt: now, updatedAt: now });
+      });
+      for (const definition of [...replaced, ...created]) this.definitions.set(definition.id, definition);
+      this.persistDefinitions();
+      // Paused rows have no baseline to keep; enabling re-establishes one from the current time.
+      for (const definition of replaced) if (this.state(definition.id)) this.setState(definition.id, () => ({ revision: definition.revision }));
+      return { created, replaced };
+    } finally { this.loadDefinitions(); mutation.release(); }
+  }
+
   creation(key: string): DeferredCreationRecord | undefined {
     this.loadDefinitions();
     return this.readCreation(key);

@@ -87,6 +87,29 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  /** PR #2038: Manager mode's cockpit events, closed labels only — never a name or a text. */
+  it('relays the manager events with their closed labels only', async () => {
+    const ok: Array<[string, string]> = [
+      ['manager_mode_opened', 'sidebar'], ['manager_mode_opened', 'phone_default'], ['manager_mode_opened', 'deep_link'],
+      ['manager_mode_opened', 'notification'], ['manager_chat_opened', 'list'], ['manager_chat_opened', 'task_card'],
+      ['manager_message_sent', 'composer:no:desktop'], ['manager_message_sent', 'question_card:no:phone'], ['manager_message_sent', 'chip:yes:desktop'],
+      ['manager_question_answered', 'card'], ['manager_question_answered', 'typed'], ['manager_notification_clicked', 'approval'],
+    ];
+    for (const [event, label] of ok) {
+      expect((await post('/api/v1/telemetry/event', { event, label })).status, `${event} ${label}`).toBe(204);
+      expect(track).toHaveBeenCalledWith(event, { label }, { sid: undefined });
+    }
+    vi.mocked(track).mockClear();
+    for (const [event, label] of [
+      ['manager_mode_opened', '/manager/acme'], ['manager_chat_opened', 'Acme manager'], ['manager_message_sent', 'composer'],
+      ['manager_message_sent', 'merge the login fix'], ['manager_question_answered', 'yes'], ['manager_notification_clicked', 'Needs your approval'],
+      ['manager_created', 'yes:all:on:claude'], ['manager_turn_completed', 'user:ok'],
+    ]) {
+      expect((await post('/api/v1/telemetry/event', { event, label })).status, `${event} ${label}`).toBe(400);
+    }
+    expect(track).not.toHaveBeenCalled();
+  });
+
   it('relays add_project_opened with its closed dialog labels only', async () => {
     for (const label of ['new', 'clone', 'folder']) {
       expect((await post('/api/v1/telemetry/event', { event: 'add_project_opened', label })).status).toBe(204);

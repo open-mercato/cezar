@@ -1,4 +1,5 @@
-import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { ManagerSummary, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { To } from 'react-router'
 import { deriveAttention, wantsAttention } from './attention'
 
 /* Browser notifications (R6 Step 1.7, spec §"Cross-cutting"): the pure half.
@@ -116,6 +117,8 @@ export interface RunNotificationContent {
   /** Stable per run, so a second transition REPLACES the first notification instead of piling
    *  up one per status change of the same run. */
   tag: string
+  /** Where a click on it leads. */
+  path: To
 }
 
 /** What the notification says: the run's display title (#389: `titleSummary ?? title`) and the
@@ -126,5 +129,40 @@ export function describeRunNotification(run: RunRecord): RunNotificationContent 
     title: run.titleSummary ?? run.title,
     body: `Task ${label}`,
     tag: `cezar-run-${run.id}`,
+    // The watched list is the boot project's; `default` is its URL alias.
+    path: `/p/default/tasks/${encodeURIComponent(run.id)}`,
+  }
+}
+
+// ---- managers (spec 2026-10-31-managers) ----------------------------------------------------
+
+/** What makes a manager worth interrupting for: a new approval, or what it judged important.
+ *  Everything else waits behind the unread dot. */
+const managerAttentionCount = (manager: ManagerSummary) =>
+  manager.pendingActions + manager.pendingQuestions + manager.important
+
+/**
+ * The managers whose attention count rose. `previous === null` is the first observation, which only
+ * records; a manager created since has no baseline and counts from zero.
+ */
+export function diffManagerAttention(
+  previous: ReadonlyMap<string, number> | null,
+  managers: readonly ManagerSummary[],
+): { entering: ManagerSummary[]; counts: ReadonlyMap<string, number> } {
+  const counts = new Map(managers.map((manager) => [manager.id, managerAttentionCount(manager)]))
+  const entering = previous === null
+    ? []
+    : managers.filter((manager) => manager.notify !== false && managerAttentionCount(manager) > (previous.get(manager.id) ?? 0))
+  return { entering, counts }
+}
+
+export function describeManagerNotification(manager: ManagerSummary): RunNotificationContent {
+  return {
+    title: manager.name,
+    body: manager.pendingActions > 0
+      ? 'Needs your approval'
+      : manager.pendingQuestions > 0 ? 'Has a question for you' : (manager.headline ?? manager.preview ?? 'New message'),
+    tag: `cezar-manager-${manager.id}`,
+    path: `/manager/${encodeURIComponent(manager.id)}`,
   }
 }

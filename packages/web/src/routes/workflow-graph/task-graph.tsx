@@ -20,6 +20,7 @@ import { Link } from '@/lib/project-router'
 import { useRun } from '@/api/queries'
 import type { ApiRun, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { closingStepId, runClosure, type RunClosure } from '@/lib/attention'
 import {
   graphForWorkflow,
   loopEdges,
@@ -33,7 +34,7 @@ import {
 
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
-import { backLanes, edgeStyle, edgeTypes, GraphNodeView } from './graph-node'
+import { backLanes, closedLabel, edgeStyle, edgeTypes, GraphNodeView } from './graph-node'
 import { FloatingPanel } from './workflow-graph'
 
 /**
@@ -69,7 +70,11 @@ function LiveNodeCard({ data }: NodeProps<Node<LiveNodeData>>) {
 function SubtaskNodeCard({ node, state, childRunId }: { node: WorkflowGraphNode; state: NodeRunState; childRunId: string }) {
   const child = useRun(childRunId).data
   // A multi-step child (a sub-workflow) shows its steps; a single-step one is the node itself.
-  const inner = child && child.steps.length > 1 ? child.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, status: s.status })) : undefined
+  const closing = child ? closingStepOf(child) : undefined
+  const inner =
+    child && child.steps.length > 1
+      ? child.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, status: s.id === closing?.stepId ? closing.as : s.status }))
+      : undefined
   return (
     <GraphNodeView
       node={node}
@@ -83,6 +88,13 @@ function SubtaskNodeCard({ node, state, childRunId }: { node: WorkflowGraphNode;
 }
 
 const nodeTypes = { live: LiveNodeCard }
+
+/** The step that closed `run` without failing it, and how: its node is not drawn red (#2024, #2025). */
+function closingStepOf(run: ApiRun): { stepId: string; as: RunClosure } | undefined {
+  const as = runClosure(run)
+  const stepId = as ? closingStepId(run.steps) : undefined
+  return as && stepId ? { stepId, as } : undefined
+}
 
 export function TaskGraphRoute() {
   const { id } = useParams<{ id: string }>()
@@ -99,7 +111,7 @@ export function TaskGraphRoute() {
 export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   const def = run.workflowDef
   const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
-  const overlay = useMemo(() => (graph ? runOverlay(graph, run) : null), [graph, run])
+  const overlay = useMemo(() => (graph ? runOverlay(graph, run, { closing: closingStepOf(run) }) : null), [graph, run])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = graph?.nodes.find((n) => n.id === selectedId)
 
@@ -222,7 +234,8 @@ function NodeDetails({
   loopMax?: number
   childRunId?: string
 }) {
-  const rows: [string, string][] = [['status', state.status === 'reached' ? 'passed through' : state.status]]
+  const status = state.status === 'reached' ? 'passed through' : closedLabel(state.status)
+  const rows: [string, string][] = [['status', status]]
   if (state.iterations) rows.push(['runs', String(state.iterations)])
   if (state.costUsd) rows.push(['cost', `$${state.costUsd.toFixed(2)}`])
   if (state.loopCount !== undefined) rows.push(['iterations', `${state.loopCount}${loopMax ? ` / ${loopMax}` : ''}`])

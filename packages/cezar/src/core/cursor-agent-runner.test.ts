@@ -16,6 +16,12 @@ import {
 import { mapCursorStreamEvent } from './cursor-ui-mapper.ts';
 
 describe('buildCursorArgs', () => {
+  it('runs a read-only task in ask mode, without --force', () => {
+    const args = buildCursorArgs({ userPrompt: 'hi', enforceReadOnly: true });
+    expect(args).toEqual(expect.arrayContaining(['--mode', 'ask']));
+    expect(args).not.toContain('--force');
+  });
+
   it('builds print-mode args with force and stream-json', () => {
     expect(buildCursorArgs({ userPrompt: 'hi' })).toEqual(
       expect.arrayContaining(['-p', '--force', '--output-format', 'stream-json']),

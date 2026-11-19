@@ -1,0 +1,17 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`impact report in a DOM > keeps the first screen’s reading order (snapshot) 1`] = `
+[
+  "fact: Decision | !Conditionally, into the core | 3 conditions before merging · first: A port instead of direct SQL | See the conditions ↓",
+  "fact: For the user | Organization keys | An admin gives the integration its own key and its own permissions. | + 2 new~ 1 changed− 1 removed | All capabilities →",
+  "fact: Public API | ✕1 breaking change | Authorization: Bearer <personal token> on /api/* | 1 undecided — someone has to say whether it breaks | What to do about it →",
+  "condition: A port instead of direct SQL · Architect",
+  "condition: Migration without cutting anyone off · Product owner",
+  "condition: Tenant isolation and revocation · Maintainer / QA",
+  "api: Authorization: Bearer <personal token> on /api/* · ✕ Breaking · Before merge / Consumers must",
+  "api: X-Org-Key request header · Not breaking · Before merge",
+  "api: KeyResolver port · ? Undecided · Before merge",
+  "api: org_key.rotated / org_key.revoked · Not breaking · No action",
+  "api: org_keys table · Not breaking · No action",
+]
+`;

@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 import type { CreateRunInput, DeferredOptions, DeferredPreview, StartCondition } from '@open-mercato/cezar-api-client'
 import { getDeferredStartOptions, previewDeferredStart } from '@/api/client'
+import { chipChevron, chipClass } from '@/components/chip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -87,18 +88,28 @@ function dateErrors(start: AtStart): { date?: string; time?: string } {
 }
 
 /**
- * The start-time menu: a chevron joined to the composer's send button (Gmail's "Schedule send"),
- * moved off the footer pill row where it read as the project switcher. The host renders the
- * chosen start from `onLabelChange` and may open the menu through `open`/`onOpenChange`.
+ * The start-time menu (Gmail's "Schedule send"): the "Start" row of the composer's Options panel
+ * since design Proposal 5, a split-button chevron before it. The host renders the chosen start
+ * from `onLabelChange` and may open the menu through `open`/`onOpenChange`.
  */
-export function StartTimePicker({ task, value, onChange, disabledReason, onBlockedChange, onLabelChange, open: openProp, onOpenChange }: {
+export interface StartTimePickerProps {
   task: CreateRunInput; value: StartChoice | null; onChange: (value: StartChoice | null) => void; disabledReason?: string
   /** Why Schedule task cannot submit yet, for the line beside the button; undefined when it can. */
   onBlockedChange?: (reason: string | undefined) => void
   /** The chosen start's summary (`startLabel`) and tooltip (`startTitle`), or undefined while it is Now. */
   onLabelChange?: (label: { text: string; title: string } | undefined) => void
   open?: boolean; onOpenChange?: (open: boolean) => void
-}) {
+}
+
+export type StartTimePickerState = ReturnType<typeof useStartTimePicker>
+
+/**
+ * The picker's whole state machine — the options fetch, the debounced preview, the expiry timer
+ * and the blocked/label reports — as a hook the HOST runs, so it keeps working while the menu
+ * itself lives inside a popover that is mostly closed (the composer's Options panel). The JSX is
+ * `StartTimePopover`; `StartTimePicker` composes the two for a host that mounts both together.
+ */
+export function useStartTimePicker({ task, value, onChange, disabledReason, onBlockedChange, onLabelChange, open: openProp, onOpenChange }: StartTimePickerProps) {
   const [openState, setOpenState] = useState(false)
   const open = openProp ?? openState
   const setOpen = (next: boolean) => { setOpenState(next); onOpenChange?.(next) }
@@ -233,9 +244,30 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   const label = startLabel(value, ready, currentOptions?.timeZone)
   const title = startTitle(value, ready, currentOptions?.timeZone)
   useEffect(() => { onLabelChange?.(value ? { text: label, title } : undefined) }, [value ? `${label}\n${title}` : undefined])
+  return {
+    task, value, onChange, disabledReason, open, setOpen, pick, busy, message, retry, touched, setTouched, setOptionsAttempt,
+    optionsError, timeError, errors, fieldMessage, lastAt, autoDefault, groupName, errorId, eligibilityId, currentOptions,
+    resetReason, check, ready, blocked, visibleFieldMessage, describedBy, label, title,
+  }
+}
+
+export function StartTimePicker(props: StartTimePickerProps) {
+  return <StartTimePopover state={useStartTimePicker(props)} />
+}
+
+/** The menu itself. `trigger="chip"` is the Options-panel row (design Proposal 5): the chosen
+ *  start as a value pill; the default is the split-button chevron beside a send button. */
+export function StartTimePopover({ state, trigger = 'split' }: { state: StartTimePickerState; trigger?: 'split' | 'chip' }) {
+  const {
+    task, value, onChange, disabledReason, open, setOpen, pick, busy, message, retry, touched, setTouched, setOptionsAttempt,
+    optionsError, timeError, errors, fieldMessage, lastAt, autoDefault, groupName, errorId, eligibilityId, currentOptions,
+    resetReason, check, ready, blocked, visibleFieldMessage, describedBy, label, title,
+  } = state
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><Button type="button" size="icon-sm" data-slot="start-time-trigger" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" aria-label="Choose task start time" title={title}><ChevronDownIcon aria-hidden="true" className={cn('size-4 transition-transform', open && 'rotate-180')} /></Button></PopoverTrigger>
-    <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain space-y-3">
+    <PopoverTrigger asChild>{trigger === 'chip'
+      ? <button type="button" data-slot="start-time-trigger" aria-label="Choose task start time" title={title} className={chipClass}>{value ? label : 'now'}{chipChevron}</button>
+      : <Button type="button" size="icon-sm" data-slot="start-time-trigger" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" aria-label="Choose task start time" title={title}><ChevronDownIcon aria-hidden="true" className={cn('size-4 transition-transform', open && 'rotate-180')} /></Button>}</PopoverTrigger>
+    <PopoverContent align={trigger === 'chip' ? 'start' : 'end'} className="w-80 max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain space-y-3">
       <fieldset className="space-y-3">
       <legend className="font-medium">Start task</legend>
       <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} checked={!value} onChange={() => pick('now', null)} />Now</label>

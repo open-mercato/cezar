@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RunRecord } from '../runs/store.ts';
-import { automationWork, launchingAutomationId, pausedAutomationHold, pauseHoldsDispatch, queuedToCancel } from './paused-work.ts';
+import { automationWork, hasUnstartedAutomationRun, launchingAutomationId, pausedAutomationHold, pauseHoldsDispatch, queuedToCancel } from './paused-work.ts';
 import type { AutomationDefinition } from './types.ts';
 
 const at = '2026-11-04T15:00:00.000Z';
@@ -64,5 +64,15 @@ describe('paused automation work (#1980)', () => {
     expect(pauseHoldsDispatch(def({ enabled: false, schedule: { type: 'daily', hour: 4, minute: 0 }, deferredStart: { creationKey: 'k' } }))).toBe(false);
     expect(pauseHoldsDispatch(def({ enabled: false, kind: 'github', events: ['issue.opened'] }))).toBe(true);
     expect(pauseHoldsDispatch(undefined)).toBe(false);
+  });
+});
+
+describe('hasUnstartedAutomationRun (#2094)', () => {
+  it('counts only a queued, never-started run the automation launched', () => {
+    const queued = run('a', { status: 'queued', automationTrigger: trigger('auto') });
+    expect(hasUnstartedAutomationRun([queued], 'auto')).toBe(true);
+    expect(hasUnstartedAutomationRun([queued], 'other')).toBe(false);
+    expect(hasUnstartedAutomationRun([run('b', { status: 'running', automationTrigger: trigger('auto') })], 'auto')).toBe(false);
+    expect(hasUnstartedAutomationRun([run('c', { status: 'queued', automationTrigger: trigger('auto', 'manual') })], 'auto')).toBe(false);
   });
 });

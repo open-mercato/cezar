@@ -91,6 +91,30 @@ export const runHistoryContextSchema = z.object({
 });
 export type RunHistoryContext = z.infer<typeof runHistoryContextSchema>;
 
+/** Longest `text` a `user-messages` entry carries: enough for a two-line preview. */
+export const RUN_USER_MESSAGE_PREVIEW_CHARS = 400;
+
+/**
+ * One message the user sent in a run, for the transcript's "your messages" list
+ * (spec 2026-11-17-my-message-navigation). `seq` 0 is the run's opening task; every other entry
+ * is a persisted `user-message` line, so `seq` is that line's and pages the history to it.
+ */
+export const runUserMessageSchema = z.object({
+  seq: z.number().int().nonnegative(),
+  ts: z.string().optional(),
+  /** The message text, cut to {@link RUN_USER_MESSAGE_PREVIEW_CHARS}. */
+  text: z.string(),
+  images: z.number().int().nonnegative(),
+  files: z.number().int().nonnegative(),
+});
+export type RunUserMessage = z.infer<typeof runUserMessageSchema>;
+
+export const runUserMessagesSchema = z.object({
+  /** Oldest first. */
+  messages: z.array(runUserMessageSchema),
+});
+export type RunUserMessages = z.infer<typeof runUserMessagesSchema>;
+
 /**
  * One `checkout-progress` workspace frame (multi-project spec, step 4.3).
  *

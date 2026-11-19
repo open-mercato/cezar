@@ -1,0 +1,27 @@
+---
+title: "Jump between your own messages"
+description: "Step back through the messages you sent, or pick one from a list."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/my-messages/my-messages-pill.tsx
+    line: 17
+    commit: 335a00d25d648ea5c1fea0c2d50866954163fff4
+---
+In a long task conversation or manager chat, your own messages get buried under agent output. When you scroll up, the **Jump to latest** button grows into a small control that takes you to them.
+
+## Where to find it
+
+Task → Chat, or a manager chat → scroll up → the control above the message field
+
+## How to use it
+
+1. Scroll up in the conversation. **Jump to latest** turns into four buttons: previous, your messages, next and latest.
+2. Select the up or down arrow to move to your previous or next message. Cezar scrolls to it and briefly highlights it.
+3. Select the speech-bubble button to see every message you sent in this conversation, with its time and attachments. On a computer, hover to peek at the list or click to keep it open. On a phone or tablet, tap to open it as a sheet.
+4. Select a message in the list to jump to it. Messages currently on screen are marked.
+5. Select the down arrow beside **Latest** to return to the newest message. The control disappears at the bottom.
+
+> **Good to know**: The list covers the whole conversation. When you pick an older message that is not loaded yet, Cezar loads that part of the conversation first. In the list, use the arrow keys to move, **Enter** to jump, and **Esc** to close.

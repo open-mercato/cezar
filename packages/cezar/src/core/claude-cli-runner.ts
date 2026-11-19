@@ -17,13 +17,10 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
-import {
-  assertReasoningEffortSupported,
-  isSignalTerminationExit,
-  trackChildExit,
-} from './agent-runner.ts';
+import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, receivedOwnSignalSince, watchOwnSignals } from './process-signals.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
@@ -130,7 +127,16 @@ export class ClaudeCliRunner implements AgentRunner {
   ): AgentSession {
     const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
     const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt));
-    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path);
+    const settingsFile = writeClaudeSettingsFile(spec.claudeSettings);
+    // A fence that could not be written must not run unfenced.
+    if (spec.claudeSettings && !settingsFile) {
+      mcpConfig?.cleanup();
+      promptFile?.cleanup();
+      throw new Error('claude: could not write the --settings file');
+    }
+    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path, settingsFile?.path);
+    watchOwnSignals();
+    const startedAt = Date.now();
 
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -140,6 +146,7 @@ export class ClaudeCliRunner implements AgentRunner {
     } catch (err) {
       mcpConfig?.cleanup();
       promptFile?.cleanup();
+      settingsFile?.cleanup();
       throw wrapSpawnError(err, this.bin);
     }
 
@@ -297,12 +304,16 @@ export class ClaudeCliRunner implements AgentRunner {
           // describes the intentional stop rather than an agent failure.
           // Normalize only this precise wire shape so genuine result errors
           // (authentication, limits, malformed sessions) stay authoritative.
-          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
+          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
           const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
           const isInit = raw.type === 'system' && raw.subtype === 'init';
           if (isInit && typeof raw.model === 'string') initModel = raw.model;
+          if (isInit) {
+            const servers = claudeMcpServers(mappedMessage);
+            if (servers) onEvent?.(servers);
+          }
           const status = claudeUsageStatus(mappedMessage, initModel);
           // Every content block repeats its message's usage, so only a changed reading goes out.
           const statusKey = status === undefined ? '' : JSON.stringify(status);
@@ -349,6 +360,7 @@ export class ClaudeCliRunner implements AgentRunner {
         // stdout closed: the CLI read `--mcp-config` at startup long ago, so the file can go.
         mcpConfig?.cleanup();
         promptFile?.cleanup();
+        settingsFile?.cleanup();
       }
 
       const exitCode = await waitForExit(child);
@@ -375,6 +387,16 @@ export class ClaudeCliRunner implements AgentRunner {
         });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
+      }
+
+      // The signal reached cezar too (Ctrl-C, a unit stop, a logout): its shutdown, not a crash.
+      // Unsettled, the run stays `running` for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const msg = ownShutdownExitMessage('claude CLI', ownSignal, exitCode!);
+        onEvent?.({ type: 'error', message: msg });
+        throw new Error(msg);
       }
 
       if (exitCode !== 0 && exitCode !== null) {
@@ -407,6 +429,9 @@ export class ClaudeCliRunner implements AgentRunner {
   }
 }
 
+/** What a read-only Claude run is denied, whatever the user's or repo's settings allow. */
+export const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
+
 /**
  * Build the headless argv. `--print` is spelled out because both stream-json
  * formats are documented as "only works with --print"; `--input-format
@@ -423,8 +448,8 @@ export function buildClaudeArgs(
   env: NodeJS.ProcessEnv = process.env,
   mcpConfigPath?: string,
   systemPromptFilePath?: string,
+  settingsPath?: string,
 ): string[] {
-  assertReasoningEffortSupported('claude', spec.reasoningEffort);
   const args: string[] = [
     '--print',
     '--input-format',
@@ -434,7 +459,9 @@ export function buildClaudeArgs(
     '--verbose',
     '--include-partial-messages',
     '--permission-mode',
-    env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
+    spec.bypassPermissions && !spec.enforceReadOnly
+      ? 'bypassPermissions'
+      : env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
   if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
   else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
@@ -458,13 +485,63 @@ export function buildClaudeArgs(
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
   }
+  // A prefix rule cannot say "gh api GET only"; the hook can, and its deny outranks the allow rules.
+  const bashAllowed = allowed.some((rule) => rule === 'Bash' || rule.startsWith('Bash('));
+  const hook = spec.bashHookCommand && bashAllowed
+    ? { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: spec.bashHookCommand }] }] } }
+    : {};
+  // For a command the user's Bash sandbox would cut off from the loopback cockpit. Claude honors
+  // this key from `--settings` only for a plain command: every pipe stage must match, and a
+  // heredoc, a substitution, `?`, `*`, `[` or a leading `~` keeps it sandboxed (#2258).
+  const sandbox = spec.sandboxExcludedCommands?.length && bashAllowed
+    ? { sandbox: { excludedCommands: spec.sandboxExcludedCommands } }
+    : {};
+  if (Object.keys(hook).length > 0 || Object.keys(sandbox).length > 0) {
+    args.push('--settings', JSON.stringify({ ...hook, ...sandbox }));
+  }
+  // Settings allow rules widen `--allowedTools`; only a deny rule outranks them.
+  if (spec.enforceReadOnly) {
+    args.push('--disallowedTools', CLAUDE_WRITE_TOOLS.join(','));
+  }
   if (spec.model) {
     args.push('--model', spec.model);
+  }
+  // Session-scoped, so a resumed process must be told again (#808).
+  if (spec.reasoningEffort) {
+    args.push('--effort', spec.reasoningEffort);
   }
   for (const dir of spec.additionalDirectories ?? []) {
     args.push('--add-dir', dir);
   }
+  if (settingsPath && spec.claudeSettings) args.push('--settings', settingsPath);
   return args;
+}
+
+/** `system/init`'s `mcp_servers` and `tools`, as a `mcp-servers` event; undefined when it has neither. */
+export function claudeMcpServers(msg: unknown): Extract<AgentEvent, { type: 'mcp-servers' }> | undefined {
+  const raw = msg as { mcp_servers?: unknown; tools?: unknown };
+  if (!Array.isArray(raw.mcp_servers) && !Array.isArray(raw.tools)) return undefined;
+  const servers = (Array.isArray(raw.mcp_servers) ? raw.mcp_servers : []).flatMap((server: unknown) => {
+    const { name, status } = (server ?? {}) as { name?: unknown; status?: unknown };
+    return typeof name === 'string' ? [{ name, status: typeof status === 'string' ? status : 'unknown' }] : [];
+  });
+  const tools = (Array.isArray(raw.tools) ? raw.tools : []).filter((tool: unknown): tool is string => typeof tool === 'string');
+  return { type: 'mcp-servers', servers, tools };
+}
+
+/** `AgentRunSpec.claudeSettings` in a `0600` temp file for `--settings`: a hook command stays out of `ps`. */
+export function writeClaudeSettingsFile(
+  settings: Record<string, unknown> | undefined,
+): { path: string; cleanup: () => void } | undefined {
+  if (!settings) return undefined;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-settings-'));
+    const path = join(dir, 'settings.json');
+    writeFileSync(path, JSON.stringify(settings), { mode: 0o600 });
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Windows caps a command line at 32,767 chars; a skill body plus cezar's rules blows past it (#1584). */
