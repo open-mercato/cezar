@@ -12,7 +12,7 @@ import { TaskGraphView } from './task-graph'
 
 /**
  * The Graph tab on a run that closed without failing: the node of the step that closed it reads
- * orange "closed · idle" (#2024) or a still "needs you" (#2025), like the run header and the step
+ * a quiet neutral "idle" (#2024) or a still "needs you" (#2025), like the run header and the step
  * rail. jsdom never measures a node, so these read the nodes' DOM attributes, not their layout.
  */
 
@@ -93,14 +93,13 @@ const nodeEl = (id: string) => document.querySelector<HTMLElement>(`.react-flow_
 const statusDot = (id: string) => nodeEl(id)?.querySelector('[aria-label]')?.getAttribute('aria-label')
 
 describe('the Graph tab on an idle-closed run (#2024)', () => {
-  it('draws the closing step orange with the "closed · idle" label', () => {
+  it('draws the closing step a quiet neutral "idle", no ring', () => {
     renderGraph(run({ idleClosedAt: LATER }))
     const node = nodeEl('fix')
     expect(node?.getAttribute('data-node-status')).toBe('idle')
-    expect(node?.querySelector('.ring-conflict')).not.toBeNull()
-    expect(node?.querySelector('.bg-conflict')).not.toBeNull()
-    expect(node?.querySelector('.ring-danger, .bg-danger')).toBeNull()
-    expect(statusDot('fix')).toBe('closed · idle')
+    expect(node?.querySelector('.bg-soft-foreground')).not.toBeNull()
+    expect(node?.querySelector('.ring-conflict, .ring-danger, .bg-danger, .bg-conflict')).toBeNull()
+    expect(statusDot('fix')).toBe('idle')
   })
 
   it('recolours only the step that idle-closed the run', () => {
@@ -109,11 +108,12 @@ describe('the Graph tab on an idle-closed run (#2024)', () => {
     expect(statusDot('tests')).toBe('failed')
   })
 
-  it('the details panel reads "closed · idle"', () => {
+  it('the details panel reads "idle"', () => {
     renderGraph(run({ idleClosedAt: LATER }))
     fireEvent.click(document.querySelector('.react-flow__node[data-id="fix"]')!)
     const panel = screen.getByLabelText('Node details')
-    expect(panel.textContent).toContain('closed · idle')
+    expect(panel.textContent).toContain('idle')
+    expect(panel.textContent).not.toContain('closed · idle')
     expect(panel.textContent).not.toContain('failed')
   })
 
@@ -126,7 +126,7 @@ describe('the Graph tab on an idle-closed run (#2024)', () => {
   })
 
 
-  it("a multi-step child card shows the child's idle-closing step as an orange dot", () => {
+  it("a multi-step child card shows the child's idle-closing step as a neutral dot", () => {
     const child = run({
       id: 'child-1',
       idleClosedAt: LATER,
@@ -138,9 +138,9 @@ describe('the Graph tab on an idle-closed run (#2024)', () => {
     })
     renderGraph(parent, [child])
     const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
-    const dots = inner ? [...inner.querySelectorAll('[title]')] : []
-    expect(dots.map((d) => d.getAttribute('title'))).toEqual(['Plan — done', 'Build — closed · idle'])
-    expect(dots[1]?.querySelector('.bg-conflict')).not.toBeNull()
+    const dots = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual(['Plan — done', 'Build — idle'])
+    expect(dots[1]?.querySelector('.bg-soft-foreground')).not.toBeNull()
   })
 })
 
@@ -178,10 +178,30 @@ describe('the Graph tab on a run closed on an unanswered question (#2025)', () =
     })
     renderGraph(parent, [child])
     const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
-    const dots = inner ? [...inner.querySelectorAll('[title]')] : []
-    expect(dots.map((d) => d.getAttribute('title'))).toEqual(['Plan — done', 'Ask — needs you'])
+    const dots = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual(['Plan — done', 'Ask — needs you'])
     const dot = dots[1]?.querySelector('.bg-info')
     expect(dot).not.toBeNull()
     expect(dot?.getAttribute('class')).not.toContain('animate-pulse')
+  })
+})
+
+describe('truncated node text keeps its native title reveal', () => {
+  it('a square tile carries its full name and detail, and each inner step its name and state', () => {
+    const child = run({
+      id: 'child-1',
+      steps: [step('a', { name: 'Plan the whole migration' }), step('b', { name: 'Build', status: 'failed', finishedAt: LATER })],
+    })
+    const parent = run({
+      steps: [step('implement', { status: 'running' }), step('tests', { status: 'pending' }), step('fix', { status: 'pending' })],
+      graphState: { loops: {}, taken: [], outputs: { implement: { runId: 'child-1' } } },
+    })
+    renderGraph(parent, [child])
+    // A check is a square tile (agents are wide and print both lines in full).
+    expect(nodeEl('tests')?.getAttribute('title')).toMatch(/^Tests — /)
+    expect(nodeEl('fix')?.getAttribute('title')).toBeNull()
+    const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
+    const steps = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(steps.map((s) => s.getAttribute('title'))).toEqual(['Plan the whole migration — done', 'Build — failed'])
   })
 })

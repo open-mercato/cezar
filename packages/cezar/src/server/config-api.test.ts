@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -98,6 +99,8 @@ describe('the config API', () => {
       defaultSkill: null,
       askSkill: null,
       teamSkills: true,
+      bypassPermissions: false,
+      bypassPermissionsBlocked: null,
     });
   });
 
@@ -300,6 +303,8 @@ describe('the config API', () => {
       defaultSkill: null,
       askSkill: null,
       teamSkills: true,
+      bypassPermissions: false,
+      bypassPermissionsBlocked: null,
     });
   });
 
@@ -492,6 +497,42 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     })).json()) as Record<string, unknown>;
     expect(off).toMatchObject({ profile: null, taskWorkspace: null, landing: null, requiredChecks: [], defaultSkill: null, teamSkills: true });
     expect(Object.keys(rawFile()).sort()).toEqual([]);
+  });
+
+  it('PUT bypassPermissions stores only true, and a git-tracked config.json cannot grant it', async () => {
+    const on = (await (await put({ bypassPermissions: true })).json()) as Record<string, unknown>;
+    expect(on).toMatchObject({ bypassPermissions: true, bypassPermissionsBlocked: null });
+    expect(rawFile().bypassPermissions).toBe(true);
+
+    execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+    execFileSync('git', ['add', '-f', '.ai/cezar/config.json'], { cwd: repoRoot });
+    const tracked = (await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>;
+    expect(tracked.bypassPermissions).toBe(true);
+    expect(tracked.bypassPermissionsBlocked).toMatch(/tracked by git/);
+
+    const off = (await (await put({ bypassPermissions: false })).json()) as Record<string, unknown>;
+    expect(off).toMatchObject({ bypassPermissions: false, bypassPermissionsBlocked: null });
+    expect('bypassPermissions' in rawFile()).toBe(false);
+  });
+
+  // #2259 review: a hosted operator may rely on Claude's own sandbox to contain agents.
+  it('a hosted cockpit cannot turn bypassPermissions on, can turn it off, and says why', async () => {
+    const prevRemote = process.env.CEZ_REMOTE;
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ bypassPermissions: true }));
+    process.env.CEZ_REMOTE = '1';
+    try {
+      const refused = await put({ bypassPermissions: true });
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: string }).error).toMatch(/local-only/);
+      const shown = (await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>;
+      expect(shown.bypassPermissionsBlocked).toMatch(/local-only/);
+      const off = await put({ bypassPermissions: null });
+      expect(off.status).toBe(200);
+      expect('bypassPermissions' in rawFile()).toBe(false);
+    } finally {
+      if (prevRemote === undefined) delete process.env.CEZ_REMOTE;
+      else process.env.CEZ_REMOTE = prevRemote;
+    }
   });
 
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {

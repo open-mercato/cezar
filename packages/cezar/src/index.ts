@@ -22,10 +22,11 @@ import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
-import { RunStore } from './runs/store.ts';
+import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
+import { narrowForRelay } from './relay/scope.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
 import { registerRunningInstance } from './worktree-in-use.ts';
 import {
@@ -400,7 +401,11 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
+  const manager = new RunManager(store, repoRoot, {
+    semaphore,
+    projectId: bootProjectId,
+    hosted: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+  });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
@@ -472,7 +477,7 @@ async function serveCommand(
   }
   const recovered = store
     .listRuns()
-    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
+    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r)).length;
   await recoverWithProviderRuntimeAuthObservation(
     store,
     () => manager.recover(),
@@ -492,7 +497,7 @@ async function serveCommand(
     runs: semaphore,
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
-    trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+    trimPaths: () => !narrowForRelay(resolveCapabilities(process.env, bindHost)).localHandoff,
     restart: () => {
       void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
         store.flush({ pretty: true });

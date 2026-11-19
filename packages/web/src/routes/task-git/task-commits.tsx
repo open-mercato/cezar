@@ -70,7 +70,7 @@ export function CommitsView({
           <CommitDiffView key={sha} runId={run.id} sha={sha} />
         </>
       ) : commits.isPending ? (
-        <p data-slot="commits-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
+        <p data-slot="commits-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading commits…
         </p>
       ) : commits.isError ? (
@@ -135,7 +135,7 @@ function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
       </div>
 
       {commit.isPending ? (
-        <p data-slot="commit-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
+        <p data-slot="commit-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading commit…
         </p>
       ) : commit.isError ? (

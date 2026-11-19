@@ -25,6 +25,8 @@ export interface TaskWorkspaceBridge {
   terminal: { allowed: boolean; open: boolean; inColumn: boolean; toggle: () => void; openInColumn: () => void }
   /** Null when no Chat column shows a composer. */
   focusComposer: (() => void) | null
+  /** Null when no unresolved question card is mounted — the header's Answer then falls back to the composer (#2297). */
+  focusQuestion: (() => void) | null
   openFile: (path: string) => void
   /** Suppress the workspace's auto-mark-read for this visit, as the header's Mark unread does (#775). */
   markedUnread: () => void

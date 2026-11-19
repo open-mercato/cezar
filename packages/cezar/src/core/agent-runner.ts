@@ -68,6 +68,15 @@ export interface AgentRunSpec {
   allowedTools?: string[];
   /** When `Bash` is allowed, restrict it to commands starting with one of these. */
   bashAllowlist?: string[];
+  /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
+   *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
+  bashHookCommand?: string;
+  /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
+   *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
+  bypassPermissions?: boolean;
+  /** Claude only: `sandbox.excludedCommands` patterns, for a command that must reach the loopback
+   *  cockpit the user's Bash sandbox blocks (a manager's `cez-manager`). Other backends ignore it. */
+  sandboxExcludedCommands?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control
@@ -80,6 +89,9 @@ export interface AgentRunSpec {
   /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
+  /** Claude only: extra settings (e.g. a `PreToolUse` hook) for `--settings`, written to a `0600`
+   *  temp file, never inline in argv. Other backends ignore it, so never rely on it elsewhere. */
+  claudeSettings?: Record<string, unknown>;
   model?: string;
   /**
    * Reasoning effort for this session (Codex `turn/start.effort`, Claude `--effort`). Omitted
@@ -101,7 +113,7 @@ export interface AgentRunSpec {
 }
 
 /**
- * Backends without a dedicated system-prompt channel (codex app-server,
+ * Backends without a replaceable system-prompt channel (codex app-server,
  * opencode serve) deliver `spec.systemPrompt` as a leading block of the
  * opening user message — the documented per-backend mapping (spec §protocol
  * v2: claude = `--append-system-prompt`, codex/opencode = prepended here).
@@ -207,6 +219,9 @@ export type AgentEvent =
    *  sessions mint their own id, so the run manager persists this to enable
    *  resume ("Continue") and "open in CLI". Claude's equals `spec.sessionId`. */
   | { type: 'session'; sessionId: string }
+  /** The MCP servers and tool names the session loaded (Claude's `system/init`). Claude only; a
+   *  manager reads it for connectors (spec 2026-11-12-manager-connectors), a task ignores it. */
+  | { type: 'mcp-servers'; servers: Array<{ name: string; status: string }>; tools: string[] }
   | { type: 'turn-end'; reason?: TurnEndReason }
   | { type: 'note'; message: string }
   | { type: 'done' }

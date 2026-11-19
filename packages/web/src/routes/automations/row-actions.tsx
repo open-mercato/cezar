@@ -24,7 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +32,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { useNavigate } from '@/lib/project-router'
 
 import { hasPendingWork, PendingWorkDialog } from './pending-work-dialog'
@@ -43,6 +44,9 @@ import type { AutomationActions } from './use-automations'
  * click in here stops at the cell — the row itself opens the editor, and a pause must never
  * also navigate. The menu and the confirm are portaled, so they stop propagation on their own
  * content too: React bubbles synthetic events through portals to the row.
+ *
+ * The icon buttons wear the one `Tooltip` instead of a native `title` (redesign 2026-11); the
+ * `aria-label` stays their accessible name.
  */
 export function RowActions({ automation, actions }: { automation: AutomationListEntry; actions: AutomationActions }) {
   const navigate = useNavigate()
@@ -68,32 +72,39 @@ export function RowActions({ automation, actions }: { automation: AutomationList
   }
   const stop = (event: SyntheticEvent) => event.stopPropagation()
   const editorPath = `/automations/${encodeURIComponent(automation.id)}`
+  const pauseLabel = automation.enabled ? 'Pause' : 'Enable'
 
   return (
     <span data-slot="row-actions" className="inline-flex gap-0.5" onClick={stop}>
-      {automation.kind !== 'schedule' ? <Button variant="ghost" size="icon-sm" title="Preview matches" aria-label="Preview matches" disabled={actions.busy} onClick={() => void actions.preview(automation)}>
-        <EyeIcon className="size-[13px]" />
-      </Button> : null}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        title="Run now"
-        aria-label="Run now"
-        disabled={actions.busy}
-        onClick={() => void actions.runNow(automation)}
-      >
-        <PlayIcon className="size-[13px]" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        title={automation.enabled ? 'Pause' : 'Enable'}
-        aria-label={automation.enabled ? 'Pause' : 'Enable'}
-        disabled={actions.busy}
-        onClick={() => void togglePause()}
-      >
-        {automation.enabled ? <PauseIcon className="size-[13px]" /> : <PowerIcon className="size-[13px]" />}
-      </Button>
+      {automation.kind !== 'schedule' ? (
+        <IconTooltip label="Preview matches">
+          <Button variant="ghost" size="icon-sm" aria-label="Preview matches" disabled={actions.busy} onClick={() => void actions.preview(automation)}>
+            <EyeIcon className="size-[13px]" />
+          </Button>
+        </IconTooltip>
+      ) : null}
+      <IconTooltip label="Run now">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Run now"
+          disabled={actions.busy}
+          onClick={() => void actions.runNow(automation)}
+        >
+          <PlayIcon className="size-[13px]" />
+        </Button>
+      </IconTooltip>
+      <IconTooltip label={pauseLabel}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={pauseLabel}
+          disabled={actions.busy}
+          onClick={() => void togglePause()}
+        >
+          {automation.enabled ? <PauseIcon className="size-[13px]" /> : <PowerIcon className="size-[13px]" />}
+        </Button>
+      </IconTooltip>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon-sm" aria-label="More">
@@ -142,13 +153,14 @@ export function RowActions({ automation, actions }: { automation: AutomationList
           <AlertDialogHeader>
             <AlertDialogTitle>Delete “{automation.name}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              The automation is removed for good. Tasks it already launched and its execution log stay.
+              The automation is deleted and cannot be undone. Tasks it already launched and its execution log stay.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:brightness-[0.96]"
+              data-variant="destructive"
+              className={buttonVariants({ variant: 'destructive' })}
               onClick={() => void actions.remove(automation)}
             >
               Delete

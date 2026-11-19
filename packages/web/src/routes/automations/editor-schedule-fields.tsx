@@ -129,15 +129,15 @@ export function EditorScheduleFields({
             onChange={(event) => set({ minute: Math.min(59, Math.max(0, Number(event.target.value) || 0)) })}
             className="w-14 text-center font-mono"
           />
-          <span className="font-mono text-xs">{timeZone}</span>
+          <span className="text-label">{timeZone}</span>
         </div>
       )}
       {s.type === 'once' ? (
-        <p data-slot="editor-once-note" className={`m-0 text-xs ${passed ? 'text-danger' : 'text-soft-foreground'}`}>
+        <p data-slot="editor-once-note" className={`m-0 text-label ${passed ? 'text-danger' : 'text-muted-foreground'}`}>
           {passed ? 'This time has passed — pick a later one to enable it.' : 'Runs a single time, then pauses itself.'}
         </p>
       ) : (
-        <div className="flex items-center gap-2.5 font-mono text-xs text-soft-foreground">
+        <div className="flex items-center gap-2.5 text-label text-soft-foreground">
           <span>cron</span>
           <BranchChip data-slot="editor-cron">{cronOf(schedule)}</BranchChip>
         </div>

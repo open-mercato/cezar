@@ -9,10 +9,42 @@ import { viewLabel, type ViewId } from './layout-state'
 /** A tab of the row: a view, or Notes — its own page, painted among the views. */
 export type StripTab = ViewId | 'notes'
 
-/** The row's order: the views, with Notes placed before Preview (or Terminal, or at the end). */
+/** The row's order: the views, with Notes placed before Preview (or Assets, or Terminal, or at
+ *  the end) — main's numbering, so a tab's 1–9 key never changed under a reader. */
 export function stripTabs(views: readonly ViewId[]): StripTab[] {
-  const at = views.findIndex((view) => view === 'browser' || view === 'terminal')
+  const at = views.findIndex((view) => view === 'browser' || view === 'assets' || view === 'terminal')
   return at < 0 ? [...views, 'notes'] : [...views.slice(0, at), 'notes', ...views.slice(at)]
+}
+
+/** The strip's three groups, a hairline between them: Chat | the review (what the task changed)
+ *  | the run (how it ran, what it published — Preview included). Tabs keep their drag and ⌥-click; only the row's
+ *  reading changes. */
+export type StripGroup = 'chat' | 'review' | 'run'
+
+export const STRIP_GROUP_OF: Record<StripTab, StripGroup> = {
+  session: 'chat',
+  changes: 'review',
+  commits: 'review',
+  files: 'review',
+  browser: 'run',
+  graph: 'run',
+  notes: 'run',
+  assets: 'run',
+  terminal: 'run',
+}
+
+/** `tabs` cut into its consecutive groups, empty groups dropped — what the row paints between
+ *  separators. Order is the caller's; a tab never moves across a hairline. */
+export function stripGroups<T extends StripTab>(tabs: readonly T[]): T[][] {
+  const groups: T[][] = []
+  let last: StripGroup | null = null
+  for (const tab of tabs) {
+    const group = STRIP_GROUP_OF[tab]
+    if (group !== last || groups.length === 0) groups.push([])
+    groups[groups.length - 1]!.push(tab)
+    last = group
+  }
+  return groups
 }
 
 /**

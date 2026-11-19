@@ -79,22 +79,46 @@ describe('AutomationsList', () => {
     expect(document.querySelector('[data-slot="automations-table"]')).toBeNull()
   })
 
-  it('keeps "How it works" in the header once automations exist, opening the picture guide', () => {
+  it('splits the header into a title row and a toolbar row, folding Export, Import and How it works into one labelled ⋯ menu', async () => {
+    renderList()
+
+    expect(document.querySelector('[data-slot="automations-title"] h1')?.textContent).toBe('Automations')
+    const toolbar = document.querySelector<HTMLElement>('[data-slot="automations-toolbar"]')
+    expect(toolbar?.querySelector('[data-slot="automations-view"]')).not.toBeNull()
+    expect(within(toolbar!).getByRole('link', { name: /New automation/ })).toBeTruthy()
+    // The secondary actions are not loose buttons in the band: they live in the menu, with labels.
+    expect(screen.queryByRole('button', { name: 'Export' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Import' })).toBeNull()
+    fireEvent.pointerDown(within(toolbar!).getByRole('button', { name: 'More actions' }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Export automations',
+      'Import automations…',
+      'How automations work',
+    ])
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Import automations…' }))
+    expect(screen.getByRole('heading', { name: 'Import automations' })).toBeTruthy()
+  })
+
+  it('keeps "How it works" reachable from the ⋯ menu once automations exist, opening the picture guide', async () => {
     renderList()
 
     expect(screen.queryByText('Let the routine run itself')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'How automations work' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'How automations work' }))
     expect(screen.getByRole('heading', { name: 'How automations work' })).toBeTruthy()
     expect(document.querySelector('[data-slot="automations-guide-page"]')?.getAttribute('data-page')).toBe('prompt')
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(document.querySelector('[data-slot="automations-guide-page"]')?.getAttribute('data-page')).toBe('triggers')
   })
 
-  it('renders the header status trio in the server zone and the counted view switch', () => {
+  it('renders the header status trio as dot + word in the server zone, and the counted view switch', () => {
     renderList()
 
     expect(status()?.textContent).toBe('Scheduler running·GitHub available·UTC')
     expect(status()?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    // The zone is a name, not code.
+    expect(status()?.querySelector('.font-mono')).toBeNull()
     expect(status()?.className).toContain('max-[1280px]:hidden')
 
     const group = screen.getByRole('group', { name: 'View' })

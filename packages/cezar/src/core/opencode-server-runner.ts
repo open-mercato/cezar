@@ -20,6 +20,7 @@ import {
 import { buildChildEnv } from './agent-env.ts';
 import { resolveOpencodeExecutable } from './opencode-model-catalog.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { provisionedLinkTargets } from '../skills-provision.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { signalServer, trackServer } from './opencode-server-registry.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
@@ -208,6 +209,7 @@ class OpencodeSession implements AgentSession {
   private readonly pendingPermissions: Array<{ id: string; props: Record<string, unknown> }> = [];
   /** The native `question` tool call the session is blocked on; the next user message answers it (#1652). */
   private pendingQuestion: { id: string; questions: AskQuestion[] } | undefined;
+  private readonly v1UsageByMessage = new Map<string, { tokens: number; cost: number }>();
   private readonly v2UsageByMessage = new Map<string, { tokens: number; cost: number }>();
   /** messageID → role. Parts carry no role; only assistant parts are surfaced
    *  (the user's own message also streams as parts over the same SSE feed). */
@@ -662,9 +664,12 @@ class OpencodeSession implements AgentSession {
     if (!this.sessionId || !this.serverOpen) return;
     // A prompt posted while a turn is still in flight supersedes it — the
     // cockpit lets a user type into a running task (#986), so this is reachable.
-    // Close the old turn here or its `await turnEnded` never resolves, and with
-    // it the `sendMessage`/`bootstrap` call that is waiting on it.
-    this.finishTurn();
+    // Settle the old waiter here or its `await turnEnded` never resolves, and
+    // with it the `sendMessage`/`bootstrap` call that is waiting on it. The
+    // agent is still working, so this is NOT a turn end: emitting one made the
+    // workflow auto-nudge, which superseded again, until the budget was gone (#2097).
+    const superseding = this.turnInFlight;
+    if (superseding) this.supersedeTurn();
     const generation = ++this.turnGeneration;
     if (this.autoEndTimer) {
       clearTimeout(this.autoEndTimer);
@@ -676,8 +681,8 @@ class OpencodeSession implements AgentSession {
     const turnEnded = new Promise<void>((resolve) => {
       this.endTurn = resolve;
     });
-    // v2 turn boundary — the prompt POST is the turn start (§7.1).
-    this.emitUi(opencodeTurnStarted);
+    // v2 turn boundary — the prompt POST is the turn start (§7.1); a superseding prompt joins the open turn.
+    if (!superseding) this.emitUi(opencodeTurnStarted);
     const body: Record<string, unknown> = { parts: [{ type: 'text', text }] };
     // `spec.model` arrives already normalised to canonical `provider/model`
     // (the run wiring's fail-loud gate). Split it with the shared parser — the
@@ -721,6 +726,17 @@ class OpencodeSession implements AgentSession {
     }
     this.armTurnGrace();
     await turnEnded;
+  }
+
+  /** Release the in-flight turn's waiter without ending the turn (#2097). */
+  private supersedeTurn(): void {
+    if (this.turnGraceTimer) {
+      clearTimeout(this.turnGraceTimer);
+      this.turnGraceTimer = undefined;
+    }
+    const resolve = this.endTurn;
+    this.endTurn = undefined;
+    resolve?.();
   }
 
   /**
@@ -894,7 +910,7 @@ class OpencodeSession implements AgentSession {
     const id = stringField(props, 'id');
     if (!id || this.permissionsAnswered.has(id)) return;
     this.permissionsAnswered.add(id);
-    const reply = opencodePermissionReply(props, this.spec.env);
+    const reply = opencodePermissionReply(props, this.spec.env, this.spec.cwd);
     // Ask the user rather than refuse behind their back (#2042) — but only when one can answer:
     // an autonomous or headless run keeps the refusal, never a park only a human could end.
     if (reply === 'reject' && this.opts.onUiEvent && this.opts.canAskPermission?.() === true) {
@@ -1063,23 +1079,33 @@ class OpencodeSession implements AgentSession {
       }
       return;
     }
+    // Cumulative per message: sum distinct messages, never take a session maximum (#2101).
+    const id = stringField(info, 'id') ?? '';
     const tokens = info.tokens as Record<string, unknown> | undefined;
-    if (tokens) {
-      const input = numField(tokens, 'input');
-      const output = numField(tokens, 'output');
-      const reasoning = numField(tokens, 'reasoning');
-      const total = input + output + reasoning;
-      if (total > this.tokensUsed) {
-        this.tokensUsed = total;
-        this.emit({ type: 'token-usage', tokensUsed: this.tokensUsed });
-      }
-    }
+    const count = tokens ? numField(tokens, 'input') + numField(tokens, 'output') + numField(tokens, 'reasoning') : 0;
     const cost = info.cost;
     // A turn the provider turned away for a usage limit spent nothing, whatever list-price estimate
     // OpenCode stamped on it (#1756); costs of earlier messages and of other failures stay (#1346).
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && !isUsageLimitRejection(info.error) && (this.lastCost === undefined || cost > this.lastCost)) {
-      this.emit({ type: 'cost', usd: cost - (this.lastCost ?? 0) });
-      this.lastCost = cost;
+    const usd = typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && !isUsageLimitRejection(info.error) ? cost : 0;
+    const reported = typeof cost === 'number' && Number.isFinite(cost) && cost >= 0;
+    const previous = this.v1UsageByMessage.get(id);
+    this.v1UsageByMessage.set(id, { tokens: Math.max(previous?.tokens ?? 0, count), cost: Math.max(previous?.cost ?? 0, usd) });
+    let totalTokens = 0;
+    let totalCost = 0;
+    // An id-less snapshot (the POST body) only stands in while no identified message exists.
+    const anonymous = this.v1UsageByMessage.size > 1 ? '' : undefined;
+    for (const [key, usage] of this.v1UsageByMessage) {
+      if (key === anonymous) continue;
+      totalTokens += usage.tokens;
+      totalCost += usage.cost;
+    }
+    if (totalTokens > this.tokensUsed) {
+      this.tokensUsed = totalTokens;
+      this.emit({ type: 'token-usage', tokensUsed: totalTokens });
+    }
+    if ((reported && this.lastCost === undefined) || totalCost > (this.lastCost ?? 0)) {
+      this.emit({ type: 'cost', usd: totalCost - (this.lastCost ?? 0) });
+      this.lastCost = totalCost;
     }
   }
 
@@ -1164,7 +1190,11 @@ function textOf(content: ContentBlock[]): string {
  * The reply to one OpenCode permission prompt. Only this run's own state
  * outside the worktree is granted: its handoff file (`CEZ_HANDOFF_FILE`), the
  * files in its pasted-attachments folder (`runs/<CEZ_TASK_ID>-images/`), and
- * its scratch directory when cezar set `TMPDIR` to it (#785). A config rule
+ * its scratch directory when cezar set `TMPDIR` to it (#785), the directories
+ * cezar names in its env for the agent — the dispatch tree (`CEZ_TREE_DIR`) and
+ * `CEZ_ARTIFACTS_DIR`, the ones `agentDirectories` hands claude (#2115) — and
+ * the targets of the skill links cezar itself provisioned into `cwd` (#2103) —
+ * never a committed or agent-made link, which could point anywhere. A config rule
  * cannot do this — OpenCode matches rules against the whole parent directory
  * (`runs/*`), which would expose every other task's transcript. Paths are
  * compared after following symlinks. Everything else is refused, `once` so no
@@ -1173,6 +1203,7 @@ function textOf(content: ContentBlock[]): string {
 export function opencodePermissionReply(
   props: Record<string, unknown>,
   env: Record<string, string> | undefined,
+  cwd?: string,
 ): 'once' | 'reject' {
   const permission = stringField(props, 'permission') ?? stringField(props, 'type');
   const filepath = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
@@ -1180,6 +1211,12 @@ export function opencodePermissionReply(
   const taskId = env?.CEZ_TASK_ID;
   if (permission !== 'external_directory' || !filepath || !handoffFile || !taskId) return 'reject';
   const target = canonicalPath(filepath);
+  for (const dir of [env.CEZ_TREE_DIR, env.CEZ_ARTIFACTS_DIR]) {
+    if (!dir) continue;
+    const root = canonicalPath(dir);
+    if (target === root || target.startsWith(root + sep)) return 'once';
+  }
+  if (cwd && provisionedLinkTargets(cwd).some((root) => target === root || target.startsWith(root + sep))) return 'once';
   const handoff = canonicalPath(handoffFile);
   if (target === handoff) return 'once';
   const runsDir = dirname(handoff);

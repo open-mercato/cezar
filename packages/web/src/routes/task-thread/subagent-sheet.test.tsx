@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
 
+import { deriveAttention } from '@/lib/attention'
+
 import { SubagentSheet } from './subagent-sheet'
 import type { SubagentSummary } from './subagent-dock'
 import type { ThreadEntry } from './thread-state'
@@ -102,6 +104,21 @@ describe('SubagentSheet — header', () => {
   ] as const)('renders %s as the word %s', (status, label) => {
     render(<SubagentSheet runId="r1" agent={agent({ status })} entries={[]} onClose={() => {}} />)
     expect(document.querySelector('[data-slot="subagent-status"]')!.textContent).toBe(label)
+  })
+
+  it.each([
+    ['completed', 'done'],
+    ['failed', 'failed'],
+    ['declined', 'failed'],
+    ['running', 'running'],
+    ['pending', 'queued'],
+  ] as const)('the %s status dot is deriveAttention(%s) — a plain word beside the dot, no tinted pill', (status, runStatus) => {
+    render(<SubagentSheet runId="r1" agent={agent({ status })} entries={[]} onClose={() => {}} />)
+    const expected = deriveAttention({ status: runStatus })
+    const pill = document.querySelector<HTMLElement>('[data-slot="subagent-status"]')!
+    expect(pill.dataset.tone).toBe(expected.tone)
+    expect(pill.querySelector<HTMLElement>('[data-slot="status-dot"]')!.dataset.tone).toBe(expected.tone)
+    expect(pill.className).not.toMatch(/bg-(success|danger)/)
   })
 })
 

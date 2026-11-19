@@ -349,12 +349,40 @@ export interface UiAskQuestion {
 }
 
 /**
+ * A task's question closed without being answered from its card, or was answered (Questions inbox
+ * spec). The thread redraws the card in its quiet closed state; a replay draws the same.
+ */
+export interface UiAskClosedEvent {
+  type: 'ask.closed';
+  requestId: string;
+  reason: 'answered' | 'dismissed' | 'replaced' | 'retracted' | 'expired' | 'ended';
+  detail?: string;
+  replacedBy?: string;
+  answer?: string;
+}
+
+/** Build the `ask.closed` event for a closed task question; the answer is bounded like the record's. */
+export function askClosedEvent(
+  requestId: string,
+  closed: { reason: UiAskClosedEvent['reason']; detail?: string; replacedBy?: string; answer?: string },
+): UiAskClosedEvent {
+  return {
+    type: 'ask.closed',
+    requestId,
+    reason: closed.reason,
+    ...(closed.detail ? { detail: closed.detail } : {}),
+    ...(closed.replacedBy ? { replacedBy: closed.replacedBy } : {}),
+    ...(closed.answer ? { answer: closed.answer.slice(0, 4000) } : {}),
+  };
+}
+
+/**
  * The agent asked the user a structured multiple-choice question via a
  * `CEZ:ASK` marker (spec `2026-07-18-askuser-across-runners`). Emitted by the
  * RunManager off the assembled turn text — uniform across claude/codex/opencode
  * with no per-backend mapper work. The run parks `waiting`; the cockpit renders
- * clickable option chips. Resolution is client-side — the next user message for
- * the run closes the card — so there is no separate `ask.resolved` event.
+ * clickable option chips. A `CEZ:ASK` card stays open until its `ask.closed`
+ * (Questions inbox spec); a plain chat reply no longer closes it.
  */
 export interface UiAskRequestedEvent {
   type: 'ask.requested';
@@ -403,6 +431,7 @@ export type UiEvent =
   | UiPermissionRequestedEvent
   | UiPermissionResolvedEvent
   | UiAskRequestedEvent
+  | UiAskClosedEvent
   | UiUsageUpdatedEvent
   | UiImageEvent;
 

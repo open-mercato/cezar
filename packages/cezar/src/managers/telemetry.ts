@@ -46,24 +46,34 @@ export function managerAgeLabel(createdAt: string, now: number): '0' | '1-6' | '
   return '30+';
 }
 
-export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'projects', 'jobs', 'persona'] as const;
+export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'projects', 'jobs', 'persona', 'connectors', 'confirm'] as const;
 export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 
-const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
+// Quick prompts have no label: the server enforces a closed set, and they are not a turn setting.
+const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials'>, ManagerSettingField> = {
   cronMinutes: 'watch',
   runner: 'runner',
+  taskRunner: 'runner',
+  taskAgents: 'runner',
   agentProfile: 'runner',
   model: 'model',
   effort: 'model',
   notify: 'notify',
+  // How the manager hears about its tasks: the same decision as its cadence, no new label.
+  followUp: 'watch',
   projects: 'projects',
   access: 'projects',
   projectAccess: 'projects',
+  cancelAnyTask: 'projects',
+  // What the manager may reach, like its project access.
+  bashAllow: 'projects',
   jobs: 'jobs',
   name: 'persona',
   avatar: 'persona',
   mascot: 'persona',
   instructions: 'persona',
+  connectors: 'connectors',
+  confirm: 'confirm',
 };
 
 /** The groups whose stored value really changed — a save that repeats a value counts nothing. */
@@ -79,8 +89,15 @@ export function changedSettingFields(before: Manager, after: Manager): ManagerSe
   return MANAGER_SETTING_FIELDS.filter((field) => changed.has(field));
 }
 
-export function managerActionLabel(action: Pick<ManagerActionRequest, 'type'>): 'merge' | 'automation' | 'job' {
-  return action.type === 'merge-pr' ? 'merge' : action.type === 'enable-automation' ? 'automation' : 'job';
+const ACTION_LABEL: Record<ManagerActionRequest['type'], 'merge' | 'automation' | 'job' | 'connector'> = {
+  'merge-pr': 'merge',
+  'enable-automation': 'automation',
+  'add-job': 'job',
+  'connector-call': 'connector',
+};
+
+export function managerActionLabel(action: Pick<ManagerActionRequest, 'type'>): 'merge' | 'automation' | 'job' | 'connector' {
+  return ACTION_LABEL[action.type];
 }
 
 export function managerWorkflowLabel(workflow: string | undefined): 'builtin' | 'custom' {

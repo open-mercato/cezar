@@ -134,8 +134,8 @@ const THREAD: GithubCommentsData = { available: true, comments: [COMMENT_TEXT, C
 
 const WORKFLOWS: WorkflowsResponse = {
   workflows: [
-    { name: 'quick-task', description: 'one step', steps: [], source: 'built-in' },
-    { name: 'ship-it', description: 'plan, build, review', steps: [], source: 'file' },
+    { name: 'quick-task', description: 'one step', steps: [], source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true } },
+    { name: 'ship-it', description: 'plan, build, review', steps: [], source: 'file', capabilities: { push: true, openPr: true, postToGithub: true } },
   ],
   issues: [],
 }
@@ -307,7 +307,12 @@ it('/github/prs/:n/changes renders PR-only file review navigation and completene
   expect(screen.getByRole('navigation', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
   expect(screen.getByRole('status').textContent).toContain('One patch was omitted.')
   expect(screen.getByLabelText('Next file').hasAttribute('disabled')).toBe(false)
+  // The desktop file list truncates a long path; the native title reveals it.
+  const listed = [...document.querySelectorAll('ul button')].map((button) => [button.textContent, button.getAttribute('title')])
+  expect(listed).toContainEqual([expect.stringContaining('src/new.ts'), 'src/new.ts'])
+
 })
+
 
 /** A run record carrying only what reference resolution reads. */
 function refRun(id: string, createdAt: string, over: Record<string, unknown> = {}) {
@@ -418,6 +423,9 @@ describe('the GitHub tab lists', () => {
     expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139'])
     // Rows are deep links, not click handlers.
     expect(rows()[0]?.getAttribute('href')).toBe('/github/issues/142')
+    // The drag-to-composer gesture's only hint.
+    expect(rows()[0]?.getAttribute('title')).toBe('Drag into the composer to prefill a task')
+
 
     // No URL selection → the first item's detail renders (legacy parity), marked current.
     expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
@@ -1029,6 +1037,9 @@ describe('the GitHub detail pane', () => {
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-merge-box"]')?.textContent).toContain('Ready to merge'))
     expect(document.querySelectorAll('[data-slot="gh-merge-status-passing"]')).toHaveLength(3)
+    // The merge method is the cockpit select (native <select> is retired), named for the keyboard.
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Merge method' }).textContent).toContain('Squash and merge')
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(sent.some((request) => request.path.endsWith('merge-state?refresh=1'))).toBe(true))
     fireEvent.click(screen.getByRole('button', { name: 'Squash and merge' }))
@@ -1483,7 +1494,8 @@ describe('the comment thread', () => {
   it.each([
     ['passing', '✓', 'text-success'],
     ['failing', '✗', 'text-danger'],
-    ['pending', '○', 'text-muted-foreground'],
+    // Amber ink for pending (one meaning per hue, redesign 2026-11) — `--warning` is the readable token.
+    ['pending', '○', 'text-warning'],
   ])('renders the %s CI glyph on a commit row', async (state, glyph, tone) => {
     stubFetch(thread('pr', 137, {
       available: true, comments: [],
@@ -1640,7 +1652,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -2541,7 +2553,7 @@ describe('the remembered last selection (#408 item 3)', () => {
  */
 describe('a remembered pick the catalog no longer has (#408)', () => {
   const WITHOUT_SHIP_IT: WorkflowsResponse = {
-    workflows: [{ name: 'quick-task', description: 'one step', steps: [], source: 'built-in' }],
+    workflows: [{ name: 'quick-task', description: 'one step', steps: [], source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true } }],
     issues: [],
   }
 

@@ -1,4 +1,4 @@
-import { GitPullRequestIcon, UserRoundIcon } from 'lucide-react'
+import { GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon, GitPullRequestIcon, UserRoundIcon } from 'lucide-react'
 import type { GithubItem } from '@open-mercato/cezar-api-client'
 import { cn, isHttpUrl } from '@/lib/utils'
 
@@ -10,7 +10,8 @@ export function IssueOwnership({ item }: { item: GithubItem }) {
     <div aria-label={`Issue #${item.number} ownership`} role="group" className="flex min-w-0 flex-wrap items-center gap-1 px-2.5 pb-2 pl-8 text-meta text-muted-foreground">
       {item.assignees !== undefined ? (
         <span className={chip} title={item.assignees.length ? `Assigned to ${item.assignees.map(login => `@${login}`).join(', ')}` : undefined}>
-          <UserRoundIcon aria-hidden="true" className="size-3 shrink-0" />
+          <UserRoundIcon
+ aria-hidden="true" className="size-3 shrink-0" />
           <span className="truncate">
             {item.assignees.length ? `Assigned to ${item.assignees.map(login => `@${login}`).join(', ')}` : item.assigneesTruncated ? 'Assignees' : 'Unassigned'}
           </span>
@@ -21,8 +22,11 @@ export function IssueOwnership({ item }: { item: GithubItem }) {
       ) : null}
       {item.linkedPrs?.map(pr => {
         const state = pr.state === 'merged' ? 'Merged' : pr.state === 'closed' ? 'Closed' : pr.isDraft ? 'Draft' : 'Open'
-        const content = <><GitPullRequestIcon aria-hidden="true" className="size-3 shrink-0" /><span className="truncate">PR #{pr.number} · {state}</span></>
-        const className = cn(chip, pr.state === 'merged' ? 'text-violet' : pr.state === 'open' && !pr.isDraft ? 'text-success' : '')
+        const Icon = pr.state === 'merged' ? GitMergeIcon : pr.state === 'closed' ? GitPullRequestClosedIcon : pr.isDraft ? GitPullRequestDraftIcon : GitPullRequestIcon
+        const content = <><Icon aria-hidden="true" className="size-3 shrink-0" /><span className="truncate">PR #{pr.number} · {state}</span></>
+        // The reference chip's own tones (`lib/reference-status.ts`): merged purple, open blue
+        // (review state unknown here), closed dark grey, draft grey.
+        const className = cn(chip, pr.state === 'merged' ? 'text-merged' : pr.state === 'closed' ? 'text-closed' : pr.isDraft ? '' : 'text-info')
         return isHttpUrl(pr.url) ? (
           <a key={pr.url} className={cn(className, 'hover:underline focus-visible:outline focus-visible:outline-ring')} href={pr.url} target="_blank" rel="noopener noreferrer" title={`${pr.title} — ${pr.url}`} aria-label={`PR #${pr.number} · ${state}: ${pr.title}`}>
             {content}

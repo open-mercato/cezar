@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -33,6 +33,8 @@ import { track } from '../telemetry.ts';
 import { reportAgentError } from './agent-error-telemetry.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
 import { MAX_REF } from './task-refs.ts';
+import { ASK_ENDING_STATUSES, asksReplacedBy, asksPartlyReasked, capTaskAsks, isOpenAsk } from './task-asks.ts';
+import { askClosedEvent } from '../core/ui-events.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
@@ -64,6 +66,8 @@ export type StepStatus =
   | 'skipped';
 
 const usageCounterSchema = z.number().finite().nonnegative();
+/** Pending dismiss notes kept for the next Continue (Questions inbox spec § Telling the agent). */
+export const TASK_ASK_NOTES_MAX = 5;
 
 /**
  * A runner id as it may appear in a PERSISTED record, normalized to the
@@ -145,6 +149,14 @@ const queuedMessageSchema = z.object({
 
 /** One authoritative PR association for a task. Older records project their scalar fields
  * into this list on first append, so no migration is needed. */
+/** Per-entry salvage for `RunRecord.asks`: one unreadable ask costs only itself, never the list. */
+function salvageTaskAsks(list: unknown[]): TaskAskRecord[] {
+  return list.flatMap((entry) => {
+    const parsed = taskAskRecordSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 const prRefSchema = z.object({
   number: z.number().int().positive().max(MAX_REF),
   url: z.string().url().optional(),
@@ -294,6 +306,11 @@ export const runRecordSchema = z.object({
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
   completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
+  /** The run's `CEZ:ASK` questions (Questions inbox spec). An older cezar's `z.object` strips the
+   *  unknown key rather than rejecting the run, so this lives on the record, not in a sidecar. */
+  asks: z.array(z.unknown()).transform(salvageTaskAsks).optional().catch(undefined),
+  /** Dismiss notes waiting for the next Continue (the session was closed when the user skipped). */
+  askNotes: z.array(z.string().max(1000)).max(TASK_ASK_NOTES_MAX).optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
@@ -324,11 +341,17 @@ export const runRecordSchema = z.object({
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
   /**
-   * When the inactivity timer closed a session nobody replied to and the run settled `failed`
-   * (spec 2026-11-04-idle-closed-attention-state). The cockpit paints it "closed · idle" instead
-   * of red. Same invariant as `awaitingAnswerSince`: only a `failed` run carries it.
+   * When the inactivity timer closed the session of a run parked on the user. Housekeeping, not a
+   * state change (spec 2026-11-04-idle-closed-attention-state § Revision): the run stays `waiting`
+   * with no process, and the next message reopens it. Older records and dispatched children carry
+   * it on a `failed` run. Only a `waiting` or `failed` run carries it.
    */
   idleClosedAt: z.string().datetime().optional().catch(undefined),
+  /** The manager whose `task create` started this run (spec 2026-10-31-managers). */
+  startedByManager: z.object({ id: z.string(), name: z.string() }).optional().catch(undefined),
+  /** Why a `cancelled` run was stopped and who stopped it, when the canceller said (`POST /runs/:id/cancel`). */
+  cancelReason: z.string().optional(),
+  cancelledBy: z.string().optional(),
   /**
    * When the current wait on the user began: stamped by `updateRun` on entering `waiting` or on a
    * new question while there, so a wait has an identity even without a question. It outlives the
@@ -427,6 +450,9 @@ export const runRecordSchema = z.object({
    *  namer result may replace it). Missing on old runs = legacy behavior (auto
    *  fills only an unset titleSummary). Precedence: user > marker > auto. */
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  /** Set once the live refresh has fired: a task's title is refreshed from turn
+   *  context at most once, then stays put so the user can find it again. */
+  titleSettled: z.boolean().optional(),
   /** References the agent itself declared via `CEZ:PR=` / `CEZ:ISSUE=` markers
    *  (spec 2026-07-18-task-ref-markers). Presence of a kind makes it
    *  authoritative: the namer may no longer write that kind, and a declared PR
@@ -974,6 +1000,14 @@ function createdPrUrl(haystack: string): string | undefined {
 }
 
 /**
+ * A `waiting` run whose session the inactivity timer closed: no process and no slot, but the same
+ * state to the user, and a message reopens it (spec 2026-11-04-idle-closed-attention-state).
+ */
+export function isIdleParked(run: Pick<RunRecord, 'status' | 'idleClosedAt'>): boolean {
+  return run.status === 'waiting' && run.idleClosedAt !== undefined;
+}
+
+/**
  * Reconcile one record just read off disk with the fact that whichever process wrote it is gone.
  *
  * Mutates and returns `run`. Extracted from `RunStore.open` so the read-only index reader
@@ -994,7 +1028,9 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // all still work.
   if (
     !opts?.keepLive &&
-    (run.status === 'running' || run.status === 'queued' || run.status === 'waiting')
+    (run.status === 'running' || run.status === 'queued' || run.status === 'waiting') &&
+    // An idle-parked run has no process to lose: it is a rest state, not a ghost.
+    !isIdleParked(run)
   ) {
     // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
@@ -1022,7 +1058,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   if (run.status !== 'failed') run.autoResumeAt = undefined;
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
-  if (run.status !== 'failed') run.idleClosedAt = undefined;
+  if (run.status !== 'failed' && run.status !== 'waiting') run.idleClosedAt = undefined;
   if (run.status !== 'waiting' && run.awaitingAnswerSince === undefined) run.waitingSince = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
@@ -1544,7 +1580,8 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
-      normalized.idleClosedAt = undefined;
+      // An idle park keeps its marker through its own `waiting` writes; a reopen retires it.
+      if (normalized.status !== 'waiting' || run.status !== 'waiting') normalized.idleClosedAt = undefined;
     }
     // Stamped here so no park site can forget it; every wait reaches the record through this line.
     if (resultingStatus === 'waiting') {
@@ -1855,6 +1892,116 @@ export class RunStore extends EventEmitter {
     } catch {
       // live-only — the SSE stream still carries it
     }
+  }
+
+  /**
+   * Record a task's `CEZ:ASK` (Questions inbox spec), closing the open asks it replaces: the same
+   * card id, or every header covered. Returns the asks it closed.
+   */
+  recordTaskAsk(runId: string, ask: TaskAskRecord): TaskAskRecord[] {
+    const run = this.runs.get(runId);
+    if (!run) return [];
+    const redacted: TaskAskRecord = {
+      ...ask,
+      questions: ask.questions.map((question) => ({
+        ...question,
+        question: this.redactText(question.question, runId),
+        options: question.options.map((option) => ({
+          ...option,
+          label: this.redactText(option.label, runId),
+          ...(option.description ? { description: this.redactText(option.description, runId) } : {}),
+        })),
+      })),
+    };
+    const replaced = new Set(asksReplacedBy(run.asks, redacted).map((old) => old.requestId));
+    const at = new Date().toISOString();
+    const closed: TaskAskRecord[] = [];
+    const asks = (run.asks ?? []).map((old) => {
+      if (!replaced.has(old.requestId)) return old;
+      const next = { ...old, closed: { reason: 'replaced' as const, at, replacedBy: ask.cardId ?? ask.requestId } };
+      closed.push(next);
+      return next;
+    });
+    const partly = asksPartlyReasked(run.asks, redacted);
+    const capped = capTaskAsks([...asks, redacted], { reason: 'expired', at, detail: 'Too many newer questions in this task' });
+    run.asks = capped.kept;
+    closed.push(...capped.evicted);
+    for (const old of closed) this.appendEvent(runId, { ...askClosedEvent(old.requestId, old.closed!) });
+    // Partly re-asked: its other questions still need an answer, so it stays open, flagged.
+    for (const { ask: old, headers } of partly) {
+      this.flagTaskAsks(runId, (open) => open.requestId === old.requestId, {
+        why: 'partly-reasked', detail: `a newer question asked ${headers.map((header) => `«${header}»`).join(', ')} again`, since: at,
+      });
+    }
+    this.touch(run);
+    this.emit('asks', { runId, closed });
+    return closed;
+  }
+
+  /** Close the run's open asks that `select` picks, with an `ask.closed` event each. */
+  closeTaskAsks(runId: string, select: (ask: TaskAskRecord) => boolean, closed: QuestionClosed): TaskAskRecord[] {
+    const run = this.runs.get(runId);
+    if (!run?.asks?.some((ask) => isOpenAsk(ask) && select(ask))) return [];
+    const bounded: QuestionClosed = {
+      ...closed,
+      ...(closed.detail ? { detail: this.redactText(closed.detail, runId).slice(0, 300) } : {}),
+      ...(closed.answer ? { answer: this.redactText(closed.answer, runId).slice(0, 4000) } : {}),
+    };
+    const done: TaskAskRecord[] = [];
+    run.asks = run.asks.map((ask) => {
+      if (!isOpenAsk(ask) || !select(ask)) return ask;
+      const next = { ...ask, closed: bounded, stale: undefined };
+      done.push(next);
+      return next;
+    });
+    for (const ask of done) this.appendEvent(runId, { ...askClosedEvent(ask.requestId, bounded) });
+    this.touch(run);
+    this.emit('asks', { runId, closed: done });
+    return done;
+  }
+
+  /** Flag open asks "may be out of date" (still open, still counted). A flagged ask keeps its first reason. */
+  flagTaskAsks(runId: string, select: (ask: TaskAskRecord) => boolean, stale: QuestionStale): TaskAskRecord[] {
+    const run = this.runs.get(runId);
+    // The first flag stays, except that a partial re-ask names what changed more precisely than any other.
+    const flaggable = (ask: TaskAskRecord) => isOpenAsk(ask) && (!ask.stale || stale.why === 'partly-reasked') && select(ask);
+    if (!run?.asks?.some(flaggable)) return [];
+    const flagged: TaskAskRecord[] = [];
+    run.asks = run.asks.map((ask) => {
+      if (!flaggable(ask)) return ask;
+      const next = { ...ask, stale: { ...stale, detail: stale.detail.slice(0, 300) } };
+      flagged.push(next);
+      return next;
+    });
+    this.touch(run);
+    this.emit('asks', { runId, closed: [] });
+    return flagged;
+  }
+
+  /** Queue a note for the next Continue, or take (and clear) every queued one. */
+  pushAskNote(runId: string, note: string): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    run.askNotes = [...(run.askNotes ?? []), note.slice(0, 1000)].slice(-TASK_ASK_NOTES_MAX);
+    this.touch(run);
+  }
+
+  takeAskNotes(runId: string): string[] {
+    const run = this.runs.get(runId);
+    const notes = run?.askNotes ?? [];
+    if (!run || notes.length === 0) return [];
+    run.askNotes = undefined;
+    this.touch(run);
+    return notes;
+  }
+
+  /** A run that reached done, review or cancelled, or was archived, ends its open asks. `failed`
+   *  does not: idle-closed and awaiting-answer runs can still be answered (#2286). */
+  private endTaskAsks(run: RunRecord): void {
+    if (!run.asks?.some(isOpenAsk)) return;
+    const how = run.archived ? 'archived' : ASK_ENDING_STATUSES.has(run.status) ? run.status : undefined;
+    if (!how) return;
+    this.closeTaskAsks(run.id, () => true, { reason: 'ended', at: new Date().toISOString(), detail: `Task ${how === 'review' ? 'ready for review' : how}` });
   }
 
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
@@ -2294,6 +2441,8 @@ export class RunStore extends EventEmitter {
   }
 
   private touch(run: RunRecord): void {
+    // Every status and archive write passes here, so no settle path can forget to end a question.
+    this.endTaskAsks(run);
     this.observeLifecycle(run.id, run);
     this.scheduleSave();
     this.emit('run', run);

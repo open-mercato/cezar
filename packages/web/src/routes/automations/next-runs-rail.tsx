@@ -86,7 +86,7 @@ export function NextRunsRail({
                 }}
                 className="grid w-full cursor-pointer grid-cols-[76px_1fr_auto] items-center gap-2 px-4 py-2 text-left text-ui hover:bg-muted"
               >
-                <span className="font-mono text-xs font-medium whitespace-nowrap text-muted-foreground tabular-nums">{time}</span>
+                <span className="text-label font-medium whitespace-nowrap text-muted-foreground tabular-nums">{time}</span>
                 <span className="overflow-hidden text-ui font-medium text-ellipsis whitespace-nowrap">{run.automation.name}</span>
                 <span className="text-meta whitespace-nowrap text-soft-foreground">{relativeIn(run.at, now)}</span>
               </button>
@@ -97,7 +97,7 @@ export function NextRunsRail({
           ) : null}
           <div
             data-slot="next-runs-footer"
-            className="mt-1.5 flex items-center gap-2 border-t border-border px-3.5 pt-2.5 pb-1 text-xs text-muted-foreground"
+            className="mt-1.5 flex items-center gap-2 border-t border-border px-3.5 pt-2.5 pb-1 text-label text-muted-foreground"
           >
             <StatusDot tone="pending" pulse />
             {pollCount} GitHub polls running continuously

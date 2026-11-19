@@ -114,6 +114,8 @@ describe('the project folder in settings', () => {
     })
     // The whole path, not an ellipsised head — this row exists to be read and pasted.
     expect(field.querySelector('[data-slot="project-location-path"]')?.textContent).toBe(ROOT)
+    // A basis, not `flex-1`: on a phone the buttons wrap below instead of squeezing the path.
+    expect(field.querySelector('[data-slot="project-location-path"]')?.className).toContain('flex-[1_1_16rem]')
   })
 
   it('every project section keeps the root in the nav footer', async () => {
@@ -124,13 +126,15 @@ describe('the project folder in settings', () => {
       return el!
     })
     expect(nav.querySelector('[data-action="project-location-copy"]')?.textContent).toBe(ROOT)
+    // The rail truncates the path, so hovering it reveals the whole folder.
+    expect(nav.querySelector('[data-action="project-location-copy"]')?.getAttribute('title')).toBe(ROOT)
   })
 
   it('copies the path to the clipboard', async () => {
     const writeText = vi.fn(async () => {})
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
     renderAt('/settings')
-    const copy = await screen.findByTitle('Copy the project folder path')
+    const copy = await screen.findByRole('button', { name: 'Copy the project folder path' })
 
     fireEvent.click(copy)
 
