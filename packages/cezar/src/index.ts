@@ -93,7 +93,8 @@ Usage:
   cezar handoff <log|resume>  update a running task's handoff file (CEZ_HANDOFF_FILE)
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
   cezar worktrees <list|reclaim|prune|remove>  task worktrees on disk: sizes, reclaim idle ones
-                            (reclaim [--older-than 7d] [--all-inactive] [--dry-run] · remove <runId>);
+                            (reclaim [--older-than 7d] [--all-inactive] [--dry-run] · remove <runId> ·
+                            prune [--archived-older-than 90d] [--dry-run]);
                             uses the running cockpit when one serves the project, else the repo directly
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)

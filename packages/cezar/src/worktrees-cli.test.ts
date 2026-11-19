@@ -164,6 +164,25 @@ describe('cez worktrees', () => {
       expect(existsSync(store.getRun(done)!.worktreePath!)).toBe(true);
     });
 
+    it('prune --archived-older-than previews with --dry-run, then deletes the archived task', async () => {
+      const archivedAt = new Date(Date.now() - 200 * DAY).toISOString();
+      const old = await seed('done', { archived: true, archivedAt });
+      const recent = await seed('done', { archived: true, archivedAt: new Date().toISOString() });
+      expect(await runWorktreesCommand(['prune', '--archived-older-than', '90d', '--dry-run'], io())).toBe(0);
+      expect(out.join('\n')).toContain(`would delete 1 task archived over 90d: ${old.slice(0, 8)}`);
+      expect(reread().getRun(old)).toBeDefined();
+
+      out = [];
+      expect(await runWorktreesCommand(['prune', '--archived-older-than', '90d'], io())).toBe(0);
+      expect(out.join('\n')).toContain(`deleted 1 task archived over 90d: ${old.slice(0, 8)}`);
+      expect(reread().getRun(old)).toBeUndefined();
+      expect(reread().getRun(recent)).toBeDefined();
+    });
+
+    it('prune --dry-run without --archived-older-than is refused', async () => {
+      expect(await runWorktreesCommand(['prune', '--dry-run'], io())).toBe(2);
+    });
+
     it('refuses to write behind a cockpit it could not verify', async () => {
       await seed('done');
       const cockpits = async () => ({ origins: [], unverified: ['pid 7: health answered 500'] });
@@ -249,6 +268,14 @@ describe('cez worktrees', () => {
       expect(await runWorktreesCommand(['remove', 'aaaaaaaa'], legacy)).toBe(1);
       expect(err.join('\n')).toContain('older than this CLI');
       expect(posts).toEqual([]);
+    });
+
+    it('prune --archived-older-than --dry-run asks the cockpit and deletes nothing', async () => {
+      const old = await seed('done', { archived: true, archivedAt: new Date(Date.now() - 200 * DAY).toISOString() });
+      expect(await runWorktreesCommand(['prune', '--archived-older-than', '90d', '--dry-run'], cockpitIo())).toBe(0);
+      expect(calls).toEqual(['POST /api/v1/p/default/runs/archived/delete-expired']);
+      expect(out.join('\n')).toContain(`would delete 1 task archived over 90d: ${old.slice(0, 8)}`);
+      expect(store.getRun(old)).toBeDefined();
     });
 
     it('prune goes through POST /worktrees/prune', async () => {

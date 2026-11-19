@@ -15,7 +15,9 @@ import { parseArgs, promisify } from 'node:util';
 import { z } from 'zod';
 import {
   projectsResponseSchema,
+  deleteExpiredArchivedResponseSchema,
   pruneWorktreesResponseSchema,
+  type DeleteExpiredArchivedResponse,
   reclaimWorktreesResponseSchema,
   worktreeInfoSchema,
   worktreesResponseSchema,
@@ -25,6 +27,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { resolveWorktreeIdleDays, resolveWorktreeRetention } from './config.ts';
 import { pruneOrphans, worktreeSizeBytes } from './git-worktree.ts';
+import { deleteExpiredArchivedTasks } from './runs/archived-cleanup.ts';
 import {
   configuredReclaimCandidates,
   enforceWorktreeRetention,
@@ -71,7 +74,10 @@ const USAGE = `cez worktrees — task worktrees on disk (uses the running cockpi
   cez worktrees reclaim [--older-than 7d] [--all-inactive] [--dry-run]
                                        remove inactive trees (branch kept, Continue restores them);
                                        no selector = the configured retention; --older-than takes d or h
-  cez worktrees prune                  remove orphan tree directories and run \`git worktree prune\`
+  cez worktrees prune [--archived-older-than 90d] [--dry-run]
+                                       remove orphan tree directories and run \`git worktree prune\`;
+                                       with --archived-older-than, also delete tasks archived that
+                                       long (a branch with unmerged or unpushed work, or an open PR, is kept)
   cez worktrees remove <runId>         reclaim one task's tree (id or id prefix); refuses active tasks
 
   --project <path>                     the project (default: the repository of the current directory)`;
@@ -86,6 +92,8 @@ interface Backend {
   list(): Promise<WorktreesResponse>;
   reclaim(request: ReclaimWorktreesInput): Promise<string[]>;
   prune(): Promise<string[]>;
+  /** Delete archived tasks past `olderThanDays` (or report them, on a dry run). */
+  deleteArchived(olderThanDays: number, dryRun: boolean): Promise<DeleteExpiredArchivedResponse>;
   /** Run records for `remove` (id prefix lookup and the refusal reasons). */
   runs(): Promise<RunRecord[]>;
   /** Offline only: liveness by status. A cockpit answers through `reclaimable`. */
@@ -113,6 +121,7 @@ export async function runWorktreesCommand(args: string[], io: WorktreesCliIo): P
         json: { type: 'boolean', default: false },
         'older-than': { type: 'string' },
         'all-inactive': { type: 'boolean', default: false },
+        'archived-older-than': { type: 'string' },
         'dry-run': { type: 'boolean', default: false },
         help: { type: 'boolean', short: 'h', default: false },
       },
@@ -123,7 +132,7 @@ export async function runWorktreesCommand(args: string[], io: WorktreesCliIo): P
     }
     if (command !== 'remove' && positionals.length > 0) throw new CliError(`unexpected argument "${positionals[0]}"`, 2);
     const root = await projectRoot(values.project, io.cwd);
-    const mutates = command !== 'list' && !(command === 'reclaim' && values['dry-run']);
+    const mutates = command !== 'list' && !((command === 'reclaim' || command === 'prune') && values['dry-run']);
     backend = await openBackend(root, io, mutates);
     switch (command) {
       case 'list':
@@ -135,10 +144,17 @@ export async function runWorktreesCommand(args: string[], io: WorktreesCliIo): P
           dryRun: values['dry-run'],
         }, io);
       case 'prune': {
-        const removed = await backend.prune();
-        io.log(removed.length
-          ? `removed ${removed.length} orphan worktree${plural(removed.length)}: ${removed.map((id) => id.slice(0, 8)).join(', ')}`
-          : 'no orphan worktrees (git worktree prune ran)');
+        const archivedDays = values['archived-older-than'] === undefined ? undefined : parseOlderThan(values['archived-older-than'], '--archived-older-than');
+        if (values['dry-run']) {
+          if (archivedDays === undefined) throw new CliError('--dry-run on prune previews --archived-older-than; orphan removal has no dry run', 2);
+          io.log('dry run — orphan worktrees are not checked');
+        } else {
+          const removed = await backend.prune();
+          io.log(removed.length
+            ? `removed ${removed.length} orphan worktree${plural(removed.length)}: ${removed.map((id) => id.slice(0, 8)).join(', ')}`
+            : 'no orphan worktrees (git worktree prune ran)');
+        }
+        if (archivedDays !== undefined) reportArchived(await backend.deleteArchived(archivedDays, values['dry-run']), io);
         return 0;
       }
       default:
@@ -273,6 +289,8 @@ function cockpitBackend(scope: string, io: WorktreesCliIo): Backend {
       return (await call('/worktrees/reclaim', reclaimWorktreesResponseSchema, request)).reclaimed;
     },
     prune: async () => (await call('/worktrees/prune', pruneWorktreesResponseSchema, {})).removed,
+    deleteArchived: (olderThanDays, dryRun) =>
+      call('/runs/archived/delete-expired', deleteExpiredArchivedResponseSchema, { olderThanDays, dryRun }),
     runs: async () => (await call('/runs', z.array(z.object({ id: z.string(), status: z.string() }).passthrough()))) as unknown as RunRecord[],
     close: () => undefined,
   };
@@ -357,6 +375,16 @@ function offlineBackend(root: string, io: WorktreesCliIo): Backend {
       }
       return pruneOrphans(root, new Set(writeStore.listRuns().map((r) => r.id)));
     },
+    async deleteArchived(olderThanDays, dryRun) {
+      const empty = { deleted: [], keptBranches: [], skipped: [], days: olderThanDays, dryRun };
+      if (!store) return empty;
+      const target = dryRun ? store : await writable();
+      const result = await deleteExpiredArchivedTasks(root, target, olderThanDays, {
+        isLive: liveById, dryRun, now: now(), activity: storeActivity(store),
+      });
+      dirty ||= !dryRun && result.deleted.length > 0;
+      return { ...result, days: olderThanDays, dryRun };
+    },
     async runs() {
       return store?.listRuns() ?? [];
     },
@@ -364,6 +392,15 @@ function offlineBackend(root: string, io: WorktreesCliIo): Backend {
       if (dirty) store?.flush();
     },
   };
+}
+
+function reportArchived(result: DeleteExpiredArchivedResponse, io: WorktreesCliIo): void {
+  const verb = result.dryRun ? 'would delete' : 'deleted';
+  io.log(result.deleted.length
+    ? `${verb} ${result.deleted.length} task${plural(result.deleted.length)} archived over ${result.days}d: ${result.deleted.map((id) => id.slice(0, 8)).join(', ')}`
+    : `no task archived over ${result.days}d`);
+  for (const kept of result.keptBranches) io.log(`  branch ${kept.branch} kept — ${kept.reason}`);
+  for (const skip of result.skipped) io.log(`  ${skip.runId.slice(0, 8)} left in place — ${skip.reason}`);
 }
 
 async function readError(response: Response): Promise<string> {
@@ -415,11 +452,11 @@ function footerSettings(data: WorktreesResponse): string {
 }
 
 /** `7d`, `36h`, or a bare number of days → days. */
-export function parseOlderThan(value: string): number {
+export function parseOlderThan(value: string, flag = '--older-than'): number {
   const match = /^(\d+(?:\.\d+)?)([dh]?)$/i.exec(value.trim());
-  if (!match) throw new CliError(`--older-than wants a duration like 7d or 12h, not "${value}"`, 2);
+  if (!match) throw new CliError(`${flag} wants a duration like 7d or 12h, not "${value}"`, 2);
   const days = Number(match[1]) / (match[2]?.toLowerCase() === 'h' ? 24 : 1);
-  if (days > 3650) throw new CliError('--older-than is capped at 3650d', 2);
+  if (days > 3650) throw new CliError(`${flag} is capped at 3650d`, 2);
   return days;
 }
 

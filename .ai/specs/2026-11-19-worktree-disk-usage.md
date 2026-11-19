@@ -46,6 +46,34 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
    - Uses the running server's API when one serves the project; otherwise it works on the project
      path directly, under the store's lock.
 
+5. **Archived tasks are deleted after N days.**
+   - Repo `archivedTaskDeleteDays`; workspace `resources.archivedTaskDeleteDaysDefault`. The default
+     is 90, and 0 means never.
+   - The clock starts at `archivedAt`. Older records fall back to `finishedAt`, then to their last
+     activity (`runs/archived-cleanup.ts`).
+   - Deletion removes the record and every per-task file (`RunStore.deleteRun`), the worktree and the
+     branch.
+   - The branch stays, and only the task is deleted, when the branch has an open PR (or `gh` cannot
+     tell for a task that opened one), or has commits that are neither merged into the default
+     branch nor pushed.
+   - It never touches an unarchived, live, running, queued or pinned task, nor a tree with
+     uncommitted work.
+   - It runs at boot and with the hourly sweep, and logs a summary. The 500-archived cap stays as
+     the backstop.
+   - CLI: `cez worktrees prune --archived-older-than 90d [--dry-run]`.
+6. **Task files go with the task.** `deleteRun` and the run-cap prune remove the task's
+   `artifacts/<id>` and its `dispatch/<root>` tree once no member remains. They also remove the
+   attachment-library copies no remaining task holds; ownership is decided by content, against
+   `runs/<id>-images`. A startup sweep removes the leftovers of tasks already gone. Library files
+   and directories younger than an hour are spared (`runs/task-files.ts`).
+7. **Old cezar versions are pruned** (`self-update/versions-prune.ts`).
+   - It keeps the running version plus the 2 most recently installed others. The setting is
+     `versionRetention` in `~/.cezar/config.json`: default 3, and 0 turns the automatic prune off.
+   - It runs at boot and after every update.
+   - It never removes the current, running, leased or in-use version, a linked checkout, or anything
+     while an install is staging.
+   - `versions.backup-*` directories are removed only by `cez versions prune --backups`.
+
 ## API
 
 - `GET /api/v1/worktrees`: rows gain `lastActivityAt`, the response gains `idleDays`, and
@@ -53,4 +81,8 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
 - `POST /api/v1/worktrees/reclaim` body `{ olderThanDays?, allInactive?, runIds?, dryRun? }`. An
   empty body runs the configured retention. The response is `{ reclaimed, dryRun? }`.
 - `GET/PUT /api/v1/workspace/config` `resources.worktreeIdleDaysDefault`, `resources.diskGuard`.
-- `GET/PUT /api/v1/config` `worktreeIdleDays` (null clears it), `worktreeIdleDaysOwn`.
+- `GET/PUT /api/v1/config` `worktreeIdleDays` (null clears it), `worktreeIdleDaysOwn`,
+  `archivedTaskDeleteDays`, `archivedTaskDeleteDaysOwn`; workspace
+  `resources.archivedTaskDeleteDaysDefault`.
+- `POST /api/v1/runs/archived/delete-expired` body `{ olderThanDays?, dryRun? }`.
+- `POST /api/v1/worktrees/prune`; `GET /api/v1/workspace/disk-guard`.
