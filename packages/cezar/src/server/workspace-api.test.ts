@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hostUsageSchema, setWorkspaceConfigInputSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
+import { diskGuardStatusSchema, hostUsageSchema, setWorkspaceConfigInputSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunStore } from '../runs/store.ts';
@@ -273,6 +273,15 @@ describe('the workspace settings API (step 2.7)', () => {
       expect(sample.cpuPct).toBeGreaterThanOrEqual(0);
       expect(sample.cpuPct).toBeLessThanOrEqual(100);
     }
+  });
+
+  // ---- GET /api/v1/workspace/disk-guard ---------------------------------------
+
+  it('GET disk-guard answers the configured thresholds before any pass has run', async () => {
+    const res = await apiRequest(app, '/api/v1/workspace/disk-guard');
+    expect(res.status).toBe(200);
+    const body = diskGuardStatusSchema.parse(await res.json());
+    expect(body).toEqual({ thresholds: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 } });
   });
 
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {

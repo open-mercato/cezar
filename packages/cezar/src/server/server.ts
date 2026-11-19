@@ -288,6 +288,8 @@ import {
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
+import { DiskGuard, type DiskGuardStatus } from '../runs/disk-guard.ts';
+import { workspaceDiskGuardDeps } from '../runs/disk-guard-workspace.ts';
 import { branchesCheckedOutElsewhere, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
@@ -503,6 +505,9 @@ export interface ServerDeps {
   workspaceEvents?: WorkspaceEventBus;
   /** Hands `startServer` the engine `createApp` built, which arms its timer and drains it. */
   onManagerEngine?: (engine: ManagerEngine) => void;
+  /** Hands `startServer` the disk guard `createApp` built (spec 2026-11-19-worktree-disk-usage),
+   *  which arms its timer; a bare app only reads it. */
+  onDiskGuard?: (guard: DiskGuard) => void;
   /** The phone relay client. `startServer` starts it; a bare app only answers the routes. */
   relay?: RelayService;
   /** Test seam: the agent backend a manager turn talks to (spec 2026-10-31-managers). */
@@ -1704,16 +1709,25 @@ export function createApp(deps: ServerDeps) {
   // count against the same workspace semaphore as the boot manager (step 2.5).
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
+  const contextProjects = async () => {
+    const selector = capabilities().singleProject
+      ? { projectId: await resolveBootProject() }
+      : undefined;
+    return listProjects(selector);
+  };
   const contexts = deps.contexts ?? new ProjectContexts({
-    listProjects: async () => {
-      const selector = capabilities().singleProject
-        ? { projectId: await resolveBootProject() }
-        : undefined;
-      return listProjects(selector);
-    },
+    listProjects: contextProjects,
     semaphore: deps.semaphore,
     hosted: () => !capabilities().localHandoff,
   });
+  // The disk guard (spec 2026-11-19-worktree-disk-usage, decision 3): health and its status route
+  // read it here; `startServer` arms its timer. Every registered project, since the disk is shared.
+  const diskGuard = new DiskGuard(
+    workspaceDiskGuardDeps({ boot: bootContext, contexts, listProjects: contextProjects, loadConfig: workspaceConfig.load }),
+    undefined,
+    (message) => console.log(`  ${message}`),
+  );
+  deps.onDiskGuard?.(diskGuard);
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
     ports: () => [deps.webhookPort ?? 4321, ...listServerInstances().map(instance => instance.state.primaryPort)],
@@ -2075,7 +2089,7 @@ export function createApp(deps: ServerDeps) {
       projects: workspace.projects,
       bootProject: workspace.bootProject,
       ...(process.env.CEZ_INSTANCE_ID ? { instanceId: process.env.CEZ_INSTANCE_ID } : {}),
-      ...diskHealth(bootRoot),
+      ...diskHealth(bootRoot, undefined, undefined, diskGuard.status()),
     };
   };
   // The scope-dependent fields, added per send: the cache below is process-wide, so a phone must
@@ -3948,6 +3962,13 @@ export function createApp(deps: ServerDeps) {
       const usage = hostSampler.sampleHostUsage();
       hostSampler.keepWarm();
       return c.json(usage);
+    })
+    // The disk guard's thresholds and last pass, for Settings → Worktrees. A read of what the
+    // guard already holds: never a `statfs` or `du` of its own.
+    .get('/workspace/disk-guard', async (c) => {
+      const config = await workspaceConfig.load();
+      const { minFreePercent, minFreeGb, maxWorktreesGb } = config.resources.diskGuard;
+      return c.json(diskGuardStatusBody(diskGuard.status(), { minFreePercent, minFreeGb, maxWorktreesGb }));
     })
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
@@ -9490,6 +9511,19 @@ export function createApp(deps: ServerDeps) {
   return routed;
 }
 
+/** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */
+function diskGuardStatusBody(status: DiskGuardStatus, thresholds: { minFreePercent: number; minFreeGb: number; maxWorktreesGb: number }) {
+  return {
+    thresholds,
+    ...(status.checkedAt !== undefined ? { checkedAt: status.checkedAt } : {}),
+    ...(status.freeBytes !== undefined ? { freeBytes: status.freeBytes } : {}),
+    ...(status.totalBytes !== undefined ? { totalBytes: status.totalBytes } : {}),
+    ...(status.worktreesBytes !== undefined ? { worktreesBytes: status.worktreesBytes } : {}),
+    ...(status.lastAction !== undefined ? { lastAction: status.lastAction } : {}),
+    ...(status.warning !== undefined ? { warning: status.warning } : {}),
+  };
+}
+
 export function startServer(deps: ServerDeps, port: number): ServerType & { shutdownLifecycle(): Promise<void> } {
   let shutdownPromise: Promise<void> | undefined;
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
@@ -9528,11 +9562,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   let rescheduleAutomations = () => {};
   const appCleanups: Array<() => void> = [];
   let managerEngine: ManagerEngine | undefined;
+  let diskGuard: DiskGuard | undefined;
   const relay = deps.relay ?? new RelayService();
   const app = createApp({
     ...deps,
     relay,
     onManagerEngine: (engine) => { managerEngine = engine; deps.onManagerEngine?.(engine); },
+    onDiskGuard: (guard) => { diskGuard = guard; deps.onDiskGuard?.(guard); },
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
     webhookPort: port,
@@ -9643,6 +9679,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   });
   server.once('listening', () => {
     void relay.start();
+    // Boot already ran the retention sweep (src/index.ts), so the guard's first pass follows it.
+    diskGuard?.start();
     void listProjects().then((projects) => {
       if (shutdownPromise) return;
       // Spec 2026-10-31-managers: arms for a manager that exists, and only behind the flag.
@@ -9665,7 +9703,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); diskGuard?.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return Object.assign(server, {
     shutdownLifecycle(): Promise<void> {
@@ -9674,6 +9712,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       server.close();
       coordinator.stop();
       automationScheduler.stop();
+      diskGuard?.stop();
       shutdownPromise = (async () => {
         const results = await Promise.allSettled([managerEngine?.shutdown(), deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
         deps.manager.dispose();

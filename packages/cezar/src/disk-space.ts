@@ -102,7 +102,21 @@ export function diskFullAgentErrorText(text: string, path?: string, probe = prob
 /** How long a worktrees-size estimate is reused: `du` over many checkouts is seconds of I/O. */
 const SIZE_TTL_MS = 10 * 60_000;
 const sizeCache = new Map<string, { at: number; bytes: number | null }>();
-const sizeInFlight = new Set<string>();
+const sizeInFlight = new Map<string, Promise<number | null>>();
+
+function refreshDirSize(dir: string, sizer: (path: string) => Promise<number | null>): Promise<number | null> {
+  const running = sizeInFlight.get(dir);
+  if (running) return running;
+  const next = sizer(dir)
+    .catch(() => null)
+    .then((bytes) => {
+      sizeCache.set(dir, { at: Date.now(), bytes });
+      return bytes;
+    })
+    .finally(() => sizeInFlight.delete(dir));
+  sizeInFlight.set(dir, next);
+  return next;
+}
 
 /**
  * The cached size of `dir`, refreshed in the BACKGROUND when stale — never awaited, so a request
@@ -115,14 +129,43 @@ export function cachedDirSize(
   now = Date.now(),
 ): number | undefined {
   const hit = sizeCache.get(dir);
-  if ((!hit || now - hit.at > SIZE_TTL_MS) && !sizeInFlight.has(dir)) {
-    sizeInFlight.add(dir);
-    void sizer(dir)
-      .catch(() => null)
-      .then((bytes) => sizeCache.set(dir, { at: Date.now(), bytes }))
-      .finally(() => sizeInFlight.delete(dir));
-  }
+  if (!hit || now - hit.at > SIZE_TTL_MS) void refreshDirSize(dir, sizer);
   return hit?.bytes ?? undefined;
+}
+
+/**
+ * For background passes only (the disk guard): the cached size, even stale (refreshed behind),
+ * else one awaited, deduped `du`. Never use on a request path.
+ */
+export async function dirSizeForBackground(
+  dir: string,
+  sizer: (path: string) => Promise<number | null>,
+): Promise<number | undefined> {
+  const cached = cachedDirSize(dir, sizer);
+  if (cached !== undefined || sizeCache.has(dir)) return cached;
+  return (await refreshDirSize(dir, sizer)) ?? undefined;
+}
+
+/** Correct a cached size after cezar itself removed `bytes` under `dir` — so health and the guard
+ *  see the reclaim now, not after the next `du`. No-op when nothing is cached. */
+export function adjustCachedDirSize(dir: string, deltaBytes: number): void {
+  const hit = sizeCache.get(dir);
+  if (hit?.bytes == null) return;
+  sizeCache.set(dir, { at: hit.at, bytes: Math.max(0, hit.bytes + deltaBytes) });
+}
+
+/** Drop one cached size (a reclaimed worktree no longer exists). */
+export function forgetDirSize(dir: string): void {
+  sizeCache.delete(dir);
+}
+
+/** Which volume `path` lives on (its device id), so trees on one disk share one free-space budget. */
+export function volumeOf(path: string): string | undefined {
+  try {
+    return String(fs.statSync(existingAncestor(path)).dev);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Test seam: forget cached sizes. */
