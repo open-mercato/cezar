@@ -11,15 +11,26 @@ function warn(path: string): void {
   warned.add(path);
   console.warn('[cezar] Usage metadata unavailable; continuing without usage reset data.');
 }
-function read(path: string): UsageWindowsSnapshot[] {
+/** Per-entry salvage (#1655): an entry this build cannot parse (a newer cezar's provider) is
+ *  skipped on read and carried through on write, never dropping the rest of the file. */
+function readEntries(path: string): { snapshots: UsageWindowsSnapshot[]; foreign: unknown[] } {
   try {
     const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
     if (!Array.isArray(raw) || raw.length > 1024) throw new Error('Invalid snapshot store');
-    return raw.map((entry) => usageWindowsSnapshotSchema.parse(entry));
+    const snapshots: UsageWindowsSnapshot[] = [];
+    const foreign: unknown[] = [];
+    for (const entry of raw) {
+      const parsed = usageWindowsSnapshotSchema.safeParse(entry);
+      if (parsed.success) snapshots.push(parsed.data); else foreign.push(entry);
+    }
+    return { snapshots, foreign };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warn(path);
-    return [];
+    return { snapshots: [], foreign: [] };
   }
+}
+function read(path: string): UsageWindowsSnapshot[] {
+  return readEntries(path).snapshots;
 }
 function sameLocation(a: UsageAccountBinding, b: UsageAccountBinding): boolean {
   return a.provider === b.provider && a.accountId === b.accountId && a.profilePath === b.profilePath;
@@ -60,7 +71,7 @@ export async function saveUsageWindows(binding: UsageAccountBinding, observation
       retries: { retries: 5, minTimeout: 20, maxTimeout: 100 },
       onCompromised: () => { compromised = true; },
     });
-    const snapshots = read(path);
+    const { snapshots, foreign } = readEntries(path);
     // Unknown identity is not evidence of a new login (or a moved profile).
     // Preserve established holds rather than replacing them with unbound data.
     if (!binding.identity && snapshots.some((s) => s.binding.provider === binding.provider &&
@@ -70,7 +81,7 @@ export async function saveUsageWindows(binding: UsageAccountBinding, observation
     // Active sessions keep their captured location; their later events cannot evict a moved profile.
     const others = snapshots.filter((s) => !sameLocation(s.binding, binding));
     if (compromised) throw new Error('Usage store lease lost');
-    atomicWriteJsonSync(path, [...others.slice(-1023), merged]);
+    atomicWriteJsonSync(path, [...foreign.slice(-512), ...others.slice(-(1023 - Math.min(foreign.length, 512))), merged]);
     return true;
   } catch {
     warn(path);

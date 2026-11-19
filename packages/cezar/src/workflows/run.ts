@@ -2039,7 +2039,7 @@ export class RunManager {
       }
       trackerContext = trackerPrompt({ binding, ...(context && contextFile ? { context, contextFile } : {}), ...(unavailable ? { unavailable } : {}), commands });
     }
-    const usageProvider = backend === 'claude' ? 'claude' : boundIdentity ? 'codex' : undefined;
+    const usageProvider = backend === 'claude' ? 'claude' : backend === 'opencode' ? 'opencode' : boundIdentity ? 'codex' : undefined;
     const onUsageWindows = usageProvider ? async (observation: UsageWindowsObservation) => {
       try {
         if (usageProvider === 'codex') {

@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { emitUsageWindows, normalizeOpencodeUsageWindows } from './usage-windows.ts';
 import { realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { basename, dirname, join, resolve, sep } from 'node:path';
@@ -899,6 +900,7 @@ class OpencodeSession implements AgentSession {
     const reason = stringField(status, 'message') ?? 'the provider refused the request';
     const at = next === undefined ? '' : ` — ${action && !quota ? 'next attempt' : 'retry at'} ${new Date(next).toISOString()}`;
     this.retryGaveUp = true;
+    emitUsageWindows(this.spec.onUsageWindows, normalizeOpencodeUsageWindows(status));
     this.emit({ type: 'error', message: `opencode: ${quota ? 'usage limit reached: ' : ''}${reason}${at}` });
     this.interrupt();
   }

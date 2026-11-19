@@ -132,3 +132,18 @@ it('checks every retained location before admitting unidentified account data', 
   expect(await saveUsageWindows({ ...binding, profilePath: '/unknown' }, observation(30))).toBe(false);
   expect(loadUsageWindows(identified)?.observedAt).toBe(20);
 });
+
+it('#1655 skips an entry from a newer cezar on read and carries it through a write', async () => {
+  vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'usage-store-')));
+  const file = join(process.env.CEZ_HOME!, 'usage-windows.json');
+  await saveUsageWindows(binding, observation());
+  const foreign = { provider: 'future-agent', source: 'future-source', observedAt: 1, windows: [], binding: { provider: 'future-agent', accountId: 'x', profilePath: '/p' } };
+  writeFileSync(file, JSON.stringify([...JSON.parse(readFileSync(file, 'utf8')), foreign]));
+  // The known entry still loads…
+  expect(loadUsageWindows(binding)?.windows).toHaveLength(1);
+  // …and another account's write neither drops it nor the known entry.
+  expect(await saveUsageWindows({ ...binding, accountId: 'personal' }, observation())).toBe(true);
+  const written = JSON.parse(readFileSync(file, 'utf8')) as unknown[];
+  expect(written).toContainEqual(foreign);
+  expect(written).toHaveLength(3);
+});
