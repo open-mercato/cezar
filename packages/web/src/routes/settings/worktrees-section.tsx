@@ -15,8 +15,8 @@ import { WorktreesPanel } from './worktrees-panel'
 import { WorktreeLifecycleEditor } from './worktree-lifecycle-editor'
 
 /**
- * Project settings → Worktrees: the retention count (#483), age retention (spec
- * 2026-11-19-worktree-disk-usage) and the disk panel — what used to be the bottom half of
+ * Project settings → Worktrees: the retention count (#483), age retention and archived-task
+ * lifetime (spec 2026-11-19-worktree-disk-usage) and the disk panel — what used to be the bottom half of
  * Settings → Resources.
  *
  * It stayed PROJECT-scoped when step 3.5 split Settings (spec §"Resource governance"): retention
@@ -30,6 +30,8 @@ const WORKTREE_RETENTION_MIN = 0
 const WORKTREE_RETENTION_MAX = 1000
 /** Age retention bounds in days — 0 = off, matching the config schema. */
 const WORKTREE_IDLE_DAYS_MAX = 365
+/** Archived-task lifetime bounds in days — 0 = never, matching the config schema. */
+const ARCHIVED_DELETE_DAYS_MAX = 3650
 
 export function WorktreesSection() {
   const config = useConfig()
@@ -79,6 +81,11 @@ function WorktreesForm({ config }: { config: ConfigResponse }) {
   const idleOwn = config.worktreeIdleDaysOwn ?? false
   const idleMode: 'inherit' | 'own' = idleOwn ? 'own' : 'inherit'
   const daysText = (days: number) => (days === 0 ? 'off' : `${days} day${days === 1 ? '' : 's'}`)
+  // Same effective/own pair for the archived-task lifetime; 0 = never.
+  const deleteDays = config.archivedTaskDeleteDays ?? 0
+  const deleteOwn = config.archivedTaskDeleteDaysOwn ?? false
+  const deleteMode: 'inherit' | 'own' = deleteOwn ? 'own' : 'inherit'
+  const deleteText = deleteDays === 0 ? 'never' : `after ${deleteDays} day${deleteDays === 1 ? '' : 's'}`
 
   return (
     <div data-slot="worktrees-section" className="flex w-full flex-col gap-5">
@@ -128,6 +135,41 @@ function WorktreesForm({ config }: { config: ConfigResponse }) {
                 className="w-24"
                 disabled={save.isPending}
                 onCommit={(days) => save.mutateAsync({ worktreeIdleDays: days ?? 0 })}
+              />
+              <span className="text-label text-muted-foreground">days</span>
+            </>
+          ) : null}
+        </FormRow>
+
+        <FormRow
+          saved={saved && savedKey === 'archivedTaskDeleteDays'}
+          label="Delete archived tasks after"
+          description={`An archived task is deleted this many days after it was archived: its record, log, worktree and branch. The branch is kept when it has an open pull request or commits that are neither merged nor pushed. Pinned tasks and trees with uncommitted changes are kept. 0 = never. ${deleteOwn ? `This project: ${deleteText}.` : `Inherited from Settings → Resources: ${deleteText}.`}`}
+        >
+          <Select
+            value={deleteMode}
+            disabled={save.isPending}
+            onValueChange={(value) => void save.mutateAsync({ archivedTaskDeleteDays: value === 'inherit' ? null : deleteDays })}
+          >
+            <SelectTrigger size="sm" aria-label="Archived task lifetime source" data-slot="worktrees-archived-delete-days-mode" data-value={deleteMode} className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="inherit">Workspace default</SelectItem>
+              <SelectItem value="own">This project</SelectItem>
+            </SelectContent>
+          </Select>
+          {deleteMode === 'own' ? (
+            <>
+              <IntegerStepper
+                aria-label="Delete archived tasks after days"
+                data-slot="worktrees-archived-delete-days"
+                value={deleteDays}
+                min={0}
+                max={ARCHIVED_DELETE_DAYS_MAX}
+                className="w-24"
+                disabled={save.isPending}
+                onCommit={(days) => save.mutateAsync({ archivedTaskDeleteDays: days ?? 0 })}
               />
               <span className="text-label text-muted-foreground">days</span>
             </>

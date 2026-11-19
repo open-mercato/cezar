@@ -52,6 +52,9 @@ const MAX_WORKTREES_GB_MAX = 100_000
 /** What the server applies when it predates the keys — the shipped defaults. */
 const DISK_GUARD_DEFAULTS = { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }
 const IDLE_DAYS_DEFAULT = 7
+/** Archived-task lifetime bounds and default in days — 0 = never, matching the config schema. */
+const ARCHIVED_DELETE_DAYS_MAX = 3650
+const ARCHIVED_DELETE_DAYS_DEFAULT = 90
 
 export function ResourcesCards() {
   const config = useWorkspaceConfig()
@@ -110,6 +113,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
     save.mutate({ composerDefaults: { [key]: value === 'inherit' ? null : value === 'on' } })
   const triState = (value: boolean | null) => (value === null ? 'inherit' : value ? 'on' : 'off')
   const idleDaysDefault = config.resources.worktreeIdleDaysDefault ?? IDLE_DAYS_DEFAULT
+  const archivedDeleteDaysDefault = config.resources.archivedTaskDeleteDaysDefault ?? ARCHIVED_DELETE_DAYS_DEFAULT
   const diskGuard = config.resources.diskGuard ?? DISK_GUARD_DEFAULTS
   const saveGuard = (key: keyof typeof DISK_GUARD_DEFAULTS, value: number | null) =>
     save.mutateAsync({ resources: { diskGuard: { [key]: value ?? 0 } } })
@@ -263,6 +267,22 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
             min={0}
             max={IDLE_DAYS_MAX}
             onCommit={(days) => save.mutateAsync({ resources: { worktreeIdleDaysDefault: days ?? 0 } })}
+          />
+          <span className="text-label text-muted-foreground">days</span>
+        </FormRow>
+        <FormRow
+          saved={savedFor('archivedTaskDeleteDaysDefault')}
+          label="Delete archived tasks after"
+          description={`An archived task is deleted this many days after it was archived: its record, log, worktree and branch. The branch is kept when it has an open pull request or commits that are neither merged nor pushed. Pinned tasks are never deleted. Projects that set their own value in Project settings → Worktrees keep it. 0 = never. ${archivedDeleteDaysDefault === 0 ? 'Never.' : `Currently ${archivedDeleteDaysDefault} day${archivedDeleteDaysDefault === 1 ? '' : 's'}.`}`}
+        >
+          <IntegerStepper
+            aria-label="Delete archived tasks after days"
+            data-slot="resources-archived-delete-days"
+            value={archivedDeleteDaysDefault}
+            min={0}
+            max={ARCHIVED_DELETE_DAYS_MAX}
+            className="w-24"
+            onCommit={(days) => save.mutateAsync({ resources: { archivedTaskDeleteDaysDefault: days ?? 0 } })}
           />
           <span className="text-label text-muted-foreground">days</span>
         </FormRow>
