@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>CezarBot · Computers screen (design, phase 1)</title>
+<title>CezarBot · Devices screen redesign (phase 1)</title>
 <style>
   /* The page around the mockups. */
   :root { --page: #f4f4f2; --ink: #171717; --soft: #5c5c5c; --rule: #e2e2de; }
@@ -199,12 +199,13 @@
 </head>
 <body>
 <div class="page">
-  <h1 class="doc">CezarBot · “Devices” becomes “Computers”</h1>
-  <p class="lede">Phase 1 design for the connect page's list screen (<code>packages/mobile/connect/</code>, shared by iOS and Android). Every mockup below is live: tap a computer to open it, tap <b>⋯</b> for its settings, try Forget. Spec: <code>.ai/specs/2026-11-19-mobile-computers-screen.md</code>.</p>
+  <h1 class="doc">CezarBot · a clearer “Devices” screen</h1>
+  <p class="lede">Phase 1 design for the connect page's list screen (<code>packages/mobile/connect/</code>, shared by iOS and Android). Every mockup below is live: tap a cezar to open it, tap <b>⋯</b> for its settings, try Forget. The <b>Name</b> control swaps the noun everywhere, since the list can hold a laptop, a VPS or a cloud host. Spec: <code>.ai/specs/2026-11-19-mobile-devices-screen.md</code>.</p>
 
   <div class="bar" role="toolbar" aria-label="Mockup controls">
     <div><label>Device</label><span class="seg" id="seg-device"></span></div>
     <div><label>State</label><span class="seg" id="seg-state"></span></div>
+    <div><label>Name</label><span class="seg" id="seg-name"></span></div>
     <div><label>Theme</label><span class="seg" id="seg-theme"></span></div>
   </div>
 
@@ -218,29 +219,29 @@
       <h3>How you get here, and back</h3>
       <div class="flow">
         <span class="node">Manager</span><span class="arrow">→ Devices link / banner →</span>
-        <span class="node">Switcher sheet (native)</span><span class="arrow">→ “Manage computers” →</span>
-        <span class="node new">Computers</span>
+        <span class="node">Switcher sheet (native)</span><span class="arrow">→ “Manage cezars” →</span>
+        <span class="node new">Your cezars</span>
       </div>
       <ul style="margin-top:12px">
-        <li>The top-left <b>←</b> carries the name of the computer you came from (“← MacBook Pro”), and returns to its Manager, as <code>cameFrom</code> does today. Android Back and the iOS edge swipe do the same.</li>
-        <li>Tapping any card opens that computer at <code>/manager</code> (Decision 3 of the manager-first spec); tapping the current one just goes back.</li>
-        <li>On a cold start with no computers, this screen is the empty state: pairing comes first.</li>
-        <li>The native switcher keeps its job (quick switching over a page) but renames its two actions to <b>Connect another computer</b> and <b>Manage computers</b>; the banner's button becomes <b>Computers</b>.</li>
+        <li>The top-left <b>←</b> carries the name of the cezar you came from (“← MacBook Pro”), and returns to its Manager, as <code>cameFrom</code> does today. Android Back and the iOS edge swipe do the same.</li>
+        <li>Tapping any card opens that cezar at <code>/manager</code> (Decision 3 of the manager-first spec); tapping the current one just goes back.</li>
+        <li>On a cold start with no cezars, this screen is the empty state: pairing comes first.</li>
+        <li>The native switcher keeps its job (quick switching over a page) but renames its two actions to <b>Connect another cezar</b> and <b>Manage cezars</b>; the banner's button becomes <b>Cezars</b>.</li>
       </ul>
     </article>
     <article>
       <h3>Copy</h3>
       <table>
         <tr><th>Now</th><th>Proposed</th></tr>
-        <tr><td>Devices</td><td>Computers</td></tr>
-        <tr><td>Add a device</td><td>Connect another computer (first one: Connect your computer)</td></tr>
-        <tr><td>Forget / Forget this device</td><td>Forget this computer</td></tr>
-        <tr><td>Notifications (checkbox)</td><td>Notify me when it needs me (on the computer's page)</td></tr>
+        <tr><td>Devices</td><td>Your cezars (recommended; Machines, Servers, Connections compared live)</td></tr>
+        <tr><td>Add a device</td><td>Connect another cezar (first one: Connect your cezar)</td></tr>
+        <tr><td>Forget / Forget this device</td><td>Forget this ${W.one}</td></tr>
+        <tr><td>Notifications (checkbox)</td><td>Notify me when it needs me (on the cezar's page)</td></tr>
         <tr><td>Turn on / off app lock</td><td>App lock (switch)</td></tr>
         <tr><td>https://relay… / URL</td><td>“Paired with this phone” or the host name only</td></tr>
         <tr><td>—</td><td>Online · Offline since 09:41 · Sign in needed · 2 need you · Current</td></tr>
       </table>
-      <p class="foot" style="color:#5c5c5c">“Relay” appears once, on the detail's Connection row, where it explains how a paired computer is reached.</p>
+      <p class="foot" style="color:#5c5c5c">“Relay” appears once, on the detail's Connection row, where it explains how a paired cezar is reached.</p>
     </article>
     <article>
       <h3>Accessibility</h3>
@@ -248,7 +249,7 @@
         <li>Every target is at least 44×44 pt (iOS) / 48 dp (Android): cards are 76 tall, the ⋯ button 44.</li>
         <li>A card is one button whose label reads like the native switcher's: “MacBook Pro, online, 2 need you, current. Opens its Manager.” The ⋯ button is separate: “Settings for MacBook Pro”.</li>
         <li>Status is never colour alone: a word always sits beside the dot.</li>
-        <li>Switches use <code>role="switch"</code> with <code>aria-checked</code>; section titles are headings so VoiceOver's rotor and TalkBack's heading navigation jump between “Computers” and “App”.</li>
+        <li>Switches use <code>role="switch"</code> with <code>aria-checked</code>; section titles are headings so VoiceOver's rotor and TalkBack's heading navigation jump between the list and “App”.</li>
         <li>Forget's sheet traps focus, starts on Cancel, and Escape / Back closes it.</li>
         <li>Respects Dynamic Type / font scale (no fixed heights on text), reduced motion, light and dark.</li>
       </ul>
@@ -297,36 +298,44 @@
   const C = {
     mbp: { id: 'mbp', label: 'MacBook Pro', relay: true, status: 'online', words: 'Online', need: 2, push: true },
     rome: { id: 'rome', label: 'rome', host: 'rome.cezar.run', relay: false, status: 'online', words: 'Online', need: 0, push: null, user: 'patryk' },
-    studio: { id: 'studio', label: 'Mac Studio', relay: true, status: 'offline', words: 'Offline since 09:41', need: 1, push: true },
+    studio: { id: 'studio', label: 'vps-fra1', relay: true, status: 'offline', words: 'Offline since 09:41', need: 1, push: true },
     ci: { id: 'ci', label: 'build box', host: 'ci.example.com', relay: false, status: 'attention', words: 'Sign in needed', fix: 'Sign in', push: null },
-    removed: { id: 'removed', label: 'Office iMac', relay: true, status: 'attention', words: 'Removed from this computer', fix: 'Pair again', push: false },
+    removed: { id: 'removed', label: 'Office iMac', relay: true, status: 'attention', words: "This phone was removed", fix: 'Pair again', push: false },
   };
   const clone = (...ids) => ids.map((id) => ({ ...C[id] }));
   const STATES = {
     before: { label: 'Before', servers: () => clone('mbp') },
-    one: { label: 'One computer', servers: () => clone('mbp'), current: 'mbp' },
+    one: { label: 'One', servers: () => clone('mbp'), current: 'mbp' },
     several: { label: 'Several', servers: () => clone('mbp', 'rome', 'studio'), current: 'mbp' },
     offline: { label: 'Offline', servers: () => [{ ...C.mbp, status: 'offline', words: 'Offline since 09:41', need: null }] },
     signin: { label: 'Needs sign-in', servers: () => clone('mbp', 'ci', 'removed', 'studio'), current: 'mbp' },
-    empty: { label: 'No computers', servers: () => [] },
-    detail: { label: 'Computer detail', servers: () => clone('mbp', 'rome', 'studio'), current: 'mbp', screen: 'detail', sel: 'mbp' },
+    empty: { label: 'Empty', servers: () => [] },
+    detail: { label: 'Detail', servers: () => clone('mbp', 'rome', 'studio'), current: 'mbp', screen: 'detail', sel: 'mbp' },
     forget: { label: 'Forget confirm', servers: () => clone('mbp', 'rome', 'studio'), current: 'mbp', screen: 'forget', sel: 'studio' },
   };
   const DEVICES = { ios: 'iPhone', android: 'Android phone', ipad: 'iPad' };
   const THEMES = { dark: 'Dark', light: 'Light' };
+  // The thing in the list can be a laptop, a VPS or a cloud host: candidate names, compared live.
+  const NAMES = {
+    cezars: { label: 'Your cezars', title: 'Your cezars', one: 'cezar', many: 'cezars', add: 'Connect another cezar', first: 'Connect your cezar' },
+    machines: { label: 'Machines', title: 'Machines', one: 'machine', many: 'machines', add: 'Connect another machine', first: 'Connect a machine' },
+    servers: { label: 'Servers', title: 'Servers', one: 'server', many: 'servers', add: 'Connect another server', first: 'Connect a server' },
+    connections: { label: 'Connections', title: 'Connections', one: 'connection', many: 'connections', add: 'Add a connection', first: 'Add your first connection' },
+  };
+  let W = NAMES.cezars;
 
   const CAPTIONS = {
     before: ['before', 'Today', `<p>What ships now (<code>drawList</code>): a bordered row that does not read as tappable, a loose Forget, a Notifications checkbox of unclear scope, the green <b>Add a device</b> as the strongest thing on screen, and app-wide settings in the same column. No status, no “current”. On iPad the 28rem column floats in empty space.</p>`],
-    one: ['after', 'One computer', `<ul><li>The computer is a <b>hero card</b> with its live status and “current” mark; the green button now does the main job: <b>Open Manager</b>.</li><li><b>Connect another computer</b> is a quiet dashed button under it.</li><li>Per-computer settings sit behind <b>⋯</b>; app-wide ones are grouped under <b>App</b>.</li></ul>`],
-    several: ['after', 'Several computers', `<ul><li>A list of cards, current first, then online, offline, the rest, by “need you” inside each (the native switcher's order, <code>DeviceSwitch.rows</code>).</li><li>The whole card opens that computer's Manager; the chevron says so. <b>⋯</b> opens its page.</li><li>No green button competes: the cards are the action.</li></ul>`],
-    offline: ['after', 'Offline / unreachable', `<ul><li>The hero says why in words, with the time it was last seen, and what to do: wake the computer or check cezar.</li><li>The primary becomes <b>Try again</b>; nothing is hidden behind an error screen.</li></ul>`],
-    signin: ['after', 'Needs sign-in or re-pairing', `<ul><li>A card that cannot open shows its reason in amber and a <b>one-tap fix</b> right on the card: <b>Sign in</b> (direct server), <b>Pair again</b> (removed from the computer), Confirm email, Accept terms… The words are the native switcher's.</li><li>The card itself still opens, leading to today's matching screen.</li></ul>`],
-    empty: ['after', 'No computers yet', `<ul><li>One clear job: connect your computer. The steps say where the code is on the computer.</li><li><b>Scan QR code</b> is primary, <b>Enter code</b> secondary, a server address is the small text link (today's Advanced).</li><li>Privacy policy and the startup log stay reachable for store review and bug reports.</li></ul>`],
-    detail: ['after', 'A computer\'s page', `<ul><li>Everything about <i>one</i> computer: status, how it is reached, its notifications, rename, sign-in account, forget.</li><li>“Notify me” is clearly scoped to this computer; the phone-wide permission lives under App.</li><li>On iPad this is the right pane of a split view, so it is always visible next to the list.</li></ul>`],
-    forget: ['after', 'Forget confirm', `<ul><li>A bottom sheet on phones, a centred dialog on iPad.</li><li>It names the computer and says exactly what goes. The destructive button is red, Cancel is first in focus.</li></ul>`],
+    one: ['after', 'One cezar', `<ul><li>The cezar is a <b>hero card</b> with its live status and “current” mark; the green button now does the main job: <b>Open Manager</b>.</li><li><b>Connect another cezar</b> is a quiet dashed button under it.</li><li>Per-cezar settings sit behind <b>⋯</b>; app-wide ones are grouped under <b>App</b>.</li></ul>`],
+    several: ['after', 'Several cezars', `<ul><li>A list of cards, current first, then online, offline, the rest, by “need you” inside each (the native switcher's order, <code>DeviceSwitch.rows</code>).</li><li>The whole card opens that cezar's Manager; the chevron says so. <b>⋯</b> opens its page.</li><li>No green button competes: the cards are the action.</li></ul>`],
+    offline: ['after', 'Offline / unreachable', `<ul><li>The hero says why in words, with the time it was last seen, and what to do: wake the machine it runs on.</li><li>The primary becomes <b>Try again</b>; nothing is hidden behind an error screen.</li></ul>`],
+    signin: ['after', 'Needs sign-in or re-pairing', `<ul><li>A card that cannot open shows its reason in amber and a <b>one-tap fix</b> right on the card: <b>Sign in</b> (direct server), <b>Pair again</b> (removed from the cezar), Confirm email, Accept terms… The words are the native switcher's.</li><li>The card itself still opens, leading to today's matching screen.</li></ul>`],
+    empty: ['after', 'No cezars yet', `<ul><li>One clear job: connect your cezar. The steps say where to find the code.</li><li><b>Scan QR code</b> is primary, <b>Enter code</b> secondary, a server address is the small text link (today's Advanced).</li><li>Privacy policy and the startup log stay reachable for store review and bug reports.</li></ul>`],
+    detail: ['after', 'A cezar\'s page', `<ul><li>Everything about <i>one</i> cezar: status, how it is reached, its notifications, rename, sign-in account, forget.</li><li>“Notify me” is clearly scoped to this cezar; the phone-wide permission lives under App.</li><li>On iPad this is the right pane of a split view, so it is always visible next to the list.</li></ul>`],
+    forget: ['after', 'Forget confirm', `<ul><li>A bottom sheet on phones, a centred dialog on iPad.</li><li>It names the cezar and says exactly what goes. The destructive button is red, Cancel is first in focus.</li></ul>`],
   };
 
-  const S = { device: 'ios', state: 'one', theme: 'dark', screen: 'list', sel: null, servers: [], current: null, toast: null, lock: true, renaming: false };
+  const S = { device: 'ios', state: 'one', theme: 'dark', name: 'cezars', screen: 'list', sel: null, servers: [], current: null, toast: null, lock: true, renaming: false };
 
   function reset() {
     const st = STATES[S.state];
@@ -396,7 +405,7 @@
   function appSection(minimal) {
     const items = [
       `<div class="item"><span class="ic">${I.lock}</span><span class="lbl">App lock<small>Face ID, fingerprint or screen lock when the app opens and after a minute away.</small></span><button class="switch" role="switch" aria-checked="${S.lock}" aria-label="App lock" data-act="lock"></button></div>`,
-      minimal ? '' : `<button class="item" data-act="toast" data-msg="Opens the phone's notification settings"><span class="ic">${I.bell}</span><span class="lbl">Notifications<small>Allowed for CezarBot. Choose which computers notify you on each one's page.</small></span><span class="val">On</span><span class="chev">${I.chev}</span></button>`,
+      minimal ? '' : `<button class="item" data-act="toast" data-msg="Opens the phone's notification settings"><span class="ic">${I.bell}</span><span class="lbl">Notifications<small>Allowed for CezarBot. Choose which ones notify you on each one's page.</small></span><span class="val">On</span><span class="chev">${I.chev}</span></button>`,
       `<button class="item" data-act="toast" data-msg="Copied 42 lines"><span class="ic">${I.log}</span><span class="lbl">Copy startup log<small>For a bug report.</small></span></button>`,
       `<button class="item" data-act="toast" data-msg="Opens in your browser"><span class="ic">${I.shield}</span><span class="lbl">Privacy policy</span><span class="chev">${I.ext}</span></button>`,
       `<div class="item"><span class="ic">${I.info}</span><span class="lbl">Version</span><span class="val">0.1.1 (87)</span></div>`,
@@ -415,20 +424,20 @@
     if (!servers.length) return emptyView();
     let body;
     if (servers.length === 1 && !inSplit) {
-      body = `${hero(servers[0])}<button class="btn ghost add" data-act="add">${I.plus}Connect another computer</button>`;
+      body = `${hero(servers[0])}<button class="btn ghost add" data-act="add">${I.plus}${W.add}</button>`;
     } else {
-      body = `<div class="cards">${servers.map(card).join('')}</div><button class="btn ghost add" data-act="add">${I.plus}Connect another computer</button>`;
+      body = `<div class="cards">${servers.map(card).join('')}</div><button class="btn ghost add" data-act="add">${I.plus}${W.add}</button>`;
     }
-    const count = servers.length === 1 ? 'The computer this phone is connected to.' : `${servers.length} computers connected to this phone.`;
-    return `${topBar('Computers', cur?.label)}<p class="sub">${count}</p>${body}${appSection()}`;
+    const count = servers.length === 1 ? `The ${W.one} this phone is connected to.` : `${servers.length} ${W.many} connected to this phone.`;
+    return `${topBar(W.title, cur?.label)}<p class="sub">${count}</p>${body}${appSection()}`;
   }
 
   function emptyView() {
     return `${topBar('')}<div class="empty">
       <div class="glyph">${mark('')}</div>
-      <h1>Connect your computer</h1>
-      <p class="sub" style="margin-bottom:0">CezarBot shows the cezar running on your computer, so you can answer it from here.</p>
-      <ol class="steps"><li>On your computer, open cezar.</li><li>Go to Settings, then Connect a phone.</li><li>Scan the code it shows.</li></ol>
+      <h1>${W.first}</h1>
+      <p class="sub" style="margin-bottom:0">CezarBot shows a cezar running on your laptop, a server or the cloud, so you can answer it from here.</p>
+      <ol class="steps"><li>Open cezar, wherever it runs.</li><li>Go to Settings, then Connect a phone.</li><li>Scan the code it shows.</li></ol>
       <div style="display:grid;gap:10px">
         <button class="btn primary" data-act="toast" data-msg="Opens the camera">${I.qr}Scan QR code</button>
         <button class="btn" data-act="toast" data-msg="Enter code">${I.keys}Enter code</button>
@@ -439,24 +448,24 @@
 
   function detailView(id, inSplit) {
     const s = S.servers.find((r) => r.id === id);
-    if (!s) return inSplit ? `<div class="sub" style="text-align:center;margin-top:120px">Choose a computer</div>` : listView();
+    if (!s) return inSplit ? `<div class="sub" style="text-align:center;margin-top:120px">Choose a ${W.one}</div>` : listView();
     const cur = s.id === S.current;
     const off = s.status === 'offline';
     const primary = s.fix ? s.fix : off ? 'Try again' : cur ? `Back to ${s.label}` : 'Open Manager';
     const push = s.relay
       ? `<div class="item"><span class="ic">${I.bell}</span><span class="lbl">Notify me<small>When ${s.label} needs you. Only that, never what it is about.</small></span><button class="switch" role="switch" aria-checked="${s.push}" aria-label="Notify me when ${s.label} needs me" data-act="push" data-id="${s.id}"></button></div>`
-      : `<div class="item"><span class="ic">${I.bell}</span><span class="lbl">Notifications<small>Available for computers paired with a code.</small></span></div>`;
+      : `<div class="item"><span class="ic">${I.bell}</span><span class="lbl">Notifications<small>Available for ${W.many} paired with a code.</small></span></div>`;
     const name = S.renaming
       ? `<div class="item"><span class="ic">${I.pen}</span><input aria-label="Name" value="${s.label}" style="flex:1;min-height:40px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit;font:inherit;padding:0 10px" id="rename"><button class="fix" style="border-color:var(--accent);color:var(--accent)" data-act="rename-save" data-id="${s.id}">Save</button></div>`
       : `<button class="item" data-act="rename"><span class="ic">${I.pen}</span><span class="lbl">Name</span><span class="val">${s.label}</span><span class="chev">${I.chev}</span></button>`;
     const conn = `<div class="item"><span class="ic">${I.link}</span><span class="lbl">Connection<small>${s.relay ? 'Through the Cezar relay, end-to-end encrypted.' : `Directly, at ${s.host}.`}</small></span></div>`;
     const acct = s.user ? `<div class="item"><span class="ic">${I.user}</span><span class="lbl">Signed in as</span><span class="val">${s.user}</span></div>` : '';
-    return `${inSplit ? '' : topBar('', 'Computers')}
+    return `${inSplit ? '' : topBar("", W.title)}
       <div class="dhead">${avatar(s, true)}<div class="name">${s.label}${cur ? ' <span class="pill" style="vertical-align:4px">Current</span>' : ''}</div>${stateLine({ ...s, need: s.need })}</div>
       <button class="btn primary" data-act="${s.fix ? 'fix' : 'open'}" data-id="${s.id}">${primary}</button>
-      <h2 class="eyebrow">This computer</h2>
+      <h2 class="eyebrow">This ${W.one}</h2>
       <div class="group">${push}${name}${conn}${acct}</div>
-      <div class="group" style="margin-top:18px"><button class="item danger" data-act="forget" data-id="${s.id}"><span class="ic">${I.trash}</span><span class="lbl">Forget this computer</span></button></div>
+      <div class="group" style="margin-top:18px"><button class="item danger" data-act="forget" data-id="${s.id}"><span class="ic">${I.trash}</span><span class="lbl">Forget this ${W.one}</span></button></div>
       <p class="foot">${s.relay ? 'Removes this phone from it. You can pair again with a new code.' : 'Deletes its saved password from this phone.'}</p>`;
   }
 
@@ -505,8 +514,8 @@
       <div class="app ${S.theme} ${d}"><div class="island"></div><div class="sys">${sys}</div>${screen()}${d === 'ipad' ? '' : '<div class="gesture"><i></i></div>'}${sheet}${toast}</div>
     </div></div></div>`;
     const [tag, title, text] = CAPTIONS[S.state];
-    const platform = d === 'ipad' ? '<p><b>iPad:</b> a split view, list on the left, the selected computer on the right, so the width is used and settings are one tap away. Above 900 pt wide only; narrower windows (Split View, Slide Over) get the phone layout.</p>'
-      : d === 'android' ? '<p><b>Android:</b> the same web screen; Material-style switches, system Back pops one level, then returns to the computer you came from.</p>'
+    const platform = d === 'ipad' ? '<p><b>iPad:</b> a split view, list on the left, the selected cezar on the right, so the width is used and settings are one tap away. Above 900 pt wide only; narrower windows (Split View, Slide Over) get the phone layout.</p>'
+      : d === 'android' ? '<p><b>Android:</b> the same web screen; Material-style switches, system Back pops one level, then returns to the cezar you came from.</p>'
       : '<p><b>iPhone:</b> the same web screen; the edge swipe pops one level, as the ← does.</p>';
     document.getElementById('caption').innerHTML = `<span class="tag ${tag}">${tag === 'before' ? 'Current' : 'Proposed'}</span><h2>${title}</h2>${text}${S.state === 'before' ? '' : platform}`;
     // Cancel takes focus first, without scrolling the page around the mockup.
@@ -534,7 +543,7 @@
     if (act === 'fix') return flash(s.fix === 'Sign in' ? 'Sign in screen' : 'Pairing: scan a new code');
     if (act === 'detail') { S.sel = id; S.screen = 'detail'; S.renaming = false; return render(); }
     if (act === 'back') { if (S.screen === 'detail' || S.screen === 'forget') { S.screen = 'list'; S.renaming = false; return render(); } return flash(`Back to ${el.getAttribute('aria-label').replace('Back to ', '')}`); }
-    if (act === 'add') return flash('Connect another computer: scan or enter a code');
+    if (act === 'add') return flash(`${W.add}: scan or enter a code`);
     if (act === 'lock') { S.lock = !S.lock; return render(); }
     if (act === 'push') { s.push = !s.push; return render(); }
     if (act === 'rename') { S.renaming = true; render(); document.getElementById('rename')?.focus(); return; }
@@ -561,20 +570,23 @@
       const b = e.target.closest('button');
       if (!b) return;
       S[key] = b.dataset.k;
-      if (key !== 'theme') reset();
+      if (key === 'name') W = NAMES[S.name];
+      if (key === 'device' || key === 'state') reset();
       render();
     });
   }
   function syncSegs() {
-    for (const [id, key] of [['seg-device', 'device'], ['seg-state', 'state'], ['seg-theme', 'theme']]) {
+    for (const [id, key] of [['seg-device', 'device'], ['seg-state', 'state'], ['seg-theme', 'theme'], ['seg-name', 'name']]) {
       for (const b of document.querySelectorAll(`#${id} button`)) b.setAttribute('aria-pressed', String(b.dataset.k === S[key]));
     }
   }
   seg('seg-device', DEVICES, 'device');
   seg('seg-state', STATES, 'state');
   seg('seg-theme', THEMES, 'theme');
+  seg('seg-name', NAMES, 'name');
   // #device=ipad&state=several&theme=light links straight to one view.
-  for (const [k, v] of new URLSearchParams(location.hash.slice(1))) if (k in S && ({ device: DEVICES, state: STATES, theme: THEMES })[k]?.[v]) S[k] = v;
+  for (const [k, v] of new URLSearchParams(location.hash.slice(1))) if (k in S && ({ device: DEVICES, state: STATES, theme: THEMES, name: NAMES })[k]?.[v]) S[k] = v;
+  W = NAMES[S.name];
   reset();
   render();
 })();
