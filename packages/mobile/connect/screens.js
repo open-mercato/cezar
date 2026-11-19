@@ -103,26 +103,22 @@ export function linkLine(status) {
 /** The status that opens the server: confirmed always; pending too once blocked, as the grace started again. */
 export const accountOpens = (status, blocked) => status?.state === 'confirmed' || (blocked && status?.state === 'pending');
 
-/** The list's app lock row (spec QR3). Null where native has no lock yet. */
+/** The App section's lock switch (spec QR3). Null where native has no lock yet. */
 export function lockRow(lock) {
   if (!lock) return null;
   if (!lock.available) {
-    return { disabled: true, label: 'App lock', note: lock.enabled ? 'Paused, because this phone has no screen lock. It comes back when you set one.' : 'Set a screen lock on this phone to use this.' };
+    return { disabled: true, label: 'App lock', checked: Boolean(lock.enabled), note: lock.enabled ? 'Paused, because this phone has no screen lock. It comes back when you set one.' : 'Set a screen lock on this phone to use this.' };
   }
-  return {
-    label: lock.enabled ? 'Turn off app lock' : 'Turn on app lock',
-    enable: !lock.enabled,
-    note: 'Asks for your fingerprint, face or screen lock when the app opens and after a minute away.',
-  };
+  return { label: 'App lock', checked: lock.enabled, enable: !lock.enabled, note: 'Asks for your fingerprint, face or screen lock when the app opens and after a minute away.' };
 }
 
 /** The start screen has no list to hold the row, so it keeps one only to turn a running lock off. */
 export const startLockRow = (lock) => (lock?.enabled ? lockRow(lock) : null);
 
-/** A relay server's Notifications switch (spec R5). Null where native sent no `push`: not a relay server, or an older app. */
+/** A relay cezar's Notify me switch (spec R5). Null where native sent no `push`: not a relay server, or an older app. */
 export function pushSwitch(server) {
   if (typeof server?.push !== 'boolean') return null;
-  return { label: 'Notifications', checked: server.push, enable: !server.push };
+  return { label: 'Notify me', note: `When ${server.label ?? 'it'} needs you. Only that, never what it is about.`, checked: server.push, enable: !server.push };
 }
 
 /** Forgotten servers whose relay revoke is still owed (RELAY_PROTOCOL.md § 7). */
@@ -199,4 +195,97 @@ export function screenFor(outcome, context = {}) {
 export function backTarget(outcome, servers) {
   if (outcome?.screen !== 'list' || !outcome.serverId) return null;
   return servers?.find((row) => row.id === outcome.serverId) ?? null;
+}
+
+// Your cezars (spec 2026-11-19-mobile-devices-screen). Every field below is optional: an older app sends none.
+
+/** The fix a card offers when its cezar cannot open, by native's `reason`. `pair` starts a new pairing; `open` leads to the matching screen. */
+const FIXES = {
+  'sign-in': { label: 'Sign in', action: 'open' },
+  removed: { label: 'Pair again', action: 'pair' },
+  email: { label: 'Confirm email', action: 'open' },
+  terms: { label: 'Accept terms', action: 'open' },
+  account: { label: 'Set up', action: 'open' },
+};
+
+const GROUP = { online: 0, offline: 1, checking: 1, other: 2 };
+
+/** Where a cezar is: its host for a direct server, a plain phrase for a paired one (the relay address means nothing to the user). */
+export function whereIs(server) {
+  if (server.relay) return 'Paired with this phone';
+  try {
+    return new URL(server.url).host;
+  } catch {
+    return server.url ?? '';
+  }
+}
+
+/** "1 needs you", "3 need you", or null. */
+export const needWords = (need) => (need > 0 ? (need === 1 ? '1 needs you' : `${need} need you`) : null);
+
+/** One card: what it says, how its dot looks, and the fix it offers. `current` is the cezar the list was opened from. */
+export function cardFor(server, current) {
+  const isCurrent = server.id === current;
+  // The page on screen is up, whatever a probe said, as in the native switcher.
+  const status = isCurrent && server.status ? 'online' : server.status ?? null;
+  const words = isCurrent && server.status ? 'Online' : server.words ?? null;
+  const need = isCurrent ? null : needWords(server.need);
+  const fix = status === 'other' ? FIXES[server.reason] ?? null : null;
+  const label = server.label;
+  return {
+    id: server.id,
+    label,
+    where: whereIs(server),
+    status,
+    dot: status === 'other' ? 'attention' : status,
+    words,
+    need,
+    current: isCurrent,
+    fix,
+    aria: [label, words, need, isCurrent ? 'current' : null].filter(Boolean).join(', '),
+  };
+}
+
+/** The current one first, then online, offline, the rest; by need inside each, else saved order (DeviceSwitch.rows). */
+export function orderServers(servers, current) {
+  const rank = (server) => [server.id === current ? 0 : 1, GROUP[server.status] ?? 1, -(server.need ?? 0)];
+  return servers
+    .map((server, index) => ({ server, index, rank: rank(server) }))
+    .sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.rank[2] - b.rank[2] || a.index - b.index)
+    .map((each) => each.server);
+}
+
+/** The primary button on a cezar's page and the one-cezar card. */
+export function primaryFor(card) {
+  if (card.fix) return { label: card.fix.label, action: card.fix.action };
+  if (card.current) return { label: `Back to ${card.label}`, action: 'open' };
+  if (card.status === 'offline') return { label: 'Try again', action: 'open' };
+  return { label: 'Open Manager', action: 'open' };
+}
+
+/** What the list says under its title. */
+export const countLine = (n) => (n === 1 ? 'The cezar this phone is connected to.' : `${n} cezars connected to this phone.`);
+
+export const MAX_NAME = 60;
+
+/** A new name, trimmed, or the reason it is refused. */
+export function checkName(value) {
+  const name = String(value ?? '').trim();
+  if (!name) return { error: 'Enter a name.' };
+  if (name.length > MAX_NAME) return { error: `Use at most ${MAX_NAME} characters.` };
+  return { name };
+}
+
+/** The App section's Notifications row, from the OS permission native reports. Null on an older app. */
+export function notificationsRow(state) {
+  if (state === 'allowed') return { value: 'On', note: 'Choose which cezars notify you on each one\'s page.' };
+  if (state === 'denied') return { value: 'Off', note: 'Turned off for CezarBot in the phone\'s settings.' };
+  return null;
+}
+
+/** Forget's confirm, in the words of what goes. */
+export function forgetLead(server) {
+  return server.relay
+    ? `This phone is removed from ${server.label}, and its keys and website data are deleted. To use it again, pair with a new code.`
+    : 'Its saved password and website data are deleted from this phone.';
 }
