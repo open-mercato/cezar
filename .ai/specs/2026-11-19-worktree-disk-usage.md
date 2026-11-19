@@ -27,6 +27,8 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
      the kept branch without a checkout, and `/changes` says the tree was reclaimed. Only the PR
      path (the PR route and the `github.draft-pr` gate) restores the tree. It restores onto the
      kept branch only, never onto a fresh branch off the base after the branch was deleted.
+     `POST /runs/:id/pr/adopt` finds an existing PR from the kept branch without a checkout, and
+     archive's delayed reclaim skips a task unarchived in the meantime.
 2. **Archive frees disk.** Archiving a task, or "Archive finished", reclaims the task's tree via
    `RunManager.reclaimWorktreesOf` (after its terminals stop). The hourly sweep retries a tree that
    was still in use. Unarchive plus Continue restores it.
