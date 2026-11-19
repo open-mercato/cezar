@@ -849,6 +849,11 @@ describe('threadFooter', () => {
     expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
   })
 
+  it('a closed monitoring hand-off states its reason, not a failure or a question (#1945)', () => {
+    const error = 'monitoring stopped at its automatic wake-up cap (40); no question was asked — continue to resume it'
+    expect(threadFooter('failed', error, false, false, undefined, undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: `Session closed — ${error}` })
+  })
+
   it('a cancelled run says who stopped it and why (spec 2026-10-31-managers)', () => {
     expect(threadFooter('cancelled', undefined, false, false, undefined, { reason: 'review only', by: 'Coding Manager' })).toEqual({
       state: 'closed',

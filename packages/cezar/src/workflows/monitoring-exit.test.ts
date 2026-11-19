@@ -12,6 +12,7 @@ import {
   endsWithDoneMarker,
   MAX_AUTO_CONTINUES,
   MONITORING_LIVENESS_MS,
+  monitorHandoffClosedError,
   RunManager,
 } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -55,6 +56,18 @@ describe('endsWithDoneMarker tolerates trailing task-reference lines', () => {
     for (const text of ['CEZ:DONE', 'a\nCEZ:DONE  \n', 'CEZ:DONE\nCEZ:PR=1', 'no']) {
       if (/CEZ:DONE\s*$/.test(text.trimEnd())) expect(endsWithDoneMarker(text)).toBe(true);
     }
+  });
+});
+
+describe('monitorHandoffClosedError', () => {
+  it('names the reason and the owner, never a reply', () => {
+    const since = '2026-11-05T10:00:00.000Z';
+    expect(monitorHandoffClosedError({ reason: 'wake-cap', owner: 'user', since })).toBe(
+      `monitoring stopped at its automatic wake-up cap (${MAX_AUTO_CONTINUES}); no question was asked — continue to resume it`,
+    );
+    expect(monitorHandoffClosedError({ reason: 'liveness', owner: 'parent', since })).toBe(
+      'monitoring stopped after its no-activity bound; no question was asked — its parent task coordinates what happens next',
+    );
   });
 });
 
@@ -175,6 +188,7 @@ describe('a parked monitor always has an exit', () => {
     await waitFor(id, (r) => r?.idleClosedAt !== undefined);
     expect(store.getRun(id)?.status).toBe('waiting');
     expect(store.getRun(id)?.error).toBeUndefined();
+    expect(store.getRun(id)?.monitorHandoff).toMatchObject({ reason: 'liveness', owner: 'user' });
   }, 30_000);
 
   it.each([null, 0])('rests at `waiting` with attention after the fallback bound when idle timeout is %s', async (idleTimeoutMinutes) => {
@@ -212,6 +226,8 @@ describe('a parked monitor always has an exit', () => {
 
     vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
     await waitFor(id, (r) => r?.idleClosedAt !== undefined);
+    // #1945: the hand-off marker survives the idle close, so the park still says why it is waiting.
+    expect(store.getRun(id)?.monitorHandoff).toMatchObject({ reason: 'liveness', owner: 'user' });
     await waitFor(id, () => stateOf(id) === undefined);
     const parked = store.getRun(id);
     expect(parked?.status).toBe('waiting');
@@ -240,6 +256,7 @@ describe('a parked monitor always has an exit', () => {
     await waitFor(record.id, (r) => r?.idleClosedAt !== undefined);
     expect(store.getRun(record.id)?.status).toBe('waiting');
     expect(store.getRun(record.id)?.error).toBeUndefined();
+    expect(store.getRun(record.id)?.monitorHandoff?.reason).toBe('liveness');
   }, 30_000);
 
   it('a restart settles a handed-off monitor `failed`, not as a success', async () => {
@@ -257,7 +274,73 @@ describe('a parked monitor always has an exit', () => {
     await restarted.recover();
     restarted.dispose();
     expect(reopened.getRun(id)?.status).toBe('failed');
-    expect(reopened.getRun(id)?.error).toContain('waiting for an answer');
+    expect(reopened.getRun(id)?.error).toContain('no question was asked');
+    expect(reopened.getRun(id)?.awaitingAnswerSince).toBeUndefined();
+    expect(reopened.getRun(id)?.monitorHandoff?.reason).toBe('liveness');
+  }, 30_000);
+
+  it('a cold read of a handed-off monitor does not invent an unanswered question', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+    boot(null);
+    const id = await startMonitor();
+    vi.advanceTimersByTime(MONITORING_LIVENESS_MS);
+    expect(store.getRun(id)?.status).toBe('waiting');
+    store.flush();
+
+    const cold = RunStore.open(join(repoRoot, '.ai/cezar'));
+    expect(cold.getRun(id)?.status).toBe('failed');
+    expect(cold.getRun(id)?.awaitingAnswerSince).toBeUndefined();
+    expect(cold.getRun(id)?.monitorHandoff?.reason).toBe('liveness');
+  }, 30_000);
+
+  it('names the parent as the owner of a dispatched child\'s hand-off', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+    boot(null);
+    const id = await startMonitor();
+    store.updateRun(id, { dispatch: { rootRunId: 'root-run', parentRunId: 'root-run' } });
+    vi.advanceTimersByTime(MONITORING_LIVENESS_MS);
+    expect(store.getRun(id)?.status).toBe('waiting');
+    expect(store.getRun(id)?.monitorHandoff?.owner).toBe('parent');
+    expect(notes(id)).toContain('monitoring with no activity for 60m; parked for its parent task');
+
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+    await waitFor(id, (r) => r?.status !== 'waiting');
+    const settled = store.getRun(id);
+    expect(settled?.status).toBe('failed');
+    expect(settled?.error).toBe(
+      'monitoring stopped after its no-activity bound; no question was asked — its parent task coordinates what happens next',
+    );
+    expect(settled?.awaitingAnswerSince).toBeUndefined();
+  }, 30_000);
+
+  it('a genuine question asked after a hand-off stays a question through the idle close', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+    boot(null);
+    const id = await startMonitor();
+    vi.advanceTimersByTime(MONITORING_LIVENESS_MS);
+    expect(store.getRun(id)?.monitorHandoff).toBeDefined();
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'mock:ask which library?' }])).toBe(true);
+    await waitFor(id, (r) => r?.status === 'waiting' && r.attentionRequest !== undefined);
+    expect(store.getRun(id)?.monitorHandoff).toBeUndefined();
+
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+    // Idle close is housekeeping (spec 2026-11-04 § Revision): the question stays open on a `waiting` run.
+    await waitFor(id, (r) => r?.idleClosedAt !== undefined);
+    const parked = store.getRun(id);
+    expect(parked?.status).toBe('waiting');
+    expect(parked?.attentionRequest).toBeDefined();
+    expect(parked?.monitorHandoff).toBeUndefined();
+  }, 30_000);
+
+  it('a reply to the hand-off retires its mark', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+    boot(null);
+    const id = await startMonitor();
+    vi.advanceTimersByTime(MONITORING_LIVENESS_MS);
+    expect(store.getRun(id)?.monitorHandoff).toBeDefined();
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'mock:done all good' }])).toBe(true);
+    await waitFor(id, (r) => r?.status !== 'waiting');
+    expect(store.getRun(id)?.monitorHandoff).toBeUndefined();
   }, 30_000);
 
   it('reports a handed-off dispatched child to its parent after a restart', async () => {
@@ -296,6 +379,7 @@ describe('a parked monitor always has an exit', () => {
     expect(parked?.activity).toBeUndefined();
     expect(parked?.monitoringWakeCapReached).toBe(true);
     expect(parked?.askParked).toBe(true);
+    expect(parked?.monitorHandoff).toMatchObject({ reason: 'wake-cap', owner: 'user' });
     expect(stateOf(id)?.session?.open).toBe(true);
     expect(stateOf(id)?.idleTimer).toBeDefined();
     // Newest first: the hand-off is the last thing that happened.

@@ -209,6 +209,7 @@ export function threadFooter(
   idleClosed = false,
   thread?: ThreadState,
   cancel?: { reason?: string | undefined; by?: string | undefined },
+  monitorHandoff = false,
 ): ThreadFooter {
   switch (status) {
     case 'waiting':
@@ -218,6 +219,10 @@ export function threadFooter(
       // must not announce a failure — the answer is the way forward, not a retry.
       if (awaitingAnswer) {
         return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
+      }
+      // A monitoring hand-off (#1945): the error names why it stopped and whose move it is.
+      if (monitorHandoff) {
+        return { state: 'closed', tone: 'dim', label: error ? `Session closed — ${error}` : 'Session closed — monitoring stopped' }
       }
       // Legacy idle close: housekeeping, so it reads like `done` (spec 2026-11-04-idle-closed-attention-state).
       if (idleClosed) {
