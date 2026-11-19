@@ -65,7 +65,7 @@ export function MarkdownPreview({
   return (
     <div data-slot="diff-markdown-preview" className="px-6 py-6">
       {partial ? (
-        <p className="mx-auto mb-4 max-w-[72ch] text-xs text-soft-foreground">Showing the changed sections only.</p>
+        <p className="mx-auto mb-4 max-w-[72ch] text-label text-muted-foreground">Showing the changed sections only.</p>
       ) : null}
       <Markdown variant="document" urlTransform={urlTransform}>
         {full ?? fromPatch.text}

@@ -439,6 +439,24 @@ describe('RunManager.recordTurnEnd', () => {
     expect(after?.prNumber).toBe(500);
   });
 
+  it('the first marker title sticks — a later CEZ:TITLE does not rename the task', async () => {
+    const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=adding comment threads');
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=fixing the sse watchdog');
+    const after = store.getRun(record.id);
+    expect(after?.titleSummary).toBe('adding comment threads');
+    expect(after?.titleOrigin).toBe('marker');
+  });
+
+  it('a CEZ:TITLE after the namer settled the title does not rename the task (#1252)', async () => {
+    const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    store.updateRun(record.id, { titleSummary: 'fixing the sse watchdog', titleOrigin: 'auto', titleSettled: true });
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=carrying forward a pr');
+    const after = store.getRun(record.id);
+    expect(after?.titleSummary).toBe('fixing the sse watchdog');
+    expect(after?.titleOrigin).toBe('auto');
+  });
+
   it('a junk CEZ:TITLE never blanks the title', async () => {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
     await manager.recordTurnEnd(record.id, 'CEZ:PR=500\nCEZ:TITLE=...');
@@ -1792,7 +1810,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     vi.advanceTimersByTime(60_000);
     expect(ended).toHaveBeenCalledOnce();
     expect((state as { idleClosed?: boolean }).idleClosed).toBe(true);
-    expect(readEvents(record.id).some((event) => event.message === 'session closed after 15m of inactivity')).toBe(true);
+    // An idle close is housekeeping: the thread keeps ending on its last real message.
+    expect(store.readEvents(record.id).some((event) => String((event as { message?: unknown }).message).includes('inactivity'))).toBe(false);
     vi.useRealTimers();
   });
 
@@ -1818,7 +1837,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(ended).not.toHaveBeenCalled();
     vi.advanceTimersByTime(15 * 60_000);
     expect(ended).toHaveBeenCalledOnce();
-    expect(readEvents(record.id).some((event) => event.message === 'session closed after 30m of inactivity')).toBe(true);
+    expect(ended).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 
@@ -2115,33 +2134,61 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(store.getRun(record.id)?.error).toContain('before the question was answered');
   }, 30_000);
 
-  it('settles an ordinary final wait as failed when inactivity closes the session', async () => {
+  /** Idle park (spec 2026-11-04-idle-closed-attention-state § Revision): an idle close frees the
+   *  process and the slot, and nothing else — the record keeps the state the user last saw. */
+  const idleClose = async (id: string): Promise<void> => {
+    const live = (manager as unknown as {
+      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
+    }).active.get(id)!;
+    live.idleClosed = true;
+    live.session!.end();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), { timeout: 15_000 });
+  };
+
+  it('keeps an ordinary final wait waiting when inactivity closes the session, and a message reopens it', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
     currentId = record.id;
     await waitFor(record.id, (r) => r?.status === 'waiting');
+    const before = store.getRun(record.id)!;
 
-    const active = (manager as unknown as {
-      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
-    }).active.get(record.id);
-    active!.idleClosed = true;
-    active!.session!.end();
+    await idleClose(record.id);
+    const parked = store.getRun(record.id)!;
+    // What a client reads is the pre-close state: no failure, no error, the same wait.
+    expect(parked).toMatchObject({ status: 'waiting', waitingSince: before.waitingSince });
+    expect(parked.error).toBeUndefined();
+    expect(parked.finishedAt).toBeUndefined();
+    expect(parked.idleClosedAt).toBeDefined();
+    expect(parked.steps[0]?.status).toBe('waiting');
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && /fail|inactivity/.test(String(e.message)))).toBe(false);
 
-    await waitFor(record.id, (r) => r?.status === 'failed');
-    expect(store.getRun(record.id)?.error).toContain('after inactivity');
-    // Stamped from the timer's flag, so the cockpit says "closed · idle", not "failed".
-    expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
-    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
-    // The rail must agree with the run: a failed run never shows its final step `done`.
-    expect(store.getRun(record.id)?.steps[0]?.status).toBe('failed');
-    expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'done')).toBe(false);
-    // The transcript marks it as an idle close, never "run failed" / a red step failure.
-    expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'failed' && e.idleClosed === true)).toBe(true);
-    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run failed'))).toBe(false);
-    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run closed after inactivity'))).toBe(true);
-    expect(manager.isActive(record.id)).toBe(false);
-  }, 30_000);
+    // The composer's ordinary message (`POST /messages` → `sendMessage`) reopens it like Continue.
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'mock:done carry on' }])).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
+    const resumed = store.getRun(record.id)!;
+    expect(resumed.idleClosedAt).toBeUndefined();
+    expect(resumed.steps.map((step) => step.status)).toEqual(['done', 'done']);
+    expect(resumed.steps[1]?.sessionId).toBe(parked.steps[0]?.sessionId);
+  }, 40_000);
 
-  it('keeps the review gate for an idle-closed final wait whose worktree holds changes', async () => {
+  it('Cancel and Finish settle an idle park without a live session', async () => {
+    const cancelled = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = cancelled.id;
+    await waitFor(cancelled.id, (r) => r?.status === 'waiting');
+    await idleClose(cancelled.id);
+    expect(manager.cancel(cancelled.id)).toBe(true);
+    expect(store.getRun(cancelled.id)).toMatchObject({ status: 'cancelled' });
+    expect(store.getRun(cancelled.id)?.idleClosedAt).toBeUndefined();
+
+    const finished = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = finished.id;
+    await waitFor(finished.id, (r) => r?.status === 'waiting');
+    await idleClose(finished.id);
+    expect(manager.finish(finished.id)).toBe(true);
+    await waitFor(finished.id, (r) => r?.status === 'done');
+    expect(store.getRun(finished.id)?.steps[0]?.status).toBe('done');
+  }, 40_000);
+
+  it('an idle close never moves a final wait with changes to review', async () => {
     process.env.CEZ_REVIEW_GATE = '1';
     try {
       const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing' });
@@ -2151,51 +2198,29 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       expect(worktreePath).toBeTruthy();
       writeFileSync(join(worktreePath!, 'a.txt'), 'one\nchanged\n');
 
-      const active = (manager as unknown as {
-        active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
-      }).active.get(record.id);
-      active!.idleClosed = true;
-      active!.session!.end();
-
-      // `review` is the needs-you exit for real work (#489), never a success badge —
-      // inactivity must not take the diff and the draft-PR action away from the user.
-      await waitFor(record.id, (r) => r?.status === 'review');
-      expect(store.getRun(record.id)?.steps[0]?.status).toBe('done');
-      expect(manager.isActive(record.id)).toBe(false);
+      await idleClose(record.id);
+      expect(store.getRun(record.id)?.status).toBe('waiting');
+      expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
     } finally {
       delete process.env.CEZ_REVIEW_GATE;
     }
   }, 30_000);
 
-  /**
-   * The user did not answer, so the task still needs them. Closing the idle session frees the
-   * process and the slot, and the record is `failed` because nothing is running — but it carries
-   * `awaitingAnswerSince`, which is what keeps it under "needs you" in the cockpit instead of
-   * filing it as an outcome. Answering through Continue retires it.
-   */
-  it('keeps an unanswered final ask awaiting the user after the idle close, until Continue answers it', async () => {
+  it('keeps an unanswered final ask waiting on the user after the idle close, until the answer reopens it', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
     currentId = record.id;
     await waitFor(record.id, (r) => r?.status === 'waiting');
-    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined(); // live: plain `waiting`
+    const question = store.getRun(record.id)!.attentionRequest;
 
-    const live = (manager as unknown as {
-      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
-    }).active.get(record.id)!;
-    live.idleClosed = true;
-    live.session!.end();
+    await idleClose(record.id);
+    const parked = store.getRun(record.id)!;
+    expect(parked).toMatchObject({ status: 'waiting', askParked: true, attentionRequest: question });
+    expect(parked.awaitingAnswerSince).toBeUndefined();
+    expect(parked.error).toBeUndefined();
 
-    await waitFor(record.id, (r) => r?.status === 'failed');
-    const settled = store.getRun(record.id)!;
-    expect(settled.awaitingAnswerSince).toBeDefined();
-    expect(settled.awaitingAnswerSince).toEqual(settled.finishedAt);
-    expect(settled.error).toContain('before the question was answered');
-    expect(settled.idleClosedAt).toBeUndefined(); // still yellow "needs you", never "closed · idle"
-    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
-
-    expect(manager.continueRun(record.id, { text: 'mock:done use zod' })).toEqual({ ok: true });
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'mock:done use zod' }])).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
-    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
+    expect(store.getRun(record.id)?.askParked).toBeUndefined();
   }, 40_000);
 
   it('keeps an unanswered ask awaiting the user when the parked session fails instead of idling out', async () => {
@@ -2213,7 +2238,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
 
-  it('keeps an ask raised on a continuation awaiting the user after its idle close', async () => {
+  it('keeps an ask raised on a continuation waiting on the user after its idle close', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'do the first thing', worktree: false });
     currentId = record.id;
     await waitFor(record.id, (r) => r?.status === 'waiting');
@@ -2223,16 +2248,10 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(manager.continueRun(record.id, { text: 'mock:ask which library?' })).toEqual({ ok: true });
     await waitFor(record.id, (r) => r?.status === 'waiting');
 
-    const live = (manager as unknown as {
-      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
-    }).active.get(record.id)!;
-    live.idleClosed = true;
-    live.session!.end();
-
-    await waitFor(record.id, (r) => r?.status === 'failed');
-    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
-    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
-    expect(store.getRun(record.id)?.askParked).toBeUndefined();
+    await idleClose(record.id);
+    expect(store.getRun(record.id)).toMatchObject({ status: 'waiting', askParked: true });
+    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
   }, 40_000);
 
   /**
@@ -2267,14 +2286,13 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(live.askPark).toBeUndefined();
     expect(readEvents(record.id).filter((e) => e.type === 'ask.requested')).toHaveLength(asksBefore);
 
-    live.idleClosed = true;
-    live.session!.end();
-    await waitFor(record.id, (r) => r?.status === 'failed');
-    expect(store.getRun(record.id)?.error).toContain('after inactivity');
-    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
-    // The continuation's idle settle stamps it too.
-    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
-    // …and Continue retires it with the `failed` status.
+    await idleClose(record.id);
+    // The continuation's idle close parks it too, with no question left to answer.
+    expect(store.getRun(record.id)).toMatchObject({ status: 'waiting' });
+    expect(store.getRun(record.id)?.error).toBeUndefined();
+    expect(store.getRun(record.id)?.askParked).toBeUndefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
+    // …and Continue reopens it, retiring the marker.
     expect(manager.continueRun(record.id, { text: 'mock:done finish it' })).toEqual({ ok: true });
     await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
     expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();

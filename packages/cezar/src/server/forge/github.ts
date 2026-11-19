@@ -9,6 +9,7 @@ import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
 import { baseDivergence, rewriteLeaseArg } from '../git-changes.ts';
 import { getRepoInfo } from '../git.ts';
 import { fetchIssueMetadata } from './github-issue-metadata.ts';
+import { reportPrClosed } from './pr-closed.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -1677,6 +1678,60 @@ export async function fetchPrHeadChecks(repoRoot: string, number: number, sha: s
   }
 }
 
+const prWatchSchema = z.object({
+  state: z.string().nullish(),
+  headRefOid: z.string().min(1),
+  mergeable: z.string().nullish(),
+  reviewDecision: z.string().nullish(),
+  statusCheckRollup: z
+    .array(
+      z.object({
+        name: z.string().nullish(),
+        context: z.string().nullish(),
+        workflowName: z.string().nullish(),
+        status: z.string().nullish(),
+        conclusion: z.string().nullish(),
+        state: z.string().nullish(),
+      }),
+    )
+    .nullish(),
+  reviews: z.array(z.unknown()).nullish(),
+  comments: z.array(z.unknown()).nullish(),
+});
+
+/**
+ * What a parked monitor is waiting on, as one comparable string (#2040): the PR's state, head,
+ * conflict flag, review decision, every check's status and the review/comment counts. Timings
+ * are left out so a still-running check reads the same on every poll. `null` = cannot tell.
+ */
+export async function fetchPrWatchFingerprint(repoRoot: string, number: number): Promise<string | null> {
+  if (process.env.CEZ_DRY_RUN === '1') return null;
+  try {
+    const raw = await gh(repoRoot, [
+      'pr', 'view', String(number),
+      '--json', 'state,headRefOid,mergeable,reviewDecision,statusCheckRollup,reviews,comments',
+    ]);
+    const parsed = prWatchSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return null;
+    const pr = parsed.data;
+    const checks = (pr.statusCheckRollup ?? [])
+      .map((c) => [c.workflowName ?? '', c.name ?? c.context ?? '', c.status ?? '', c.conclusion ?? c.state ?? ''].join('\u0000'))
+      .sort();
+    return JSON.stringify({
+      state: pr.state ?? null,
+      head: pr.headRefOid,
+      // UNKNOWN ↔ MERGEABLE flips while GitHub recomputes; only a conflict is actionable.
+      conflicting: pr.mergeable === 'CONFLICTING',
+      reviewDecision: pr.reviewDecision ?? null,
+      checks,
+      reviews: pr.reviews?.length ?? 0,
+      comments: pr.comments?.length ?? 0,
+    });
+  } catch {
+    return null;
+  }
+}
+
 /** CEZ_DRY_RUN=1 — glyphs straight from the mock catalog so the offline demo shows checks. */
 function mockGithubChecks(numbers: number[]): GithubChecksData {
   const byNumber = new Map(mockGithub().prs.map((p) => [p.number, (p.checks ?? null) as ChecksGlyph]));
@@ -2461,6 +2516,7 @@ export async function fetchGithubRefStatus(
           ? (refStatusCache.get(refStatusKey(repoRoot, n))?.unknownSince ?? storedAt)
           : undefined;
       file(n, entry, unknownSince);
+      if (entry?.kind === 'pr' && (entry.status === 'merged' || entry.status === 'closed')) reportPrClosed(repoRoot, n, entry.status);
       refStatusCache.set(refStatusKey(repoRoot, n), {
         at: storedAt,
         resolved: entry,
@@ -2518,7 +2574,8 @@ function mockGithubRefStatus(prs: number[], issues: number[]): GithubRefStatusDa
   const byPr = new Map(catalog.prs.map((p) => [p.number, p]));
   const byIssue = new Set(catalog.issues.map((i) => i.number));
   const out: GithubRefStatusData = { available: true, prs: {}, issues: {}, recheckAfterMs: CACHE_MS };
-  for (const n of prs) {
+  // Filed under what the number IS, whichever list asked — the real `issueOrPullRequest` does.
+  for (const n of new Set([...prs, ...issues])) {
     const pr = byPr.get(n);
     if (pr) {
       out.prs[n] = derivePrReferenceStatus({
@@ -2527,9 +2584,8 @@ function mockGithubRefStatus(prs: number[], issues: number[]): GithubRefStatusDa
         reviewDecision: null,
         checks: (pr.checks ?? null) as ChecksGlyph,
       });
-    }
+    } else if (byIssue.has(n)) out.issues[n] = 'open';
   }
-  for (const n of issues) if (byIssue.has(n)) out.issues[n] = 'open';
   return out;
 }
 
@@ -3262,10 +3318,16 @@ function mergeCheckState(check: z.infer<typeof mergeCheckSchema>): ForgePrCheck[
 /** The single row an `aggregate` check tier collapses to — see `ForgePrMergeState['checksTier']`. */
 export const AGGREGATE_CHECK_NAME = 'All checks';
 
+/**
+ * The base branch's merge rules, from classic branch protection AND repository rulesets.
+ * `reviewsRequired` is `false` only when both sources were read and neither asks for a review.
+ */
+export type MergeRequirements = { readable: boolean; requiredChecks: string[]; reviewsRequired?: boolean };
+
 export function normalizeMergeState(
   raw: unknown,
   policyRaw: unknown,
-  requirements: { readable: boolean; requiredChecks: string[] } = {
+  requirements: MergeRequirements = {
     readable: false,
     requiredChecks: [],
   },
@@ -3281,14 +3343,19 @@ export function normalizeMergeState(
       : pr.mergeable?.toUpperCase() === 'CONFLICTING'
         ? 'conflicting'
         : 'unknown';
+  const decision = (pr.reviewDecision ?? '').toUpperCase();
   const reviewDecision: ForgePrMergeState['reviewDecision'] =
-    pr.reviewDecision?.toUpperCase() === 'APPROVED'
+    decision === 'APPROVED'
       ? 'approved'
-      : pr.reviewDecision?.toUpperCase() === 'CHANGES_REQUESTED'
+      : decision === 'CHANGES_REQUESTED'
         ? 'changes-requested'
-        : pr.reviewDecision?.toUpperCase() === 'REVIEW_REQUIRED'
+        : decision === 'REVIEW_REQUIRED'
           ? 'review-required'
-          : 'unknown';
+          : // GitHub leaves the decision empty when no review is required — trust that only once the
+            // rules were read and agree, so an unreadable ruleset never turns into "not required".
+            decision === '' && requirements.readable && requirements.reviewsRequired === false
+            ? 'not-required'
+            : 'unknown';
   const checks: ForgePrCheck[] = (pr.statusCheckRollup ?? []).map((check) => ({
     name: check.name,
     state: mergeCheckState(check),
@@ -3438,6 +3505,120 @@ async function fetchMergeChecks(
   }
 }
 
+/** GitHub's 404s for a rule that is simply not configured — anything else (403, 401, a bare
+ *  "Not Found", a network error) means the rule could not be read. */
+const PROTECTION_ABSENT = /Branch not protected|Required status checks not enabled|Required pull request reviews not enabled/i;
+
+function protectionAbsent(err: unknown): boolean {
+  const text = [err instanceof Error ? err.message : String(err), ghStderr(err) ?? '', (err as { stdout?: unknown } | null)?.stdout]
+    .filter((part): part is string => typeof part === 'string')
+    .join('\n');
+  return /HTTP 404/.test(text) && PROTECTION_ABSENT.test(text);
+}
+
+/** GitHub's 403 when the repository's plan has no branch protection at all — a private repo on
+ *  GitHub Free (#2173). Matched on the body's exact message; any other 403 stays unreadable. */
+const PLAN_GATED_MESSAGE = 'Upgrade to GitHub Pro or make this repository public to enable this feature.';
+const PLAN_GATED = Symbol('plan-gated');
+const NOT_CONFIGURED = Symbol('not-configured');
+
+function planGated(err: unknown): boolean {
+  const stdout = (err as { stdout?: unknown } | null)?.stdout;
+  if (typeof stdout !== 'string') return false;
+  try {
+    const body = z.object({ message: z.string(), status: z.union([z.string(), z.number()]).nullish() }).parse(JSON.parse(stdout));
+    // Older GitHub Enterprise bodies carry no `status`; `gh` still names the code on stderr.
+    const forbidden = body.status != null ? String(body.status) === '403' : /\(HTTP 403\)/.test(ghStderr(err) ?? '');
+    return forbidden && body.message === PLAN_GATED_MESSAGE;
+  } catch {
+    return false;
+  }
+}
+
+const rulesetRulesSchema = z.array(
+  z.object({ type: z.string(), parameters: z.record(z.string(), z.unknown()).nullish() }).passthrough(),
+);
+
+/**
+ * The base branch's required checks and reviews, merged from classic branch protection and
+ * repository rulesets — classic protection alone misses every ruleset-based requirement. Any read
+ * that fails for a reason other than "not configured" leaves the whole answer unreadable — except
+ * a plan-gated 403 on a branch GitHub itself reports unprotected (#2173).
+ */
+async function fetchMergeRequirements(
+  repoRoot: string,
+  repoRef: GithubRepoRef,
+  base: string,
+): Promise<MergeRequirements> {
+  const repo = `repos/${repoRef.owner}/${repoRef.repo}`;
+  const branch = encodeURIComponent(base);
+  const classic = <T>(path: string, parse: (output: string) => T) =>
+    gh(repoRoot, ['api', `${repo}/branches/${branch}/protection/${path}`])
+      .then(parse)
+      .catch((err: unknown) => (protectionAbsent(err) ? NOT_CONFIGURED : planGated(err) ? PLAN_GATED : null));
+  const [checksRead, reviewsRead, rulesRead] = await Promise.all([
+    classic('required_status_checks', (output) => {
+      const body = z
+        .object({ contexts: z.array(z.string()).nullish(), checks: z.array(z.object({ context: z.string() })).nullish() })
+        .parse(JSON.parse(output));
+      return [...(body.contexts ?? []), ...(body.checks ?? []).map((check) => check.context)];
+    }),
+    classic('required_pull_request_reviews', (output) => {
+      const body = z
+        .object({ required_approving_review_count: z.number().nullish(), require_code_owner_reviews: z.boolean().nullish() })
+        .parse(JSON.parse(output));
+      return (body.required_approving_review_count ?? 0) > 0 || body.require_code_owner_reviews === true;
+    }),
+    gh(repoRoot, ['api', `${repo}/rules/branches/${branch}?per_page=100`])
+      .then((output) => rulesetRulesSchema.parse(JSON.parse(output)))
+      .catch((err: unknown) => (planGated(err) ? PLAN_GATED : null)),
+  ]);
+  if (checksRead === null || reviewsRead === null || rulesRead === null) {
+    return { readable: false, requiredChecks: [] };
+  }
+  if (checksRead === PLAN_GATED || reviewsRead === PLAN_GATED || rulesRead === PLAN_GATED) {
+    // The plan hides the rules, so only the branch's own `protected` flag (which covers classic
+    // protection and rulesets) can say there are none — and nothing we did read may disagree.
+    const quiet =
+      (checksRead === PLAN_GATED || checksRead === NOT_CONFIGURED) &&
+      (reviewsRead === PLAN_GATED || reviewsRead === NOT_CONFIGURED) &&
+      (rulesRead === PLAN_GATED || rulesRead.length === 0);
+    if (!quiet || !(await branchUnprotected(repoRoot, repo, base))) return { readable: false, requiredChecks: [] };
+    return { readable: true, requiredChecks: [], reviewsRequired: false };
+  }
+  const classicChecks = checksRead === NOT_CONFIGURED ? [] : checksRead;
+  const classicReviews = reviewsRead === NOT_CONFIGURED ? false : reviewsRead;
+  const rules = rulesRead;
+  const requiredChecks = new Set(classicChecks);
+  let reviewsRequired = classicReviews;
+  for (const rule of rules) {
+    if (rule.type === 'required_status_checks') {
+      const parsed = z
+        .object({ required_status_checks: z.array(z.object({ context: z.string() })) })
+        .safeParse(rule.parameters);
+      // A rule we cannot read is a requirement we cannot honour — never drop it silently.
+      if (!parsed.success) return { readable: false, requiredChecks: [] };
+      for (const check of parsed.data.required_status_checks) requiredChecks.add(check.context);
+    } else if (rule.type === 'pull_request') {
+      const params = rule.parameters ?? {};
+      const count = typeof params.required_approving_review_count === 'number' ? params.required_approving_review_count : 1;
+      if (count > 0 || params.require_code_owner_review === true) reviewsRequired = true;
+    }
+  }
+  return { readable: true, requiredChecks: [...requiredChecks].sort(), reviewsRequired };
+}
+
+/** True only when GitHub's answer for exactly `base` parses and says `protected: false`. */
+async function branchUnprotected(repoRoot: string, repo: string, base: string): Promise<boolean> {
+  try {
+    const output = await gh(repoRoot, ['api', `${repo}/branches/${encodeURIComponent(base)}`]);
+    const body = z.object({ name: z.string(), protected: z.boolean() }).parse(JSON.parse(output));
+    return body.name === base && body.protected === false;
+  } catch {
+    return false;
+  }
+}
+
 /** Test hook — the merge-state cache would otherwise leak state across cases in one process. */
 export function __clearMergeStateCacheForTests(): void {
   mergeStateCache.clear();
@@ -3487,16 +3668,9 @@ export async function fetchPrMergeState(
       'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision',
     ]);
     const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
-    const [policyOut, requiredChecks, checks] = await Promise.all([
+    const [policyOut, requirements, checks] = await Promise.all([
       gh(repoRoot, ['api', `repos/${repoRef.owner}/${repoRef.repo}`]),
-      gh(repoRoot, [
-        'api',
-        `repos/${repoRef.owner}/${repoRef.repo}/branches/${encodeURIComponent(parsedPr.baseRefName)}/protection/required_status_checks`,
-        '--jq',
-        '[.contexts[]?, .checks[]?.context] | unique',
-      ])
-        .then((output) => ({ readable: true, requiredChecks: z.array(z.string()).parse(JSON.parse(output)) }))
-        .catch(() => ({ readable: false, requiredChecks: [] as string[] })),
+      fetchMergeRequirements(repoRoot, repoRef, parsedPr.baseRefName),
       fetchMergeChecks(repoRoot, repoRef, number),
     ]);
     const value: ForgePrMergeStateResult = {
@@ -3504,11 +3678,13 @@ export async function fetchPrMergeState(
       mergeState: normalizeMergeState(
         { ...parsedPr, statusCheckRollup: checks.rollup },
         JSON.parse(policyOut),
-        requiredChecks,
+        requirements,
         { tier: checks.tier, ...(checks.reason ? { reason: checks.reason } : {}) },
       ),
     };
     mergeStateCache.set(key, { at: Date.now(), value });
+    const closed = value.mergeState.state;
+    if (closed === 'merged' || closed === 'closed') reportPrClosed(repoRoot, number, closed);
     return value;
   } catch (error) {
     // `whyLine`, not `firstLine`: a reason of "Command failed: gh pr view 353 --json …" is the

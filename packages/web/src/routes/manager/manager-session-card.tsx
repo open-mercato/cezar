@@ -1,13 +1,15 @@
 import { ChevronRightIcon } from 'lucide-react'
 import { Link } from 'react-router'
 
-import { useRunsIndex } from '@/api/queries'
+import { useProjects, useRunsIndex } from '@/api/queries'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { StatusDot } from '@/components/status-dot'
 import { Skeleton } from '@/components/ui/skeleton'
 import { deriveAttention } from '@/lib/attention'
+import { shortAge } from '@/lib/format'
 import type { ManagerOrigin } from '@/lib/managers'
 import { runTitle } from '@/lib/task-groups'
+import { useNow } from '@/lib/use-now'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 
 /** The chip inside a sentence names the task; its card follows the block. */
@@ -45,6 +47,10 @@ export function SessionCard({
   const run = index.data?.runs.find((entry) => entry.projectId === projectId && entry.id === runId)
   const stat = run?.diffStat
   const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
+  const project = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name
+  const now = useNow(30_000)
+  // "project · step · age" (design, Proposal 10): the where and the when beside the status.
+  const where = [project, run ? shortAge(run.lastActivityAt, now) : ''].filter(Boolean).join(' · ')
   return (
     <div className="my-3">
       <Link
@@ -52,7 +58,7 @@ export function SessionCard({
         state={{ manager: origin }}
         data-slot="session-card"
         data-run={runId}
-        className="flex w-full max-w-64 items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="flex w-full max-w-sm items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         {/* Two lines while the index loads, as the loaded card has: its growth shifted a pinned
             transcript on every cold deep link (CLS 0.5 on a phone). */}
@@ -70,7 +76,7 @@ export function SessionCard({
             <span className="block truncate text-sm font-semibold">
               {run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`}
             </span>
-            {attention || stat ? (
+            {attention || stat || where ? (
               <span className="mt-0.5 flex min-h-4 items-center gap-2">
                 {attention ? (
                   <span className="flex items-center gap-1.5 text-meta text-muted-foreground">
@@ -78,6 +84,7 @@ export function SessionCard({
                     {attention.label}
                   </span>
                 ) : null}
+                {where ? <span data-slot="session-card-where" className="truncate text-meta text-muted-foreground">{where}</span> : null}
                 {stat ? <DiffStatLabel stat={stat} /> : null}
               </span>
             ) : null}

@@ -54,8 +54,48 @@ const stateSchema = z
     /** Replies still streaming at that read: at or under `readSeq`, yet unread once they settle. */
     readStreaming: z.array(z.string()).catch([]),
     watchFailures: z.number().int().min(0).catch(0),
+    /** Diagnostics: the newest failed turn's cause, as the agent printed it. Never shown raw. */
+    lastFailure: z
+      .object({ at: z.string(), turn: z.string(), kind: z.string(), cause: z.string() })
+      .optional()
+      .catch(undefined),
+    /** The one notice a run of failed watch checks keeps rewriting, rather than adding lines. */
+    watchNoticeId: z.string().optional().catch(undefined),
     /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),
+    /** Tasks this manager hears about, `<projectId>/<runId>` → since when (spec § Followed tasks). */
+    follows: z.record(z.string(), z.object({
+      at: z.string(),
+      created: z.boolean().optional(),
+      /** When its recent follow-up turns were owed: bounds a manager↔task ping-pong. */
+      turns: z.array(z.string()).optional(),
+    })).catch({}),
+    /** Tasks it created, `<projectId>/<runId>` → when: kept past an unfollow (the Tasks table's manager facet). */
+    created: z.record(z.string(), z.string()).catch({}),
+    /** Followed-task events the follow-up turn has not taken up yet; `ledger` is the event's identity. */
+    followups: z.array(z.object({ ledger: z.string(), line: z.string() })).catch([]),
+    /** The MCP servers the last Claude session reported (spec 2026-11-12-manager-connectors). */
+    connectors: z
+      .object({
+        observedAt: z.string(),
+        servers: z.array(z.object({ key: z.string(), name: z.string(), status: z.string(), tools: z.array(z.string()) })),
+      })
+      .optional()
+      .catch(undefined),
+    /** Bash commands the policy refused, newest first (spec 2026-10-31-managers, Safety). */
+    bashDenials: z
+      .array(z.object({ command: z.string(), reason: z.string(), at: z.string(), count: z.number().int().min(1) }))
+      .catch([]),
+    /** A usage limit's reset: no timed turn runs before it, then the chat it cut off replays. */
+    resume: z
+      .object({
+        at: z.string(),
+        /** The assistant messages showing the hint, cleared when it fires or is cancelled. */
+        messageIds: z.array(z.string()),
+        chat: z.object({ text: z.string(), paths: z.array(z.string()), messageIds: z.array(z.string()) }).optional(),
+      })
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 
@@ -242,6 +282,13 @@ export class ManagerStore {
   workdir(id: string): string {
     const dir = join(this.dir(id), 'workdir');
     assertCezarHomeWriteIsSandboxed(dir);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  }
+
+  /** The one place a Claude manager may Write: files it hands to a task with `--file`. */
+  filesDir(id: string): string {
+    const dir = join(this.workdir(id), 'files');
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     return dir;
   }

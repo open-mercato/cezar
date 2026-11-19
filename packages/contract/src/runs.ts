@@ -10,6 +10,7 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+import { taskAskRecordSchema } from './questions.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
@@ -121,6 +122,8 @@ export const stepStateSchema = z.object({
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),
+  /** Raw model this turn was spawned with ('' = deliberately auto); absent on older records. */
+  model: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -298,6 +301,10 @@ export const runRecordSchema = z.object({
   status: runStatusSchema,
   attentionRequest: webhookAttentionRequestSchema.optional(),
   completionReason: webhookCompletionReasonSchema.optional(),
+  /** The run's `CEZ:ASK` questions, newest last, at most `TASK_ASKS_MAX` (Questions inbox spec). */
+  asks: z.array(taskAskRecordSchema).optional(),
+  /** Notes for the next Continue: a question the user skipped while the session was closed. */
+  askNotes: z.array(z.string()).optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
@@ -328,10 +335,15 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
-  /** ISO-8601 instant the inactivity timer closed a session nobody replied to, settling the run
-   *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
-   *  failure (spec 2026-11-04-idle-closed-attention-state). */
+  /** ISO-8601 instant the inactivity timer closed the session (spec 2026-11-04-idle-closed-attention-state).
+   *  On a `waiting` run: housekeeping, no live process, and a message reopens it. On a `failed` run
+   *  (older records, dispatched children): it settled the run, and the cockpit shows a quiet "idle". */
   idleClosedAt: z.string().optional(),
+  /** The manager that started the task (spec 2026-10-31-managers). */
+  startedByManager: z.object({ id: z.string(), name: z.string() }).optional(),
+  /** Why a `cancelled` run was stopped, and who stopped it, when the canceller said so. */
+  cancelReason: z.string().optional(),
+  cancelledBy: z.string().optional(),
   /** ISO-8601 instant the current wait on the user began. Kept past the session while
    *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
   waitingSince: z.string().optional(),
@@ -371,6 +383,8 @@ export const runRecordSchema = z.object({
   /** 'user' = renamed via PATCH, never auto-overwritten; 'marker' = agent-declared via
    *  CEZ:TITLE (spec 2026-07-18-task-ref-markers); 'auto' = namer-owned. */
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  /** The live title refresh already fired; the title no longer follows the conversation. */
+  titleSettled: z.boolean().optional(),
   /** References the agent declared via CEZ:PR/CEZ:ISSUE markers — authoritative over the namer
    *  for the matching kind. */
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
@@ -530,7 +544,7 @@ export const runIndexEntrySchema = z.object({
   /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
    *  so a cross-project row says "needs you" like every other surface rather than "failed". */
   awaitingAnswerSince: z.string().optional(),
-  /** A `failed` run the inactivity timer closed — `deriveAttention` paints it "closed · idle". */
+  /** The inactivity timer closed the run's session: housekeeping on `waiting`, a quiet "idle" on legacy `failed`. */
   idleClosedAt: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
@@ -688,6 +702,13 @@ export const createRunResponseSchema = z.union([
   z.object({ runs: z.array(runRecordSchema) }),
 ]);
 export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
+
+/** `POST /runs/:id/cancel` body, optional: why it was stopped and who stopped it, kept on the run. */
+export const cancelRunInputSchema = z.object({
+  reason: z.string().trim().min(1).max(2000).optional(),
+  cancelledBy: z.string().trim().min(1).max(200).optional(),
+});
+export type CancelRunInput = z.infer<typeof cancelRunInputSchema>;
 
 /** `POST /runs/:id/cancel` — genuinely a boolean: an already-settled run answers 200 + `false`. */
 export const cancelResponseSchema = z.object({ cancelled: z.boolean() });
@@ -1282,6 +1303,9 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    /** The manager starting this task (spec 2026-10-31-managers): provenance for `task cancel`'s
+     *  own-tasks rule and the manager's `startedBy`. Never an authorization by itself. */
+    startedByManager: z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(80) }).optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
@@ -1317,6 +1341,8 @@ export const messageInputSchema = z
     images: attachmentListSchema.default([]),
     /** One per message, reused by its retries: a key that already landed is not delivered again. */
     idempotencyKey: z.string().uuid().optional(),
+    /** Sent from an ask card: answers that card. Absent (typed in the composer): open cards stay open, flagged. */
+    askRequestId: z.string().min(1).max(200).optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
@@ -1340,6 +1366,8 @@ export const continueInputSchema = z.object({
   agentProfile: z.string().max(64).optional(),
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey: z.string().uuid().optional(),
+  /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
+  askRequestId: z.string().min(1).max(200).optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 

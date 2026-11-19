@@ -10,7 +10,7 @@ sources:
     line: 167
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
 ---
-Waiting-session idle timeout sets how many inactive minutes Cezar waits before closing a waiting backend session. You can return to the task later and resume it with Continue.
+Waiting-session idle timeout sets how many inactive minutes Cezar waits before closing a waiting backend session to free its resources. Nothing about the task changes: you can write to it at any time, and your message reopens the session.
 
 ## Where to find it
 
@@ -20,12 +20,12 @@ Settings → Global → Resources → Waiting-session idle timeout
 
 1. Set the number of minutes.
 2. Choose 0 to keep the session open without a time limit.
-3. Resume a closed session with Continue on the task.
+3. Write to the task as usual, from its composer or through a manager. The message reopens the closed session.
 
 ## What a closed task looks like
 
-When the timeout closes a session nobody replied to, the task shows an orange **closed · idle** dot instead of a red failure. It is not counted as failed, does not appear under "Needs you", and its footer reads "Closed after inactivity — Continue to pick it up".
+Closing an idle session is housekeeping, not a state change. The task keeps the state it had before: a task waiting for you still shows **needs you**, its thread still ends on the agent's last message, and the composer stays the ordinary one. Cezar does not mark it failed or closed, does not send a notification, and does not tell a manager about it. A task waiting on an answer to an agent's question keeps that question too.
 
-A task that was waiting on an answer to an agent's question stays under "Needs you" after its session closes, because the question is still yours to answer. If the task has changes and the review gate applies, it goes to review instead.
+Tasks dispatched by another task are the exception: their session still settles when it closes, so the parent receives a report. Tasks closed by an older version of Cezar show a neutral **idle** mark.
 
 > **Good to know**: Sessions marked as monitoring are exempt from this timeout.

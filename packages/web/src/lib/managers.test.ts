@@ -20,8 +20,21 @@ import {
   PR_LINK_PREFIX,
   projectsLabel,
   resolveManagerOrigin,
+  cardedTasks,
+  checkFailureCause,
+  everyLabel,
+  lastCheckResult,
+  managerRailSummary,
+  needsYouCount,
+  needsYouLabel,
+  nextCheckLabel,
+  streamingReply,
+  turnKindLabel,
+  watchingLine,
+  inlineReferenceText,
+  parseInlineReferences,
 } from './managers'
-import { managerFixture } from '@/routes/manager/manager-fixtures'
+import { assistantMessage, managerFixture, userMessage } from '@/routes/manager/manager-fixtures'
 
 afterEach(clearManagerOrigins)
 
@@ -77,6 +90,20 @@ describe('managerAttention', () => {
 })
 
 describe('parseManagerText', () => {
+  it('links project/N for a connected project, leaving markers, unknown projects and bare numbers alone', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }]
+    expect(parseManagerText('Assess frontends/2902 vs 2894, other/5 and [[pr:fe-1/3]]', [], named)).toEqual([
+      { kind: 'markdown', text: 'Assess [#2902](#cez-issue/fe-1/2902) vs 2894, other/5 and [#3](#cez-pr/fe-1/3)' },
+    ])
+  })
+
+  it('keeps a markdown link target intact, but links a parenthesised project/N', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }]
+    expect(parseManagerText('[see](frontends/12) or (frontends/2902)', [], named)).toEqual([
+      { kind: 'markdown', text: '[see](frontends/12) or ([#2902](#cez-issue/fe-1/2902))' },
+    ])
+  })
+
   it('makes a task alone on its line a card, and keeps the text around it', () => {
     expect(parseManagerText('Before\n\n[[task:alpha/run-1]]\n\nAfter')).toEqual([
       { kind: 'markdown', text: 'Before' },
@@ -272,6 +299,19 @@ describe('actionConfirms', () => {
     expect(actionConfirms(setting, 'merge-pr')).toBe(true)
     expect(actionConfirms(setting, 'enable-automation')).toBe(true)
   })
+
+  it('lets connector calls skip the step like the other known types', () => {
+    expect(actionConfirms({ 'connector-call': false }, 'connector-call')).toBe(false)
+    expect(actionConfirms(undefined, 'connector-call')).toBe(true)
+  })
+})
+
+describe('actionTitle', () => {
+  it('names a connector call by its server name, else its key', () => {
+    const call = { type: 'connector-call', connector: 'claude_ai_Gmail', tool: 'send_message', args: {} } as const
+    expect(actionTitle(call)).toBe('claude_ai_Gmail: send_message')
+    expect(actionTitle({ ...call, connectorName: 'claude.ai Gmail' })).toBe('claude.ai Gmail: send_message')
+  })
 })
 
 describe('managerReplyAnnouncement', () => {
@@ -294,5 +334,151 @@ describe('managerReplyAnnouncement', () => {
     expect(managerReplyAnnouncement('Ops', reply({ text: '', stopped: true }))).toBe('Ops replied. Response stopped.')
     const ask = { questions: [{ header: 'A', question: 'A?', options: [] }, { header: 'B', question: 'B?', options: [] }] }
     expect(managerReplyAnnouncement('Ops', reply({ text: 'Two things.', ask }))).toBe('Ops replied: Two things. 2 questions for you.')
+  })
+})
+
+describe('the screen around the chat', () => {
+  const now = new Date('2026-10-31T09:00:00.000Z')
+
+  it('counts and words what needs the user', () => {
+    expect(needsYouCount(managerFixture({ pendingActions: 2, pendingQuestions: 1 }))).toBe(3)
+    expect(needsYouLabel(managerFixture({ pendingActions: 2, pendingQuestions: 1 }))).toBe('2 approvals · 1 question')
+    expect(needsYouLabel(managerFixture({ pendingActions: 1 }))).toBe('1 approval')
+    expect(needsYouLabel(managerFixture({ pendingQuestions: 2 }))).toBe('2 questions')
+    expect(needsYouLabel(managerFixture())).toBe('')
+  })
+
+  it('maps a failed check to a cause the card can say, and offers another account only when that helps', () => {
+    expect(checkFailureCause('claude CLI exited with code 1')).toMatchObject({ kind: 'exit', switchAccount: false })
+    expect(checkFailureCause('claude CLI exited with code 1').sentence).toContain('exited with code 1')
+    expect(checkFailureCause('You have hit your usage limit until 14:00 · claude CLI exit 1')).toMatchObject({ kind: 'usage', switchAccount: true })
+    expect(checkFailureCause('Not logged in. Run claude login')).toMatchObject({ kind: 'auth', switchAccount: true })
+    expect(checkFailureCause('fetch failed: ECONNREFUSED 127.0.0.1:443')).toMatchObject({ kind: 'network', switchAccount: false })
+    expect(checkFailureCause('something odd')).toMatchObject({ kind: 'unknown', switchAccount: false })
+  })
+
+  it('says what a turn works on', () => {
+    expect(turnKindLabel(undefined)).toBe('')
+    expect(turnKindLabel({ turn: 'watch' })).toBe('the watch check')
+    expect(turnKindLabel({ turn: 'job', jobName: 'Nightly' })).toBe('the job Nightly')
+    expect(turnKindLabel({ turn: 'job' })).toBe('a job')
+    expect(turnKindLabel({ turn: 'chat' })).toBe('your message')
+    expect(streamingReply([assistantMessage(1, { turn: 'watch', streaming: true }), userMessage(2)])?.turn).toBe('watch')
+    expect(streamingReply([assistantMessage(1)])).toBeUndefined()
+  })
+
+  it('counts down to the next check', () => {
+    expect(nextCheckLabel('2026-10-31T09:09:00.000Z', now)).toBe('in 9 min')
+    expect(nextCheckLabel('2026-10-31T08:59:00.000Z', now)).toBe('now')
+    expect(nextCheckLabel('2026-10-31T13:00:00.000Z', now)).toBe('in 4 h')
+    expect(nextCheckLabel(undefined, now)).toBe('')
+    expect(nextCheckLabel('nope', now)).toBe('')
+  })
+
+  it('writes the header line from what the manager watches', () => {
+    expect(watchingLine({ names: ['cezar', 'om-skills'], access: ['write', 'write'], cronMinutes: 15, nextCheckAt: '2026-10-31T09:09:00.000Z', now }))
+      .toBe('Watching cezar, om-skills · write · every 15 min · next check in 9 min')
+    expect(watchingLine({ names: ['a', 'b', 'c', 'd'], access: ['write', 'read', 'read', 'read'], cronMinutes: 60, now }))
+      .toBe('Watching 4 projects · mixed · every 1 hour')
+    expect(watchingLine({ names: ['a'], access: ['read'], cronMinutes: 0, nextCheckAt: '2026-10-31T09:09:00.000Z', now }))
+      .toBe('Watching a · read-only · checks off')
+    expect(watchingLine({ names: [], access: [], cronMinutes: 15, now })).toBe('Watching nothing yet · every 15 min')
+  })
+
+  it('sums the rail footer without claiming a spend it does not have', () => {
+    expect(managerRailSummary([managerFixture(), managerFixture({ connectedProjectIds: ['beta', 'gamma'] })])).toBe('2 managers · 3 projects watched')
+    expect(managerRailSummary([managerFixture({ connectedProjectIds: ['alpha'] })])).toBe('1 manager · 1 project watched')
+  })
+
+  it('names a job cadence', () => {
+    expect(everyLabel(15)).toBe('every 15 min')
+    expect(everyLabel(60)).toBe('hourly')
+    expect(everyLabel(120)).toBe('every 2 hours')
+    expect(everyLabel(1440)).toBe('daily')
+  })
+
+  it('lists the tasks the replies carded, newest first and once each', () => {
+    expect(cardedTasks([
+      assistantMessage(1, { text: '[[task:alpha/one]]' }),
+      assistantMessage(2, { text: 'Started [[task:alpha/two]] and [[task:alpha/one]] again.' }),
+      assistantMessage(3, { text: '', commands: [{ id: 'c', tool: 'Bash', summary: 'cez-manager task create', output: '[[task:beta/three]]' }] }),
+    ])).toEqual([{ projectId: 'beta', runId: 'three' }, { projectId: 'alpha', runId: 'two' }, { projectId: 'alpha', runId: 'one' }])
+  })
+
+  it('reads the last check off the transcript only when it can', () => {
+    const at = '2026-10-31T09:18:00.000Z'
+    expect(lastCheckResult([assistantMessage(2, { turn: 'watch', at: '2026-10-31T09:18:30.000Z' })], at, false)).toBe('reported')
+    expect(lastCheckResult([assistantMessage(2, { turn: 'watch', at: '2026-10-31T09:18:30.000Z', error: 'boom' })], at, false)).toBe('failed')
+    // A reply from the check before it: not this one.
+    expect(lastCheckResult([assistantMessage(2, { turn: 'watch', at: '2026-10-31T09:00:00.000Z' })], at, true)).toBe('quiet')
+    expect(lastCheckResult([{ ...userMessage(1), at: '2026-10-31T09:00:00.000Z' }], at, false)).toBe('quiet')
+    expect(lastCheckResult([assistantMessage(2, { at: '2026-10-31T09:19:00.000Z' })], at, false)).toBeUndefined()
+    expect(lastCheckResult([], at, false)).toBeUndefined()
+    expect(lastCheckResult([], undefined, true)).toBeUndefined()
+  })
+})
+
+describe('parseInlineReferences', () => {
+  const projects = [{ id: 'alpha', repoUrl: 'https://github.com/o/alpha' }, { id: 'beta' }]
+
+  it('splits markers out of plain text', () => {
+    expect(parseInlineReferences('Assess [[pr:alpha/2897]] for [[task:beta/run-1]].', projects)).toEqual([
+      { kind: 'text', text: 'Assess ' },
+      { kind: 'pr', projectId: 'alpha', number: 2897 },
+      { kind: 'text', text: ' for ' },
+      { kind: 'task', projectId: 'beta', runId: 'run-1' },
+      { kind: 'text', text: '.' },
+    ])
+  })
+
+  it('resolves a bare #N against the project the text names, and leaves plain numbers alone', () => {
+    expect(parseInlineReferences('[[issue:beta/3]] then PR #12, not 2896', projects)).toEqual([
+      { kind: 'issue', projectId: 'beta', number: 3 },
+      { kind: 'text', text: ' then PR ' },
+      { kind: 'pr', projectId: 'beta', number: 12 },
+      { kind: 'text', text: ', not 2896' },
+    ])
+  })
+
+  it('keeps a bare #N as words when no single project owns it', () => {
+    expect(parseInlineReferences('Merge #12?', projects)).toEqual([{ kind: 'text', text: 'Merge #12?' }])
+  })
+
+  it('turns a connected GitHub URL into a chip', () => {
+    expect(parseInlineReferences('See https://github.com/o/alpha/pull/7', projects)).toEqual([
+      { kind: 'text', text: 'See ' },
+      { kind: 'pr', projectId: 'alpha', number: 7 },
+    ])
+  })
+
+  it('falls back to the words for an unknown project or a malformed number', () => {
+    expect(parseInlineReferences('[[pr:gone/12]] [[issue:alpha/x1]] [[task:gone/abcdef1234]]', projects)).toEqual([
+      { kind: 'text', text: '#12 issue x1 task abcdef12' },
+    ])
+    expect(inlineReferenceText('Assess [[pr:gone/12]]')).toBe('Assess #12')
+  })
+
+  it('resolves project/N and project#N for a connected project, by id or name, and nothing else', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }, { id: 'beta' }]
+    expect(parseInlineReferences('Should I assess frontends/2902 and check whether it makes 2894 unnecessary?', named)).toEqual([
+      { kind: 'text', text: 'Should I assess ' },
+      { kind: 'issue', projectId: 'fe-1', number: 2902 },
+      { kind: 'text', text: ' and check whether it makes 2894 unnecessary?' },
+    ])
+    expect(parseInlineReferences('PR Beta#7', named)).toEqual([{ kind: 'text', text: 'PR ' }, { kind: 'pr', projectId: 'beta', number: 7 }])
+    // Unknown projects, paths, URLs and dates stay words.
+    for (const text of ['Assess other/2902', 'see src/frontends/2902', 'https://x.dev/frontends/12', 'on 2026/11', 'frontends/2902/files']) {
+      expect(parseInlineReferences(text, named)).toEqual([{ kind: 'text', text }])
+    }
+  })
+
+  it('leaves a name two connected projects share as words, unless an id says which', () => {
+    const clones = [{ id: 'fe-1', name: 'frontends' }, { id: 'fe-2', name: 'frontends' }]
+    expect(parseInlineReferences('Assess frontends/2902', clones)).toEqual([{ kind: 'text', text: 'Assess frontends/2902' }])
+    expect(parseManagerText('Assess frontends/2902', [], clones)).toEqual([{ kind: 'markdown', text: 'Assess frontends/2902' }])
+    expect(parseInlineReferences('Assess fe-2/2902', clones)).toEqual([
+      { kind: 'text', text: 'Assess ' },
+      { kind: 'issue', projectId: 'fe-2', number: 2902 },
+    ])
   })
 })

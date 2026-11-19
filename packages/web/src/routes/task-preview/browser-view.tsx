@@ -14,6 +14,7 @@ import { openDesignProxy } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
@@ -611,7 +612,7 @@ export function BrowserView({
               onClick={() => {
                 if (index !== active) onChange({ ...state, active: index })
               }}
-              title={tab || 'New tab'}
+              aria-label={tab || 'New tab'}
               className="inline-block h-auto max-w-32 flex-none truncate rounded-none border-0 p-0 text-xs font-medium text-inherit hover:text-inherit focus-visible:underline focus-visible:ring-0 focus-visible:outline-0 data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:text-inherit group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
             >
               {tabLabel(tab)}
@@ -632,17 +633,18 @@ export function BrowserView({
           </div>
         ))}
         {tabs.length < MAX_BROWSER_TABS ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="New tab"
-            title="New tab"
-            onClick={addTab}
-            className="size-6 rounded"
-          >
-            <PlusIcon aria-hidden="true" className="size-3.5" />
-          </Button>
+          <IconTooltip label="New tab">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="New tab"
+              onClick={addTab}
+              className="size-6 rounded"
+            >
+              <PlusIcon aria-hidden="true" className="size-3.5" />
+            </Button>
+          </IconTooltip>
         ) : null}
       </TabsList>
       </Tabs>
@@ -696,34 +698,40 @@ export function BrowserView({
         {designOffered ? (
           // The one control in this toolbar that is not navigation, and the only one a user has
           // to be told exists — so it carries its name, and wears the accent while it is on.
-          <Button
-            type="button"
-            data-slot="browser-design-toggle"
-            variant={designActive ? 'primary' : 'outline'}
-            size="sm"
-            aria-pressed={designActive}
-            disabled={designUnavailable !== null || targetOrigin === null}
-            title={
-              designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
-              : designActive ? `Stop selecting elements (${formatChord(DESIGN_CHORD)} or Esc)`
-              : `Click an element of the page to send it to the agent (${formatChord(DESIGN_CHORD)})`)
+          <IconTooltip
+            label={
+              designActive
+                ? `Stop selecting elements (${formatChord(DESIGN_CHORD)} or Esc)`
+                : `Click an element of the page to send it to the agent (${formatChord(DESIGN_CHORD)})`
             }
-            onClick={() => {
-              if (!design) trackDesignModeEnabled('button')
-              setDesign((on) => !on)
-            }}
-            className="ml-1 disabled:opacity-40"
           >
-            <MousePointerClickIcon aria-hidden="true" className="size-3.5" />
-            Design Mode
-            <kbd
-              data-slot="browser-design-key"
-              aria-hidden="true"
-              className="ml-0.5 rounded border border-current/25 px-1 font-sans text-micro leading-4 opacity-70"
+            <Button
+              type="button"
+              data-slot="browser-design-toggle"
+              variant={designActive ? 'primary' : 'outline'}
+              size="sm"
+              aria-pressed={designActive}
+              disabled={designUnavailable !== null || targetOrigin === null}
+              // A disabled control cannot open a tooltip, so its reason stays a native title; the
+              // live control's hint is the one-line tooltip wrapped around it below.
+              title={designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses' : undefined)}
+              onClick={() => {
+                if (!design) trackDesignModeEnabled('button')
+                setDesign((on) => !on)
+              }}
+              className="ml-1 disabled:opacity-40"
             >
-              {formatChord(DESIGN_CHORD)}
-            </kbd>
-          </Button>
+              <MousePointerClickIcon aria-hidden="true" className="size-3.5" />
+              Design Mode
+              <kbd
+                data-slot="browser-design-key"
+                aria-hidden="true"
+                className="ml-0.5 rounded border border-current/25 px-1 font-sans text-micro leading-4 opacity-70"
+              >
+                {formatChord(DESIGN_CHORD)}
+              </kbd>
+            </Button>
+          </IconTooltip>
         ) : null}
       </div>
 
@@ -763,7 +771,7 @@ export function BrowserView({
             {status === 'failed' ? (
               <div
                 data-slot="browser-failed"
-                className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-2 text-xs text-soft-foreground"
+                className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-2 text-label text-muted-foreground"
               >
                 <span className="font-medium text-foreground">Could not open</span> — the page did not
                 respond or does not allow embedding. The address is still in the bar; you can fix it.
@@ -772,20 +780,20 @@ export function BrowserView({
             {adrift.length > 0 ? (
               <div data-slot="browser-design-adrift" className="absolute bottom-3 left-3 z-10 flex max-w-[60%] flex-wrap gap-1.5">
                 {adrift.map((mark) => (
-                  <Button
-                    key={mark.key}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    title="A note in progress — its element could not be found on this page"
-                    onClick={() => {
-                      setAnchor(mark.key)
-                      setNoteOpen(true)
-                    }}
-                    className="max-w-48"
-                  >
-                    <span className="truncate">Draft · {mark.label}</span>
-                  </Button>
+                  <IconTooltip key={mark.key} label="A note in progress — its element could not be found on this page">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setAnchor(mark.key)
+                        setNoteOpen(true)
+                      }}
+                      className="max-w-48"
+                    >
+                      <span className="truncate">Draft · {mark.label}</span>
+                    </Button>
+                  </IconTooltip>
                 ))}
               </div>
             ) : null}
@@ -795,7 +803,7 @@ export function BrowserView({
             {designActive && status === 'idle' && !noteVisible && adrift.length === 0 && !designTray ? (
               <p
                 data-slot="browser-design-hint"
-                className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-xs whitespace-nowrap text-soft-foreground shadow-sm"
+                className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-label whitespace-nowrap text-muted-foreground shadow-sm"
               >
                 {hasNote ? 'Click an element to write a note about it · Esc to stop' : 'Click an element to pick it · Esc to stop'}
               </p>
@@ -870,18 +878,19 @@ function ToolbarButton({
   disabled?: boolean
 }) {
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      disabled={disabled}
-      className="disabled:opacity-40"
-    >
-      {icon}
-    </Button>
+    <IconTooltip label={label}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={label}
+        onClick={onClick}
+        disabled={disabled}
+        className="disabled:opacity-40"
+      >
+        {icon}
+      </Button>
+    </IconTooltip>
   )
 }
 

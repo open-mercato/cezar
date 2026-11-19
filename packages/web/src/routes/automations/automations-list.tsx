@@ -1,21 +1,30 @@
-import { PlusIcon } from 'lucide-react'
+import { CircleHelpIcon, DownloadIcon, EllipsisIcon, PlusIcon, UploadIcon } from 'lucide-react'
 import { useState } from 'react'
 import { AUTOMATION_ORDER_LIMIT, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 
 import { Segmented, type SegmentedOption } from '@/components/segmented'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Link } from '@/lib/project-router'
 
-import { AutomationsGuideButton, AutomationsOnboarding } from './automations-onboarding'
+import { AutomationsGuide, AutomationsOnboarding } from './automations-onboarding'
 import { PageState, type AutomationsView } from './automations-route'
+import { schedulerState } from './automation-state'
 import { AutomationsTable } from './automations-table'
 import { moveAutomation, orderAutomations, type AutomationSort } from './automation-order'
 import { useAutomationOrder } from './use-automation-order'
 import { DayView } from './day-view'
 import { NextRunsRail, nextRuns } from './next-runs-rail'
 import { StatsStrip } from './stats-strip'
-import { ExportAutomationsButton, ImportAutomationsButton } from './automations-transfer'
+import { ImportAutomationsDialog, useExportAutomations } from './automations-transfer'
 import type { AutomationActions } from './use-automations'
 import { WeekView } from './week-view'
 
@@ -28,10 +37,14 @@ function viewOptions(count: number | undefined): SegmentedOption<AutomationsView
 }
 
 /**
- * `/automations` (spec 2026-09-14-automations-redesign § UI/UX 1–3): the header with the
- * List | Week | Day switch, then whichever of the three the `?view=` param names. One header for
- * all three so the switch never jumps; the status trio (scheduler · GitHub · zone) reads from the
- * same payload the table does, so "GitHub unavailable" and the capability-paused rows agree.
+ * `/automations` (spec 2026-09-14-automations-redesign § UI/UX 1–3): the header, then whichever
+ * of the three views the `?view=` param names. One header for all three so the switch never
+ * jumps; the status trio (scheduler · GitHub · zone) reads from the same payload the table does,
+ * so "GitHub unavailable" and the capability-paused rows agree.
+ *
+ * Two rows, not one (redesign 2026-11, "content over chrome"): the title row carries the name
+ * and the status words, the toolbar row the view switch, the ⋯ menu (Export · Import · How it
+ * works) and the one primary action.
  */
 export function AutomationsList({
   data,
@@ -47,50 +60,79 @@ export function AutomationsList({
   onViewChange: (view: AutomationsView) => void
 }) {
   const [railOpen, setRailOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const exporter = useExportAutomations()
   const { preferences, canSave, loadError, retry, setSort, setOrder } = useAutomationOrder()
   const now = Date.now()
   const upcoming = data ? nextRuns(data.automations, now, data.timeZone, 12) : []
   const pollCount = data ? data.automations.filter((automation) => automation.kind === 'github' && automation.enabled).length : 0
   const ordered = data ? orderAutomations(data.automations, preferences, data.timeZone, now) : []
   const withinLimit = ordered.length <= AUTOMATION_ORDER_LIMIT
+  const scheduler = data ? schedulerState(data.scheduler.state) : undefined
 
   return (
     <div data-route="automations" className="flex min-h-full flex-col">
-      {/* Below `md` the header may wrap onto a second row (the editor's rule): a phone cannot fit
-          the title, the view switch, How it works and New automation on one line. */}
-      <header className="sticky top-0 z-10 flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-border bg-background px-5 max-md:py-2 md:h-14 md:flex-nowrap">
-        <h1 className="text-base font-semibold">Automations</h1>
-        <Segmented<AutomationsView>
-          slot="automations-view"
-          label="View"
-          value={view}
-          options={viewOptions(data?.automations.length)}
-          onChange={onViewChange}
-        />
-        <div className="flex-1" />
-        {data ? (
-          <span
-            data-slot="automations-status"
-            className="inline-flex min-w-0 items-center gap-2 overflow-hidden text-label text-ellipsis whitespace-nowrap text-muted-foreground max-[1280px]:hidden"
-          >
-            <StatusDot tone={data.scheduler.state === 'scheduled' ? 'success' : 'neutral'} />
-            {data.scheduler.state === 'scheduled' ? 'Scheduler running' : 'Scheduler idle'}
-            <span className="text-soft-foreground">·</span>
-            {data.available ? 'GitHub available' : `GitHub unavailable${data.reason ? ` · ${data.reason}` : ''}`}
-            <span className="text-soft-foreground">·</span>
-            <span className="font-mono text-xs">{data.timeZone}</span>
-          </span>
-        ) : null}
-        <AutomationsGuideButton />
-        <ExportAutomationsButton disabled={!data?.automations.length} />
-        <ImportAutomationsButton />
-        <Button asChild className="shrink-0">
-          <Link to="/automations/new">
-            <PlusIcon className="size-[15px]" />
-            New automation
-          </Link>
-        </Button>
+      <header className="sticky top-0 z-10 shrink-0 border-b border-border bg-background">
+        <div data-slot="automations-title" className="flex h-14 items-center gap-3 px-5">
+          <h1 className="text-base font-semibold">Automations</h1>
+          <div className="flex-1" />
+          {data && scheduler ? (
+            <span
+              data-slot="automations-status"
+              className="inline-flex min-w-0 items-center gap-2 overflow-hidden text-label text-ellipsis whitespace-nowrap text-muted-foreground max-[1280px]:hidden"
+            >
+              <span className="inline-flex items-center gap-1.5"><StatusDot tone={scheduler.tone} pulse={scheduler.pulse} />{scheduler.label}</span>
+              <span className="text-soft-foreground">·</span>
+              <span className="inline-flex items-center gap-1.5"><StatusDot tone={data.available ? 'success' : 'neutral'} />{data.available ? 'GitHub available' : `GitHub unavailable${data.reason ? ` · ${data.reason}` : ''}`}</span>
+              <span className="text-soft-foreground">·</span>
+              <span>{data.timeZone}</span>
+            </span>
+          ) : null}
+        </div>
+        <div data-slot="automations-toolbar" className="flex min-h-12 flex-wrap items-center gap-3 px-5 pb-2 md:pb-0">
+          <Segmented<AutomationsView>
+            slot="automations-view"
+            label="View"
+            value={view}
+            options={viewOptions(data?.automations.length)}
+            onChange={onViewChange}
+          />
+          <div className="flex-1" />
+          <DropdownMenu>
+            <IconTooltip label="More actions">
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="More actions" data-slot="automations-more">
+                  <EllipsisIcon className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+            </IconTooltip>
+            <DropdownMenuContent align="end" className="w-[220px]">
+              <DropdownMenuItem data-action="automations-export" disabled={!data?.automations.length || exporter.busy} onSelect={() => void exporter.run()}>
+                <DownloadIcon />
+                Export automations
+              </DropdownMenuItem>
+              <DropdownMenuItem data-action="automations-import" onSelect={() => setImportOpen(true)}>
+                <UploadIcon />
+                Import automations…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem data-slot="automations-guide" onSelect={() => setGuideOpen(true)}>
+                <CircleHelpIcon />
+                How automations work
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button asChild className="shrink-0">
+            <Link to="/automations/new">
+              <PlusIcon className="size-[15px]" />
+              New automation
+            </Link>
+          </Button>
+        </div>
       </header>
+      <ImportAutomationsDialog open={importOpen} onOpenChange={setImportOpen} />
+      {guideOpen ? <AutomationsGuide onOpenChange={setGuideOpen} /> : null}
 
       {error !== undefined ? (
         <div className="p-5">
@@ -121,7 +163,7 @@ export function AutomationsList({
             onOpenRail={() => setRailOpen(true)}
           />
           <div className="flex flex-wrap items-center gap-3">
-            <span className="text-xs text-muted-foreground">Sort</span>
+            <span className="text-label text-muted-foreground">Sort</span>
             <fieldset disabled={!canSave} aria-label="Automation sort" className="min-w-0">
               <Segmented<AutomationSort>
                 slot="automations-sort"
@@ -136,12 +178,12 @@ export function AutomationsList({
               />
             </fieldset>
             {!canSave ? (
-              <span role="status" className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+              <span role="status" className="inline-flex items-center gap-2 text-label text-muted-foreground">
                 {loadError ? 'Saved order unavailable.' : 'Loading saved order…'}
                 {loadError ? <Button size="sm" variant="ghost" onClick={retry}>Retry</Button> : null}
               </span>
             ) : preferences.sort === 'manual' ? (
-              <span className="text-xs text-muted-foreground">
+              <span className="text-label text-muted-foreground">
                 {withinLimit ? 'Drag a handle or use Move up and down.' : `Manual placement supports up to ${AUTOMATION_ORDER_LIMIT} automations.`}
               </span>
             ) : null}

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+import { initCommand } from './init.ts';
+import { sweepOrphanedServers } from './core/opencode-server-registry.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
 import { allocateProjectSlug, listProjects, shouldRegisterProject } from './workspace/projects.ts';
 import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.ts';
@@ -20,10 +22,11 @@ import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
-import { RunStore } from './runs/store.ts';
+import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
+import { narrowForRelay } from './relay/scope.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
 import { registerRunningInstance } from './worktree-in-use.ts';
 import {
@@ -398,7 +401,11 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
+  const manager = new RunManager(store, repoRoot, {
+    semaphore,
+    projectId: bootProjectId,
+    hosted: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+  });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
@@ -470,7 +477,7 @@ async function serveCommand(
   }
   const recovered = store
     .listRuns()
-    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
+    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r)).length;
   await recoverWithProviderRuntimeAuthObservation(
     store,
     () => manager.recover(),
@@ -490,7 +497,7 @@ async function serveCommand(
     runs: semaphore,
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
-    trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+    trimPaths: () => !narrowForRelay(resolveCapabilities(process.env, bindHost)).localHandoff,
     restart: () => {
       void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
         store.flush({ pretty: true });
@@ -540,6 +547,14 @@ async function serveCommand(
   // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
   process.env.CEZ_API_URL = apiOrigin(bindHost, port);
   process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+  // #1498: reap `opencode serve` processes a dead cezar left behind (provable ones only).
+  if (process.env.CEZ_DRY_RUN !== '1') {
+    try {
+      sweepOrphanedServers();
+    } catch {
+      // best effort
+    }
+  }
   httpServer = startServer({
     repoRoot,
     store,
@@ -950,58 +965,6 @@ async function serverCommand(
     console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
   }
-}
-
-// ---- init --------------------------------------------------------------------
-
-function initCommand(repoRoot: string): void {
-  const workflowsDir = join(repoRoot, '.ai/cezar', 'workflows');
-  const skillsDir = join(repoRoot, '.ai/cezar', 'skills');
-  mkdirSync(workflowsDir, { recursive: true });
-  mkdirSync(skillsDir, { recursive: true });
-
-  const examples: Array<{ path: string; content: string }> = [
-    {
-      path: join(workflowsDir, 'fix-and-verify.yaml'),
-      content: `name: fix-and-verify
-description: Implement the task, then run your test command; on failure the agent retries with the failing output.
-steps:
-  - id: implement
-    name: Implement
-    prompt: "{{task}}"
-  - id: verify
-    name: Verify
-    command: "echo 'replace me with: npm test / yarn test / pytest'"
-    onFail:
-      retry: implement
-      max: 2
-`,
-    },
-    {
-      path: join(skillsDir, 'project-conventions.md'),
-      content: `---
-name: project-conventions
-description: House rules the agent should follow in this repo.
----
-
-# Project conventions
-
-- Describe your stack, style and testing conventions here.
-- Reference this skill from a workflow step via \`skill: project-conventions\`.
-`,
-    },
-  ];
-
-  for (const example of examples) {
-    if (existsSync(example.path)) {
-      console.log(`  = ${example.path} (exists, left untouched)`);
-    } else {
-      writeFileSync(example.path, example.content, 'utf8');
-      console.log(`  + ${example.path}`);
-    }
-  }
-  ensureDataGitignore(repoRoot);
-  console.log('\nDone. Start the cockpit with: npx cezar');
 }
 
 // ---- helpers -----------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
@@ -85,6 +85,26 @@ function renderAgents() {
 }
 
 const section = () => document.querySelector<HTMLElement>('[data-slot="fallback-section"]')
+
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+/** Open a Radix Select and read its option labels, then close it again. */
+async function optionsOf(trigger: HTMLElement): Promise<string[]> {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  const listbox = await screen.findByRole('listbox')
+  const names = [...listbox.querySelectorAll('[role="option"]')].map((o) => o.textContent ?? '')
+  fireEvent.keyDown(listbox, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+  return names
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 const rows = () => Array.from(document.querySelectorAll('[data-slot="fallback-row"]')).map((row) => row.textContent ?? '')
 
 afterEach(() => {
@@ -128,8 +148,10 @@ describe('automatic fallback settings', () => {
   it('adds a specific account, never offers one already listed, and sends the current revision', async () => {
     serve()
     renderAgents()
-    const agent = await screen.findByLabelText<HTMLSelectElement>('Agent to add')
-    fireEvent.change(agent, { target: { value: 'codex:work' } })
+    const agent = await screen.findByLabelText<HTMLButtonElement>('Agent to add')
+    expect(document.querySelector('[data-slot="fallback-section"] select')).toBeNull()
+    await pick(agent, 'codex · Work')
+    expect(agent.getAttribute('data-value')).toBe('codex:work')
     fireEvent.click(screen.getByRole('button', { name: /Add agent/ }))
     await waitFor(() => expect(rows()).toHaveLength(1))
     expect(puts[0]).toMatchObject({ expectedRevision: 0, enabled: false, candidates: [{ provider: 'codex', profileId: 'work' }] })
@@ -138,8 +160,7 @@ describe('automatic fallback settings', () => {
     expect(screen.getByText('Off — the list is saved but not used.')).toBeTruthy()
     fireEvent.click(screen.getByRole('switch', { name: 'Automatic fallback' }))
     await waitFor(() => expect(puts[1]).toMatchObject({ enabled: true }))
-    const options = Array.from(screen.getByLabelText<HTMLSelectElement>('Agent to add').options).map((o) => o.value)
-    expect(options).not.toContain('codex:work')
+    expect(await optionsOf(screen.getByLabelText('Agent to add'))).not.toContain('codex · Work')
   })
 
   it('reorders and removes rows with named buttons, keeping the policy on while rows remain', async () => {

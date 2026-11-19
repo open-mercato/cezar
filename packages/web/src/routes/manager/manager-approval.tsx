@@ -1,16 +1,28 @@
-import { CircleAlertIcon, ExternalLinkIcon } from 'lucide-react'
-import { useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { CircleAlertIcon, CircleCheckIcon, ClockIcon, ExternalLinkIcon, GitMergeIcon, PlugIcon, ZapIcon, type LucideIcon } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { Link } from 'react-router'
 
-import { useProjects, useWorkspaceUiState } from '@/api/queries'
+import { useProjects, useRunsIndex, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
+import { chipClass } from '@/components/chip'
+import { prTaskRuns } from '@/components/reference-conflict-action'
+import { ReferenceStatusProvider, useReferenceStatus } from '@/components/reference-status'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/toaster'
-import { actionConfirms, actionTitle } from '@/lib/managers'
+import { useManagers } from '@/api/managers'
+import { deriveAttention } from '@/lib/attention'
+import { actionConfirms, actionTitle, managerConfirmOf, type ManagerOrigin } from '@/lib/managers'
+import { runTitle } from '@/lib/task-groups'
 import { cn } from '@/lib/utils'
-import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
+import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage, RunRecord } from '@open-mercato/cezar-api-client'
 
-export type DecideAction = (actionId: string, decision: 'approve' | 'reject') => Promise<unknown>
+import { DecisionSources } from './decision-sources'
+import { ManagerCard } from './manager-card'
+import { ForgeReference, ManagerReferenceText } from './manager-reference'
+import { taskPath } from './manager-session-card'
+
+export type DecideAction = (actionId: string, decision: 'approve' | 'reject' | 'dismiss', opts?: { onlyIfStale?: boolean }) => Promise<unknown>
 
 type ActionMessage = Extract<ManagerMessage, { kind: 'action' }>
 
@@ -20,6 +32,16 @@ const ACTION_STATUS: Record<ManagerActionStatus, { tone: StatusDotTone; label: s
   done: { tone: 'success', label: 'Done' },
   rejected: { tone: 'neutral', label: 'Rejected' },
   failed: { tone: 'danger', label: 'Failed' },
+  dismissed: { tone: 'neutral', label: 'Dismissed' },
+}
+
+/** A merge says what it did: "Merging…" then "Merged" (the Approvals page shows it live). */
+const MERGE_STATUS: Partial<Record<ManagerActionStatus, string>> = { running: 'Merging…', done: 'Merged' }
+
+const statusOf = (message: ActionMessage) => {
+  const base = ACTION_STATUS[message.status]
+  const merge = message.action.type === 'merge-pr' ? MERGE_STATUS[message.status] : undefined
+  return merge ? { ...base, label: merge } : base
 }
 
 /** Keyed by string: a type from a newer server must still get a sheet, never a crash. */
@@ -27,17 +49,32 @@ const SHEET_COPY: Record<string, { title: string; confirm: string; effect: strin
   'merge-pr': { title: 'Merge this pull request?', confirm: 'Merge', effect: 'The merge is refused if the pull request changed after this proposal.' },
   'enable-automation': { title: 'Enable this automation?', confirm: 'Enable', effect: 'It starts launching tasks on its own. It is refused if the automation was edited after this proposal.' },
   'add-job': { title: 'Add this job?', confirm: 'Add job', effect: 'It runs unattended on this interval until you remove it.' },
+  'connector-call': { title: 'Make this call?', confirm: 'Make call', effect: 'cezar makes exactly this call with these arguments, and nothing else.' },
 }
 
 const UNKNOWN_ACTION_COPY = { title: 'Approve this action?', confirm: 'Approve', effect: 'This version of the cockpit cannot describe it.' }
 
 const SHORT_SHA = 12
 
+/** Tasks named on a merge card before the rest fold into '+N'. */
+const PR_TASKS_SHOWN = 3
+
 /** The prompt or definition that will actually run, when the action carries one. */
 function actionDetail(action: ManagerActionRequest): string | undefined {
-  if (action.type === 'add-job') return action.prompt
-  return action.type === 'enable-automation' ? action.summary : undefined
+  switch (action.type) {
+    case 'add-job': return action.prompt
+    case 'enable-automation': return action.summary
+    case 'connector-call': return JSON.stringify(action.args, null, 2)
+    case 'merge-pr': return undefined
+  }
 }
+
+/** The card's three lines: a connector call's top-level arguments one per line, so a date or a recipient shows without opening it. */
+export function actionPreview(action: ManagerActionRequest): string | undefined {
+  if (action.type !== 'connector-call') return actionDetail(action)
+  return Object.entries(action.args).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
+}
+
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -45,6 +82,118 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
       <dt className="w-20 shrink-0 text-xs text-muted-foreground">{label}</dt>
       <dd className="min-w-0 text-sm break-words">{children}</dd>
     </div>
+  )
+}
+
+const NO_REFERENCES: readonly ReferenceStatusRequest[] = []
+
+/** Keyed by string, as `SHEET_COPY` is: a type from a newer server still gets a card. */
+const CARD_TITLE: Record<string, string | undefined> = {
+  'merge-pr': 'Merge pull request',
+  'enable-automation': 'Enable automation',
+  'add-job': 'Add job',
+  'connector-call': 'Connector call',
+}
+
+const CARD_ICON: Record<string, LucideIcon | undefined> = {
+  'merge-pr': GitMergeIcon,
+  'enable-automation': ZapIcon,
+  'add-job': ClockIcon,
+  'connector-call': PlugIcon,
+}
+
+/** The card's pinned facts (design, Proposal 10): the PR as the tables' chip, the head sha with
+ *  what pinning means. The sheet keeps `ActionFacts`, where the link is what a reader checks. */
+function CardFacts({ action, projectName, origin }: { action: ManagerActionRequest; projectName: string | undefined; origin: ManagerOrigin }) {
+  if (action.type === 'merge-pr') {
+    return (
+      <>
+        <Fact label="Project">{projectName ?? action.projectId}</Fact>
+        <Fact label="Pull request">
+          {/* The chat's own chip: without the URL it painted an inert span. */}
+          <ForgeReference kind="PR" projectId={action.projectId} number={action.number} {...(action.title ? { title: action.title } : {})} />
+          {action.title ? <span className="ml-1.5">{action.title}</span> : null}
+        </Fact>
+        <PrTasks projectId={action.projectId} number={action.number} projectName={projectName} origin={origin} />
+        <Fact label="Method">{action.method ?? 'Repository default'}</Fact>
+        <Fact label="Head">
+          {action.headSha ? (
+            <>
+              <code title={action.headSha} className="font-mono text-xs">{action.headSha.slice(0, SHORT_SHA)}</code>
+              <span className="text-xs text-muted-foreground"> · pinned, a new push refuses</span>
+            </>
+          ) : 'Latest at merge'}
+        </Fact>
+      </>
+    )
+  }
+  if (action.type === 'add-job') {
+    return (
+      <>
+        <Fact label="Name">{action.name}</Fact>
+        <Fact label="Interval">Every {action.everyMinutes} min</Fact>
+      </>
+    )
+  }
+  if (action.type === 'connector-call') {
+    return (
+      <>
+        <Fact label="Connector">{action.connectorName ?? action.connector}</Fact>
+        <Fact label="Tool"><code className="font-mono text-xs">{action.tool}</code></Fact>
+      </>
+    )
+  }
+  return (
+    <>
+      <Fact label="Project">{projectName ?? action.projectId}</Fact>
+      <Fact label="Name">{action.name ?? action.automationId}</Fact>
+      {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
+    </>
+  )
+}
+
+/**
+ * The tasks carrying the PR, by the rule Resolve conflicts uses to find its owner (#2199): the
+ * creator first. A read of the shared runs index, so a chat of merge cards fetches it once.
+ */
+function PrTasks({ projectId, number, projectName, origin }: { projectId: string; number: number; projectName: string | undefined; origin: ManagerOrigin }) {
+  const runs = useRunsIndex().data?.runs
+  const repoBase = useProjects().data?.projects.find((entry) => entry.id === projectId)?.repoUrl
+  const tasks = useMemo(() => (runs ? prTaskRuns(runs, projectId, number, repoBase) : []), [runs, projectId, number, repoBase])
+  if (tasks.length === 0) return null
+  const shown = tasks.slice(0, PR_TASKS_SHOWN)
+  const more = tasks.length - shown.length
+  return (
+    <Fact label={tasks.length === 1 ? 'Task' : 'Tasks'}>
+      <span data-slot="manager-action-tasks" className="flex flex-wrap items-center gap-1.5">
+        {shown.map((run) => {
+          const record = run as unknown as RunRecord
+          const attention = deriveAttention(record)
+          return (
+            // The manager rides the link, so a phone or CezarBot keeps Manager current (#2220).
+            <Link
+              key={run.id}
+              to={taskPath(run.projectId, run.id)}
+              state={{ manager: origin }}
+              data-slot="manager-action-task"
+              data-run={run.id}
+              title={attention.label}
+              className={cn(chipClass, 'max-w-full min-w-0 no-underline text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50')}
+            >
+              <StatusDot tone={attention.tone} pulse={attention.pulse} className="shrink-0" />
+              <span className="min-w-0 truncate">{runTitle(record)}</span>
+              {projectName ? <span className="shrink-0 text-muted-foreground">· {projectName}</span> : null}
+              <span className="sr-only">, {attention.label}</span>
+            </Link>
+          )
+        })}
+        {more > 0 ? (
+          <span data-slot="manager-action-tasks-more" className="text-xs text-muted-foreground" title={tasks.slice(PR_TASKS_SHOWN).map((run) => runTitle(run as unknown as RunRecord)).join('\n')}>
+            +{more}<span className="sr-only"> more {more === 1 ? 'task' : 'tasks'}</span>
+          </span>
+        ) : null}
+      </span>
+    </Fact>
   )
 }
 
@@ -72,22 +221,30 @@ function MergeFacts({ action }: { action: Extract<ManagerActionRequest, { type: 
 
 /** What the user reads before approving: the pinned facts, by type (mobile spec, Approval cards). */
 function ActionFacts({ action }: { action: ManagerActionRequest }) {
-  if (action.type === 'merge-pr') return <MergeFacts action={action} />
-  if (action.type === 'add-job') {
-    return (
-      <>
-        <Fact label="Name">{action.name}</Fact>
-        <Fact label="Interval">Every {action.everyMinutes} min</Fact>
-      </>
-    )
+  switch (action.type) {
+    case 'merge-pr': return <MergeFacts action={action} />
+    case 'add-job':
+      return (
+        <>
+          <Fact label="Name">{action.name}</Fact>
+          <Fact label="Interval">Every {action.everyMinutes} min</Fact>
+        </>
+      )
+    case 'enable-automation':
+      return (
+        <>
+          <Fact label="Name">{action.name ?? action.automationId}</Fact>
+          {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
+        </>
+      )
+    case 'connector-call':
+      return (
+        <>
+          <Fact label="Connector">{action.connectorName ?? action.connector}</Fact>
+          <Fact label="Tool"><code className="font-mono text-xs">{action.tool}</code></Fact>
+        </>
+      )
   }
-  if (action.type !== 'enable-automation') return null
-  return (
-    <>
-      <Fact label="Name">{action.name ?? action.automationId}</Fact>
-      {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
-    </>
-  )
 }
 
 /**
@@ -137,7 +294,7 @@ function ActionSheet({
             <ActionFacts action={action} />
           </dl>
           {detail ? (
-            <pre data-slot="manager-action-full" className="mt-3 rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
+            <pre data-slot="manager-action-full" className="mt-3 overflow-x-auto rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
           ) : null}
         </div>
         <DialogFooter className="flex-row">
@@ -149,11 +306,56 @@ function ActionSheet({
   )
 }
 
-export function ActionCard({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
+/** Merge and enable cards already asked about this page session, so a re-render never asks again. */
+const staleChecked = new Set<string>()
+
+/**
+ * Asks the server once per pending merge card whether its PR is still open, and once per enable
+ * card whether its automation is unchanged; an outdated one is closed as `dismissed`. The chip's colour cannot decide this: it can be a cached 'ready'.
+ */
+export function useDismissStaleMerges(messages: readonly ManagerMessage[], onDecide: DecideAction): void {
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.kind !== 'action' || message.status !== 'pending' || (message.action.type !== 'merge-pr' && message.action.type !== 'enable-automation') || staleChecked.has(message.id)) continue
+      staleChecked.add(message.id)
+      // A 409 is the answer "still open"; nothing to show.
+      onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
+    }
+  }, [messages, onDecide])
+}
+
+/** Merge cards whose chip already reported the PR merged or closed, so the ask goes out once. */
+const closedChecked = new Set<string>()
+
+/**
+ * The fallback for a PR that merges while the chat is open: the chip's own status, which the
+ * cockpit already polls, re-sends the onlyIfStale dismiss. The server confirms before closing.
+ */
+function DismissWhenPrCloses({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
   const { action } = message
-  const status = ACTION_STATUS[message.status]
-  const detail = actionDetail(action)
-  const setting = useWorkspaceUiState().data?.managerConfirm
+  const merge = action.type === 'merge-pr' ? action : undefined
+  const status = useReferenceStatus('PR', merge?.number, merge?.projectId).status
+  const closed = message.status === 'pending' && (status === 'merged' || status === 'closed')
+  useEffect(() => {
+    if (!closed || closedChecked.has(message.id)) return
+    closedChecked.add(message.id)
+    onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
+  }, [closed, message.id, onDecide])
+  return null
+}
+
+export function forgetStaleChecks(): void {
+  staleChecked.clear()
+  closedChecked.clear()
+}
+
+export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigin; message: ActionMessage; onDecide: DecideAction }) {
+  const managerId = origin.id
+  const { action } = message
+  const status = statusOf(message)
+  const detail = actionPreview(action)
+  const own = useManagers().data?.managers.find((entry) => entry.id === managerId)?.confirm
+  const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
   const projectId = 'projectId' in action ? action.projectId : undefined
   const projectName = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name ?? projectId
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -180,7 +382,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
     card.current.focus({ preventScroll: true })
   }
 
-  const decide = async (decision: 'approve' | 'reject') => {
+  const decide = async (decision: 'approve' | 'reject' | 'dismiss') => {
     if (inFlight.current) return
     inFlight.current = true
     setDeciding(true)
@@ -198,26 +400,49 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
     }
   }
 
+  const Icon = CARD_ICON[action.type] ?? CircleCheckIcon
+  // One card shape (design, Proposal 10): header row, pinned facts, actions row. Its PR chip reads
+  // checks and review state through the same provider the task tables use.
+  const references = action.type === 'merge-pr' ? [{ projectId: action.projectId, kind: 'PR' as const, number: action.number }] : NO_REFERENCES
   return (
-    <section
+    <ManagerCard
+      ref={card}
+      id={`decision-${message.id}`}
       data-slot="manager-action"
       data-status={message.status}
       data-action-id={message.id}
       aria-label={actionTitle(action)}
-      ref={card}
-      tabIndex={-1}
-      className="w-full rounded-xl border border-border bg-card p-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      tone={message.status === 'pending' ? 'info' : 'plain'}
+      icon={<Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
+      title={CARD_TITLE[action.type] ?? 'Approve an action'}
+      status={<><StatusDot tone={status.tone} pulse={message.status === 'running'} />{status.label}</>}
+      actions={message.status === 'pending' ? (
+        <>
+          <Button
+            ref={approveButton}
+            className="max-md:h-10 max-md:flex-1"
+            disabled={deciding}
+            onClick={() => (actionConfirms(setting, action.type) ? openSheet() : void decide('approve'))}
+          >
+            Approve
+          </Button>
+          <Button variant="outline" className="max-md:h-10 max-md:flex-1" disabled={deciding} onClick={() => void decide('reject')}>Reject</Button>
+          {/* Neither yes nor no: the proposal is moot, e.g. its PR was merged elsewhere. */}
+          <Button variant="ghost" className="ml-auto max-md:h-10" disabled={deciding} onClick={() => void decide('dismiss')}>Dismiss</Button>
+        </>
+      ) : undefined}
     >
-      <p className="text-sm font-semibold break-words">{actionTitle(action)}</p>
-      <p className="mt-0.5 text-xs break-words text-muted-foreground">
-        {action.type === 'add-job' ? `Every ${action.everyMinutes} min` : projectName}
-        {action.type === 'merge-pr' && action.method ? ` · ${action.method}` : ''}
-        {action.type === 'merge-pr' && action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}
-      </p>
+      <DecisionSources message={message} origin={origin} />
+      <ReferenceStatusProvider requests={references}>
+        {action.type === 'merge-pr' && message.status === 'pending' ? <DismissWhenPrCloses message={message} onDecide={onDecide} /> : null}
+        <dl className="flex flex-col gap-1.5">
+          <CardFacts action={action} projectName={projectName} origin={origin} />
+        </dl>
+      </ReferenceStatusProvider>
       {/* What will actually run. Three lines here: a prompt can be 20,000 characters, and a nested
           scroller inside the chat traps a thumb. The sheet has it all, with any setting. */}
       {detail ? (
-        <div className="mt-2 rounded-lg bg-muted p-2">
+        <div className="rounded-lg bg-muted p-2">
           <p data-slot="manager-action-detail" className="line-clamp-3 font-mono text-xs break-words whitespace-pre-wrap">{detail}</p>
           <button
             type="button"
@@ -228,36 +453,23 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
           </button>
         </div>
       ) : null}
-      {message.reason ? <p className="mt-2 text-sm">{message.reason}</p> : null}
+      {message.reason ? <p className="text-sm"><ManagerReferenceText text={message.reason} origin={origin} /></p> : null}
       {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
-      <div role="status" data-slot="manager-action-outcome">
+      <div role="status" data-slot="manager-action-outcome" className="empty:hidden">
         {message.status === 'pending' ? null : (
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <StatusDot tone={status.tone} pulse={message.status === 'running'} />
-            {message.result ?? status.label}
+          // The header already says the status: drawn only when there is a result sentence.
+          <p className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', !message.result && 'sr-only')}>
+            {message.result ? <StatusDot tone={status.tone} pulse={message.status === 'running'} className="shrink-0" /> : null}
+            {/* A connector's raw reply can run to 4,000 characters; the title keeps the clamped rest. */}
+            <span className="line-clamp-3 min-w-0 break-words whitespace-pre-wrap" title={message.result}>{message.result ?? status.label}</span>
           </p>
         )}
       </div>
-      {message.status === 'pending' ? (
-        <>
-          {refusal ? (
-            <p role="alert" data-slot="manager-action-refusal" className="mt-2 flex items-start gap-1.5 text-sm text-danger">
-              <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-              {refusal}
-            </p>
-          ) : null}
-          <div className="mt-3 flex gap-2">
-            <Button variant="outline" className="h-11 flex-1" disabled={deciding} onClick={() => void decide('reject')}>Reject</Button>
-            <Button
-              ref={approveButton}
-              className="h-11 flex-1"
-              disabled={deciding}
-              onClick={() => (actionConfirms(setting, action.type) ? openSheet() : void decide('approve'))}
-            >
-              Approve
-            </Button>
-          </div>
-        </>
+      {refusal && message.status === 'pending' ? (
+        <p role="alert" data-slot="manager-action-refusal" className="flex items-start gap-1.5 text-sm text-danger">
+          <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+          {refusal}
+        </p>
       ) : null}
       <ActionSheet
         message={message}
@@ -278,6 +490,6 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
           void decide('approve')
         }}
       />
-    </section>
+    </ManagerCard>
   )
 }

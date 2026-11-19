@@ -9,9 +9,11 @@ import { useRuns } from '@/api/queries'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { AUTOMATION_COST_VISIBLE, statusLabel, statusTone, usd } from '@/lib/automation-format'
+import { AUTOMATION_COST_VISIBLE, usd } from '@/lib/automation-format'
 import { shortAge } from '@/lib/format'
 import { Link } from '@/lib/project-router'
+
+import { runAttention } from './automation-state'
 
 /** The detail rail's last five launched tasks (#1623); checks and children stay in View log. */
 export function RecentRunsCard({ automationId, onRunNow, onLog, busy = false, now }: {
@@ -46,30 +48,31 @@ export function RecentRunsCard({ automationId, onRunNow, onLog, busy = false, no
 
   return (
     <Card flush data-slot="recent-runs-card" className="min-w-0 px-3.5 py-3">
-      <h2 className="m-0 mb-2 text-meta font-semibold tracking-[.05em] uppercase text-soft-foreground">Recent runs</h2>
-      {query.isPending ? <p role="status" className="m-0 text-xs text-muted-foreground">Loading recent runs…</p> : null}
+      <h2 className="m-0 mb-2 eyebrow text-soft-foreground">Recent runs</h2>
+      {query.isPending ? <p role="status" className="m-0 text-label text-muted-foreground">Loading recent runs…</p> : null}
       {query.isError ? (
-        <div role="alert" className="text-xs text-muted-foreground">
+        <div role="alert" className="text-label text-muted-foreground">
           <p className="m-0">{query.data ? 'Could not refresh recent runs.' : 'Could not load recent runs.'}</p>
           <Button variant="ghost" size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry</Button>
         </div>
       ) : null}
-      {query.data && records.length === 0 ? <p className="m-0 text-xs text-muted-foreground">No runs launched yet.</p> : null}
+      {query.data && records.length === 0 ? <p className="m-0 text-label text-muted-foreground">No runs launched yet.</p> : null}
       {records.length > 0 ? (
         <ul aria-label="Recent runs" className="m-0 list-none divide-y divide-border p-0">
           {records.map((record) => {
             const run = liveRuns.data?.find((item) => item.id === record.runId) ?? query.data?.runs[record.runId]
             const title = run?.title || `Task ${record.runId.slice(0, 8)}`
+            const attention = run ? runAttention(run.status) : undefined
             return (
               <li key={record.runId} className="min-w-0 py-2 first:pt-0 last:pb-0">
-                <Link to={`/tasks/${encodeURIComponent(record.runId)}`} title={title} className="block truncate rounded-sm text-ui font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2">
+                <Link to={`/tasks/${encodeURIComponent(record.runId)}`} className="block truncate rounded-sm text-ui font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2">
                   {title}
                 </Link>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-muted-foreground">
-                  <StatusDot aria-hidden="true" tone={run ? statusTone(run.status) : 'neutral'} />
-                  <span>{run ? statusLabel(run.status) : 'Status unavailable'}</span>
-                  <time dateTime={record.ts} title={record.ts}>{shortAge(record.ts, now)}</time>
-                  {AUTOMATION_COST_VISIBLE && run?.costUsd !== undefined ? <span className="ml-auto font-mono">{usd(run.costUsd)}</span> : null}
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-label text-muted-foreground">
+                  <StatusDot aria-hidden="true" tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} />
+                  <span>{attention ? attention.label : 'Status unavailable'}</span>
+                  <time dateTime={record.ts}>{shortAge(record.ts, now)}</time>
+                  {AUTOMATION_COST_VISIBLE && run?.costUsd !== undefined ? <span className="ml-auto tabular-nums">{usd(run.costUsd)}</span> : null}
                 </div>
               </li>
             )

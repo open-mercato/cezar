@@ -37,7 +37,11 @@ describe('Tracker route', () => {
     )
     expect(await screen.findByText('First page')).toBeTruthy()
     const firstRow = screen.getByText('First page').closest('a') as HTMLAnchorElement
+    // The drag-to-composer gesture's only hint, and the truncated project name's full text.
+    expect(firstRow.getAttribute('title')).toBe('Drag into the composer to prefill a task')
+    expect(screen.getByText('OPS', { selector: 'span' }).getAttribute('title')).toBe('OPS')
     fireEvent.mouseEnter(firstRow)
+
     await waitFor(() => expect(requests.some((url) => new URL(url, 'http://localhost').pathname.endsWith('/tracker/OPS-1'))).toBe(true))
     const setData = vi.fn()
     fireEvent.dragStart(firstRow, { dataTransfer: { setData, effectAllowed: 'none' } })

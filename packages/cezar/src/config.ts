@@ -64,6 +64,11 @@ export const configSchema = z.object({
   /** Model for the task namer (spec 2026-07-17-task-auto-naming) — the cheapest
    *  alias that answers strict JSON; naming is fire-and-forget and never blocks. */
   namerModel: z.string().min(1).default('haiku'),
+  /** Per-runner namer model (#2012). Unset for a runner = discovery's cheapest tier, else a
+   *  static default, else no LLM naming on that runner (`runs/namer-model.ts`). */
+  namerModels: perRunner(z.string().trim().min(1).max(200).optional())
+    .optional()
+    .catch(undefined),
   /** Live title updates: refresh the display title through the namer on each
    *  turn end. Absent = the `CEZ_TITLE_UPDATES` env decides (default ON — owner
    *  decision on PR #479). */
@@ -149,6 +154,9 @@ export const configSchema = z.object({
   /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
   defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
   askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
+  /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`).
+   *  Off by default; see `bypassPermissionsBlocked` for where it is not honored. */
+  bypassPermissions: z.boolean().optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;

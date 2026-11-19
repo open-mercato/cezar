@@ -16,9 +16,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
+import { StatusDot } from '@/components/status-dot'
+import { deriveAttention } from '@/lib/attention'
 import { formatMem } from '@/lib/tasks-table'
 import { shortAge } from '@/lib/format'
 
@@ -110,12 +113,12 @@ export function WorktreesPanel() {
   return (
     <div data-slot="worktrees-panel" className="flex flex-col gap-3">
       {rows.length === 0 ? (
-        <p data-slot="worktrees-empty" className="text-ui text-soft-foreground">
+        <p data-slot="worktrees-empty" className="text-ui text-muted-foreground">
           No task worktrees on disk.
         </p>
       ) : (
         <div className="overflow-x-auto rounded-md border border-border">
-          <table className="w-full border-collapse text-sm">
+          <table className="w-full border-collapse text-ui">
             <caption className="sr-only">Task worktrees currently materialized on disk</caption>
             <thead>
               <tr className="border-b border-border text-left text-label text-soft-foreground">
@@ -142,7 +145,7 @@ export function WorktreesPanel() {
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p data-slot="worktrees-footer" className="text-label text-soft-foreground">
+        <p data-slot="worktrees-footer" className="text-label text-muted-foreground">
           {rows.length} worktree{rows.length === 1 ? '' : 's'}
           {totalBytes !== null ? ` · ${formatMem(totalBytes) || '0 kB'} on disk` : ' · size unavailable'}
           {' · '}
@@ -160,13 +163,13 @@ export function WorktreesPanel() {
         </Button>
       </div>
 
-      {lifecycle.isError && <p className="text-xs text-danger" role="alert">Lifecycle state could not be loaded: {lifecycle.error.message}</p>}
+      {lifecycle.isError && <p className="text-label text-danger" role="alert">Lifecycle state could not be loaded: {lifecycle.error.message}</p>}
       {managed.filter(item => item.operation || item.autoCleanupSuppressed || item.needsAttention || !item.task).map(item => <section key={item.worktreeId} className="min-w-0 rounded-md border border-border p-3" data-slot="lifecycle-worktree-row">
-        <h3 className="text-sm font-medium">{item.task?.title ?? `Orphan worktree ${item.runId.slice(0, 8)}`}</h3>
+        <h3 className="text-ui font-medium">{item.task?.title ?? `Orphan worktree ${item.runId.slice(0, 8)}`}</h3>
         <p className="break-all font-mono text-meta text-muted-foreground">{item.worktreePath}</p>
-        {item.error && <p className="mt-1 text-xs text-danger">{item.error}</p>}
-        {item.needsAttention && <p className="mt-1 text-xs text-danger">{item.operation?.phase === 'setup' ? 'Setup needs attention' : 'Cleanup needs attention'} — worktree retained.</p>}
-        {item.autoCleanupSuppressed && <p className="mt-1 text-xs text-muted-foreground">Automatic cleanup is suppressed for this generation because it was kept or cancelled. Explicit removal is still available.</p>}
+        {item.error && <p className="mt-1 text-label text-danger">{item.error}</p>}
+        {item.needsAttention && <p className="mt-1 text-label text-danger">{item.operation?.phase === 'setup' ? 'Setup needs attention' : 'Cleanup needs attention'} — worktree retained.</p>}
+        {item.autoCleanupSuppressed && <p className="mt-1 text-label text-muted-foreground">Automatic cleanup is suppressed for this generation because it was kept or cancelled. Explicit removal is still available.</p>}
         {item.operation ? <div id={`lifecycle-operation-${item.operation.id}`} className="mt-3 scroll-mt-4"><LifecycleOperationCard operationId={item.operation.id} worktreePath={item.worktreePath} taskTitle={item.task?.title} /></div>
           : !item.task && !item.error && item.onDisk ? <Button className="mt-2" type="button" variant="outline" size="sm" disabled={busy} onClick={() => setConfirming({kind: 'orphan', worktreeId: item.worktreeId, title: item.worktreePath})}>Remove orphan worktree</Button> : null}
       </section>)}
@@ -181,9 +184,9 @@ export function WorktreesPanel() {
             <AlertDialogDescription>
               {confirming?.kind === 'delete' || confirming?.kind === 'orphan' ? (
                 <>
-                  This removes the worktree directory and its branch — the local-only work is not
-                  recoverable afterwards. Configured cleanup scripts run first; failures retain the directory for your recovery choice.
-                  <span className="mt-1 block truncate font-medium text-foreground" title={confirming.title}>
+                  This deletes the worktree directory and its branch — local-only work is gone and this
+                  cannot be undone. Configured cleanup scripts run first; failures retain the directory for your recovery choice.
+                  <span className="mt-1 block break-all font-medium text-foreground">
                     {confirming.title}
                   </span>
                 </>
@@ -196,7 +199,7 @@ export function WorktreesPanel() {
             <AlertDialogCancel>Keep it</AlertDialogCancel>
             <AlertDialogAction
               data-action="worktrees-confirm"
-              className={confirming?.kind === 'delete' || confirming?.kind === 'orphan' ? 'bg-danger text-danger-foreground hover:brightness-[0.96]' : undefined}
+              className={confirming?.kind === 'delete' || confirming?.kind === 'orphan' ? buttonVariants({ variant: 'destructive' }) : undefined}
               onClick={runConfirmed}
             >
               {confirming?.kind === 'delete' || confirming?.kind === 'orphan' ? 'Delete' : 'Reclaim now'}
@@ -219,20 +222,40 @@ function WorktreeRow({
   disabled: boolean
   onDelete: () => void
 }) {
+  // One status grammar for every surface: the dot's tone comes from the attention model, and a
+  // finished worktree stays plain text (calm when done).
+  const attention = deriveAttention({ status: worktree.status })
+  const calm = attention.bucket === 'none'
+  const deleteButton = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      data-action="worktree-delete"
+      aria-label={`Delete the worktree for ${worktree.title}`}
+      disabled={disabled || !!worktree.inUse}
+      onClick={onDelete}
+    >
+      Delete
+    </Button>
+  )
   return (
     <tr data-slot="worktree-row" data-run={worktree.runId} className="border-b border-border last:border-0">
       <th scope="row" className="max-w-[220px] px-3 py-2 text-left font-normal">
-        <span className="block truncate text-foreground" title={worktree.title}>{worktree.title}</span>
+        <span className="block truncate text-foreground">{worktree.title}</span>
         <span className="block truncate font-mono text-meta text-soft-foreground">
           {worktree.branch ?? worktree.runId.slice(0, 8)}
         </span>
       </th>
       <td className="px-3 py-2">
-        <span className="text-label text-soft-foreground">{worktree.status}</span>
+        <span data-slot="worktree-status" data-tone={calm ? undefined : attention.tone} className="inline-flex items-center gap-1.5 text-label text-muted-foreground">
+          {calm ? null : <StatusDot tone={attention.tone} pulse={attention.pulse} />}
+          {worktree.status}
+        </span>
         {lifecycle?.needsAttention && <span className="block text-meta text-danger">{lifecycle.operation?.phase === 'setup' ? 'Setup needs attention' : 'Cleanup needs attention'}</span>}
         {lifecycle?.autoCleanupSuppressed && <span className="block text-meta text-muted-foreground">Automatic cleanup suppressed</span>}
         {worktree.inUse ? (
-          <span data-slot="worktree-in-use" className="block text-meta text-muted-foreground" title={worktree.inUse}>
+          <span data-slot="worktree-in-use" className="block text-meta text-muted-foreground">
             Protected — {worktree.inUse}
           </span>
         ) : null}
@@ -247,18 +270,13 @@ function WorktreeRow({
       </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortAge(worktree.finishedAt ?? undefined) || '—'}</td>
       <td className="px-3 py-2 text-right">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-action="worktree-delete"
-          aria-label={`Delete the worktree for ${worktree.title}`}
-          title={worktree.inUse ? `Protected — ${worktree.inUse}` : undefined}
-          disabled={disabled || !!worktree.inUse}
-          onClick={onDelete}
-        >
-          Delete
-        </Button>
+        {/* A disabled button swallows pointer events (`disabled:pointer-events-none`), so the
+            tooltip hangs off a wrapper that still receives them. */}
+        {worktree.inUse ? (
+          <IconTooltip label={`Protected — ${worktree.inUse}`}>
+            <span className="inline-flex">{deleteButton}</span>
+          </IconTooltip>
+        ) : deleteButton}
       </td>
     </tr>
   )

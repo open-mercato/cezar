@@ -37,6 +37,10 @@ import {
   isViewId,
   viewLabel,
   type WorkspaceState,
+  BUILT_IN_LAYOUTS,
+  firstVisitState,
+  isBuiltInLayoutName,
+  isReservedLayoutName,
 } from './layout-state'
 import { workspaceViewSchema } from '@open-mercato/cezar-api-client'
 import { drawerStorageKey } from './drawer-state'
@@ -59,7 +63,7 @@ const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Graph']
 describe('the view set', () => {
   it('is exactly these views, Assets included (spec 2026-10-22-html-artifacts-and-impact)', () => {
     expect(VIEW_IDS).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal'])
-    // Assets sits after Preview and before Terminal on the strip.
+    // Main's tab order (the 1–9 keys): Graph before Preview, Notes placed between them by `strip.ts`.
     expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal'])
     expect(VIEW_PATHS.assets).toBe('assets')
     expect(viewLabel('assets')).toBe('Assets')
@@ -804,5 +808,23 @@ describe('the terminal view (main)', () => {
     const revived = reviveState(JSON.parse(JSON.stringify(placed.state)))
     expect(revived.active).toBe(placed.name)
     expect(findLayout(revived, placed.name)).toEqual(layout)
+  })
+})
+
+describe('the built-in Review layout (firstVisitState)', () => {
+  it('ships Chat beside Changes under a name a user layout may take over', () => {
+    expect(BUILT_IN_LAYOUTS).toEqual([
+      { name: 'Review', columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }], builtIn: true },
+    ])
+    expect(isBuiltInLayoutName('Review')).toBe(true)
+    expect(isBuiltInLayoutName('Debug')).toBe(false)
+    // Not a view tab's name and not the working arrangement's: it saves and applies like any other.
+    expect(isReservedLayoutName('Review')).toBe(false)
+  })
+
+  it('is never the first-visit state: a task opens on Chat alone, whatever the viewport', () => {
+    // Owner review (2026-11-12): Changes is opened by the user, not for them.
+    expect(firstVisitState()).toEqual(defaultState())
+    expect(firstVisitState().active).not.toBe('Review')
   })
 })

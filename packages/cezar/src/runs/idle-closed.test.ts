@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from './store.ts';
+import { isIdleParked, RunStore } from './store.ts';
 import { track } from '../telemetry.ts';
 
 vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
@@ -43,6 +43,34 @@ describe('RunStore — idleClosedAt', () => {
       expect(store.getRun(id)?.idleClosedAt).toBeUndefined();
     },
   );
+
+  // The idle park (spec § Revision): the record keeps its pre-close `waiting`, only the marker is new.
+  const idleParked = (store: RunStore): string => {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'running' });
+    store.updateRun(run.id, { status: 'waiting' });
+    store.updateRun(run.id, { idleClosedAt: AT });
+    return run.id;
+  };
+
+  it('an idle park stays waiting, keeps its wait and marker through its own waiting writes', () => {
+    const store = RunStore.open(dataDir);
+    const id = idleParked(store);
+    const waitingSince = store.getRun(id)?.waitingSince;
+    store.updateRun(id, { status: 'waiting' });
+    expect(store.getRun(id)).toMatchObject({ status: 'waiting', idleClosedAt: AT, waitingSince });
+    expect(isIdleParked(store.getRun(id)!)).toBe(true);
+    store.updateRun(id, { status: 'running' });
+    expect(store.getRun(id)?.idleClosedAt).toBeUndefined();
+  });
+
+  it('a cold read leaves an idle park waiting instead of stamping it interrupted', () => {
+    const store = RunStore.open(dataDir);
+    const id = idleParked(store);
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(id)).toMatchObject({ status: 'waiting', idleClosedAt: AT });
+    expect(RunStore.open(dataDir).getRun(id)?.error).toBeUndefined();
+  });
 
   it('is an ordinary outcome: "Archive finished" sweeps it', () => {
     const store = RunStore.open(dataDir);

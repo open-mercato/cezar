@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { MANAGER_HEADS_STORAGE_KEY } from '@/lib/manager-heads-pref'
 import { NotificationsSection } from './notifications-section'
 
 /**
@@ -64,6 +65,7 @@ const putBody = () => requests.find((r) => r.method === 'PUT' && r.url === '/api
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  localStorage.removeItem(MANAGER_HEADS_STORAGE_KEY)
 })
 
 describe('the notifications section', () => {
@@ -94,6 +96,38 @@ describe('the notifications section', () => {
     expect(toggle().getAttribute('aria-checked')).toBe('true')
     expect(requestPermission).toHaveBeenCalledOnce()
     await waitFor(() => expect(putBody()).toEqual({ notifications: { enabled: true } }))
+  })
+
+  it('a toggle made while settings are still loading survives the late first load', async () => {
+    requests = []
+    // The first GET answers only after the PUT has: the stale "off" must not win over the user's tap.
+    let answerFirstLoad: (payload: unknown) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
+        requests.push({ method, url, body })
+        const json = (payload: unknown) =>
+          new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+        if (url === '/api/v1/workspace/ui-state' && method === 'GET')
+          return new Promise<Response>((resolve) => { answerFirstLoad = (payload) => resolve(json(payload)) })
+        if (url === '/api/v1/workspace/ui-state' && method === 'PUT') return json(body)
+        return new Promise<never>(() => {})
+      }),
+    )
+    stubNotification('granted')
+    renderSection()
+    await waitFor(() => expect(requests.some((r) => r.method === 'GET')).toBe(true))
+
+    fireEvent.click(toggle())
+    await waitFor(() => expect(putBody()).toEqual({ notifications: { enabled: true } }))
+    await waitFor(() => expect(screen.getByText('Saved')).toBeTruthy())
+    answerFirstLoad({})
+    // Let the late answer settle before reading the switch.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(toggle().getAttribute('aria-checked')).toBe('true')
   })
 
   it('enabling with permission already granted does not re-ask', async () => {
@@ -151,5 +185,20 @@ describe('the notifications section', () => {
     expect(
       document.querySelector('[data-slot="notifications-unsupported"]')?.textContent,
     ).toContain('does not support')
+  })
+
+  it('Manager pop-ups: on by default, stored per browser, and never touches ui-state', async () => {
+    serve()
+    stubNotification('default')
+    renderSection()
+    const popups = screen.getByRole('switch', { name: 'Manager pop-ups' })
+    expect(popups.getAttribute('aria-checked')).toBe('true')
+    expect(document.body.textContent).toContain('appears in the corner of task pages')
+
+    fireEvent.click(popups)
+    expect(popups.getAttribute('aria-checked')).toBe('false')
+    expect(localStorage.getItem(MANAGER_HEADS_STORAGE_KEY)).toBe('off')
+    expect(requests.some((r) => r.method === 'PUT')).toBe(false)
+    expect(document.querySelector('[data-slot="manager-heads-toggle"]')?.closest('[data-slot="form-row"]')?.hasAttribute('data-saved')).toBe(true)
   })
 })

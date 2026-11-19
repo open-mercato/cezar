@@ -1,11 +1,24 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router'
-import { afterEach, it, expect, vi } from 'vitest'
+import { afterEach, beforeEach, it, expect, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { DashboardRoute } from './index'
 import { readEntry, saveEntry } from './state'
 import type { DashboardCosts } from '@open-mercato/cezar-api-client'
+
+/** Radix Select in jsdom: open from the keyboard, then click the option (there is no real pointer). */
+async function pick(trigger: HTMLElement, option: string) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  Element.prototype.hasPointerCapture = vi.fn(() => false)
+  Element.prototype.releasePointerCapture = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 const at = '2026-09-19T00:00:00.000Z'
 function fixture(id = 's1'): DashboardCosts {
   return {
@@ -96,7 +109,7 @@ afterEach(() => {
 it('restores direct Costs Back scroll and filter replacements without requesting hidden operational data', async () => {
   const { calls, client, entry } = setup()
   await screen.findByRole('button', { name: 'View tasks' })
-  fireEvent.change(screen.getByRole('combobox', { name: 'Tasks created' }), { target: { value: '7d' } })
+  await pick(screen.getByRole('combobox', { name: 'Tasks created' }), 'Last 7 days')
   dashboard().scrollTop = 321
   fireEvent.scroll(dashboard())
   fireEvent.click(await screen.findByRole('button', { name: 'View tasks' }))

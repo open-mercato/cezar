@@ -220,9 +220,9 @@ function AgentIcon({ status, stalled = false }: { status: ToolStatus; stalled?: 
       viewBox="0 0 24 24"
       fill="none"
     >
-      {/* stroke/fill-pending, not text-*: amber is a dot & spinner color only (guardian rule). */}
-      <circle className="stroke-pending" cx="12" cy="12" r="8.5" strokeWidth="2" />
-      <path className="fill-pending" d="M12 3.5 A8.5 8.5 0 0 1 12 20.5 Z" />
+      {/* Violet, pulsing: the accent means cezar is working (status grammar) — amber is parked. */}
+      <circle className="stroke-violet" cx="12" cy="12" r="8.5" strokeWidth="2" />
+      <path className="fill-violet" d="M12 3.5 A8.5 8.5 0 0 1 12 20.5 Z" />
     </svg>
   )
 }

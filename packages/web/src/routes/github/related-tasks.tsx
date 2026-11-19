@@ -33,7 +33,7 @@ export function GithubRelatedTasks({ item }: { item: Pick<GithubItem, 'kind' | '
                   <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
                   <span className="min-w-0 flex-1 truncate">{runTitle(run)}</span>
                   {run.archived ? <span className="text-micro text-soft-foreground">archived</span> : null}
-                  <span className="shrink-0 text-xs text-soft-foreground">
+                  <span className="shrink-0 text-label text-muted-foreground">
                     {attention.label} · {shortAge(run.createdAt)} ago
                   </span>
                 </Link>
