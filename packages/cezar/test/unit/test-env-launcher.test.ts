@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { afterEach, test } from 'node:test';
 
 // The scripts under test are the REPO's, not this package's: `.ai/` is agent-pipeline tooling
@@ -26,11 +26,31 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
 });
 
-function commandPath(command: string): string {
-  return execFileSync('/bin/sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).trim();
+// Discovered on PATH, never a hard-coded /bin/sh: native Windows has none (#2146).
+function findOnPath(command: string): string | null {
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not in this directory.
+    }
+  }
+  return null;
 }
 
-const hasSetsid = spawnSync('/bin/sh', ['-c', 'command -v setsid'], { stdio: 'ignore' }).status === 0;
+function commandPath(command: string): string {
+  const found = findOnPath(command);
+  assert.ok(found, `${command} not found on PATH`);
+  return found;
+}
+
+const sh = process.platform === 'win32' ? null : findOnPath('sh');
+const hasSetsid = sh !== null && findOnPath('setsid') !== null;
+// The launcher scripts are POSIX shell; without one (native Windows) there is nothing to run.
+const noShell = sh === null ? 'a POSIX sh is not available on this platform' : false;
 
 function makeFixture(withSetsid: boolean): { root: string; path: string } {
   const root = mkdtempSync(join(tmpdir(), 'cez-test-env-launcher-'));
@@ -152,7 +172,7 @@ async function waitForHealth(baseUrl: string): Promise<void> {
 for (const withSetsid of [true, false]) {
   test(
     `generated launcher survives its caller and stops by descriptor PID (${withSetsid ? 'setsid' : 'nohup fallback'})`,
-    { skip: withSetsid && !hasSetsid ? 'setsid is not available on this platform' : false },
+    { skip: noShell || (withSetsid && !hasSetsid ? 'setsid is not available on this platform' : false) },
     async () => {
       const fixture = makeFixture(withSetsid);
       const env = { ...process.env, PATH: fixture.path, TEST_ENV_CACHE_TTL_SECONDS: '600' };
@@ -160,9 +180,9 @@ for (const withSetsid of [true, false]) {
       const down = join(fixture.root, '.ai/scripts/test-env-down.sh');
       const callerPidFile = join(fixture.root, 'caller.pid');
 
-      const coldCommand = withSetsid ? commandPath('setsid') : '/bin/sh';
+      const coldCommand = withSetsid ? commandPath('setsid') : sh!;
       const coldArgs = withSetsid
-        ? ['/bin/sh', '-c', 'echo $$ > "$2"; sh "$1"', 'launcher-parent', up, callerPidFile]
+        ? [sh!, '-c', 'echo $$ > "$2"; sh "$1"', 'launcher-parent', up, callerPidFile]
         : ['-c', 'echo $$ > "$2"; sh "$1"', 'launcher-parent', up, callerPidFile];
       const cold = spawnSync(coldCommand, coldArgs, {
         cwd: tmpdir(),
@@ -190,12 +210,12 @@ for (const withSetsid of [true, false]) {
       const health = await fetch(`${first.baseUrl}/api/health`).then((response) => response.json());
       assert.deepEqual(health, { ok: true, repoRoot: first.app.repoRoot });
 
-      const warm = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+      const warm = spawnSync(sh!, [up], { encoding: 'utf8', env, timeout: 20_000 });
       assert.equal(warm.status, 0, warm.stderr);
       assert.match(warm.stdout, /TEST_ENV_REUSED=1/);
       assert.equal(descriptor(fixture.root).app.pid, firstPid);
 
-      const stopped = spawnSync('/bin/sh', [down], { encoding: 'utf8', env, timeout: 20_000 });
+      const stopped = spawnSync(sh!, [down], { encoding: 'utf8', env, timeout: 20_000 });
       assert.equal(stopped.status, 0, stopped.stderr);
       assert.match(stopped.stdout, /TEST_ENV_STATUS=stopped/);
       assert.throws(() => process.kill(firstPid, 0));
@@ -213,7 +233,7 @@ for (const withSetsid of [true, false]) {
 // routinely recycled onto an unrelated process and its port is routinely held by another
 // worktree's instance. These cover both halves of that.
 
-test('a descriptor whose PID was recycled onto a foreign process never signals it', async () => {
+test('a descriptor whose PID was recycled onto a foreign process never signals it', { skip: noShell }, async () => {
   const fixture = makeFixture(hasSetsid);
   const env = { ...process.env, PATH: fixture.path, TEST_ENV_CACHE_TTL_SECONDS: '600' };
   const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
@@ -237,7 +257,7 @@ test('a descriptor whose PID was recycled onto a foreign process never signals i
     browser: { installed: true },
   });
 
-  const boot = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  const boot = spawnSync(sh!, [up], { encoding: 'utf8', env, timeout: 20_000 });
   assert.equal(boot.status, 0, boot.stderr);
   assert.match(boot.stdout, /TEST_ENV_REUSED=0/);
 
@@ -248,12 +268,12 @@ test('a descriptor whose PID was recycled onto a foreign process never signals i
   launchedPids.add(booted.app.pid);
 });
 
-test('an instance from another checkout on the recorded port is not reused as this one', async () => {
+test('an instance from another checkout on the recorded port is not reused as this one', { skip: noShell }, async () => {
   const fixture = makeFixture(hasSetsid);
   const env = { ...process.env, PATH: fixture.path, TEST_ENV_CACHE_TTL_SECONDS: '600' };
   const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
 
-  const cold = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  const cold = spawnSync(sh!, [up], { encoding: 'utf8', env, timeout: 20_000 });
   assert.equal(cold.status, 0, cold.stderr);
   assert.match(cold.stdout, /TEST_ENV_REUSED=0/);
   const ours = descriptor(fixture.root);
@@ -263,7 +283,7 @@ test('an instance from another checkout on the recorded port is not reused as th
 
   // The guards must not defeat the build cache: an instance this fixture booted is
   // still recognised as its own and reused.
-  const warm = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  const warm = spawnSync(sh!, [up], { encoding: 'utf8', env, timeout: 20_000 });
   assert.equal(warm.status, 0, warm.stderr);
   assert.match(warm.stdout, /TEST_ENV_REUSED=1/);
 
@@ -285,7 +305,7 @@ test('an instance from another checkout on the recorded port is not reused as th
 
   writeDescriptor(fixture.root, { ...ours, baseUrl: foreignUrl, startedAt: new Date().toISOString() });
 
-  const collided = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  const collided = spawnSync(sh!, [up], { encoding: 'utf8', env, timeout: 20_000 });
   assert.equal(collided.status, 0, collided.stderr);
   assert.match(collided.stdout, /TEST_ENV_REUSED=0/);
   await assertStillRunning(foreign, "the other checkout's instance");

@@ -33,6 +33,7 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
   let outside: string;
   let app: Hono;
   let store: RunStore;
+  let linked = false;
 
   beforeEach(() => {
     home = realpathSync(mkdtempSync(join(tmpdir(), 'cez-fs-browse-home-')));
@@ -47,9 +48,15 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
     mkdirSync(join(home, '.hidden'), { recursive: true });
     mkdirSync(join(outside, 'secrets'), { recursive: true });
     writeFileSync(join(home, 'notes.txt'), 'not a directory', 'utf8');
-    // The two links that make or break the containment rule.
-    symlinkSync(outside, join(home, 'link-outside'));
-    symlinkSync(join(home, 'projects/repo'), join(home, 'link-inside'));
+    // The two links that make or break the containment rule. Without symlink privilege (an
+    // unprivileged win32 account) only the symlink cases skip, not the whole suite (#2146).
+    try {
+      symlinkSync(outside, join(home, 'link-outside'), 'dir');
+      symlinkSync(join(home, 'projects/repo'), join(home, 'link-inside'), 'dir');
+      linked = true;
+    } catch {
+      linked = false;
+    }
 
     const repoRoot = join(home, 'boot');
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
@@ -162,7 +169,8 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
     expect(message).not.toContain(outside);
   });
 
-  it('rejects a SYMLINK that escapes the root, even though it spells as inside', async () => {
+  it('rejects a SYMLINK that escapes the root, even though it spells as inside', async (ctx) => {
+    if (!linked) ctx.skip();
     // `~/link-outside` passes any lexical check — only realpath sees `outside`.
     for (const path of [join(home, 'link-outside'), join(home, 'link-outside/secrets')]) {
       const res = await browse(`?path=${encodeURIComponent(path)}`);
@@ -173,7 +181,8 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
     }
   });
 
-  it('never LISTS an escaping symlink either (no click needed to learn it exists)', async () => {
+  it('never LISTS an escaping symlink either (no click needed to learn it exists)', async (ctx) => {
+    if (!linked) ctx.skip();
     const payload = await body(await browse());
     expect(names(payload)).not.toContain('link-outside');
     // …while a symlink that stays inside the root is a normal, usable folder.
@@ -183,7 +192,8 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
       .toBe(join(home, 'projects/repo'));
   });
 
-  it('caps candidates before rejecting a broken symlink, without refilling the cap', async () => {
+  it('caps candidates before rejecting a broken symlink, without refilling the cap', async (ctx) => {
+    if (!linked) ctx.skip();
     const capped = join(home, 'capped');
     mkdirSync(capped);
     for (let i = 0; i < 999; i += 1) mkdirSync(join(capped, `dir-${String(i).padStart(4, '0')}`));
