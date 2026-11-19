@@ -10,7 +10,7 @@ import { planEntry } from './task-thread/__fixtures__/plan-usage'
 
 afterEach(cleanup)
 
-const started = { startedAt: '2026-11-19T10:00:00.000Z' }
+const started = { startedAt: new Date(Date.now() - 3_600_000).toISOString() }
 
 describe('planLimitCell', () => {
   it('is a dash until the ledger answers, and for a run that never started', () => {
@@ -23,6 +23,11 @@ describe('planLimitCell', () => {
     expect(planLimitCell({ id: 'a', runner: 'codex', ...started }, [], 'claude').kind).toBe('not-measured')
     expect(planLimitCell({ id: 'a', runner: 'opencode', ...started }, [], 'claude').kind).toBe('not-reported')
     expect(planLimitCell({ id: 'a', ...started }, [], 'cursor').kind).toBe('not-reported')
+  })
+
+  it('is a dash, not "not measured yet", for a run older than the loaded two weeks', () => {
+    const old = { startedAt: new Date(Date.now() - 20 * 86_400_000).toISOString() }
+    expect(planLimitCell({ id: 'a', ...old }, [], 'claude')).toEqual({ kind: 'none' })
   })
 
   it('shows the first window, the later ones as "+N% next", and the markers', () => {

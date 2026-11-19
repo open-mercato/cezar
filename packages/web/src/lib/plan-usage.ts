@@ -25,6 +25,15 @@ export function clockTime(iso: string): string {
 
 // --- Task share helpers (task page chip + Tasks list column) ---
 
+/** Days the consumers query covers; a run older than that is not "not measured", just not loaded. */
+export const PLAN_USAGE_CONSUMERS_DAYS = 14
+
+/** True when a run started before the consumers query's window, so no entry says nothing about it. */
+export function beforeConsumersWindow(startedAt: string | undefined, now = Date.now()): boolean {
+  const at = startedAt ? Date.parse(startedAt) : NaN
+  return Number.isFinite(at) && at < now - PLAN_USAGE_CONSUMERS_DAYS * 86_400_000
+}
+
 /** Runners whose subscription logins report plan limits; every other tool is "not reported". */
 export const PLAN_LIMIT_RUNNERS: ReadonlySet<string> = new Set(['claude', 'codex'])
 

@@ -167,15 +167,19 @@ function NotListed() {
   return <p className="text-label text-muted-foreground">Tools without plan limits (OpenCode, Cursor, API keys…) aren't listed: they don't report them.</p>
 }
 
+function segmentsLabel(w: PlanUsageWindow): string {
+  return windowSegments(w).map((s) => `${s.label} ${s.id === 'tasks' || s.id === 'managers' ? approxPp(s.pp) : exactPp(s.pp)}`).join(', ')
+}
+
+/** A span inside the account button, whose label carries the breakdown (`segmentsLabel`). */
 function StackedBar({ window: w }: { window: PlanUsageWindow }) {
   const segments = windowSegments(w)
   return (
-    <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted" role="img"
-      aria-label={segments.map((s) => `${s.label} ${s.id === 'tasks' || s.id === 'managers' ? approxPp(s.pp) : exactPp(s.pp)}`).join(', ')}>
+    <span className="flex h-3 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
       {segments.map((s) => (
         <span key={s.id} data-segment={s.id} className={`h-full ${SEGMENT_FILL[s.id]}`} style={{ width: `${s.width}%` }} />
       ))}
-    </div>
+    </span>
   )
 }
 
@@ -186,7 +190,7 @@ function AccountBar({ window: w, onOpen }: { window: PlanUsageWindow; onOpen: (k
     <button
       type="button"
       data-plan-account={w.account.key}
-      aria-label={`${w.account.label}: ${windowStatus(w)}. Show details`}
+      aria-label={`${w.account.label}: ${windowStatus(w)}. ${segmentsLabel(w)}. Show details`}
       className="grid w-full gap-2 rounded-lg p-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
       onClick={(e) => onOpen(w.account.key, e.currentTarget)}
     >
@@ -324,7 +328,7 @@ function StepChart({ window: w }: { window: PlanUsageWindow }) {
         </g>
       )}
       {g.path && <path d={g.path} fill="none" stroke="var(--color-violet)" strokeWidth={2} />}
-      {g.points.map((p) => <circle key={p.at} cx={p.x} cy={p.y} r={2.5} fill="var(--color-violet)" />)}
+      {g.points.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={2.5} fill="var(--color-violet)" />)}
     </svg>
   )
 }

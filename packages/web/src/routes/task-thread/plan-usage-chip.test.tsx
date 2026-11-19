@@ -36,11 +36,11 @@ function stubConsumers(entries: PlanUsageConsumerWindow[]) {
   }))
 }
 
-const renderChip = (runner = 'claude', isStarted = true) =>
+const renderChip = (runner = 'claude', startedAt: string | null = new Date(Date.now() - 3_600_000).toISOString()) =>
   render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter>
-        <PlanUsageChip runId="r1" runner={runner} started={isStarted} />
+        <PlanUsageChip runId="r1" runner={runner} startedAt={startedAt ?? undefined} />
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -88,13 +88,20 @@ describe('PlanUsageChip', () => {
     expect(document.body.textContent).not.toContain('0%')
   })
 
+  it('stays out of the line for a run older than the two weeks the ledger query loads', async () => {
+    stubConsumers([])
+    renderChip('claude', new Date(Date.now() - 20 * 86_400_000).toISOString())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(document.querySelector('[data-slot="plan-usage-chip"]')).toBeNull()
+  })
+
   it('stays out of the line for tools without plan limits and for runs that never started', async () => {
     stubConsumers([])
     const { unmount } = renderChip('opencode')
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(document.querySelector('[data-slot="plan-usage-chip"]')).toBeNull()
     unmount()
-    renderChip('claude', false)
+    renderChip('claude', null)
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(document.querySelector('[data-slot="plan-usage-chip"]')).toBeNull()
   })

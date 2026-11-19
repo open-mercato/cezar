@@ -65,7 +65,7 @@ it('renders one bar per account with status, top consumers, legend and the not-l
   expect(within(claude).getByText(/top: Drop waiting dot ≈ 53%/)).toBeTruthy()
   expect(claude.querySelectorAll('[data-segment]')).toHaveLength(4)
   expect(screen.getByRole('button', { name: /Codex · default: 63% used · resets/ })).toBeTruthy()
-  expect(screen.getByRole('img', { name: /Before tracking 40%.*Outside cezar 23%/ })).toBeTruthy()
+  expect(screen.getByRole('button', { name: /Before tracking 40%.*Outside cezar 23%/ })).toBeTruthy()
   expect(within(screen.getByRole('list', { name: 'Legend' })).getAllByRole('listitem').map((li) => li.textContent))
     .toEqual(['Tasks', 'Managers', 'cezar internal', "Couldn't split", 'Before tracking', 'Outside cezar', 'Left'])
   expect(screen.getByText(/aren't listed: they don't report them/)).toBeTruthy()

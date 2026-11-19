@@ -3,7 +3,7 @@ import { useMemo } from 'react'
 import { formatPlanPp, type ManagerMessage, type PlanUsageAccount, type PlanUsageConsumerWindow } from '@open-mercato/cezar-api-client'
 import { usePlanUsageConsumers } from '@/api/plan-usage'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { approxPp, clockTime, managerConsumerId, taskConsumerId } from '@/lib/plan-usage'
+import { approxPp, clockTime, managerConsumerId } from '@/lib/plan-usage'
 
 /** Plan-limit usage in a manager chat (session-usage design, screen 5). Tasks it starts count on the task. */
 
@@ -85,11 +85,12 @@ export function managerUsageToday(
       quietWatchTurns: e.consumer.quietWatchTurns ?? 0,
     }))
   if (windows.length === 0) return null
-  const startedIds = new Set(started.map((t) => taskConsumerId(t.projectId, t.runId)))
+  // Matched on the run id: the ledger may spell the project as `default` where the card names its registry id.
+  const startedRuns = new Set(started.map((t) => t.runId))
   const counted = new Set<string>()
   let taskPp = 0
   for (const e of today) {
-    if (!startedIds.has(e.consumer.id)) continue
+    if (e.consumer.kind !== 'task' || !e.consumer.runId || !startedRuns.has(e.consumer.runId)) continue
     counted.add(e.consumer.id)
     taskPp += e.consumer.estimatePp
   }
@@ -117,8 +118,8 @@ export function replyUsageById(entries: readonly PlanUsageConsumerWindow[] | und
   return out
 }
 
-export function useManagerPlanUsage(managerId: string, messages: readonly ManagerMessage[], now: number) {
-  const entries = usePlanUsageConsumers().data?.entries
+export function useManagerPlanUsage(managerId: string, messages: readonly ManagerMessage[], now: number, enabled = true) {
+  const entries = usePlanUsageConsumers(enabled).data?.entries
   const started = useMemo(() => managerStartedTasks(messages), [messages])
   // `now` ticks every 30 s; the day boundary only needs that resolution.
   const today = useMemo(() => managerUsageToday(entries, managerId, started, new Date(now)), [entries, managerId, started, now])

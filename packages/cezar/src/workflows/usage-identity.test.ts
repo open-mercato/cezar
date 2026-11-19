@@ -147,3 +147,21 @@ it('a launched scheduled run does not re-verify the binding on later steps', asy
   expect(await callback(true)).toBeDefined();
   expect(probeCodexIdentity).not.toHaveBeenCalled();
 });
+
+it('records a failed check as a failed plan attempt only on the run\'s own tracked plan account', async () => {
+  const { setAccountTracking, resetLedgerCaches } = await import('../usage-ledger/store.ts');
+  resetLedgerCaches();
+  const internals = manager as unknown as {
+    planUsageTracker(runId: string, account: { provider: 'claude'; key: string }): unknown;
+    recordFailedPlanAttempt(runId: string): void;
+  };
+  const failures = () => readLedger(1).filter((r) => r.t === 'attempt-failed');
+  internals.recordFailedPlanAttempt('no-plan-run');
+  expect(failures()).toEqual([]);
+  internals.planUsageTracker('r1', { provider: 'claude', key: 'claude:default' });
+  internals.recordFailedPlanAttempt('r1');
+  expect(failures()).toHaveLength(1);
+  setAccountTracking('claude:default', false);
+  internals.recordFailedPlanAttempt('r1');
+  expect(failures()).toHaveLength(1);
+});

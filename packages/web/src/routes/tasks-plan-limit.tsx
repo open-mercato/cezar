@@ -1,7 +1,7 @@
 import { formatPlanPp, type PlanUsageConsumerWindow, type RunRecord } from '@open-mercato/cezar-api-client'
 
 import { IconTooltip } from '@/components/ui/icon-tooltip'
-import { approxPp, clockTime, KIND_LONG, PLAN_LIMIT_RUNNERS, taskWindows } from '@/lib/plan-usage'
+import { approxPp, beforeConsumersWindow, clockTime, KIND_LONG, PLAN_LIMIT_RUNNERS, taskWindows } from '@/lib/plan-usage'
 import { cn } from '@/lib/utils'
 
 /** What the Tasks table's "Plan limit" cell says for one run (plan-usage design, screen 4). */
@@ -24,7 +24,7 @@ export function planLimitCell(
   const windows = taskWindows(entries, run.id, 'five-hour').reverse()
   const first = windows[0]
   if (!first) {
-    if (!run.startedAt) return { kind: 'none' }
+    if (!run.startedAt || beforeConsumersWindow(run.startedAt)) return { kind: 'none' }
     return PLAN_LIMIT_RUNNERS.has(run.runner ?? defaultRunner ?? 'claude') ? { kind: 'not-measured' } : { kind: 'not-reported' }
   }
   const later = windows.slice(1)

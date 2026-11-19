@@ -63,6 +63,7 @@ import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './mana
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
 import { ManagerUsageChip, useManagerPlanUsage } from './manager-plan-usage'
+import { PLAN_LIMIT_RUNNERS } from '@/lib/plan-usage'
 
 /** Older history loads this far before the reader reaches the top. */
 const HISTORY_SLACK_PX = 400
@@ -553,7 +554,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && message.askClosed === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
-  const planUsage = useManagerPlanUsage(id, chat.messages, now)
+  const planUsage = useManagerPlanUsage(id, chat.messages, now, PLAN_LIMIT_RUNNERS.has(manager.runner ?? 'claude'))
   const subline = watchingLine({
     names: connected.map((project) => project.name),
     access: connected.map((project) => managerAccessOf(manager, project.id)),

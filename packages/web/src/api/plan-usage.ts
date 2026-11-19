@@ -6,14 +6,15 @@ import {
   type PlanUsageWindowKind,
 } from '@open-mercato/cezar-api-client'
 import { cez, unwrap } from './client'
-import { workspaceQueryKeys } from './queries'
+import { PLAN_USAGE_CONSUMERS_DAYS } from '@/lib/plan-usage'
 
 /** Plan-limit usage (design rev 3): one workspace-level ledger behind every surface. */
 export const planUsageKeys = {
-  all: [...workspaceQueryKeys.dashboard, 'plan-usage'] as const,
+  // Not under `dashboard`: that prefix refetches on every run event, and these poll on their own.
+  all: ['workspace', 'plan-usage'] as const,
   report: (q: PlanUsageReportQuery) => [...planUsageKeys.all, 'report', q] as const,
-  consumers: [...workspaceQueryKeys.dashboard, 'plan-usage', 'consumers'] as const,
-  tracking: [...workspaceQueryKeys.dashboard, 'plan-usage', 'tracking'] as const,
+  consumers: ['workspace', 'plan-usage', 'consumers'] as const,
+  tracking: ['workspace', 'plan-usage', 'tracking'] as const,
 }
 
 export interface PlanUsageReportQuery {
@@ -56,7 +57,7 @@ export function usePlanUsageConsumers(enabled = true) {
     refetchInterval: REFRESH_MS,
     staleTime: 30_000,
     queryFn: async ({ signal }) => planUsageConsumersResponseSchema.parse(await unwrap(
-      await cez.api.v1.workspace['plan-usage'].consumers.$get({ query: {} }, { init: { signal } }),
+      await cez.api.v1.workspace['plan-usage'].consumers.$get({ query: { days: String(PLAN_USAGE_CONSUMERS_DAYS) } }, { init: { signal } }),
       '/workspace/plan-usage/consumers',
     )),
   })

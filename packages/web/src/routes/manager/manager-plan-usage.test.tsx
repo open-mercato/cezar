@@ -73,12 +73,17 @@ describe('managerUsageToday', () => {
       startsAt: new Date('2026-11-19T04:00:00').toISOString(), resetsAt: new Date('2026-11-19T09:00:00').toISOString(),
     })
     const weekly = entry(manager, { kind: 'weekly', windowId: 'wk' })
-    const task = entry(consumer({ id: 'run:p1/r1', kind: 'task', estimatePp: 35 }))
-    const other = entry(consumer({ id: 'run:p1/r9', kind: 'task', estimatePp: 50 }))
+    const task = entry(consumer({ id: 'run:p1/r1', kind: 'task', runId: 'r1', estimatePp: 35 }))
+    const other = entry(consumer({ id: 'run:p1/r9', kind: 'task', runId: 'r9', estimatePp: 50 }))
     const usage = managerUsageToday([entry(manager), earlier, weekly, task, other], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)!
     expect(usage.totalPp).toBe(7)
     expect(usage.windows.map((w) => w.windowId)).toEqual(['w-early', 'w-today'])
     expect(usage.tasks).toEqual({ count: 1, pp: 35 })
+  })
+
+  it('counts a started task the ledger filed under the `default` project alias', () => {
+    const task = entry(consumer({ id: 'run:default/r1', kind: 'task', runId: 'r1', estimatePp: 35 }))
+    expect(managerUsageToday([entry(manager), task], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)!.tasks).toEqual({ count: 1, pp: 35 })
   })
 
   it('skips the tasks row when no started task has an estimate', () => {
@@ -88,7 +93,7 @@ describe('managerUsageToday', () => {
 
 describe('ManagerUsageChip', () => {
   it('renders the chip and the breakdown with every share marked ≈ and the window named', () => {
-    const usage = managerUsageToday([entry(manager), entry(consumer({ id: 'run:p1/r1', kind: 'task', estimatePp: 35 }))], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)
+    const usage = managerUsageToday([entry(manager), entry(consumer({ id: 'run:p1/r1', kind: 'task', runId: 'r1', estimatePp: 35 }))], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)
     render(<ManagerUsageChip name="Release manager" usage={usage} />)
     const chip = document.querySelector('[data-slot="manager-usage-chip"]')!
     expect(chip.textContent).toBe('Today ≈ 5% of 5h')

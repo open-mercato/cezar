@@ -9,6 +9,7 @@ export function ledgerAccountKey(provider: 'claude' | 'codex', accountId: string
 
 /** The account a reading or turn belongs to; `identity` fingerprints the login inside it. */
 export interface LedgerAccountRef { key: string; label?: string; identity?: string }
+export type PlanUsageAccountRef = LedgerAccountRef & { provider: 'claude' | 'codex' };
 
 const lastWritten = new Map<string, { usedPercent: number; status: string; at: number }>();
 const REPEAT_MS = 10 * 60_000;

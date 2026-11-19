@@ -5,7 +5,7 @@ import type { PlanUsageConsumerWindow } from '@open-mercato/cezar-api-client'
 import { usePlanUsageConsumers } from '@/api/plan-usage'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { approxPp, clockTime, KIND_LABEL, KIND_LONG, PLAN_LIMIT_RUNNERS, planWindowHref, taskWindows } from '@/lib/plan-usage'
+import { approxPp, beforeConsumersWindow, clockTime, KIND_LABEL, KIND_LONG, PLAN_LIMIT_RUNNERS, planWindowHref, taskWindows } from '@/lib/plan-usage'
 
 const CHIP_CLASS =
   'flex shrink-0 items-center gap-1 rounded-sm border border-border bg-card px-1.5 py-px font-mono text-meta tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
@@ -24,13 +24,14 @@ export function ranTogetherLabel(c: PlanUsageConsumerWindow['consumer']): string
  * account, so every figure is an estimate tied to one account and one window; no entry is
  * "not measured yet", never 0%.
  */
-export function PlanUsageChip({ runId, runner, started }: { runId: string; runner: string; started: boolean }) {
-  const consumers = usePlanUsageConsumers(started)
+export function PlanUsageChip({ runId, runner, startedAt }: { runId: string; runner: string; startedAt: string | undefined }) {
+  const started = Boolean(startedAt)
+  const consumers = usePlanUsageConsumers(started && PLAN_LIMIT_RUNNERS.has(runner))
   if (!started || !consumers.data) return null
   const windows = taskWindows(consumers.data.entries, runId, 'five-hour')
   const latest = windows[0]
   if (!latest) {
-    if (!PLAN_LIMIT_RUNNERS.has(runner)) return null
+    if (!PLAN_LIMIT_RUNNERS.has(runner) || beforeConsumersWindow(startedAt)) return null
     return (
       <span data-slot="plan-usage-chip" data-measured="false" className="shrink-0 text-meta text-soft-foreground">
         This task · plan limit not measured yet

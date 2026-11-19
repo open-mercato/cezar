@@ -301,22 +301,26 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
   const readings = seed.readings;
   const first = readings[0]!;
   let hwm = first.used;
+  // When the current high-water level was first reported: a flat whole-percent reading after it
+  // does not end the spend that the next rise reveals.
+  let hwmAt = first.at;
   let outside = 0;
   let unsplit = 0;
   const shares: Share[] = [];
   const intervals: PlanUsageInterval[] = [];
   for (let i = 1; i < readings.length; i++) {
-    const prev = readings[i - 1]!;
     const cur = readings[i]!;
     if (cur.used <= hwm) continue;
     const delta = cur.used - hwm;
+    const from = hwmAt;
     hwm = cur.used;
-    // The slice since the high-water reading, not since a lower (corrected) one.
-    const result = attribute(sessions, prev.at, cur.at, delta);
+    hwmAt = cur.at;
+    // The slice since the high-water reading, not since a later flat or lower (corrected) one.
+    const result = attribute(sessions, from, cur.at, delta);
     outside += result.outside;
     unsplit += result.unsplit;
     for (const share of result.shares) shares.push({ ...share, interval: i });
-    if (options.intervals) intervals.push({ from: new Date(prev.at).toISOString(), to: new Date(cur.at).toISOString(), deltaPp: round(delta), ...result.interval });
+    if (options.intervals) intervals.push({ from: new Date(from).toISOString(), to: new Date(cur.at).toISOString(), deltaPp: round(delta), ...result.interval });
   }
   const last = readings.at(-1)!;
   const correction = Math.max(0, hwm - last.used);

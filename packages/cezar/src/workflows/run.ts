@@ -5,11 +5,9 @@ import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
-import { PlanUsageTracker, recordFailedAttempt, recordUsageObservation } from '../usage-ledger/recorder.ts';
+import { PlanUsageTracker, recordFailedAttempt, recordUsageObservation, type PlanUsageAccountRef } from '../usage-ledger/recorder.ts';
 import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { taskConsumerId } from '../usage-ledger/report.ts';
-
-type PlanUsageAccountRef = { provider: 'claude' | 'codex'; key: string; label?: string; identity?: string };
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
@@ -1644,8 +1642,8 @@ export class RunManager {
   /** The workspace-registry id of this manager's project — what a dispatched agent's `cez task`
    *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
   private readonly projectId: string | undefined;
-  /** Start of each task's current attempt, for the plan-usage retry flag. */
-  private readonly planAttemptSince = new Map<string, number>();
+  /** Each task's plan-limit account and the start of its current attempt, for the retry flag. */
+  private readonly planAttempts = new Map<string, { account: string; since?: number }>();
 
   /** See the constructor option of the same name. */
   private readonly secrets: SecretStore;
@@ -9428,19 +9426,17 @@ export class RunManager {
     this.namerInFlight.set(runId, pending);
   }
 
-  /**
-   * End-of-session telemetry (#348): stop sampling the run's process tree and
-   * fold the session's peaks into the run record. `max` with existing values —
-   * a run can hold several sessions (multiple agent steps, Continue) and the
-   * record keeps the highest water mark across all of them.
-   */
-  /** Everything this task spent since its previous failed check was a failed attempt. */
+  /** Everything this task spent since its previous failed check was a failed attempt. Only a run
+   *  with a plan-limit account writes one, and only to that account (its tracking switch applies). */
   private recordFailedPlanAttempt(runId: string): void {
+    const attempt = this.planAttempts.get(runId);
+    if (!attempt) return;
     const run = this.store.getRun(runId);
     const now = Date.now();
-    const since = this.planAttemptSince.get(runId) ?? Date.parse(run?.startedAt ?? run?.createdAt ?? '') ?? now;
-    this.planAttemptSince.set(runId, now);
-    try { recordFailedAttempt(undefined, taskConsumerId(this.projectId ?? 'default', runId), Number.isFinite(since) ? since : now, now); }
+    const started = Date.parse(run?.startedAt ?? run?.createdAt ?? '');
+    const since = attempt.since ?? (Number.isFinite(started) ? started : now);
+    this.planAttempts.set(runId, { account: attempt.account, since: now });
+    try { recordFailedAttempt(attempt.account, taskConsumerId(this.projectId ?? 'default', runId), since, now); }
     catch { /* metadata only */ }
   }
 
@@ -9449,6 +9445,11 @@ export class RunManager {
     if (!account) return undefined;
     const run = this.store.getRun(runId);
     const projectId = this.projectId ?? 'default';
+    // Bounded: one entry per run that ran on a plan-limit account, oldest dropped first.
+    const prior = this.planAttempts.get(runId);
+    this.planAttempts.delete(runId);
+    this.planAttempts.set(runId, { account: account.key, ...(prior?.since !== undefined ? { since: prior.since } : {}) });
+    if (this.planAttempts.size > 500) this.planAttempts.delete(this.planAttempts.keys().next().value!);
     try {
       return new PlanUsageTracker(account.provider, account, {
         id: taskConsumerId(projectId, runId), kind: 'task', title: run?.title ?? runId, projectId, runId,
@@ -9458,6 +9459,12 @@ export class RunManager {
     }
   }
 
+  /**
+   * End-of-session telemetry (#348): stop sampling the run's process tree and
+   * fold the session's peaks into the run record. `max` with existing values —
+   * a run can hold several sessions (multiple agent steps, Continue) and the
+   * record keeps the highest water mark across all of them.
+   */
   private recordUsagePeaks(runId: string, owner: ActiveRun): void {
     // unregisterRunProcess is keyed by run id, so an old generation must not
     // remove telemetry belonging to a replacement owner.

@@ -89,6 +89,18 @@ describe('plan usage attribution', () => {
     expect(invariant(w)).toBeCloseTo(20, 5);
   });
 
+  it('splits a rise across everyone who ran since the reading last rose, not only since the last flat one', () => {
+    const w = only([
+      reading('10:00', 10), task('a', 'run:p/a', '10:00'), sample('a', '10:00', '10:20', 3), end('a', '10:20'),
+      reading('10:21', 10), task('b', 'run:p/b', '10:21'), sample('b', '10:21', '10:40', 3), end('b', '10:40'),
+      reading('10:41', 11),
+    ]);
+    const by = Object.fromEntries(w.consumers.map((c) => [c.id, c.estimatePp]));
+    expect(by['run:p/a']).toBeCloseTo(0.5, 5);
+    expect(by['run:p/b']).toBeCloseTo(0.5, 5);
+    expect(invariant(w)).toBeCloseTo(11, 5);
+  });
+
   it('shows a provider correction instead of re-counting the climb back', () => {
     const w = only([reading('10:00', 10), reading('10:10', 20), reading('10:20', 18), reading('10:30', 19)]);
     expect(w.outsideCezarPp).toBe(10);

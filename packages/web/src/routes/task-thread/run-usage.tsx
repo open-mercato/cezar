@@ -49,7 +49,7 @@ export function RunUsage({
       className={cn('flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-meta text-muted-foreground', className)}
     >
       {showLiveUsage ? <LiveUsage usage={run.liveUsage} account={account} /> : null}
-      <PlanUsageChip runId={run.id} runner={runner} started={Boolean(run.startedAt)} />
+      <PlanUsageChip runId={run.id} runner={runner} startedAt={run.startedAt} />
       <UsageChip
         run={run}
         showTokens={visibility.tokens}
