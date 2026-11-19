@@ -445,6 +445,14 @@ async function serveCommand(
   const checks = await detectEnvironment();
   const repo = await getRepoInfo(repoRoot);
 
+  // Task files whose task is gone (spec 2026-11-19-worktree-disk-usage); never blocks boot.
+  setImmediate(() => {
+    try {
+      const swept = store.sweepOrphanTaskFiles();
+      const count = swept.artifacts.length + swept.dispatch.length + swept.library.length;
+      if (count > 0) console.log(`  removed ${count} leftover task file set(s) of deleted tasks`);
+    } catch { /* best effort */ }
+  });
   // Startup reconcile (spec 006): sweep worktrees whose run no longer exists.
   if (repo) {
     const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(

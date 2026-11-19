@@ -26,6 +26,7 @@ import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 import type { AgentUsageStatus } from '../core/agent-runner.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
+import { deleteLibraryCopies, sweepOrphanTaskFiles } from './task-files.ts';
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
 import { failureKind, taskFailedLabel } from './failure-kind.ts';
@@ -2355,9 +2356,10 @@ export class RunStore extends EventEmitter {
 
   deleteRun(id: string): boolean {
     // A record this version cannot read is still the user's to delete, prompt text included.
+    const root = this.runs.get(id)?.dispatch?.rootRunId;
     const existed = this.forget(id) || this.salvaged.delete(id);
     if (existed) {
-      this.deleteRunFiles(id);
+      this.deleteRunFiles(id, root);
       this.seqs.delete(id);
       this.scheduleSave();
     }
@@ -2531,15 +2533,32 @@ export class RunStore extends EventEmitter {
       ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
+      const root = this.runs.get(stale.id)?.dispatch?.rootRunId;
       this.forget(stale.id);
       this.salvaged.delete(stale.id);
-      this.deleteRunFiles(stale.id);
+      this.deleteRunFiles(stale.id, root);
     }
   }
 
+  /** Startup sweep: artifacts, dispatch trees and library copies whose task is gone (spec
+   *  2026-11-19-worktree-disk-usage). Never throws. */
+  sweepOrphanTaskFiles(): ReturnType<typeof sweepOrphanTaskFiles> {
+    const known = new Set([...this.runs.keys(), ...this.salvaged.keys()]);
+    const roots = new Set<string>();
+    for (const run of this.runs.values()) if (run.dispatch?.rootRunId) roots.add(run.dispatch.rootRunId);
+    return sweepOrphanTaskFiles(this.dataDir, known, roots);
+  }
+
   /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
-  private deleteRunFiles(id: string): void {
+  private deleteRunFiles(id: string, root?: string): void {
     try {
+      // Library copies only this task held, read from its run folder before that folder goes.
+      deleteLibraryCopies(this.dataDir, [id], [...this.runs.keys(), ...this.salvaged.keys()]);
+      // A dispatch tree outlives its root while a member remains (they share CEZ_TREE_DIR).
+      const tree = root ?? id;
+      if (![...this.runs.values()].some((run) => run.id === tree || run.dispatch?.rootRunId === tree)) {
+        rmSync(join(this.dataDir, 'dispatch', tree), { recursive: true, force: true });
+      }
       rmSync(this.eventsPath(id), { force: true });
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots

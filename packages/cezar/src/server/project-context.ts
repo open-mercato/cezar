@@ -268,6 +268,8 @@ export class ProjectContexts {
       // Startup reconcile (spec 006) + count-based retention (#483) — the same
       // best-effort sweeps serveCommand runs for the boot project, gated on the
       // root actually being a git repo.
+      // Task files whose task is gone (spec 2026-11-19-worktree-disk-usage); never blocks the build.
+      setImmediate(() => { try { store.sweepOrphanTaskFiles(); } catch { /* best effort */ } });
       if (await getRepoInfo(project.root)) {
         await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
           () => [] as string[],
