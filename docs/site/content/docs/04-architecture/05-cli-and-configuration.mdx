@@ -80,7 +80,7 @@ Use `CEZ_HOME` to select a directory other than `~/.cezar`. This does not move r
 | Path | Contents |
 | --- | --- |
 | &lt;repo>/`.ai/cezar/config.json` | Optional project settings: runner, models, branch, worktree retention count and age, and instructions. |
-| `~/.cezar/`config.json | Project registry and resources: concurrency limit, memory limits, monitoring settings, worktree age default, and disk guard. |
+| `~/.cezar/`config.json | Project registry and resources: concurrency limit, memory limits, monitoring settings, worktree age default, archived-task lifetime, and disk guard. |
 | &lt;repo>/`.ai/cezar/workflows/` and skills/ | YAML workflows and local instructions. These can be tracked in Git. |
 | &lt;repo>/`.ai/cezar/runs.json` and runs/\*.ndjson | Task index and event records. This working data is excluded from Git. |
 | `~/.cezar/`agent-`accounts.json` | Additional agent accounts and the selected account for each project. |
@@ -115,7 +115,9 @@ Each task worktree is a full checkout. Reclaiming one removes the directory only
 | `resources.diskGuard.minFreePercent` | global | 10 | The guard acts below the smaller of this percentage and `minFreeGb` of free space. `0` = off. |
 | `resources.diskGuard.minFreeGb` | global | 5 | See above. `0` = off. |
 | `resources.diskGuard.maxWorktreesGb` | global | 20 | The guard acts when worktrees of every project total more than this. `0` = off. |
-| `versionRetention` | global | 3 | Installed versions kept in `~/.cezar/versions`. `0` = no automatic pruning. |
+| `archivedTaskDeleteDays` | project | inherits | Delete a task N days after it was archived, with its worktree and branch. A branch with an open pull request, or with commits neither merged nor pushed, is kept. `0` = never. Unset inherits the global default. |
+| `resources.archivedTaskDeleteDaysDefault` | global | 90 | Archived-task lifetime for projects that set none. |
+| `versionRetention` | global | 3 | Installed versions kept in `~/.cezar/versions`, the running one included. `0` = no automatic pruning. |
 
 Edit them in Project settings → Worktrees and Settings → Resources → Worktrees. To free space from a terminal:
 
@@ -124,6 +126,7 @@ npx cezar-run worktrees list
 npx cezar-run worktrees reclaim --older-than 7d --dry-run
 npx cezar-run worktrees reclaim --all-inactive
 npx cezar-run worktrees prune
+npx cezar-run worktrees prune --archived-older-than 90d --dry-run
 npx cezar-run worktrees remove <runId>
 ```
 

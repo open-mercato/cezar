@@ -376,6 +376,27 @@ describe('Settings → Resources → Worktrees (spec 2026-11-19-worktree-disk-us
     await waitFor(() => expect(screen.getByText(/0 = off\. Off\./)).not.toBeNull())
   })
 
+  it('renders and saves the archived-task lifetime default, 0 included (never)', async () => {
+    serve({ archivedTaskDeleteDaysDefault: 30 })
+    renderResources()
+    await waitFor(() => expect(field('resources-archived-delete-days')).not.toBeNull())
+    expect(field('resources-archived-delete-days')!.value).toBe('30')
+    expect(screen.getByText(/Currently 30 days/)).not.toBeNull()
+    commit(field('resources-archived-delete-days')!, '0')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { archivedTaskDeleteDaysDefault: 0 } })
+    await waitFor(() => expect(screen.getByText(/0 = never\. Never\./)).not.toBeNull())
+  })
+
+  it('refuses an archived-task lifetime past the server bound (3650)', async () => {
+    serve()
+    renderResources()
+    await waitFor(() => expect(field('resources-archived-delete-days')).not.toBeNull())
+    commit(field('resources-archived-delete-days')!, '3651')
+    expect(document.querySelector('[data-slot="stepper-invalid"]')).not.toBeNull()
+    expect(puts()).toHaveLength(0)
+  })
+
   it('saves each guard threshold alone, so the others keep their value', async () => {
     serve()
     renderResources()

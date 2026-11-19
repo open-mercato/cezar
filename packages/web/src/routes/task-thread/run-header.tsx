@@ -13,6 +13,7 @@ import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo
 import { Link, useNavigate } from '@/lib/project-router'
 
 import {
+  useConfig,
   useHealth,
   usePatchRun,
   useProjectRepoBase,
@@ -383,6 +384,7 @@ function HeaderActions({
   const canTerminal = useCanOpenTerminal(run)
   const { choices, canResumeHere, open: openIn } = useRunOpenChoices(run, canTerminal)
   const terminalAvailable = useHealth().data?.capabilities?.terminal === true
+  const archivedDeleteDays = useConfig().data?.archivedTaskDeleteDays
   const navigate = useNavigate()
   const { bindings } = useKeybindings()
   const owned = ownedTaskPr(run)
@@ -403,6 +405,7 @@ function HeaderActions({
       terminalAvailable,
       openChoices: choices,
       ...(prUrl ? { prUrl } : {}),
+      ...(archivedDeleteDays !== undefined ? { archivedDeleteDays } : {}),
       taskUrl: '',
     },
     {

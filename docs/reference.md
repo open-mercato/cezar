@@ -992,6 +992,8 @@ restores it, a tree with uncommitted changes is skipped):
 | `resources.diskGuard.minFreePercent` | `~/.cezar/config.json` | `10` | Guard triggers when free space on the worktrees' volume is below the smaller of this percentage and `minFreeGb`; `0` = off. |
 | `resources.diskGuard.minFreeGb` | `~/.cezar/config.json` | `5` | See above; `0` = off. |
 | `resources.diskGuard.maxWorktreesGb` | `~/.cezar/config.json` | `20` | Guard triggers when task worktrees across all projects total more than this; `0` = off. |
+| `archivedTaskDeleteDays` | repo `.ai/cezar/config.json` | inherits | Delete a task N days after it was archived; `0` = never. Absent (or `null` through the API) inherits the workspace default. |
+| `resources.archivedTaskDeleteDaysDefault` | `~/.cezar/config.json` | `90` | The archived-task lifetime for every repo that sets none (0–3650). |
 | `versionRetention` | `~/.cezar/config.json` | `3` | Installed cezar versions kept in `~/.cezar/versions` (the running one included); `0` = never prune automatically. |
 
 Age retention skips running, queued and parked tasks, pinned tasks, tasks with a
@@ -999,10 +1001,24 @@ pending auto-resume or monitoring wake-up, and trees a running process uses. It
 runs at boot, after a task settles, hourly and on **Reclaim now**. Archiving a
 task (or **Archive finished**) reclaims its tree too. The disk guard reclaims the
 oldest idle trees across every project until it is back under its threshold, and
-warns ("Disk almost full") in the cockpit, the attention list and a notification
-when that is not enough; it never stops a running task. Edit the repo key in
-Project settings → Worktrees and the workspace keys in Settings → Resources →
-Worktrees.
+warns ("Disk almost full — N GB in task worktrees") in the cockpit, the
+attention list and a notification when that is not enough; it never stops a
+running task. It checks at boot and every 10 minutes, and
+`GET /api/v1/workspace/disk-guard` returns its thresholds and last pass. Edit the
+repo keys in Project settings → Worktrees and the workspace keys in Settings →
+Resources → Worktrees.
+
+An archived task is deleted after `archivedTaskDeleteDays`, counted from
+`archivedAt` (older records: `finishedAt`, else last activity): its record,
+event log, handoff, images, drafts, artifacts, attachment-library copies,
+dispatch files, worktree and branch. The branch is kept, and only the task
+deleted, when it has an open pull request (or `gh` cannot tell for a task that
+opened one) or commits neither merged into the default branch nor pushed to a
+remote. Unarchived, running and pinned tasks are never touched, and a tree with
+uncommitted changes keeps its task. It runs at boot and on the hourly sweep and
+logs a summary; the 500-archived-tasks cap stays as a safety net.
+`POST /api/v1/runs/archived/delete-expired` `{ olderThanDays?, dryRun? }` runs it
+on demand.
 
 `cez worktrees` works against the running cockpit when one serves the project
 and straight on the project directory otherwise (`--project <path>` picks
@@ -1015,6 +1031,7 @@ cez worktrees reclaim --older-than 7d       # every inactive tree idle that long
 cez worktrees reclaim --all-inactive        # every inactive tree
 cez worktrees reclaim --all-inactive --dry-run   # list, change nothing
 cez worktrees prune                         # orphan tree dirs + `git worktree prune`
+cez worktrees prune --archived-older-than 90d [--dry-run]   # also delete tasks archived that long; --dry-run previews only them
 cez worktrees remove <runId>                # one task's tree (branch kept); refuses active tasks
 cez versions prune [--keep N] [--dry-run] [--backups]   # old installed versions; backups only with --backups
 ```
