@@ -627,23 +627,6 @@ path for the reading-width default: it removes the legacy workspace-owned
 appearance.width value narrow once, while preserving accent, density and
 unknown ui-state keys. It does not touch per-repo files.
 
-<<<<<<< HEAD
-=======
-## Workflows — a human gate before every review-council PR, 2026-11-12
-
-- **Changed built-in**: `review-council`'s `judge.ship` now goes to its `gate.human` (as
-  `implement-review-pr` does) instead of straight to `github.draft-pr`. A saved copy in
-  `.ai/cezar/workflows/` keeps the graph it was saved with, and a file named `review-council` still
-  wins over the built-in; delete it to get the new graph.
-- **Additive port**: `github.draft-pr` gains a `nothing` port. A clean branch with no commits ahead
-  of its base opens no PR and leaves by `nothing`; unconnected, it ends the run as a success. It
-  used to leave by `failed`, so that is the one changed outcome, and it protects saved copies too.
-- **New built-in**: `review-pr`, a read-only PR review. Its agents' tool limits are enforced, so on
-  a backend that ignores `allowedTools`/`bashAllowlist` (everything but Claude Code and Pi) it is
-  refused before spawning, also on Continue. The refusal applies to any workflow whose
-  `capabilities` are all false.
-- **Additive response field**: `GET /api/v1/workflows` entries gain `capabilities`.
-
 ## Workflows — typed replies answer a human gate (#2318), 2026-11-18
 
 - **Changed outcome**: a `gate.human` reply that is not a clear reject (`Reject`, "request
@@ -658,7 +641,6 @@ unknown ui-state keys. It does not touch per-repo files.
   **Approve, open a full PR**, which opens it ready for review. When the task already has a PR,
   `github.draft-pr` after an instructed approval pushes the branch to it instead of opening another.
 
->>>>>>> 0272089 (fix(workflows): apply typed replies at review gates (#2318))
 ## Automations — results reach the manager chat, 2026-11-12
 
 - **Additive**: the definition gains an optional `report: {managerId, mode}` (`mode`:

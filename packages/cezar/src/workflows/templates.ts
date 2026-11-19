@@ -171,17 +171,7 @@ export const REVIEW_COUNCIL = builtIn(
         session: { continue: 'implement' },
         prompt: 'The review council asked for changes (round {{nodes.rounds.iteration}}/{{nodes.rounds.max}}):\n\n{{nodes.judge.summary}}\n\nMake them.',
       },
-<<<<<<< HEAD
-      { id: 'gate', type: 'gate.human', name: 'Your call', message: 'The council still wants changes after 2 rounds:\n\n{{nodes.judge.summary}}\n\nOpen a draft PR anyway?' },
-=======
-      // Every path to the PR passes this gate: a review-only run must never publish unasked.
-      {
-        id: 'gate',
-        type: 'gate.human',
-        name: 'Your call',
-        message: 'Council verdict: {{nodes.judge.verdict}}.\n\n{{nodes.judge.summary}}\n\nOpen a PR for “{{task}}”?',
-      },
->>>>>>> 0272089 (fix(workflows): apply typed replies at review gates (#2318))
+      { id: 'gate', type: 'gate.human', name: 'Your call', message: 'The council still wants changes after 2 rounds:\n\n{{nodes.judge.summary}}\n\nOpen a PR anyway?' },
       { id: 'pr', type: 'github.draft-pr', name: 'Draft PR' },
       { id: 'done', type: 'end', name: 'PR opened', status: 'success' },
       { id: 'stopped', type: 'end', name: 'Stopped', status: 'failed' },

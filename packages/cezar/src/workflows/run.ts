@@ -7384,21 +7384,6 @@ export class RunManager {
           note(`PR already open: ${run.pullRequestUrl}`);
           return !readyPr || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
         }
-<<<<<<< HEAD
-=======
-        // Nothing to propose — a clean tree with no commits ahead of the base (a review-only
-        // run): succeed without pushing, rather than fail on gh's refusal.
-        if (
-          !run.pullRequestUrl &&
-          run.worktreePath &&
-          (await worktreeChangedPaths(run.worktreePath)).length === 0 &&
-          (await baseDivergence(run.worktreePath, run.baseBranch)).ahead === 0
-        ) {
-          outputs.set(node.id, { url: '', number: '' });
-          note('no commits ahead of the base branch — no PR opened');
-          return 'nothing';
-        }
->>>>>>> 0272089 (fix(workflows): apply typed replies at review gates (#2318))
         const title = node.title ? render(node.title) : undefined;
         const outcome = await createDraftPr({
           repoRoot: this.repoRoot,
@@ -7853,11 +7838,6 @@ export class RunManager {
   }
 
   /**
-<<<<<<< HEAD
-   * Install the named skills and every companion they name into the run's cwd (skills-provision.ts).
-   * Once a named skill is known, waits (bounded) for the team-skill load before collecting companions.
-   * Refreshes `state.skills` so expansion sees the same catalog. Never throws.
-=======
    * The turn that applies a gate's typed instructions before the walk goes on, on the gate's own
    * rail row. Reuse the implementer's session when available. A failed or unconfirmed turn
    * returns to the same gate so the graph can still continue after the next answer.
@@ -7922,12 +7902,9 @@ export class RunManager {
   }
 
   /**
-   * Install the named skills — a step skill, a leading `/name`, and every catalog skill the
-   * prompt names in prose — plus their companions into the run's cwd (skills-provision.ts).
-   * Once a named skill is known, waits (bounded) for the team-skill load before collecting
-   * companions; a repo extension whose shared skill is missing triggers one bounded team-skill
-   * refresh. Refreshes `state.skills` so expansion sees the same catalog. Never throws.
->>>>>>> 0272089 (fix(workflows): apply typed replies at review gates (#2318))
+   * Install the named skills and every companion they name into the run's cwd (skills-provision.ts).
+   * Once a named skill is known, waits (bounded) for the team-skill load before collecting companions.
+   * Refreshes `state.skills` so expansion sees the same catalog. Never throws.
    */
   private async provisionTaskSkills(
     state: ActiveRun,
