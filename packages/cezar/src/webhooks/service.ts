@@ -379,13 +379,13 @@ export class WebhookService extends EventEmitter {
   }
   /** One commit per admission file, one history write and one registry commit, however many deliveries settle. */
   private async settle(targets: readonly { admission: Admission; ids: readonly string[] }[], status: DeliveryRecord['status'], reason: string): Promise<void> {
-    for (const { admission, ids } of targets) await this.admissions.update(admission.id, record => {
+    await this.admissions.updateMany(targets.map(({ admission, ids }) => ({ id: admission.id, mutate: (record: Admission) => {
       for (const delivery of record.deliveries) {
         if (!ids.includes(delivery.id)) continue;
         delivery.status = status; delivery.historyPending = true; delivery.reason = reason; delivery.claim = undefined;
         if (terminalDelivery(status)) { delivery.completedAt = new Date(this.now()).toISOString(); delivery.nextAttemptAt = undefined; }
       }
-    });
+    } })));
     await this.recordHistories(targets.flatMap(({ admission, ids }) => ids.map(id => ({ eventId: admission.id, deliveryId: id }))));
     await this.endpoints.invalidate();
   }
@@ -412,8 +412,10 @@ export class WebhookService extends EventEmitter {
     // can outlast it; only complete() may settle our outstanding attempt.
     if (this.inFlight) return undefined;
     await this.persistFailures();
-    let reclaimed = false;
-    for (let count = 0; count < 100; count++) {
+    let reclaimed = false, admittedAny = false;
+    // One registry commit for the batch: it only bumps `changeSequence`, and each one is a
+    // full durable rewrite of the registry (two fsyncs) per admitted event.
+    try { for (let count = 0; count < 100; count++) {
       const entry = this.outbox.peek(); if (!entry) break;
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
@@ -426,10 +428,10 @@ export class WebhookService extends EventEmitter {
         if (reclaimed) break;
         reclaimed = true; await this.maintain(true); continue;
       }
+      admittedAny = true;
       await this.persistFailures(); await this.outbox.advance(entry.end);
       for (const delivery of admitted.deliveries) if (terminalDelivery(delivery.status)) await this.recordHistory(admitted.id, delivery.id);
-      await this.endpoints.invalidate();
-    }
+    } } finally { if (admittedAny) await this.endpoints.invalidate(); }
     await this.maintain();
     // Admission files load in UUID order. Probe by delivery age and source sequence,
     // including same-timestamp captures, rather than whichever file was read first.
@@ -678,9 +680,9 @@ export class WebhookService extends EventEmitter {
     await this.history.upsert(rows.map(({ record, delivery }) => this.display(record, delivery)));
     const pending = new Map<string, Set<string>>();
     for (const { record, delivery } of rows) if (delivery.historyPending) pending.set(record.id, (pending.get(record.id) ?? new Set()).add(delivery.id));
-    for (const [eventId, ids] of pending) await this.admissions.update(eventId, next => {
+    await this.admissions.updateMany([...pending].map(([eventId, ids]) => ({ id: eventId, mutate: (next: Admission) => {
       for (const delivery of next.deliveries) if (ids.has(delivery.id)) delivery.historyPending = undefined;
-    });
+    } })));
   }
   private receiverIdentity(id: string) {
     const receiver = this.list().receivers.find(receiver => receiver.id === id) ?? this.endpoints.historical().find(receiver => receiver.id === id);
