@@ -20,6 +20,7 @@ describe('TASK_COLUMNS', () => {
       'reference',
       'tokens',
       'cost',
+      'planLimit',
       'cpu',
       'memory',
       'started',
@@ -27,7 +28,7 @@ describe('TASK_COLUMNS', () => {
     expect(TASK_COLUMNS.slice(0, 2).map((column) => column.canFold)).toEqual([false, false])
   })
 
-  it('folds only Branch by default — Mem stays open, as existing users have it', () => {
+  it('folds only Branch and the optional Plan limit by default — Mem stays open, as existing users have it', () => {
     const normalized = normalizeExpandedColumns(undefined)
     expect(
       Object.fromEntries(TASK_COLUMNS.map((column) => [column.id, isColumnExpanded(column.id, normalized)])),
@@ -40,6 +41,7 @@ describe('TASK_COLUMNS', () => {
       reference: true,
       tokens: true,
       cost: true,
+      planLimit: false,
       cpu: true,
       memory: true,
       started: true,
@@ -83,6 +85,7 @@ describe('TASK_COLUMNS', () => {
       'diff',
       'reference',
       'cost',
+      'planLimit',
       'cpu',
       'memory',
       'started',
@@ -92,8 +95,8 @@ describe('TASK_COLUMNS', () => {
 })
 
 describe('tableMinWidth', () => {
-  // 116 status + 124 workflow + 42 folded branch + 78 diff + 76 ref + 112 tokens + 76 cost + 68 cpu + 88 mem + 82 started.
-  const fixed = 862
+  // 116 status + 124 workflow + 42 folded branch + 78 diff + 76 ref + 112 tokens + 76 cost + 42 folded plan limit + 68 cpu + 88 mem + 82 started.
+  const fixed = 904
 
   it('keeps the Task column its 220px floor beside every fixed column (iPad portrait gave it 0px)', () => {
     expect(tableMinWidth(TASK_COLUMNS, {}, false)).toBe(fixed + 220)
