@@ -4,7 +4,7 @@ import { open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { AgentRunSpec } from './agent-runner.ts';
-import { codexBashArgv, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
+import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
 
 const path = z.string().min(1).max(4_096);
 const requestSchema = z.discriminatedUnion('tool', [
@@ -115,17 +115,36 @@ export class CodexReadBroker {
           if (argv[0] === 'gh') {
             if (!this.githubReadsAllowed) throw new Error('GitHub reads are disabled by CEZ_CODEX_NETWORK=0');
             const hosts = new Set(['github.com', (this.env.GH_HOST ?? 'github.com').toLowerCase()]);
-            for (const arg of argv.slice(3)) {
-              if (/^https?:\/\//i.test(arg)) {
-                const url = new URL(arg);
-                if (url.protocol !== 'https:' || url.username || url.password || url.port || !hosts.has(url.hostname.toLowerCase())) throw new Error('GitHub host is outside this step’s configured hosts');
+            const repository = (value: string): void => {
+              if (/^https?:\/\//i.test(value)) {
+                const url = new URL(value);
+                if (url.protocol === 'https:' && !url.username && !url.password && !url.port && hosts.has(url.hostname.toLowerCase())) return;
+              } else {
+                const parts = value.split('/');
+                if (parts.length === 3 && hosts.has(parts[0]!.toLowerCase())) parts.shift();
+                if (parts.length === 2 && parts.every(p => /^[A-Za-z0-9_.-]+$/.test(p))) return;
               }
-            }
+              throw new Error('GitHub repository host is not granted');
+            };
+            let explicit = false;
             for (let i = 3; i < argv.length; i++) if (argv[i] === '--repo' || argv[i] === '-R') {
-              const repository = argv[++i]!;
-              if (!repository.startsWith('https://') && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
-                const [host, owner, repo, ...extra] = repository.split('/');
-                if (!host || !hosts.has(host.toLowerCase()) || !owner || !repo || extra.length) throw new Error('GitHub repository host is not granted');
+              repository(argv[++i]!); explicit = true;
+            }
+            const operands = codexGithubOperands(argv);
+            if (operands.length > 1) throw new Error('unsupported GitHub operands');
+            for (const operand of operands) {
+              if (argv[1] === 'repo' || /^https?:\/\//i.test(operand)) { repository(operand); explicit = true; }
+              else if (!/^[A-Za-z0-9_.-]+$/.test(operand)) throw new Error('unsupported GitHub operand');
+            }
+            if (!explicit) {
+              // gh can infer an enterprise host from ANY resolved Git remote, including URL rewrites.
+              const remotes = await this.execute(['git', 'remote', '-v']);
+              const urls = remotes.trim().split('\n').filter(Boolean).map(line => line.split(/\s+/)[1]!);
+              if (!urls.length) throw new Error('GitHub reads need an explicit --repo or a configured GitHub remote');
+              for (const remote of urls) {
+                const scp = /^[^@/]+@([^:/]+):(.+)$/.exec(remote);
+                if (scp) repository(`${scp[1]}/${scp[2]}`);
+                else repository(remote);
               }
             }
           }

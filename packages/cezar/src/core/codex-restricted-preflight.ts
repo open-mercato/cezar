@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import type { RestrictedCodexHome } from './codex-restricted-home.ts';
 
-export const CODEX_DISABLED_FEATURES = ['shell_tool', 'view_image', 'hooks', 'multi_agent', 'goals', 'unified_exec_tty', 'shell_snapshot', 'remote_plugin', 'remote_control', 'tool_suggest', 'image_generation', 'js_repl', 'code_mode'] as const;
+import { CODEX_DISABLED_FEATURES } from './codex-restricted-policy.ts';
 const object = z.record(z.string(), z.unknown());
 const configResponse = z.object({
   config: object,

@@ -39,7 +39,7 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     expect(turn.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
     if (path === 'lock') expect(f.requests().some((r: {method: string}) => r.method === 'thread/fork')).toBe(true);
   });
-  it.each(['version', 'flags', 'layer', 'hooks', 'mcp', 'requirements', 'sandbox'])('refuses before a model turn when %s cannot be verified', async mode => {
+  it.each(['version', 'flags', 'apps', 'layer', 'hooks', 'mcp', 'requirements', 'sandbox'])('refuses before a model turn when %s cannot be verified', async mode => {
     const f = setup(mode);
     await expect(f.runner.run(f.spec)).rejects.toThrow('tool-policy enforcement unavailable');
     expect(f.requests().some((r: {method: string}) => r.method === 'turn/start')).toBe(false);

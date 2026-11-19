@@ -2,6 +2,8 @@ import { DEFAULT_ALLOWED_TOOLS, type AgentRunSpec } from './agent-runner.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { tokenizePlainShell } from './plain-shell.ts';
 
+export const CODEX_DISABLED_FEATURES = ['shell_tool', 'view_image', 'hooks', 'multi_agent', 'multi_agent_v2', 'goals', 'unified_exec_tty', 'shell_snapshot', 'remote_plugin', 'remote_control', 'tool_suggest', 'image_generation', 'js_repl', 'code_mode', 'apps', 'plugins', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'in_app_browser', 'skill_mcp_dependency_install', 'workspace_dependencies'] as const;
+
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'Bash']);
 // A prefix here is only a grant selector. Each invocation is validated again below.
 export const CODEX_READ_PREFIXES = [
@@ -17,13 +19,13 @@ export interface CodexRestrictedPolicy {
 
 /** Undefined is the historical unrestricted path. Unsupported grants never become unrestricted. */
 export function compileCodexRestrictedPolicy(spec: Pick<AgentRunSpec,
-  'allowedTools' | 'bashAllowlist' | 'bashHookCommand' | 'enforceReadOnly'
+  'allowedTools' | 'bashAllowlist' | 'bashHookCommand' | 'enforceReadOnly' | 'mcpServers'
 >): CodexRestrictedPolicy | undefined {
   const explicit = spec.allowedTools;
   const tools = explicit ?? (spec.enforceReadOnly ? ['Read', 'Grep', 'Glob'] : undefined);
   const legacy = tools === undefined || (tools.length === DEFAULT_ALLOWED_TOOLS.length && DEFAULT_ALLOWED_TOOLS.every(t => tools.includes(t)));
   if (legacy && !spec.enforceReadOnly && spec.bashAllowlist === undefined && spec.bashHookCommand === undefined) return undefined;
-  if (spec.bashHookCommand !== undefined || !tools || tools.some(t => !READ_TOOLS.has(t))) throw new CodexToolPolicyError();
+  if (spec.mcpServers?.length || spec.bashHookCommand !== undefined || !tools || tools.some(t => !READ_TOOLS.has(t))) throw new CodexToolPolicyError();
   if ((tools.includes('Bash') && !spec.bashAllowlist) || spec.bashAllowlist?.some(p => !(CODEX_READ_PREFIXES as readonly string[]).includes(p))) throw new CodexToolPolicyError();
   return { mutation: 'read-only', tools: new Set(tools), bashPrefixes: [...(spec.bashAllowlist ?? [])] };
 }
@@ -78,4 +80,18 @@ export function codexBashArgv(command: unknown, policy: CodexRestrictedPolicy): 
   const parsed = tokenizePlainShell(command);
   if (typeof parsed === 'string' || parsed.length !== 1 || !permittedArgv(parsed[0]!, policy)) return undefined;
   return parsed[0];
+}
+
+/** Called only after argv validation; separates operands from search/filter flag values. */
+export function codexGithubOperands(argv: readonly string[]): string[] {
+  const operands: string[] = [];
+  let afterDash = false;
+  for (let i = 3; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (!afterDash && arg === '--') { afterDash = true; continue; }
+    if (!afterDash && ONE_VALUE.has(arg)) { i++; continue; }
+    if (!afterDash && GH_FLAGS.has(arg)) continue;
+    operands.push(arg);
+  }
+  return operands;
 }

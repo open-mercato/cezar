@@ -34,6 +34,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     case 'config/read': {
       const effective = { apps: null, plugins: {}, mcp_servers: {}, hooks: null, ...config };
       if (mode === 'flags') effective.features.shell_tool = true;
+      if (mode === 'apps') effective.features.apps = true;
       const layers = [{ name: { type: 'user', file: configPath }, config }];
       if (mode === 'layer') layers.push({ name: { type: 'futureLayer' }, config: {} });
       send({ id: msg.id, result: { config: effective, layers } }); break;

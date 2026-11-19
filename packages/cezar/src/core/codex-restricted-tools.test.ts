@@ -37,10 +37,14 @@ describe.skipIf(process.platform === 'win32')('cezar executes restricted reads',
     const executable = join(bin, 'gh');
     writeFileSync(executable, `#!${process.execPath}\nimport { appendFileSync } from 'node:fs';\nappendFileSync(process.env.PROBE_LOG, JSON.stringify(process.argv.slice(2))+'\\n');\nprocess.stdout.write('read-only diff');\n`);
     chmodSync(executable, 0o755);
-    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'] })!, { cwd: f.cwd }, { ...f.home.toolEnv, PATH: bin, PROBE_LOG: log });
+    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff', 'gh repo view'] })!, { cwd: f.cwd }, { ...f.home.toolEnv, PATH: `${bin}:${f.home.toolEnv.PATH}`, PROBE_LOG: log });
     brokers.push(broker);
+    execFileSync('git', ['init', '-q'], { cwd: f.cwd, timeout: 5_000 });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/o/r.git'], { cwd: f.cwd, timeout: 5_000 });
     expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command: 'gh pr diff 3' } })).contentItems[0]?.text).toBe('read-only diff');
-    for (const command of ['gh pr merge 3', 'gh pr diff 3; gh pr merge 3', 'gh pr diff 3 --web', 'gh api repos/o/r -X DELETE', 'gh pr diff https://evil.example/o/r/pull/3', 'gh pr diff 3 -R evil.example/o/r']) expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).success).toBe(false);
+    for (const command of ['gh pr merge 3', 'gh pr diff 3; gh pr merge 3', 'gh pr diff 3 --web', 'gh api repos/o/r -X DELETE', 'gh pr diff https://evil.example/o/r/pull/3', 'gh pr diff 3 -R evil.example/o/r', 'gh repo view evil.example/o/r', 'gh repo view -- evil.example/o/r']) expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).success).toBe(false);
+    execFileSync('git', ['remote', 'set-url', 'origin', 'https://evil.example/o/r.git'], { cwd: f.cwd, timeout: 5_000 });
+    expect((await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command: 'gh pr diff 3' } })).success).toBe(false);
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['["pr","diff","3"]']);
   });
   it('honors the existing network-off setting for brokered GitHub reads', async () => {

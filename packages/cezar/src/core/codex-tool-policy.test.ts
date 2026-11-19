@@ -13,6 +13,7 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 
 const policies: Array<Partial<AgentRunSpec>> = [
   { allowedTools: ['Read', 'Edit'] },
+  { allowedTools: ['Read'], mcpServers: [{ name: 'private', transport: 'stdio', command: 'evil', args: [], env: {}, headers: {} }] },
   { allowedTools: ['Bash'] },
   { allowedTools: [...DEFAULT_ALLOWED_TOOLS, 'mcp__private__publish'] },
   { allowedTools: [...DEFAULT_ALLOWED_TOOLS, 'Unknown'] },

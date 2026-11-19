@@ -22,7 +22,7 @@ describe.skipIf(process.platform === 'win32')('restricted Codex homes', () => {
     const home = prepareRestrictedCodexHome({ cwd: f.cwd }, f.env);
     expect(home.path).not.toBe(f.native);
     expect(home.config.approval_policy).toBe('never');
-    expect(home.config.features).toMatchObject({ hooks: false, unified_exec_tty: false });
+    expect(home.config.features).toMatchObject({ hooks: false, unified_exec_tty: false, apps: false, plugins: false, browser_use: false, computer_use: false, skill_mcp_dependency_install: false });
     expect(home.config.model).toBe('test');
     expect(home.config).not.toHaveProperty('mcp_servers');
     expect(existsSync(join(home.path, 'rules'))).toBe(false);

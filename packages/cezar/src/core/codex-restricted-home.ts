@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
+import { CODEX_DISABLED_FEATURES } from './codex-restricted-policy.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 
 const PROVIDER_KEYS = new Set(['name', 'base_url', 'wire_api', 'env_key', 'requires_openai_auth', 'http_headers', 'env_http_headers', 'query_params', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'supports_websockets']);
@@ -103,7 +104,7 @@ export function prepareRestrictedCodexHome(
     web_search: 'disabled',
     check_for_update_on_startup: false,
     agents: { enabled: false },
-    features: { hooks: false, multi_agent: false, goals: false, unified_exec_tty: false, shell_snapshot: false, shell_tool: false, view_image: false, remote_plugin: false, remote_control: false, tool_suggest: false, image_generation: false, js_repl: false, code_mode: false },
+    features: Object.fromEntries(CODEX_DISABLED_FEATURES.map(key => [key, false])),
     projects: { [cwd]: { trust_level: 'untrusted' } },
     shell_environment_policy: { inherit: 'none', set: {
       HOME: shellHome, PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin',
@@ -139,8 +140,11 @@ export function prepareRestrictedCodexHome(
   credentialLink(join(nativeGh, 'hosts.yml'), join(ghHome, 'hosts.yml'));
   const shellEnv = record(record(config.shell_environment_policy).set) as Record<string, string>;
   const toolEnv: NodeJS.ProcessEnv = { ...shellEnv, GH_CONFIG_DIR: ghHome };
-  for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_HOST', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'LANG', 'LC_ALL']) {
+  for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_HOST', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'LANG', 'LC_ALL']) {
     if (!dry && inherited[name] !== undefined) toolEnv[name] = inherited[name];
+  }
+  if (!dry && inherited.GH_HOST) for (const name of ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
+    if (inherited[name] !== undefined) toolEnv[name] = inherited[name];
   }
   return { path, env, config, toolEnv, githubReadsAllowed: hostEnv.CEZ_CODEX_NETWORK !== '0' };
 }

@@ -171,7 +171,7 @@ native refresh update the selected account. Keyring-only authentication and unsu
 settings may be unavailable; cezar never silently picks another account. `CEZ_DRY_RUN=1` loads
 neither native credentials nor native config.
 
-Native shell/image/agent tools are disabled. Every `thread/start` and `turn/start` sends
+Native shell/image/agent tools, apps/connectors, plugins and browser/computer features are disabled. Every `thread/start` and `turn/start` sends
 `environments: []`; resume can restore a local environment, so the turn override is mandatory.
 Every turn also pins read-only/network-off sandbox and `approvalPolicy: never`. All native
 approval/permission/MCP requests are denied; unknown requests return an RPC error. The dynamic
@@ -180,7 +180,9 @@ git/GitHub commands. It validates arguments at execution, starts no shell or PTY
 bounds concurrency/output/time and aborts processes when the session closes. Files must remain
 inside cwd/additional read roots; Read accepts regular files up to 2 MB. Grep/Glob need `rg`.
 `CEZ_CODEX_NETWORK=0` also denies brokered GitHub reads. Write, push, PR mutation, arbitrary HTTP,
-interpreters, jq/templates and shell syntax are unavailable.
+interpreters, jq/templates and shell syntax are unavailable. GitHub positional repositories, explicit
+`--repo` values and inferred Git remote hosts must match github.com or `GH_HOST`; enterprise
+tokens travel only with an explicit `GH_HOST`. Restricted private MCP requests refuse.
 
 Each launched step persists an optional contract `toolPolicy` snapshot. Continue, restart and
 fresh-session retries reuse the owning snapshot, including synthetic/nested step policies and
