@@ -25,14 +25,10 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import com.openmercato.cezar.mobile.R;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
-import com.openmercato.cezar.mobile.shell.relay.RelayLink;
-import com.openmercato.cezar.mobile.shell.relay.RelayStatus;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -73,6 +69,7 @@ final class DeviceSwitcherSheet {
     private final Map<String, Row> rows = new LinkedHashMap<>();
     private final LinearLayout list;
     private final Dialog dialog;
+    private DeviceProbes probing;
     private String switching;
     private boolean closed;
 
@@ -86,7 +83,6 @@ final class DeviceSwitcherSheet {
         DeviceSwitch.State state;
         long lastSeen;
         Integer needCount;
-        boolean countsAsked;
 
         Row(ServerRecord server, View view, TextView words, TextView need, TextView tick, ProgressBar spinner) {
             this.server = server;
@@ -144,9 +140,7 @@ final class DeviceSwitcherSheet {
     }
 
     static DeviceSwitch.Clock clock(Activity activity) {
-        java.text.DateFormat time = android.text.format.DateFormat.getTimeFormat(activity);
-        java.text.DateFormat day = new java.text.SimpleDateFormat(android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "d MMM"), Locale.getDefault());
-        return new DeviceSwitch.Clock(System.currentTimeMillis(), TimeZone.getDefault(), time, day);
+        return ShellServices.clock(activity);
     }
 
     private void close() {
@@ -154,114 +148,40 @@ final class DeviceSwitcherSheet {
         closed = true;
         probes.shutdownNow();
         // Never the current server's link: cool() only stops what warm() started.
-        if (relay != null) relay.cool(switching);
+        if (probing != null) probing.stop(switching);
+        else if (relay != null) relay.cool(switching);
     }
 
     private void probe() {
-        for (Row row : rows.values()) {
-            if (row.current()) {
-                countsOfCurrent(row);
-                continue;
-            }
-            set(row, DeviceSwitch.State.CHECKING);
-            if (row.server.relay != null) probeRelay(row);
-            else probeDirect(row);
-        }
-        main.postDelayed(() -> {
-            if (closed) return;
-            for (Row row : rows.values()) {
-                if (row.state.status == DeviceSwitch.Status.CHECKING) set(row, DeviceSwitch.offline(row.lastSeen, clock()));
-            }
-        }, DeviceSwitch.PROBE_MS);
+        for (Row row : rows.values()) if (!row.current()) set(row, DeviceSwitch.State.CHECKING);
+        probing = new DeviceProbes(DeviceProbes.relayProbe(relay, probes), DeviceProbes.directProbe(connector, DeviceSwitcherSheet::cookies, probes),
+                keep -> {
+                    if (relay != null) relay.cool(keep);
+                },
+                (ms, work) -> main.postDelayed(work, ms),
+                (id, answer) -> connector.sawHealth(id, answer, System.currentTimeMillis()),
+                this::probed);
+        probing.start(connector.list());
     }
 
-    /** The page on screen keeps its own link and listener: only its counts are read here. */
-    private void countsOfCurrent(Row row) {
-        if (row.server.relay != null) {
-            RelayLink live = relay == null ? null : relay.warm(row.server);
-            if (live != null) readCounts(row, () -> relay.health(live));
-            return;
-        }
-        String cookies = row.server.url == null ? null : CookieManager.getInstance().getCookie(row.server.url);
-        readCounts(row, () -> connector.health(row.server.id, cookies));
+    private static String cookies(ServerRecord server) {
+        return server.url == null ? null : CookieManager.getInstance().getCookie(server.url);
     }
 
-    private void probeRelay(Row row) {
-        if (relay == null) {
-            set(row, DeviceSwitch.offline(row.lastSeen, clock()));
-            return;
-        }
-        RelayLink link = relay.warm(row.server);
-        if (link == null) {
-            set(row, DeviceSwitch.state(RelayStatus.Kind.DEVICE_REMOVED, row.lastSeen, clock()));
-            return;
-        }
-        link.setListener(status -> main.post(() -> relayStatus(row, link, status.kind)));
-        // A link warmed by an earlier open may have settled already, and a listener hears only changes.
-        RelayStatus.Kind now = link.status().kind;
-        if (DeviceSwitch.answered(now)) relayStatus(row, link, now);
-    }
-
-    private void relayStatus(Row row, RelayLink link, RelayStatus.Kind kind) {
-        if (closed) return;
-        // Connecting is no answer yet: the 6 s bound decides it.
-        if (!DeviceSwitch.answered(kind) && row.state.status == DeviceSwitch.Status.CHECKING) return;
-        set(row, DeviceSwitch.state(kind, row.lastSeen, clock()));
-        if (kind == RelayStatus.Kind.READY) readCounts(row, () -> relay.health(link));
-    }
-
-    private void probeDirect(Row row) {
-        String cookies = row.server.url == null ? null : CookieManager.getInstance().getCookie(row.server.url);
-        String id = row.server.id;
-        probes.execute(() -> {
-            HealthAnswer answer;
-            try {
-                answer = connector.health(id, cookies);
-            } catch (RuntimeException e) {
-                answer = null;
-            }
-            HealthAnswer read = answer;
-            sawHealth(row, read);
-            main.post(() -> {
-                if (closed) return;
-                set(row, read == null ? DeviceSwitch.offline(row.lastSeen, clock()) : DeviceSwitch.state(read.kind, row.lastSeen, clock()));
-            });
-        });
-    }
-
-    /** Once per row and sheet: the counts from the computer's own health, cached for the badge. */
-    private void readCounts(Row row, java.util.function.Supplier<HealthAnswer> health) {
-        if (row.countsAsked) return;
-        row.countsAsked = true;
+    /** Any thread. The row on screen keeps the view's own state: only its counts are read here. */
+    private void probed(String id, DeviceProbes.Reading reading) {
+        ServerListStore.Seen seen;
         try {
-            probes.execute(() -> {
-                HealthAnswer answer;
-                try {
-                    answer = health.get();
-                } catch (RuntimeException e) {
-                    answer = null;
-                }
-                sawHealth(row, answer);
-            });
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            // The sheet closed first.
-        }
-    }
-
-    /** Probe thread: an answer from cezar is a sighting, and its counts replace the cached ones. */
-    private void sawHealth(Row row, HealthAnswer answer) {
-        if (answer == null || answer.kind != HealthAnswer.Kind.CEZAR) return;
-        try {
-            connector.sawHealth(row.server.id, answer, System.currentTimeMillis());
+            seen = connector.seen(id);
         } catch (RuntimeException e) {
             return;
         }
-        ServerListStore.Seen seen = connector.seen(row.server.id);
         main.post(() -> {
-            if (closed) return;
+            Row row = rows.get(id);
+            if (closed || row == null) return;
             row.lastSeen = seen.at;
             row.needCount = seen.need();
-            set(row, row.state);
+            set(row, row.current() ? row.state : DeviceSwitch.state(reading, row.lastSeen, clock()));
         });
     }
 
@@ -359,8 +279,8 @@ final class DeviceSwitcherSheet {
         lineSize.topMargin = dp(6);
         lineSize.bottomMargin = dp(6);
         column.addView(line, lineSize);
-        column.addView(action(R.drawable.ic_plus, "Add a device", ACCENT, () -> leave(ShellConnector.ADD)));
-        column.addView(action(R.drawable.ic_gear, "Manage devices", FG, () -> leave(ShellConnector.LIST)));
+        column.addView(action(R.drawable.ic_plus, "Connect another cezar", ACCENT, () -> leave(ShellConnector.ADD)));
+        column.addView(action(R.drawable.ic_gear, "Manage cezars", FG, () -> leave(ShellConnector.LIST)));
 
         GradientDrawable sheet = new GradientDrawable();
         sheet.setColor(SHEET);

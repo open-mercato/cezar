@@ -30,7 +30,7 @@ public final class ShellConnector {
     public static final String OPEN = "open";
     public static final String LOGIN = "login";
     public static final String LIST = "list";
-    /** The connect page's pairing start: the switcher's Add a device. */
+    /** The connect page's pairing start: the switcher's Connect another cezar. */
     public static final String ADD = "add";
     public static final String ASK_CREDENTIALS = "ask-credentials";
     public static final String PASSWORD_REJECTED = "password-rejected";
@@ -278,6 +278,14 @@ public final class ShellConnector {
 
     public ServerRecord server(String serverId) {
         return servers.get(serverId);
+    }
+
+    /** Your cezars' Name: null once saved, else a sentence for the user (CezarRows.renameError). */
+    public String rename(String serverId, String label) {
+        ServerRecord server = servers.get(serverId);
+        String error = CezarRows.renameError(server, label);
+        if (error == null) servers.put(server.withLabel(label.trim()));
+        return error;
     }
 
     public ServerListStore.Seen seen(String serverId) {

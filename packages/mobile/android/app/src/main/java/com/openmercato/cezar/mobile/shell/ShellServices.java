@@ -78,6 +78,13 @@ public final class ShellServices {
         return relay;
     }
 
+    /** The phone's clock and formats, for "Offline since …". */
+    public static DeviceSwitch.Clock clock(Context context) {
+        java.text.DateFormat time = android.text.format.DateFormat.getTimeFormat(context);
+        java.text.DateFormat day = new java.text.SimpleDateFormat(android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "d MMM"), java.util.Locale.getDefault());
+        return new DeviceSwitch.Clock(System.currentTimeMillis(), java.util.TimeZone.getDefault(), time, day);
+    }
+
     public static synchronized StartupLog startupLog(Context context) {
         if (startupLog == null) startupLog = new StartupLog(new File(context.getApplicationContext().getNoBackupFilesDir(), "startup.log"), System::currentTimeMillis);
         return startupLog;
