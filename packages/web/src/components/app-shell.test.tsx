@@ -814,7 +814,7 @@ describe('AppShell', () => {
       expect(phones.compareDocumentPosition(unfold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
 
-    it('folds the switch into two stacked mode icons above the nav, each with its dot', () => {
+    it('folds the switch into two stacked mode icons above the nav, only Manager with a dot', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       const rail = () => document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
       const modes = () => rail().querySelector('[data-slot="rail-mode-switch"]') as HTMLElement
@@ -831,9 +831,10 @@ describe('AppShell', () => {
       expect(rail().querySelector('[data-slot="rail-manager"]')).toBeNull()
       cleanup()
 
-      // Manager mode: Projects carries the tasks dot, and the rail lists managers instead of areas.
+      // Manager mode: Projects stays undotted though tasks wait, and the rail lists managers instead of areas.
       renderShell('/manager/m-2', { managersAvailable: true, managerAttention: 'unread', nowCount: 2, managerRail: <p>manager thumbnails</p> })
-      expect(within(modes()).getByRole('link', { name: 'Projects, tasks need you' })).toBeTruthy()
+      const railProjects = within(modes()).getByRole('link', { name: 'Projects' })
+      expect(railProjects.querySelector('[data-slot="mode-switch-dot"]')).toBeNull()
       expect(within(modes()).getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
       expect(within(rail()).getByRole('link', { name: 'New manager' }).getAttribute('href')).toBe('/manager/new')
       expect(within(rail()).getByText('manager thumbnails')).toBeTruthy()
@@ -1404,7 +1405,7 @@ describe('AppShell with managers (design 2026-11 "Manager mode")', () => {
     expect(half(/^Projects/).getAttribute('href')).toBe('/')
   })
 
-  it('dots only the half you are not on: blue for needs-you, violet for unread news', () => {
+  it('dots only Manager, and only off it: blue for needs-you, violet for unread news', () => {
     const dot = (name: RegExp) => half(name).querySelector('[data-slot="mode-switch-dot"]')
     renderShell('/p/alpha/', { ...manager, managerAttention: 'needs-you', nowCount: 3 })
     expect(dot(/^Projects/)).toBeNull()
@@ -1414,13 +1415,11 @@ describe('AppShell with managers (design 2026-11 "Manager mode")', () => {
     renderShell('/p/alpha/', { ...manager, managerAttention: 'unread' })
     expect(dot(/^Manager/)?.querySelector('span')?.className).toContain('bg-violet')
     cleanup()
+    // Projects never carries a dot, even with tasks waiting: surfacing them is the manager's job.
     renderShell('/manager/m-1', { ...manager, managerAttention: 'needs-you', nowCount: 3 })
     expect(dot(/^Manager/)).toBeNull()
-    expect(dot(/^Projects/)?.querySelector('span')?.className).toContain('bg-info')
-    expect(half(/^Projects/).textContent).toBe('Projects, tasks need you')
-    cleanup()
-    renderShell('/manager/m-1', { ...manager, nowCount: 0 })
     expect(dot(/^Projects/)).toBeNull()
+    expect(half(/^Projects/).textContent).toBe('Projects')
   })
 
   it('swaps the project areas for the manager sidebar in manager mode, keeping the footer', () => {

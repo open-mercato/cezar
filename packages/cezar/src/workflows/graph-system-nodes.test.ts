@@ -142,6 +142,15 @@ describe('graph system nodes', () => {
     expect(final.steps.find((s) => s.id === 'no')?.status).toBe('done');
   }, 30_000);
 
+  it('applies a typed reply with no worker session on Codex instead of refusing its tool grant (#2330)', async () => {
+    const id = manager.startRun(def(GATE), { task: 'x', worktree: true, runner: 'codex' }).id;
+    await until(id, parkedAt('gate'));
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'Leave it for tomorrow. mock:verdict=declined' }])).toBe(true);
+    const final = await until(id, terminal);
+    expect(final.steps.find((s) => s.id === 'gate')?.error ?? '').not.toMatch(/tool|restrict/i);
+    expect(final.steps.find((s) => s.id === 'no')?.status).toBe('done');
+  }, 30_000);
+
   it('asks again when instructions cannot be applied, then resumes the same gate on approval', async () => {
     const id = manager.startRun(def(GATE), { task: 'x', worktree: true }).id;
     const original = (await until(id, parkedAt('gate'))).attentionRequest?.requestId;

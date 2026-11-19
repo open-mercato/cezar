@@ -2,6 +2,7 @@ import type { AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { z } from 'zod';
 import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
+import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
 import { parseStructured } from '../planner.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { resolveNamerModel } from './namer-model.ts';
@@ -202,7 +203,7 @@ export function postValidateTitle(title: string, refNumber?: number): string {
  * without one is never called (#2012) — its default model is the premium one —
  * except to name a branch under explicit `branchNaming`, which the user opted into.
  */
-export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
+export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }, onUnavailable?: (reason: string) => void): Promise<NameResult | null> {
   try {
     const config = await loadConfig(repoRoot);
     if (ctx.nameBranch && ctx.branchNaming === undefined && config.branchNaming) {
@@ -235,7 +236,10 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
       const composed = composeNameResult(result.text, ctx);
       if (composed) return composed;
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof CodexToolPolicyError) {
+      try { onUnavailable?.(err.message); } catch { /* Diagnostics must not block a task. */ }
+    }
     // runner unavailable / crashed — the heuristic title stays
   }
   return null;

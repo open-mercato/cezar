@@ -39,6 +39,22 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (packages/cezar/src/server/server.ts)
 
+Codex step restrictions (additive policy metadata, safety correction): run steps may include
+`toolPolicy` with `allowedTools`, optional `bashAllowlist` and optional `enforceReadOnly`.
+Old records without it remain readable. Continue uses the recorded grant before reconstructing
+one from a workflow, so nested and synthetic steps cannot inherit a wider tail grant. A legacy
+graph step whose grant is ambiguous refuses on Codex; a record without a workflow definition
+keeps the historical unrestricted default.
+
+An explicit dispatch `allowed_tools: []` is retained instead of converted to defaults. Codex
+executes that grant without broker capabilities. Other backends keep their own permission
+semantics. Omitted/exact-default unrestricted Codex grants are unchanged; supported read grants
+use isolated account/cwd state, while unsupported write/MCP/hook grants refuse. Native rules,
+hooks, plugins and keyring-only authentication are not imported into the restricted runtime.
+The selected file-backed account and supported provider settings are preserved. Unknown CLI
+protocols and active system policies refuse before any model call; no opt-out widens the grant.
+
+
 Issue ownership metadata (#1620, additive): `GET /api/v1/github` and
 `GET /api/v1/github/search`, including their project aliases, may add issue-only
 `assignees: string[]`, `assigneesTruncated: boolean`,
@@ -707,6 +723,16 @@ unknown ui-state keys. It does not touch per-repo files.
 - **Additive option**: a gate whose `approve` port leads straight to `github.draft-pr` also offers
   **Approve, open a full PR**, which opens it ready for review. When the task already has a PR,
   `github.draft-pr` after an instructed approval pushes the branch to it instead of opening another.
+
+## Managers — Codex managers are refused (#2330), 2026-11-19
+
+- **Changed outcome (security, fail-closed)**: a manager whose agent is Codex — pinned, or the
+  machine default when none is pinned — now fails every chat, watch, job and follow-up turn with
+  `CodexToolPolicyError` before any model call. Codex cannot enforce the manager's `cez-manager`
+  shell fence, so these turns used to run with Codex's unrestricted native shell. Pick Claude
+  Code for the manager; Codex stays available for the tasks a manager starts.
+- **Cockpit**: the manager agent picker no longer offers Codex. Stored managers keep their
+  `runner: 'codex'` pin and show the refusal in their chat until it is changed.
 
 ## Automations — results reach the manager chat, 2026-11-12
 

@@ -268,9 +268,11 @@ A write produces an approval card, like a merge. The card shows the connector, t
 
 Open the chat's settings gear → **Manager agent** to change the manager's agent, account, model and effort in one dialog. The account field lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. During setup, **Model and effort** also offers agent and account choices.
 
+> **Good to know**: Codex is not offered as the manager's own agent. A manager's tools are limited to a `cez-manager` shell allowlist, and Codex cannot enforce that limit, so a manager already set to Codex, or one with no agent set on a machine whose default is Codex, shows an error in its chat instead of running. Choose Claude Code for the manager. Tasks the manager starts can still run on Codex.
+
 Use **Agent for new tasks** during setup or in the dialog's **For new tasks** section to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
 
-**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Codex manager's task runs on Codex even when the project's default is Claude. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
+**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Claude Code manager's task runs on Claude Code even when the project's default is Codex. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
 
 The manager passes an account with `cez-manager task create --runner claude --account <id>`. The task records the requested account and the account that actually ran; open its agent badge to see the account label. If a selected account was deleted, task creation is refused instead of using another account.
 
