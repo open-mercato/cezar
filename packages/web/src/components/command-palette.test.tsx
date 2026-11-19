@@ -1149,6 +1149,20 @@ describe('Skills group', () => {
     await waitFor(() => expect(dialog()).toBeNull())
   })
 
+  it('marks a missing shared skill and opens its project catalog entry', async () => {
+    renderPalette({
+      entry: '/p/acme/',
+      skills: [skill({ name: 'om-auto-review-pr', source: 'ai', missingShared: true })],
+    })
+    openWith({ metaKey: true })
+
+    const option = await screen.findByRole('option', { name: /om-auto-review-pr\s*Shared skill missing/ })
+    fireEvent.click(option)
+
+    expect(location()).toBe('/p/acme/skills?skill=om-auto-review-pr')
+    await waitFor(() => expect(dialog()).toBeNull())
+  })
+
   it('shows the description beside the name', async () => {
     renderPalette({ skills: MIXED })
     openWith({ metaKey: true })

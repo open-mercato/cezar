@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { createQueryClient } from '@/api/query-client'
-import { workspaceQueryKeys } from '@/api/queries'
+import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 
 import bashAndScreenshot from '../../../../cezar/src/core/__fixtures__/claude/bash-and-screenshot.expected.json'
 import failedAndDenied from '../../../../cezar/src/core/__fixtures__/claude/failed-and-denied.expected.json'
@@ -20,6 +21,7 @@ import {
   ContextGroup,
   AssistantMessage,
   isNearBottom,
+  NoteLine,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
@@ -35,6 +37,65 @@ import { SessionTranscript } from './session-transcript'
 afterEach(() => {
   cleanup()
   Reflect.deleteProperty(navigator, 'clipboard')
+})
+
+describe('NoteLine skill recovery', () => {
+  const note = {
+    kind: 'note', id: 'v1:1', text: 'Shared skill unavailable', tone: 'danger', action: 'install-skills',
+  } as const
+
+  it('refreshes the current project, updates both catalog queries, and reports still-missing skills', async () => {
+    let respond!: (response: Response) => void
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { respond = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const client = createQueryClient()
+      const renderNote = (projectId: string) => (
+        <QueryClientProvider client={client}>
+          <ProjectScopeProvider projectId={projectId}>
+            <NoteLine note={{ ...note, skillNames: ['om-review', 'om-engine'] }} />
+          </ProjectScopeProvider>
+        </QueryClientProvider>
+      )
+      const { rerender } = render(renderNote('acme'))
+      const { skills, skillsReady } = queryKeys
+      const catalog = [{ name: 'om-review', source: 'ai', path: '/acme/om-review.md', body: '', missingShared: true }]
+
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      const pending = await screen.findByRole<HTMLButtonElement>('button', { name: 'Refreshing skills…' })
+      expect(pending.disabled).toBe(true)
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/p/acme/skills/refresh', expect.objectContaining({ method: 'POST' })))
+
+      rerender(renderNote('other'))
+      respond(Response.json(catalog))
+      expect((await screen.findByRole('status')).textContent)
+        .toBe('Skills catalog refreshed. The catalog is still missing om-review, om-engine.')
+      expect(client.getQueryData(skills)).toEqual(catalog)
+      expect(client.getQueryData(skillsReady)).toEqual(catalog)
+      expect(client.getQueryData(queryKeys.skills)).toBeUndefined()
+      expect(client.getQueryData(queryKeys.skillsReady)).toBeUndefined()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('reports a failed refresh and lets the user retry', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: 'Project unavailable' }, { status: 409 }))
+      .mockResolvedValueOnce(Response.json([]))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<QueryClientProvider client={createQueryClient()}><NoteLine note={note} /></QueryClientProvider>)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      expect((await screen.findByRole('alert')).textContent).toContain('Could not refresh skills. Project unavailable')
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      expect((await screen.findByRole('status')).textContent).toBe('Skills catalog refreshed.')
+      expect(screen.queryByRole('alert')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('ProviderAuthRequiredCard', () => {
