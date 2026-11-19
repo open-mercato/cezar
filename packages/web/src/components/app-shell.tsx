@@ -675,21 +675,10 @@ function SidebarIconRail({
         desktop === 'macos' && 'pt-[36px]',
       )}
     >
-<<<<<<< HEAD
       <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
         {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
       </span>
-      {/* The folded Projects | Manager switch: two stacked icons above the nav, each with its dot. */}
-=======
-      {isCezarShell() ? (
-        <DeviceAvatarLink name={props.computerName} size={28} slot="rail-device-avatar" className="my-0.5" />
-      ) : (
-        <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
-          {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
-        </span>
-      )}
       {/* The folded Projects | Manager switch: two stacked icons above the nav, Manager with its dot. */}
->>>>>>> 4c5d275 (fix(web): drop the waiting dot from the Projects tab (#2334))
       {managersAvailable ? <ModeRailSwitch {...modeSwitchProps(props)} /> : null}
       {managerMode ? (
         // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
