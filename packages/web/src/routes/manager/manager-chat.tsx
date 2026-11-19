@@ -62,6 +62,7 @@ import type { ManagerPatch } from './manager-pickers'
 import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
+import { ManagerUsageChip, useManagerPlanUsage } from './manager-plan-usage'
 
 /** Older history loads this far before the reader reaches the top. */
 const HISTORY_SLACK_PX = 400
@@ -552,6 +553,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && message.askClosed === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
+  const planUsage = useManagerPlanUsage(id, chat.messages, now)
   const subline = watchingLine({
     names: connected.map((project) => project.name),
     access: connected.map((project) => managerAccessOf(manager, project.id)),
@@ -665,6 +667,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
         </div>
+        <ManagerUsageChip name={manager.name} usage={planUsage.today} />
         <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" onClick={checkNow}>
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now
@@ -787,6 +790,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   superseded={superseded.has(message.id)}
                   authLive={authLive.has(message.id)}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
+                  planUsage={planUsage.replies.get(message.id)}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
                 />
               )))}
