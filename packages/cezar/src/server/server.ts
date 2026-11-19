@@ -110,7 +110,8 @@ import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { getAgentFallbackPolicyQuerySchema, putAgentFallbackPolicySchema } from '@open-mercato/cezar-contract';
-import { providerConnectSchema } from '@open-mercato/cezar-contract';
+import { providerConnectSchema, loginSessionStartSchema, loginSessionInputSchema, type LoginSession } from '@open-mercato/cezar-contract';
+import { LoginSessionManager, phoneSafeSession, type LoginSessionResult } from '../core/login-session.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -225,7 +226,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
-import { artifactsDir, isIdleParked } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
@@ -242,7 +243,7 @@ import {
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { readRunUserMessages } from '../runs/user-messages.ts';
-import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
+import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
 import {
@@ -427,6 +428,7 @@ import {
   type TelemetryConsentPayload,
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
+import { registerAuthResume } from './auth-resume.ts';
 import { MessageReceipts } from './message-receipts.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
@@ -571,6 +573,8 @@ export interface ServerDeps {
   socketHub?: SocketHub;
   /** The task terminal's session registry. Injectable so route tests drive a fake PTY. */
   terminalSessions?: TerminalSessions;
+  /** Inline account reconnect's login sessions; tests inject a fake. */
+  loginSessions?: LoginSessionManager;
   /** What the first-run page's install commands are chosen from. Injectable so a route test probes nothing. */
   agentSetupProbeEnv?: () => Promise<InstallEnv>;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
@@ -827,6 +831,12 @@ export interface UpdateProjectResponse {
   project: ProjectListEntry;
 }
 
+/** One reply shape for the login-session routes: the session, or `{ error, command? }`. */
+function loginSessionReply(c: Context, result: LoginSessionResult, phone: boolean) {
+  if (result.ok) return c.json(phone ? phoneSafeSession(result.session) : result.session, 200);
+  return c.json({ error: result.error, ...(result.command ? { command: result.command } : {}) }, result.status);
+}
+
 // ---- workspace SSE (multi-project spec, step 2.8) --------------------------
 
 /** Workspace-level event names carried ONLY on `GET /api/workspace/events`
@@ -837,6 +847,8 @@ export type WorkspaceEventName =
   | 'project-removed'
   | 'checkout-progress'
   | 'provider-status'
+  | 'agent-login'
+  | 'account-reconnected'
   | 'automation-change'
   | 'tracker-changed'
   | 'worktree-lifecycle'
@@ -2346,9 +2358,45 @@ export function createApp(deps: ServerDeps) {
     const cancel = watchLogin(check, () => {
       loginWatches.delete(key);
       track('provider_connected', { label: provider }, { sid });
+      // A terminal sign-in resumes what was blocked too (spec 2026-11-18-inline-account-reconnect).
+      void loginSessions.accountConnected(provider, profile.id);
     }, deps.loginWatchOffsetsMs ?? LOGIN_WATCH_OFFSETS_MS);
     loginWatches.set(key, cancel);
   };
+
+  // Inline account reconnect (spec 2026-11-18-inline-account-reconnect).
+  const loginSessions = deps.loginSessions ?? new LoginSessionManager({
+    resolveProfile: resolveWorkspaceProfile,
+    loginCommand: (provider, configDir) => providerAuth.loginCommand(provider, configDir),
+    // The user's completed login is the evidence the provider-auth spec asks for, so the incident
+    // is lifted before the fresh probe that must answer connected.
+    confirmConnected: async (provider, profile) => {
+      if (profile.isDefault) {
+        const latched = providerAuth.peekStatus()?.providers.find((row) => row.provider === provider)?.authFailureId;
+        if (latched) providerAuth.clearRuntimeAuthFailure(provider, latched);
+        const row = (await providerStatus({ refresh: true })).providers.find((candidate) => candidate.provider === provider);
+        if (row) workspaceEvents.emit('provider-status', row);
+        return row?.status === 'connected';
+      }
+      // No `provider-status` here: that event carries default-login rows only.
+      providerAuth.recheckProfileAuthFailure(provider, profile.id);
+      providerAuth.forgetProfileStatus(provider, profile.id);
+      return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
+    },
+    // Consulted only off a phone, where it is exactly the Connect gate.
+    remoteAccountsEnabled: accountsEnabled,
+    emit: (event, payload) => workspaceEvents.emit(event, payload),
+    openTerminal: (command) => openTerminal(bootRoot, command),
+    watchTerminal: (provider, profile) => watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }),
+    readIdentity: (provider, configDir) => readAccountIdentity(provider, configDir),
+    dryRun: () => process.env.CEZ_DRY_RUN === '1',
+  });
+
+  deps.onDispose?.(() => loginSessions.dispose());
+  const blockedOnAccount = async (provider: ProviderId, profileId: string): Promise<boolean> =>
+    (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId))
+    || (await workspaceProjectSources({ salvageColdRuns: true })).some((project) => project.available
+      && project.runs().some((run) => authParkForAccount(run, provider, profileId)));
 
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -2401,6 +2449,8 @@ export function createApp(deps: ServerDeps) {
         const result = await providerStatus({ refresh: true });
         const row = result.providers.find(({ provider: id }) => id === provider.data);
         if (row) workspaceEvents.emit('provider-status', row);
+        // The incident this retry cleared is over: resume what was parked on it.
+        if (row?.status === 'connected') void loginSessions.accountConnected(provider.data, DEFAULT_AGENT_ACCOUNT_ID);
         return c.json(result);
       },
     )
@@ -2495,6 +2545,24 @@ export function createApp(deps: ServerDeps) {
       watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
     })
+
+    // Inline account reconnect (spec 2026-11-18-inline-account-reconnect): the vendor's own sign-in,
+    // relayed to the card instead of a terminal. Tokens and pasted keys never reach a response.
+    .post('/providers/login', jsonZodValidator(loginSessionStartSchema, { message: `provider must be one of ${RUNNER_IDS.join(', ')}` }), async (c) => {
+      const result = await loginSessions.start(c.req.valid('json'), { local: capabilities().localHandoff, phone: inRelayScope() });
+      return loginSessionReply(c, result, inRelayScope());
+    })
+    .post(
+      '/providers/login/:sessionId/input',
+      paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
+      jsonZodValidator(loginSessionInputSchema, { message: 'code or apiKey is required' }),
+      async (c) => loginSessionReply(c, await loginSessions.input(c.req.valid('param').sessionId, c.req.valid('json')), inRelayScope()),
+    )
+    .delete(
+      '/providers/login/:sessionId',
+      paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
+      async (c) => loginSessionReply(c, await loginSessions.cancel(c.req.valid('param').sessionId), inRelayScope()),
+    )
 
     // Offered next to an "X or newer is required" agent error: hands the CLI's own self-update to
     // a terminal, like Connect hands it the login.
@@ -2895,19 +2963,27 @@ export function createApp(deps: ServerDeps) {
           const all = await providerStatus(refresh ? { refresh: true } : undefined);
           const row = all.providers.find((candidate) => candidate.provider === account.provider);
           if (recheck && account.provider === 'cursor') await modelCatalog.refresh('cursor');
+          if (recheck && row?.status === 'connected' && await blockedOnAccount(account.provider, DEFAULT_AGENT_ACCOUNT_ID)) {
+            void loginSessions.accountConnected(account.provider, DEFAULT_AGENT_ACCOUNT_ID);
+          }
           return c.json({ status: row ?? { provider: account.provider, status: 'unknown' as const } });
         }
         // "Check again" re-probes THIS account only — the other accounts' warm answers are not
         // invalidated by asking about this one. Only `recheck` (the pane's button) may lift a dead
         // login; New task's verify-before-refuse re-probes with `refresh` alone (telemetry 9e4a95db).
         if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
+        const hadIncident = recheck && providerAuth.peekProfileStatus(account.provider, account.id)?.authFailureId !== undefined;
         if (recheck) providerAuth.recheckProfileAuthFailure(account.provider, account.id);
-        return c.json({
-          status: await providerAuth.profileStatus(account.provider, {
-            id: account.id,
-            configDir: account.path,
-          }),
+        const status = await providerAuth.profileStatus(account.provider, {
+          id: account.id,
+          configDir: account.path,
         });
+        // Check again lifted this account's incident, or something parked on it survived a restart
+        // that forgot the incident: resume it. A healthy account's Check again announces nothing.
+        if (recheck && status.status === 'connected' && (hadIncident || await blockedOnAccount(account.provider, account.id))) {
+          void loginSessions.accountConnected(account.provider, account.id);
+        }
+        return c.json({ status });
       },
     )
 
@@ -7082,6 +7158,10 @@ export function createApp(deps: ServerDeps) {
         // already-open stream.
         const offWorkspace = workspaceEvents.on((event, data) => {
           if (relayReader && event === 'phone-pairing') return;
+          if (relayReader && event === 'agent-login') {
+            void stream.writeSSE({ event, data: JSON.stringify(phoneSafeSession(data as LoginSession)) });
+            return;
+          }
           if (event === 'project-removed') {
             const removed = (data as { id?: string }).id;
             if (removed !== undefined && attached.has(removed)) {
@@ -8577,6 +8657,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
+    ...(run.parked !== undefined ? { parked: run.parked } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.diffStat !== undefined ? { diffStat: run.diffStat } : {}),
@@ -8816,7 +8897,7 @@ export function createApp(deps: ServerDeps) {
   // Spec 2026-10-31-managers. Single-mount: a manager spans projects, so a scoped spelling would
   // be a contradiction. Explicit paths for the gate, for the reason `requireAutomations` spells out.
   const managerLoopback: { request?: (path: string, init?: RequestInit) => Response | Promise<Response> } = {};
-  const managerProjectSources = async (): Promise<ManagerProjectSource[]> => {
+  const workspaceProjectSources = async ({ salvageColdRuns = false } = {}): Promise<ManagerProjectSource[]> => {
     const registry = await loadWorkspaceConfig().then((config) => config.projects).catch(() => []);
     const bootId = await resolveBootProject(registry);
     const visible = capabilities().singleProject ? registry.filter((project) => project.id === bootId) : registry;
@@ -8830,7 +8911,11 @@ export function createApp(deps: ServerDeps) {
         name: project.name || basename(project.root),
         root: project.root,
         available: existsSync(project.root),
-        runs: () => owned ? owned.store.listRuns() : readColdRuns(join(project.root, '.ai/cezar')),
+        runs: () => {
+          if (owned) return owned.store.listRuns();
+          const dataDir = join(project.root, '.ai/cezar');
+          return salvageColdRuns ? readRunIndexDiagnostic(dataDir, project.root).runs : readColdRuns(dataDir);
+        },
         automationFailures: () => {
           if (!owned) return [];
           return owned.automationStore.list().flatMap((automation) => {
@@ -8848,7 +8933,7 @@ export function createApp(deps: ServerDeps) {
   const managerEngine = new ManagerEngine({
     store: managerStore,
     emit: (event, data) => workspaceEvents.emit(event, data),
-    projects: managerProjectSources,
+    projects: workspaceProjectSources,
     github: {
       list: (root) => fetchGithub(root, false, 30),
       refStatus: (root, prs) => fetchGithubRefStatus(root, { prs: prs.slice(0, GH_REF_STATUS_MAX), issues: [] }),
@@ -8877,6 +8962,12 @@ export function createApp(deps: ServerDeps) {
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
+  // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
+  deps.onDispose?.(registerAuthResume({
+    contexts,
+    boot: { context: bootContext, projectId: () => resolveBootProject() },
+    managers: { resumeAuthFailed: (provider, profileId) => (capabilities().managers !== false ? managerEngine.resumeAuthFailed(provider, profileId) : []) },
+  }));
   // The Questions inbox (spec 2026-11-17-questions-inbox): every open manager and task question. With
   // managers off the manager provider is gated out and the inbox serves task questions only.
   const taskQuestions = createTaskQuestionProvider({

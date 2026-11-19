@@ -305,6 +305,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
     case 'review':
       return 'Needs review'
     case 'waiting':
+      if (run.parked?.kind === 'auth') return 'Needs sign-in'
       return budgetStop(run) ? 'Budget reached' : 'Asked'
     case 'queued':
       return run.fallbackEpisode?.pending ? 'Switching agent' : `Queued${queuePosition !== undefined ? ` #${queuePosition}` : ''}`

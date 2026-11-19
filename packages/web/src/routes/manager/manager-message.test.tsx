@@ -775,3 +775,35 @@ describe('supersededAskIds', () => {
     expect(supersededAskIds([card(1, ['PR 100']), card(2, ['PR 200'])]).size).toBe(0)
   })
 })
+
+describe('ManagerMessageRow — expired login (spec 2026-11-18-inline-account-reconnect)', () => {
+  const failed = (over = {}) => assistantMessage(4, { text: '', error: 'Sign in to Claude Code again', authFailure: { provider: 'claude', profileId: 'default' }, ...over })
+
+  it('draws the reconnect card instead of the red line', () => {
+    renderMessage(failed())
+    expect(screen.getByRole('group', { name: 'Claude Code · Default is signed out' }).textContent).toContain('This turn stopped before answering')
+    expect(document.querySelector('[data-slot="manager-error"]')).toBeNull()
+  })
+
+  it('an older failure on the same account is a quiet line', () => {
+    const client = new QueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><ManagerMessageRow message={failed()} origin={origin} onDecide={vi.fn()} authLive={false} /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(screen.queryByRole('group')).toBeNull()
+    expect(screen.getByText(/Claude Code · Default was signed out here/)).toBeTruthy()
+  })
+
+  it('a reconnected turn says so quietly', () => {
+    renderMessage(assistantMessage(5, { text: '', error: 'Sign in to Claude Code again', reconnectedAt: '2026-11-18T10:51:00Z' }))
+    expect(screen.getByText(/Reconnected · resumed/)).toBeTruthy()
+    expect(document.querySelector('[data-slot="manager-error"]')).toBeNull()
+  })
+
+  it('a reconnected turn names the account it came back on', () => {
+    renderMessage(assistantMessage(6, { text: '', reconnectedAt: '2026-11-18T10:51:00Z', reconnectedFrom: { provider: 'claude', profileId: 'default' } }))
+    expect(screen.getByText(/Reconnected Claude Code · Default · resumed/)).toBeTruthy()
+  })
+})

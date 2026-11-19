@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -19,6 +20,7 @@ function renderBanner(
   entry = '/p/cezar/',
 ) {
   return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter initialEntries={[entry]}>
       <ProviderBanner
         status={DEFINITIVE_MISSING}
@@ -28,7 +30,8 @@ function renderBanner(
         onDismissAuthFailures={vi.fn()}
         {...props}
       />
-    </MemoryRouter>,
+    </MemoryRouter>
+    </QueryClientProvider>,
   )
 }
 
@@ -155,6 +158,19 @@ describe('ProviderBanner', () => {
     })
 
     expect(screen.getByRole('alert').textContent).toContain('Claude Code')
+  })
+
+  it('offers an inline Reconnect per signed-out agent (spec 2026-11-18-inline-account-reconnect)', () => {
+    renderBanner({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
+          { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'codex-1' },
+        ],
+      },
+    })
+    expect(screen.getByRole('button', { name: 'Reconnect Claude Code' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reconnect Codex' })).toBeTruthy()
   })
 
   it('keeps the runtime alert settings link scoped to the active project', () => {

@@ -7,7 +7,9 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
@@ -206,9 +208,32 @@ function writeHandoffAndTodo() {
 
 // Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
 // proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
+/** True the first time this message fails on auth in this cezar home; later replays succeed.
+ *  Without `CEZ_HOME` (no sandboxed home to write to) it fails every time, as before. */
+function firstAuthFailure(text) {
+  const home = process.env.CEZ_HOME;
+  if (!home) return true;
+  const dir = join(home, 'mock-auth-once');
+  const marker = join(dir, createHash('sha256').update(text).digest('hex').slice(0, 16));
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Exclusive create: the existence check and the write are one step.
+    writeFileSync(marker, '', { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch (error) {
+    return error?.code !== 'EEXIST';
+  }
+}
+
 async function managerTurn(userText) {
   const kind = /\[cez-manager:(chat|watch|job|followup)\]/.exec(userText)?.[1] ?? 'chat';
   const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
+  // `mock:auth-error` fails a manager turn the way a revoked login does, once per message: the turn a
+  // reconnect replays then answers (spec 2026-11-18-inline-account-reconnect).
+  if (said.includes('mock:auth-error') && firstAuthFailure(said)) {
+    emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.', usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
   const tool = (args) => {
     const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cez-manager ${args.join(' ')}` } }], usage: { input_tokens: 90, output_tokens: 30 } } });
@@ -554,7 +579,9 @@ async function respond(userText, imageCount) {
   // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
   // the credential failure in an `is_error` result even though its subtype is
   // `success`, rather than emitting a dedicated error frame.
-  if (userText.includes('mock:auth-error')) {
+  // A reconnect's continuation answers (spec 2026-11-18-inline-account-reconnect): it quotes the
+  // original task text, so the trigger alone would re-park the task forever.
+  if (userText.includes('mock:auth-error') && !userText.includes('Your sign-in was renewed')) {
     emit({
       type: 'result',
       subtype: 'success',

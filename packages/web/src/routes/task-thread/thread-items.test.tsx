@@ -31,7 +31,7 @@ import {
   UserBubble,
   WorkingIndicator,
 } from './thread-items'
-import { reduceThread } from './thread-state'
+import { reduceThread, type ThreadProviderAuthRequired } from './thread-state'
 import { SessionTranscript } from './session-transcript'
 
 afterEach(() => {
@@ -99,33 +99,7 @@ describe('NoteLine skill recovery', () => {
 })
 
 describe('ProviderAuthRequiredCard', () => {
-  it.each([
-    ['claude', 'Claude Code'],
-    ['codex', 'Codex'],
-    ['opencode', 'OpenCode'],
-  ] as const)('renders accessible fixed recovery guidance for %s', (provider, label) => {
-    render(
-      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
-        <ProviderAuthRequiredCard incident={{
-          kind: 'provider-auth-required',
-          id: 'v1:2',
-          provider,
-          authFailureId: 'incident-1',
-        }} />
-      </MemoryRouter>,
-    )
-
-    expect(screen.getByRole('alert').textContent).toContain(`This run needed ${label} authorization`)
-    expect(screen.getByRole('alert').textContent).toContain(
-      `Review ${label} settings before retrying.`,
-    )
-    expect(screen.getByRole('alert').textContent).not.toContain(`${label} needs authorization`)
-    const link = screen.getByRole('link', { name: 'Open provider settings' })
-    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
-    expect(link.getAttribute('tabindex')).not.toBe('-1')
-  })
-
-  it('names the rejected agent account and links to Agent accounts (telemetry 9e4a95db)', () => {
+  const renderIncident = (incident: Partial<ThreadProviderAuthRequired> = {}) => {
     // The listing never answers, so the label below can only come from the seeded cache.
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
     const client = createQueryClient()
@@ -133,7 +107,7 @@ describe('ProviderAuthRequiredCard', () => {
       { id: 'work', provider: 'codex', label: 'Codex work' },
       { id: 'work', provider: 'claude', label: 'Work login' },
     ] })
-    render(
+    return render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
           <ProviderAuthRequiredCard incident={{
@@ -141,16 +115,40 @@ describe('ProviderAuthRequiredCard', () => {
             id: 'v1:2',
             provider: 'claude',
             authFailureId: 'incident-1',
-            profileId: 'work',
+            ...incident,
           }} />
         </MemoryRouter>
       </QueryClientProvider>,
     )
+  }
+  afterEach(() => vi.unstubAllGlobals())
 
-    expect(screen.getByRole('alert').textContent).toContain('This run needed Claude Code account “Work login” to be signed in')
-    expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
-    expect(screen.getByRole('link', { name: 'Open agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
-    vi.unstubAllGlobals()
+  it.each([
+    ['claude', 'Claude Code'],
+    ['codex', 'Codex'],
+    ['opencode', 'OpenCode'],
+  ] as const)('draws the reconnect card for the default %s login', (provider, label) => {
+    renderIncident({ provider })
+    const card = screen.getByRole('group', { name: `${label} · Default is signed out` })
+    expect(card.textContent).toContain('Login expired')
+    expect(card.textContent).toContain('continues from the same session')
+    expect(screen.getByRole('button', { name: 'Reconnect Default' })).toBeTruthy()
+  })
+
+  it('names the rejected agent account and keeps Agent accounts one click away (telemetry 9e4a95db)', () => {
+    renderIncident({ profileId: 'work' })
+    expect(screen.getByRole('group', { name: 'Claude Code · Work login is signed out' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }))
+    expect(screen.getByRole('link', { name: 'Open Settings → Agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+  })
+
+  it('collapses an older occurrence and a reconnected one to quiet lines', () => {
+    const older = renderIncident({ profileId: 'work', state: 'older' })
+    expect(screen.queryByRole('group')).toBeNull()
+    expect(screen.getByText(/Claude Code · Work login was signed out here/)).toBeTruthy()
+    older.unmount()
+    renderIncident({ profileId: 'work', state: 'reconnected', reconnectedAt: '2026-11-18T10:51:00Z' })
+    expect(screen.getByText(/Reconnected Claude Code · Work login · resumed/)).toBeTruthy()
   })
 })
 

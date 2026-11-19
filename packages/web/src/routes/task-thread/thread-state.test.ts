@@ -719,6 +719,24 @@ describe('reduceThread — provider authorization recovery', () => {
     }])
   })
 
+  it('keeps one live card per account: older rejections collapse, a reconnect quiets them all', () => {
+    const items = reduceThread([
+      line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'a', profileId: 'work' }),
+      line(2, 'provider-auth-required', { provider: 'codex', authFailureId: 'b' }),
+      line(3, 'provider-auth-required', { provider: 'claude', authFailureId: 'c', profileId: 'work' }),
+    ]).turns.flatMap((turn) => turn.items)
+    expect(items.map((item) => item.kind === 'provider-auth-required' ? item.state : 'x')).toEqual(['older', undefined, undefined])
+
+    const after = reduceThread([
+      line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'a', profileId: 'work' }),
+      line(2, 'provider-auth-required', { provider: 'codex', authFailureId: 'b' }),
+      { ...line(3, 'account-reconnected', { provider: 'claude', profileId: 'work' }), ts: '2026-07-14T12:05:00.000Z' } as RunEvent,
+    ]).turns.flatMap((turn) => turn.items)
+    expect(after[0]).toMatchObject({ state: 'reconnected', reconnectedAt: '2026-07-14T12:05:00.000Z' })
+    // Another account's card stays live.
+    expect(after[1]).not.toHaveProperty('state')
+  })
+
   it.each(RUNNER_IDS)('persists an incident for the %s runner', (provider) => {
     expect(reduceThread([
       line(1, 'provider-auth-required', { provider, authFailureId: 'incident-1' }),

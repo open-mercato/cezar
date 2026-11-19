@@ -781,6 +781,23 @@
   --mascot-shadow: rgba(90, 43, 25, 0.13);
 }
 
+/* Agents' brand marks on the reconnect card (spec 2026-11-18-inline-account-reconnect): intrinsic,
+ * like the mascot, so a mark reads the same in both themes. */
+:root {
+  --runner-mark-ink: #ffffff;
+  --runner-mark-claude: #d97757;
+  --runner-mark-codex: #0f0f0f;
+  --runner-mark-cursor: #3b3b3b;
+  --runner-mark-copilot: #8250df;
+  --runner-mark-opencode: #2563eb;
+  --runner-mark-kimi: #111827;
+  --runner-mark-pi: #0d9488;
+  --runner-mark-gemini: #1a73e8;
+  --runner-mark-antigravity: #ea4335;
+  --runner-mark-junie: #21d789;
+  --runner-mark-omp: #7c3aed;
+}
+
 /* A message reached from "your messages" (spec 2026-11-17-my-message-navigation): the #2218
  * ring, plus a short violet wash so the eye finds it after a long scroll. */
 [data-jump-highlight] {

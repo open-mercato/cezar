@@ -138,10 +138,28 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('done')} thread={reduceThread(authRequired)} />)
 
-    expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
-    expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
-    )
+    // The inline reconnect card (spec 2026-11-18-inline-account-reconnect) outlives the run.
+    const card = screen.getByRole('group', { name: /Codex · .* is signed out/ })
+    expect(card.closest('[data-slot="provider-auth-required"]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^Reconnect/ })).toBeTruthy()
+    // Not parked, so a reconnect resumes nothing by itself: the card says to Continue.
+    expect(card.textContent).toContain('Reconnect, then Continue the task.')
+    expect(card.textContent).not.toContain('continues from the same session')
+  })
+
+  it('a run parked on an expired login carries the reconnect card in its dock when the transcript has none', () => {
+    const parked = { kind: 'auth' as const, provider: 'claude' as const, profileId: 'default', at: '2026-11-18T10:00:00Z' }
+    renderView(<ThreadView run={run('waiting', { parked })} thread={reduceThread([line(1, 'done')])} />)
+    expect(screen.getByRole('group', { name: /Claude Code · .* is signed out/ })).toBeTruthy()
+    expect(document.querySelector('[data-slot="sign-in-hint"]')).toBeNull()
+  })
+
+  it('a parked run whose transcript already shows the card gets only the dock hint', () => {
+    const parked = { kind: 'auth' as const, provider: 'claude' as const, profileId: 'default', at: '2026-11-18T10:00:00Z' }
+    const events = [line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'incident-1' })]
+    renderView(<ThreadView run={run('waiting', { parked })} thread={reduceThread(events)} />)
+    expect(screen.getAllByRole('group', { name: /Claude Code · .* is signed out/ })).toHaveLength(1)
+    expect(document.querySelector('[data-slot="sign-in-hint"]')).not.toBeNull()
   })
 
   it('a running run clocks its open turn and last activity on the Working… line; a closed run shows none', () => {

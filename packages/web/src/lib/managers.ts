@@ -348,6 +348,19 @@ export function retryOf(messages: readonly ManagerMessage[]): { messageId: strin
   return asked.length > 0 ? { messageId: last.id, text: asked.join('\n\n') } : undefined
 }
 
+/** Ids of the newest auth-failed chat turn per account since its last reconnect: those draw the
+ *  live reconnect card, older ones a quiet line (spec 2026-11-18-inline-account-reconnect, one card
+ *  per account). Only chat turns: a reconnect replays those, never a watch or a job. */
+export function liveAuthFailures(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const newest = new Map<string, string>()
+  for (const message of messages) {
+    if (message.kind !== 'assistant' || message.turn !== 'chat') continue
+    if (message.authFailure) newest.set(`${message.authFailure.provider}:${message.authFailure.profileId}`, message.id)
+    else if (message.reconnectedFrom) newest.delete(`${message.reconnectedFrom.provider}:${message.reconnectedFrom.profileId}`)
+  }
+  return new Set(newest.values())
+}
+
 // ---- labels --------------------------------------------------------------------------------
 
 export function cronLabel(minutes: number): string {
