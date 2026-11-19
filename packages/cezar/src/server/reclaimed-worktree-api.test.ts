@@ -83,7 +83,10 @@ describe('a reclaimed review run', () => {
     expect(commit.status).toBe(200);
     const changes = await apiRequest(app, `/api/v1/runs/${id}/changes`);
     expect(changes.status).toBe(409);
-    expect(((await changes.json()) as { error: string }).error).toContain('reclaimed');
+    const error = ((await changes.json()) as { error: string }).error;
+    expect(error).toContain('was reclaimed');
+    expect(error).toContain('Continue restores it');
+    expect(error).not.toContain('could not be restored');
     expect(existsSync(store.getRun(id)!.worktreePath!)).toBe(false);
     expect(store.getRun(id)?.worktreeReclaimedAt).toBeDefined();
   });
@@ -105,6 +108,22 @@ describe('a reclaimed review run', () => {
     expect(res.status).toBe(201);
     expect(createDraftPr).toHaveBeenCalledTimes(1);
     expect(vi.mocked(createDraftPr).mock.calls[0]![0].run.worktreePath).toBe(store.getRun(id)!.worktreePath);
+  });
+
+  it('adopts an existing pull request from the kept branch without the worktree', async () => {
+    const id = await reclaimedReview();
+    await exec('git', ['remote', 'add', 'origin', 'git@github.com:acme/demo.git'], { cwd: repo });
+    const saved = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1'; // the dry-run forge answers the branch lookup offline
+    try {
+      const res = await apiRequest(app, `/api/v1/runs/${id}/pr/adopt`, { method: 'POST', headers: ORIGIN });
+      expect(await res.json()).toEqual({ found: true, url: 'https://github.com/open-mercato/demo/pull/777' });
+    } finally {
+      if (saved === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = saved;
+    }
+    expect(store.getRun(id)?.pullRequestUrl).toBe('https://github.com/open-mercato/demo/pull/777');
+    expect(existsSync(store.getRun(id)!.worktreePath!)).toBe(false);
   });
 
   it('archiving a task, one or all finished, reclaims its worktree', async () => {

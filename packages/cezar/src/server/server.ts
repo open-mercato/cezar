@@ -6455,8 +6455,9 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (run.pullRequestUrl) return c.json({ found: true as const, url: run.pullRequestUrl });
-      const worktree = worktreeOf(run);
-      const target = worktree ? await resolvePrTarget(run) : null;
+      // A reclaimed task's branch is still in the repo: its remotes and `gh` answer from the root.
+      const worktree = worktreeOf(run) ?? (await reclaimedBranchOf(run, repoRoot) ? repoRoot : null);
+      const target = worktree ? await resolvePrTarget({ ...run, worktreePath: worktree }) : null;
       const pr = worktree && target ? await findBranchPr(worktree, target) : null;
       if (!pr) return c.json({ found: false as const });
       forgetRefStatus(repoRoot, pr.number);
@@ -6821,7 +6822,7 @@ export function createApp(deps: ServerDeps) {
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
-  const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk and could not be restored — its branch is kept; Continue restores it';
+  const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk — its branch is kept, and Continue restores it';
   /** A reclaimed task's kept branch, when its tree is gone and the branch still exists: the read
    *  routes answer from it without a checkout (spec 2026-11-19-worktree-disk-usage). */
   const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> =>

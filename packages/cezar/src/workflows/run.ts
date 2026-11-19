@@ -4681,7 +4681,9 @@ export class RunManager {
     this.retentionPass = this.retentionPass.then(async () => {
       if (this.disposed) return;
       await new Promise((resolve) => setTimeout(resolve, ARCHIVE_RECLAIM_DELAY_MS));
-      out = await reclaimSelectedWorktrees(this.repoRoot, this.store, runIds, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+      // Re-read per run right before removal: an unarchive inside the delay keeps the tree.
+      const keep = (id: string) => this.isActive(id) || this.store.getRun(id)?.archived !== true;
+      out = await reclaimSelectedWorktrees(this.repoRoot, this.store, runIds, {lifecycle: this.lifecycle, isLive: keep});
     }).catch(() => undefined);
     return this.retentionPass.then(() => out);
   }
