@@ -141,8 +141,11 @@ export async function dirSizeForBackground(
   dir: string,
   sizer: (path: string) => Promise<number | null>,
 ): Promise<number | undefined> {
+  // No worktrees directory yet is a known size: nothing (the boot pass runs before the first task).
+  if (!fs.existsSync(dir)) return 0;
   const cached = cachedDirSize(dir, sizer);
-  if (cached !== undefined || sizeCache.has(dir)) return cached;
+  if (cached !== undefined) return cached;
+  // Never measured, or the last `du` failed: measure now rather than report "unknown" for a TTL.
   return (await refreshDirSize(dir, sizer)) ?? undefined;
 }
 

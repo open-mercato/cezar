@@ -192,4 +192,9 @@ describe('DiskGuard', () => {
   it('words the warning without a size when none is known', () => {
     expect(diskGuardWarning(undefined)).toBe('Disk almost full — task worktrees could not be reclaimed');
   });
+
+  it('never rounds a small worktrees total up to a gigabyte it does not hold', () => {
+    expect(diskGuardWarning(48 * 1024)).toBe('Disk almost full — under 1 GB in task worktrees');
+    expect(diskGuardWarning(17.4 * 1024 ** 3)).toBe('Disk almost full — 17.0 GB in task worktrees');
+  });
 });
