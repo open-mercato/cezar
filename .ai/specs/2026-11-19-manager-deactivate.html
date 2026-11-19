@@ -200,9 +200,11 @@ svg.i.s14{width:14px;height:14px}svg.i.s20{width:20px;height:20px}
 .grp-h .s{font-size:11px;color:var(--muted-foreground)}
 .qcard{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:12px;display:flex;flex-direction:column;gap:8px;font-size:13px}
 .qcard .opts{display:flex;flex-wrap:wrap;gap:6px}
-.qcard .opt{border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:12px;background:var(--background)}
+.qcard .opt{border:1px solid var(--border);border-radius:999px;padding:4px 12px;font-size:12px;background:var(--background);cursor:pointer}
+.qcard .opt:hover{background:var(--muted);border-color:var(--violet)}
+.qcard .opt.extra{color:var(--muted-foreground);border-style:dashed}
 .qcard.idle{background:var(--card-2)}
-.qcard.idle .opt{opacity:.6}
+.qcard.idle .opt{opacity:.75}
 .flag{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted-foreground);background:var(--muted);border-radius:999px;padding:2px 8px;align-self:flex-start}
 .srcblk{border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--muted) 30%,transparent);padding:8px;font-size:12px}
 
@@ -249,7 +251,7 @@ pre .c{color:var(--soft-foreground)}pre .k{color:var(--violet)}pre .a{color:var(
       <tr><td>Tasks it already started</td><td><span class="rec">Rec</span>Keep running — they are independent runs. Their status cards keep posting into the manager's chat (server-written, no model). Anything waiting on you surfaces where any task's does: the Questions inbox task group and Now.</td><td>Pause them: stops work the user already approved, and a task paused by a manager that is "off" has no one to resume it.</td></tr>
       <tr><td>Follow-up wake-ups</td><td><span class="rec">Rec</span><b>Dropped as turns, kept as notes.</b> The card still posts; its line joins the manager's notes, so the first chat turn after reactivation hears it. This is the existing <code>followUp: false</code> path.</td><td>Queue them: N queued turns become a burst of N model calls on reactivation. The optional catch-up check covers the gap in one.</td></tr>
       <tr><td>Approval cards</td><td><span class="rec">Rec</span>Answerable, still counted in the Approvals badge, marked <i>Manager inactive</i>. A decision runs on the server (merge, enable) and leaves the manager a note, so it costs nothing.</td><td>Freeze them: blocks a merge the user can make without the manager.</td></tr>
-      <tr><td>Question cards</td><td><span class="rec">Rec</span>Visible, marked <i>Manager inactive</i>, <b>not</b> counted in the Questions badge. Two ways out: <i>Dismiss</i> closes the card on the server and leaves a note (no model call, the manager stays inactive); an answer is a chat turn, so that button reads <i>Reactivate and answer</i> and confirms first.</td><td>Count them: a badge that cannot go down without spending is noise.</td></tr>
+      <tr><td>Question cards</td><td><span class="rec">Rec</span>Visible, marked <i>Manager inactive</i>, <b>not</b> counted in the Questions badge. Two ways out: <i>Dismiss</i> closes the card on the server and leaves a note (no model call, the manager stays inactive); its option chips stay tappable, but an answer is a chat turn, so a tap first confirms <i>Reactivate and answer?</i> with the chosen answer shown. On an active manager's card a tap answers at once, as today.</td><td>Count them: a badge that cannot go down without spending is noise.</td></tr>
       <tr><td>Automations that report to it</td><td><span class="rec">Rec</span>Keep running and keep posting their report into its chat (no model). The unread dot turns grey.</td><td>Reroute to Questions: duplicates; the chat is where the user looks for them on reactivation.</td></tr>
       <tr><td>Messaging an inactive manager</td><td><span class="rec">Rec</span>The composer stays usable; Send becomes <i>Reactivate and send</i> with a one-step confirm. The draft is kept if you cancel.</td><td>Blocked: hostile. Queued: a message waiting on a state with no exit.</td></tr>
       <tr><td>Reactivation</td><td><span class="rec">Rec</span>Quiet by default. The server posts one <i>While inactive</i> summary (counts, no model). An unticked <i>Catch me up</i> box runs one forced check. Timers restart from now, so overdue jobs never fire in a burst.</td><td>Always catch up: a model call the user did not ask for.</td></tr>
@@ -597,6 +599,13 @@ function dialogHtml(d, isStatic = false) {
       ${working ? `<div class="warn">${esc(m.name)} is working right now; that turn stops.</div>` : ''}
       ${acts('Cancel', `${icon('power', 's14')}Deactivate`)}</div>`
   }
+  if (d.type === 'answer') {
+    return `<div class="dialog" role="alertdialog" aria-labelledby="at">
+      <h5 id="at">${avatar(m, 28)}Reactivate ${esc(m.name)} and answer?</h5>
+      <p>Your answer — <b style="color:var(--foreground)">“${esc(S.pendingAnswer || 'Ship tonight')}”</b> — starts its next turn, so ${esc(m.name)} has to be active. Checks and jobs restart from now.</p>
+      <p class="small">Don't want to spend a turn? Cancel and use <b>Dismiss</b> instead: it closes the question and ${esc(m.name)} stays inactive.</p>
+      ${acts('Cancel', `${icon('send', 's14')}Reactivate and answer`)}</div>`
+  }
   if (d.type === 'reactivate' || d.type === 'send') {
     const st = S.inactive[m.id] || { since: 'yesterday 23:40', events: { tasks: 2, automations: 1, checks: 5, jobs: 1 } }
     const e = st.events
@@ -713,8 +722,9 @@ function renderInbox() {
     const card = kind === 'q'
       ? `<div class="qcard ${idle ? 'idle' : ''}">${idle ? `<span class="flag">${icon('pause', 's14')}Manager inactive — answering reactivates it; dismissing does not</span>` : ''}
           <div><b>Ship v0.14.2 tonight or wait for the prune fix?</b></div>
-          <div class="opts"><span class="opt">Ship tonight</span><span class="opt">Wait for the fix</span></div>${src}
-          <div style="display:flex;gap:8px;flex-wrap:wrap">${idle ? `<button class="btn btn-sm btn-primary" data-act="reactivate" data-id="${m.id}" data-where="desk">${icon('play', 's14')}Reactivate and answer…</button>` : ''}<button class="btn btn-sm btn-outline" data-act="dismiss-q" data-id="${m.id}">${icon('x', 's14')}Dismiss</button></div>
+          <div class="opts">${['Ship tonight', 'Wait for the fix'].map((o) => `<button class="opt" data-act="answer-q" data-id="${m.id}" data-answer="${o}">${o}</button>`).join('')}<button class="opt extra" data-act="answer-q" data-id="${m.id}" data-answer="Other…">Other…</button><button class="opt extra" data-act="answer-q" data-id="${m.id}" data-answer="Need more info">Need more info</button></div>
+          <div class="xs soft">${idle ? `Tapping an option asks to reactivate ${esc(m.name)} first.` : 'Tap an option to answer — one tap, as in the chat.'}</div>${src}
+          <div style="display:flex;gap:8px;flex-wrap:wrap">${idle ? `<button class="btn btn-sm btn-primary" data-act="reactivate" data-id="${m.id}" data-where="desk">${icon('play', 's14')}Reactivate…</button>` : ''}<button class="btn btn-sm btn-outline" data-act="dismiss-q" data-id="${m.id}">${icon('x', 's14')}Dismiss</button></div>
           ${idle ? `<div class="xs soft">Dismiss closes the card now, costs nothing, and ${esc(m.name)} stays inactive. It hears “you skipped this” on its next turn.</div>` : ''}</div>`
       : `<div class="qcard ${idle ? 'idle' : ''}">${idle ? `<span class="flag">${icon('pause', 's14')}Manager inactive — it hears your decision when reactivated</span>` : ''}
           <div style="display:flex;align-items:center;gap:8px"><b>Merge PR #2329</b><span class="badge">checks green</span></div>
@@ -785,9 +795,16 @@ document.addEventListener('click', (e) => {
     const d = S.dialog; S.dialog = null
     if (d.type === 'deactivate') deactivate(d.id)
     else if (d.type === 'reactivate') reactivate(d.id, S.catchUp)
+    else if (d.type === 'answer') { reactivate(d.id, false); S.dismissed[d.id] = true; toast(`${icon('send', 's14')}<span><b>${esc(byId(d.id).name)}</b> is active again and has your answer.</span>`) }
     else if (d.type === 'send') { reactivate(d.id, false); S.draft = ''; toast(`${icon('send', 's14')}<span><b>${esc(byId(d.id).name)}</b> is active again; your message started its turn.</span>`) }
     else if (d.type === 'bulk') { ordered().active.forEach((m) => deactivate(m.id)); toast(`${icon('pause', 's14')}All managers are inactive. Nothing runs until you reactivate them.`) }
     renderAll(); return
+  }
+  if (act === 'answer-q') {
+    const id = t.dataset.id
+    if (t.dataset.answer === 'Other…') { toast('“Other…” opens a text field for your own answer, as in the real card.'); return }
+    if (isIdle(id)) { S.pendingAnswer = t.dataset.answer; return openDialog('answer', id, 'desk') }
+    S.dismissed[id] = true; toast(`${icon('send', 's14')}<span>Answered “${esc(t.dataset.answer)}” — <b>${esc(byId(id).name)}</b> takes it from here.</span>`); renderAll(); return
   }
   if (act === 'dismiss-q') { S.dismissed[t.dataset.id] = true; toast(`${icon('x', 's14')}<span>Question dismissed${isIdle(t.dataset.id) ? ` — <b>${esc(byId(t.dataset.id).name)}</b> stays inactive` : ''}.</span>`); renderAll(); return }
   if (act === 'noop') { S.menu = null; renderAll() }

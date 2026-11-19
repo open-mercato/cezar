@@ -47,8 +47,8 @@ a VPS saving cost, a manager they only need during a release.
   hears your decision when reactivated."
 - **Questions** stay visible, marked "manager inactive", but drop out of the Questions badge. Two
   ways out: **Dismiss** works as is — `dismissAsk` closes the card and leaves a note, no model call,
-  and the manager stays inactive; an answer is a chat turn, so it reads **Reactivate and answer**
-  and asks first.
+  and the manager stays inactive; its option chips stay tappable, but an answer is a chat
+  turn, so a tap first asks **Reactivate and answer?** with the chosen answer shown.
 - **Automations that report to it** still run and still post their report into its chat (no model);
   the unread dot shows grey.
 - **Sending a message**: the composer stays usable; Send reads **Reactivate and send** and opens a
