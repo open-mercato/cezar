@@ -1,4 +1,4 @@
-import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, MessageCircleQuestionIcon, PaperclipIcon } from 'lucide-react'
+import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, ClockIcon, MessageCircleQuestionIcon, PaperclipIcon, PlayIcon, PowerIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
@@ -39,6 +39,7 @@ import {
   type QuestionClosed,
   type QuestionStale,
   type ManagerAsk,
+  type ManagerActivityNotice,
   type ManagerAttachment,
   type ManagerCommand,
   type ManagerMessage,
@@ -165,6 +166,7 @@ function ManagerQuestions({
   superseded?: boolean
 }) {
   const managerId = origin.id
+  const chatActions = useContext(ManagerChatActionsContext)
   const closed = closedOnServer ?? (superseded ? { reason: 'replaced' as const, at: '' } : undefined)
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
@@ -244,11 +246,13 @@ function ManagerQuestions({
     )
   }
   const send = async (text: string) => {
+    const reactivate = chatActions.confirmReactivate
+    if (reactivate && !(await reactivate(text))) return `Not sent: ${origin.name} is still inactive. Dismiss closes the question without waking it.`
     sentHere.current = true
     setPending(true)
     setError(undefined)
     try {
-      await sendManagerMessage(managerId, text, undefined, messageId)
+      await sendManagerMessage(managerId, text, undefined, messageId, reactivate ? { reactivate: true } : undefined)
       setLocalAnswer(text)
       trackManagerMessageSent('question_card', false)
       trackManagerQuestionAnswered('card')
@@ -400,6 +404,8 @@ function AssistantMessage({
  *  bare render, where the button that needs it stays away. */
 export interface ManagerChatActions {
   switchAccount?: () => void
+  /** Set while the manager is inactive: confirm reactivating it for this answer (spec 2026-11-19-manager-deactivate). */
+  confirmReactivate?: (answer: string) => Promise<boolean>
 }
 
 export const ManagerChatActionsContext = createContext<ManagerChatActions>({})
@@ -572,6 +578,38 @@ function MessageBody({
     case 'action':
       return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':
+      if (message.activity) return <ActivityNotice at={message.at} activity={message.activity} />
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }
+}
+
+const count = (value: number | undefined, noun: string) => (value === undefined ? null : <span><b className="font-semibold text-foreground">{value}</b> {noun}{value === 1 ? '' : 's'}</span>)
+
+/** The deactivate and reactivate lines (spec 2026-11-19-manager-deactivate, design § 02): a divider,
+ *  and after a reactivation the "While inactive" counts the server posted. */
+function ActivityNotice({ at, activity }: { at: string; activity: ManagerActivityNotice }) {
+  const reactivated = activity.change === 'reactivated'
+  const Icon = reactivated ? PlayIcon : PowerIcon
+  const time = managerMessageTime(at)
+  const counted = [activity.taskUpdates, activity.automationReports, activity.checksSkipped, activity.jobRunsSkipped].some((value) => value !== undefined)
+  return (
+    <div data-slot="manager-activity-notice" data-change={activity.change} className="flex flex-col gap-2.5">
+      <p role="separator" className="flex items-center gap-2.5 text-meta text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
+        <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+        {reactivated ? 'Reactivated' : 'Deactivated'} by you · {time}
+      </p>
+      {reactivated && counted ? (
+        <div data-slot="manager-activity-summary" className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 rounded-xl border border-dashed border-border px-3 py-2.5 text-label text-muted-foreground">
+          <ClockIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <b className="font-semibold text-foreground">While inactive{activity.since ? ` (${managerMessageTime(activity.since)} → ${time})` : ''}</b>
+          {count(activity.taskUpdates, 'task update')}
+          {count(activity.automationReports, 'automation report')}
+          {count(activity.checksSkipped, 'check')}{activity.checksSkipped !== undefined ? ' skipped' : null}
+          {count(activity.jobRunsSkipped, 'job run')}{activity.jobRunsSkipped !== undefined ? ' skipped' : null}
+          {activity.catchUp ? <span>catching up now</span> : null}
+          <span className="text-muted-foreground">posted by cezar · no model call</span>
+        </div>
+      ) : null}
+    </div>
+  )
 }

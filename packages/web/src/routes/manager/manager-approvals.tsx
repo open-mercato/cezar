@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCheckIcon } from 'lucide-react'
+import { CheckCheckIcon, PauseIcon } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState, type RefObject } from 'react'
 import { Link } from 'react-router'
 
@@ -106,16 +106,26 @@ function ManagerApprovals({ manager, heading, results, saveResult, now }: {
   }, [client, manager.id, heading, messages, saveResult, readResult])
   useDismissStaleMerges(manager.pendingActions > 0 ? pending.data ?? [] : [], onDecide)
   if (manager.pendingActions === 0 && results.length === 0) return null
+  const inactive = manager.inactive !== undefined
   return (
     <ManagerProjectsContext.Provider value={connected}>
       <section aria-label={manager.name} className="flex flex-col gap-3">
         <div className="flex items-center gap-2.5">
-          <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} className="size-8" />
-          <h2 className="min-w-0 flex-1 truncate font-semibold">{manager.name}</h2>
+          <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} inactive={inactive} className="size-8" />
+          <div className="min-w-0 flex-1">
+            <h2 className={cn('truncate font-semibold', inactive && 'text-muted-foreground')}>{manager.name}</h2>
+            {inactive ? <p className="truncate text-meta text-muted-foreground">Manager · inactive</p> : null}
+          </div>
           <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
             <Link to={`/manager/${encodeURIComponent(manager.id)}#needs-you`} aria-label={`Open chat with ${manager.name}`}>Open chat</Link>
           </Button>
         </div>
+        {inactive && manager.pendingActions > 0 ? (
+          <p data-slot="approval-inactive-flag" className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
+            <PauseIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            Manager inactive — it hears your decision when reactivated
+          </p>
+        ) : null}
         {manager.pendingActions > 0 ? <CacheStatusChip queryKey={managerKeys.approvals(manager.id)} isFetching={pending.isFetching} isError={pending.isError} className="self-start" /> : null}
         {manager.pendingActions > 0 && pending.isPending ? <LoadingState label={`Loading approvals from ${manager.name}…`} /> : null}
         {manager.pendingActions > 0 && pending.isError ? (
