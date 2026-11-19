@@ -197,6 +197,7 @@ import { setNamerModelCatalog } from '../runs/namer-model.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
+import { planUsageRoutes } from './plan-usage.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import { workflowCapabilities } from '../workflows/capabilities.ts';
 import {
@@ -9494,6 +9495,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', phonesRoutes)
     .route('/', phonePushRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
+    .route('/', planUsageRoutes())
     .route('/', workspaceEventsRoutes)
     .route('/', telemetryRoutes);
 

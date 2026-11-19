@@ -49,6 +49,7 @@ export class LedgerSession {
   readonly id = randomUUID();
   private cursor: number;
   private closed = false;
+  private endedAt: number | undefined;
 
   constructor(
     readonly account: string,
@@ -65,12 +66,14 @@ export class LedgerSession {
     }, account);
   }
 
-  sample(weight: { usd?: number; tokens?: number }, now = Date.now()): void {
-    if (this.closed) return;
+  /** `late`: a cost reported just after the turn closed still belongs to that turn. */
+  sample(weight: { usd?: number; tokens?: number }, now = Date.now(), late = false): void {
+    if (this.closed && !late) return;
     const usd = weight.usd !== undefined && Number.isFinite(weight.usd) && weight.usd > 0 ? weight.usd : undefined;
     const tokens = weight.tokens !== undefined && Number.isFinite(weight.tokens) && weight.tokens > 0 ? weight.tokens : undefined;
     if (usd === undefined && tokens === undefined) return;
-    const to = Math.max(now, this.cursor);
+    // A late cost stays inside its turn, so it never weighs on time the session sat idle.
+    const to = this.closed && this.endedAt !== undefined ? Math.max(this.cursor, this.endedAt) : Math.max(now, this.cursor);
     appendLedger({ t: 'sample', from: this.cursor, to, session: this.id, ...(usd !== undefined ? { usd } : {}), ...(tokens !== undefined ? { tokens } : {}) }, this.account);
     this.cursor = to;
   }
@@ -78,11 +81,66 @@ export class LedgerSession {
   end(options: { quiet?: boolean; now?: number } = {}): void {
     if (this.closed) return;
     this.closed = true;
-    appendLedger({ t: 'end', at: Math.max(options.now ?? Date.now(), this.cursor), session: this.id, ...(options.quiet !== undefined ? { quiet: options.quiet } : {}) }, this.account);
+    this.endedAt = Math.max(options.now ?? Date.now(), this.cursor);
+    appendLedger({ t: 'end', at: this.endedAt, session: this.id, ...(options.quiet !== undefined ? { quiet: options.quiet } : {}) }, this.account);
   }
 }
 
 /** A check step failed: every sample of this consumer since `since` was a failed attempt. */
 export function recordFailedAttempt(account: string | undefined, consumerId: string, since: number, now = Date.now()): void {
   appendLedger({ t: 'attempt-failed', at: now, consumerId, since }, account);
+}
+
+/**
+ * Turn-aware activity for one agent session: a ledger span per turn, so a session parked
+ * between turns (waiting for the user) is never "running" while other work moves the limit.
+ * Claude is weighted by reported cost, Codex by tokens — the units each reports per turn.
+ */
+export class PlanUsageTracker {
+  private turn: LedgerSession | undefined;
+  private last: LedgerSession | undefined;
+
+  constructor(
+    readonly provider: 'claude' | 'codex',
+    readonly account: string,
+    readonly consumer: LedgerConsumer,
+    private readonly options: { label?: string; part?: 'chat' | 'watch' | 'job'; messageId?: string; endOnClose?: boolean } = {},
+  ) {}
+
+  private open(): LedgerSession {
+    if (!this.turn) {
+      const { endOnClose: _endOnClose, ...session } = this.options;
+      this.turn = new LedgerSession(this.account, this.consumer, session);
+      this.last = this.turn;
+    }
+    return this.turn;
+  }
+
+  /** A v1 agent event. Only `cost` matters; it may land just after the turn closed. */
+  event(event: { type: string; usd?: number }): void {
+    if (event.type !== 'cost' || this.provider !== 'claude' || typeof event.usd !== 'number') return;
+    (this.turn ?? this.last ?? this.open()).sample({ usd: event.usd }, Date.now(), true);
+  }
+
+  /** A v2 UI event: turn boundaries, and Codex's per-turn token usage. */
+  ui(event: { type: string; usage?: { input?: unknown; output?: unknown } }): void {
+    if (event.type === 'turn.started') this.open();
+    else if (event.type === 'turn.completed') {
+      if (this.provider === 'codex') {
+        const input = typeof event.usage?.input === 'number' ? event.usage.input : 0;
+        const output = typeof event.usage?.output === 'number' ? event.usage.output : 0;
+        this.open().sample({ tokens: input + output });
+      }
+      // A one-turn session (a manager turn) ends on close, where its outcome is known.
+      if (this.options.endOnClose) return;
+      this.turn?.end();
+      this.turn = undefined;
+    }
+  }
+
+  /** The session settled: close a turn that never completed (a crash stays unweighted, hence unsplit). */
+  close(options: { quiet?: boolean } = {}): void {
+    this.turn?.end(options);
+    this.turn = undefined;
+  }
 }

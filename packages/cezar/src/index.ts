@@ -62,6 +62,7 @@ import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 import { runWorktreesCommand } from './worktrees-cli.ts';
 import { runImpactCommand } from './impact/impact-cli.ts';
+import { runUsageCommand } from './usage-ledger/cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
@@ -95,6 +96,7 @@ Usage:
                             (reclaim [--older-than 7d] [--all-inactive] [--dry-run] · remove <runId> ·
                             prune [--archived-older-than 90d] [--dry-run]);
                             uses the running cockpit when one serves the project, else the repo directly
+  cezar usage [--json]      which tasks and managers used your Claude/Codex plan limits (\`cezar usage --help\`)
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
@@ -209,6 +211,11 @@ async function main(): Promise<void> {
       cwd: process.cwd(),
       env: process.env,
     });
+    return;
+  }
+  // `cez usage` (plan-limit usage, design rev 3): reads the local ledger, no server, own flags.
+  if (process.argv[2] === 'usage') {
+    process.exitCode = await runUsageCommand(process.argv.slice(3));
     return;
   }
   // `cez impact …` (spec 2026-10-22-html-artifacts-and-impact): local, no server, own flags.
