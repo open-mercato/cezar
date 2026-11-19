@@ -11,6 +11,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { useEffect, useSyncExternalStore } from 'react'
 
 import { ApiError, cez, unwrap } from './client'
+import { managerKeys } from './managers'
 import { queryKeys } from './queries'
 import { subscribeTopic } from './ws'
 
@@ -196,6 +197,8 @@ async function commit(key: string): Promise<void> {
     entry.paused = true
     publish()
     void entry.queryClient.invalidateQueries({ queryKey: questionKeys.all })
+    // The page dropped its manager's "Waiting for N answers" on the click: put it back.
+    void entry.queryClient.invalidateQueries({ queryKey: managerKeys.list })
   }
 }
 

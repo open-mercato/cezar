@@ -36,6 +36,7 @@ const taskItem = (requestId: string, header: string, rest: Partial<QuestionItem>
 let data: QuestionsResponse
 const posts: Array<{ path: string; body: unknown }> = []
 let answerStatus = 200
+let dismissStatus = 200
 /** Holds the answer POST open until released, so the in-flight card can be inspected. */
 let answerGate: Promise<void> | undefined
 let managerList = [managerFixture({ pendingActions: 2 })]
@@ -49,6 +50,7 @@ beforeEach(() => {
   data = { open: [], closed: [], counts: { live: 0, older: 0 }, olderAfterDays: 7 }
   posts.length = 0
   answerStatus = 200
+  dismissStatus = 200
   answerGate = undefined
   managerList = [managerFixture({ pendingActions: 2 })]
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
@@ -59,6 +61,7 @@ beforeEach(() => {
       const key = decodeURIComponent(verb[1]!)
       posts.push({ path: `${verb[2]} ${key}`, body: init?.body ? JSON.parse(init.body as string) : undefined })
       if (verb[2] === 'answer' && answerGate) await answerGate
+      if (verb[2] === 'dismiss' && dismissStatus !== 200) return Response.json({ error: 'the store is read-only' }, { status: dismissStatus })
       if (verb[2] === 'answer' && answerStatus !== 200) return Response.json({ error: answerStatus === 409 ? 'already closed' : 'the agent session is gone' }, { status: answerStatus })
       const item = data.open.find((row) => row.key === key)!
       const closed = { ...item, closed: verb[2] === 'answer'
@@ -273,6 +276,22 @@ describe('the Questions page', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(LINGER_MS + 10) })
     expect(screen.queryByRole('group', { name: 'Design' })).toBeNull()
     expect(card('Storage')).toBeTruthy()
+  })
+
+  it('a dismissal that fails gives the manager its “Waiting for N answers” back', async () => {
+    managerList = [managerFixture({ pendingQuestions: 1 })]
+    data.open = [managerItem('m1', 'Design')]
+    dismissStatus = 500
+    renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    await waitFor(() => expect(screen.getAllByText('Waiting for your answer').length).toBeGreaterThan(0))
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.queryAllByText('Waiting for your answer')).toEqual([])
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS + 100) })
+    expect(await screen.findByText(/Couldn’t dismiss «Design»/)).toBeTruthy()
+    await waitFor(() => expect(screen.getAllByText('Waiting for your answer').length).toBeGreaterThan(0))
   })
 
   it('Undo cancels the dismissal: nothing is sent and the card comes back', async () => {
