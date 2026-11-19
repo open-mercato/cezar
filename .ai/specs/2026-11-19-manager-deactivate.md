@@ -18,8 +18,8 @@ a VPS saving cost, a manager they only need during a release.
 - `Manager.activeSince?: string`: written on reactivation, the floor for every due time (below).
 - Nothing else is touched: chat, memory (`state.json`), jobs, `cronMinutes`, `followUp`,
   connectors and automation links all stay as they were, so reactivating restores them exactly.
-- `PATCH /managers/:id { active: boolean, catchUp?: boolean }`; workspace route
-  `POST /managers/activity { active: boolean }` for the bulk action. Both are cockpit-only: no
+- `PATCH /api/v1/workspace/managers/:id { active, catchUp?: true }`; workspace route
+  `POST /api/v1/workspace/managers/activity { active }` for the bulk action. Both are cockpit-only: no
   `cez-manager` tool route can change it — a manager never switches itself or another manager on.
 
 ## While inactive
@@ -31,7 +31,7 @@ a VPS saving cost, a manager they only need during a release.
 | Watch checks | Not armed: `nextDue` returns nothing, so the timer never fires for it. No snapshot is read. |
 | Jobs | Do not fire. They are still listed and editable. |
 | Follow-up turns | **Dropped as turns, kept as notes**: the task's card still posts (no model), and its line joins `state.notes`, so the next chat turn hears it. This is the existing `followUp: false` path. Not queued: a queue would turn into a burst of N turns on reactivation, and the catch-up check covers the gap in one. |
-| Chat | `POST …/chat` answers 409 unless `reactivate: true` is sent; the cockpit asks first. |
+| Chat | `POST …/messages` and the Questions answer route answer 409 unless `reactivate: true` is sent; the cockpit asks first. |
 | Check now, connector probe and call | 409 `manager inactive`. |
 | Account reconnect, crash recovery, usage-limit replay | Skip inactive managers. Deactivating clears a pending replay. |
 | OS notification, phone push | Off. The task's own surfaces (Questions inbox task group, Now) still show it. |
