@@ -5,12 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { managerKeys } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
-import { DISMISS_UNDO_MS, resetDismissals } from '@/api/questions'
+import { DISMISS_UNDO_MS, questionKeys, resetDismissals } from '@/api/questions'
+import { LINGER_MS } from '@/routes/manager/approvals-linger'
 import { managerFixture } from '@/routes/manager/manager-fixtures'
 import { ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import type { QuestionItem, QuestionsResponse } from '@open-mercato/cezar-api-client'
 
-import { closedLabel, groupQuestions, questionContextHref, QuestionsRoute } from './questions-route'
+import { answerShown, closedLabel, groupQuestions, questionContextHref, QuestionsRoute } from './questions-route'
 
 const HOUR = 3_600_000
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
@@ -35,6 +36,9 @@ const taskItem = (requestId: string, header: string, rest: Partial<QuestionItem>
 let data: QuestionsResponse
 const posts: Array<{ path: string; body: unknown }> = []
 let answerStatus = 200
+/** Holds the answer POST open until released, so the in-flight card can be inspected. */
+let answerGate: Promise<void> | undefined
+let managerList = [managerFixture({ pendingActions: 2 })]
 
 function respond(): QuestionsResponse {
   const live = data.open.filter((item) => !item.older).length
@@ -45,6 +49,8 @@ beforeEach(() => {
   data = { open: [], closed: [], counts: { live: 0, older: 0 }, olderAfterDays: 7 }
   posts.length = 0
   answerStatus = 200
+  answerGate = undefined
+  managerList = [managerFixture({ pendingActions: 2 })]
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input, 'http://localhost')
     if (url.pathname === '/api/v1/workspace/questions') return Response.json(respond())
@@ -52,7 +58,8 @@ beforeEach(() => {
     if (verb) {
       const key = decodeURIComponent(verb[1]!)
       posts.push({ path: `${verb[2]} ${key}`, body: init?.body ? JSON.parse(init.body as string) : undefined })
-      if (verb[2] === 'answer' && answerStatus === 409) return Response.json({ error: 'already closed' }, { status: 409 })
+      if (verb[2] === 'answer' && answerGate) await answerGate
+      if (verb[2] === 'answer' && answerStatus !== 200) return Response.json({ error: answerStatus === 409 ? 'already closed' : 'the agent session is gone' }, { status: answerStatus })
       const item = data.open.find((row) => row.key === key)!
       const closed = { ...item, closed: verb[2] === 'answer'
         ? { reason: 'answered' as const, at: new Date().toISOString(), answer: (JSON.parse(init!.body as string) as { text: string }).text }
@@ -66,7 +73,7 @@ beforeEach(() => {
       data = { ...data, olderAfterDays: days, open: data.open.map((item) => ({ ...item, older: days > 0 && Date.now() - Date.parse(item.askedAt) > days * 24 * HOUR })) }
       return Response.json({})
     }
-    if (url.pathname.endsWith('/managers')) return Response.json({ managers: [managerFixture({ pendingActions: 2 })] })
+    if (url.pathname.endsWith('/managers')) return Response.json({ managers: managerList })
     return Response.json({})
   }))
 })
@@ -77,13 +84,15 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderPage({ managers = true, entry = '/manager/questions' } = {}) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
-  client.setQueryData(queryKeys.health, { capabilities: { managers, localHandoff: true } })
-  client.setQueryData(managerKeys.list, { managers: [managerFixture({ pendingActions: 2 })] })
-  client.setQueryData(workspaceQueryKeys.projects, { projects: [{ id: 'alpha', name: 'Alpha' }], bootProject: null, projectsDir: '' })
-  client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [] })
-  client.setQueryData(workspaceQueryKeys.uiState, {})
+function renderPage({ managers = true, entry = '/manager/questions', client: reuse }: { managers?: boolean; entry?: string; client?: QueryClient } = {}) {
+  const client = reuse ?? new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+  if (!reuse) {
+    client.setQueryData(queryKeys.health, { capabilities: { managers, localHandoff: true } })
+    client.setQueryData(managerKeys.list, { managers: managerList })
+    client.setQueryData(workspaceQueryKeys.projects, { projects: [{ id: 'alpha', name: 'Alpha' }], bootProject: null, projectsDir: '' })
+    client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [] })
+    client.setQueryData(workspaceQueryKeys.uiState, {})
+  }
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
@@ -137,17 +146,146 @@ describe('the Questions page', () => {
     expect(screen.queryByRole('group', { name: 'Storage' })).toBeNull()
   })
 
-  it('answers in place with one tap, then moves focus to the next card and lists it as closed', async () => {
+  it('answers in place: the card stays locked with the answer, then lingers 30 s and leaves', async () => {
     data.open = [managerItem('m1', 'Design'), managerItem('m2', 'Budget', { askedAt: ago(10 * 60_000) })]
     renderPage()
-    fireEvent.click(within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'Yes' }))
-    await waitFor(() => expect(screen.queryByRole('group', { name: 'Design' })).toBeNull())
+    const yes = within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'Yes' })
+    yes.focus()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(yes)
+    await waitFor(() => expect(within(card('Design')).getByText('Sent to Global Manager')).toBeTruthy())
     expect(posts).toEqual([{ path: 'answer m:global:m1', body: { text: 'Design: Yes' } }])
-    await waitFor(() => expect(document.activeElement?.textContent).toBe('Yes'))
-    expect(document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')).toBe('m:global:m2')
+    const outcome = card('Design').querySelector('[data-slot="question-outcome"]')!
+    expect(outcome.textContent).toContain('Answered: Yes')
+    expect(within(card('Design')).getByRole('img', { name: 'Delivered' })).toBeTruthy()
+    // Locked: no chips, no Dismiss; the focus the chip held moved to the outcome.
+    expect(within(card('Design')).queryByRole('button', { name: 'Yes' })).toBeNull()
+    expect(within(card('Design')).queryByRole('button', { name: /Dismiss/ })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(outcome))
     expect(screen.getByText('Answered «Design».')).toBeTruthy()
+    // A lingering card is not counted.
+    expect(screen.getByText('1 question waiting, from 1 manager')).toBeTruthy()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(LINGER_MS - 1_000) })
+    expect(card('Design').getAttribute('data-lingering')).toBe('shown')
+    await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+    expect(card('Design').getAttribute('data-lingering')).toBe('leaving')
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(screen.queryByRole('group', { name: 'Design' })).toBeNull()
+    // Focus held by the leaving card goes to the next answerable one.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')).toBe('m:global:m2')
     fireEvent.click(screen.getByRole('button', { name: /Closed · 1/ }))
-    expect(screen.getByText('Answered')).toBeTruthy()
+    expect(document.querySelector('[data-slot="question-closed-reason"]')?.textContent).toBe('Answered')
+  })
+
+  it('counts drop on the click: the Questions badge and the manager’s “Waiting for N answers”', async () => {
+    managerList = [managerFixture({ pendingQuestions: 2 })]
+    data.open = [managerItem('m1', 'Design'), managerItem('m2', 'Budget')]
+    let release!: () => void
+    answerGate = new Promise((resolve) => { release = resolve })
+    renderPage()
+    const count = () => document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent
+    await waitFor(() => expect(count()).toBe('2'))
+    expect(screen.getAllByText('Waiting for 2 answers').length).toBeGreaterThan(0)
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Yes' }))
+    // Still in flight: locked, no ✓ yet, and already not counted.
+    expect(await within(card('Design')).findByText('Sending to Global Manager…')).toBeTruthy()
+    expect(within(card('Design')).queryByRole('img', { name: 'Delivered' })).toBeNull()
+    expect(count()).toBe('1')
+    expect(screen.getAllByText('Waiting for your answer').length).toBeGreaterThan(0)
+    managerList = [managerFixture({ pendingQuestions: 1 })]
+    release()
+    expect(await within(card('Design')).findByRole('img', { name: 'Delivered' })).toBeTruthy()
+    await waitFor(() => expect(count()).toBe('1'))
+  })
+
+  it('a failed delivery hands the card back, answerable, with the error; counts come back', async () => {
+    managerList = [managerFixture({ pendingQuestions: 1 })]
+    data.open = [managerItem('m1', 'Design')]
+    answerStatus = 500
+    renderPage()
+    const count = () => document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent
+    await waitFor(() => expect(count()).toBe('1'))
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Yes' }))
+    expect(await within(card('Design')).findByText(/the agent session is gone/)).toBeTruthy()
+    expect(within(card('Design')).getByRole('button', { name: 'Yes' })).toBeTruthy()
+    expect(card('Design').getAttribute('data-state')).toBe('open')
+    expect(count()).toBe('1')
+    await waitFor(() => expect(screen.getAllByText('Waiting for your answer').length).toBeGreaterThan(0))
+  })
+
+  it('coming back after answering shows the card already gone, under Closed', async () => {
+    data.open = [managerItem('m1', 'Design')]
+    const client = renderPage()
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'Yes' }))
+    await waitFor(() => expect(within(card('Design')).getByRole('img', { name: 'Delivered' })).toBeTruthy())
+    cleanup()
+    renderPage({ client })
+    expect(await screen.findByRole('heading', { name: 'No questions waiting' })).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Design' })).toBeNull()
+    expect(screen.getByRole('button', { name: /Closed · 1/ })).toBeTruthy()
+  })
+
+  it('a question the system closes while on screen shows why, in place, then lingers', async () => {
+    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
+    const client = renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const [design] = data.open
+    data = { ...data, open: data.open.slice(1), closed: [{ ...design!, closed: { reason: 'replaced', at: new Date().toISOString(), replacedBy: 'm9' } }] }
+    await act(async () => { await client.invalidateQueries({ queryKey: questionKeys.all }) })
+    const outcome = await waitFor(() => {
+      const found = card('Design').querySelector('[data-slot="question-outcome"]')
+      expect(found?.getAttribute('data-reason')).toBe('replaced')
+      return found!
+    })
+    expect(outcome.textContent).toContain('Replaced')
+    expect(outcome.textContent).toContain('A newer “Design” question replaced this one.')
+    expect(screen.getByText('1 question waiting, from 1 task')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(LINGER_MS + 10) })
+    expect(screen.queryByRole('group', { name: 'Design' })).toBeNull()
+  })
+
+  it('dismiss shows “Dismissed” with Undo in place, POSTs after 6 s, then lingers; counts drop at once', async () => {
+    managerList = [managerFixture({ pendingQuestions: 1 })]
+    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
+    renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    const count = () => document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent
+    await waitFor(() => expect(count()).toBe('2'))
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
+    expect(within(card('Design')).getByText('Dismissed «Design»')).toBeTruthy()
+    expect(within(card('Design')).getByRole('button', { name: 'Undo' })).toBeTruthy()
+    expect(count()).toBe('1')
+    // The manager list's change reaches the sidebar on the query cache's next tick.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.queryAllByText('Waiting for your answer')).toEqual([])
+    expect(screen.getByText('Dismissed «Design». Undo available for 6 seconds.')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS - 100) })
+    expect(posts).toEqual([])
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await waitFor(() => expect(posts).toEqual([{ path: 'dismiss m:global:m1', body: undefined }]))
+    await waitFor(() => expect(card('Design').querySelector('[data-slot="question-outcome"]')?.getAttribute('data-reason')).toBe('dismissed'))
+    expect(card('Design').textContent).toContain('Dismissed')
+    expect(within(card('Design')).queryByRole('button', { name: 'Undo' })).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(LINGER_MS + 10) })
+    expect(screen.queryByRole('group', { name: 'Design' })).toBeNull()
+    expect(card('Storage')).toBeTruthy()
+  })
+
+  it('Undo cancels the dismissal: nothing is sent and the card comes back', async () => {
+    data.open = [managerItem('m1', 'Design')]
+    renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
+    expect(screen.getByText('Nothing waiting on you')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS * 2) })
+    expect(posts).toEqual([])
+    expect(within(card('Design')).getByRole('button', { name: 'Yes' })).toBeTruthy()
   })
 
   it('a stale tab: answering a question that closed meanwhile says so and refetches', async () => {
@@ -158,40 +296,7 @@ describe('the Questions page', () => {
     expect(await screen.findByText('This question closed before your answer arrived.')).toBeTruthy()
   })
 
-  it('dismiss waits out the 6 s undo before it POSTs; the sidebar count drops at once', async () => {
-    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
-    renderPage()
-    await screen.findByRole('group', { name: 'Design' })
-    const count = () => document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent
-    await waitFor(() => expect(count()).toBe('2'))
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
-    expect(screen.queryByRole('group', { name: 'Design' })).toBeNull()
-    expect(count()).toBe('1')
-    expect(screen.getByText('Dismissed «Design». Undo available for 6 seconds.')).toBeTruthy()
-    // Focus went to the next card's first option.
-    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-    expect(document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')).toBe('r:alpha:run1:ask_1')
-    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS - 100) })
-    expect(posts).toEqual([])
-    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
-    await waitFor(() => expect(posts).toEqual([{ path: 'dismiss m:global:m1', body: undefined }]))
-  })
-
-  it('Undo cancels the dismissal: nothing is sent and the card comes back', async () => {
-    data.open = [managerItem('m1', 'Design')]
-    renderPage()
-    await screen.findByRole('group', { name: 'Design' })
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
-    expect(screen.getByRole('heading', { name: 'No questions waiting' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS * 2) })
-    expect(posts).toEqual([])
-    expect(card('Design')).toBeTruthy()
-  })
-
-  it('the undo window pauses while focus is inside the toast', async () => {
+  it('the undo window pauses while focus is on the card’s Undo', async () => {
     data.open = [managerItem('m1', 'Design')]
     renderPage()
     await screen.findByRole('group', { name: 'Design' })
@@ -206,7 +311,7 @@ describe('the Questions page', () => {
     await waitFor(() => expect(posts).toHaveLength(1))
   })
 
-  // Leaving the page while focus is in the toast fires no blur: the paused clock must restart.
+  // Leaving the page while focus is on Undo fires no blur: the paused clock must restart.
   it('a dismissal paused by focus still lands after the page unmounts', async () => {
     data.open = [managerItem('m1', 'Design')]
     renderPage()
@@ -343,6 +448,14 @@ describe('references on the Questions page (#2306)', () => {
 })
 
 describe('question helpers', () => {
+  it('answerShown drops a lone header and cuts long text', () => {
+    expect(answerShown(managerItem('m1', 'Design'), 'Design: Yes')).toBe('Yes')
+    expect(answerShown({ questions: [{ header: 'A', question: '', options: [] }, { header: 'B', question: '', options: [] }] }, 'A: x\nB: y')).toBe('A: x · B: y')
+    const long = answerShown(managerItem('m1', 'Design'), `Design: ${'w'.repeat(400)}`)
+    expect(long.length).toBe(140)
+    expect(long.endsWith('…')).toBe(true)
+  })
+
   it('closedLabel names where a linked copy was answered', () => {
     expect(closedLabel({ reason: 'answered', at: '', answeredIn: 'task:alpha/run1' })).toBe('Answered in the task')
     expect(closedLabel({ reason: 'answered', at: '', answeredIn: 'manager:global' }, () => 'Scout')).toBe('Answered in Scout’s chat')

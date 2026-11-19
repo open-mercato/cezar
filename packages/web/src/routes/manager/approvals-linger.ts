@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { ManagerActionStatus } from '@open-mercato/cezar-api-client'
 
-/** How long a card decided on the Approvals page stays after it finished. */
+/** How long a card decided on the Approvals or Questions page stays after it finished. */
 export const LINGER_MS = 30_000
 /** The fade at the end of the linger; reduced motion skips it. */
 export const FADE_MS = 300
