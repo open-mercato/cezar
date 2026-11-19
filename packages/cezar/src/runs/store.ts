@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -42,6 +42,7 @@ import { workflowDefSchema } from '../workflows/types.ts';
 import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
 import { dispatchSchema, runParkedSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
+import { foldReportedModel, foldRunModels } from './reported-model.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -131,6 +132,10 @@ const stepStateSchema = z.object({
   /** Raw model this turn was spawned with ('' = deliberately auto), so a continued turn keeps
    *  the model of the step that owns its session (#1488). Absent on older records. */
   model: z.string().optional(),
+  /** The model the agent reported actually running (latest main one) and every model the
+   *  step's turns used — see `recordReportedModel`. Unreadable values drop, never the record. */
+  actualModel: z.string().optional().catch(undefined),
+  modelsUsed: z.array(modelUsageSchema).optional().catch(undefined),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -213,6 +218,10 @@ export const runRecordSchema = z.object({
    *  whenever it says something `model` does not — so this is no longer a
    *  write-only field whose next reader has to guess whether it is load-bearing. */
   modelIdentity: z.string().optional(),
+  /** Run-level summary of the steps' `actualModel`/`modelsUsed`: the latest main model reported,
+   *  and every model seen, first-seen order. Absent until an agent reports one. */
+  actualModel: z.string().optional().catch(undefined),
+  modelsUsed: z.array(z.string()).optional().catch(undefined),
   /** Agent backend this run used — drives "open in CLI" resume command. `storedRunnerSchema`
    *  so a legacy `claude-cli` record folds to `claude` instead of failing the whole index (#547). */
   runner: storedRunnerSchema.optional(),
@@ -1736,6 +1745,17 @@ export class RunStore extends EventEmitter {
     this.touch(run);
   }
 
+  /** The model the agent reports running, onto its step and the run summary (`reported-model.ts`). */
+  private recordReportedModel(run: RunRecord, event: RunEvent): void {
+    const step = typeof event.stepId === 'string' ? run.steps.find((s) => s.id === event.stepId) : undefined;
+    if (!step) return;
+    const next = foldReportedModel(step, event);
+    if (!next) return;
+    Object.assign(step, next);
+    Object.assign(run, foldRunModels(run, step));
+    this.touch(run);
+  }
+
   /** Merge a live gauge reading (`usage-status`) onto the record; each field is the latest. */
   setLiveUsage(runId: string, status: AgentUsageStatus): void {
     const run = this.runs.get(runId);
@@ -2035,6 +2055,7 @@ export class RunStore extends EventEmitter {
     this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
     if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
+    if (full.type === 'session.started' || full.type === 'turn.completed') this.recordReportedModel(run, full);
     // A new step or Continue may run another backend: the last session's no longer names it.
     if (full.type === 'step-start') this.sessionBackends.delete(runId);
     if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {

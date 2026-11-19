@@ -27,6 +27,7 @@ import {
   type ManagerForwarded,
   type ManagerJob,
   type ManagerMessage,
+  type ManagerTaskSource,
   type ManagerMessagesResponse,
   type ManagerProposeActionInput,
   type ManagerRetryTaskInput,
@@ -93,7 +94,7 @@ import {
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
 import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
-import { buildSnapshot, findRun, gateAttention, openTaskAskId, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
 import {
   ageLabel,
   cardHeaders,
@@ -591,6 +592,7 @@ export class ManagerEngine {
       }
     }
     if (!answering && messages.at(-1)?.kind === 'user') this.addNotice(id, 'cezar restarted before answering this. Send it again if you still need it.');
+    this.collapseDuplicateCards(id);
   }
 
   dispose(): void {
@@ -1214,6 +1216,7 @@ export class ManagerEngine {
       const snapshot = await this.snapshot(id);
       // Deleted meanwhile: writing the gate's state would bring the directory back.
       if (!snapshot || !store.get(id)) return;
+      this.collapseDuplicateCards(id);
       await this.dismissStaleMerges(id, snapshot);
       await this.dismissStaleEnables(id, snapshot);
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
@@ -2731,7 +2734,7 @@ export class ManagerEngine {
     return { ...action, name: automation.name.slice(0, 1000), revision: automation.revision, summary: clipSummary(JSON.stringify(definition)) };
   }
 
-  async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus } | ManagerRefusal> {
+  async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus; replaced?: string[]; alsoWaitingIn?: string[] } | ManagerRefusal> {
     const scope = await this.toolScope(id, actionProject(input.action), true);
     if ('error' in scope) return scope;
     const refused = accessRefusal(scope.manager, input.action);
@@ -2744,23 +2747,24 @@ export class ManagerEngine {
     }
     const action = await this.stampAction(id, input.action);
     if ('error' in action) return action;
-    const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action);
+    // From here to `publish` nothing awaits, so two racing proposals see each other's card.
+    const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action) && sameMethod(other, action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
     if (pending) return { actionId: pending.id, status: 'pending' };
-    if (action.type === 'enable-automation') {
-      // An edit bumps the revision: the older card can never be approved, so it must not wait on the user.
-      for (const older of this.deps.store.messages(id)) {
-        if (older.kind !== 'action' || older.status !== 'pending' || older.action.type !== 'enable-automation') continue;
-        if (older.action.projectId !== action.projectId || older.action.automationId !== action.automationId) continue;
-        this.settleAction(id, older, 'dismissed', `Replaced by a newer proposal (revision ${action.revision})`);
-      }
+    // One waiting card per PR or automation: a new head, method or revision replaces the older card.
+    const replaced: string[] = [];
+    for (const older of this.deps.store.messages(id)) {
+      if (older.kind !== 'action' || older.status !== 'pending' || cardSubject(older.action) === undefined || cardSubject(older.action) !== cardSubject(action)) continue;
+      this.settleAction(id, older, 'dismissed', replacedBy(action));
+      replaced.push(older.id);
     }
+    const alsoWaitingIn = this.alsoWaitingIn(id, action);
     const message: ManagerMessage = {
       id: randomUUID(),
       seq: this.deps.store.nextSeq(id),
       at: this.iso(),
       kind: 'action',
-      sourceTasks: taskSources(input.reason ?? '').length ? taskSources(input.reason ?? '') : this.runtime(id).active?.sourceTasks ?? [],
+      sourceTasks: this.actionSources(action, input.reason ?? '', scope.source?.runs() ?? []),
       action,
       ...(input.reason ? { reason: input.reason } : {}),
       status: 'pending',
@@ -2771,7 +2775,55 @@ export class ManagerEngine {
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
     this.alert(id, message, `Needs your approval: ${describe(action)}`);
-    return { actionId: message.id, status: 'pending' };
+    return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
+  }
+
+  /**
+   * A card's Source task, never the turn's context (a task read or followed earlier names an
+   * unrelated card): a merge card takes the task that opened or declared its PR, plus any task the
+   * reason names that carries the same PR; other cards only what their reason names.
+   */
+  private actionSources(action: ManagerActionRequest, reason: string, runs: RunRecord[]): ManagerTaskSource[] {
+    const named = taskSources(reason);
+    if (action.type !== 'merge-pr') return named;
+    const tied = runs
+      .map((run) => ({ run, tie: prTie(run, action.number) }))
+      .filter((entry): entry is { run: RunRecord; tie: 0 | 1 | 2 } => entry.tie !== undefined);
+    const owner = tied
+      .filter((entry) => entry.tie < 2)
+      .sort((a, b) => a.tie - b.tie || Number(Boolean(a.run.archived)) - Number(Boolean(b.run.archived)) || (a.run.createdAt < b.run.createdAt ? 1 : a.run.createdAt > b.run.createdAt ? -1 : 0))[0]?.run;
+    const sources = owner ? [{ projectId: action.projectId, runId: owner.id }] : [];
+    for (const source of named) {
+      if (source.projectId !== action.projectId || sources.some((entry) => entry.runId === source.runId)) continue;
+      if (tied.some((entry) => entry.run.id === source.runId)) sources.push(source);
+    }
+    return sources;
+  }
+
+  /** Other managers' chats with a card waiting on the same PR or automation: allowed, but said. */
+  private alsoWaitingIn(id: string, action: ManagerActionRequest): string[] {
+    const subject = cardSubject(action);
+    if (subject === undefined) return [];
+    return this.deps.store.list()
+      .filter((manager) => manager.id !== id && this.deps.store.messages(manager.id).some((message) => message.kind === 'action' && message.status === 'pending' && cardSubject(message.action) === subject))
+      .map((manager) => manager.name);
+  }
+
+  /** Cards stored before one-per-PR (or written by two cockpits at once): the newest stays waiting. */
+  private collapseDuplicateCards(id: string): void {
+    const newest = new Map<string, Extract<ManagerMessage, { kind: 'action' }>>();
+    const cards = this.deps.store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'action' }> => message.kind === 'action' && message.status === 'pending');
+    for (const card of cards) {
+      const subject = cardSubject(card.action);
+      if (subject === undefined) continue;
+      const kept = newest.get(subject);
+      if (!kept || card.seq > kept.seq) newest.set(subject, card);
+    }
+    for (const card of cards) {
+      const subject = cardSubject(card.action);
+      const kept = subject === undefined ? undefined : newest.get(subject);
+      if (kept && kept.id !== card.id) this.settleAction(id, card, 'dismissed', replacedBy(kept.action));
+    }
   }
 
   /** The only path to a merge or an enabled automation; the agent's tools cannot reach it. */
@@ -3035,6 +3087,23 @@ const actionKey = (action: ManagerActionRequest): string => {
   if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}:${action.revision}`;
   if (action.type === 'connector-call') return `connector:${action.connector}:${action.tool}:${canonicalJson(action.args)}`;
   return `job:${action.name}:${action.everyMinutes}:${action.prompt}`;
+};
+
+/** What one waiting card may exist for: a PR or an automation. Other kinds may repeat. */
+const cardSubject = (action: ManagerActionRequest): string | undefined => {
+  if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}`;
+  if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}`;
+  return undefined;
+};
+
+const sameMethod = (a: ManagerActionRequest, b: ManagerActionRequest): boolean =>
+  a.type !== 'merge-pr' || b.type !== 'merge-pr' || a.method === b.method;
+
+/** The closed card's line, in the dismissed wording of #2241/#2292. */
+const replacedBy = (action: ManagerActionRequest): string => {
+  if (action.type === 'merge-pr') return `Replaced by a newer proposal${action.headSha ? ` for head ${action.headSha.slice(0, 12)}` : ''}${action.method ? ` (${action.method})` : ''}`;
+  if (action.type === 'enable-automation') return `Replaced by a newer proposal (revision ${action.revision})`;
+  return 'Replaced by a newer proposal';
 };
 
 const describe = (action: ManagerActionRequest): string => {

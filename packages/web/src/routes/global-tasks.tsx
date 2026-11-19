@@ -26,6 +26,7 @@ import {
 } from '@/api/queries'
 import type { ManagerSummary, ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
+import { runModelLine, titleWithModel } from '@/lib/actual-model'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
 import { Segmented } from '@/components/segmented'
@@ -1086,7 +1087,7 @@ const TaskRow = React.memo(function TaskRow({
           <Link
             to={to}
             state={linkState}
-            title={runTitle(run)}
+            title={titleWithModel(runTitle(run), run)}
             aria-describedby={quiet ? statusId : undefined}
             className={cn(
               'min-w-0 truncate text-ui',
@@ -1152,6 +1153,7 @@ const TaskRow = React.memo(function TaskRow({
       </td>
       {showCost ? (
         <td
+          title={runModelLine(run)}
           className={cn(
             TD_BASE,
             'hidden text-right font-mono text-xs text-muted-foreground tabular-nums lg:table-cell',

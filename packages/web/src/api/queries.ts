@@ -75,6 +75,7 @@ import {
   getImportableSkillsWhenReady,
   getSkills,
   getSkillsWhenReady,
+  refreshSkills,
   getTodos,
   getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
   getTrackerCandidates,
@@ -1703,6 +1704,24 @@ export function useSkills(enabled = true) {
   }, [queryClient, ready.data, ready.dataUpdatedAt, skillsScope])
 
   return skills
+}
+
+export function useRefreshSkillCatalog() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      // Capture the requested project's keys before navigation can change the scope.
+      const { skills, skillsReady } = queryKeys
+      const catalog = await refreshSkills()
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: skills, exact: true }),
+        queryClient.cancelQueries({ queryKey: skillsReady, exact: true }),
+      ])
+      queryClient.setQueryData(skills, catalog)
+      queryClient.setQueryData(skillsReady, catalog)
+      return catalog
+    },
+  })
 }
 
 /** The opt-in catalog for the "Import skills" panel — the default (vendor) repo's full skill

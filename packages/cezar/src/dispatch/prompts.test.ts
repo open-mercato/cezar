@@ -64,6 +64,15 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toContain('CEZ_TREE_DIR');
   });
 
+  it('keeps task-granted authorization (non-force PR pushes) out of the Guard, and the hard stops in', () => {
+    for (const kind of [undefined, 'implement', 'review'] as const) {
+      const p = composeDispatchPrompt(kind);
+      expect(p).toMatch(/Authorization the user already gave .* stays in force across turns and continuations/);
+      expect(p).toMatch(/non-force push to that PR's head branch is already authorized and needs no CEZ:ASK/);
+      expect(p).toMatch(/Force pushes, history rewrites, merging into the base branch, deleting branches/);
+    }
+  });
+
   it('composes the review addendum only for a review task', () => {
     expect(composeDispatchPrompt(undefined)).toBe(DISPATCH_PROMPT);
     expect(composeDispatchPrompt('implement')).toBe(DISPATCH_PROMPT);

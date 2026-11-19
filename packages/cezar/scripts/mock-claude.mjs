@@ -37,7 +37,25 @@ function streamedBlocks(obj) {
   });
 }
 
+// The model a real CLI reports in `init` and `result.modelUsage`: an alias (or no --model at
+// all, "auto") resolves to a full id, so the cockpit's "auto → <model>" badge is testable.
+const MOCK_MODEL = (() => {
+  const at = process.argv.indexOf('--model');
+  const requested = at >= 0 ? process.argv[at + 1] ?? '' : '';
+  const alias = { '': 'opus', default: 'opus', opus: 'opus', sonnet: 'sonnet', haiku: 'haiku' }[requested];
+  return alias ? `claude-${alias}-5-5` : requested;
+})();
+
 function emit(obj) {
+  if (obj?.type === 'result' && !obj.is_error && !obj.modelUsage && !process.env.CEZ_MANAGER_ID) {
+    const usage = obj.usage ?? {};
+    obj = {
+      ...obj,
+      modelUsage: {
+        [MOCK_MODEL]: { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, costUSD: obj.total_cost_usd ?? 0 },
+      },
+    };
+  }
   const blocks = streamedBlocks(obj);
   const envelope = { session_id: obj?.session_id, parent_tool_use_id: obj?.parent_tool_use_id ?? null };
   for (const block of blocks) {
@@ -88,7 +106,7 @@ emit(process.env.CEZ_MANAGER_ID
       mcp_servers: [{ name: 'claude.ai Google Calendar', status: MOCK_CONNECTOR_STATUS }],
       tools: ['Bash', 'Read', 'Grep', 'Glob', ...(MOCK_CONNECTOR_STATUS === 'connected' ? MOCK_CONNECTOR_TOOLS : [])],
     }
-  : { type: 'system', subtype: 'init' });
+  : { type: 'system', subtype: 'init', model: MOCK_MODEL });
 
 // Plan usage windows, so the dry-run header shows its live gauges (real wire shape). Sent once,
 // on the first ordinary turn: a `mock:limit` session must report only its terminal limit.
@@ -311,6 +329,15 @@ async function managerTurn(userText) {
         { label: 'Assess both (recommended)', description: `One read-only task each for ${pr(2897)} and ${pr(2896)}.` },
         { label: `Only ${pr(2897)}`, description: 'The frontend bump; the other waits.' },
         { label: 'Neither' },
+      ] },
+    ] })}`);
+  }
+  // A card that names its PRs as `project/N` and a bare number: the first is a chip, the second stays words.
+  if (/\bsupersede\b/i.test(said) && repo) {
+    lines.push('One PR may supersede another.', `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: '2902 + 2894', question: `Should I assess ${repo}/2902 and check whether it makes 2894 unnecessary?`, options: [
+        { label: 'Assess it (recommended)', description: `One read-only task for [[pr:${repo}/2902]].` },
+        { label: 'Leave both' },
       ] },
     ] })}`);
   }
