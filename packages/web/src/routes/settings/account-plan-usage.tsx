@@ -21,7 +21,7 @@ function weeklyReset(iso: string): string {
 /** `5-hour limit: N% used · resets HH:MM · cezar tasks and managers ≈ M% of it`. */
 export function fiveHourLine(w: PlanUsageWindow | undefined): string {
   if (!w || !w.usedPercent) return 'no reading yet'
-  return `${exactPp(w.usedPercent.last)} used · resets ${clockTime(w.resetsAt)} · cezar tasks and managers ${approxPp(sumConsumers(w))} of it${unknownTail(w)}`
+  return `${exactPp(w.usedPercent.last)} used · resets ${clockTime(w.resetsAt)} · cezar tasks and managers ${approxPp(sumConsumers(w))} of it, outside cezar ${exactPp(w.outsideCezarPp)}${unknownTail(w)}`
 }
 
 /** `Weekly limit: N% used · resets Mon 24 Nov 08:00 · this week: cezar ≈ X%, outside cezar Y%`. */
@@ -34,6 +34,7 @@ export function weeklyLine(w: PlanUsageWindow | undefined): string {
 function unknownTail(w: PlanUsageWindow): string {
   const parts = [
     w.beforeTrackingPp > 0 ? `before tracking ${exactPp(w.beforeTrackingPp)}` : '',
+    w.untrackedPp > 0 ? `not tracked ${exactPp(w.untrackedPp)}` : '',
     w.unsplitPp > 0 ? `couldn't split ${exactPp(w.unsplitPp)}` : '',
   ].filter(Boolean)
   return parts.length ? `, ${parts.join(', ')}` : ''

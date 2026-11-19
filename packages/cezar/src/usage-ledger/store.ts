@@ -44,6 +44,9 @@ export const ledgerRecordSchema = z.discriminatedUnion('t', [
   }),
   z.object({ t: z.literal('end'), at: ms, session: z.string().max(100), quiet: z.boolean().optional() }),
   z.object({ t: z.literal('attempt-failed'), at: ms, consumerId: z.string().max(400), since: ms }),
+  /** Recording boundaries (QA F1): `off`/`on` when an account's switch flips, `start` the first
+   *  time a process records an account. Usage across one is never attributed. */
+  z.object({ t: z.literal('tracking'), at: ms, account: z.string().max(300), state: z.enum(['off', 'on', 'start']) }),
 ]);
 export type LedgerRecord = z.infer<typeof ledgerRecordSchema>;
 
@@ -92,6 +95,10 @@ export function setAccountTracking(account: string, enabled: boolean): PlanUsage
   const path = trackingPath();
   assertCezarHomeWriteIsSandboxed(path);
   const accounts = { ...readTrackingAccounts() };
+  const was = accounts[account] !== false;
+  // The boundary is metadata about the switch, not usage: written while the account still
+  // records (off) or once it records again (on), never under CEZ_USAGE_LOG=0.
+  if (was && !enabled && !usageLogDisabledByEnv()) writeRecord({ t: 'tracking', at: Date.now(), account, state: 'off' });
   // Only an opt-out is stored: the default stays the absence of a key.
   if (enabled) delete accounts[account];
   else accounts[account] = false;
@@ -100,6 +107,7 @@ export function setAccountTracking(account: string, enabled: boolean): PlanUsage
   writeFileSync(tmp, `${JSON.stringify({ accounts }, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, path);
   trackingCache = { at: Date.now(), accounts };
+  if (!was && enabled && !usageLogDisabledByEnv()) writeRecord({ t: 'tracking', at: Date.now(), account, state: 'on' });
   return planUsageTracking();
 }
 
@@ -120,9 +128,22 @@ function pruneOld(dir: string, now: number): void {
 }
 
 /** Append one record. Never throws: usage metadata must never fail a task or a manager turn. */
+const startedAccounts = new Set<string>();
+
 export function appendLedger(record: LedgerRecord, account?: string): void {
   if (usageLogDisabledByEnv()) return;
   if (account !== undefined && !accountTracked(account)) return;
+  // This process may follow a stretch nobody recorded (cezar stopped, CEZ_USAGE_LOG=0, another
+  // cockpit with the account off): mark where its recording starts, once per account.
+  if (account !== undefined && !startedAccounts.has(account)) {
+    startedAccounts.add(account);
+    const at = record.t === 'sample' ? record.from : record.at;
+    writeRecord({ t: 'tracking', at, account, state: 'start' });
+  }
+  writeRecord(record);
+}
+
+function writeRecord(record: LedgerRecord): void {
   const dir = ledgerDir();
   try {
     const at = record.t === 'sample' ? record.to : record.at;
@@ -164,5 +185,6 @@ export function readLedger(days: number, now = Date.now()): LedgerRecord[] {
 /** Test seam. */
 export function resetLedgerCaches(): void {
   trackingCache = undefined;
+  startedAccounts.clear();
   lastPrune = 0;
 }

@@ -31,6 +31,23 @@ describe('plan limits model', () => {
     expect(windowSegments(w).reduce((n, s) => n + s.width, 0)).toBeCloseTo(100)
   })
 
+  it('fills the bar to the reading when a provider correction lowered it (QA F5)', () => {
+    const w = planWindow({ consumers: [], usedPercent: { first: 5, last: 30 }, limitReachedAt: undefined, beforeTrackingPp: 5, outsideCezarPp: 27, unsplitPp: 0, correctionPp: 2, leftPp: 70 })
+    const used = windowSegments(w).filter((s) => s.id !== 'left').reduce((n, s) => n + s.width, 0)
+    expect(used).toBeCloseTo(30)
+  })
+
+  it('shows usage across a recording gap as Not tracked, with why and when (QA F1)', () => {
+    const w = planWindow({
+      untrackedPp: 8,
+      trackingGaps: [{ from: '2026-11-19T10:02:00.000Z', to: '2026-11-19T10:09:00.000Z', reason: 'tracking-off' }],
+    })
+    expect(windowSegments(w).find((s) => s.id === 'untracked')).toMatchObject({ label: 'Not tracked', pp: expect.any(Number) })
+    const row = remainderRows(w).find((r) => r.id === 'untracked')!
+    expect(row.value).toBe('8%')
+    expect(row.label).toMatch(/^Not tracked · tracking was off .+–.+$/)
+  })
+
   it('reads the header as a reading, not an estimate', () => {
     expect(windowStatus(planWindow())).toMatch(/^limit reached · back at /)
     const open = planWindow({ usedPercent: { first: 1, last: 18 }, limitReachedAt: undefined, leftPp: 82 })

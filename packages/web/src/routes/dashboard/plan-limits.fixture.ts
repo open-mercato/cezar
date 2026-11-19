@@ -34,6 +34,8 @@ export function planWindow(over: Partial<PlanUsageWindow> = {}): PlanUsageWindow
     outsideCezarPp: 9,
     unsplitPp: 8,
     correctionPp: 0,
+    untrackedPp: 0,
+    trackingGaps: [],
     leftPp: 0,
     ...over,
   }

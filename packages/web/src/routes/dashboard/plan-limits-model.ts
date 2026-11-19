@@ -13,7 +13,7 @@ export const PLAN_KINDS = ['five-hour', 'weekly'] as const
 
 export const PROVIDER_NAME: Record<PlanUsageProvider, string> = { claude: 'Claude', codex: 'Codex' }
 
-export type SegmentId = 'tasks' | 'managers' | 'internal' | 'unsplit' | 'before' | 'outside' | 'left'
+export type SegmentId = 'tasks' | 'managers' | 'internal' | 'unsplit' | 'untracked' | 'before' | 'outside' | 'left'
 export interface Segment {
   id: SegmentId
   label: string
@@ -27,6 +27,7 @@ export const SEGMENT_FILL: Record<SegmentId, string> = {
   managers: 'bg-info',
   internal: 'bg-success',
   unsplit: 'bg-warning',
+  untracked: 'bg-[repeating-linear-gradient(45deg,var(--color-warning)_0_2px,transparent_2px_5px)] opacity-70',
   // Unknown, not outside: striped so it never reads as anyone's share.
   before: 'bg-[repeating-linear-gradient(135deg,var(--color-soft-foreground)_0_2px,transparent_2px_5px)] opacity-60',
   outside: 'bg-soft-foreground/60',
@@ -48,14 +49,20 @@ export function windowSegments(w: PlanUsageWindow): Segment[] {
     { id: 'managers', label: 'Managers', pp: sum(w.consumers, 'manager') },
     { id: 'internal', label: 'cezar internal', pp: sum(w.consumers, 'internal') },
     { id: 'unsplit', label: "Couldn't split", pp: Math.max(0, w.unsplitPp) },
+    // Moved while cezar was not recording: the provider total, charged to nobody.
+    { id: 'untracked', label: 'Not tracked', pp: Math.max(0, w.untrackedPp) },
     // Used before cezar's first reading: unknown who, so never folded into "Outside cezar".
     { id: 'before', label: 'Before tracking', pp: Math.max(0, w.beforeTrackingPp) },
     { id: 'outside', label: 'Outside cezar', pp: Math.max(0, w.outsideCezarPp) },
-    { id: 'left', label: 'Left', pp: Math.max(0, w.leftPp ?? 100 - used) },
   ]
-  const total = raw.reduce((n, s) => n + s.pp, 0)
+  // A provider correction lowered the total after these parts were counted: draw them to the
+  // reading (QA F5), never past it.
+  const parts = raw.reduce((n, s) => n + s.pp, 0)
+  const fit = parts > used && parts > 0 ? used / parts : 1
+  const all = [...raw.map((s) => ({ ...s, pp: s.pp * fit })), { id: 'left' as const, label: 'Left', pp: Math.max(0, w.leftPp ?? 100 - used) }]
+  const total = all.reduce((n, s) => n + s.pp, 0)
   const scale = total > 100 ? 100 / total : 1
-  return raw.filter((s) => s.pp > 0).map((s) => ({ ...s, width: s.pp * scale }))
+  return all.filter((s) => s.pp > 0).map((s) => ({ ...s, width: s.pp * scale }))
 }
 
 export function isLimitReached(w: PlanUsageWindow): boolean {
@@ -178,6 +185,12 @@ export function managerParts(c: PlanUsageConsumer): string | null {
   return parts.length ? parts.map((p) => `${p} ${approxPp(c.parts![p])}`).join(' · ') : null
 }
 
+/** `tracking was off 20:00–20:10`: why a slice is charged to nobody, with its time. */
+export function gapReasons(w: PlanUsageWindow): string {
+  if (w.trackingGaps.length === 0) return 'cezar was not recording'
+  return w.trackingGaps.map((g) => `${g.reason === 'tracking-off' ? 'tracking was off' : 'cezar was not recording'} ${clockTime(g.from)}–${g.to ? clockTime(g.to) : 'now'}`).join('; ')
+}
+
 export interface RemainderRow { id: string; label: string; value: string }
 
 /** Account-level rows under the consumers: plain numbers, shown only when above zero. */
@@ -185,6 +198,7 @@ export function remainderRows(w: PlanUsageWindow): RemainderRow[] {
   const rows: RemainderRow[] = []
   if (w.unsplitPp > 0) rows.push({ id: 'unsplit', label: "Couldn't be split", value: exactPp(w.unsplitPp) })
   if (w.outsideCezarPp > 0) rows.push({ id: 'outside', label: 'Outside cezar', value: exactPp(w.outsideCezarPp) })
+  if (w.untrackedPp > 0) rows.push({ id: 'untracked', label: `Not tracked · ${gapReasons(w)}`, value: exactPp(w.untrackedPp) })
   if (w.beforeTrackingPp > 0) rows.push({ id: 'before', label: "Before cezar's first reading", value: exactPp(w.beforeTrackingPp) })
   if (w.correctionPp > 0) rows.push({ id: 'correction', label: 'Provider correction', value: `−${formatPlanPp(w.correctionPp)}%` })
   return rows

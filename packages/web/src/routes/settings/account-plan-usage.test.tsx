@@ -22,7 +22,7 @@ const consumer = (id: string, estimatePp: number) => ({
 const win = (over: Partial<PlanUsageWindow>): PlanUsageWindow => ({
   id: 'w', account, kind: 'five-hour', startsAt: '2026-11-19T10:00:00Z', resetsAt: '2026-11-19T15:00:00Z', current: true,
   usedPercent: { first: 10, last: 100 }, readings: [], consumers: [consumer('run:p/a', 50), consumer('mgr:m', 33)],
-  beforeTrackingPp: 10, outsideCezarPp: 7, unsplitPp: 0, correctionPp: 0, leftPp: 0, ...over,
+  beforeTrackingPp: 10, outsideCezarPp: 7, unsplitPp: 0, correctionPp: 0, untrackedPp: 0, trackingGaps: [], leftPp: 0, ...over,
 })
 
 beforeEach(() => {
@@ -34,7 +34,7 @@ afterEach(cleanup)
 
 describe('limit lines', () => {
   it('marks cezar\'s share ≈ and keeps provider readings and remainders plain', () => {
-    expect(fiveHourLine(win({}))).toMatch(/^100% used · resets .+ · cezar tasks and managers ≈ 83% of it, before tracking 10%$/)
+    expect(fiveHourLine(win({}))).toMatch(/^100% used · resets .+ · cezar tasks and managers ≈ 83% of it, outside cezar 7%, before tracking 10%$/)
     expect(weeklyLine(win({ kind: 'weekly', usedPercent: { first: 0, last: 29 }, consumers: [consumer('run:p/a', 22)] })))
       .toMatch(/^29% used · resets .+ · this week: cezar ≈ 22%, outside cezar 7%, before tracking 10%$/)
   })

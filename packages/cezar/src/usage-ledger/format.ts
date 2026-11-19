@@ -26,6 +26,10 @@ export function formatWindow(w: PlanUsageWindow, now: number, timeZone?: string)
   if (w.unsplitPp > 0) lines.push(`  ${pp(w.unsplitPp)}%  couldn't be split`);
   if (w.outsideCezarPp > 0) lines.push(`  ${pp(w.outsideCezarPp)}%  outside cezar`);
   if (w.beforeTrackingPp > 0) lines.push(`  ${pp(w.beforeTrackingPp)}%  before cezar's first reading`);
+  if (w.untrackedPp > 0) {
+    const gaps = w.trackingGaps.map((g) => `${clock(g.from, timeZone)}–${g.to ? clock(g.to, timeZone) : 'now'} ${g.reason === 'tracking-off' ? 'tracking off' : 'cezar not recording'}`);
+    lines.push(`  ${pp(w.untrackedPp)}%  not tracked${gaps.length ? ` (${gaps.join('; ')})` : ''}`);
+  }
   if (w.correctionPp > 0) lines.push(`  -${pp(w.correctionPp)}%  provider correction`);
   if (w.readings.length < 2) lines.push('  (one reading so far: nothing to split yet)');
   return lines;

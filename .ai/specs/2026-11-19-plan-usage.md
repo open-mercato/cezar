@@ -40,7 +40,18 @@ however many parallel sessions reported it:
 - the first reading → **before cezar's first reading** — unknown, shown as its own segment and
   never folded into "outside cezar".
 
-Invariant, pinned by tests: before + Σ consumers + outside + unsplit − correction = last reading.
+- a slice that crosses a **recording gap** → **not tracked** (`untrackedPp`, with the gap's
+  reason and time); the first reading after the gap is the new baseline, and turns begun before
+  the gap are never candidates after it (QA F1). Gaps come from `tracking` records: `off`/`on`
+  when an account's switch flips, and `start` the first time a process records an account
+  (so a stop, a restart or `CEZ_USAGE_LOG=0` in between reads as "cezar was not recording"
+  from the account's previous record). A turn whose own records continue past a `start` was
+  live in another process and keeps counting;
+- a stretch longer than 15 minutes with no cezar turn inside a slice → **couldn't be split**
+  (the next reading carries both the last turn's spend and your own use in between).
+
+Invariant, pinned by tests: before + Σ consumers + outside + unsplit + untracked − correction =
+last reading.
 
 A reset is a new window (readings cluster by `resetsAt` ±10 min); a newer window whose first
 reading predates the older one's reset (an early reset, another login) ends the older one.

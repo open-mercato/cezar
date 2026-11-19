@@ -237,3 +237,105 @@ describe('account identity and cezar internal calls', () => {
     expect(by['run:p/a']).toBeCloseTo(9.9, 5);
   });
 });
+
+describe('recording gaps (QA F1)', () => {
+  const mark = (at: string, state: 'off' | 'on' | 'start'): LedgerRecord => ({ t: 'tracking', at: T(at), account: ACC, state });
+  const watch = (session: string, at: string, to: string): LedgerRecord[] => [
+    { t: 'begin', at: T(at), account: ACC, session, consumer: { id: 'mgr:m', kind: 'manager', title: 'QA Manager', managerId: 'm' }, part: 'watch' },
+    sample(session, at, to, 0.01), end(session, to, true),
+  ];
+
+  it('keeps usage spent while tracking was off as untracked, never on the last turn before it', () => {
+    // The QA repro: a quiet watch check, tracking off, untracked work, tracking on, a task turn.
+    const w = only([
+      reading('10:00', 30), ...watch('w', '10:00', '10:01'),
+      mark('10:02', 'off'), mark('10:09', 'on'), mark('10:09', 'start'),
+      task('a', 'run:p/a', '10:10'), reading('10:10', 38), sample('a', '10:10', '10:12', 1), end('a', '10:12'),
+      reading('10:13', 40),
+    ]);
+    expect(w.untrackedPp).toBe(8);
+    expect(w.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/a', 2]]);
+    expect(w.trackingGaps).toEqual([{ from: new Date(T('10:02')).toISOString(), to: new Date(T('10:09')).toISOString(), reason: 'tracking-off' }]);
+    expect(w.intervals?.[0]).toMatchObject({ outcome: 'untracked', reason: 'tracking-off', deltaPp: 8, allocations: [] });
+    expect(w.beforeTrackingPp + 2 + w.untrackedPp + w.outsideCezarPp + w.unsplitPp - w.correctionPp).toBe(40);
+  });
+
+  it('treats a restart (or CEZ_USAGE_LOG=0 in between) as a gap from the last record', () => {
+    const w = only([
+      reading('10:00', 30), task('a', 'run:p/a', '10:00'), sample('a', '10:00', '10:05', 1),
+      // no end: the process stopped mid-turn; the next one starts recording at 11:00
+      mark('11:00', 'start'), task('b', 'run:p/b', '11:00'), reading('11:00', 50),
+      sample('b', '11:00', '11:05', 1), end('b', '11:05'), reading('11:06', 53),
+    ]);
+    expect(w.untrackedPp).toBe(20);
+    expect(w.trackingGaps[0]).toMatchObject({ reason: 'not-recording', from: new Date(T('10:05')).toISOString() });
+    // The crashed pre-gap turn is not a candidate after the restart, open cap or not.
+    expect(w.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/b', 3]]);
+  });
+
+  it('waits for the first usable reading: turns before it are re-baselined, not charged', () => {
+    const w = only([
+      reading('10:00', 30), mark('10:02', 'off'), mark('10:20', 'on'),
+      // A turn after resuming that produced no reading of its own (a failed request).
+      task('a', 'run:p/a', '10:21'), end('a', '10:22'),
+      task('b', 'run:p/b', '10:30'), reading('10:30', 45), sample('b', '10:30', '10:32', 1), end('b', '10:32'), reading('10:33', 47),
+    ]);
+    expect(w.untrackedPp).toBe(15);
+    expect(w.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/b', 2]]);
+  });
+
+  it('a window that resets during the gap starts on its own baseline', () => {
+    const windows = computeWindows([
+      reading('09:00', 60, { resetsAt: T('10:00') }), mark('09:10', 'off'), mark('10:30', 'on'),
+      reading('10:31', 7), task('a', 'run:p/a', '10:31'), sample('a', '10:31', '10:40', 1), end('a', '10:40'), reading('10:41', 9),
+    ], { now: T('10:50') });
+    const [current, previous] = windows;
+    expect(previous).toMatchObject({ current: false, untrackedPp: 0, usedPercent: { first: 60, last: 60 } });
+    expect(current).toMatchObject({ current: true, beforeTrackingPp: 7, untrackedPp: 0 });
+    expect(current!.consumers.map((c) => c.estimatePp)).toEqual([2]);
+  });
+
+  it('a long idle stretch after a short turn is unknown, not the turn\'s alone', () => {
+    const w = only([
+      reading('10:00', 10), ...watch('w', '10:00', '10:01'),
+      // 2h of your own Claude Code use, then the next cezar turn reads the account.
+      task('b', 'run:p/b', '12:00'), reading('12:00', 30), end('b', '12:01'),
+    ]);
+    const watchShare = w.consumers.find((c) => c.id === 'mgr:m')?.estimatePp ?? 0;
+    // Covered: the turn plus 15 minutes of grace out of 120 minutes.
+    expect(watchShare).toBeCloseTo(20 * 16 / 120, 1);
+    expect(w.unsplitPp).toBeCloseTo(20 - 20 * 16 / 120, 1);
+  });
+});
+
+describe('a second process starting up', () => {
+  it('does not cut off a turn that kept recording in the first one', () => {
+    const w = only([
+      reading('10:00', 10), task('a', 'run:p/a', '10:00'), reading('10:05', 12),
+      { t: 'tracking', at: T('10:06'), account: ACC, state: 'start' }, // `cezar run` elsewhere
+      sample('a', '10:00', '10:20', 1), end('a', '10:20'), reading('10:21', 15),
+    ]);
+    // The slice the start lands in is unknown; the turn keeps what it spent before it.
+    expect(w.untrackedPp).toBe(3);
+    expect(w.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/a', 2]]);
+    const later = only([
+      reading('10:00', 10), task('a', 'run:p/a', '10:00'), reading('10:05', 12),
+      { t: 'tracking', at: T('10:06'), account: ACC, state: 'start' }, reading('10:07', 12),
+      sample('a', '10:00', '10:20', 1), end('a', '10:20'), reading('10:21', 15),
+    ]);
+    // After the next reading the live turn is a candidate again (its records continue).
+    expect(later.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/a', 5]]);
+  });
+});
+
+describe('the human view of a recording gap', () => {
+  it('prints the untracked share with its reason and time, the same number as the JSON', () => {
+    const records: LedgerRecord[] = [
+      reading('10:00', 30), { t: 'tracking', at: T('10:02'), account: ACC, state: 'off' },
+      { t: 'tracking', at: T('10:09'), account: ACC, state: 'on' }, reading('10:10', 38),
+    ];
+    const report = buildPlanUsageReport({ window: 'current' }, { records, now: T('10:20'), timeZone: 'UTC' });
+    expect(report.windows[0]!.untrackedPp).toBe(8);
+    expect(formatPlanUsageReport(report, T('10:20'), 'UTC')).toContain('  8%  not tracked (10:02–10:09 tracking off)');
+  });
+});

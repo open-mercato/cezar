@@ -18,6 +18,8 @@ const RESET_TOLERANCE = 10 * MINUTE;
 /** A session with no `end` (a crashed process) counts as running this long after its last sign. */
 const OPEN_SESSION_CAP = 2 * 60 * MINUTE;
 const EPS = 1e-9;
+/** Quiet time after a turn that still counts as that turn's (reading at the next turn's start). */
+const IDLE_GRACE = 15 * MINUTE;
 /** How long after a turn starts its own first reading may arrive. */
 const READING_LEAD = 20_000;
 
@@ -32,6 +34,8 @@ interface Session {
   end?: number;
   quiet?: boolean;
   samples: Sample[];
+  /** No `end` was recorded: `end` is the open-session bound, not evidence the turn was live. */
+  capped?: boolean;
 }
 interface Reading { at: number; used: number; status: PlanUsageReading['status']; source: PlanUsageReading['source'] }
 interface Share {
@@ -104,6 +108,72 @@ export interface Ledger {
   rawReadings: Array<{ account: string; kind: PlanUsageWindowKind; resetsAt: number } & Reading>;
   failures: Array<{ consumerId: string; since: number; at: number }>;
   labels: Map<string, string>;
+  /** Stretches an account was not recorded, by plain account key (QA F1). */
+  gaps: Map<string, Gap[]>;
+}
+
+export interface Gap { from: number; to: number | null; reason: 'tracking-off' | 'not-recording' }
+
+/**
+ * Where recording stopped and resumed. `off`…`on` is an explicit stretch; a `start` means this
+ * process began recording, so whatever happened since the account's previous record is unknown.
+ */
+function trackingGaps(markers: Array<Extract<LedgerRecord, { t: 'tracking' }>>, readings: Ledger['rawReadings'], sessions: Session[]): Map<string, Gap[]> {
+  const gaps = new Map<string, Gap[]>();
+  const seen = new Map<string, number[]>();
+  const note = (account: string, at: number) => {
+    const list = seen.get(account);
+    if (list) list.push(at);
+    else seen.set(account, [at]);
+  };
+  for (const r of readings) note(splitLogin(r.account).account, r.at);
+  for (const x of sessions) {
+    const account = splitLogin(x.account).account;
+    note(account, x.begin);
+    if (x.end !== undefined) note(account, x.end);
+    for (const sample of x.samples) note(account, sample.to);
+  }
+  for (const m of [...markers].sort((a, b) => a.at - b.at)) {
+    const list = gaps.get(m.account) ?? [];
+    const open = list.at(-1)?.to === null ? list.at(-1) : undefined;
+    if (m.state === 'off') {
+      if (!open) list.push({ from: m.at, to: null, reason: 'tracking-off' });
+    } else if (open) {
+      open.to = m.at;
+    } else if (m.state === 'start') {
+      const before = (seen.get(m.account) ?? []).filter((at) => at < m.at);
+      const from = before.length ? Math.max(...before) : m.at;
+      const last = list.at(-1);
+      // Nothing recorded since the previous gap closed (the usual `on` then `start`): one gap.
+      if (last && last.to !== null && from <= last.to) last.to = Math.max(last.to, m.at);
+      else list.push({ from, to: m.at, reason: 'not-recording' });
+    }
+    gaps.set(m.account, list);
+  }
+  return gaps;
+}
+
+/** The gap a slice crosses, if any: nobody can be named for usage across it. */
+function crossedGap(gaps: Gap[], a: number, b: number): Gap | undefined {
+  return gaps.find((g) => g.from < b && (g.to === null || g.to > a));
+}
+
+/** The last closed gap before `a`. */
+function lastGapBefore(gaps: Gap[], a: number): Gap | undefined {
+  let found: Gap | undefined;
+  for (const g of gaps) if (g.to !== null && g.to <= a && (!found || g.to > found.to!)) found = g;
+  return found;
+}
+
+/**
+ * Turns begun before a recording gap never carry over it (QA F1). One exception: a turn whose
+ * own records continue past a `not-recording` gap was live in another process the whole time
+ * (a second cockpit or `cezar run` starting up), so that gap did not interrupt it.
+ */
+function carriesOver(session: Session, gap: Gap | undefined): boolean {
+  if (!gap || session.begin >= gap.to!) return true;
+  if (gap.reason !== 'not-recording') return false;
+  return (!session.capped && session.end !== undefined && session.end > gap.to!) || session.samples.some((x) => x.to > gap.to!);
 }
 
 export function indexLedger(records: LedgerRecord[]): Ledger {
@@ -112,6 +182,7 @@ export function indexLedger(records: LedgerRecord[]): Ledger {
   const failures: Ledger['failures'] = [];
   const labels = new Map<string, string>();
   const latestConsumer = new Map<string, LedgerConsumer>();
+  const markers: Array<Extract<LedgerRecord, { t: 'tracking' }>> = [];
   for (const r of records) {
     if (r.t === 'reading') {
       rawReadings.push({ account: loginKey(r.account, r.identity), kind: r.window, resetsAt: r.resetsAt, at: r.at, used: r.usedPercent, status: r.status, source: r.source });
@@ -129,6 +200,9 @@ export function indexLedger(records: LedgerRecord[]): Ledger {
         s.end = r.at;
         if (r.quiet !== undefined) s.quiet = r.quiet;
       }
+    } else if (r.t === 'tracking') {
+      markers.push(r);
+      continue;
     } else failures.push({ consumerId: r.consumerId, since: r.since, at: r.at });
   }
   // A later title (auto-naming, a rename) wins for every session of that consumer.
@@ -136,7 +210,7 @@ export function indexLedger(records: LedgerRecord[]): Ledger {
     const latest = latestConsumer.get(s.consumer.id);
     if (latest?.title) s.consumer = { ...s.consumer, title: latest.title };
   }
-  return { sessions: [...sessions.values()], rawReadings, failures, labels };
+  return { sessions: [...sessions.values()], rawReadings, failures, labels, gaps: trackingGaps(markers, rawReadings, [...sessions.values()]) };
 }
 
 interface WindowSeed { account: string; kind: PlanUsageWindowKind; resetsAt: number; readings: Reading[]; supersededAt?: number }
@@ -195,11 +269,16 @@ function attribute(sessions: Session[], a: number, b0: number, delta: number): {
   if (consumerIds.size === 0) {
     return { shares: [], outside: delta, unsplit: 0, interval: { outcome: 'outside', weightUnit: null, allocations: [], outsideCezarPp: round(delta), unsplitPp: 0 } };
   }
-  // Someone in cezar ran: the slice is theirs (≈, since your own sessions are not excluded).
+  // Someone in cezar ran: the slice is theirs (≈, since your own sessions are not excluded) —
+  // except stretches longer than IDLE_GRACE with no cezar turn at all. The next reading also
+  // carries the last turn's spend, so that time is unknown, never the short turn's alone (QA F1).
   const outside = 0;
-  const inside = delta;
+  const span = b - a;
+  const busy = unionLength(active.map((x) => [x.start, Math.min(b, x.stop + IDLE_GRACE)] as [number, number]));
+  const idleUnsplit = span > 0 && busy < span ? delta * (span - busy) / span : 0;
+  const inside = delta - idleUnsplit;
   const shares: Share[] = [];
-  let unsplit = 0;
+  let unsplit = idleUnsplit;
   let unit: 'usd' | 'tokens' | null = null;
 
   if (consumerIds.size === 1) {
@@ -297,7 +376,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
   const startsAt = seed.resetsAt - DURATION[seed.kind];
   const end = seed.supersededAt ?? seed.resetsAt;
   const sessions = ledger.sessions.filter((s) => s.account === seed.account && s.begin < end && sessionEnd(s, now) > startsAt)
-    .map((s) => (s.end === undefined ? { ...s, end: sessionEnd(s, now) } : s));
+    .map((s) => (s.end === undefined ? { ...s, end: sessionEnd(s, now), capped: true } : s));
   const readings = seed.readings;
   const first = readings[0]!;
   let hwm = first.used;
@@ -308,15 +387,32 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
   let unsplit = 0;
   const shares: Share[] = [];
   const intervals: PlanUsageInterval[] = [];
+  const gaps = ledger.gaps.get(splitLogin(seed.account).account) ?? [];
+  let untracked = 0;
   for (let i = 1; i < readings.length; i++) {
+    const prev = readings[i - 1]!;
     const cur = readings[i]!;
+    const gap = crossedGap(gaps, prev.at, cur.at);
+    if (gap) {
+      // Across a recording gap the provider total stands, but nobody is charged; the first
+      // reading after it is the new baseline (QA F1).
+      if (cur.used > hwm) {
+        untracked += cur.used - hwm;
+        if (options.intervals) intervals.push({ from: new Date(prev.at).toISOString(), to: new Date(cur.at).toISOString(), deltaPp: round(cur.used - hwm), outcome: 'untracked', reason: gap.reason, weightUnit: null, allocations: [], outsideCezarPp: 0, unsplitPp: 0 });
+        hwm = cur.used;
+      }
+      hwmAt = cur.at;
+      continue;
+    }
     if (cur.used <= hwm) continue;
     const delta = cur.used - hwm;
     const from = hwmAt;
     hwm = cur.used;
     hwmAt = cur.at;
-    // The slice since the high-water reading, not since a later flat or lower (corrected) one.
-    const result = attribute(sessions, from, cur.at, delta);
+    // The slice since the high-water reading, not since a later flat or lower (corrected) one;
+    // turns begun before the last recording gap never carry over it.
+    const gapBefore = lastGapBefore(gaps, from);
+    const result = attribute(sessions.filter((x) => carriesOver(x, gapBefore)), from, cur.at, delta);
     outside += result.outside;
     unsplit += result.unsplit;
     for (const share of result.shares) shares.push({ ...share, interval: i });
@@ -397,6 +493,9 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
     beforeTrackingPp: round(first.used),
     outsideCezarPp: round(outside),
     unsplitPp: round(unsplit),
+    untrackedPp: round(untracked),
+    trackingGaps: gaps.filter((g) => g.from <= end && (g.to === null || g.to >= startsAt))
+      .map((g) => ({ from: new Date(g.from).toISOString(), to: g.to === null ? null : new Date(g.to).toISOString(), reason: g.reason })),
     correctionPp: round(correction),
     leftPp: round(Math.max(0, 100 - last.used)),
     ...(options.intervals ? { intervals } : {}),

@@ -38,7 +38,8 @@ describe('the plan-usage ledger store', () => {
     t.ui({ type: 'turn.completed' });
     t.close();
     const records = readLedger(1);
-    expect(records.map((r) => r.t)).toEqual(['reading', 'begin', 'end', 'sample']);
+    expect(records.map((r) => r.t)).toEqual(['tracking', 'reading', 'begin', 'end', 'sample']);
+    expect(records[0]).toMatchObject({ t: 'tracking', account: 'claude:default', state: 'start' });
     const end = records.find((r) => r.t === 'end')!;
     const sample = records.find((r) => r.t === 'sample')!;
     expect(sample.t === 'sample' && end.t === 'end' && sample.to).toBe(end.t === 'end' ? end.at : -1);
@@ -52,9 +53,10 @@ describe('the plan-usage ledger store', () => {
     setAccountTracking('claude:work', false);
     recordUsageObservation({ key: 'claude:work' }, obs(10, Date.now()));
     new PlanUsageTracker('claude', { key: 'claude:work' }, { id: 'run:p/a', kind: 'task', title: 'A' }).ui({ type: 'turn.started' });
-    expect(readLedger(1)).toEqual([]);
+    // Only the switch's own boundary, never usage.
+    expect(readLedger(1).map((r) => r.t === 'tracking' && r.state)).toEqual(['off']);
     recordUsageObservation({ key: 'claude:default' }, obs(12, Date.now()));
-    expect(readLedger(1)).toHaveLength(1);
+    expect(readLedger(1).filter((r) => r.t === 'reading')).toHaveLength(1);
   });
 
   it('drops day files older than 90 days on write and skips a torn line', () => {
@@ -64,7 +66,20 @@ describe('the plan-usage ledger store', () => {
     writeFileSync(join(ledgerDir(), `${today}.ndjson`), '{"t":"end","at":1,"sess');
     recordUsageObservation({ key: 'claude:default' }, obs(20, Date.now()));
     expect(readdirSync(ledgerDir())).toEqual([`${today}.ndjson`]);
-    expect(readLedger(1).map((r) => r.t)).toEqual(['reading']);
+    expect(readLedger(1).map((r) => r.t)).toEqual(['tracking', 'reading']);
+  });
+
+  it('marks the off/on boundary and a process start, and survives a restart with the account off', () => {
+    recordUsageObservation({ key: 'claude:default' }, obs(30, Date.now()));
+    setAccountTracking('claude:default', false);
+    resetLedgerCaches(); // a restart: the opt-out is read back from disk
+    recordUsageObservation({ key: 'claude:default' }, obs(40, Date.now()));
+    expect(readLedger(1).filter((r) => r.t === 'reading')).toHaveLength(1);
+    setAccountTracking('claude:default', true);
+    setAccountTracking('claude:default', true); // idempotent: no second boundary
+    recordUsageObservation({ key: 'claude:default' }, obs(41, Date.now()));
+    expect(readLedger(1).flatMap((r) => (r.t === 'tracking' ? [r.state] : r.t === 'reading' ? [`r${r.usedPercent}`] : [])))
+      .toEqual(['start', 'r30', 'off', 'on', 'start', 'r41']);
   });
 
   it('serves the contract shapes, and the tracking switch round-trips', async () => {
