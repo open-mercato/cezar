@@ -17,7 +17,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
@@ -135,17 +135,13 @@ export async function acquireVersionsLock(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
-    let owner = NaN;
-    try {
-      owner = Number(readFileSync(path, 'utf8').trim());
-    } catch {
-      continue; // released between the open and the read
-    }
-    const stale = Number.isInteger(owner) && owner > 0
-      ? !isAlive(owner)
-      : Date.now() - safeMtime(path) > UNREADABLE_LOCK_STALE_MS;
+    const held = readLockOwner(path);
+    if (!held) continue; // released between the open and the read
+    const stale = Number.isInteger(held.owner) && held.owner > 0
+      ? !isAlive(held.owner)
+      : Date.now() - held.mtimeMs > UNREADABLE_LOCK_STALE_MS;
     if (stale) {
-      rmSync(path, { force: true });
+      breakStaleLock(path, held.owner);
       continue;
     }
     if (Date.now() >= deadline) return null;
@@ -153,13 +149,42 @@ export async function acquireVersionsLock(
   }
 }
 
-function safeMtime(path: string): number {
+/** The lock's owner pid and mtime, read through one descriptor so both describe the same file. */
+function readLockOwner(path: string): { owner: number; mtimeMs: number } | null {
+  let fd: number;
   try {
-    return statSync(path).mtimeMs;
+    fd = openSync(path, 'r');
   } catch {
-    return Date.now();
+    return null;
+  }
+  try {
+    return { owner: Number(readFileSync(fd, 'utf8').trim()), mtimeMs: fstatSync(fd).mtimeMs };
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
   }
 }
+
+/**
+ * Remove a dead owner's lock without racing another breaker: move it aside atomically, and if what
+ * moved is not the dead owner's (someone broke it and re-took it meanwhile), link it back — `link`
+ * fails rather than clobbering a lock taken since.
+ */
+function breakStaleLock(path: string, deadOwner: number): void {
+  const aside = `${path}.stale-${process.pid}-${Date.now()}`;
+  try {
+    renameSync(path, aside);
+  } catch {
+    return; // already gone
+  }
+  const moved = readLockOwner(aside);
+  if (moved && moved.owner !== deadOwner && !(Number.isNaN(moved.owner) && Number.isNaN(deadOwner))) {
+    try { linkSync(aside, path); } catch { /* a newer lock exists; ours was stale anyway */ }
+  }
+  rmSync(aside, { force: true });
+}
+
 
 // ---- in-use leases ---------------------------------------------------------------------------
 
