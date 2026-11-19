@@ -594,7 +594,7 @@ function ActivityNotice({ at, activity }: { at: string; activity: ManagerActivit
   const counted = [activity.taskUpdates, activity.automationReports, activity.checksSkipped, activity.jobRunsSkipped].some((value) => value !== undefined)
   return (
     <div data-slot="manager-activity-notice" data-change={activity.change} className="flex flex-col gap-2.5">
-      <p role="separator" className="flex items-center gap-2.5 text-meta text-soft-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
+      <p role="separator" className="flex items-center gap-2.5 text-meta text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
         <Icon aria-hidden="true" className="size-3.5 shrink-0" />
         {reactivated ? 'Reactivated' : 'Deactivated'} by you · {time}
       </p>
@@ -607,7 +607,7 @@ function ActivityNotice({ at, activity }: { at: string; activity: ManagerActivit
           {count(activity.checksSkipped, 'check')}{activity.checksSkipped !== undefined ? ' skipped' : null}
           {count(activity.jobRunsSkipped, 'job run')}{activity.jobRunsSkipped !== undefined ? ' skipped' : null}
           {activity.catchUp ? <span>catching up now</span> : null}
-          <span className="text-soft-foreground">posted by cezar · no model call</span>
+          <span className="text-muted-foreground">posted by cezar · no model call</span>
         </div>
       ) : null}
     </div>

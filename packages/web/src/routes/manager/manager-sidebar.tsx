@@ -319,7 +319,7 @@ export const ManagerSidebarRow = memo(function ManagerSidebarRow({
           </span>
           <span
             data-slot="manager-row-preview"
-            className={cn('block truncate text-label', inactive ? 'text-soft-foreground' : attention === 'needs-you' ? 'text-info' : 'text-muted-foreground')}
+            className={cn('block truncate text-label', inactive ? 'text-muted-foreground' : attention === 'needs-you' ? 'text-info' : 'text-muted-foreground')}
           >
             {managerRowPreview(manager)}
           </span>
