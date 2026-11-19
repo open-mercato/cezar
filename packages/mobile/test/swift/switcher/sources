@@ -1,0 +1,4 @@
+# The device switcher's plain classes, with the shell and relay classes they read.
+ios/App/App/Shell/*.swift
+ios/App/App/Shell/Relay/*.swift
+ios/App/App/Shell/Switcher/*.swift

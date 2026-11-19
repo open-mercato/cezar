@@ -99,39 +99,40 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
         <EnginePills pick={engine} onChange={setEngine} accounts disabled={start.isPending || !resolved.canRun} />
         <AgentProviderGate resolved={resolved} dataSlot="tracker-provider-gate" />
       </div>
-      {validSkills.length ? <div className="mt-2.5 flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}
+      {validSkills.length ? <div className="mt-2.5 flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex h-[26px] items-center gap-1 rounded-full border border-border bg-muted px-2 font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}
       {workflow === null && validSkills.length >= MAX_CHAIN_STEPS ? (
-        <p className={`mt-2 text-xs ${skillChainOverLimit ? 'text-danger' : 'text-muted-foreground'}`}>
+        <p className={`mt-2 text-label ${skillChainOverLimit ? 'text-danger' : 'text-muted-foreground'}`}>
           Skill chains support at most {MAX_CHAIN_STEPS} skills. Remove one before selecting another.
         </p>
       ) : null}
       {losses.length || emptyDescription ? (
         <div className="mt-3 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm">
           <p className="font-medium">{losses.length ? 'This provider snapshot lost some issue content.' : 'This issue has no description.'}</p>
-          {losses.length ? <ul className="mt-1 list-disc pl-5 text-xs">{losses.map((loss) => <li key={loss}>{loss}</li>)}</ul> : <p className="mt-1 text-xs">Add any context the agent needs before starting.</p>}
-          {losses.length ? <a className="mt-2 inline-block text-xs text-violet underline underline-offset-4" href={item.url} target="_blank" rel="noreferrer">Review the source issue</a> : null}
-          <label className="mt-3 block text-xs font-medium" htmlFor="tracker-supplemental">Supplemental context</label>
+          {losses.length ? <ul className="mt-1 list-disc pl-5 text-label">{losses.map((loss) => <li key={loss}>{loss}</li>)}</ul> : <p className="mt-1 text-label">Add any context the agent needs before starting.</p>}
+          {losses.length ? <a className="mt-2 inline-block text-label text-violet underline underline-offset-4" href={item.url} target="_blank" rel="noreferrer">Review the source issue</a> : null}
+          <label className="mt-3 block text-label font-medium" htmlFor="tracker-supplemental">Supplemental context</label>
           <Textarea id="tracker-supplemental" value={supplemental} onChange={(event) => setSupplemental(event.target.value)} placeholder="Paste any missing context here…" className="mt-1 min-h-20 bg-background" />
-          {losses.length ? <label className="mt-2 flex items-start gap-2 text-xs">
+          {losses.length ? <label className="mt-2 flex items-start gap-2 text-label">
             <input type="checkbox" checked={acknowledgeLoss} onChange={(event) => setAcknowledgedSnapshot(event.target.checked ? snapshotIdentity : null)} />
             I understand the agent receives this snapshot and the supplemental context above.
           </label> : null}
         </div>
       ) : null}
-      <label className="mt-3 block text-xs font-medium" htmlFor="tracker-instruction">Custom instruction</label>
+      <label className="mt-3 block text-label font-medium" htmlFor="tracker-instruction">Custom instruction</label>
       <Textarea id="tracker-instruction" aria-keyshortcuts="Control+Enter Meta+Enter" onKeyDown={event => { if (isSubmitShortcut(event.nativeEvent)) { event.preventDefault(); if (canSubmit) start.mutate() } }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Optional instructions; these are placed last in the task." className="mt-1 min-h-20 text-ui" />
       <div className="mt-1 flex justify-between text-meta text-muted-foreground">
         <span>{composition.error ?? 'Full tracker detail and source link are included. Comments, attachments, and custom fields are outside the snapshot.'}</span>
         <span>{composition.task.length.toLocaleString()} / {TRACKER_TASK_LIMIT.toLocaleString()}</span>
       </div>
-      {scopePending ? <p role="status" className="mt-3 text-xs text-muted-foreground">Verifying tracker connection…</p> : null}
-      {detailUnavailable ? <p role="status" className="mt-3 text-xs text-danger">Issue detail could not be verified. Retry successfully before starting the agent; your draft is preserved.</p> : null}
+      {scopePending ? <p role="status" className="mt-3 text-label text-muted-foreground">Verifying tracker connection…</p> : null}
+      {detailUnavailable ? <p role="status" className="mt-3 text-label text-danger">Issue detail could not be verified. Retry successfully before starting the agent; your draft is preserved.</p> : null}
       <div className="mt-4 flex flex-wrap items-center gap-2.5">
         <Button variant="contrast" onClick={() => start.mutate()} disabled={!canSubmit}>
           <PlayIcon className="size-3.5" /> Run agent on this issue
         </Button>
         <kbd aria-hidden="true" className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-micro font-medium text-muted-foreground">{submitShortcutHint()}</kbd>
-        {queued ? <span className="flex items-center gap-1 text-xs text-success"><CheckIcon className="size-3" /> queued · <Link className="text-violet hover:underline" to={`/tasks/${queued}`}>View task →</Link></span> : null}
+        {/* Queued is grey in the status grammar (owner: queued = neutral); the link is the accent. */}
+        {queued ? <span className="flex items-center gap-1 text-label font-medium text-muted-foreground"><CheckIcon className="size-3" /> queued · <Link className="text-violet hover:underline" to={`/tasks/${queued}`}>View task →</Link></span> : null}
       </div>
     </section>
   )

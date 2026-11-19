@@ -79,8 +79,11 @@ describe('EventBlock', () => {
 
     expect(block()?.style.top).toBe(`${(240 / 60) * HOUR_H + 1}px`)
     expect(block()?.className).toContain('h-6')
+    expect(block()?.getAttribute('aria-label')).toBe('Nightly dependency bump · 04:00')
+    // The 24px block truncates the name; the native title reveals it with its time.
     expect(block()?.getAttribute('title')).toBe('Nightly dependency bump · 04:00')
     expect(block()?.textContent).toBe('Nightly dependency bump')
+
   })
 
   it('stacks 26px lower per same-minute sibling', () => {

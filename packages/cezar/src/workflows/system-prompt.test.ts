@@ -44,12 +44,14 @@ describe('resolveExtraSystemPrompt', () => {
     expect(resolveExtraSystemPrompt(override, configDefault)).toBe(expected);
   });
 
-  it('global instructions alone ride along unlabelled', () => {
-    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe('Global rule');
-    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe('Global rule');
+  it('labels global instructions even without a project prompt, so repository rules cannot override them', () => {
+    const expected = `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule`;
+    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe(expected);
+    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe(expected);
+    expect(GLOBAL_INSTRUCTIONS_HEADING).toContain('take precedence over repository, project, workflow and skill instructions');
   });
 
-  it('merges global FIRST and the project prompt after it, labelled as winning', () => {
+  it('merges global FIRST and the project prompt after it, labelled as yielding', () => {
     const merged = resolveExtraSystemPrompt(undefined, 'Project rule', 'Global rule');
     expect(merged).toBe(
       `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule\n\n---\n\n${PROJECT_INSTRUCTIONS_HEADING}\n\nProject rule`,
@@ -364,10 +366,31 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(after?.prNumber).toBe(437);
   }, 30_000);
 
+  it('turn-end refresh renames once, then the title settles (#1252)', async () => {
+    type Seam = {
+      maybeRefreshTitle(id: string, text: string): Promise<void>;
+      lastNamerKey: Map<string, string>;
+      namerInFlight: Map<string, Promise<unknown>>;
+    };
+    const seam = manager as unknown as Seam;
+    const record = manager.startRun(skillWorkflow, { task: '437' });
+    store.updateRun(record.id, { titleOrigin: 'auto' });
+    await seam.maybeRefreshTitle(record.id, 'fixed the watchdog race');
+    await seam.namerInFlight.get(record.id);
+    expect(store.getRun(record.id)?.titleSummary).toBe('437: implementing cr fixes');
+    expect(store.getRun(record.id)?.titleSettled).toBe(true);
+
+    // Settled → a later turn on another topic never re-runs the namer.
+    await seam.maybeRefreshTitle(record.id, 'moved on to another topic');
+    expect(seam.lastNamerKey.get(record.id)).toContain('fixed the watchdog race');
+    expect(seam.namerInFlight.has(record.id)).toBe(false);
+  }, 30_000);
+
   it('turn-end refresh skips under CEZ_DRY_RUN and when the toggle or ownership forbids it', async () => {
     type Seam = {
       maybeRefreshTitle(id: string, text: string): Promise<void>;
       lastNamerKey: Map<string, string>;
+      namerInFlight: Map<string, Promise<unknown>>;
     };
     const seam = manager as unknown as Seam;
     const record = manager.startRun(skillWorkflow, { task: '437' });
@@ -399,11 +422,16 @@ describe('systemPrompt end-to-end (dry run)', () => {
       expect(seam.lastNamerKey.has(record.id)).toBe(false);
 
       // Namer-owned + toggle ON → the key is recorded (the call itself fails
-      // fast on the fake binary and leaves the title as-is), and the SAME
-      // inputs never record twice.
+      // fast on the fake binary and leaves the title as-is). A failed namer
+      // does NOT settle the title, so the next turn end retries (#1252).
       store.updateRun(record.id, { titleOrigin: 'auto' });
       await seam.maybeRefreshTitle(record.id, 'progress worth naming');
       expect(seam.lastNamerKey.get(record.id)).toContain('progress worth naming');
+      await seam.namerInFlight.get(record.id);
+      expect(store.getRun(record.id)?.titleSettled).toBeUndefined();
+      await seam.maybeRefreshTitle(record.id, 'moved on to another topic');
+      expect(seam.lastNamerKey.get(record.id)).toContain('moved on to another topic');
+      await seam.namerInFlight.get(record.id);
     } finally {
       if (savedDry === undefined) delete process.env.CEZ_DRY_RUN;
       else process.env.CEZ_DRY_RUN = savedDry;

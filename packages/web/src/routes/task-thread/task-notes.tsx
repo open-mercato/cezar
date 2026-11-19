@@ -9,8 +9,11 @@ import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { LayoutCards } from '../task-workspace/layout-cards'
 import { FIXED_VIEW_ORDER, VIEW_PATHS } from '../task-workspace/layout-state'
 import { stripEntries, useStripKeyHints } from '../task-workspace/strip'
+import { cn } from '@/lib/utils'
+
 import { Markdown } from './markdown'
 import { RunHeader } from './run-header'
+import { THREAD_PROSE_MEASURE } from './thread-items'
 
 /**
  * `/tasks/:id/notes` — the handoff journal (spec 007) as its own tab: what the agent did and
@@ -47,6 +50,7 @@ function NotesHeader({ run }: { run: ApiRun }) {
   const strip = useMemo(() => stripEntries(fixedViews), [fixedViews])
   const { hints, show } = useStripKeyHints(strip)
   const assetCount = useRunArtifacts(run.id).data?.artifacts?.length ?? 0
+  const changedFiles = run.diffStat?.files ?? 0
   const tabs = useMemo(
     () => (
       <LayoutCards
@@ -61,10 +65,14 @@ function NotesHeader({ run }: { run: ApiRun }) {
         notesHref={`/tasks/${run.id}/notes`}
         notesActive
         showLayouts={false}
-        badges={assetCount > 0 ? { assets: assetCount } : undefined}
+        badges={
+          assetCount > 0 || changedFiles > 0
+            ? { ...(assetCount > 0 ? { assets: assetCount } : {}), ...(changedFiles > 0 ? { changes: changedFiles } : {}) }
+            : undefined
+        }
       />
     ),
-    [fixedViews, navigate, run.id, hints, show, assetCount],
+    [fixedViews, navigate, run.id, hints, show, assetCount, changedFiles],
   )
   return <RunHeader run={run} tab="notes" tabs={tabs} wide />
 }
@@ -74,15 +82,15 @@ const noop = () => {}
 function NotesBody({ runId }: { runId: string }) {
   const handoff = useRunHandoff(runId)
   return (
-    <div data-slot="notes-panel">
+    <div data-slot="notes-panel" className={cn('leading-[1.65]', THREAD_PROSE_MEASURE)}>
       {handoff.isPending ? (
-        <p className="text-xs text-soft-foreground">Loading notes…</p>
+        <p className="text-label text-soft-foreground">Loading notes…</p>
       ) : handoff.isError ? (
-        <p className="text-xs text-danger">{handoff.error.message}</p>
+        <p className="text-label text-danger">{handoff.error.message}</p>
       ) : handoff.data.trim().length > 0 ? (
         <Markdown>{handoff.data}</Markdown>
       ) : (
-        <p className="text-xs text-soft-foreground">
+        <p className="text-label text-muted-foreground">
           No notes yet — the handoff file is seeded when the task starts.
         </p>
       )}

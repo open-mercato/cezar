@@ -90,7 +90,7 @@ describe('FolderBrowser root boundary guidance (#1688)', () => {
     let resolveBrowse: ((response: Response) => void) | undefined
     fetchMock.mockImplementation(() => new Promise<Response>((resolve) => { resolveBrowse = resolve }))
     renderBrowser()
-    expect(screen.getByText('Loading…')).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Loading folder…' }).getAttribute('aria-busy')).toBe('true')
     expect(hint()).toBeNull()
     expect(screen.queryByRole('link')).toBeNull()
     await waitFor(() => expect(resolveBrowse).toBeTypeOf('function'))

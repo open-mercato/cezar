@@ -347,6 +347,17 @@ describe('usableRunners', () => {
     expect(usableRunners(status)).toEqual(['junie'])
   })
 
+  it('includes omp when its probe answers unknown — its login may live only in the keychain', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'unknown', enabled: true },
+        { provider: 'omp', status: 'unknown', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual(['omp'])
+  })
+
   it('allows enabled Antigravity when unknown — its `agy models` probe needs the network', () => {
     // The live failure: a network blip left agy `unknown`, and Continue fell back to claude.
     const status: ProviderStatusResponse = {

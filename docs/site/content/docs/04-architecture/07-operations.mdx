@@ -86,7 +86,7 @@ The procedure below follows Cezar's file layout. It is an operational recommenda
 | 502 from the reverse proxy | Check the service and its logs, then make a local GET `/api/v1/health` request. The service name depends on the instance. |
 | 403 when writing through the proxy | Check that Origin and Host match, including the port. Nginx should forward $http_host without stripping the port. |
 | CLI cannot find tasks | Check `CEZ_API_URL`, the actual server port, and `CEZ_PROJECT_ID`. |
-| Empty shell output / temp directory error | Check free space, quota, and inodes on the repository disk. The task temporary directory is `.ai/cezar/tmp/<id>`. |
+| Empty shell output / temp directory error | Check free space, quota, and inodes on the repository disk. The task temporary directory is `~/.cezar/tmp/agent/<project>/<id>`, outside the repository. |
 | Project missing after restart | Check `CEZ_HOME` and the project registry before adding directories again. |
 
 ```bash

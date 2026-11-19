@@ -1,11 +1,12 @@
 import { useAgentProfiles, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun } from '@open-mercato/cezar-api-client'
-import { PickerPill } from '@/components/picker-pill'
+import { chipClass } from '@/components/chip'
 import { modelsForRunner } from '@/routes/new-task-form'
+import { cn } from '@/lib/utils'
 
 /**
  * Which agent, account and model a run is ON — the one resolution the header's agent badge and
- * the composer's read-only engine pills both read, so the two can never name different engines.
+ * the composer's read-only engine chip both read, so the two can never name different engines.
  */
 export function useRunEngine(run: ApiRun) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
@@ -41,11 +42,11 @@ export function useRunEngine(run: ApiRun) {
 }
 
 /**
- * The composer's engine pills while there is nothing to pick: a live session cannot change engine
- * mid-turn, and a closed run with no session has nothing to reopen. Same chips as the editable
- * follow-up pills (`follow-up-engine.tsx`) in their read-only form, so the chat box always says
- * which agent and model it is talking to — and the editable pair simply takes their place once a
- * Continue can choose.
+ * The composer's `agent · model` chip while there is nothing to pick: a live session cannot change
+ * engine mid-turn, and a closed run with no session has nothing to reopen. The same shape as the
+ * editable chip (`follow-up-engine.tsx`) in its read-only form, so the chat box always says which
+ * agent and model it is talking to — and the editable one simply takes its place once a Continue
+ * can choose.
  */
 export function RunEnginePills({ run }: { run: ApiRun }) {
   const engine = useRunEngine(run)
@@ -56,27 +57,16 @@ export function RunEnginePills({ run }: { run: ApiRun }) {
   const modelLabel = models.find((preset) => preset.id === engine.model)?.label ?? engine.model
   const hint = 'The session’s engine — pick another when you continue it'
   return (
-    <div data-slot="run-engine" className="flex flex-wrap items-center gap-1.5">
-      <PickerPill
-        slot="run-engine-runner"
-        ariaLabel="Agent"
-        label={engine.account && engine.account !== 'default' ? `${engine.runner} · ${engine.account}` : engine.runner}
-        value={engine.runner}
-        options={[]}
-        onPick={() => {}}
-        readOnly
-        hint={hint}
-      />
-      <PickerPill
-        slot="run-engine-model"
-        ariaLabel="Model"
-        label={modelLabel}
-        value={engine.model}
-        options={[]}
-        onPick={() => {}}
-        readOnly
-        hint={engine.identity ? `${hint} (served as ${engine.identity})` : hint}
-      />
-    </div>
+    <span
+      data-slot="run-engine"
+      title={engine.identity ? `${hint} (served as ${engine.identity})` : hint}
+      className={cn(chipClass, 'cursor-default hover:bg-card hover:text-muted-foreground')}
+    >
+      <span data-slot="run-engine-runner" aria-label="Agent">
+        {engine.account && engine.account !== 'default' ? `${engine.runner} · ${engine.account}` : engine.runner}
+      </span>
+      <span aria-hidden="true" className="text-soft-foreground">·</span>
+      <span data-slot="run-engine-model" aria-label="Model">{modelLabel}</span>
+    </span>
   )
 }

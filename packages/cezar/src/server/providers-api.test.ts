@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,6 +60,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  omp: '18.4.2',
   // `agy models` lists the signed-in account's models (live agy 1.4.0 output).
   antigravity: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)',
   // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
@@ -81,6 +82,11 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   pi: 'No models available. Use /login to authenticate.',
   junie: 'Junie version: 26.9.22 (3419.7)',
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
+  // omp has no disconnected answer: `--version` is the only probe and it says nothing about a
+  // login. Its credential evidence is read off the injected env / agent dir (pinned in
+  // `beforeEach` below), so the state map's `disconnected` for omp exercises the exit-1 path only
+  // (→ `unknown`); the unknown/connected branches live in `core/provider-auth.test.ts`.
+  omp: '18.4.2',
   antigravity: 'Please sign in',
   gemini: '0.60.0',
   kimi: 'No providers configured.',
@@ -88,7 +94,7 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
 
 const providerForExecutable = (executable: string): ProviderId => {
   const name = basename(executable);
-  if (name === 'claude' || name === 'codex' || name === 'opencode' || name === 'pi' || name === 'junie' || name === 'copilot' || name === 'kimi') return name as ProviderId;
+  if (name === 'claude' || name === 'codex' || name === 'opencode' || name === 'pi' || name === 'junie' || name === 'copilot' || name === 'omp' || name === 'kimi') return name as ProviderId;
   if (name === 'agy') return 'antigravity';
   if (name === 'gemini') return 'gemini';
   // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
@@ -117,6 +123,8 @@ describe('workspace provider API', () => {
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedRemote = process.env.CEZ_REMOTE;
+  const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let ompAgentDir: string;
   const savedGeminiKey = process.env.GEMINI_API_KEY;
 
   beforeEach(() => {
@@ -125,6 +133,10 @@ describe('workspace provider API', () => {
     delete process.env.CEZ_AGENT_MODELS_LOCKED;
     delete process.env.CEZ_DRY_RUN;
     delete process.env.CEZ_REMOTE;
+    // omp reads its login evidence off the host: pin an agent.db so the suite is hermetic.
+    ompAgentDir = mkdtempSync(join(tmpdir(), 'cez-omp-agent-'));
+    writeFileSync(join(ompAgentDir, 'agent.db'), '');
+    process.env.PI_CODING_AGENT_DIR = ompAgentDir;
     // Gemini's connected-ness is an environment read, not a probe output: give it a key so the
     // stubbed "every provider connected" host really is one.
     process.env.GEMINI_API_KEY = 'AIza-test-key';
@@ -137,6 +149,9 @@ describe('workspace provider API', () => {
     else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
+    rmSync(ompAgentDir, { recursive: true, force: true });
+    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
     else process.env.CEZ_REMOTE = savedRemote;
     if (savedGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
@@ -231,6 +246,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'omp', status: 'connected', enabled: true },
         { provider: 'antigravity', status: 'connected', enabled: true },
         { provider: 'gemini', status: 'connected', enabled: true },
         { provider: 'kimi', status: 'connected', enabled: true },
@@ -257,6 +273,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'omp', status: 'connected', enabled: true },
         { provider: 'antigravity', status: 'connected', enabled: true },
         { provider: 'gemini', status: 'connected', enabled: true },
         { provider: 'kimi', status: 'connected', enabled: true },

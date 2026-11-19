@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { discoverCursorModels, parseCursorModelsOutput } from './cursor-model-catalog.ts';
 
 describe('parseCursorModelsOutput', () => {
+  it('strips terminal colours from model ids and labels', () => {
+    expect(parseCursorModelsOutput('\u001b[32mcomposer-2.5\u001b[0m - \u001b[1mComposer 2.5\u001b[0m'))
+      .toEqual([{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }]);
+  });
+
   it('parses id/label lines and skips auto, headers, and tips', () => {
     const models = parseCursorModelsOutput(`Available models
 

@@ -33,6 +33,7 @@ describe('webhook history navigation and mobile boundaries', () => {
     // Do not serialize the returned signing secret.
   })
   const openList = () => {
+    // Repeated full-document entries must not leak document-owned SSE connections.
     browser.goto(`${url}/p/${project}/settings/webhooks`)
     browser.waitForFunction("document.querySelector('article h3') !== null")
   }

@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiScope, type E2eStatus } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
@@ -39,6 +39,18 @@ function setup(options: { status?: E2eStatus; runStatus?: string; postStatus?: n
   return calls
 }
 
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+const providerValue = () => screen.getByRole('combobox', { name: 'Model provider' }).getAttribute('data-value')
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
+
 describe('TesterArmy e2e card', () => {
   it('shows what the project lacks and offers one button', async () => {
     setup()
@@ -51,7 +63,7 @@ describe('TesterArmy e2e card', () => {
   it('starts the setup with the key and opens the setup task', async () => {
     const calls = setup()
     await screen.findByText('Not configured in this checkout')
-    fireEvent.change(screen.getByLabelText('Model provider'), { target: { value: 'OPENAI_API_KEY' } })
+    await pick(screen.getByRole('combobox', { name: 'Model provider' }), /OpenAI \(OPENAI_API_KEY\)/)
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
     fireEvent.click(screen.getByRole('button', { name: 'Set up e2e' }))
     await screen.findByText('task page')
@@ -79,7 +91,7 @@ describe('TesterArmy e2e card', () => {
     setup({ status: { configFile: 'e2e.config.ts', workflow: true, credentials: ['AI_GATEWAY_API_KEY'], setup: { runId: 'run-1', status: 'done' } } })
     await screen.findByText('e2e.config.ts')
     expect(screen.getByText('AI_GATEWAY_API_KEY')).toBeTruthy()
-    expect((screen.getByLabelText('Model provider') as HTMLSelectElement).value).toBe('AI_GATEWAY_API_KEY')
+    expect(providerValue()).toBe('AI_GATEWAY_API_KEY')
     expect(screen.getByRole('button', { name: 'Set up again' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open the setup task' }).getAttribute('href')).toBe('/p/default/tasks/run-1')
   })
@@ -101,7 +113,11 @@ describe('TesterArmy e2e card', () => {
   it('preselects the provider whose key is already stored', async () => {
     setup({ status: { ...EMPTY, credentials: ['OPENAI_API_KEY'] } })
     await screen.findByText('OPENAI_API_KEY')
-    expect((screen.getByLabelText('Model provider') as HTMLSelectElement).value).toBe('OPENAI_API_KEY')
+    expect(providerValue()).toBe('OPENAI_API_KEY')
+    // Design-system controls: no native select, the shared Input, status in a dotted Pill.
+    expect(document.querySelector('select:not([aria-hidden="true"])')).toBeNull()
+    expect(screen.getByLabelText('API key').getAttribute('data-slot')).toBe('input')
+    expect(document.querySelector('[data-slot="e2e-badge"] [data-slot="status-dot"]')).not.toBeNull()
   })
 
   it('links the draft PR a finished setup opened', async () => {
