@@ -26,7 +26,8 @@ import { CardNote, FormRow, SettingsCard, useSavedFlash } from './form-row'
  * and the server refreshes the shared semaphore so a change takes effect without a restart.
  *
  * Worktree retention stayed behind in the PROJECT settings (worktrees-section.tsx) — it sizes
- * one repo's own worktree pool, which is a property of the repo.
+ * one repo's own worktree pool, which is a property of the repo. The age default and the disk
+ * guard live here: they protect the host's disk (spec 2026-11-19-worktree-disk-usage).
  */
 
 const MAX_PARALLEL_MIN = 1
@@ -43,6 +44,14 @@ const MEMORY_MAX_MB = 1_048_576
 const MEMORY_STEP_FROM_MB = 2048
 /** The arrows move the memory limit in 256 MiB steps, as main's number input did. */
 const MEMORY_STEP_MB = 256
+/** Bounds the workspace config route accepts (`setWorkspaceConfigInputSchema`). */
+const IDLE_DAYS_MAX = 365
+const MIN_FREE_PERCENT_MAX = 50
+const MIN_FREE_GB_MAX = 10_000
+const MAX_WORKTREES_GB_MAX = 100_000
+/** What the server applies when it predates the keys — the shipped defaults. */
+const DISK_GUARD_DEFAULTS = { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }
+const IDLE_DAYS_DEFAULT = 7
 
 export function ResourcesCards() {
   const config = useWorkspaceConfig()
@@ -76,7 +85,8 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
     onSuccess: (result, patch) => {
       queryClient.setQueryData(workspaceQueryKeys.config, result)
       // Which row flashes "Saved": the one key the patch carried.
-      setSavedKey(Object.keys({ ...patch.resources, ...patch.composerDefaults })[0] ?? null)
+      const guardKey = Object.keys(patch.resources?.diskGuard ?? {})[0]
+      setSavedKey(guardKey ?? Object.keys({ ...patch.resources, ...patch.composerDefaults })[0] ?? null)
       flash()
     },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
@@ -99,6 +109,10 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const saveComposerDefault = (key: 'autonomous' | 'worktree', value: string) =>
     save.mutate({ composerDefaults: { [key]: value === 'inherit' ? null : value === 'on' } })
   const triState = (value: boolean | null) => (value === null ? 'inherit' : value ? 'on' : 'off')
+  const idleDaysDefault = config.resources.worktreeIdleDaysDefault ?? IDLE_DAYS_DEFAULT
+  const diskGuard = config.resources.diskGuard ?? DISK_GUARD_DEFAULTS
+  const saveGuard = (key: keyof typeof DISK_GUARD_DEFAULTS, value: number | null) =>
+    save.mutateAsync({ resources: { diskGuard: { [key]: value ?? 0 } } })
 
   return (
     <div data-slot="resources-section" className="flex flex-col gap-5">
@@ -234,6 +248,71 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
             onCheckedChange={(on) => save.mutate({ resources: { autoResumeOnUsageLimit: on } })}
           />
         </FormRow>
+      </SettingsCard>
+
+      <SettingsCard id="worktrees" slot="resources-worktrees" title="Worktrees">
+        <FormRow
+          saved={savedFor('worktreeIdleDaysDefault')}
+          label="Reclaim idle worktrees after"
+          description={`A task that is not running gives back its worktree after this many days without activity — in review, waiting or finished alike. The branch is kept and Continue restores the tree. Projects that set their own value in Project settings → Worktrees keep it. 0 = off. ${idleDaysDefault === 0 ? 'Off.' : `Currently ${idleDaysDefault} day${idleDaysDefault === 1 ? '' : 's'}.`}`}
+        >
+          <IntegerStepper
+            aria-label="Reclaim idle worktrees after days"
+            data-slot="resources-worktree-idle-days"
+            value={idleDaysDefault}
+            min={0}
+            max={IDLE_DAYS_MAX}
+            onCommit={(days) => save.mutateAsync({ resources: { worktreeIdleDaysDefault: days ?? 0 } })}
+          />
+          <span className="text-label text-muted-foreground">days</span>
+        </FormRow>
+        <FormRow
+          saved={savedFor('minFreePercent')}
+          label="Disk guard: minimum free space"
+          description="When free space on the worktrees' disk drops below the smaller of these two, cezar reclaims the oldest idle worktrees across every project until it is back above, and warns you when that is not enough. Running tasks are never touched. 0 turns a trigger off."
+        >
+          <IntegerStepper
+            aria-label="Disk guard minimum free percent"
+            data-slot="resources-disk-guard-min-free-percent"
+            value={diskGuard.minFreePercent}
+            min={0}
+            max={MIN_FREE_PERCENT_MAX}
+            className="w-24"
+            onCommit={(value) => saveGuard('minFreePercent', value)}
+          />
+          <span className="text-label text-muted-foreground">%</span>
+          <IntegerStepper
+            aria-label="Disk guard minimum free GB"
+            data-slot="resources-disk-guard-min-free-gb"
+            value={diskGuard.minFreeGb}
+            min={0}
+            max={MIN_FREE_GB_MAX}
+            className="w-24"
+            onCommit={(value) => saveGuard('minFreeGb', value)}
+          />
+          <span className="text-label text-muted-foreground">GB</span>
+        </FormRow>
+        <FormRow
+          saved={savedFor('maxWorktreesGb')}
+          label="Disk guard: worktrees cap"
+          description="When task worktrees across every project take more than this, the guard reclaims the oldest idle ones first. 0 = no cap."
+        >
+          <IntegerStepper
+            aria-label="Disk guard maximum worktrees GB"
+            data-slot="resources-disk-guard-max-worktrees-gb"
+            value={diskGuard.maxWorktreesGb}
+            min={0}
+            max={MAX_WORKTREES_GB_MAX}
+            className="w-28"
+            onCommit={(value) => saveGuard('maxWorktreesGb', value)}
+          />
+          <span className="text-label text-muted-foreground">GB</span>
+        </FormRow>
+        <CardNote>
+          Reclaiming removes only the directory: the branch stays, and Continue on the task restores
+          it. A worktree with uncommitted changes is never reclaimed. Archiving a task frees its
+          worktree right away.
+        </CardNote>
       </SettingsCard>
 
       <SettingsCard id="new-task-defaults" slot="resources-composer-defaults" title="New task defaults">

@@ -1282,7 +1282,7 @@ function ArchiveToggle({
           <Icon className="size-3.5" aria-hidden="true" />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="left">{archived ? 'Restore' : 'Archive'}</TooltipContent>
+      <TooltipContent side="left">{archived ? 'Restore' : 'Archive and free its worktree (branch kept)'}</TooltipContent>
     </Tooltip>
   )
 }

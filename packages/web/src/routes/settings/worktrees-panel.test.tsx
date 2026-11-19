@@ -173,3 +173,36 @@ describe('Worktrees lifecycle management', () => {
     expect(document.body.textContent).not.toContain('Remove orphan worktree') // Unknown context has no force shortcut.
   })
 })
+
+describe('Worktrees panel: age retention (spec 2026-11-19-worktree-disk-usage)', () => {
+  it('shows each row\'s last activity, the idle age in the footer and the total size', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-04T00:00:00.000Z'))
+    serve({ ...sample, totalBytes: 3 * 1024 * 1024 * 1024 })
+    renderPanel()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    const activity = [...document.querySelectorAll('[data-slot="worktree-last-activity"]')].map((cell) => cell.textContent)
+    expect(activity).toEqual(['3d ago', '2d ago'])
+    const footer = document.querySelector('[data-slot="worktrees-footer"]')?.textContent
+    expect(footer).toContain('3.0 GB on disk')
+    expect(footer).toContain('idle trees reclaimed after 7 days')
+    vi.useRealTimers()
+  })
+
+  it('marks an idle in-review tree reclaimable and says so in the reclaim dialog', async () => {
+    serve({ ...sample, worktrees: [{ ...sample.worktrees[1]!, reclaimable: true }] })
+    renderPanel()
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(document.querySelector('[data-slot="worktree-reclaimable"]')).not.toBeNull()
+    fireEvent.click(document.querySelector('[data-action="worktrees-reclaim-now"]')!)
+    await waitFor(() => expect(confirmButton()).not.toBeNull())
+    expect(document.body.textContent).toContain('in review and waiting included')
+  })
+
+  it('says the age limit is off when idleDays is 0', async () => {
+    serve({ ...sample, idleDays: 0 })
+    renderPanel()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(document.querySelector('[data-slot="worktrees-footer"]')?.textContent).toContain('no idle age limit')
+  })
+})
