@@ -489,7 +489,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         ShellServices.push(this).markAsked();
         new AlertDialog.Builder(this)
                 .setTitle("Get notified?")
-                .setMessage("Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off on the Devices list.")
+                .setMessage("Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off in Your cezars.")
                 .setPositiveButton("Turn on", (dialog, which) -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
                     else turnPushOn();
@@ -564,7 +564,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         });
         bannerView.addView(bannerRetry);
         bannerServers = new Button(this);
-        bannerServers.setText("Devices");
+        bannerServers.setText("Cezars");
         bannerServers.setOnClickListener(view -> openSwitcher());
         bannerView.addView(bannerServers);
         frame.addView(bannerView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
