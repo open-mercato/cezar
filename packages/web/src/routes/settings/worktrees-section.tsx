@@ -109,7 +109,7 @@ function WorktreesForm({ config }: { config: ConfigResponse }) {
         <FormRow
           saved={saved && savedKey === 'worktreeIdleDays'}
           label="Reclaim idle worktrees after"
-          description={`A task that is not running — in review, waiting or finished — gives back its worktree after this many days without activity. The branch is kept and Continue restores the tree; pinned tasks and trees with uncommitted changes are kept. 0 = off. ${idleOwn ? `This project: ${daysText(idleDays)}.` : `Inherited from Settings → Resources: ${daysText(idleDays)}.`}`}
+          description={`A task that is not running — in review, waiting or finished — gives back its worktree after this many days without activity. The branch is kept and Continue restores the tree; pinned tasks and trees with uncommitted changes are kept. 0 = off. ${idleOwn ? `This project: ${daysText(idleDays)}.` : `Inherited from Settings → Behaviour: ${daysText(idleDays)}.`}`}
         >
           <Select
             value={idleMode}
@@ -144,7 +144,7 @@ function WorktreesForm({ config }: { config: ConfigResponse }) {
         <FormRow
           saved={saved && savedKey === 'archivedTaskDeleteDays'}
           label="Delete archived tasks after"
-          description={`An archived task is deleted this many days after it was archived: its record, log, worktree and branch. The branch is kept when it has an open pull request or commits that are neither merged nor pushed. Pinned tasks and trees with uncommitted changes are kept. 0 = never. ${deleteOwn ? `This project: ${deleteText}.` : `Inherited from Settings → Resources: ${deleteText}.`}`}
+          description={`An archived task is deleted this many days after it was archived: its record, log, worktree and branch. The branch is kept when it has an open pull request or commits that are neither merged nor pushed. Pinned tasks and trees with uncommitted changes are kept. 0 = never. ${deleteOwn ? `This project: ${deleteText}.` : `Inherited from Settings → Behaviour: ${deleteText}.`}`}
         >
           <Select
             value={deleteMode}

@@ -183,7 +183,7 @@ describe('Project settings → Worktrees: idle age (spec 2026-11-19-worktree-dis
     await waitFor(() => expect(mode()).not.toBeNull())
     expect(mode()!.getAttribute('data-value')).toBe('inherit')
     expect(days()).toBeNull()
-    expect(screen.getByText(/Inherited from Settings → Resources: 7 days/)).not.toBeNull()
+    expect(screen.getByText(/Inherited from Settings → Behaviour: 7 days/)).not.toBeNull()
   })
 
   it('switching to "This project" saves the inherited value as its own; editing saves the new one', async () => {
@@ -234,7 +234,7 @@ describe('Project settings → Worktrees: archived-task lifetime (spec 2026-11-1
     await waitFor(() => expect(mode()).not.toBeNull())
     expect(mode()!.getAttribute('data-value')).toBe('inherit')
     expect(days()).toBeNull()
-    expect(screen.getByText(/Inherited from Settings → Resources: after 90 days/)).not.toBeNull()
+    expect(screen.getByText(/Inherited from Settings → Behaviour: after 90 days/)).not.toBeNull()
   })
 
   it('switching to "This project" saves the inherited value as its own; 0 saves "never"', async () => {
