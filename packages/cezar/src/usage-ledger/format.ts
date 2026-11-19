@@ -3,6 +3,10 @@ import { formatPlanPp as pp, type PlanUsageReport, type PlanUsageWindow } from '
 function clock(iso: string, timeZone?: string): string {
   return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', ...(timeZone ? { timeZone } : {}) });
 }
+function day(iso: string, timeZone?: string): string {
+  const date = new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', ...(timeZone ? { timeZone } : {}) });
+  return `${date} ${clock(iso, timeZone)}`;
+}
 function inLeft(ms: number): string {
   const m = Math.max(0, Math.round(ms / 60_000));
   if (m < 60) return `${m}m`;
@@ -15,7 +19,11 @@ export function formatWindow(w: PlanUsageWindow, now: number, timeZone?: string)
   const kind = w.kind === 'weekly' ? 'weekly window' : '5-hour window';
   const resets = w.current ? ` (resets in ${inLeft(Date.parse(w.resetsAt) - now)})` : ' (ended)';
   const used = w.usedPercent ? ` · ${pp(w.usedPercent.last)}% used` : ' · no reading';
-  const lines = [`${w.account.label} · ${kind} ${clock(w.startsAt, timeZone)}–${clock(w.resetsAt, timeZone)}${resets}${used}  [${w.id}]`];
+  // A weekly window spans days: name them, or "00:00–00:00" says nothing (QA F6).
+  const span = w.kind === 'weekly'
+    ? `${day(w.startsAt, timeZone)} – ${day(w.resetsAt, timeZone)}`
+    : `${clock(w.startsAt, timeZone)}–${clock(w.resetsAt, timeZone)}`;
+  const lines = [`${w.account.label} · ${kind} ${span}${resets}${used}  [${w.id}]`];
   for (const c of w.consumers) {
     const extra: string[] = [];
     if (c.kind === 'manager' && c.parts) extra.push(`(chat ${pp(c.parts.chat)}, watch ${pp(c.parts.watch)}, job ${pp(c.parts.job)})`);
@@ -27,7 +35,7 @@ export function formatWindow(w: PlanUsageWindow, now: number, timeZone?: string)
   if (w.outsideCezarPp > 0) lines.push(`  ${pp(w.outsideCezarPp)}%  outside cezar`);
   if (w.beforeTrackingPp > 0) lines.push(`  ${pp(w.beforeTrackingPp)}%  before cezar's first reading`);
   if (w.untrackedPp > 0) {
-    const gaps = w.trackingGaps.map((g) => `${clock(g.from, timeZone)}–${g.to ? clock(g.to, timeZone) : 'now'} ${g.reason === 'tracking-off' ? 'tracking off' : 'cezar not recording'}`);
+    const gaps = w.trackingGaps.map((g) => `${clock(g.from, timeZone)}–${g.to ? clock(g.to, timeZone) : 'now'} ${g.reason === 'tracking-off' ? 'tracking off' : 'nothing recorded until cezar started recording'}`);
     lines.push(`  ${pp(w.untrackedPp)}%  not tracked${gaps.length ? ` (${gaps.join('; ')})` : ''}`);
   }
   if (w.correctionPp > 0) lines.push(`  -${pp(w.correctionPp)}%  provider correction`);

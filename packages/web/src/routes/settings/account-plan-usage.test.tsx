@@ -33,6 +33,10 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('limit lines', () => {
+  it('names a provider correction so the parts add up to the amount used (QA F3)', () => {
+    expect(fiveHourLine(win({ correctionPp: 3 }))).toMatch(/provider correction −3%$/)
+  })
+
   it('marks cezar\'s share ≈ and keeps provider readings and remainders plain', () => {
     expect(fiveHourLine(win({}))).toMatch(/^100% used · resets .+ · cezar tasks and managers ≈ 83% of it, outside cezar 7%, before tracking 10%$/)
     expect(weeklyLine(win({ kind: 'weekly', usedPercent: { first: 0, last: 29 }, consumers: [consumer('run:p/a', 22)] })))

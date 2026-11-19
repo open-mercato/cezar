@@ -80,7 +80,7 @@ export const planUsageIntervalSchema = z.object({
   deltaPp: pp,
   outcome: z.enum(['alone', 'split', 'outside', 'unsplit', 'mixed', 'untracked']),
   /** `untracked` only: why nobody can be named for this slice. */
-  reason: z.enum(['tracking-off', 'not-recording']).optional(),
+  reason: z.enum(['tracking-off', 'recording-started']).optional(),
   weightUnit: z.enum(['usd', 'tokens']).nullable(),
   allocations: z.array(z.object({ consumerId: z.string(), estimatePp: pp, weight: z.number().finite().nullable() })),
   outsideCezarPp: pp,
@@ -107,11 +107,12 @@ export const planUsageWindowSchema = z.object({
   outsideCezarPp: pp,
   /** Moved while cezar ran, but could not be split (no cost reported yet, a session that stopped mid-reply). */
   unsplitPp: pp,
-  /** Moved across a stretch cezar did not record (tracking off, cezar stopped or restarted):
+  /** Moved across a stretch cezar did not record (`tracking-off`; `recording-started`: a cezar
+   *  process began recording after nothing was recorded — stopped, restarted or another process):
    *  the provider total is kept, but no consumer is charged for it. */
   untrackedPp: pp,
   /** The recording gaps inside this window, newest last; `to` null = still not recording. */
-  trackingGaps: z.array(z.object({ from: iso, to: iso.nullable(), reason: z.enum(['tracking-off', 'not-recording']) })),
+  trackingGaps: z.array(z.object({ from: iso, to: iso.nullable(), reason: z.enum(['tracking-off', 'recording-started']) })),
   /** The provider lowered its reading after a higher one (shown, never hidden). */
   correctionPp: pp,
   leftPp: pp.nullable(),

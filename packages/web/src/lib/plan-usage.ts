@@ -8,7 +8,7 @@ export const KIND_LABEL: Record<PlanUsageWindowKind, string> = { 'five-hour': '5
 export const KIND_LONG: Record<PlanUsageWindowKind, string> = { 'five-hour': '5-hour limit', weekly: 'weekly limit' }
 
 /** `≈ 25%`: every task or manager share is an estimate, even when it ran alone (approved design). */
-export const approxPp = (pp: number) => `≈ ${formatPlanPp(pp)}%`
+export const approxPp = (pp: number) => (pp === 0 ? '—' : `≈ ${formatPlanPp(pp)}%`)
 /** A provider reading or an account-level remainder: not an estimate. */
 export const exactPp = (pp: number) => `${formatPlanPp(pp)}%`
 
@@ -17,6 +17,13 @@ export function consumerWindows(entries: PlanUsageConsumerWindow[] | undefined, 
   return (entries ?? [])
     .filter((e) => e.consumer.id === consumerId && e.kind === kind)
     .sort((a, b) => Date.parse(b.resetsAt) - Date.parse(a.resetsAt))
+}
+
+/** A weekly reset is days away: name the day, not just the clock (QA F6). */
+export function resetTime(iso: string, kind: PlanUsageWindowKind): string {
+  if (kind === 'five-hour') return clockTime(iso)
+  const d = new Date(iso)
+  return `${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${clockTime(iso)}`
 }
 
 export function clockTime(iso: string): string {

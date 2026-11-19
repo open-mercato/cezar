@@ -78,6 +78,26 @@ function sessionEnd(s: Session, now: number): number {
   return Math.min(now, last + OPEN_SESSION_CAP);
 }
 
+/**
+ * Time in (a, b] inside quiet stretches longer than IDLE_GRACE with no cezar turn — before the
+ * first turn, between turns or after the last — counting only what exceeds the grace (QA R3).
+ */
+function idleBeyondGrace(ranges: Array<[number, number]>, a: number, b: number): number {
+  const merged: Array<[number, number]> = [];
+  for (const [x, y] of ranges.map(([x, y]) => [Math.max(a, x), Math.min(b, Math.max(x, y))] as [number, number]).sort((p, q) => p[0] - q[0])) {
+    const last = merged.at(-1);
+    if (last && x <= last[1]) last[1] = Math.max(last[1], y);
+    else merged.push([x, y]);
+  }
+  let idle = 0;
+  let cursor = a;
+  for (const [x, y] of merged) {
+    idle += Math.max(0, x - cursor - IDLE_GRACE);
+    cursor = Math.max(cursor, y);
+  }
+  return idle + Math.max(0, b - cursor - IDLE_GRACE);
+}
+
 function unionLength(ranges: Array<[number, number]>): number {
   const sorted = ranges.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
   let total = 0;
@@ -112,7 +132,7 @@ export interface Ledger {
   gaps: Map<string, Gap[]>;
 }
 
-export interface Gap { from: number; to: number | null; reason: 'tracking-off' | 'not-recording' }
+export interface Gap { from: number; to: number | null; reason: 'tracking-off' | 'recording-started' }
 
 /**
  * Where recording stopped and resumed. `off`…`on` is an explicit stretch; a `start` means this
@@ -141,6 +161,13 @@ function trackingGaps(markers: Array<Extract<LedgerRecord, { t: 'tracking' }>>, 
     } else if (open) {
       open.to = m.at;
     } else if (m.state === 'start') {
+      // A turn recorded on both sides of the marker proves another cezar process was recording
+      // the account all along (a headless `cezar run` starting beside the cockpit): no gap (QA R2).
+      if (sessions.some((x) => splitLogin(x.account).account === m.account && x.begin < m.at
+        && ((x.end !== undefined && x.end > m.at) || x.samples.some((sample) => sample.to > m.at)))) {
+        gaps.set(m.account, list);
+        continue;
+      }
       const before = (seen.get(m.account) ?? []).filter((at) => at < m.at);
       // The very first record of an account has nothing before it to cut off.
       if (before.length === 0) {
@@ -151,7 +178,7 @@ function trackingGaps(markers: Array<Extract<LedgerRecord, { t: 'tracking' }>>, 
       const last = list.at(-1);
       // Nothing recorded since the previous gap closed (the usual `on` then `start`): one gap.
       if (last && last.to !== null && from <= last.to) last.to = Math.max(last.to, m.at);
-      else list.push({ from, to: m.at, reason: 'not-recording' });
+      else list.push({ from, to: m.at, reason: 'recording-started' });
     }
     gaps.set(m.account, list);
   }
@@ -172,12 +199,12 @@ function lastGapBefore(gaps: Gap[], a: number): Gap | undefined {
 
 /**
  * Turns begun before a recording gap never carry over it (QA F1). One exception: a turn whose
- * own records continue past a `not-recording` gap was live in another process the whole time
+ * own records continue past a `recording-started` gap was live in another process the whole time
  * (a second cockpit or `cezar run` starting up), so that gap did not interrupt it.
  */
 function carriesOver(session: Session, gap: Gap | undefined): boolean {
   if (!gap || session.begin >= gap.to!) return true;
-  if (gap.reason !== 'not-recording') return false;
+  if (gap.reason !== 'recording-started') return false;
   return (!session.capped && session.end !== undefined && session.end > gap.to!) || session.samples.some((x) => x.to > gap.to!);
 }
 
@@ -279,8 +306,8 @@ function attribute(sessions: Session[], a: number, b0: number, delta: number): {
   // carries the last turn's spend, so that time is unknown, never the short turn's alone (QA F1).
   const outside = 0;
   const span = b - a;
-  const busy = unionLength(active.map((x) => [x.start, Math.min(b, x.stop + IDLE_GRACE)] as [number, number]));
-  const idleUnsplit = span > 0 && busy < span ? delta * (span - busy) / span : 0;
+  const idle = idleBeyondGrace(active.map((x) => [x.start, x.stop] as [number, number]), a, b);
+  const idleUnsplit = span > 0 && idle > 0 ? delta * idle / span : 0;
   const inside = delta - idleUnsplit;
   const shares: Share[] = [];
   let unsplit = idleUnsplit;
@@ -317,8 +344,10 @@ function attribute(sessions: Session[], a: number, b0: number, delta: number): {
       unknownTime += len - cov;
     }
     const u = activeTime > 0 ? unknownTime / activeTime : 1;
-    unsplit = inside * u;
-    const rest = inside - unsplit;
+    // Added to the idle share above, never replacing it (QA R1).
+    const unknown = inside * u;
+    unsplit += unknown;
+    const rest = inside - unknown;
     const weighted = unit ? overlapping.map(({ x, sample }) => ({ x, sample, w: sampleWeight(sample, unit!, a, b) })) : [];
     const total = weighted.reduce((sum, item) => sum + item.w, 0);
     if (total <= 0) unsplit += rest;
@@ -393,7 +422,10 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
   const shares: Share[] = [];
   const intervals: PlanUsageInterval[] = [];
   const gaps = ledger.gaps.get(splitLogin(seed.account).account) ?? [];
-  let untracked = 0;
+  // A window whose start fell inside a recording gap opened while cezar was not recording: its
+  // first reading is untracked usage, not "before cezar's first reading" (QA R4).
+  const openingGap = gaps.find((g) => g.from < first.at && (g.to === null || g.to > startsAt));
+  let untracked = openingGap ? first.used : 0;
   for (let i = 1; i < readings.length; i++) {
     const prev = readings[i - 1]!;
     const cur = readings[i]!;
@@ -495,7 +527,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
     ...(limitHit ? { limitReachedAt: new Date(limitHit.at).toISOString() } : {}),
     readings: readings.map((r) => ({ at: new Date(r.at).toISOString(), usedPercent: round(r.used), status: r.status, source: r.source })),
     consumers: list,
-    beforeTrackingPp: round(first.used),
+    beforeTrackingPp: openingGap ? 0 : round(first.used),
     outsideCezarPp: round(outside),
     unsplitPp: round(unsplit),
     untrackedPp: round(untracked),

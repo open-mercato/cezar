@@ -36,6 +36,8 @@ function unknownTail(w: PlanUsageWindow): string {
     w.beforeTrackingPp > 0 ? `before tracking ${exactPp(w.beforeTrackingPp)}` : '',
     w.untrackedPp > 0 ? `not tracked ${exactPp(w.untrackedPp)}` : '',
     w.unsplitPp > 0 ? `couldn't split ${exactPp(w.unsplitPp)}` : '',
+    // Without it the named parts can exceed the amount used (QA F3).
+    w.correctionPp > 0 ? `provider correction −${exactPp(w.correctionPp)}` : '',
   ].filter(Boolean)
   return parts.length ? `, ${parts.join(', ')}` : ''
 }

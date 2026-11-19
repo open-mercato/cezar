@@ -261,6 +261,7 @@ describe('recording gaps (QA F1)', () => {
   });
 
   it('treats a restart (or CEZ_USAGE_LOG=0 in between) as a gap from the last record', () => {
+    // No turn spans the start marker here, so nothing proves anyone was recording.
     const w = only([
       reading('10:00', 30), task('a', 'run:p/a', '10:00'), sample('a', '10:00', '10:05', 1),
       // no end: the process stopped mid-turn; the next one starts recording at 11:00
@@ -268,7 +269,7 @@ describe('recording gaps (QA F1)', () => {
       sample('b', '11:00', '11:05', 1), end('b', '11:05'), reading('11:06', 53),
     ]);
     expect(w.untrackedPp).toBe(20);
-    expect(w.trackingGaps[0]).toMatchObject({ reason: 'not-recording', from: new Date(T('10:05')).toISOString() });
+    expect(w.trackingGaps[0]).toMatchObject({ reason: 'recording-started', from: new Date(T('10:05')).toISOString() });
     // The crashed pre-gap turn is not a candidate after the restart, open cap or not.
     expect(w.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/b', 3]]);
   });
@@ -291,7 +292,8 @@ describe('recording gaps (QA F1)', () => {
     ], { now: T('10:50') });
     const [current, previous] = windows;
     expect(previous).toMatchObject({ current: false, untrackedPp: 0, usedPercent: { first: 60, last: 60 } });
-    expect(current).toMatchObject({ current: true, beforeTrackingPp: 7, untrackedPp: 0 });
+    // It opened while tracking was off: that usage is not tracked, not "before tracking" (QA R4).
+    expect(current).toMatchObject({ current: true, beforeTrackingPp: 0, untrackedPp: 7 });
     expect(current!.consumers.map((c) => c.estimatePp)).toEqual([2]);
   });
 
@@ -309,21 +311,23 @@ describe('recording gaps (QA F1)', () => {
 });
 
 describe('a second process starting up', () => {
-  it('does not cut off a turn that kept recording in the first one', () => {
+  it('does not cut off a turn that kept recording in the first one, nor call it a gap', () => {
     const w = only([
       reading('10:00', 10), task('a', 'run:p/a', '10:00'), reading('10:05', 12),
       { t: 'tracking', at: T('10:06'), account: ACC, state: 'start' }, // `cezar run` elsewhere
       sample('a', '10:00', '10:20', 1), end('a', '10:20'), reading('10:21', 15),
     ]);
-    // The slice the start lands in is unknown; the turn keeps what it spent before it.
-    expect(w.untrackedPp).toBe(3);
-    expect(w.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/a', 2]]);
+    // The turn recorded on both sides of the start: the account was being recorded all along,
+    // so there is no gap and no "not recording" label (QA R2).
+    expect(w.untrackedPp).toBe(0);
+    expect(w.trackingGaps).toEqual([]);
+    expect(w.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/a', 5]]);
     const later = only([
       reading('10:00', 10), task('a', 'run:p/a', '10:00'), reading('10:05', 12),
       { t: 'tracking', at: T('10:06'), account: ACC, state: 'start' }, reading('10:07', 12),
       sample('a', '10:00', '10:20', 1), end('a', '10:20'), reading('10:21', 15),
     ]);
-    // After the next reading the live turn is a candidate again (its records continue).
+    expect(later.untrackedPp).toBe(0);
     expect(later.consumers.map((c) => [c.id, c.estimatePp])).toEqual([['run:p/a', 5]]);
   });
 });
@@ -337,5 +341,59 @@ describe('the human view of a recording gap', () => {
     const report = buildPlanUsageReport({ window: 'current' }, { records, now: T('10:20'), timeZone: 'UTC' });
     expect(report.windows[0]!.untrackedPp).toBe(8);
     expect(formatPlanUsageReport(report, T('10:20'), 'UTC')).toContain('  8%  not tracked (10:02–10:09 tracking off)');
+  });
+});
+
+describe('the parts always add up to the provider reading (QA R1)', () => {
+  const sum = (w: PlanUsageWindow) => w.beforeTrackingPp + w.consumers.reduce((n, c) => n + c.estimatePp, 0)
+    + w.outsideCezarPp + w.unsplitPp + w.untrackedPp - w.correctionPp;
+
+  it('keeps the idle share when two turns share a slice after 30 quiet minutes', () => {
+    const w = only([
+      reading('10:00', 10), task('a', 'run:p/a', '10:30'), task('b', 'run:p/b', '10:30'),
+      sample('a', '10:30', '10:40', 0.1), sample('b', '10:30', '10:40', 0.1), end('a', '10:40'), end('b', '10:40'),
+      reading('10:41', 14),
+    ]);
+    expect(w.unsplitPp).toBeGreaterThan(0);
+    expect(sum(w)).toBeCloseTo(14, 1);
+  });
+
+  it('holds for random ledgers: parallel turns, idle stretches, gaps, corrections', () => {
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    for (let round = 0; round < 200; round++) {
+      const records: LedgerRecord[] = [];
+      let used = Math.floor(rnd() * 20);
+      let t = T('10:00');
+      records.push({ ...reading('10:00', used), at: t } as LedgerRecord);
+      for (let step = 0; step < 8; step++) {
+        t += Math.floor(rnd() * 40 + 1) * 60_000;
+        const turns = Math.floor(rnd() * 3);
+        for (let k = 0; k < turns; k++) {
+          const id = `s${round}-${step}-${k}`;
+          const from = t + Math.floor(rnd() * 5) * 60_000;
+          const to = from + Math.floor(rnd() * 10 + 1) * 60_000;
+          records.push({ t: 'begin', at: from, account: ACC, session: id, consumer: { id: `run:p/${k}`, kind: 'task', title: `${k}` } });
+          if (rnd() > 0.2) records.push({ t: 'sample', session: id, from, to, usd: rnd() });
+          if (rnd() > 0.1) records.push({ t: 'end', session: id, at: to });
+        }
+        if (rnd() < 0.1) records.push({ t: 'tracking', at: t + 60_000, account: ACC, state: rnd() < 0.5 ? 'start' : 'off' });
+        if (rnd() < 0.05) records.push({ t: 'tracking', at: t + 120_000, account: ACC, state: 'on' });
+        t += 15 * 60_000;
+        used = Math.max(0, Math.min(100, used + Math.floor(rnd() * 8) - (rnd() < 0.1 ? 3 : 0)));
+        records.push({ ...reading('10:00', used), at: t } as LedgerRecord);
+      }
+      for (const w of computeWindows(records, { now: t + 60_000 })) {
+        expect(sum(w)).toBeCloseTo(w.usedPercent!.last, 1);
+      }
+    }
+  });
+});
+
+describe('quiet time under the grace (QA R3)', () => {
+  it('a short lead before a lone turn stays the turn\'s', () => {
+    const w = only([reading('10:00', 10), task('a', 'run:p/a', '10:10'), sample('a', '10:10', '10:20', 1), end('a', '10:20'), reading('10:21', 14)]);
+    expect(w.unsplitPp).toBe(0);
+    expect(w.consumers).toMatchObject([{ id: 'run:p/a', estimatePp: 4 }]);
   });
 });

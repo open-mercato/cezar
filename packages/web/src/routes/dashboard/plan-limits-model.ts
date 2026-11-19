@@ -5,7 +5,7 @@ import {
   type PlanUsageWindow,
   type PlanUsageWindowKind,
 } from '@open-mercato/cezar-api-client'
-import { approxPp, clockTime, exactPp } from '@/lib/plan-usage'
+import { approxPp, clockTime, exactPp, resetTime } from '@/lib/plan-usage'
 
 /** URL search params of the details panel, so other pages can link to it (spec 2026-11-19-plan-usage). */
 export const PLAN_PARAMS = { account: 'planAccount', window: 'planWindow', kind: 'planKind' } as const
@@ -72,9 +72,9 @@ export function isLimitReached(w: PlanUsageWindow): boolean {
 /** `Claude · default` header status: `63% used · resets 16:40` or `limit reached · back at 15:00`. */
 export function windowStatus(w: PlanUsageWindow): string {
   const used = lastUsed(w)
-  if (isLimitReached(w)) return `limit reached · back at ${clockTime(w.resetsAt)}`
-  if (used === null) return `no reading yet · resets ${clockTime(w.resetsAt)}`
-  return `${exactPp(used)} used · resets ${clockTime(w.resetsAt)}`
+  if (isLimitReached(w)) return `limit reached · back at ${resetTime(w.resetsAt, w.kind)}`
+  if (used === null) return `no reading yet · resets ${resetTime(w.resetsAt, w.kind)}`
+  return `${exactPp(used)} used · resets ${resetTime(w.resetsAt, w.kind)}`
 }
 
 export function byShare(list: PlanUsageConsumer[]): PlanUsageConsumer[] {
@@ -187,8 +187,8 @@ export function managerParts(c: PlanUsageConsumer): string | null {
 
 /** `tracking was off 20:00–20:10`: why a slice is charged to nobody, with its time. */
 export function gapReasons(w: PlanUsageWindow): string {
-  if (w.trackingGaps.length === 0) return 'cezar was not recording'
-  return w.trackingGaps.map((g) => `${g.reason === 'tracking-off' ? 'tracking was off' : 'cezar was not recording'} ${clockTime(g.from)}–${g.to ? clockTime(g.to) : 'now'}`).join('; ')
+  if (w.trackingGaps.length === 0) return 'nothing was recorded'
+  return w.trackingGaps.map((g) => `${g.reason === 'tracking-off' ? 'tracking was off' : 'nothing recorded until cezar started recording'} ${clockTime(g.from)}–${g.to ? clockTime(g.to) : 'now'}`).join('; ')
 }
 
 export interface RemainderRow { id: string; label: string; value: string }

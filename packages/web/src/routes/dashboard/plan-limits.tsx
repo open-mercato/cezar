@@ -364,7 +364,7 @@ function ConsumerTable({ window: w, provider }: { window: PlanUsageWindow; provi
                 </td>
                 <td className={cell}>{c.kind === 'task' ? projectName(c.projectId) : '—'}</td>
                 <td className={`${cell} tabular-nums`}>{approxPp(c.estimatePp)}</td>
-                <td className={`${cell} tabular-nums`}>{c.aloneInferredPp > 0 ? approxPp(c.aloneInferredPp) : '0%'}</td>
+                <td className={`${cell} tabular-nums`}>{approxPp(c.aloneInferredPp)}</td>
                 <td className={cell}>{ranTogether(c)}</td>
                 <td className={`${cell} tabular-nums`}>{c.retryWasteEstimatePp > 0 ? approxPp(c.retryWasteEstimatePp) : '—'}</td>
               </tr>

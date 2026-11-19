@@ -44,11 +44,15 @@ however many parallel sessions reported it:
   reason and time); the first reading after the gap is the new baseline, and turns begun before
   the gap are never candidates after it (QA F1). Gaps come from `tracking` records: `off`/`on`
   when an account's switch flips, and `start` the first time a process records an account
-  (so a stop, a restart or `CEZ_USAGE_LOG=0` in between reads as "cezar was not recording"
-  from the account's previous record). A turn whose own records continue past a `start` was
-  live in another process and keeps counting;
-- a stretch longer than 15 minutes with no cezar turn inside a slice → **couldn't be split**
-  (the next reading carries both the last turn's spend and your own use in between).
+  (reason `recording-started`: nothing was recorded from the account's previous record until
+  a cezar process started recording — a stop, a restart or `CEZ_USAGE_LOG=0` in between). A
+  `start` that a turn spans with records on both sides is no gap at all: another process was
+  recording the account the whole time (QA R2). A window that opened inside a gap counts its
+  opening usage as not tracked, not "before tracking" (QA R4);
+- any quiet stretch inside a slice — before the first turn, between turns or after the last —
+  longer than 15 minutes counts its excess over 15 minutes as **couldn't be split** (the next
+  reading carries both the last turn's spend and your own use in between; QA R3). It adds to
+  the unsplit share of parallel turns, never replaces it (QA R1).
 
 Invariant, pinned by tests: before + Σ consumers + outside + unsplit + untracked − correction =
 last reading.
