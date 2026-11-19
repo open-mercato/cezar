@@ -5,7 +5,7 @@ export const consumer = (over: Partial<PlanUsageConsumer> & Pick<PlanUsageConsum
   aloneInferredPp: 0,
   sharedEstimatePp: over.estimatePp,
   retryWasteEstimatePp: 0,
-  ranTogetherWith: { tasks: 0, managers: 0 },
+  ranTogetherWith: { tasks: 0, managers: 0, internal: 0 },
   evidence: 'account-level',
   ...over,
 })
@@ -26,9 +26,9 @@ export function planWindow(over: Partial<PlanUsageWindow> = {}): PlanUsageWindow
       { at: '2026-11-19T14:20:00.000Z', usedPercent: 100, status: 'blocked', source: 'claude-stream' },
     ],
     consumers: [
-      consumer({ id: 'run:shop/r1', title: 'Retry temp-repo removal', projectId: 'shop', runId: 'r1', estimatePp: 25, aloneInferredPp: 4, retryWasteEstimatePp: 11, ranTogetherWith: { tasks: 3, managers: 0 } }),
-      consumer({ id: 'run:shop/r2', title: 'Drop waiting dot', projectId: 'shop', runId: 'r2', estimatePp: 53, ranTogetherWith: { tasks: 3, managers: 1 } }),
-      consumer({ id: 'mgr:m1', kind: 'manager', title: 'Release manager', managerId: 'm1', estimatePp: 5, parts: { chat: 4, watch: 0.6, job: 0.4 }, ranTogetherWith: { tasks: 2, managers: 0 } }),
+      consumer({ id: 'run:shop/r1', title: 'Retry temp-repo removal', projectId: 'shop', runId: 'r1', estimatePp: 25, aloneInferredPp: 4, retryWasteEstimatePp: 11, ranTogetherWith: { tasks: 3, managers: 0, internal: 0 } }),
+      consumer({ id: 'run:shop/r2', title: 'Drop waiting dot', projectId: 'shop', runId: 'r2', estimatePp: 53, ranTogetherWith: { tasks: 3, managers: 1, internal: 0 } }),
+      consumer({ id: 'mgr:m1', kind: 'manager', title: 'Release manager', managerId: 'm1', estimatePp: 5, parts: { chat: 4, watch: 0.6, job: 0.4 }, ranTogetherWith: { tasks: 2, managers: 0, internal: 0 } }),
     ],
     beforeTrackingPp: 0,
     outsideCezarPp: 9,

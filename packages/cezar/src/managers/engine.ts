@@ -119,7 +119,8 @@ import {
 import { finalAssistantText, resumeLabel } from './automation-reports.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
 import { outsideRelayScope } from '../relay/scope.ts';
-import { ledgerAccountKey, PlanUsageTracker, recordUsageObservation } from '../usage-ledger/recorder.ts';
+import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from '../usage-ledger/recorder.ts';
+import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
 
 /**
@@ -278,7 +279,7 @@ interface ActiveTurn {
   settled?: Promise<unknown>;
   /** Plan-usage ledger: the reply this turn writes and the account it runs on (design rev 3). */
   ledgerMessageId?: string;
-  planAccount?: { provider: 'claude' | 'codex'; key: string; label: string };
+  planAccount?: LedgerAccountRef & { provider: 'claude' | 'codex' };
 }
 
 interface Runtime {
@@ -2065,8 +2066,8 @@ export class ManagerEngine {
     // Codex is refused above; Claude is the one manager runner with plan limits today.
     const planProvider = runner === 'claude' ? runner : undefined;
     const planProfile = 'profile' in profile ? profile.profile : undefined;
-    turn.planAccount = planProvider
-      ? { provider: planProvider, key: ledgerAccountKey(planProvider, planProfile?.id ?? DEFAULT_AGENT_ACCOUNT_ID), label: planProfile?.label ?? DEFAULT_AGENT_ACCOUNT_ID }
+    turn.planAccount = planProvider && planProfile
+      ? await ledgerAccountRef(planProvider, planProfile).catch(() => undefined)
       : undefined;
     const planAccount = turn.planAccount;
     // Stopped or deleted during setup: building the spec would recreate the workdir.
@@ -2127,7 +2128,7 @@ export class ManagerEngine {
         ...(readOnlyWatch ? readOnlyEnv() : {}),
       },
       ...(readOnlyWatch ? { enforceReadOnly: true } : {}),
-      ...(planAccount ? { onUsageWindows: (observation) => recordUsageObservation(planAccount.key, planAccount.label, observation) } : {}),
+      ...(planAccount ? { onUsageWindows: (observation) => recordUsageObservation(planAccount, observation) } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
@@ -2242,9 +2243,9 @@ export class ManagerEngine {
     turn.started = true;
     this.emitChange(id);
     // Its own consumer: tasks this manager starts count on those tasks, never here.
-    const planUsage = turn.planAccount ? new PlanUsageTracker(turn.planAccount.provider, turn.planAccount.key, {
+    const planUsage = turn.planAccount ? new PlanUsageTracker(turn.planAccount.provider, turn.planAccount, {
       id: managerConsumerId(id), kind: 'manager', title: store.get(id)?.name ?? id, managerId: id,
-    }, { label: turn.planAccount.label, part: turn.kind, ...(turn.ledgerMessageId ? { messageId: turn.ledgerMessageId } : {}), endOnClose: true }) : undefined;
+    }, { part: turn.kind, ...(turn.ledgerMessageId ? { messageId: turn.ledgerMessageId } : {}), endOnClose: true }) : undefined;
     try {
       const runner = (this.deps.runnerFor ?? createRunner)(runnerId);
       const session = runner.startSession(spec, (event) => { planUsage?.event(event); onEvent(event); }, {

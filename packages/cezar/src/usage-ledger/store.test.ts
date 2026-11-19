@@ -29,9 +29,9 @@ describe('the plan-usage ledger store', () => {
 
   it('records readings and one span per turn, with the late cost inside its turn', () => {
     const now = Date.now();
-    recordUsageObservation('claude:default', 'Default', obs(10, now));
-    recordUsageObservation('claude:default', 'Default', obs(10, now + 1)); // unchanged: thinned
-    const t = new PlanUsageTracker('claude', 'claude:default', { id: 'run:p/a', kind: 'task', title: 'A' });
+    recordUsageObservation({ key: 'claude:default' }, obs(10, now));
+    recordUsageObservation({ key: 'claude:default' }, obs(10, now + 1)); // unchanged: thinned
+    const t = new PlanUsageTracker('claude', { key: 'claude:default' }, { id: 'run:p/a', kind: 'task', title: 'A' });
     t.ui({ type: 'turn.started' });
     t.ui({ type: 'turn.completed' });
     t.event({ type: 'cost', usd: 0.5 });
@@ -46,14 +46,14 @@ describe('the plan-usage ledger store', () => {
 
   it('writes nothing under CEZ_USAGE_LOG=0 or for an opted-out account', () => {
     process.env.CEZ_USAGE_LOG = '0';
-    recordUsageObservation('claude:default', undefined, obs(10, Date.now()));
+    recordUsageObservation({ key: 'claude:default' }, obs(10, Date.now()));
     expect(readLedger(1)).toEqual([]);
     delete process.env.CEZ_USAGE_LOG;
     setAccountTracking('claude:work', false);
-    recordUsageObservation('claude:work', undefined, obs(10, Date.now()));
-    new PlanUsageTracker('claude', 'claude:work', { id: 'run:p/a', kind: 'task', title: 'A' }).ui({ type: 'turn.started' });
+    recordUsageObservation({ key: 'claude:work' }, obs(10, Date.now()));
+    new PlanUsageTracker('claude', { key: 'claude:work' }, { id: 'run:p/a', kind: 'task', title: 'A' }).ui({ type: 'turn.started' });
     expect(readLedger(1)).toEqual([]);
-    recordUsageObservation('claude:default', undefined, obs(12, Date.now()));
+    recordUsageObservation({ key: 'claude:default' }, obs(12, Date.now()));
     expect(readLedger(1)).toHaveLength(1);
   });
 
@@ -62,14 +62,14 @@ describe('the plan-usage ledger store', () => {
     writeFileSync(join(ledgerDir(), '2020-01-01.ndjson'), '{"t":"end","at":1,"session":"x"}\n');
     const today = new Date().toISOString().slice(0, 10);
     writeFileSync(join(ledgerDir(), `${today}.ndjson`), '{"t":"end","at":1,"sess');
-    recordUsageObservation('claude:default', undefined, obs(20, Date.now()));
+    recordUsageObservation({ key: 'claude:default' }, obs(20, Date.now()));
     expect(readdirSync(ledgerDir())).toEqual([`${today}.ndjson`]);
     expect(readLedger(1).map((r) => r.t)).toEqual(['reading']);
   });
 
   it('serves the contract shapes, and the tracking switch round-trips', async () => {
     const app = planUsageRoutes();
-    recordUsageObservation('claude:default', undefined, obs(25, Date.now()));
+    recordUsageObservation({ key: 'claude:default' }, obs(25, Date.now()));
     const report = await (await app.request('/workspace/plan-usage?kind=five-hour&intervals=1')).json();
     expect(planUsageReportSchema.parse(report).windows[0]?.usedPercent).toEqual({ first: 25, last: 25 });
     planUsageConsumersResponseSchema.parse(await (await app.request('/workspace/plan-usage/consumers?ids=run:p/a')).json());

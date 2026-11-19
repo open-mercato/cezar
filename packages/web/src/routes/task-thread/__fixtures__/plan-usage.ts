@@ -27,7 +27,7 @@ export function planEntry(
       aloneInferredPp: 4,
       sharedEstimatePp: 21,
       retryWasteEstimatePp: 0,
-      ranTogetherWith: { tasks: 2, managers: 0 },
+      ranTogetherWith: { tasks: 2, managers: 0, internal: 0 },
       evidence: 'account-level',
       ...consumer,
     },

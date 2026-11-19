@@ -50,6 +50,14 @@ export interface ComputeOptions {
   intervals?: boolean;
 }
 
+/** One login inside one account folder: a re-login never shares windows or turns with the old one. */
+const LOGIN_SEP = '\u0001';
+const loginKey = (account: string, identity?: string) => (identity ? `${account}${LOGIN_SEP}${identity}` : account);
+const splitLogin = (key: string) => {
+  const [account, identity] = key.split(LOGIN_SEP);
+  return { account: account!, ...(identity ? { identity } : {}) };
+};
+
 export function accountFromKey(key: string, label?: string): PlanUsageAccount {
   const [provider, ...rest] = key.split(':');
   const accountId = rest.join(':') || 'default';
@@ -93,7 +101,6 @@ function sampleCoverage(sample: Sample, a: number, b: number): number {
 
 export interface Ledger {
   sessions: Session[];
-  readings: Map<string, Map<PlanUsageWindowKind, Reading[] & { resetsAt?: number }>>;
   rawReadings: Array<{ account: string; kind: PlanUsageWindowKind; resetsAt: number } & Reading>;
   failures: Array<{ consumerId: string; since: number; at: number }>;
   labels: Map<string, string>;
@@ -107,11 +114,11 @@ export function indexLedger(records: LedgerRecord[]): Ledger {
   const latestConsumer = new Map<string, LedgerConsumer>();
   for (const r of records) {
     if (r.t === 'reading') {
-      rawReadings.push({ account: r.account, kind: r.window, resetsAt: r.resetsAt, at: r.at, used: r.usedPercent, status: r.status, source: r.source });
+      rawReadings.push({ account: loginKey(r.account, r.identity), kind: r.window, resetsAt: r.resetsAt, at: r.at, used: r.usedPercent, status: r.status, source: r.source });
       if (r.label) labels.set(r.account, r.label);
     } else if (r.t === 'begin') {
       if (sessions.has(r.session)) continue;
-      sessions.set(r.session, { id: r.session, account: r.account, consumer: r.consumer, ...(r.part ? { part: r.part } : {}), ...(r.messageId ? { messageId: r.messageId } : {}), begin: r.at, samples: [] });
+      sessions.set(r.session, { id: r.session, account: loginKey(r.account, r.identity), consumer: r.consumer, ...(r.part ? { part: r.part } : {}), ...(r.messageId ? { messageId: r.messageId } : {}), begin: r.at, samples: [] });
       if (r.label) labels.set(r.account, r.label);
       latestConsumer.set(r.consumer.id, r.consumer);
     } else if (r.t === 'sample') {
@@ -129,7 +136,7 @@ export function indexLedger(records: LedgerRecord[]): Ledger {
     const latest = latestConsumer.get(s.consumer.id);
     if (latest?.title) s.consumer = { ...s.consumer, title: latest.title };
   }
-  return { sessions: [...sessions.values()], readings: new Map(), rawReadings, failures, labels };
+  return { sessions: [...sessions.values()], rawReadings, failures, labels };
 }
 
 interface WindowSeed { account: string; kind: PlanUsageWindowKind; resetsAt: number; readings: Reading[]; supersededAt?: number }
@@ -179,7 +186,8 @@ function windowSeeds(ledger: Ledger): WindowSeed[] {
 function attribute(sessions: Session[], a: number, b0: number, delta: number): { shares: Share[]; outside: number; unsplit: number; interval: Omit<PlanUsageInterval, 'from' | 'to' | 'deltaPp'> } {
   const b = b0 > a ? b0 : a + 1;
   const active = sessions.map((s) => ({ s, start: Math.max(s.begin, a), stop: Math.min(sessionEnd(s, Number.MAX_SAFE_INTEGER), b) }))
-    .filter((x) => x.stop > x.start || (x.s.begin <= a && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) >= b))
+    // Closed overlap: a call that began and answered within one instant still ran in the slice.
+    .filter((x) => x.s.begin <= b && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > a)
     // Claude reads the account when a request starts: the turn whose start produced reading `b`
     // had spent nothing yet, so it is not a candidate for the slice that reading closes.
     .filter((x) => !(x.s.begin > b - READING_LEAD && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > b));
@@ -257,8 +265,31 @@ function attribute(sessions: Session[], a: number, b0: number, delta: number): {
   };
 }
 
-function windowId(account: string, kind: PlanUsageWindowKind, resetsAt: number): string {
-  return `win:${account}:${kind}:${new Date(resetsAt).toISOString().slice(0, 16)}Z`;
+function windowId(login: string, kind: PlanUsageWindowKind, resetsAt: number): string {
+  const { account, identity } = splitLogin(login);
+  return `win:${account}${identity ? `@${identity.slice(0, 8)}` : ''}:${kind}:${new Date(resetsAt).toISOString().slice(0, 16)}Z`;
+}
+
+/** The login an account folder held most recently (by its newest reading or turn). */
+function latestLogin(ledger: Ledger, account: string): string | undefined {
+  let best: { at: number; login: string } | undefined;
+  for (const r of ledger.rawReadings) {
+    if (splitLogin(r.account).account === account && (!best || r.at > best.at)) best = { at: r.at, login: r.account };
+  }
+  for (const s of ledger.sessions) {
+    if (splitLogin(s.account).account === account && (!best || s.begin > best.at)) best = { at: s.begin, login: s.account };
+  }
+  return best?.login;
+}
+function earlierLogin(login: string, ledger: Ledger): boolean {
+  const latest = latestLogin(ledger, splitLogin(login).account);
+  return latest !== undefined && latest !== login;
+}
+function windowAccount(login: string, ledger: Ledger): PlanUsageAccount {
+  const { account, identity } = splitLogin(login);
+  const base = accountFromKey(account, ledger.labels.get(account));
+  const earlier = earlierLogin(login, ledger);
+  return { ...base, ...(identity ? { identity } : {}), ...(earlier ? { earlierLogin: true, label: `${base.label} (earlier login)` } : {}) };
 }
 
 function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions): PlanUsageWindow {
@@ -304,7 +335,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
         ...(s.consumer.runId ? { runId: s.consumer.runId } : {}),
         ...(s.consumer.managerId ? { managerId: s.consumer.managerId } : {}),
         estimatePp: 0, aloneInferredPp: 0, sharedEstimatePp: 0, retryWasteEstimatePp: 0,
-        ranTogetherWith: { tasks: 0, managers: 0 }, evidence: 'account-level',
+        ranTogetherWith: { tasks: 0, managers: 0, internal: 0 }, evidence: 'account-level',
         ...(s.consumer.kind === 'manager' ? { parts: { chat: 0, watch: 0, job: 0 }, messages: [] } : {}),
         _partners: new Set<string>(),
       };
@@ -338,7 +369,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
       ...c,
       estimatePp: round(c.estimatePp), aloneInferredPp: round(c.aloneInferredPp), sharedEstimatePp: round(c.sharedEstimatePp),
       retryWasteEstimatePp: round(c.retryWasteEstimatePp),
-      ranTogetherWith: { tasks: partners.filter((k) => k === 'task').length, managers: partners.filter((k) => k === 'manager').length },
+      ranTogetherWith: { tasks: partners.filter((k) => k === 'task').length, managers: partners.filter((k) => k === 'manager').length, internal: partners.filter((k) => k === 'internal').length },
       ...(c.parts ? { parts: { chat: round(c.parts.chat), watch: round(c.parts.watch), job: round(c.parts.job) } } : {}),
       ...(c.kind === 'manager' ? {
         turns: { chat: own.filter((s) => s.part === 'chat').length, watch: own.filter((s) => s.part === 'watch').length, job: own.filter((s) => s.part === 'job').length },
@@ -350,11 +381,11 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
 
   return {
     id: windowId(seed.account, seed.kind, seed.resetsAt),
-    account: accountFromKey(seed.account, ledger.labels.get(seed.account)),
+    account: windowAccount(seed.account, ledger),
     kind: seed.kind,
     startsAt: new Date(startsAt).toISOString(),
     resetsAt: new Date(seed.resetsAt).toISOString(),
-    current: seed.resetsAt > now && seed.supersededAt === undefined,
+    current: seed.resetsAt > now && seed.supersededAt === undefined && !earlierLogin(seed.account, ledger),
     usedPercent: { first: round(first.used), last: round(last.used) },
     ...(limitHit ? { limitReachedAt: new Date(limitHit.at).toISOString() } : {}),
     readings: readings.map((r) => ({ at: new Date(r.at).toISOString(), usedPercent: round(r.used), status: r.status, source: r.source })),

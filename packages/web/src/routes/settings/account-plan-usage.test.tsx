@@ -17,7 +17,7 @@ const { AccountPlanUsage, fiveHourLine, weeklyLine } = await import('./account-p
 const account = { key: 'claude:default', provider: 'claude' as const, accountId: 'default', label: 'Claude · default' }
 const consumer = (id: string, estimatePp: number) => ({
   id, kind: 'task' as const, title: id, estimatePp, aloneInferredPp: 0, sharedEstimatePp: estimatePp, retryWasteEstimatePp: 0,
-  ranTogetherWith: { tasks: 0, managers: 0 }, evidence: 'account-level' as const,
+  ranTogetherWith: { tasks: 0, managers: 0, internal: 0 }, evidence: 'account-level' as const,
 })
 const win = (over: Partial<PlanUsageWindow>): PlanUsageWindow => ({
   id: 'w', account, kind: 'five-hour', startsAt: '2026-11-19T10:00:00Z', resetsAt: '2026-11-19T15:00:00Z', current: true,
@@ -34,9 +34,9 @@ afterEach(cleanup)
 
 describe('limit lines', () => {
   it('marks cezar\'s share ≈ and keeps provider readings and remainders plain', () => {
-    expect(fiveHourLine(win({}))).toMatch(/^100% used · resets .+ · cezar tasks and managers ≈ 83% of it$/)
+    expect(fiveHourLine(win({}))).toMatch(/^100% used · resets .+ · cezar tasks and managers ≈ 83% of it, before tracking 10%$/)
     expect(weeklyLine(win({ kind: 'weekly', usedPercent: { first: 0, last: 29 }, consumers: [consumer('run:p/a', 22)] })))
-      .toMatch(/^29% used · resets .+ · this week: cezar ≈ 22%, outside cezar 7%$/)
+      .toMatch(/^29% used · resets .+ · this week: cezar ≈ 22%, outside cezar 7%, before tracking 10%$/)
   })
 
   it('says no reading yet instead of 0%', () => {

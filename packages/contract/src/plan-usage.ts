@@ -23,6 +23,11 @@ export const planUsageAccountSchema = z.object({
   provider: planUsageProviderSchema,
   accountId: z.string(),
   label: z.string(),
+  /** Fingerprint of the login inside the account folder (never who it is). A re-login is a
+   *  different login: its windows are never merged with the earlier one's. */
+  identity: z.string().optional(),
+  /** True for a login the account folder no longer holds. */
+  earlierLogin: z.boolean().optional(),
 });
 export type PlanUsageAccount = z.infer<typeof planUsageAccountSchema>;
 
@@ -34,13 +39,14 @@ export const planUsageReadingSchema = z.object({
 });
 export type PlanUsageReading = z.infer<typeof planUsageReadingSchema>;
 
-export const planUsageConsumerKindSchema = z.enum(['task', 'manager']);
+/** `internal`: cezar's own one-shot calls (auto-naming, commit messages, planner). */
+export const planUsageConsumerKindSchema = z.enum(['task', 'manager', 'internal']);
 export type PlanUsageConsumerKind = z.infer<typeof planUsageConsumerKindSchema>;
 export const planUsageManagerPartSchema = z.enum(['chat', 'watch', 'job']);
 export type PlanUsageManagerPart = z.infer<typeof planUsageManagerPartSchema>;
 
 export const planUsageConsumerSchema = z.object({
-  /** `run:<projectId>/<runId>` or `mgr:<managerId>`. */
+  /** `run:<projectId>/<runId>`, `mgr:<managerId>` or `internal:<purpose>`. */
   id: z.string(),
   kind: planUsageConsumerKindSchema,
   title: z.string(),
@@ -56,7 +62,7 @@ export const planUsageConsumerSchema = z.object({
   /** Part of `estimatePp` spent on attempts that later failed a check step. */
   retryWasteEstimatePp: pp,
   /** Distinct other cezar consumers it shared slices with. */
-  ranTogetherWith: z.object({ tasks: z.number().int().nonnegative(), managers: z.number().int().nonnegative() }),
+  ranTogetherWith: z.object({ tasks: z.number().int().nonnegative(), managers: z.number().int().nonnegative(), internal: z.number().int().nonnegative() }),
   evidence: z.literal('account-level'),
   /** Manager only: chat / watch checks / jobs. Tasks a manager starts count on the task. */
   parts: z.object({ chat: pp, watch: pp, job: pp }).optional(),

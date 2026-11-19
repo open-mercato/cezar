@@ -5,10 +5,11 @@ import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
-import { ledgerAccountKey, PlanUsageTracker, recordFailedAttempt, recordUsageObservation } from '../usage-ledger/recorder.ts';
+import { PlanUsageTracker, recordFailedAttempt, recordUsageObservation } from '../usage-ledger/recorder.ts';
+import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { taskConsumerId } from '../usage-ledger/report.ts';
 
-type PlanUsageAccountRef = { provider: 'claude' | 'codex'; key: string; label: string };
+type PlanUsageAccountRef = { provider: 'claude' | 'codex'; key: string; label?: string; identity?: string };
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
@@ -2050,11 +2051,11 @@ export class RunManager {
     // above stays limited to accounts whose identity it can bind.
     const ledgerProvider = backend === 'claude' || backend === 'codex' ? backend : undefined;
     const planUsageAccount = ledgerProvider
-      ? { provider: ledgerProvider, key: ledgerAccountKey(ledgerProvider, resolved.profile.id), label: resolved.profile.label }
+      ? await ledgerAccountRef(ledgerProvider, { id: resolved.profile.id, label: resolved.profile.label, path: profilePath }).catch(() => undefined)
       : undefined;
     const onUsageWindows = ledgerProvider ? async (observation: UsageWindowsObservation) => {
       if (planUsageAccount && !(ledgerProvider === 'codex' && attributionDisabled)) {
-        try { recordUsageObservation(planUsageAccount.key, planUsageAccount.label, observation); } catch { /* metadata only */ }
+        try { recordUsageObservation(planUsageAccount, observation); } catch { /* metadata only */ }
       }
       if (!usageProvider) return;
       try {
@@ -9269,7 +9270,7 @@ export class RunManager {
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
-        execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows };
+        execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows, ...(profile.planUsageAccount ? { planUsageAccount: profile.planUsageAccount } : {}) };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,
         (reason) => this.store.appendEvent(runId, { type: 'note', message: `model naming unavailable — ${reason}` }));
@@ -9449,9 +9450,9 @@ export class RunManager {
     const run = this.store.getRun(runId);
     const projectId = this.projectId ?? 'default';
     try {
-      return new PlanUsageTracker(account.provider, account.key, {
+      return new PlanUsageTracker(account.provider, account, {
         id: taskConsumerId(projectId, runId), kind: 'task', title: run?.title ?? runId, projectId, runId,
-      }, { label: account.label });
+      });
     } catch {
       return undefined;
     }

@@ -19,10 +19,10 @@ describe('plan limits model', () => {
     expect(segments.reduce((n, s) => n + s.width, 0)).toBeCloseTo(100)
   })
 
-  it('folds before-tracking into outside and names it, and shows what is left', () => {
+  it('keeps before-tracking (unknown) apart from outside cezar, and shows what is left', () => {
     const w = planWindow({ consumers: [], usedPercent: { first: 40, last: 63 }, limitReachedAt: undefined, beforeTrackingPp: 40, outsideCezarPp: 4, unsplitPp: 0, leftPp: 37 })
-    const outside = windowSegments(w).find((s) => s.id === 'outside')!
-    expect(outside).toMatchObject({ label: 'Outside cezar / before tracking', pp: 44 })
+    expect(windowSegments(w).find((s) => s.id === 'outside')).toMatchObject({ label: 'Outside cezar', pp: 4 })
+    expect(windowSegments(w).find((s) => s.id === 'before')).toMatchObject({ label: 'Before tracking', pp: 40 })
     expect(windowSegments(w).find((s) => s.id === 'left')?.pp).toBe(37)
   })
 

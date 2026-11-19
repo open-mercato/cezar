@@ -33,7 +33,9 @@ import {
 const LEGEND: { id: SegmentId; label: string }[] = [
   { id: 'tasks', label: 'Tasks' },
   { id: 'managers', label: 'Managers' },
+  { id: 'internal', label: 'cezar internal' },
   { id: 'unsplit', label: "Couldn't split" },
+  { id: 'before', label: 'Before tracking' },
   { id: 'outside', label: 'Outside cezar' },
   { id: 'left', label: 'Left' },
 ]

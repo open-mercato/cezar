@@ -10,7 +10,7 @@ import { createInterface } from 'node:readline';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
@@ -117,11 +117,13 @@ function emitPlanWindows() {
   const now = Date.now();
   const fiveHours = 5 * 3600_000;
   const start = Math.floor(now / fiveHours) * fiveHours;
-  const stateFile = join(tmpdir(), `cez-mock-plan-${start}.json`);
+  // The cezar home, never the shared temp dir: a predictable world-writable path is a planting target.
+  const stateDir = join(process.env.CEZ_HOME || join(homedir(), '.cezar'), 'mock');
+  const stateFile = join(stateDir, `plan-${start}.json`);
   let used = 0.15;
   try { used = JSON.parse(readFileSync(stateFile, 'utf8')).used; } catch { /* first turn of this window */ }
   used = Math.min(0.99, Math.round((used + 0.02) * 100) / 100);
-  try { writeFileSync(stateFile, JSON.stringify({ used })); } catch { /* read-only tmp: a flat reading */ }
+  try { mkdirSync(stateDir, { recursive: true, mode: 0o700 }); writeFileSync(stateFile, JSON.stringify({ used }), { mode: 0o600 }); } catch { /* read-only tmp: a flat reading */ }
   emit({
     type: 'rate_limit_event',
     rate_limit_info: {

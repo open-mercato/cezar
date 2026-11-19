@@ -13,7 +13,7 @@ import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 
 const consumerSchema = z.object({
   id: z.string().max(400),
-  kind: z.enum(['task', 'manager']),
+  kind: z.enum(['task', 'manager', 'internal']),
   title: z.string().max(300).catch(''),
   projectId: z.string().max(200).optional(),
   runId: z.string().max(200).optional(),
@@ -27,12 +27,14 @@ const ms = z.number().int().nonnegative();
 export const ledgerRecordSchema = z.discriminatedUnion('t', [
   z.object({
     t: z.literal('reading'), at: ms, account: z.string().max(300), label: z.string().max(200).optional(),
+    identity: z.string().max(64).optional(),
     window: z.enum(['five-hour', 'weekly']), usedPercent: z.number().finite().nonnegative(),
     resetsAt: ms, status: z.enum(['allowed', 'blocked', 'unknown']),
     source: z.enum(['claude-stream', 'codex-notification', 'codex-read']),
   }),
   z.object({
     t: z.literal('begin'), at: ms, account: z.string().max(300), label: z.string().max(200).optional(),
+    identity: z.string().max(64).optional(),
     session: z.string().max(100), consumer: consumerSchema, part, messageId: z.string().max(200).optional(),
   }),
   z.object({

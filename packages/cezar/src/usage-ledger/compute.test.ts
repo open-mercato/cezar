@@ -60,7 +60,7 @@ describe('plan usage attribution', () => {
     expect(by['run:p/b']!.estimatePp).toBeCloseTo(3.54, 1);
     expect(by['mgr:rel']!.estimatePp).toBeCloseTo(1.33, 1);
     expect(by['run:p/a']!.aloneInferredPp).toBe(0);
-    expect(by['run:p/a']!.ranTogetherWith).toEqual({ tasks: 1, managers: 1 });
+    expect(by['run:p/a']!.ranTogetherWith).toEqual({ tasks: 1, managers: 1, internal: 0 });
     expect(by['mgr:rel']!.parts).toEqual({ chat: 1.33, watch: 0, job: 0 });
     expect(by['mgr:rel']!.messages).toEqual([{ messageId: 'msg1', part: 'chat', estimatePp: 1.33 }]);
     expect(invariant(w)).toBeCloseTo(19, 5);
@@ -191,5 +191,37 @@ describe('readings that arrive when a turn starts', () => {
     ]);
     expect(w.outsideCezarPp).toBe(20);
     expect(w.consumers).toMatchObject([{ id: 'run:p/a', estimatePp: 3, aloneInferredPp: 3 }]);
+  });
+});
+
+describe('account identity and cezar internal calls', () => {
+  it('keeps a re-login in the same account folder apart, even with the same reset hour', () => {
+    const windows = computeWindows([
+      { ...reading('10:00', 30), identity: 'aaaa' } as LedgerRecord, { ...reading('10:10', 35), identity: 'aaaa' } as LedgerRecord,
+      { ...task('a', 'run:p/a', '10:00'), identity: 'aaaa' } as LedgerRecord, sample('a', '10:00', '10:10', 1), end('a', '10:10'),
+      // The user signs in to another org in the same folder: its 80% must not read as +45%.
+      { ...reading('10:20', 80), identity: 'bbbb' } as LedgerRecord, { ...reading('10:30', 82), identity: 'bbbb' } as LedgerRecord,
+      { ...task('b', 'run:p/b', '10:20'), identity: 'bbbb' } as LedgerRecord, sample('b', '10:20', '10:30', 1), end('b', '10:30'),
+    ], { now: T('10:40') });
+    expect(windows).toHaveLength(2);
+    const old = windows.find((w) => w.account.identity === 'aaaa')!;
+    const now = windows.find((w) => w.account.identity === 'bbbb')!;
+    expect(old).toMatchObject({ current: false, account: { earlierLogin: true, label: 'Claude · default (earlier login)' } });
+    expect(old.consumers).toMatchObject([{ id: 'run:p/a', estimatePp: 5 }]);
+    expect(now).toMatchObject({ current: true, beforeTrackingPp: 80, correctionPp: 0 });
+    expect(now.consumers).toMatchObject([{ id: 'run:p/b', estimatePp: 2 }]);
+    expect(old.id).not.toBe(now.id);
+  });
+
+  it('gives auto-naming its own share instead of inflating the task that ran beside it', () => {
+    const w = only([
+      reading('10:00', 10), task('a', 'run:p/a', '10:00'),
+      { t: 'begin', at: T('10:01'), account: ACC, session: 'n', consumer: { id: 'internal:auto-naming', kind: 'internal', title: 'Auto-naming' } },
+      sample('n', '10:01', '10:01', 0.01), end('n', '10:01'),
+      sample('a', '10:00', '10:10', 0.99), end('a', '10:10'), reading('10:10', 20),
+    ]);
+    const by = Object.fromEntries(w.consumers.map((c) => [c.id, c.estimatePp]));
+    expect(by['internal:auto-naming']).toBeCloseTo(0.1, 5);
+    expect(by['run:p/a']).toBeCloseTo(9.9, 5);
   });
 });

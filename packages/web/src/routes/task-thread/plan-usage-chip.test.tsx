@@ -71,7 +71,7 @@ describe('PlanUsageChip', () => {
   })
 
   it('hides the failed-attempts line when nothing was wasted', async () => {
-    stubConsumers([planEntry('r1', '2026-11-19T15:00:00.000Z', { retryWasteEstimatePp: 0, ranTogetherWith: { tasks: 1, managers: 1 } })])
+    stubConsumers([planEntry('r1', '2026-11-19T15:00:00.000Z', { retryWasteEstimatePp: 0, ranTogetherWith: { tasks: 1, managers: 1, internal: 0 } })])
     renderChip()
     fireEvent.click(await screen.findByRole('button', { name: /This task/ }))
     const details = within(await screen.findByRole('dialog'))

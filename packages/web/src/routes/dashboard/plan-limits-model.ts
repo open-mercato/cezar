@@ -13,7 +13,7 @@ export const PLAN_KINDS = ['five-hour', 'weekly'] as const
 
 export const PROVIDER_NAME: Record<PlanUsageProvider, string> = { claude: 'Claude', codex: 'Codex' }
 
-export type SegmentId = 'tasks' | 'managers' | 'unsplit' | 'outside' | 'left'
+export type SegmentId = 'tasks' | 'managers' | 'internal' | 'unsplit' | 'before' | 'outside' | 'left'
 export interface Segment {
   id: SegmentId
   label: string
@@ -25,7 +25,10 @@ export interface Segment {
 export const SEGMENT_FILL: Record<SegmentId, string> = {
   tasks: 'bg-violet',
   managers: 'bg-info',
+  internal: 'bg-success',
   unsplit: 'bg-warning',
+  // Unknown, not outside: striped so it never reads as anyone's share.
+  before: 'bg-[repeating-linear-gradient(135deg,var(--color-soft-foreground)_0_2px,transparent_2px_5px)] opacity-60',
   outside: 'bg-soft-foreground/60',
   left: 'bg-muted',
 }
@@ -40,12 +43,14 @@ export function lastUsed(w: PlanUsageWindow): number | null {
 /** The stacked bar: who filled the limit, then what is left. Widths never exceed 100%. */
 export function windowSegments(w: PlanUsageWindow): Segment[] {
   const used = lastUsed(w) ?? 0
-  const outsideLabel = w.beforeTrackingPp > 0 ? 'Outside cezar / before tracking' : 'Outside cezar'
   const raw: Omit<Segment, 'width'>[] = [
     { id: 'tasks', label: 'Tasks', pp: sum(w.consumers, 'task') },
     { id: 'managers', label: 'Managers', pp: sum(w.consumers, 'manager') },
+    { id: 'internal', label: 'cezar internal', pp: sum(w.consumers, 'internal') },
     { id: 'unsplit', label: "Couldn't split", pp: Math.max(0, w.unsplitPp) },
-    { id: 'outside', label: outsideLabel, pp: Math.max(0, w.outsideCezarPp) + Math.max(0, w.beforeTrackingPp) },
+    // Used before cezar's first reading: unknown who, so never folded into "Outside cezar".
+    { id: 'before', label: 'Before tracking', pp: Math.max(0, w.beforeTrackingPp) },
+    { id: 'outside', label: 'Outside cezar', pp: Math.max(0, w.outsideCezarPp) },
     { id: 'left', label: 'Left', pp: Math.max(0, w.leftPp ?? 100 - used) },
   ]
   const total = raw.reduce((n, s) => n + s.pp, 0)
@@ -75,8 +80,9 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 export function topConsumersLine(w: PlanUsageWindow, limit = 3): string | null {
   if (w.consumers.length === 0) return null
   const tasks = w.consumers.filter((c) => c.kind === 'task').length
-  const managers = w.consumers.length - tasks
-  const counts = [tasks ? plural(tasks, 'task') : '', managers ? plural(managers, 'manager') : ''].filter(Boolean)
+  const managers = w.consumers.filter((c) => c.kind === 'manager').length
+  const internal = w.consumers.some((c) => c.kind === 'internal')
+  const counts = [tasks ? plural(tasks, 'task') : '', managers ? plural(managers, 'manager') : '', internal ? 'cezar internal' : ''].filter(Boolean)
   const top = byShare(w.consumers).slice(0, limit).map((c) => `${c.title} ${approxPp(c.estimatePp)}`)
   return `${counts.join(' · ')} · top: ${top.join(', ')}`
 }
@@ -156,10 +162,11 @@ const fix = (n: number) => Math.round(n * 10) / 10
 
 /** `3 tasks, manager` — who it shared slices with; `—` when nobody. */
 export function ranTogether(c: PlanUsageConsumer): string {
-  const { tasks, managers } = c.ranTogetherWith
+  const { tasks, managers, internal } = c.ranTogetherWith
   const parts = [
     tasks ? plural(tasks, 'task') : '',
     managers === 1 ? 'manager' : managers > 1 ? plural(managers, 'manager') : '',
+    internal ? 'cezar internal' : '',
   ].filter(Boolean)
   return parts.length ? parts.join(', ') : '—'
 }

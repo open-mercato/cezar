@@ -19,7 +19,7 @@ const consumer = (over: Partial<PlanUsageConsumer> & Pick<PlanUsageConsumer, 'id
   aloneInferredPp: 0,
   sharedEstimatePp: 0,
   retryWasteEstimatePp: 0,
-  ranTogetherWith: { tasks: 0, managers: 0 },
+  ranTogetherWith: { tasks: 0, managers: 0, internal: 0 },
   evidence: 'account-level',
   ...over,
 })

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveCursorAgentBin } from '../core/cursor-agent-runner.ts';
@@ -151,6 +152,36 @@ async function readCodexIdentity(configDir: string): Promise<AccountIdentity> {
   return fields.length > 0
     ? { available: true, fields }
     : { available: false, reason: NOT_SIGNED_IN, fields: [] };
+}
+
+/**
+ * A one-way fingerprint of WHICH login an account folder holds, for the plan-usage ledger
+ * (spec 2026-11-19-plan-usage): it tells a re-login apart without storing who it is. Hashes
+ * opaque ids only (Claude `oauthAccount` uuids, Codex `sub`/account id claims); undefined when
+ * there is no such login. Never throws.
+ */
+export async function accountLoginFingerprint(provider: 'claude' | 'codex', configDir: string): Promise<string | undefined> {
+  try {
+    let parts: unknown[] = [];
+    if (provider === 'claude') {
+      const account = (await readJsonCapped(claudeStateFilePath(configDir)))?.oauthAccount;
+      if (account && typeof account === 'object') {
+        const a = account as Record<string, unknown>;
+        parts = [a.accountUuid, a.organizationUuid];
+      }
+    } else {
+      const tokens = (await readJsonCapped(join(configDir, 'auth.json')))?.tokens;
+      const idToken = tokens && typeof tokens === 'object' ? (tokens as Record<string, unknown>).id_token : undefined;
+      const claims = typeof idToken === 'string' ? decodeJwtClaims(idToken) : null;
+      const openai = claims?.['https://api.openai.com/auth'];
+      parts = [claims?.sub, openai && typeof openai === 'object' ? (openai as Record<string, unknown>).chatgpt_account_id : undefined];
+    }
+    const ids = parts.filter((p): p is string => typeof p === 'string' && p.length > 0 && p.length <= 200);
+    if (ids.length === 0) return undefined;
+    return createHash('sha256').update(`${provider}\u0000${ids.join('\u0000')}`).digest('hex').slice(0, 16);
+  } catch {
+    return undefined;
+  }
 }
 
 /** A JWT's payload claims, or null when it is not a readable three-part token. */

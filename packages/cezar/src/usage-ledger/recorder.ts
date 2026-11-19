@@ -7,6 +7,9 @@ export function ledgerAccountKey(provider: 'claude' | 'codex', accountId: string
   return `${provider}:${accountId}`;
 }
 
+/** The account a reading or turn belongs to; `identity` fingerprints the login inside it. */
+export interface LedgerAccountRef { key: string; label?: string; identity?: string }
+
 const lastWritten = new Map<string, { usedPercent: number; status: string; at: number }>();
 const REPEAT_MS = 10 * 60_000;
 
@@ -15,7 +18,8 @@ const REPEAT_MS = 10 * 60_000;
  * every model are kept (Claude's five_hour/seven_day, Codex's general bucket): a model-specific
  * bucket would be read as the whole account. Repeats of an unchanged reading are thinned.
  */
-export function recordUsageObservation(account: string, label: string | undefined, observation: UsageWindowsObservation): void {
+export function recordUsageObservation(ref: LedgerAccountRef, observation: UsageWindowsObservation): void {
+  const { key: account, label, identity } = ref;
   for (const window of observation.windows) {
     if (window.usedPercent === null || window.resetsAt === null || window.applicability !== 'all') continue;
     let kind: 'five-hour' | 'weekly' | undefined;
@@ -26,7 +30,7 @@ export function recordUsageObservation(account: string, label: string | undefine
         : window.durationMinutes <= 24 * 60 ? 'five-hour' : 'weekly';
     }
     if (!kind) continue;
-    const key = `${account}|${kind}|${window.resetsAt}`;
+    const key = `${account}|${identity ?? ''}|${kind}|${window.resetsAt}`;
     const previous = lastWritten.get(key);
     if (previous && previous.usedPercent === window.usedPercent && previous.status === window.status
       && window.observedAt - previous.at < REPEAT_MS) continue;
@@ -34,6 +38,7 @@ export function recordUsageObservation(account: string, label: string | undefine
     lastWritten.set(key, { usedPercent: window.usedPercent, status: window.status, at: window.observedAt });
     appendLedger({
       t: 'reading', at: window.observedAt, account, ...(label ? { label: label.slice(0, 200) } : {}),
+      ...(identity ? { identity } : {}),
       window: kind, usedPercent: Math.round(window.usedPercent * 100) / 100, resetsAt: window.resetsAt, status: window.status,
       source: observation.source,
     }, account);
@@ -51,19 +56,23 @@ export class LedgerSession {
   private closed = false;
   private endedAt: number | undefined;
 
+  readonly account: string;
+
   constructor(
-    readonly account: string,
+    ref: LedgerAccountRef,
     readonly consumer: LedgerConsumer,
-    options: { label?: string; part?: 'chat' | 'watch' | 'job'; messageId?: string; now?: number } = {},
+    options: { part?: 'chat' | 'watch' | 'job'; messageId?: string; now?: number } = {},
   ) {
+    this.account = ref.key;
     this.cursor = options.now ?? Date.now();
     appendLedger({
-      t: 'begin', at: this.cursor, account, session: this.id,
+      t: 'begin', at: this.cursor, account: ref.key, session: this.id,
+      ...(ref.label ? { label: ref.label.slice(0, 200) } : {}),
+      ...(ref.identity ? { identity: ref.identity } : {}),
       consumer: { ...consumer, title: consumer.title.slice(0, 300) },
-      ...(options.label ? { label: options.label.slice(0, 200) } : {}),
       ...(options.part ? { part: options.part } : {}),
       ...(options.messageId ? { messageId: options.messageId } : {}),
-    }, account);
+    }, ref.key);
   }
 
   /** `late`: a cost reported just after the turn closed still belongs to that turn. */
@@ -102,9 +111,9 @@ export class PlanUsageTracker {
 
   constructor(
     readonly provider: 'claude' | 'codex',
-    readonly account: string,
+    readonly account: LedgerAccountRef,
     readonly consumer: LedgerConsumer,
-    private readonly options: { label?: string; part?: 'chat' | 'watch' | 'job'; messageId?: string; endOnClose?: boolean } = {},
+    private readonly options: { part?: 'chat' | 'watch' | 'job'; messageId?: string; endOnClose?: boolean } = {},
   ) {}
 
   private open(): LedgerSession {
@@ -143,4 +152,33 @@ export class PlanUsageTracker {
     this.turn?.end(options);
     this.turn = undefined;
   }
+}
+
+/** cezar's own one-shot model calls: tracked as their own consumer, so they never inflate a task. */
+export const INTERNAL_CONSUMERS = {
+  naming: { id: 'internal:auto-naming', kind: 'internal', title: 'Auto-naming (task titles, branches)' },
+  commit: { id: 'internal:commit-messages', kind: 'internal', title: 'Commit messages' },
+  planner: { id: 'internal:planner', kind: 'internal', title: 'Planner' },
+} as const satisfies Record<string, LedgerConsumer>;
+
+/**
+ * Wrap a one-shot `runner.run`: one span from call to answer, weighted by the reported cost
+ * (Claude) or tokens (Codex). Pass `onEvent` on to the runner. Off Claude/Codex it is a no-op.
+ */
+export function trackOneShot(provider: string, account: LedgerAccountRef | undefined, consumer: LedgerConsumer) {
+  if (!account || (provider !== 'claude' && provider !== 'codex')) {
+    return { onEvent: (_event: { type: string; usd?: number }) => {}, done: (_result?: { tokensUsed?: number }) => {} };
+  }
+  let session: LedgerSession | undefined;
+  try { session = new LedgerSession(account, consumer); } catch { /* metadata only */ }
+  let usd = 0;
+  return {
+    onEvent: (event: { type: string; usd?: number }) => { if (event.type === 'cost' && typeof event.usd === 'number') usd += event.usd; },
+    done: (result?: { tokensUsed?: number }) => {
+      if (!session) return;
+      if (provider === 'claude') session.sample({ usd });
+      else session.sample({ tokens: result?.tokensUsed ?? 0 });
+      session.end();
+    },
+  };
 }

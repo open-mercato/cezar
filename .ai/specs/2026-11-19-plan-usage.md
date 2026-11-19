@@ -29,20 +29,27 @@ Per account and window (5-hour, weekly; Codex primary/secondary mapped by durati
 are sorted by time and walked with a high-water mark, so each rise is allocated exactly once
 however many parallel sessions reported it:
 
-- no cezar turn running in the slice → **outside cezar**;
+- no cezar turn running in the slice → **outside cezar** (Claude reads the account when a
+  request starts, so the turn whose start produced a reading is not a candidate for the slice
+  it closes);
 - one consumer running → its share, marked **alone**;
 - several → split by the weight each reported inside the slice (Claude USD, Codex tokens,
   spread evenly over the turn); time no report covers yet (a turn still running, one that
   stopped mid-reply) → **couldn't be split**;
-- the part of a slice no cezar turn covers → outside cezar (time-proportional);
 - a reading lower than an earlier one → **provider correction**, shown, never re-counted;
-- the first reading → **before cezar's first reading**.
+- the first reading → **before cezar's first reading** — unknown, shown as its own segment and
+  never folded into "outside cezar".
 
 Invariant, pinned by tests: before + Σ consumers + outside + unsplit − correction = last reading.
 
 A reset is a new window (readings cluster by `resetsAt` ±10 min); a newer window whose first
 reading predates the older one's reset (an early reset, another login) ends the older one.
-Accounts are keyed `provider:<cezar account id>`. Retries: a failed check marks everything the
+Accounts are keyed `provider:<cezar account id>`, plus a one-way fingerprint of the login the
+folder holds (Claude `oauthAccount` uuids, Codex `sub`/account-id claims; never the email): a
+re-login in the same folder gets its own windows, the older one is labelled "(earlier login)"
+and is never current. A fingerprint that cannot be read reuses the last one this process saw.
+cezar's own one-shot calls — auto-naming, commit messages, the planner — are `internal`
+consumers with their own share, so they never land in a task's. Retries: a failed check marks everything the
 task spent since its previous failed check as `retryWasteEstimatePp`. Tasks a manager starts
 count on the task; manager turns are their own consumer with chat/watch/job parts, per-reply
 estimates and quiet-watch counts.
@@ -68,5 +75,8 @@ sat under 50%; every watch check of a manager quiet (≥ 3). Each carries its ev
 
 Claude reports utilization in whole percent and usually once per turn, so short turns read as
 0–1% steps. Codex reports tokens but no cost, so Codex shares split by tokens. API-key logins
-and every other runner report no plan limits ("not reported"). Claude has no login identity on
-the stream, so a re-login inside the same account folder is only told apart by a new reset.
+and every other runner report no plan limits ("not reported"). The login fingerprint is read at
+session start, so a re-login during a running turn is only caught at the next turn. Readings
+written before fingerprints existed carry none and read as another login once. Between two
+readings cezar cannot see your own Claude Code use beside a running task, so a task share
+can include it (hence `≈`).
