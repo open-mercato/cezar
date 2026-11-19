@@ -229,7 +229,7 @@ describe("Continue reconciles a stale 'active' registration (#798)", () => {
       .filter((event) => event.type === 'note' && String(event.message).includes('had been released')).length;
   }
 
-  it('refuses a second Continue during the run-up and leaves the first continuation untouched', async () => {
+  it('folds a second Continue during the run-up into the first and leaves the first continuation untouched', async () => {
     const runId = settledRunWithSession('Claude AI usage limit reached|1');
     const internals = manager as unknown as Record<string, (...args: unknown[]) => unknown>;
     const settledReport = vi.spyOn(internals, 'reportSettledChildToParent');
@@ -242,7 +242,8 @@ describe("Continue reconciles a stale 'active' registration (#798)", () => {
     await gate.parked;
     expect(store.getRun(runId)?.status).toBe('failed');
 
-    expect(manager.continueRun(runId, { text: 'again' })).toEqual({ ok: false, error: 'run is still active' });
+    // main (77117b95): a follow-up in the run-up is one more message, never a second Continue.
+    expect(manager.continueRun(runId, { text: 'again' })).toEqual({ ok: true });
     expect(settledReport).not.toHaveBeenCalled();
     expect(autoResume).not.toHaveBeenCalled();
     expect(retention).not.toHaveBeenCalled();
@@ -256,7 +257,7 @@ describe("Continue reconciles a stale 'active' registration (#798)", () => {
     expect(manager.isActive(runId)).toBe(true);
   }, 30_000);
 
-  it('treats the run-up as live even when the record still shows an earlier turn running', async () => {
+  it('treats the run-up as live (no release) even when the record still shows an earlier turn running', async () => {
     const runId = settledRunWithSession('interrupted — cezar process exited during the run');
     store.updateStep(runId, 'work', { status: 'running', finishedAt: undefined });
     const gate = holdSkillDiscovery();
@@ -266,23 +267,25 @@ describe("Continue reconciles a stale 'active' registration (#798)", () => {
 
     // A settled record with a turn left open is the stale shape — but no session has opened on
     // this registration yet, so it is a continuation on its way up, not a leftover.
-    expect(manager.continueRun(runId, { text: 'again' })).toEqual({ ok: false, error: 'run is still active' });
+    const releasedBefore = releasedNotes(runId);
+    expect(manager.continueRun(runId, { text: 'again' })).not.toMatchObject({ error: expect.stringContaining('cannot continue') });
+    expect(releasedNotes(runId)).toBe(releasedBefore);
     gate.release();
     await waitFor(() => sessionOpened(runId));
     expect(store.getRun(runId)?.currentStepId).toBe('continue-1');
   }, 30_000);
 
-  it('refuses Continue while a cancellation is still in its grace window', async () => {
+  it('queues Continue behind a cancellation still in its grace window, without releasing it', async () => {
     const runId = await liveContinuation();
     expect(manager.cancel(runId)).toBe(true);
     expect(store.getRun(runId)?.status).toBe('cancelled');
 
     // The session is still being reaped and holds its slot until it is — not a stalled leftover.
-    expect(manager.continueRun(runId, { text: 'carry on' })).toEqual({ ok: false, error: 'run is still active' });
+    // main (77117b95) parks it as `continueOnDrop` instead of answering 409.
+    expect(manager.continueRun(runId, { text: 'carry on' })).toEqual({ ok: true });
     expect(store.readEvents(runId).some((event) => String(event.message ?? '').includes('stale session'))).toBe(false);
 
-    await waitFor(() => !manager.isActive(runId));
-    expect(manager.continueRun(runId, { text: 'carry on' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(runId)?.status === 'running');
   }, 30_000);
 
   it('refuses while the previous session is closing out a turn it already settled', async () => {
@@ -443,7 +446,7 @@ describe('a continuation parked on the repo-root lease (#798)', () => {
     return record.id;
   }
 
-  it('is live: Continue is refused and the waiter keeps its place', async () => {
+  it('is live: a repeat Continue is folded in and the waiter keeps its place', async () => {
     // The holder takes the lease and never lets go — its session ignores EOF.
     const holder = rootRunWithSession();
     expect(manager.continueRun(holder, { text: 'hold the tree' })).toEqual({ ok: true });
@@ -455,7 +458,7 @@ describe('a continuation parked on the repo-root lease (#798)', () => {
     await waitFor(() => manager.isActive(blocked));
     expect(store.getRun(blocked)?.status).toBe('failed');
 
-    expect(manager.continueRun(blocked, { text: 'carry on' })).toEqual({ ok: false, error: 'run is still active' });
+    expect(manager.continueRun(blocked, { text: 'carry on' })).toEqual({ ok: true });
 
     // Once the holder lets go, the waiter it was blocking is the one that runs.
     expect(manager.cancel(holder)).toBe(true);
