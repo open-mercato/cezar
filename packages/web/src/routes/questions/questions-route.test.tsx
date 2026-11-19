@@ -182,6 +182,35 @@ describe('the Questions page', () => {
     expect(document.querySelector('[data-slot="question-closed-reason"]')?.textContent).toBe('Answered')
   })
 
+  it('a leaving card in the middle hands focus to its nearest neighbour, never the top of the page', async () => {
+    data.open = [
+      managerItem('m1', 'Alpha', { askedAt: ago(40 * 60_000) }),
+      managerItem('m2', 'Bravo', { askedAt: ago(30 * 60_000) }),
+      managerItem('m3', 'Charlie', { askedAt: ago(20 * 60_000) }),
+      managerItem('m4', 'Delta', { askedAt: ago(10 * 60_000) }),
+    ]
+    renderPage()
+    await screen.findByRole('group', { name: 'Charlie' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const focusedKey = () => document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')
+    const answerAndLinger = async (name: string) => {
+      const yes = within(card(name)).getByRole('button', { name: 'Yes' })
+      yes.focus()
+      fireEvent.click(yes)
+      await waitFor(() => expect(within(card(name)).getByRole('img', { name: 'Delivered' })).toBeTruthy())
+      await waitFor(() => expect(document.activeElement).toBe(card(name).querySelector('[data-slot="question-outcome"]')))
+      await act(async () => { await vi.advanceTimersByTimeAsync(LINGER_MS + 10) })
+      expect(screen.queryByRole('group', { name })).toBeNull()
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    }
+    // Third of four: the next card down.
+    await answerAndLinger('Charlie')
+    expect(focusedKey()).toBe('m:global:m4')
+    // Now the last card: the one just above it, not Alpha at the top.
+    await answerAndLinger('Delta')
+    expect(focusedKey()).toBe('m:global:m2')
+  })
+
   it('counts drop on the click: the Questions badge and the manager’s “Waiting for N answers”', async () => {
     managerList = [managerFixture({ pendingQuestions: 2 })]
     data.open = [managerItem('m1', 'Design'), managerItem('m2', 'Budget')]
@@ -215,7 +244,33 @@ describe('the Questions page', () => {
     expect(within(card('Design')).getByRole('button', { name: 'Yes' })).toBeTruthy()
     expect(card('Design').getAttribute('data-state')).toBe('open')
     expect(count()).toBe('1')
+    expect(screen.getByText(/Your answer to «Design» was not delivered/)).toBeTruthy()
     await waitFor(() => expect(screen.getAllByText('Waiting for your answer').length).toBeGreaterThan(0))
+  })
+
+  it('a failed delivery from the keyboard puts focus back on the card’s answer, mid-list', async () => {
+    data.open = [
+      managerItem('m1', 'Alpha', { askedAt: ago(30 * 60_000) }),
+      managerItem('m2', 'Bravo', { askedAt: ago(20 * 60_000) }),
+      managerItem('m3', 'Charlie', { askedAt: ago(10 * 60_000) }),
+    ]
+    answerStatus = 500
+    renderPage()
+    const yes = within(await screen.findByRole('group', { name: 'Bravo' })).getByRole('button', { name: 'Yes' })
+    yes.focus()
+    fireEvent.click(yes)
+    expect(await within(card('Bravo')).findByText(/the agent session is gone/)).toBeTruthy()
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-pressed')).not.toBeNull())
+    expect(document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')).toBe('m:global:m2')
+    expect(screen.getByText(/Your answer to «Bravo» was not delivered/)).toBeTruthy()
+  })
+
+  it('a 409 announces that the question closed first', async () => {
+    data.open = [managerItem('m1', 'Design')]
+    answerStatus = 409
+    renderPage()
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'Yes' }))
+    expect(await screen.findByText('«Design» closed before your answer arrived.')).toBeTruthy()
   })
 
   it('coming back after answering shows the card already gone, under Closed', async () => {

@@ -67,6 +67,12 @@ const firstHeader = (item: QuestionItem) => item.questions[0]?.header ?? 'Questi
 const firstOption = (key: string) =>
   document.querySelector<HTMLElement>(`[data-question-key="${key.replace(/["\\]/g, '\\$&')}"] [aria-pressed]`)
 
+/** Where focus lands on a card: its first option, else its outcome or Undo note. */
+const cardFocusTarget = (key: string) => {
+  const card = `[data-question-key="${key.replace(/["\\]/g, '\\$&')}"]`
+  return firstOption(key) ?? document.querySelector<HTMLElement>(`${card} [data-slot="question-outcome"], ${card} [data-slot="question-dismissing-wrap"]`)
+}
+
 /** Where the card lives: the chat's `#decision-<id>` anchor, or the task thread's open ask. */
 export function questionContextHref(item: Pick<QuestionItem, 'key' | 'source'>): string {
   const key = parseQuestionKey(item.key)
@@ -213,16 +219,17 @@ export function QuestionsRoute() {
   const managerById = useCallback((id: string) => managers.data?.managers.find((manager) => manager.id === id), [managers.data])
   const approvals = (managers.data?.managers ?? []).reduce((sum, manager) => sum + manager.pendingActions, 0)
 
-  // When a lingering card leaves, focus goes to the next answerable card's first option, else the
-  // heading (design § E).
+  // When a lingering card leaves, focus goes to its nearest surviving neighbour, next then previous,
+  // else the heading (design § E).
   const order = useRef<string[]>([])
   order.current = [...groups.flatMap((group) => group.items.map((item) => item.key)), ...(olderOpen ? older.map((item) => item.key) : [])]
   const handOffFocus = useCallback((leaving: string) => {
+    // Read the order now: by the time the timer fires the leaving card is no longer in it.
+    const keys = order.current
+    const at = keys.indexOf(leaving)
+    const candidates = at < 0 ? keys : [...keys.slice(at + 1), ...keys.slice(0, at).reverse()]
     setTimeout(() => {
-      const keys = order.current
-      const at = keys.indexOf(leaving)
-      const candidates = at < 0 ? keys : [...keys.slice(at + 1), ...keys.slice(0, at).reverse()]
-      const target = candidates.filter((key) => key !== leaving).map(firstOption).find(Boolean)
+      const target = candidates.filter((key) => key !== leaving).map(cardFocusTarget).find(Boolean)
       ;(target ?? heading.current)?.focus({ preventScroll: false })
     }, 0)
   }, [])
@@ -270,13 +277,14 @@ export function QuestionsRoute() {
       // The chat's copy of the card turns answered too, without waiting for its next frame.
       if (item.source.kind === 'manager') void refreshManagerChat(queryClient, item.source.managerId)
     },
-    failed: (item, closedMeanwhile) => {
+    failed: (item, message, closedMeanwhile) => {
       markAnswering(item.key, false)
+      setAnnouncement(closedMeanwhile ? `«${firstHeader(item)}» closed before your answer arrived.` : `Your answer to «${firstHeader(item)}» was not delivered: ${message}`)
       void queryClient.invalidateQueries({ queryKey: managerKeys.list })
       // Never dropped silently: a delivery that failed hands the card back with its error.
       setFinished((rows) => [
         ...rows.filter((row) => row.item.key !== item.key),
-        ...(closedMeanwhile ? [{ item, outcome: { kind: 'closed' as const, note: closedMeanwhile }, finishedAt: Date.now() }] : []),
+        ...(closedMeanwhile ? [{ item, outcome: { kind: 'closed' as const, note: message }, finishedAt: Date.now() }] : []),
       ])
     },
   }), [queryClient])
@@ -434,8 +442,8 @@ type CardState =
 interface AnswerHandlers {
   start: (item: QuestionItem, text: string) => void
   done: (item: QuestionItem, text: string, settled: QuestionItem) => void
-  /** `closedMeanwhile`: the server says it closed first (409), so the card finishes with that note. */
-  failed: (item: QuestionItem, closedMeanwhile?: string) => void
+  /** `closedMeanwhile`: the server says it closed first (409), so the card finishes with `message`. */
+  failed: (item: QuestionItem, message: string, closedMeanwhile: boolean) => void
 }
 
 interface CardProps {
@@ -481,7 +489,11 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
   const phase = state.kind === 'finished' ? `finished:${state.row.outcome.kind}` : state.kind
   useEffect(() => {
     if (!focusedInside.current || (document.activeElement && document.activeElement !== document.body && document.activeElement.isConnected)) return
-    root.current?.querySelector<HTMLElement>('[data-slot="question-outcome"], [data-slot="question-dismissing-wrap"]')?.focus({ preventScroll: true })
+    // Back to answerable (a failed delivery, an Undo): the pick it was sent with, else the first chip.
+    const target = state.kind === 'open'
+      ? root.current?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? root.current?.querySelector<HTMLElement>('[aria-pressed]')
+      : root.current?.querySelector<HTMLElement>('[data-slot="question-outcome"], [data-slot="question-dismissing-wrap"]')
+    target?.focus({ preventScroll: true })
   }, [phase])
   const send = async (text: string) => {
     setPending(true)
@@ -496,7 +508,7 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
         ? 'This question closed before your answer arrived.'
         : failure instanceof Error ? failure.message : 'Your answer was not delivered.'
       setError(message)
-      answer.failed(item, gone ? message : undefined)
+      answer.failed(item, message, gone)
       if (gone) void queryClient.invalidateQueries({ queryKey: questionKeys.all })
       return message
     } finally {
