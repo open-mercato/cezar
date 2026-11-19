@@ -18,6 +18,7 @@ import {
   type ManagerActionRequest,
   type ManagerAsk,
   type ManagerActionStatus,
+  type ManagerActivityNotice,
   type ManagerCancelTaskInput,
   type ManagerCancelTaskResponse,
   type ManagerCommand,
@@ -157,7 +158,12 @@ export interface ManagerEngineDeps {
   turnLimitMs?: number;
   /** Test seam for `RETRY_BACKOFF_MS`. */
   retryDelayMs?: number;
+  /** A manager was deactivated or reactivated: the Questions count leaves its cards out while inactive. */
+  onActivityChange?: (managerId: string) => void;
 }
+
+/** What `check`, a connector probe and the chat routes answer for a deactivated manager (spec 2026-11-19-manager-deactivate). */
+export const MANAGER_INACTIVE = 'manager inactive';
 
 /** One finished run of an automation linked to a manager (`reportAutomationRun`). */
 export interface AutomationRunReport {
@@ -246,6 +252,14 @@ function followedTasks(state: ManagerState): string[] {
 
 const connectedTo = (manager: Manager, projectId: string): boolean =>
   manager.projects === 'all' || manager.projects.includes(projectId);
+
+/** Due times count from the last reactivation at the earliest, so nothing overdue fires at once. */
+const floorAt = (manager: Manager, iso: string | undefined): number =>
+  Math.max(msOf(iso ?? manager.createdAt), manager.activeSince ? msOf(manager.activeSince) : 0);
+
+const jobDueAt = (manager: Manager, job: ManagerJob): number => floorAt(manager, job.lastRunAt) + job.everyMinutes * 60_000;
+
+const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
 
 type QueueItem =
   | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
@@ -552,8 +566,12 @@ export class ManagerEngine {
     // Events that happened while cezar was down: their cards, then the turns still owed.
     void this.reconcileFollows().catch((error) => console.warn(`[cezar] manager follows: ${error instanceof Error ? error.message : String(error)}`));
     for (const manager of this.deps.store.list()) {
-      if (this.deps.store.state(manager.id).followups.length > 0) this.scheduleFollowup(manager.id);
+      if (!manager.inactive && this.deps.store.state(manager.id).followups.length > 0) this.scheduleFollowup(manager.id);
     }
+  }
+
+  private inactive(id: string): boolean {
+    return this.deps.store.get(id)?.inactive !== undefined;
   }
 
   /** A `streaming` message at boot is a turn that died with its process — unless a second cockpit
@@ -564,6 +582,11 @@ export class ManagerEngine {
     for (const manager of this.deps.store.list()) {
       // Our own lease is a turn alive in this process, not one to recover.
       if (this.leases.has(manager.id)) continue;
+      // Swept by the first turn after it is reactivated.
+      if (manager.inactive) {
+        this.unrecovered.add(manager.id);
+        continue;
+      }
       const release = this.tryLease(manager.id);
       if (!release) {
         this.unrecovered.add(manager.id);
@@ -680,7 +703,7 @@ export class ManagerEngine {
   }
 
   private checkDueAt(manager: Manager, state: { lastCheckAt?: string; watchFailures: number }): number {
-    return msOf(state.lastCheckAt ?? manager.createdAt) + manager.cronMinutes * 60_000 * 2 ** Math.min(state.watchFailures, MAX_WATCH_BACKOFF);
+    return floorAt(manager, state.lastCheckAt) + manager.cronMinutes * 60_000 * 2 ** Math.min(state.watchFailures, MAX_WATCH_BACKOFF);
   }
 
   private async summarize(manager: Manager, projects?: ManagerProjectSource[]): Promise<ManagerSummary> {
@@ -712,7 +735,7 @@ export class ManagerEngine {
       pendingActions: messages.filter(pendingAction).length,
       pendingQuestions: messages.filter((message) => openAsk(message) && !superseded.has(message.id) && !isOlder(message.at, this.now(), olderDays)).length,
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
-      ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
+      ...(manager.cronMinutes > 0 && !manager.inactive ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
       followedTasks: followedTasks(state),
       ...denialsOf(manager, state.bashDenials),
@@ -841,6 +864,14 @@ export class ManagerEngine {
   async update(id: string, input: UpdateManagerInput, ctx: ManagerTelemetryContext = {}): Promise<ManagerSummary | ManagerRefusal> {
     const current = this.deps.store.get(id);
     if (!current) return { error: 'manager not found', status: 404 };
+    // A toggle alone writes nothing else, and one already in that state is a no-op.
+    if (Object.keys(input).every((key) => key === 'active' || key === 'catchUp')) {
+      if (input.active !== undefined) this.applyActivity(id, input.active, input.catchUp === true);
+      const generation = this.nextChange(id);
+      const summary = await this.summarize(this.deps.store.get(id) ?? current);
+      this.emitSummary(id, generation, summary);
+      return summary;
+    }
     const issue = await this.accountIssue(
       input.runner === null ? undefined : (input.runner ?? current.runner),
       input.agentProfile === null ? undefined : input.agentProfile,
@@ -893,12 +924,13 @@ export class ManagerEngine {
       ...optional('agentProfile'),
       updatedAt: this.iso(),
     };
-    const updated = this.deps.store.update(id, () => next);
+    let updated = this.deps.store.update(id, () => next);
     if (!updated) return { error: 'manager not found', status: 404 };
     if (input.clearBashDenials) this.deps.store.updateState(id, (state) => ({ ...state, bashDenials: [] }));
+    if (input.active !== undefined && this.applyActivity(id, input.active, input.catchUp === true)) updated = this.deps.store.get(id) ?? updated;
     // "Use another account" (spec 2026-11-18-inline-account-reconnect): the chat turn the old login
     // failed re-runs on the new one, in a fresh session (the session key follows the account).
-    if (current.agentProfile !== updated.agentProfile || current.runner !== updated.runner) this.retryAuthFailedChat(id);
+    if ((current.agentProfile !== updated.agentProfile || current.runner !== updated.runner) && !updated.inactive) this.retryAuthFailedChat(id);
     for (const field of changedSettingFields(current, updated)) this.deps.telemetry?.track('manager_settings_changed', field, ctx);
     if (JSON.stringify(current.projects) !== JSON.stringify(updated.projects)) {
       const names = (await this.sources(updated)).map((source) => source.name);
@@ -909,6 +941,76 @@ export class ManagerEngine {
     const summary = await this.summarize(updated);
     this.emitSummary(id, generation, summary);
     return summary;
+  }
+
+  /** The bulk action: every manager not already in that state. Returns the ids that changed. */
+  async setActivity(active: boolean): Promise<string[]> {
+    const changed: string[] = [];
+    for (const manager of this.deps.store.list()) {
+      if ((manager.inactive === undefined) === active) continue;
+      const updated = await this.update(manager.id, { active });
+      if (!('error' in updated)) changed.push(manager.id);
+    }
+    return changed;
+  }
+
+  /**
+   * Deactivate or reactivate (spec 2026-11-19-manager-deactivate); false when already in that state.
+   * Deactivating stops the turn in flight and drops everything owed a turn; reactivating floors every
+   * due time at now and posts what happened meanwhile. Only `catchUp` buys a model call.
+   */
+  private applyActivity(id: string, active: boolean, catchUp = false): boolean {
+    const { store } = this.deps;
+    const current = store.get(id);
+    if (!current || (current.inactive === undefined) === active) return false;
+    const at = this.iso();
+    if (!active) {
+      store.update(id, (manager) => ({ ...manager, inactive: { since: at }, updatedAt: at }));
+      const runtime = this.runtime(id);
+      runtime.queue = [];
+      if (runtime.retry) clearTimeout(runtime.retry);
+      runtime.retry = undefined;
+      runtime.retries = 0;
+      const followup = this.followupTimers.get(id);
+      if (followup) clearTimeout(followup);
+      this.followupTimers.delete(id);
+      this.interrupt(runtime);
+      this.clearResume(id, false);
+      // Not queued: a queue would burst into N turns on reactivation. The next chat hears them as notes.
+      store.updateState(id, (state) => (state.followups.length === 0 ? state : {
+        ...state,
+        notes: [...state.notes, ...state.followups.map((entry) => followupHeadline(entry.line))].slice(-20),
+        followups: [],
+      }));
+      this.pushedAttention.delete(id);
+      this.addActivityNotice(id, 'Deactivated by you', { change: 'deactivated' });
+    } else {
+      const since = current.inactive!.since;
+      store.update(id, ({ inactive: _inactive, ...manager }) => ({ ...manager, activeSince: at, updatedAt: at }));
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: at }));
+      const after = msOf(since);
+      const missed = store.messages(id).filter((message) => message.kind === 'assistant' && msOf(message.at) >= after);
+      const taskUpdates = missed.filter((message) => message.kind === 'assistant' && message.taskReport).length;
+      const automationReports = missed.filter((message) => message.kind === 'assistant' && message.automationReport).length;
+      const span = Math.max(0, this.now() - after);
+      const checksSkipped = current.cronMinutes > 0 ? Math.floor(span / (current.cronMinutes * 60_000)) : 0;
+      const jobRunsSkipped = current.jobs.filter((job) => job.enabled).reduce((sum, job) => sum + Math.floor(span / (job.everyMinutes * 60_000)), 0);
+      const heard = [taskUpdates > 0 ? plural(taskUpdates, 'task update') : '', automationReports > 0 ? plural(automationReports, 'automation report') : ''].filter(Boolean);
+      const skipped = [checksSkipped > 0 ? plural(checksSkipped, 'check') : '', jobRunsSkipped > 0 ? plural(jobRunsSkipped, 'job run') : ''].filter(Boolean);
+      const meanwhile = [heard.join(', '), skipped.length > 0 ? `${skipped.join(' and ')} skipped` : ''].filter(Boolean).join('; ');
+      this.addActivityNotice(id, `Reactivated by you.${meanwhile ? ` While inactive: ${meanwhile}.` : ''}${catchUp ? ' Catching up now.' : ''}`, {
+        change: 'reactivated', since, taskUpdates, automationReports, checksSkipped, jobRunsSkipped, catchUp,
+      });
+      if (catchUp) this.enqueue(id, { kind: 'watch', forced: true });
+    }
+    this.reschedule();
+    this.deps.onActivityChange?.(id);
+    return true;
+  }
+
+  private addActivityNotice(id: string, text: string, activity: ManagerActivityNotice): void {
+    this.publish(id, { id: randomUUID(), seq: this.deps.store.nextSeq(id), at: this.iso(), kind: 'notice', text, activity }, true);
+    this.emitChange(id);
   }
 
   async remove(id: string, ctx: ManagerTelemetryContext = {}): Promise<boolean> {
@@ -1011,6 +1113,7 @@ export class ManagerEngine {
   /** Does any manager's latest chat turn wait on this login? */
   hasAuthFailed(provider: string, profileId: string): boolean {
     return this.deps.store.list().some((manager) => {
+      if (manager.inactive) return false;
       const failure = this.latestAuthFailedChat(manager.id)?.authFailure;
       return failure?.provider === provider && failure.profileId === profileId;
     });
@@ -1019,6 +1122,8 @@ export class ManagerEngine {
   resumeAuthFailed(provider: string, profileId: string): Array<{ managerId: string; title: string }> {
     const resumed: Array<{ managerId: string; title: string }> = [];
     for (const manager of this.deps.store.list()) {
+      // A replay is a model call: an inactive manager keeps its reconnect card instead.
+      if (manager.inactive) continue;
       const failed = this.latestAuthFailedChat(manager.id);
       if (!failed?.authFailure || failed.authFailure.provider !== provider || failed.authFailure.profileId !== profileId) continue;
       if (this.retryAuthFailedChat(manager.id)) resumed.push({ managerId: manager.id, title: manager.name });
@@ -1097,15 +1202,21 @@ export class ManagerEngine {
   }
 
   /** `Check now`: ignores the key gate, and queues behind a running turn rather than being lost. */
-  check(id: string): boolean {
-    if (!this.deps.store.get(id)) return false;
+  check(id: string): { ok: true } | ManagerRefusal {
+    const manager = this.deps.store.get(id);
+    if (!manager) return { error: 'manager not found', status: 404 };
+    if (manager.inactive) return { error: MANAGER_INACTIVE, status: 409 };
     const runtime = this.runtime(id);
     if (!runtime.queue.some((item) => item.kind === 'watch' && item.forced)) this.enqueue(id, { kind: 'watch', forced: true });
-    return true;
+    return { ok: true };
   }
 
-  /** A turn outlives the request that asked for it, so it reads the unscoped value. */
+  /**
+   * A turn outlives the request that asked for it, so it reads the unscoped value. THE gate of
+   * spec 2026-11-19-manager-deactivate: an inactive manager takes no turn, so it makes no model call.
+   */
   private enqueue(id: string, item: QueueItem): void {
+    if (this.inactive(id)) return;
     const runtime = this.runtime(id);
     runtime.queue.push(item);
     this.emitChange(id);
@@ -1131,6 +1242,11 @@ export class ManagerEngine {
   private pump(id: string): void {
     const runtime = this.runtime(id);
     if (this.disposed || runtime.deleted || runtime.active || runtime.queue.length === 0) return;
+    // Queued before it was deactivated, by a path that skipped the gate's sweep (a lease retry).
+    if (this.inactive(id)) {
+      runtime.queue = [];
+      return;
+    }
     const release = this.tryLease(id);
     if (!release) {
       // A timed watch is the other cockpit's to fire; a message or a Check now the user asked for here waits.
@@ -1528,10 +1644,15 @@ export class ManagerEngine {
   }
 
   /** The inbox's Answer: the same as answering on the card. A card closed meanwhile is a 409. */
-  answerAsk(id: string, messageId: string, text: string): ManagerAskResult {
+  answerAsk(id: string, messageId: string, text: string, reactivate = false): ManagerAskResult {
     const found = this.askCard(id, messageId);
     if (!('card' in found)) return found;
     if (!openAsk(found.card.message)) return { ok: false, status: 409, error: 'question already closed' };
+    // An answer is a chat turn: an inactive manager takes one only when the user confirmed reactivating it.
+    if (this.inactive(id)) {
+      if (!reactivate) return { ok: false, status: 409, error: MANAGER_INACTIVE };
+      this.applyActivity(id, true);
+    }
     this.send(id, text, [], messageId);
     return this.refreshed(id, messageId);
   }
@@ -1847,7 +1968,8 @@ export class ManagerEngine {
     const excerpt = final ? (final.length > FOLLOWUP_EXCERPT_LIMIT ? `${final.slice(0, FOLLOWUP_EXCERPT_LIMIT)}…` : final) : undefined;
     const followup = excerpt ? `${line}${FINAL_MESSAGE_MARK}${excerpt}` : line;
     // A cancel is the user's own doing, and an auto-resume will report again: neither needs a turn.
-    if (manager.followUp === false || event.state === 'cancelled' || resumes) {
+    // Nor does an inactive manager take one: it hears the note on its next chat (spec 2026-11-19-manager-deactivate).
+    if (manager.followUp === false || event.state === 'cancelled' || resumes || this.inactive(id)) {
       this.addNote(id, `Task update, posted to the chat by cezar: ${line}`);
       return true;
     }
@@ -1883,11 +2005,12 @@ export class ManagerEngine {
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
   private alert(id: string, message: { id: string; seq: number }, body: string): void {
     const { notifySystem, pushSignal, store } = this.deps;
-    if (!notifySystem && !pushSignal) return;
+    // An inactive manager raises nothing: its tasks' own surfaces (Questions, Now) still show them.
+    if ((!notifySystem && !pushSignal) || this.inactive(id)) return;
     const timer = outsideRelayScope(() => setTimeout(() => {
       this.alerts.delete(timer);
       const manager = store.get(id);
-      if (!manager || manager.notify === false || !unseen(store.state(id), message)) return;
+      if (!manager || manager.notify === false || manager.inactive || !unseen(store.state(id), message)) return;
       notifySystem?.(manager.name, body);
       pushSignal?.(id);
     }, SYSTEM_NOTIFY_DELAY_MS));
@@ -1898,7 +2021,7 @@ export class ManagerEngine {
   /** A task newly waiting on the user wakes the phone before the model is asked, whatever it says. */
   private pushWaitingTasks(id: string, fresh: ManagerSnapshot['attention']): void {
     const { pushSignal, store } = this.deps;
-    if (!pushSignal) return;
+    if (!pushSignal || this.inactive(id)) return;
     const waiting = fresh.filter((item) => item.kind === 'task-needs-you').map((item) => item.key);
     const pushed = this.pushedAttention.get(id) ?? new Set<string>();
     const newKeys = waiting.filter((key) => !pushed.has(key));
@@ -2239,9 +2362,10 @@ export class ManagerEngine {
   // ---- the timer ---------------------------------------------------------------------------
 
   private nextDue(manager: Manager, now: number): number | undefined {
+    if (manager.inactive) return undefined;
     const resume = this.deps.store.state(manager.id).resume;
     if (resume) return Math.max(msOf(resume.at), now);
-    const dues = manager.jobs.filter((job) => job.enabled).map((job) => msOf(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000);
+    const dues = manager.jobs.filter((job) => job.enabled).map((job) => jobDueAt(manager, job));
     if (manager.cronMinutes > 0) dues.push(this.checkDueAt(manager, this.deps.store.state(manager.id)));
     return dues.length > 0 ? Math.max(Math.min(...dues), now) : undefined;
   }
@@ -2266,6 +2390,7 @@ export class ManagerEngine {
   tick(): void {
     const now = this.now();
     for (const manager of this.deps.store.list()) {
+      if (manager.inactive) continue;
       const runtime = this.runtime(manager.id);
       if (runtime.active || runtime.queue.length > 0) continue;
       const resume = this.deps.store.state(manager.id).resume;
@@ -2281,7 +2406,7 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'watch', forced: false });
       }
       for (const job of manager.jobs) {
-        if (!job.enabled || msOf(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000 > now) continue;
+        if (!job.enabled || jobDueAt(manager, job) > now) continue;
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
@@ -2311,9 +2436,10 @@ export class ManagerEngine {
   }
 
   /** A Claude session with no tools, ended as soon as its init reports the servers: no model turn is needed. */
-  async refreshConnectors(id: string): Promise<ManagerConnectorsResponse | undefined> {
+  async refreshConnectors(id: string): Promise<ManagerConnectorsResponse | ManagerRefusal | undefined> {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
+    if (manager.inactive) return { error: MANAGER_INACTIVE, status: 409 };
     const runner = await this.runnerOf(manager);
     if (runner !== 'claude') return this.connectorsOf(manager, runner);
     const profile = await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile);
@@ -2356,6 +2482,7 @@ export class ManagerEngine {
     const { store } = this.deps;
     const manager = store.get(id);
     if (!manager) return { ok: false, result: 'manager not found' };
+    if (manager.inactive) return { ok: false, result: 'This manager is inactive: reactivate it to run the call.' };
     const runner = await this.runnerOf(manager);
     if (runner !== 'claude') return { ok: false, result: CONNECTORS_CLAUDE_ONLY };
     const name = action.connectorName ?? connectorDisplayName(action.connector, store.state(id).connectors);
@@ -2854,6 +2981,8 @@ export class ManagerEngine {
       this.settleAction(id, message, 'dismissed', stale ?? 'Dismissed');
       return { ok: true as const };
     }
+    // A connector call is a model session: it waits on the card until the manager is reactivated.
+    if (decision === 'approve' && message.action.type === 'connector-call' && manager.inactive) return { error: MANAGER_INACTIVE, status: 409 };
     const type = managerActionLabel(message.action);
     this.deps.telemetry?.track('manager_action_decided', `${type}:${decision}`, ctx);
     const proposedAt = Date.parse(message.at);
