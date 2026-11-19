@@ -128,7 +128,8 @@ export function appendLedger(record: LedgerRecord, account?: string): void {
     assertCezarHomeWriteIsSandboxed(file);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     // One short line per O_APPEND write: concurrent cezar processes never interleave inside it.
-    appendFileSync(file, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    // The leading newline seals a line a crash left torn, so it never swallows this record.
+    appendFileSync(file, `\n${JSON.stringify(record)}`, { mode: 0o600 });
     pruneOld(dir, Date.now());
   } catch (error) {
     if (error instanceof Error && /sandbox/i.test(error.message)) throw error;
