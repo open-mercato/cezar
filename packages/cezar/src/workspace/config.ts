@@ -243,6 +243,9 @@ export const workspaceConfigSchema = z
      *  `development` → none: a worktree or PR preview picked by hand). Absent inherits
      *  `CEZ_UPDATE_CHANNEL`, then stable. */
     updateChannel: z.enum(['stable', 'nightly', 'development']).optional().catch(undefined),
+    /** Installed versions kept under `~/.cezar/versions` by the automatic prune, the running one
+     *  included (`self-update/versions-prune.ts`). Absent = 3; 0 = never prune automatically. */
+    versionRetention: z.number().int().min(0).max(100).optional().catch(undefined),
     /** The telemetry install id (random UUIDv7). Written on the first send after consent;
      *  removed when consent is withdrawn. */
     cezarId: z.string().uuid().optional().catch(undefined),

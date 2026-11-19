@@ -43,7 +43,7 @@ import { SelfUpdateService } from './self-update/service.ts';
 import { runsFromCheckout } from './self-update/layout.ts';
 import { devVersion } from './self-update/semver.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
-import { runSelfUpdateCommand } from './self-update/cli.ts';
+import { runSelfUpdateCommand, runVersionsPruneCommand } from './self-update/cli.ts';
 import { writeLaunchers } from './self-update/launcher.ts';
 import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
@@ -107,6 +107,8 @@ Usage:
   cezar update              update the managed install to the channel's newest version
                             (--channel stable|nightly, --version <x> to pin or downgrade)
   cezar versions            list installed versions and cezar worktrees (\`cezar use <id>\` switches)
+  cezar versions prune      remove old versions, keeping the running one + 2 previous
+                            (--keep <n>, --dry-run, --backups for ~/.cezar/versions.backup-*)
   cezar link [<dir>]        run a cezar checkout/worktree (default: cwd) as a version — a
                             link, not a copy, so rebuilds are live (--use to switch to it now);
                             the desktop app runs it after a restart or from Cezar ▸ Versions
@@ -175,6 +177,11 @@ async function main(): Promise<void> {
   // `cez handoff …`: an agent's own handoff file (CEZ_HANDOFF_FILE), no server involved.
   if (process.argv[2] === 'handoff') {
     process.exitCode = await runHandoffCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez versions prune` has its own flags (--keep, --dry-run, --backups); no server, no repo.
+  if (process.argv[2] === 'versions' && process.argv[3] === 'prune') {
+    process.exitCode = await runVersionsPruneCommand(process.argv.slice(4), { entry: resolve(process.argv[1] ?? fileURLToPath(import.meta.url)) });
     return;
   }
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
@@ -511,6 +518,7 @@ async function serveCommand(
       });
     },
   });
+  selfUpdate.startVersionPruning((line) => console.log(`  ${line}`));
   void selfUpdate.updateAvailable().then((latest) => {
     if (!latest) return;
     update.latest = latest;
