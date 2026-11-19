@@ -260,6 +260,17 @@ export interface UiTurnCompletedEvent {
   stopReason: StopReason;
   usage?: TokenUsage;
   costUsd?: number;
+  /** Every model the turn billed, with its share when known — claude's `result.modelUsage`.
+   *  A turn can use several (a Haiku sub-call); absent when the backend does not report it. */
+  models?: UiModelUsage[];
+}
+
+/** One model's share of a turn (`turn.completed.models`). */
+export interface UiModelUsage {
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
 }
 
 /** An item entered the stream (tools usually with status pending/running). */

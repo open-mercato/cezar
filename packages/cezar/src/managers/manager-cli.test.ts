@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runManagerCommand, SANDBOX_BLOCKED_HINT, type ManagerCliIo } from './manager-cli.ts';
+import { runManagerCommand, SANDBOX_BLOCKED_HINT, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
 
 const snapshot = {
   generatedAt: '',
@@ -57,6 +57,13 @@ describe('cez manager', () => {
     expect(await run('status')).toBe(0);
     expect(logs.join('\n')).toContain('pr-ready');
     expect(logs.join('\n')).toContain('2 dispatched)');
+  });
+
+  it('names the model a task asked for and the one it ran, arrow only when they differ', () => {
+    expect(taskModelLabel(undefined, 'claude-opus-5-5')).toBe('auto → claude-opus-5-5');
+    expect(taskModelLabel('anthropic/opus', 'claude-opus-5-5[1m]')).toBe('anthropic/opus → claude-opus-5-5[1m]');
+    expect(taskModelLabel('anthropic/claude-opus-5-5', 'claude-opus-5-5[1m]')).toBe('anthropic/claude-opus-5-5');
+    expect(taskModelLabel('anthropic/claude-opus-5-5', undefined)).toBe('anthropic/claude-opus-5-5');
   });
 
   it('follows and unfollows a task, finding its project from the snapshot', async () => {

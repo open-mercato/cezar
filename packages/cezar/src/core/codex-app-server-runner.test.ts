@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
+import type { UiEvent } from './ui-events.ts';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
 import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
@@ -225,27 +226,34 @@ describe('resuming a thread another Codex process still holds', () => {
   );
   const resume = async (locked: string) => {
     const events: AgentEvent[] = [];
+    const uiEvents: UiEvent[] = [];
     const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0, resumeLockRetryMs: [5, 5] }).startSession(
       { userPrompt: 'continue', cwd: process.cwd(), sessionId: 'th_old', resume: true, env: { MOCK_CODEX_RESUME_LOCKED: locked } },
       (event) => events.push(event),
-      { autoEndAfterFirstTurn: true },
+      { autoEndAfterFirstTurn: true, onUiEvent: (event) => uiEvents.push(event) },
     );
     const result = await session.result;
-    return { events, result };
+    return { events, uiEvents, result };
   };
 
   it('resumes the same thread once the other writer lets go', async () => {
-    const { events, result } = await resume('2');
+    const { events, uiEvents, result } = await resume('2');
     expect(result.sessionId).toBe('th_old');
     expect(events).toContainEqual({ type: 'session', sessionId: 'th_old' });
+    expect(uiEvents[0]).toEqual({
+      type: 'session.started', backend: 'codex', sessionId: 'th_old', model: 'gpt-mock-resumed',
+    });
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(result.text).toBe('Checking the working tree.');
   }, 15_000);
 
   it('continues in a fork of the thread when the lock is never released', async () => {
-    const { events, result } = await resume('always');
+    const { events, uiEvents, result } = await resume('always');
     expect(result.sessionId).toBe('fork_of_th_old');
     expect(events).toContainEqual({ type: 'session', sessionId: 'fork_of_th_old' });
+    expect(uiEvents[0]).toEqual({
+      type: 'session.started', backend: 'codex', sessionId: 'fork_of_th_old', model: 'gpt-mock-forked',
+    });
     expect(events.some((e) => e.type === 'note' && e.message.includes('continuing in a fork'))).toBe(true);
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(result.text).toBe('Checking the working tree.');

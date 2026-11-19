@@ -8614,6 +8614,8 @@ export function createApp(deps: ServerDeps) {
       : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
+    ...(run.model !== undefined ? { model: run.model } : {}),
+    ...(run.actualModel !== undefined ? { actualModel: run.actualModel } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
     ...(run.peakProcCount !== undefined ? { peakProcCount: run.peakProcCount } : {}),
     // The live sample, on the same terms as `GET /runs`: process-wide sampler, so a

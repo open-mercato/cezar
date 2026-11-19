@@ -574,7 +574,8 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
     case 'tool':
       return previous.kind === 'tool' && sameToolItem(previous, next)
     case 'note':
-      return previous.kind === 'note' && sameFields(previous, next, NOTE_COMPARE_FIELDS)
+      return previous.kind === 'note' && sameFields<Omit<ThreadNote, 'skillNames'>>(previous, next, NOTE_COMPARE_FIELDS) &&
+        sameData(previous.skillNames, next.skillNames)
     case 'image':
       return previous.kind === 'image' && sameFields(previous, next, IMAGE_COMPARE_FIELDS)
     case 'ask':
@@ -612,7 +613,8 @@ const NOTE_COMPARE_FIELDS = {
   id: true,
   text: true,
   tone: true,
-} satisfies Record<keyof ThreadNote, true>
+  action: true,
+} satisfies Record<keyof Omit<ThreadNote, 'skillNames'>, true>
 
 const IMAGE_COMPARE_FIELDS = {
   kind: true,

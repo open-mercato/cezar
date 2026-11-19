@@ -1,5 +1,6 @@
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
+import { runModelLine, titleWithModel } from '@/lib/actual-model'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
@@ -1387,6 +1388,7 @@ function TaskTableCell({
       return (
         <td
           data-column-id={column.id}
+          title={runModelLine(run)}
           className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}
         >
           {cost || <Dash />}
@@ -1479,7 +1481,7 @@ function TitleCell({
       ) : null}
       <Link
         to={to}
-        title={title}
+        title={titleWithModel(title, run)}
         aria-describedby={quiet ? statusId : undefined}
         className={cn(
           'min-w-0 truncate text-ui',

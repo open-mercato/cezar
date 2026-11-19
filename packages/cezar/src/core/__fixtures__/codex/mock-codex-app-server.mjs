@@ -145,9 +145,9 @@ rl.on('line', (line) => {
       rl.close();
     } else if (msg.method === 'thread/start') {
       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
-      emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+      emit({ id: msg.id, result: { thread: { id: 'th_mock_1' }, model: 'gpt-mock-codex' } });
     } else if (msg.method === 'thread/fork') {
-      emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` } } });
+      emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` }, model: 'gpt-mock-forked' } });
     } else if (resumeLocked()) {
       // Another live app-server still holds the thread's writer lock (codex-rs writer_lock.rs).
       emit({ id: msg.id, error: { code: -32600, message: `thread ${msg.params?.threadId ?? ''} already has an active writer` } });
@@ -155,7 +155,7 @@ rl.on('line', (line) => {
       emit({ id: msg.id, error: { code: -32603, message: `no rollout found for thread id ${msg.params?.threadId ?? ''}` } });
       rl.close();
     } else {
-      emit({ id: msg.id, result: { thread: { id: msg.params?.threadId } } });
+      emit({ id: msg.id, result: { thread: { id: msg.params?.threadId }, model: 'gpt-mock-resumed' } });
     }
   } else if (msg.method === 'turn/steer') {
     // A follow-up delivered INTO a live turn. `mock:steer-reject` refuses it after stdin

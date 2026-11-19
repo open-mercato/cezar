@@ -74,6 +74,7 @@ function taskRow(run: RunRecord, childCount: number): ManagerSnapshotTask {
     ...(run.startedByManager ? { startedByManager: run.startedByManager.name } : {}),
     ...(run.runner ? { runner: run.runner } : {}),
     ...(run.modelIdentity ?? run.model ? { model: run.modelIdentity ?? run.model } : {}),
+    ...(run.actualModel ? { actualModel: run.actualModel } : {}),
     ...(run.reasoningEffort ? { effort: run.reasoningEffort } : {}),
     ...pullRequestOf(run),
     ...(run.cancelReason ? { cancelReason: run.cancelReason } : {}),

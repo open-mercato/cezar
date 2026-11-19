@@ -45,6 +45,8 @@ export interface ThreadNote {
   text: string
   /** `info`: an event the user should notice without alarm — another agent taking a task over. */
   tone: 'dim' | 'danger' | 'info'
+  action?: 'install-skills'
+  skillNames?: string[]
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -125,6 +127,9 @@ export interface ThreadState {
   /** Wall clock of the newest stamped event — any kind, deltas included. The live Working…
    *  indicator reads it as "last activity", so a quiet session is told apart from a busy one. */
   lastEventAt?: string
+  /** The newest `session.started.model` — the actual model of a run recorded before
+   *  `RunRecord.actualModel` existed. */
+  sessionModel?: string
 }
 
 export interface ThreadReduceOptions {
@@ -428,6 +433,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   // Graph gates and native asks are never tracked nor closed server-side, whatever closed before them.
   const serverClosed = new Set(events.flatMap((event) => event.type === 'ask.closed' && typeof event.requestId === 'string' ? [event.requestId] : []))
   let lastEventAt: string | undefined
+  let sessionModel: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
     turnSeq += 1
@@ -668,11 +674,17 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
         const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
+        const installSkills = event.type === 'note' && event.action === 'install-skills'
+        const names = installSkills && Array.isArray(event.skillNames)
+          ? event.skillNames.filter((name): name is string => typeof name === 'string') : undefined
         currentTurn().entries.push({
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
             ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
-          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
+          entry: {
+            kind: 'note', id: `v1:${event.seq}`, text, tone,
+            ...(installSkills ? { action: 'install-skills', ...(names?.length ? { skillNames: names } : {}) } : {}),
+          },
         })
         break
       }
@@ -701,6 +713,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'session.started': {
         sessionBackend = providerId(event.backend) ?? sessionBackend
+        sessionModel = str(event.model)?.trim() || sessionModel
         const turn = turns.at(-1)
         if (turn) errorTwins.delete(turn)
         break
@@ -913,6 +926,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
     ...(lastEventAt !== undefined ? { lastEventAt } : {}),
+    ...(sessionModel !== undefined ? { sessionModel } : {}),
   }
 }
 

@@ -11,6 +11,7 @@ import type {
   RunStatus,
 } from '@open-mercato/cezar-contract';
 import { projectCostTask, type CostVisibility } from './dashboard-costs.ts';
+import { baseModel } from '../runs/reported-model.ts';
 
 /** Explicit allowlist, like `projectCostTask`: never prompts, step payloads or session ids. */
 export type InsightRow = {
@@ -54,10 +55,14 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
   const backend = ran.length > 1 ? 'mixed' : (ran[0] ?? run.runner ?? 'unknown');
   const costUsd = projectCostTask(projectId, run).costUsd;
   const automationId = run.deferredBinding ? undefined : run.automation?.automationId ?? run.automationTrigger?.automationId;
-  const model =
+  // The model the agent REPORTED running wins over the request: "auto" and aliases group under
+  // what they resolved to. Older runs and silent backends fall back to the request. Normalised
+  // (`baseModel`) so `anthropic/claude-opus-4-8` and `claude-opus-4-8[1m]` share one row.
+  const rawModel =
     backend === 'mixed'
       ? undefined
-      : (run.modelIdentity ?? (backend === run.runner ? run.model : undefined));
+      : (run.actualModel ?? run.modelIdentity ?? (backend === run.runner ? run.model : undefined));
+  const model = rawModel ? baseModel(rawModel) || undefined : undefined;
   return {
     projectId,
     id: run.id,

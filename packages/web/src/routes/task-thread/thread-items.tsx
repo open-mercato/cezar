@@ -23,7 +23,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { useMutation } from '@tanstack/react-query'
 import { Link as GlobalLink } from 'react-router'
 import { ApiError, updateProvider } from '@/api/client'
-import { useAgentProfiles } from '@/api/queries'
+import { useAgentProfiles, useRefreshSkillCatalog } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
@@ -427,6 +427,36 @@ export function NoteLine({ note }: { note: ThreadNote }) {
     >
       {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
+      {note.action === 'install-skills' ? <InstallSkillsAction skillNames={note.skillNames} /> : null}
+    </div>
+  )
+}
+
+function InstallSkillsAction({ skillNames }: { skillNames?: readonly string[] }) {
+  const refresh = useRefreshSkillCatalog()
+  const catalog = refresh.data ?? []
+  const stillMissing = skillNames?.filter((name) => !catalog.some((skill) => skill.name === name && !skill.kind && !skill.missingShared))
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="text-foreground"
+        disabled={refresh.isPending}
+        onClick={() => refresh.mutate()}
+      >
+        {refresh.isPending ? 'Refreshing skills…' : 'Install skills'}
+      </Button>
+      {refresh.isSuccess ? (
+        <span role="status" className="text-soft-foreground">
+          Skills catalog refreshed.
+          {stillMissing?.length ? ` The catalog is still missing ${stillMissing.join(', ')}.` : null}
+          {!skillNames && catalog.some((skill) => skill.missingShared) ? ' Some shared skills are still unavailable.' : null}
+        </span>
+      ) : null}
+      {refresh.isError ? <span role="alert">Could not refresh skills. {refresh.error.message}</span> : null}
     </div>
   )
 }
