@@ -209,10 +209,30 @@ describe('opening and closing', () => {
     expect(await screen.findByPlaceholderText(/Search projects, tasks/)).toBeTruthy()
   })
 
-  it('does not open while the user is typing in an input', () => {
+  it('opens from a focused text field and claims the chord from the browser (#2321)', () => {
+    renderPalette()
+    const ev = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true, bubbles: true })
+
+    fireEvent(screen.getByTestId('outside-input'), ev)
+
+    expect(dialog()).not.toBeNull()
+    expect(ev.defaultPrevented).toBe(true)
+  })
+
+  it('opens on ⌘K from a text field on a Mac', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
     renderPalette()
 
     fireEvent.keyDown(screen.getByTestId('outside-input'), { key: 'k', metaKey: true })
+
+    expect(dialog()).not.toBeNull()
+  })
+
+  it('leaves Control-K to the macOS text system in a text field', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    renderPalette()
+
+    fireEvent.keyDown(screen.getByTestId('outside-input'), { key: 'k', ctrlKey: true })
 
     expect(dialog()).toBeNull()
   })
