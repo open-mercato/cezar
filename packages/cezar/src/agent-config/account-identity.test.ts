@@ -160,12 +160,21 @@ describe('readAccountIdentity', () => {
     ['pi', 'cezar does not yet read Pi account details from its config folder.'],
     ['junie', 'cezar does not yet read Junie account details from its config folder.'],
     ['copilot', 'cezar does not yet read Copilot account details from its config folder.'],
+    ['omp', 'cezar does not yet read OMP account details from its agent dir (agent.db is its login store).'],
   ] as const)('%s gets its own unsupported-provider reason without a CLI read', async (provider, reason) => {
     const identity = await readAccountIdentity(provider, home);
     expect(identity).toEqual({ available: false, reason, fields: [] });
   });
 
   describe('cursor', () => {
+    it('explains a login without display fields instead of returning an empty panel', async () => {
+      const identity = await readAccountIdentity('cursor', join(home, '.cursor'), {
+        runCommand: async () => ({ stdout: '{"isAuthenticated":true}', stderr: '', exitCode: 0 }),
+      });
+      expect(identity).toMatchObject({ available: false, fields: [] });
+      expect(identity.reason).toContain('does not expose account details');
+    });
+
     it('reads email, name and plan from agent status/about JSON — named fields only', async () => {
       const identity = await readAccountIdentity('cursor', join(home, '.cursor'), {
         runCommand: async (args) => {

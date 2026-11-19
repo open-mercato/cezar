@@ -44,6 +44,10 @@ export function automationTaskOrigin(definition: Pick<AutomationDefinition, 'kin
 
 const BUILT_IN_WORKFLOW_NAMES: ReadonlySet<string> = new Set([QUICK_TASK_WORKFLOW.name, ...BUILT_IN_GRAPH_WORKFLOWS.map((w) => w.name)]);
 
+export function isBuiltInWorkflowName(name: string): boolean {
+  return BUILT_IN_WORKFLOW_NAMES.has(name);
+}
+
 /** `workflow_used`'s label: a built-in workflow by name, everything the user wrote as `custom`. */
 export function workflowLabel(workflow: Pick<WorkflowDef, 'name' | 'source' | 'graph'>, dispatched: boolean): string {
   if (dispatched) return 'dispatch';

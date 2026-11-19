@@ -104,6 +104,44 @@ export function buildPathTree<F extends { name: string }>(
   return { ...root, dirs: root.dirs.map(compact) }
 }
 
+/**
+ * Untracked junk (redesign 2026-11, "Changes trees"): OS cruft, image/GIF frames, media, archives,
+ * fonts and compiled binaries. They are listed — the counts stay honest — but a tree de-emphasises
+ * them under the source files, folded when there are many, so a drop of screenshots never buries
+ * the eight-line fix beside it. Name-based on purpose: the Files tab's directory listing carries no
+ * `binary` flag, and the two trees must agree on what junk is. `svg` is NOT junk — it is authored.
+ */
+const JUNK_NAMES: ReadonlySet<string> = new Set(['.DS_Store', 'Thumbs.db', 'ehthumbs.db', 'desktop.ini', '.localized'])
+const JUNK_EXTENSIONS: ReadonlySet<string> = new Set([
+  // images (svg excluded) and media
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'tif', 'tiff', 'heic', 'psd',
+  'mp4', 'mov', 'webm', 'mkv', 'mp3', 'wav', 'ogg', 'flac',
+  // documents and archives
+  'pdf', 'zip', 'gz', 'tgz', 'tar', 'bz2', 'xz', '7z', 'rar', 'dmg', 'iso',
+  // fonts and compiled output
+  'woff', 'woff2', 'ttf', 'otf', 'eot', 'wasm', 'exe', 'dll', 'dylib', 'so', 'o', 'a', 'class', 'jar', 'pyc', 'node',
+])
+
+export function isJunkPath(path: string, binary = false): boolean {
+  if (binary) return true
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  if (JUNK_NAMES.has(name)) return true
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return false
+  return JUNK_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
+}
+
+/** Source first, junk after — one rule for every tree, so the two tabs cannot order differently. */
+export function partitionJunk<F>(files: readonly F[], isJunk: (file: F) => boolean): { source: F[]; junk: F[] } {
+  const source: F[] = []
+  const junk: F[] = []
+  for (const file of files) (isJunk(file) ? junk : source).push(file)
+  return { source, junk }
+}
+
+/** Past this many junk rows in one folder they fold under a single row, closed by default. */
+export const JUNK_FOLD_AT = 3
+
 /** Changed files (the `/changes` payload order) → the sorted, compacted tree root with ± counts. */
 export function buildFileTree(files: ChangedFile[]): TreeDir {
   const byPath = new Map(files.map((file) => [file.path, file]))

@@ -4,14 +4,14 @@
 
 ## TLDR
 
-Monitoring wakes the same live agent every 5 minutes by default after it emits `CEZ:MONITORING`. Each wake creates a model turn, never overlaps another turn, and counts toward the 40-wakeup cap per monitoring epoch. A childless monitor that keeps re-parking hands off as `waiting` after 40 × 5 = 200 minutes; an unanswered hand-off settles `failed` after the default 15-minute idle timeout (215 minutes total). Setting `monitoringWakeIntervalMinutes` to `null` explicitly selects park mode with no automatic model turns: the hand-off bound is four times the configured idle timeout (60 minutes at the default 15, also the fallback when idle timeout is disabled). A dispatched child still in flight postpones the hand-off.
+Monitoring wakes the same live agent every 5 minutes by default after it emits `CEZ:MONITORING`. Each wake creates a model turn, never overlaps another turn, and counts toward the 40-wakeup cap per monitoring epoch. A childless monitor that keeps re-parking hands off as `waiting` after 40 × 5 = 200 minutes; an unanswered hand-off's session closes after the default 15-minute idle timeout (215 minutes total) and the run stays `waiting` as an idle park (spec 2026-11-04-idle-closed-attention-state § Revision). Setting `monitoringWakeIntervalMinutes` to `null` explicitly selects park mode with no automatic model turns: the hand-off bound is four times the configured idle timeout (60 minutes at the default 15, also the fallback when idle timeout is disabled). A dispatched child still in flight postpones the hand-off.
 
 ## Resolved assumptions (autonomous defaults)
 
 | # | Question | Applied default | Why | Confirm? |
 |---|----------|-----------------|-----|----------|
 | Q1 | Fixed or adaptive cadence? | Fixed 1–60 minute interval; default 5 minutes. | It is predictable across backends and easy to explain, test, and budget. | ok |
-| Q2 | Default behavior? | `monitoringWakeIntervalMinutes` defaults to `5`. A childless monitor that keeps re-parking is handed to the user as `waiting` after 40 wakeups; an unanswered hand-off settles `failed` with Continue after the configured idle timeout (40 × 5 + 15 = 215 minutes by default). Explicit `null` selects park mode: hand-off after four times `resources.idleTimeoutMinutes` (60 minutes at the default 15, or when idle timeout is disabled), followed by the configured idle timeout (75 minutes total with idle timeout 15). With idle timeout `null` or `0`, either hand-off raises attention and rests at `waiting` with the session open. | The default cadence gives monitoring an exit that needs no human; explicit park mode spends no model turns, and disabling idle timeout deliberately leaves the hand-off open. | ok |
+| Q2 | Default behavior? | `monitoringWakeIntervalMinutes` defaults to `5`. A childless monitor that keeps re-parking is handed to the user as `waiting` after 40 wakeups; an unanswered hand-off's session closes after the configured idle timeout (40 × 5 + 15 = 215 minutes by default), leaving it `waiting` until a message reopens it. Explicit `null` selects park mode: hand-off after four times `resources.idleTimeoutMinutes` (60 minutes at the default 15, or when idle timeout is disabled), followed by the configured idle timeout (75 minutes total with idle timeout 15). With idle timeout `null` or `0`, either hand-off raises attention and rests at `waiting` with the session open. | The default cadence gives monitoring an exit that needs no human; explicit park mode spends no model turns, and disabling idle timeout deliberately leaves the hand-off open. | ok |
 | Q3 | Native backend scheduler or cezar timer? | Cezar timer using `AgentSession.sendMessage`. | Claude has `/loop`, but Codex CLI/app-server has no documented equivalent; parity belongs at the runner seam. | ok |
 | Q4 | Safety bound? | 40 automatic wakeups per monitoring epoch. | Reuses cezar's existing autonomous continuation ceiling and prevents forgotten loops from spending indefinitely. | ok |
 
@@ -36,9 +36,9 @@ Add nullable workspace resource `monitoringWakeIntervalMinutes`:
 - wake prompt: “Re-check the downstream work you were monitoring. Continue toward the task goal; emit `CEZ:MONITORING` again only if it is still pending.”;
 - when the next turn monitors again, schedule one new timer;
 - after 40 automatic wakeups in the current monitoring epoch, emit a lifecycle note and hand the run to the user as an ordinary `waiting` park (idle timer armed if enabled, session left open for a reply); a run with a dispatched child still in flight stays parked for that child's report instead. A real user follow-up starts a new epoch; a child's report does not;
-- while a dispatched child is in flight, a due wake-up is skipped (not counted) and re-armed: the child's settle report wakes the run on its own;
+- while a dispatched child is `queued` or `running`, a due wake-up is skipped (not counted) and re-armed: the child's settle report wakes the run on its own. A child parked `waiting` on a human does not defer it (spec 2026-09-10-dispatch, A15), so the commander can still notice it;
 - a monitoring park with nothing in flight that hears nothing for four times the configured `resources.idleTimeoutMinutes` (default 15 minutes; `MONITORING_LIVENESS_MS` = 4 × `DEFAULT_IDLE_TIMEOUT_MINUTES` = 60 minutes is the fallback for `null` or `0`) is handed to the user as `waiting` the same way, which is the bound when the interval is null. At the wake-up cap the same bound is armed as a fallback; if a dispatched child is still in flight when it expires, it re-arms and waits for that child;
-- a hand-off is parked like a mid-workflow `CEZ:ASK` (`askParked`): the second half of the fuse follows the configured idle timeout. When enabled, the idle timer closes the session without a reply and the run settles `failed` ("the session closed before you replied — continue to reply") with the Continue button, never `done`/`review` on work the agent said was still pending. With idle timeout `null` or `0`, no idle timer closes it: the hand-off raises attention and rests at `waiting` with the session open rather than settling. A cezar restart still settles a handed-off run `failed` the same way. With no dispatched child in flight, the default total fuse is 40 × 5 + 15 = 215 minutes; explicitly selecting park mode with interval `null` gives 60 + 15 = 75 minutes at the default idle timeout.
+- a hand-off is parked like a mid-workflow `CEZ:ASK` (`askParked`): the second half of the fuse follows the configured idle timeout. When enabled, the idle timer closes the session without a reply and the run stays `waiting` as an idle park (`idleClosedAt`, no process), never `done`/`review` on work the agent said was still pending; the next message reopens it (spec 2026-11-04-idle-closed-attention-state § Revision). With idle timeout `null` or `0`, no idle timer closes it: the hand-off raises attention and rests at `waiting` with the session open rather than settling. A cezar restart still settles a handed-off run `failed` the same way. With no dispatched child in flight, the default total fuse is 40 × 5 + 15 = 215 minutes; explicitly selecting park mode with interval `null` gives 60 + 15 = 75 minutes at the default idle timeout.
 
 Immediate autonomous mode keeps precedence and existing behavior. The timed mode starts only after the run actually parks as monitoring, including after immediate autonomous continuation reaches its own cap.
 
@@ -71,6 +71,31 @@ No concurrent turn or catch-up queue exists: a timer is only present between tur
 ### Compatibility
 
 The backend seam already supports live follow-ups for Claude stream-json stdin, Codex app-server turns, and OpenCode HTTP sessions. No runner-specific API, marker, status, or new event kind is added. `monitoringWakeAt?: string` is an additive `RunRecord`/API field carried by the existing run update event; old records and clients continue to parse. The in-memory counter intentionally resets after process restart; existing session recovery governs whether a timer can be rebuilt for a genuinely live/recoverable monitor. A stale persisted deadline is cleared unless recovery proves the session is live and deliberately schedules a fresh future deadline.
+
+### Change-aware wakes on a watched PR (#2040)
+
+A wake-up turn re-reads the agent's whole context to learn, most of the time, that CI is still
+running. A run that parks with a declared PR (`RunRecord.prNumber`, from the task text, `CEZ:PR=`
+or an opened PR) therefore watches that PR instead of waking blind:
+
+| # | Question | Applied default | Why |
+|---|----------|-----------------|-----|
+| W1 | What marks a CI wait? | Any monitoring park on a run with a declared PR, when an interval is configured. | No new marker or runner change; the fingerprint below includes reviews and comments, so a review wait is covered too. |
+| W2 | What is "changed"? | PR state, head OID, conflicting flag, review decision, each check's (workflow, name, status, conclusion/state), review and comment counts — timings excluded. | Everything the woken agent could act on; `UNKNOWN`↔`MERGEABLE` flips are not. |
+| W3 | Does a quiet tick count? | Yes, toward the same 40, with its own note. | The cap's load-bearing job is the park's wall-clock bound (200 min at 5); counting keeps it exact. |
+| W4 | Unreadable forge? | `gh` absent, logged out, offline, `CEZ_DRY_RUN=1`, bad JSON: the tick wakes as before. | Degrades to today; never a silent park. |
+| W5 | Waits the fingerprint cannot see? | After `MONITORING_PR_QUIET_CHECKS` (5) quiet ticks in a row the next tick wakes anyway. | A PR run may be monitoring a local process; it still gets a turn every ~30 min. |
+| W6 | Default? | On; `CEZ_MONITORING_PR_WATCH=0` restores a turn per tick. | Pending owner ratification in AGENTS.md: one `gh pr view` per tick replaces the agent's own `gh pr checks`. |
+
+Mechanism: arming the wake timer for a park starts the watch and probes the baseline fingerprint.
+At a due tick (after the supervision skip, which keeps precedence) the timer probes again: equal
+→ count, note `automatic monitoring check (N/40): PR #n unchanged — no model turn`, re-arm;
+otherwise the unchanged wake-up path. Leaving monitoring drops the watch, so the next park
+re-baselines on what the woken turn saw. One check is in flight per watch; clearing the wake
+timer (a message, a cancel, a re-arm, park mode) drops it, and arming returns early while one is
+pending, so a late `gh` answer can never wake a run twice. Restart recovery re-arms through
+`reconcileMonitoringWakeTimers`, which starts a fresh watch. Exits are unchanged: user message,
+child report, cancel, cap hand-off, liveness in park mode and at the cap.
 
 ## UI/UX
 

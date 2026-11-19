@@ -168,6 +168,17 @@ describe('GET /runs/:id/artifacts[/:name]', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
+  it('derives the image source from the Host it saw and ignores X-Forwarded-Host in local mode (#1920, #426)', async () => {
+    writeFileSync(join(dir, 'report.html'), '<img src="shots/a.png">');
+    const res = await app.request(`http://localhost:5173/api/v1/runs/${runId}/artifacts/report.html`, {
+      headers: { host: 'localhost:5173', 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.status).toBe(200);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain(`img-src data: blob: http://localhost:5173/api/v1/runs/${runId}/artifacts/`);
+    expect(csp).not.toContain('evil.example');
+  });
+
   it('serves the no-CDN CSP when CEZ_ARTIFACTS_CDN=0', async () => {
     process.env.CEZ_ARTIFACTS_CDN = '0';
     writeFileSync(join(dir, 'report.html'), '<p>hi</p>');

@@ -144,6 +144,20 @@ export const automationTaskSchema = createRunInputBaseSchema
   });
 export type AutomationTask = z.infer<typeof automationTaskSchema>;
 
+/**
+ * Where a run's outcome is posted (spec 2026-10-31-managers § Automation reports): the manager's
+ * chat, by the server, with no model turn. `post-result` posts every finished run's last message,
+ * `notify-on-failure` only failures, `none` keeps the link but posts nothing.
+ */
+export const AUTOMATION_REPORT_MODES = ['post-result', 'notify-on-failure', 'none'] as const;
+export const automationReportModeSchema = z.enum(AUTOMATION_REPORT_MODES);
+export type AutomationReportMode = z.infer<typeof automationReportModeSchema>;
+export const automationReportSchema = z.object({
+  managerId: z.string().min(1).max(100),
+  mode: automationReportModeSchema,
+});
+export type AutomationReport = z.infer<typeof automationReportSchema>;
+
 /** One stored automation, as every route that answers a single definition serves it. */
 export const automationDefinitionSchema = z.object({
   id: z.string(),
@@ -169,6 +183,8 @@ export const automationDefinitionSchema = z.object({
     dispatch: z.object({ ...dispatchIntentSchema.shape, ...automationDispatchSchema.shape }).optional(),
   }),
   deferredStart: deferredStartStateSchema.optional(),
+  /** Absent = reports nowhere, as before. Edited only by `PUT /automations/:id/report`. */
+  report: automationReportSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -397,6 +413,30 @@ export type AutomationRetryResponse = z.infer<typeof automationRetryResponseSche
 export const automationRunResponseSchema = z.object({ runId: z.string() });
 export type AutomationRunResponse = z.infer<typeof automationRunResponseSchema>;
 
+/** One live run in a tree the automation launched on its own (#1980). `rootRunId` is present
+ *  only for a dispatched descendant; `kind` only for queued work. */
+export const automationWorkRunSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: runStatusSchema,
+  rootRunId: z.string().optional(),
+  kind: z.enum(['never-started', 'continuation']).optional(),
+});
+export type AutomationWorkRun = z.infer<typeof automationWorkRunSchema>;
+
+/** `GET /automations/:id/work` — what still runs after a pause: queued (pending) and
+ *  running/waiting (active) tasks of its trees. A by-hand `Run now` is not listed. */
+export const automationWorkSchema = z.object({
+  queued: z.array(automationWorkRunSchema),
+  active: z.array(automationWorkRunSchema),
+});
+export type AutomationWork = z.infer<typeof automationWorkSchema>;
+
+/** `POST /automations/:id/cancel-queued` — the queued runs it cancelled, and those it kept
+ *  because cancelling them would also stop their running children. */
+export const automationCancelQueuedResponseSchema = z.object({ cancelled: z.array(z.string()), kept: z.array(z.string()) });
+export type AutomationCancelQueuedResponse = z.infer<typeof automationCancelQueuedResponseSchema>;
+
 /**
  * `GET /workspace/automation-templates` — the other registered projects' automations, as the
  * editor's "From your other projects" palette lists them (spec 2026-09-14 Q7). Read-only.
@@ -463,12 +503,17 @@ export type CreateAutomationInput = z.input<typeof createAutomationInputSchema>;
  * silently pause a running automation, so the caller restates it.
  */
 export const updateAutomationInputSchema = createAutomationInputSchema
-  .omit({ enable: true })
+  .omit({ enable: true, report: true })
   .extend({
     enabled: z.boolean().optional(),
     expectedRevision: z.number(),
   });
 export type UpdateAutomationInput = z.input<typeof updateAutomationInputSchema>;
+
+/** `PUT /automations/:id/report` — link to a manager, change the mode, or `null` to unlink. Bumps no
+ *  revision: an open editor's next save must not conflict with it. */
+export const setAutomationReportInputSchema = z.object({ report: automationReportSchema.nullable() });
+export type SetAutomationReportInput = z.input<typeof setAutomationReportInputSchema>;
 
 /** `POST /automations/:id/check` — which of the two manual checks to run. */
 export const automationCheckInputSchema = z.object({

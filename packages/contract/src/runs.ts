@@ -10,6 +10,7 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+import { taskAskRecordSchema } from './questions.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
@@ -121,6 +122,8 @@ export const stepStateSchema = z.object({
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),
+  /** Raw model this turn was spawned with ('' = deliberately auto); absent on older records. */
+  model: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -159,6 +162,18 @@ export const processUsageSchema = z.object({
   procCount: z.number(),
 });
 export type ProcessUsage = z.infer<typeof processUsageSchema>;
+
+/** Live session gauges for the run header (context fill, plan usage windows), the latest
+ *  reading the agent reported. Claude only today; absent on every other run. */
+export const runLiveUsageSchema = z.object({
+  contextTokens: usageCounterSchema.optional(),
+  contextWindow: usageCounterSchema.optional(),
+  limits: z
+    .array(z.object({ window: z.string(), utilization: z.number(), resetsAt: z.string() }))
+    .optional(),
+  at: z.string(),
+});
+export type RunLiveUsage = z.infer<typeof runLiveUsageSchema>;
 
 /**
  * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
@@ -286,6 +301,10 @@ export const runRecordSchema = z.object({
   status: runStatusSchema,
   attentionRequest: webhookAttentionRequestSchema.optional(),
   completionReason: webhookCompletionReasonSchema.optional(),
+  /** The run's `CEZ:ASK` questions, newest last, at most `TASK_ASKS_MAX` (Questions inbox spec). */
+  asks: z.array(taskAskRecordSchema).optional(),
+  /** Notes for the next Continue: a question the user skipped while the session was closed. */
+  askNotes: z.array(z.string()).optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
@@ -316,6 +335,18 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
+  /** ISO-8601 instant the inactivity timer closed the session (spec 2026-11-04-idle-closed-attention-state).
+   *  On a `waiting` run: housekeeping, no live process, and a message reopens it. On a `failed` run
+   *  (older records, dispatched children): it settled the run, and the cockpit shows a quiet "idle". */
+  idleClosedAt: z.string().optional(),
+  /** The manager that started the task (spec 2026-10-31-managers). */
+  startedByManager: z.object({ id: z.string(), name: z.string() }).optional(),
+  /** Why a `cancelled` run was stopped, and who stopped it, when the canceller said so. */
+  cancelReason: z.string().optional(),
+  cancelledBy: z.string().optional(),
+  /** ISO-8601 instant the current wait on the user began. Kept past the session while
+   *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
+  waitingSince: z.string().optional(),
   /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
   prHead: z
@@ -338,6 +369,7 @@ export const runRecordSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  liveUsage: runLiveUsageSchema.optional(),
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407) — auto-discovered from conversation references. Display
    *  tier only: `pullRequestUrl` (the PR this task CREATED) wins, and the action gates ignore it. */
@@ -353,6 +385,8 @@ export const runRecordSchema = z.object({
   /** 'user' = renamed via PATCH, never auto-overwritten; 'marker' = agent-declared via
    *  CEZ:TITLE (spec 2026-07-18-task-ref-markers); 'auto' = namer-owned. */
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  /** The live title refresh already fired; the title no longer follows the conversation. */
+  titleSettled: z.boolean().optional(),
   /** References the agent declared via CEZ:PR/CEZ:ISSUE markers — authoritative over the namer
    *  for the matching kind. */
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
@@ -374,6 +408,9 @@ export const runRecordSchema = z.object({
   /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
    *  writes, no landing. */
   readOnly: z.literal(true).optional(),
+  /** With `readOnly`: a manager's read-only task, which the backend enforces too — no write
+   *  tools, no `gh` login, no private MCP, or the run refuses to start (spec 2026-10-31-managers). */
+  enforceReadOnly: z.literal(true).optional(),
   /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
   landing: z
     .object({
@@ -509,6 +546,8 @@ export const runIndexEntrySchema = z.object({
   /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
    *  so a cross-project row says "needs you" like every other surface rather than "failed". */
   awaitingAnswerSince: z.string().optional(),
+  /** The inactivity timer closed the run's session: housekeeping on `waiting`, a quiet "idle" on legacy `failed`. */
+  idleClosedAt: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
@@ -517,6 +556,8 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
+  /** Lines changed, for a manager's session card (spec 2026-10-31-managers). */
+  diffStat: diffStatSchema.optional(),
   /** The run's place in a dispatch tree (spec 2026-09-10-dispatch): the two keys the global
    *  page needs to nest a child under its parent, and the child's `kind` so a row can say
    *  `review` or `implement` next to its title. Absent on a plain task. */
@@ -664,6 +705,13 @@ export const createRunResponseSchema = z.union([
 ]);
 export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
 
+/** `POST /runs/:id/cancel` body, optional: why it was stopped and who stopped it, kept on the run. */
+export const cancelRunInputSchema = z.object({
+  reason: z.string().trim().min(1).max(2000).optional(),
+  cancelledBy: z.string().trim().min(1).max(200).optional(),
+});
+export type CancelRunInput = z.infer<typeof cancelRunInputSchema>;
+
 /** `POST /runs/:id/cancel` — genuinely a boolean: an already-settled run answers 200 + `false`. */
 export const cancelResponseSchema = z.object({ cancelled: z.boolean() });
 export type CancelResponse = z.infer<typeof cancelResponseSchema>;
@@ -725,6 +773,8 @@ export type ContinueResponse = z.infer<typeof continueResponseSchema>;
 export const createPrResponseSchema = z.object({
   url: z.string(),
   dryRun: z.boolean(),
+  /** The branch already had an open PR; publishing pushed the new commits to it. */
+  updated: z.literal(true).optional(),
 });
 export type CreatePrResponse = z.infer<typeof createPrResponseSchema>;
 
@@ -1093,11 +1143,11 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
   const keepsExtension = allowed.includes(ext);
   const rawStem = keepsExtension ? cleaned.slice(0, dot) : cleaned;
-  const stem = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES)
-    // Trailing dots and spaces last, after truncation could have exposed one: Windows refuses an
-    // entry that ends in either, and `notes.` would otherwise become `notes..txt`.
-    .replace(/[. ]+$/, '')
-    .trim();
+  const truncated = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES);
+  // Truncation can expose dots and spaces that Windows refuses at the end of a stem.
+  let end = truncated.length;
+  while (end > 0 && (truncated[end - 1] === '.' || truncated[end - 1] === ' ')) end -= 1;
+  const stem = truncated.slice(0, end).trim();
   if (stem === '') return null;
   // The last Windows filename rule, and the only one that is not about characters: these stems
   // name DEVICES whatever extension follows, so `CON.txt` is the console rather than a file and a
@@ -1228,6 +1278,9 @@ export const createRunInputBaseSchema = z
     /** true → a read-only Ask task (spec 2026-10-20-trunk-based-projects): runs in the repo
      *  checkout with read-only tools, takes no lease and never lands. */
     readOnly: z.boolean().optional(),
+    /** With `readOnly: true`: enforce it on the backend as well, refusing a backend that cannot.
+     *  A manager sets it; the cockpit's Ask does not (spec 2026-10-31-managers). */
+    enforceReadOnly: z.boolean().optional(),
     /** true → autonomous run: never parks at "waiting"; auto-continues until done. */
     autonomous: z.boolean().optional(),
     /** false → keep the handoff journal but do not expose or request a follow-up todos file.
@@ -1255,6 +1308,9 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    /** The manager starting this task (spec 2026-10-31-managers): provenance for `task cancel`'s
+     *  own-tasks rule and the manager's `startedBy`. Never an authorization by itself. */
+    startedByManager: z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(80) }).optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
@@ -1290,6 +1346,8 @@ export const messageInputSchema = z
     images: attachmentListSchema.default([]),
     /** One per message, reused by its retries: a key that already landed is not delivered again. */
     idempotencyKey: z.string().uuid().optional(),
+    /** Sent from an ask card: answers that card. Absent (typed in the composer): open cards stay open, flagged. */
+    askRequestId: z.string().min(1).max(200).optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
@@ -1313,6 +1371,8 @@ export const continueInputSchema = z.object({
   agentProfile: z.string().max(64).optional(),
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey: z.string().uuid().optional(),
+  /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
+  askRequestId: z.string().min(1).max(200).optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 

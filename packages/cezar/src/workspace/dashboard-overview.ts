@@ -32,6 +32,8 @@ export function buildDashboardOverview(
       row.status === (group === 'completed' ? 'done' : 'failed') &&
       !row.autoResumeAt &&
       !row.awaitingAnswerSince &&
+      // An idle close is not a failure (spec 2026-11-04-idle-closed-attention-state).
+      !row.idleClosedAt &&
       finished >= start &&
       finished <= at
     );

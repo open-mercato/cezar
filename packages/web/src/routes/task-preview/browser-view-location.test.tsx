@@ -101,7 +101,7 @@ describe('BrowserView — in-page navigation', () => {
     expect(addressBar().value).toBe(APP)
     // Same document: the frame is not rebuilt and nothing is loading — the page gets `hashchange`.
     expect(frame()).toBe(element)
-    expect(screen.queryByText('Loading…')).toBeNull()
+    expect(screen.queryByRole('status', { name: 'Loading page…' })).toBeNull()
     expect(forward().hasAttribute('disabled')).toBe(false)
 
     // The page's own report of that move is the entry it is already on.
@@ -119,7 +119,7 @@ describe('BrowserView — in-page navigation', () => {
 
     expect(frame()).toBe(element)
     expect(framedUrl()).toBe('http://localhost:5173/orders#status=returned')
-    expect(screen.queryByText('Loading…')).toBeNull()
+    expect(screen.queryByRole('status', { name: 'Loading page…' })).toBeNull()
     expect(persisted.at(-1)?.tabs[0]).toBe('http://localhost:5173/orders#status=returned')
     // No `load` follows a fragment move, and that is not a failure.
     act(() => {
@@ -134,7 +134,7 @@ describe('BrowserView — in-page navigation', () => {
     const element = frame()
     type('http://localhost:5173/other')
     expect(frame()).not.toBe(element)
-    expect(screen.getByText('Loading…')).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Loading page…' })).toBeTruthy()
   })
 
   it('leaves the bar alone while the user is typing in it', () => {

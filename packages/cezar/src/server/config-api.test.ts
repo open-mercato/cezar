@@ -1,8 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp } from './server.ts';
@@ -27,6 +29,7 @@ describe('the config API', () => {
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   let store: RunStore;
   let app: Hono;
+  let retentionPasses = 0;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-'));
@@ -39,8 +42,10 @@ describe('the config API', () => {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     mkdirSync(join(homeRoot, '.cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    // The config routes never touch the manager — an empty stub is honest.
-    app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+    // The config routes touch the manager only to start a retention pass (#2003).
+    retentionPasses = 0;
+    const manager = { scheduleRetention: () => { retentionPasses++; } } as unknown as RunManager;
+    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
   });
 
   afterEach(() => {
@@ -94,6 +99,8 @@ describe('the config API', () => {
       defaultSkill: null,
       askSkill: null,
       teamSkills: true,
+      bypassPermissions: false,
+      bypassPermissionsBlocked: null,
     });
   });
 
@@ -187,6 +194,15 @@ describe('the config API', () => {
     expect(rawFile().defaultModels).toBeUndefined();
   });
 
+  // A runner missing from the PUT schema is stripped silently: the request answers 200 and
+  // nothing is saved.
+  it.each(RUNNER_IDS)('PUT defaultModels persists and clears a %s model', async (runner) => {
+    expect((await put({ defaultModels: { [runner]: 'some-model' } })).status).toBe(200);
+    expect(rawFile().defaultModels).toEqual({ [runner]: 'some-model' });
+    await put({ defaultModels: { [runner]: null } });
+    expect(rawFile().defaultModels).toBeUndefined();
+  });
+
   it('an explicit auto default beats the coding agent\'s own configured model (#906)', async () => {
     mkdirSync(join(homeRoot, '.claude'), { recursive: true });
     mkdirSync(join(homeRoot, '.codex'), { recursive: true });
@@ -220,6 +236,13 @@ describe('the config API', () => {
     await put({ defaultModelsAuto: { claude: null } });
     expect(rawFile().defaultModelsAuto).toBeUndefined();
     expect((await getBody()).defaultModels).toEqual({});
+  });
+
+  it('PUT defaultModelsAuto accepts omp — it reads a native default (`modelRoles.default`) too', async () => {
+    await put({ defaultModelsAuto: { omp: true } });
+    expect(rawFile().defaultModelsAuto).toEqual({ omp: true });
+    await put({ defaultModelsAuto: { omp: null } });
+    expect(rawFile().defaultModelsAuto).toBeUndefined();
   });
 
   it('the fixed-model policy refuses an auto override too (#906)', async () => {
@@ -280,6 +303,8 @@ describe('the config API', () => {
       defaultSkill: null,
       askSkill: null,
       teamSkills: true,
+      bypassPermissions: false,
+      bypassPermissionsBlocked: null,
     });
   });
 
@@ -296,6 +321,15 @@ describe('the config API', () => {
     await put({ worktreeRetention: null });
     expect(rawFile().worktreeRetention).toBeUndefined();
     expect((await getBody()).worktreeRetention).toBe(10);
+  });
+
+  it('a saved or cleared worktreeRetention starts a retention pass; other keys do not (#2003)', async () => {
+    await put({ systemPrompt: 'x' });
+    expect(retentionPasses).toBe(0);
+    await put({ worktreeRetention: 5 });
+    expect(retentionPasses).toBe(1);
+    await put({ worktreeRetention: null });
+    expect(retentionPasses).toBe(2);
   });
 
   it('rejects a negative or over-limit worktreeRetention with 400', async () => {
@@ -463,6 +497,42 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     })).json()) as Record<string, unknown>;
     expect(off).toMatchObject({ profile: null, taskWorkspace: null, landing: null, requiredChecks: [], defaultSkill: null, teamSkills: true });
     expect(Object.keys(rawFile()).sort()).toEqual([]);
+  });
+
+  it('PUT bypassPermissions stores only true, and a git-tracked config.json cannot grant it', async () => {
+    const on = (await (await put({ bypassPermissions: true })).json()) as Record<string, unknown>;
+    expect(on).toMatchObject({ bypassPermissions: true, bypassPermissionsBlocked: null });
+    expect(rawFile().bypassPermissions).toBe(true);
+
+    execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+    execFileSync('git', ['add', '-f', '.ai/cezar/config.json'], { cwd: repoRoot });
+    const tracked = (await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>;
+    expect(tracked.bypassPermissions).toBe(true);
+    expect(tracked.bypassPermissionsBlocked).toMatch(/tracked by git/);
+
+    const off = (await (await put({ bypassPermissions: false })).json()) as Record<string, unknown>;
+    expect(off).toMatchObject({ bypassPermissions: false, bypassPermissionsBlocked: null });
+    expect('bypassPermissions' in rawFile()).toBe(false);
+  });
+
+  // #2259 review: a hosted operator may rely on Claude's own sandbox to contain agents.
+  it('a hosted cockpit cannot turn bypassPermissions on, can turn it off, and says why', async () => {
+    const prevRemote = process.env.CEZ_REMOTE;
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ bypassPermissions: true }));
+    process.env.CEZ_REMOTE = '1';
+    try {
+      const refused = await put({ bypassPermissions: true });
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: string }).error).toMatch(/local-only/);
+      const shown = (await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>;
+      expect(shown.bypassPermissionsBlocked).toMatch(/local-only/);
+      const off = await put({ bypassPermissions: null });
+      expect(off.status).toBe(200);
+      expect('bypassPermissions' in rawFile()).toBe(false);
+    } finally {
+      if (prevRemote === undefined) delete process.env.CEZ_REMOTE;
+      else process.env.CEZ_REMOTE = prevRemote;
+    }
   });
 
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {

@@ -89,7 +89,7 @@ export function TelemetryConsentBanner() {
         <p className="min-w-0 flex-1 basis-[280px] text-ui leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">Help improve cezar?</span> With your OK we send task
           counts and crash reports to the maintainers — never prompts, code, paths or repo names. Change it
-          anytime in Settings → Privacy.{' '}
+          anytime in Settings → Data & privacy.{' '}
           <button
             type="button"
             data-slot="telemetry-details"
@@ -168,8 +168,8 @@ export function TelemetryDetailsDialog({
             <ConsentList title="Never shared" tone="no" items={NEVER} />
           </div>
 
-          <p className="text-xs leading-relaxed text-soft-foreground">
-            Every label is a closed list the server enforces. Withdraw anytime in Settings → Privacy or
+          <p className="text-label leading-relaxed text-soft-foreground">
+            Every label is a closed list the server enforces. Withdraw anytime in Settings → Data & privacy or
             with <code className="font-mono">cezar telemetry disable</code> — the install id is deleted.{' '}
             <a href={TELEMETRY_CODE_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">
               Read the code
