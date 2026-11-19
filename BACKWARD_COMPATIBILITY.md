@@ -627,6 +627,20 @@ path for the reading-width default: it removes the legacy workspace-owned
 appearance.width value narrow once, while preserving accent, density and
 unknown ui-state keys. It does not touch per-repo files.
 
+## Workflows — typed replies answer a human gate (#2318), 2026-11-18
+
+- **Changed outcome**: a `gate.human` reply that is not a clear reject (`Reject`, "request
+  changes", "stop here", "not yet", "don't push", "don't open a PR"…) now leaves by `approve`. Free
+  text is applied first, by an agent turn on the task branch; `CEZ:VERDICT declined` from that turn
+  takes `reject`, and anything but `applied` makes the gate ask again. Such a reply used to leave by `reject`. This applies to saved copies too, so a
+  custom graph whose `approve` port pushes, comments or calls a webhook now does so after a free-text
+  reply.
+- **Additive outputs**: `gate.human` may also set `instructions` (the reply to apply) and
+  `pr: 'ready'`; `comment` is unchanged.
+- **Additive option**: a gate whose `approve` port leads straight to `github.draft-pr` also offers
+  **Approve, open a full PR**, which opens it ready for review. When the task already has a PR,
+  `github.draft-pr` after an instructed approval pushes the branch to it instead of opening another.
+
 ## Automations — results reach the manager chat, 2026-11-12
 
 - **Additive**: the definition gains an optional `report: {managerId, mode}` (`mode`:
