@@ -724,7 +724,7 @@ unknown ui-state keys. It does not touch per-repo files.
   machine default when none is pinned — now fails every chat, watch, job and follow-up turn with
   `CodexToolPolicyError` before any model call. Codex cannot enforce the manager's `cez-manager`
   shell fence, so these turns used to run with Codex's unrestricted native shell. Pick Claude
-  Code or Pi for the manager; Codex stays available for the tasks a manager starts.
+  Code for the manager; Codex stays available for the tasks a manager starts.
 - **Cockpit**: the manager agent picker no longer offers Codex. Stored managers keep their
   `runner: 'codex'` pin and show the refusal in their chat until it is changed.
 

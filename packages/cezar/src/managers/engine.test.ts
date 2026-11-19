@@ -929,6 +929,8 @@ describe('ManagerEngine', () => {
       await settled(engine);
       expect(backend.specs).toEqual([]);
       expect(store.state(id).lastFailure?.cause).toContain('tool-policy enforcement unavailable');
+      expect(store.state(id).lastFailure?.cause).toContain('Pick Claude Code for this manager.');
+      expect(store.state(id).lastFailure?.cause).not.toMatch(/\bPi\b/);
       engine.send(id, 'hi');
       await settled(engine);
       expect(backend.specs).toEqual([]);
