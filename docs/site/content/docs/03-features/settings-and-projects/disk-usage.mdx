@@ -37,13 +37,13 @@ Freeing a worktree (reclaiming it) removes only the directory. The task's branch
 | --- | --- | --- |
 | `<repo>/.ai/cezar/worktrees/` | One checkout per task. Usually the largest part by far. | Count limit, age limit, archive, disk guard, `cez worktrees` |
 | `<repo>/.ai/cezar/artifacts/<runId>`, `dispatch/<runId>` | A task's reports and dispatch notes. | Deleted with the task |
-| `<repo>/.ai/cezar/attachments/` | The project's attachment library, shared by every task. | Never pruned |
+| `<repo>/.ai/cezar/attachments/` | A copy of every file you attached, under its own name. | Never deleted by Cezar |
 | `<repo>/.ai/cezar/runs.json`, `runs/*.ndjson` | The task index and event logs. Small. | Archived tasks are deleted after 90 days; old runs are pruned past the run-count cap |
 | `~/.cezar/versions/` | Installed Cezar versions. | Old versions are pruned after an update and on startup |
 
 ## Where to find it
 
-- Settings → Resources → Worktrees: the age default and the archived-task lifetime for every project, and the disk guard thresholds.
+- Settings → Behaviour: the age default and the archived-task lifetime for every project, and the disk guard thresholds.
 - Project settings → Worktrees: this project's count limit, age limit and archived-task lifetime, and every worktree on disk with its size, last activity and whether it can be reclaimed.
 
 ## How to use it
@@ -78,7 +78,7 @@ An archived task is deleted for good after a number of days. The default is **90
 - The branch is kept, and only the task deleted, when the branch has an open pull request, when the task opened a pull request and `gh` cannot tell its state, or when it has commits that are neither merged into the default branch nor pushed to a remote.
 - It never touches an unarchived, running or pinned task. A task whose worktree has uncommitted changes, or whose worktree removal runs lifecycle scripts, is skipped and stays archived.
 
-Deletion runs when Cezar starts and once an hour, and the server log says how many tasks it deleted and how many branches it kept. Change the lifetime in Settings → Resources → Worktrees (every project) or Project settings → Worktrees (this project, or **Workspace default** to inherit). Independently of the lifetime, a project keeps at most 500 archived tasks.
+Deletion runs when Cezar starts and once an hour, and the server log says how many tasks it deleted and how many branches it kept. Change the lifetime in Settings → Behaviour (every project) or Project settings → Worktrees (this project, or **Workspace default** to inherit). Independently of the lifetime, a project keeps at most 500 archived tasks.
 
 To delete them from a terminal, run `cez worktrees prune --archived-older-than 90d`. Add `--dry-run` to list what would be deleted, with the branches that would be kept, and change nothing.
 
@@ -89,13 +89,13 @@ The disk guard watches free space on the disk that holds the worktrees. It acts 
 - free space falls below the smaller of **10%** and **5 GB**, or
 - task worktrees across every project take more than **20 GB**.
 
-It checks when Cezar starts and every 10 minutes. It reclaims the oldest idle worktrees first, across all projects, until it is back under the threshold. When that is not enough, the cockpit shows the warning **Disk almost full — N GB in task worktrees**, adds an attention item and sends a notification. The guard never stops a running task. `GET /api/v1/workspace/disk-guard` returns its thresholds and its last check.
+It checks when Cezar starts and every 10 minutes. It reclaims the oldest idle worktrees first, across every project Cezar has open, until it is back under the threshold. When that is not enough, the cockpit shows the warning **Disk almost full — N GB in task worktrees**, adds an attention item and sends a notification. The guard never stops a running task. `GET /api/v1/workspace/disk-guard` returns its thresholds and its last check.
 
-Set the thresholds in Settings → Resources → Worktrees. Set a threshold to `0` to turn that trigger off.
+Set the thresholds in Settings → Behaviour. Set a threshold to `0` to turn that trigger off.
 
 ## Task files and old versions
 
-- Deleting a task also deletes its `artifacts` folder, and its `dispatch` folder once no task of that tree remains. The same happens when old runs are pruned past the run-count cap. A sweep at startup removes folders whose task no longer exists. It is skipped when the task index could not be read in full. The shared attachment library is never pruned.
+- Deleting a task also deletes its `artifacts` and `dispatch` folders. The same happens when old runs are pruned past the run-count cap. A sweep at startup removes folders whose task no longer exists. The `attachments` library holds your own files and is never deleted; remove files from it yourself.
 - After a successful update and on startup, Cezar keeps 3 versions in `~/.cezar/versions`, the running one included, and deletes the older ones. Set the top-level `versionRetention` in `~/.cezar/config.json` to keep a different number, or `0` to turn automatic pruning off. The active version (`cezar use`), a version a running Cezar uses and a linked checkout are never deleted, and nothing is deleted while an install is in progress.
 
 ## Command line: `cez worktrees`

@@ -5,8 +5,8 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
-import { localBranchExists, removeWorktree, worktreeHasUnpreservedWork } from '../git-worktree.ts';
 import { ghEnv } from '../core/gh-env.ts';
+import { localBranchExists, removeWorktree, worktreeHasUnpreservedWork } from '../git-worktree.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveArchivedTaskDeleteDays } from '../config.ts';
 import { lastActivityAt } from './retention.ts';
@@ -75,7 +75,7 @@ export async function hasOpenPr(repoRoot: string, branch: string): Promise<boole
   if (process.env.CEZ_DRY_RUN === '1' || !isSafeGitRef(branch)) return null;
   try {
     const { stdout } = await exec('gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '--limit', '1'], {
-      cwd: repoRoot, timeout: 20_000, env: ghEnv(),
+      cwd: repoRoot, env: ghEnv(), timeout: 20_000,
     });
     const parsed: unknown = JSON.parse(stdout);
     return Array.isArray(parsed) ? parsed.length > 0 : null;

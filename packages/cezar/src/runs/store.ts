@@ -2540,12 +2540,13 @@ export class RunStore extends EventEmitter {
     }
   }
 
-  /** Startup sweep: artifacts, dispatch trees and library copies whose task is gone (spec
+  /** Startup sweep: artifacts and dispatch trees whose task is gone (spec
    *  2026-11-19-worktree-disk-usage). Never throws. */
   sweepOrphanTaskFiles(): ReturnType<typeof sweepOrphanTaskFiles> {
-    // An index this process could not read in full makes unread tasks look gone: sweep nothing.
+    // Behind an index that did not load in full (or is empty), every task looks gone: sweep nothing,
+    // the same guard as the layout prune.
     const health = this.getIndexReadHealth();
-    if (health.state !== 'complete' || health.omittedRuns > 0) return { artifacts: [], dispatch: [] };
+    if (health.state !== 'complete' || health.omittedRuns > 0 || this.runs.size === 0) return { artifacts: [], dispatch: [] };
     const known = new Set([...this.runs.keys(), ...this.salvaged.keys()]);
     const roots = new Set<string>();
     for (const run of this.runs.values()) if (run.dispatch?.rootRunId) roots.add(run.dispatch.rootRunId);

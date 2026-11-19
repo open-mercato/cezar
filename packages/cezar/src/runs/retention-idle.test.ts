@@ -9,6 +9,7 @@ import {
   isIdleReclaimable,
   lastActivityAt,
   reclaimIdleWorktrees,
+  reclaimRunWorktrees,
   rematerializeReclaimedWorktree,
   selectIdleWorktrees,
   selectManualReclaim,
@@ -123,6 +124,26 @@ describe('reclaimIdleWorktrees against a real repo', () => {
     expect(await reclaimIdleWorktrees(repo, store, 7, opts(new Set([parked.id])))).toEqual([]);
     expect(existsSync(parked.worktreePath!)).toBe(true);
     expect(existsSync(running.worktreePath!)).toBe(true);
+  });
+
+  it('two passes reclaiming the same tree at once remove it once', async () => {
+    const run = await seed('done', daysAgo(30));
+    let removals = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const remove = async (_root: string, path: string) => {
+      removals += 1;
+      await gate;
+      rmSync(path, { recursive: true, force: true });
+    };
+    const options = { remove, hasUnpreservedWork: async () => false };
+    const first = reclaimRunWorktrees(repo, store, [run.id], () => true, options);
+    await new Promise((r) => setTimeout(r, 20));
+    const second = await reclaimRunWorktrees(repo, store, [run.id], () => true, options);
+    release();
+    expect(await first).toEqual([run.id]);
+    expect(second).toEqual([]);
+    expect(removals).toBe(1);
   });
 
   it('leaves a tree with uncommitted work on disk', async () => {

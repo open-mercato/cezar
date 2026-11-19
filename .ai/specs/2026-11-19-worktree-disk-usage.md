@@ -34,8 +34,9 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
    `{ minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }`. Each 0 turns that trigger off.
    - The guard acts when free space on the worktrees volume is below the SMALLER of
      `minFreePercent`% and `minFreeGb`, or when task worktrees total more than `maxWorktreesGb`.
-   - It reclaims the oldest idle-reclaimable trees first, across all projects, until back under
-     the threshold.
+   - It reclaims the oldest idle-reclaimable trees first, across every project this process has
+     open, until back under the threshold. It never opens a closed project: building a context
+     runs `recover()`, which would resume that project's interrupted tasks.
    - If that is not enough, it shows a cockpit warning, an attention item and a notification:
      "Disk almost full — N GB in task worktrees".
    - It never blocks running tasks. Each check is one `statfs`; sizes are cached from a background
@@ -60,17 +61,14 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
      branch nor pushed.
    - It never touches an unarchived, live, running, queued or pinned task, nor a tree with
      uncommitted work.
-   - It runs at boot and with the hourly sweep, and logs a summary. The 500-archived cap stays as
+   - It runs with every retention pass (queued off the boot path) and the hourly sweep, and logs a summary. The 500-archived cap stays as
      the backstop.
    - CLI: `cez worktrees prune --archived-older-than 90d [--dry-run]`.
-6. **Task files go with the task.**
-   - `deleteRun` and the run-cap prune remove the task's `artifacts/<id>`, and its `dispatch/<root>`
-     tree once no member remains. The task's own attachments live in `runs/<id>-images` and already
-     went with it.
-   - The attachment library (#929) is never touched: it is built to outlive tasks.
-   - A startup sweep removes the leftovers of tasks already gone. It runs only behind a fully read
-     index, because an unread record would look like a gone task. It spares directories younger
-     than an hour (`runs/task-files.ts`).
+6. **Task files go with the task.** `deleteRun` and the run-cap prune remove the task's
+   `artifacts/<id>` and its `dispatch/<root>` tree once no member remains. A startup sweep removes
+   the leftovers of tasks already gone; it skips an index that did not load or is empty, and
+   directories younger than an hour (`runs/task-files.ts`). The attachment library (#929) is never
+   swept: it holds the user's own files (BACKWARD_COMPATIBILITY.md §3).
 7. **Old cezar versions are pruned** (`self-update/versions-prune.ts`).
    - It keeps the running version plus the 2 most recently installed others. The setting is
      `versionRetention` in `~/.cezar/config.json`: default 3, and 0 turns the automatic prune off.

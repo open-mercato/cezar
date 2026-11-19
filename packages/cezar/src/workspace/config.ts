@@ -148,10 +148,10 @@ const resourcesSchema = z
     /** Reclaim a non-active task's worktree after this many days without activity (branch kept,
      *  Continue restores it); 0 = off. Seeds projects that set no `worktreeIdleDays`. */
     worktreeIdleDaysDefault: z.number().int().min(0).max(365).default(DEFAULT_WORKTREE_IDLE_DAYS).catch(DEFAULT_WORKTREE_IDLE_DAYS),
-    /** Disk guard thresholds (runs/disk-guard.ts); each 0 = that trigger off. */
     /** Delete archived tasks after this many days (record, files, worktree and a branch holding
      *  nothing unique); 0 = never. Seeds projects that set no `archivedTaskDeleteDays`. */
     archivedTaskDeleteDaysDefault: z.number().int().min(0).max(3650).default(DEFAULT_ARCHIVED_TASK_DELETE_DAYS).catch(DEFAULT_ARCHIVED_TASK_DELETE_DAYS),
+    /** Disk guard thresholds (runs/disk-guard.ts); each 0 = that trigger off. */
     diskGuard: diskGuardSchema.prefault(() => ({})).catch(() => diskGuardSchema.parse({})),
   })
   .passthrough();

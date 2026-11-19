@@ -184,6 +184,7 @@ export function describeDiskGuardNotification(warning: string): RunNotificationC
     title: 'Disk almost full',
     body: warning,
     tag: 'cezar-disk-guard',
-    path: '/settings/worktrees',
+    // Workspace-wide: the thresholds live in global Behaviour, not in any one project.
+    path: '/settings/global/behaviour#resources',
   }
 }

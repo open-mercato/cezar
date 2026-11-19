@@ -1006,12 +1006,11 @@ attention list and a notification when that is not enough; it never stops a
 running task. It checks at boot and every 10 minutes, and
 `GET /api/v1/workspace/disk-guard` returns its thresholds and last pass. Edit the
 repo keys in Project settings → Worktrees and the workspace keys in Settings →
-Resources → Worktrees.
+Behaviour.
 
 An archived task is deleted after `archivedTaskDeleteDays`, counted from
 `archivedAt` (older records: `finishedAt`, else last activity): its record,
-event log, handoff, images, drafts, artifacts, dispatch files, worktree and
-branch. The branch is kept, and only the task
+event log, handoff, images, drafts, artifacts, dispatch files, worktree and branch. The branch is kept, and only the task
 deleted, when it has an open pull request (or `gh` cannot tell for a task that
 opened one) or commits neither merged into the default branch nor pushed to a
 remote. Unarchived, running and pinned tasks are never touched, and a tree with
@@ -1036,11 +1035,10 @@ cez worktrees remove <runId>                # one task's tree (branch kept); ref
 cez versions prune [--keep N] [--dry-run] [--backups]   # old installed versions; backups only with --backups
 ```
 
-Deleting a task also deletes its `.ai/cezar/artifacts/<runId>` and its
-`dispatch/<runId>` tree once no member of it remains, as does pruning old runs
-past the run-count cap. A startup sweep removes leftovers whose run no longer
-exists, but only when the task index was read in full. The shared attachment
-library (`.ai/cezar/attachments/`) is never pruned. The cockpit-side
+Deleting a task also deletes its `.ai/cezar/artifacts/<runId>` and
+`dispatch/<runId>`, as does pruning old runs past the run-count cap; a startup
+sweep removes leftovers whose run no longer exists. The attachment library
+(`.ai/cezar/attachments/`) is never deleted: it holds your own files. The cockpit-side
 details and a manual SSH cleanup walkthrough are on the docs site's **Disk usage
 and worktrees** page.
 

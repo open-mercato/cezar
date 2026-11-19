@@ -1,6 +1,6 @@
 // The disk guard's view of the workspace (spec 2026-11-19-worktree-disk-usage, decision 3): every
-// registered project's root from the registry, and a project opened (its context built) only
-// when a pass has to reclaim — the disk is shared, so a tree in any project may go.
+// registered project's root from the registry, and the trees of every project this process already
+// has open — the disk is shared, so a tree in any of them may go. A closed project is never opened.
 import { realpathSync } from 'node:fs';
 import type { ProjectContexts, ProjectContextSource } from '../server/project-context.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
@@ -48,8 +48,10 @@ export function workspaceDiskGuardDeps(opts: {
     },
     open: async (id) => {
       if (id === boot.id) return project(boot.id, boot.root, boot.store, boot.manager);
-      const ctx = await contexts.context(id);
-      return project(ctx.id, ctx.root, ctx.store, ctx.manager);
+      // Only a project this process already opened: building one prunes, retains and `recover()`s
+      // its runs, which a disk check must never do (see `GET /workspace/runs-index`).
+      const ctx = contexts.peek(id);
+      return ctx ? project(ctx.id, ctx.root, ctx.store, ctx.manager) : undefined;
     },
     thresholds: async () => (await loadConfig()).resources.diskGuard,
   };

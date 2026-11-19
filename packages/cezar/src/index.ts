@@ -21,7 +21,6 @@ import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
 import { loadConfig } from './config.ts';
 import { enforceWorktreeRetention } from './runs/retention.ts';
-import { enforceArchivedTaskRetention } from './runs/archived-cleanup.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
@@ -490,7 +489,8 @@ async function serveCommand(
     // the keep-limit (directory only — `cez/<id8>` branch kept, so recoverable).
     // Best-effort; never blocks boot.
     const reclaimed = await enforceWorktreeRetention(repoRoot, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
-    await enforceArchivedTaskRetention(repoRoot, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
+    // Archived-task deletion may ask `gh` per task: queued off the boot path, with the rest of a pass.
+    manager.scheduleRetention();
     if (reclaimed.length > 0) {
       console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
     }
