@@ -649,7 +649,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     const command = attachments.length > 0 ? null : parseManagerCommand(text)
     // A message to an inactive manager wakes it, so it asks first; a cancel hands the draft back.
     const reactivate = inactive && command?.name !== 'stop'
-    if (reactivate && !(await activity.confirmActivity({ kind: 'send', manager }))) {
+    if (reactivate && !(await activity.confirmActivity({ kind: command?.name === 'check' ? 'check' : 'send', manager }))) {
       throw new Error(`Not sent: ${manager.name} is still inactive.`)
     }
     scroll.jump()

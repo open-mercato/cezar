@@ -1820,8 +1820,10 @@ describe('an inactive manager\'s chat (spec 2026-11-19-manager-deactivate)', () 
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     send('/check')
-    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and send\?/ })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and send' }))
+    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and check\?/ })
+    expect(dialog.textContent).toContain('A single check runs now: one model call.')
+    expect(dialog.textContent).not.toContain('Your message starts its next turn')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and check' }))
     await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ active: true, catchUp: true }))
     expect(posted('/global/check')).toHaveLength(0)
     expect(posted('/global/messages')).toHaveLength(0)
@@ -1847,5 +1849,18 @@ describe('an inactive manager\'s chat (spec 2026-11-19-manager-deactivate)', () 
     expect(summary).toContain('1 automation report')
     expect(summary).toContain('5 checks skipped')
     expect(summary).toContain('1 job run skipped')
+    expect(summary).toContain('posted by cezar · no model call')
+  })
+
+  it('says the catch-up check is a model call instead of claiming none', async () => {
+    server.managers = [managerFixture()]
+    server.messages = [
+      { id: 'n2', seq: 1, at: '2026-11-19T08:00:00Z', kind: 'notice', text: 'Reactivated by you', activity: { change: 'reactivated', since: '2026-11-18T23:40:00Z', taskUpdates: 0, automationReports: 0, checksSkipped: 5, jobRunsSkipped: 0, catchUp: true } },
+    ]
+    renderAt('/manager/global')
+    const summary = await waitFor(() => document.querySelector('[data-slot="manager-activity-summary"]')!.textContent)
+    expect(summary).toContain('catching up now')
+    expect(summary).toContain('the catch-up check is one model call')
+    expect(summary).not.toContain('no model call')
   })
 })

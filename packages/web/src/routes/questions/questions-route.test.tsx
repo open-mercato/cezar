@@ -378,6 +378,8 @@ describe('an inactive manager on the Questions page (spec 2026-11-19-manager-dea
     expect(within(card('Storage')).queryByText(/Manager inactive/)).toBeNull()
     await waitFor(() => expect(document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent).toBe('1'))
     expect(screen.getByText('+1 from inactive managers, not counted')).toBeTruthy()
+    // The header counts what the sidebar badge counts: the task question only.
+    expect(document.querySelector('[data-slot="questions-status"]')!.textContent).toBe('1 question waiting, from 1 task')
     expect(document.querySelector('[data-slot="sidebar-questions"]')!.getAttribute('title')).toBe('1 more from inactive managers, not counted')
   })
 

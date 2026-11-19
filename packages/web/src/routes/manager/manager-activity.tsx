@@ -28,6 +28,8 @@ export type ActivityRequest =
   | { kind: 'reactivate'; manager: ManagerSummary }
   /** Sending to an inactive manager: one confirm, cancelling keeps the draft. */
   | { kind: 'send'; manager: ManagerSummary }
+  /** `/check` on an inactive manager: reactivating runs one check, not a chat turn. */
+  | { kind: 'check'; manager: ManagerSummary }
   /** Answering an inactive manager's question: the chosen answer is shown. */
   | { kind: 'answer'; manager: ManagerSummary; answer: string }
   | { kind: 'bulk'; managers: readonly ManagerSummary[] }
@@ -186,13 +188,14 @@ function dialogBody(request: ActivityRequest, catchUp: boolean, setCatchUp: (nex
     }
   }
   const send = request.kind === 'send'
+  const check = request.kind === 'check'
   return {
-    title: <Title manager={manager}>{send ? `Reactivate ${manager.name} and send?` : `Reactivate ${manager.name}?`}</Title>,
-    description: `${send ? 'Your message starts its next turn. ' : ''}Checks and jobs restart from now — nothing overdue fires at once.`,
+    title: <Title manager={manager}>{send ? `Reactivate ${manager.name} and send?` : check ? `Reactivate ${manager.name} and check?` : `Reactivate ${manager.name}?`}</Title>,
+    description: `${send ? 'Your message starts its next turn. ' : check ? 'A single check runs now: one model call. ' : ''}Checks and jobs restart from now — nothing overdue fires at once.`,
     extra: (
       <>
         <WhileInactive manager={manager} />
-        {send ? null : (
+        {send || check ? null : (
           <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border px-3 py-2.5 text-sm has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50">
             <input type="checkbox" data-slot="manager-activity-catch-up" className="mt-0.5 size-4 accent-primary" checked={catchUp} onChange={(event) => setCatchUp(event.target.checked)} />
             <span>
@@ -203,7 +206,7 @@ function dialogBody(request: ActivityRequest, catchUp: boolean, setCatchUp: (nex
         )}
       </>
     ),
-    action: send ? 'Reactivate and send' : 'Reactivate',
+    action: send ? 'Reactivate and send' : check ? 'Reactivate and check' : 'Reactivate',
     icon: send ? <SendIcon aria-hidden="true" /> : <PlayIcon aria-hidden="true" />,
   }
 }

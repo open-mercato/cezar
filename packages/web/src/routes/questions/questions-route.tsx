@@ -15,6 +15,7 @@ import {
   scheduleDismiss,
   settleQuestion,
   undoDismiss,
+  useInactiveManagerIds,
   useInactiveQuestionCount,
   useLiveQuestionCount,
   usePendingDismissals,
@@ -120,8 +121,9 @@ export function closedLabel(closed: QuestionClosed, managerName?: (id: string) =
   return REASON_LABEL[closed.reason]
 }
 
-function summaryLine(open: readonly QuestionItem[]): string {
-  const live = open.filter((item) => !item.older)
+/** The header count matches the sidebar badge: an inactive manager's cards are not counted (spec 2026-11-19-manager-deactivate). */
+function summaryLine(open: readonly QuestionItem[], inactive: ReadonlySet<string>): string {
+  const live = open.filter((item) => !item.older && !(item.source.kind === 'manager' && inactive.has(item.source.managerId)))
   if (live.length === 0) return 'Nothing waiting on you'
   const managers = new Set(live.filter((item) => item.source.kind === 'manager').map((item) => sourceKey(item.source))).size
   const tasks = new Set(live.filter((item) => item.source.kind === 'task').map((item) => sourceKey(item.source))).size
@@ -156,6 +158,7 @@ export function QuestionsRoute() {
   const managerById = useCallback((id: string) => managers.data?.managers.find((manager) => manager.id === id), [managers.data])
   const approvals = (managers.data?.managers ?? []).reduce((sum, manager) => sum + manager.pendingActions, 0)
   const fromInactive = useInactiveQuestionCount()
+  const inactiveIds = useInactiveManagerIds()
 
   // When a card leaves, focus goes to the next card's first option, else the heading (design § E).
   const order = useRef<string[]>([])
@@ -200,7 +203,7 @@ export function QuestionsRoute() {
           ) : null}
         </div>
         <p data-slot="questions-status" className="text-sm text-muted-foreground">
-          {query.data ? summaryLine(open) : query.isError ? 'Questions from your managers and tasks' : 'Loading questions…'}
+          {query.data ? summaryLine(open, inactiveIds) : query.isError ? 'Questions from your managers and tasks' : 'Loading questions…'}
         </p>
       </header>
       <p aria-live="polite" data-slot="questions-announcer" className="sr-only">{announcement}</p>
