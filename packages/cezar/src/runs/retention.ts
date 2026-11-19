@@ -288,6 +288,8 @@ export async function reclaimRunWorktrees(
     // A snapshot taken by the caller is seconds old by now; a run Continued since must keep its tree.
     const run = store.listRuns().find((candidate) => candidate.id === id);
     if (!run?.worktreePath || run.worktreeReclaimedAt || !eligible(run) || claimedForResume(id)) continue;
+    // Another pass (guard, sweep, archive, CLI) is already reclaiming this tree.
+    if (reclaimsInFlight.has(id)) continue;
     let settle!: () => void;
     reclaimsInFlight.set(id, new Promise<void>((resolve) => { settle = resolve; }));
     try {

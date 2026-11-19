@@ -283,7 +283,7 @@ describe('a click on a notification', () => {
     act(() => client.setQueryData(queryKeys.health, health('Disk almost full — 21.0 GB in task worktrees')))
     expect(made.map((n) => n.title)).toEqual(['Disk almost full'])
     act(() => made[0]!.onclick!())
-    expect(where()).toBe('/settings/worktrees')
+    expect(where()).toBe('/settings/global/behaviour')
   })
 
   it('a disk guard warning already showing at the first observation stays silent', () => {

@@ -103,6 +103,21 @@ describe('task files are cleaned up with the task', () => {
     expect(existsSync(library('held.pdf'))).toBe(true);
   });
 
+  it('the startup sweep removes nothing when the task index could not be loaded', () => {
+    writeFileSync(join(dataDir, 'runs.json'), '{ truncated');
+    const store = RunStore.open(dataDir);
+    expect(store.getIndexReadHealth().state).toBe('unavailable');
+    file(join(dataDir, 'artifacts', 'some-run', 'a.html'), 'x');
+    file(join(dataDir, 'dispatch', 'some-root', 'brief.md'), 'x');
+    file(library('held.pdf'), 'held');
+    for (const dir of ['artifacts/some-run', 'dispatch/some-root']) aged(join(dataDir, dir));
+
+    expect(store.sweepOrphanTaskFiles()).toEqual({ artifacts: [], dispatch: [], library: [] });
+    expect(existsSync(join(dataDir, 'artifacts', 'some-run'))).toBe(true);
+    expect(existsSync(join(dataDir, 'dispatch', 'some-root'))).toBe(true);
+    expect(existsSync(library('held.pdf'))).toBe(true);
+  });
+
   it('never deletes a library file filed moments ago', () => {
     const store = RunStore.open(dataDir);
     mkdirSync(attachmentLibraryPath(dataDir), { recursive: true });

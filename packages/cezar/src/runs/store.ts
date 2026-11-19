@@ -2543,6 +2543,8 @@ export class RunStore extends EventEmitter {
   /** Startup sweep: artifacts, dispatch trees and library copies whose task is gone (spec
    *  2026-11-19-worktree-disk-usage). Never throws. */
   sweepOrphanTaskFiles(): ReturnType<typeof sweepOrphanTaskFiles> {
+    // Behind an index that did not load, every task looks gone — the same guard as the layout prune.
+    if (this.indexReadHealth.state !== 'complete') return { artifacts: [], dispatch: [], library: [] };
     const known = new Set([...this.runs.keys(), ...this.salvaged.keys()]);
     const roots = new Set<string>();
     for (const run of this.runs.values()) if (run.dispatch?.rootRunId) roots.add(run.dispatch.rootRunId);

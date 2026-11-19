@@ -1006,7 +1006,7 @@ attention list and a notification when that is not enough; it never stops a
 running task. It checks at boot and every 10 minutes, and
 `GET /api/v1/workspace/disk-guard` returns its thresholds and last pass. Edit the
 repo keys in Project settings → Worktrees and the workspace keys in Settings →
-Resources → Worktrees.
+Behaviour.
 
 An archived task is deleted after `archivedTaskDeleteDays`, counted from
 `archivedAt` (older records: `finishedAt`, else last activity): its record,

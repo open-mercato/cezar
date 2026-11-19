@@ -32,8 +32,9 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
    `{ minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }`. Each 0 turns that trigger off.
    - The guard acts when free space on the worktrees volume is below the SMALLER of
      `minFreePercent`% and `minFreeGb`, or when task worktrees total more than `maxWorktreesGb`.
-   - It reclaims the oldest idle-reclaimable trees first, across all projects, until back under
-     the threshold.
+   - It reclaims the oldest idle-reclaimable trees first, across every project this process has
+     open, until back under the threshold. It never opens a closed project: building a context
+     runs `recover()`, which would resume that project's interrupted tasks.
    - If that is not enough, it shows a cockpit warning, an attention item and a notification:
      "Disk almost full — N GB in task worktrees".
    - It never blocks running tasks. Each check is one `statfs`; sizes are cached from a background

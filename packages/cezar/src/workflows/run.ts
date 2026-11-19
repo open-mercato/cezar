@@ -4661,7 +4661,9 @@ export class RunManager {
   private async enforceRetention(): Promise<void> {
     try {
       await enforceWorktreeRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
-      await enforceArchivedTaskRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+      const archived = await enforceArchivedTaskRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+      // A deleted pull-request head run's `refs/cezar/pr/<n>` goes with it, as on `DELETE /runs/:id`.
+      if (archived.deleted.length > 0) await this.sweepPrHeadRefs();
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }

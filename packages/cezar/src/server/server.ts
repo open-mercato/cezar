@@ -290,7 +290,7 @@ import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
 import { DiskGuard, type DiskGuardStatus } from '../runs/disk-guard.ts';
 import { workspaceDiskGuardDeps } from '../runs/disk-guard-workspace.ts';
-import { branchesCheckedOutElsewhere, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import { branchesCheckedOutElsewhere, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeHasUnpreservedWork, worktreeSizeBytes } from '../git-worktree.ts';
 import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
@@ -5332,7 +5332,10 @@ export function createApp(deps: ServerDeps) {
       const result = await deleteExpiredArchivedTasks(repoRoot, store, days, {
         isLive: (id) => manager.isActive(id), dryRun: body.dryRun === true, lifecycle: manager.lifecycle,
         activity: storeActivity(store),
+        // The rest of what `DELETE /runs/:id` does: terminals stop, a PR head's ref goes with it.
+        onDeleted: (run) => stopTaskProcesses(run.id),
       });
+      if (body.dryRun !== true && result.deleted.length > 0) await manager.sweepPrHeadRefs();
       return c.json({ ...result, days, dryRun: body.dryRun === true });
     })
 
@@ -6875,8 +6878,12 @@ export function createApp(deps: ServerDeps) {
       const targets = selectManualReclaim(store.listRuns(), body, isLive, storeActivity(store));
       if (body.dryRun) {
         const candidates = targets ?? await configuredReclaimCandidates(repoRoot, store, isLive);
-        const inUse = await worktreesInUse(store.listRuns().filter((r) => candidates.includes(r.id)));
-        return c.json({ reclaimed: candidates.filter((id) => !inUse.has(id)), dryRun: true });
+        const runs = store.listRuns().filter((r) => candidates.includes(r.id));
+        const inUse = await worktreesInUse(runs);
+        // The real pass keeps a tree with uncommitted work (#2215); the preview must not list it.
+        const dirty = new Set<string>();
+        for (const run of runs) if (run.worktreePath && await worktreeHasUnpreservedWork(run.worktreePath)) dirty.add(run.id);
+        return c.json({ reclaimed: candidates.filter((id) => !inUse.has(id) && !dirty.has(id)), dryRun: true });
       }
       const reclaimed = targets === null
         ? await enforceWorktreeRetention(repoRoot, store, opts)
