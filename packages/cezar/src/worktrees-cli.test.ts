@@ -181,6 +181,8 @@ describe('cez worktrees', () => {
 
     it('prune --dry-run without --archived-older-than is refused', async () => {
       expect(await runWorktreesCommand(['prune', '--dry-run'], io())).toBe(2);
+      expect(await runWorktreesCommand(['prune', '--archived-older-than', '0d', '--dry-run'], io())).toBe(2);
+      expect(err.join('\n')).toContain('must be more than 0');
     });
 
     it('refuses to write behind a cockpit it could not verify', async () => {

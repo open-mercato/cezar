@@ -113,6 +113,16 @@ export async function rematerializeReclaimedWorktree(
 }
 
 /**
+ * Restore a reclaimed tree for publishing (the PR path), only onto its surviving branch: a branch
+ * deleted since (merged and cleaned up) must not come back as a fresh tree off the base.
+ */
+export async function restoreReclaimedForPublish(repoRoot: string, store: RematerializeStore, runId: string): Promise<boolean> {
+  const run = store.getRun(runId);
+  if (!run?.worktreeReclaimedAt || !await localBranchExists(repoRoot, run.branch ?? branchFor(runId))) return false;
+  return rematerializeReclaimedWorktree(repoRoot, store, runId);
+}
+
+/**
  * Enforce the retention budget: reclaim the *directory* of every over-limit
  * finished worktree (branch kept via `removeWorktree` without the branch arg),
  * stamping `worktreeReclaimedAt` on each run actually reclaimed. Returns the

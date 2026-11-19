@@ -290,7 +290,7 @@ import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
 import { DiskGuard, type DiskGuardStatus } from '../runs/disk-guard.ts';
 import { workspaceDiskGuardDeps } from '../runs/disk-guard-workspace.ts';
-import { branchesCheckedOutElsewhere, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import { branchDiff, branchesCheckedOutElsewhere, localBranchExists, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
@@ -6041,9 +6041,11 @@ export function createApp(deps: ServerDeps) {
 
     // Task diff (spec 006): what this run changed — its worktree vs its base.
     .get('/runs/:id/diff', async (c) => {
-      const { store } = c.get('project');
-      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
+      const { root: repoRoot, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const kept = await reclaimedBranchOf(run, repoRoot);
+      if (kept) return c.text(await branchDiff(repoRoot, run.baseBranch ?? 'HEAD', kept));
       if (!run.worktreePath || !existsSync(run.worktreePath)) {
         return c.text(run.worktreeReclaimedAt ? `(${RECLAIMED_WORKTREE})` : '(no worktree — this task ran directly in the repo working tree)');
       }
@@ -6052,7 +6054,7 @@ export function createApp(deps: ServerDeps) {
 
     .get('/runs/:id/changes', async (c) => {
       const { root: repoRoot, store } = c.get('project');
-      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
+      const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
       if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
@@ -6071,8 +6073,14 @@ export function createApp(deps: ServerDeps) {
     // The run's own commits (<base>..HEAD on the worktree branch) — the Commits tab.
     .get('/runs/:id/commits', async (c) => {
       const { root: repoRoot, store } = c.get('project');
-      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
+      const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const kept = await reclaimedBranchOf(run, repoRoot);
+      if (kept) {
+        const fromBranch = await collectRunCommits(repoRoot, run.baseBranch ?? 'HEAD', kept);
+        if (!fromBranch.ok) return c.json({ error: fromBranch.error }, 409);
+        return c.json({ commits: fromBranch.commits });
+      }
       const workingDirectory = workingDirectoryOf(run, repoRoot);
       if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectRunCommits(workingDirectory, run.baseBranch ?? 'HEAD');
@@ -6083,9 +6091,10 @@ export function createApp(deps: ServerDeps) {
     // One of the run's commits, structured like the Changes tab (reuses collectCommitChanges).
     .get('/runs/:id/commit/:sha', async (c) => {
       const { root: repoRoot, store } = c.get('project');
-      const run = await withRestoredWorktree(c.get('project'), store.getRun(c.req.param('id')));
+      const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      const workingDirectory = workingDirectoryOf(run, repoRoot);
+      // A reclaimed task's commits live on in the shared object store: read them from the repo.
+      const workingDirectory = (await reclaimedBranchOf(run, repoRoot)) ? repoRoot : workingDirectoryOf(run, repoRoot);
       if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectCommitChanges(workingDirectory, c.req.param('sha'));
       if (!result.ok) return c.json({ error: result.error }, 409);
@@ -6810,8 +6819,12 @@ export function createApp(deps: ServerDeps) {
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
   const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk and could not be restored — its branch is kept; Continue restores it';
-  /** A `review` run age retention reclaimed still shows its diff and opens its PR (spec
-   *  2026-11-19-worktree-disk-usage): the tree comes back from the kept branch on demand. */
+  /** A reclaimed task's kept branch, when its tree is gone and the branch still exists: the read
+   *  routes answer from it without a checkout (spec 2026-11-19-worktree-disk-usage). */
+  const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> =>
+    run.worktreeReclaimedAt && run.branch && !(run.worktreePath && existsSync(run.worktreePath))
+      && await localBranchExists(repoRoot, run.branch) ? run.branch : null;
+  /** Only the PR path restores a reclaimed tree: publishing needs a checkout (autosave, push). */
   const withRestoredWorktree = async (project: { store: RunStore; manager: RunManager }, run: RunRecord | undefined): Promise<RunRecord | undefined> => {
     if (!run?.worktreeReclaimedAt || !run.worktreePath || existsSync(run.worktreePath) || project.manager.isActive(run.id)) return run;
     await project.manager.restoreReclaimedWorktree?.(run.id);

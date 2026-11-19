@@ -417,11 +417,11 @@ export type RunCommitsResult = { ok: true; commits: RunCommit[] } | { ok: false;
  * history even though `collectChanges` narrows its payload to uncommitted work in that case.
  * Empty (not an error) when the branch has no commits past base.
  */
-export async function collectRunCommits(dir: string, baseBranch: string): Promise<RunCommitsResult> {
-  if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
-  const mergeBase = await git(dir, ['merge-base', baseBranch, 'HEAD']);
+export async function collectRunCommits(dir: string, baseBranch: string, head = 'HEAD'): Promise<RunCommitsResult> {
+  if (!isSafeGitRef(baseBranch) || !isSafeGitRef(head)) return { ok: false, error: 'refusing option-like base ref' };
+  const mergeBase = await git(dir, ['merge-base', baseBranch, head]);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const log = await git(dir, ['log', '--pretty=format:%H%x1f%s%x1f%an%x1f%cr', `${base}..HEAD`]);
+  const log = await git(dir, ['log', '--pretty=format:%H%x1f%s%x1f%an%x1f%cr', `${base}..${head}`]);
   if (!log.ok) return { ok: false, error: gitReason(log, 'git log failed') };
   const commits = log.stdout
     .split('\n')

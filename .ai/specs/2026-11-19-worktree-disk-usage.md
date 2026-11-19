@@ -23,8 +23,10 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
    - Runs at boot, after terminal transitions (`scheduleRetention`), hourly
      (`RETENTION_SWEEP_MS`), and on "Reclaim now". All go through `enforceWorktreeRetention`
      (count, then age, then archived).
-   - `review` runs keep their diff and draft-PR gate after reclaim: the diff comes from the kept
-     branch, and the PR path restores the tree on demand.
+   - Reclaimed runs keep their diff after reclaim: `/diff`, `/commits` and `/commit/:sha` read
+     the kept branch without a checkout, and `/changes` says the tree was reclaimed. Only the PR
+     path (the PR route and the `github.draft-pr` gate) restores the tree. It restores onto the
+     kept branch only, never onto a fresh branch off the base after the branch was deleted.
 2. **Archive frees disk.** Archiving a task, or "Archive finished", reclaims the task's tree via
    `RunManager.reclaimWorktreesOf` (after its terminals stop). The hourly sweep retries a tree that
    was still in use. Unarchive plus Continue restores it.
@@ -61,11 +63,14 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
    - It runs at boot and with the hourly sweep, and logs a summary. The 500-archived cap stays as
      the backstop.
    - CLI: `cez worktrees prune --archived-older-than 90d [--dry-run]`.
-6. **Task files go with the task.** `deleteRun` and the run-cap prune remove the task's
-   `artifacts/<id>` and its `dispatch/<root>` tree once no member remains. They also remove the
-   attachment-library copies no remaining task holds; ownership is decided by content, against
-   `runs/<id>-images`. A startup sweep removes the leftovers of tasks already gone. Library files
-   and directories younger than an hour are spared (`runs/task-files.ts`).
+6. **Task files go with the task.**
+   - `deleteRun` and the run-cap prune remove the task's `artifacts/<id>`, and its `dispatch/<root>`
+     tree once no member remains. The task's own attachments live in `runs/<id>-images` and already
+     went with it.
+   - The attachment library (#929) is never touched: it is built to outlive tasks.
+   - A startup sweep removes the leftovers of tasks already gone. It runs only behind a fully read
+     index, because an unread record would look like a gone task. It spares directories younger
+     than an hour (`runs/task-files.ts`).
 7. **Old cezar versions are pruned** (`self-update/versions-prune.ts`).
    - It keeps the running version plus the 2 most recently installed others. The setting is
      `versionRetention` in `~/.cezar/config.json`: default 3, and 0 turns the automatic prune off.

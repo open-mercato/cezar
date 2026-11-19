@@ -144,7 +144,7 @@ import {
   withPendingReport,
 } from '../dispatch/engine.ts';
 import { enforceArchivedTaskRetention } from '../runs/archived-cleanup.ts';
-import { enforceWorktreeRetention, isReclaimable, reclaimSelectedWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { enforceWorktreeRetention, isReclaimable, reclaimSelectedWorktrees, rematerializeReclaimedWorktree, restoreReclaimedForPublish } from '../runs/retention.ts';
 import {
   AgentTempDirError,
   agentTmpEnv,
@@ -4685,8 +4685,8 @@ export class RunManager {
 
   private restoresInFlight = new Map<string, Promise<boolean>>();
   /**
-   * Bring back a reclaimed task's worktree for a surface that needs the tree — the diff, Changes,
-   * Commits and the draft-PR gate of a `review` run age retention reclaimed (spec
+   * Bring back a reclaimed task's worktree for the one surface that needs a checkout — publishing
+   * its PR (the PR route and the draft-PR gate) — from its kept branch (spec
    * 2026-11-19-worktree-disk-usage). The note it appends is activity, so the next sweep leaves the
    * restored tree alone. True when the tree exists afterwards.
    */
@@ -4697,7 +4697,7 @@ export class RunManager {
     if (!run.worktreeReclaimedAt) return Promise.resolve(false);
     let pending = this.restoresInFlight.get(runId);
     if (!pending) {
-      pending = rematerializeReclaimedWorktree(this.repoRoot, this.store, runId)
+      pending = restoreReclaimedForPublish(this.repoRoot, this.store, runId)
         .then((restored) => {
           if (restored) this.store.appendEvent(runId, { type: 'note', message: 'worktree restored from its branch' });
           const now = this.store.getRun(runId);

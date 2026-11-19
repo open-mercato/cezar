@@ -145,6 +145,8 @@ export async function runWorktreesCommand(args: string[], io: WorktreesCliIo): P
         }, io);
       case 'prune': {
         const archivedDays = values['archived-older-than'] === undefined ? undefined : parseOlderThan(values['archived-older-than'], '--archived-older-than');
+        // 0 means "never" in the setting; as a flag it would silently select nothing.
+        if (archivedDays !== undefined && archivedDays <= 0) throw new CliError('--archived-older-than must be more than 0 (e.g. 90d)', 2);
         if (values['dry-run']) {
           if (archivedDays === undefined) throw new CliError('--dry-run on prune previews --archived-older-than; orphan removal has no dry run', 2);
           io.log('dry run — orphan worktrees are not checked');

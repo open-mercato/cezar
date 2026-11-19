@@ -474,7 +474,7 @@ async function serveCommand(
   setImmediate(() => {
     try {
       const swept = store.sweepOrphanTaskFiles();
-      const count = swept.artifacts.length + swept.dispatch.length + swept.library.length;
+      const count = swept.artifacts.length + swept.dispatch.length;
       if (count > 0) console.log(`  removed ${count} leftover task file set(s) of deleted tasks`);
     } catch { /* best effort */ }
   });

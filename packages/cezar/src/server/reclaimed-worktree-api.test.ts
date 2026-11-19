@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorktree, removeWorktree } from '../git-worktree.ts';
-import { rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { restoreReclaimedForPublish } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -46,7 +46,7 @@ describe('a reclaimed review run', () => {
     reclaimOf = vi.fn(async () => []);
     const manager = {
       isActive: () => false,
-      restoreReclaimedWorktree: (id: string) => rematerializeReclaimedWorktree(repo, store, id),
+      restoreReclaimedWorktree: (id: string) => restoreReclaimedForPublish(repo, store, id),
       reclaimWorktreesOf: reclaimOf,
     } as unknown as RunManager;
     app = createApp({ repoRoot: repo, store, manager, version: '0.0.0-test' });
@@ -74,15 +74,31 @@ describe('a reclaimed review run', () => {
     return run.id;
   }
 
-  it('still shows its diff, restoring the tree from the kept branch', async () => {
+  it('shows its diff and commits from the kept branch without checking the tree out again', async () => {
     const id = await reclaimedReview();
-    const res = await apiRequest(app, `/api/v1/runs/${id}/diff`);
-    expect(await res.text()).toContain('+the work');
-    expect(existsSync(store.getRun(id)!.worktreePath!)).toBe(true);
-    expect(store.getRun(id)?.worktreeReclaimedAt).toBeUndefined();
+    expect(await (await apiRequest(app, `/api/v1/runs/${id}/diff`)).text()).toContain('+the work');
+    const commits = (await (await apiRequest(app, `/api/v1/runs/${id}/commits`)).json()) as { commits: Array<{ sha: string; subject: string }> };
+    expect(commits.commits.map((c) => c.subject)).toEqual(['work']);
+    const commit = await apiRequest(app, `/api/v1/runs/${id}/commit/${commits.commits[0]!.sha}`);
+    expect(commit.status).toBe(200);
+    const changes = await apiRequest(app, `/api/v1/runs/${id}/changes`);
+    expect(changes.status).toBe(409);
+    expect(((await changes.json()) as { error: string }).error).toContain('reclaimed');
+    expect(existsSync(store.getRun(id)!.worktreePath!)).toBe(false);
+    expect(store.getRun(id)?.worktreeReclaimedAt).toBeDefined();
   });
 
-  it('still opens its pull request', async () => {
+  it('never recreates a branch deleted since: the PR is refused and no tree appears', async () => {
+    const id = await reclaimedReview();
+    await exec('git', ['branch', '-D', store.getRun(id)!.branch!], { cwd: repo });
+    const res = await apiRequest(app, `/api/v1/runs/${id}/pr`, { method: 'POST', headers: ORIGIN });
+    expect(res.status).toBe(400);
+    expect(createDraftPr).not.toHaveBeenCalled();
+    expect(existsSync(store.getRun(id)!.worktreePath!)).toBe(false);
+    expect(await (await apiRequest(app, `/api/v1/runs/${id}/diff`)).text()).toContain('reclaimed');
+  });
+
+  it('still opens its pull request, restoring the tree from the kept branch', async () => {
     const id = await reclaimedReview();
     vi.mocked(createDraftPr).mockResolvedValue({ ok: true, url: 'https://github.com/acme/demo/pull/7', dryRun: false });
     const res = await apiRequest(app, `/api/v1/runs/${id}/pr`, { method: 'POST', headers: ORIGIN });
