@@ -180,3 +180,16 @@ describe('the parallel-limit hint and the human view', () => {
     expect(def.consumers.map((c) => c.estimatePp)).toEqual([30, 20]);
   });
 });
+
+describe('readings that arrive when a turn starts', () => {
+  it('never hands the usage before a turn to the turn whose start produced the reading', () => {
+    const w = only([
+      reading('10:00', 10),
+      // Two idle hours (your own Claude Code use), then a task turn starts and Claude reads 30%.
+      task('a', 'run:p/a', '12:00'), { ...reading('12:00', 30), at: T('12:00') + 2_000 } as LedgerRecord,
+      sample('a', '12:00', '12:10', 1), end('a', '12:10'), reading('12:10', 33),
+    ]);
+    expect(w.outsideCezarPp).toBe(20);
+    expect(w.consumers).toMatchObject([{ id: 'run:p/a', estimatePp: 3, aloneInferredPp: 3 }]);
+  });
+});

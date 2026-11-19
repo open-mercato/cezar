@@ -18,6 +18,8 @@ const RESET_TOLERANCE = 10 * MINUTE;
 /** A session with no `end` (a crashed process) counts as running this long after its last sign. */
 const OPEN_SESSION_CAP = 2 * 60 * MINUTE;
 const EPS = 1e-9;
+/** How long after a turn starts its own first reading may arrive. */
+const READING_LEAD = 20_000;
 
 interface Sample { from: number; to: number; usd?: number; tokens?: number }
 interface Session {
@@ -176,16 +178,18 @@ function windowSeeds(ledger: Ledger): WindowSeed[] {
 
 function attribute(sessions: Session[], a: number, b0: number, delta: number): { shares: Share[]; outside: number; unsplit: number; interval: Omit<PlanUsageInterval, 'from' | 'to' | 'deltaPp'> } {
   const b = b0 > a ? b0 : a + 1;
-  const span = b - a;
   const active = sessions.map((s) => ({ s, start: Math.max(s.begin, a), stop: Math.min(sessionEnd(s, Number.MAX_SAFE_INTEGER), b) }))
-    .filter((x) => x.stop > x.start || (x.s.begin <= a && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) >= b));
+    .filter((x) => x.stop > x.start || (x.s.begin <= a && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) >= b))
+    // Claude reads the account when a request starts: the turn whose start produced reading `b`
+    // had spent nothing yet, so it is not a candidate for the slice that reading closes.
+    .filter((x) => !(x.s.begin > b - READING_LEAD && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > b));
   const consumerIds = new Set(active.map((x) => x.s.consumer.id));
   if (consumerIds.size === 0) {
     return { shares: [], outside: delta, unsplit: 0, interval: { outcome: 'outside', weightUnit: null, allocations: [], outsideCezarPp: round(delta), unsplitPp: 0 } };
   }
-  const covered = Math.min(1, unionLength(active.map((x) => [x.start, x.stop] as [number, number])) / span);
-  const outside = delta * (1 - covered);
-  const inside = delta - outside;
+  // Someone in cezar ran: the slice is theirs (≈, since your own sessions are not excluded).
+  const outside = 0;
+  const inside = delta;
   const shares: Share[] = [];
   let unsplit = 0;
   let unit: 'usd' | 'tokens' | null = null;

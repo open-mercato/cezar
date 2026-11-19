@@ -34,7 +34,7 @@ export function recordUsageObservation(account: string, label: string | undefine
     lastWritten.set(key, { usedPercent: window.usedPercent, status: window.status, at: window.observedAt });
     appendLedger({
       t: 'reading', at: window.observedAt, account, ...(label ? { label: label.slice(0, 200) } : {}),
-      window: kind, usedPercent: window.usedPercent, resetsAt: window.resetsAt, status: window.status,
+      window: kind, usedPercent: Math.round(window.usedPercent * 100) / 100, resetsAt: window.resetsAt, status: window.status,
       source: observation.source,
     }, account);
   }
