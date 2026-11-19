@@ -3192,4 +3192,15 @@ describe('step tool-policy persistence', () => {
       reopened.flush();
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+
+  it('keeps a run whose stored policy carries a key from a newer cezar, dropping only that key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const step = { id: 'read', name: 'Read', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, toolPolicy: { allowedTools: ['Read'], futureKey: true } };
+      writeFileSync(join(dir, 'runs.json'), JSON.stringify([{ ...LEGACY_RUN, steps: [step] }]), 'utf8');
+      const store = RunStore.open(dir);
+      expect(store.getRun(LEGACY_RUN.id)?.steps[0]?.toolPolicy).toEqual({ allowedTools: ['Read'] });
+      store.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });

@@ -8,7 +8,7 @@ import type { AgentRunSpec } from './agent-runner.ts';
 import { CODEX_DISABLED_FEATURES } from './codex-restricted-policy.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 
-// System and package-manager bins only (Homebrew, Linuxbrew, Nix); never a user- or repo-writable dir.
+// System and package-manager bins only (Homebrew, Linuxbrew, Nix); never a repo or worktree dir.
 const SEALED_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin', '/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin', '/nix/var/nix/profiles/default/bin', '/run/current-system/sw/bin'].join(':');
 
 const PROVIDER_KEYS = new Set(['name', 'base_url', 'wire_api', 'env_key', 'requires_openai_auth', 'http_headers', 'env_http_headers', 'query_params', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'supports_websockets']);

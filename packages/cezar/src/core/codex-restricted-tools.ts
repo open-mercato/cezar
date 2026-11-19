@@ -55,15 +55,15 @@ export class CodexReadBroker {
     return absolute;
   }
 
-  private async execute(argv: readonly string[]): Promise<string> {
+  private async execute(argv: readonly string[], truncate = true): Promise<string> {
     if (this.aborter.signal.aborted) throw new Error('session is closed');
     const cwd = await this.cwd;
     const [bin, ...args] = argv;
     return new Promise((done, fail) => {
       // stdin is closed; there is no shell, PTY or reusable interactive process.
       const child = execFile(bin!, args, { cwd, env: this.env, timeout: 15_000, maxBuffer: 256_000, encoding: 'utf8', signal: this.aborter.signal }, (err, stdout, stderr) => {
-        // Over the buffer cap the child is killed; keep what arrived instead of failing a broad search.
-        if (err && 'code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') done(stdout + TRUNCATED);
+        // Over the buffer cap the child is killed; model-facing output keeps what arrived, validation reads fail.
+        if (truncate && err && 'code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') done(stdout + TRUNCATED);
         else if (err && !(bin === 'rg' && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
         else done(stdout);
       });
@@ -144,7 +144,7 @@ export class CodexReadBroker {
             }
             if (!explicit) {
               // gh can infer an enterprise host from ANY resolved Git remote, including URL rewrites.
-              const remotes = await this.execute(['git', 'remote', '-v']);
+              const remotes = await this.execute(['git', 'remote', '-v'], false);
               const urls = remotes.trim().split('\n').filter(Boolean).map(line => line.split(/\s+/)[1]!);
               if (!urls.length) throw new Error('GitHub reads need an explicit --repo or a configured GitHub remote');
               for (const remote of urls) {

@@ -60,6 +60,22 @@ describe.skipIf(process.platform === 'win32')('cezar executes restricted reads',
     expect(res.success).toBe(true);
     expect(res.contentItems[0]?.text).toMatch(/^x{64000}\n\[cezar: output truncated/);
   });
+  it('fails a GitHub read when the remote list overflows instead of validating a truncated list', async () => {
+    const f = setup();
+    const bin = join(f.root, 'bin'); mkdirSync(bin);
+    const log = join(f.root, 'calls');
+    writeFileSync(join(bin, 'gh'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(process.env.PROBE_LOG, 'called');\n`);
+    chmodSync(join(bin, 'gh'), 0o755);
+    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'] })!, { cwd: f.cwd }, { ...f.home.toolEnv, PATH: `${bin}:${f.home.toolEnv.PATH}`, PROBE_LOG: log });
+    brokers.push(broker);
+    execFileSync('git', ['init', '-q'], { cwd: f.cwd, timeout: 5_000 });
+    const remotes = Array.from({ length: 3_000 }, (_, i) => `[remote "r${i}"]\n\turl = https://github.com/o/repository-with-a-long-name-${i}.git\n`).join('');
+    writeFileSync(join(f.cwd, '.git/config'), readFileSync(join(f.cwd, '.git/config'), 'utf8') + remotes + '[remote "zz"]\n\turl = https://evil.example/o/r.git\n');
+    const res = await broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command: 'gh pr diff 3' } });
+    expect(res.success).toBe(false);
+    expect(res.contentItems[0]?.text).toMatch(/maxBuffer/);
+    expect(existsSync(log)).toBe(false);
+  });
   it('honors the existing network-off setting for brokered GitHub reads', async () => {
     const f = setup();
     const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'] })!, { cwd: f.cwd }, f.home.toolEnv, false);
