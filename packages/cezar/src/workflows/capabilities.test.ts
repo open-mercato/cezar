@@ -118,12 +118,12 @@ describe('workflowCapabilities', () => {
 
 describe('readOnlyWorkflowRefusal', () => {
   it('refuses a read-only workflow on a backend that ignores tool limits', () => {
-    expect(readOnlyWorkflowRefusal(REVIEW_PR, 'codex')).toMatch(/codex does not enforce .* "review-pr"/);
     expect(readOnlyWorkflowRefusal(REVIEW_PR, 'opencode')).toBeDefined();
   });
 
   it('lets it run where the limits hold, and never touches a workflow that may publish', () => {
     expect(readOnlyWorkflowRefusal(REVIEW_PR, 'claude')).toBeUndefined();
+    expect(readOnlyWorkflowRefusal(REVIEW_PR, 'codex')).toBeUndefined();
     expect(readOnlyWorkflowRefusal(REVIEW_PR, 'pi')).toBeUndefined();
     expect(readOnlyWorkflowRefusal(QUICK_TASK_WORKFLOW, 'codex')).toBeUndefined();
     expect(readOnlyWorkflowRefusal(undefined, 'codex')).toBeUndefined();

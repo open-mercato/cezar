@@ -9,6 +9,7 @@ vi.mock('@/api/queries', () => ({
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'pi', status: 'connected', enabled: true },
+    { provider: 'opencode', status: 'connected', enabled: true },
   ] } }),
   useRunnerModels: () => ({ data: undefined }),
   useAgentProfiles: () => ({ data: { defaults: { codex: 'work' }, profiles: [
@@ -26,10 +27,12 @@ describe('manager agent and account selection', () => {
     const onChange = vi.fn()
     render(<ManagerRunnerPicker runner="claude" onChange={onChange} />)
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Manager agent' }))
-    const codex = await screen.findByRole('menuitemradio', { name: 'codex' })
+    const opencode = await screen.findByRole('menuitemradio', { name: 'opencode' })
     expect(screen.queryByRole('menuitemradio', { name: 'pi' })).toBeNull()
-    fireEvent.click(codex)
-    expect(onChange).toHaveBeenCalledWith({ runner: 'codex', model: null, agentProfile: null })
+    // Codex cannot enforce the manager's cez-manager fence (#2330).
+    expect(screen.queryByRole('menuitemradio', { name: 'codex' })).toBeNull()
+    fireEvent.click(opencode)
+    expect(onChange).toHaveBeenCalledWith({ runner: 'opencode', model: null, agentProfile: null })
   })
 
   it('keeps the model and account pins when the current agent is chosen again', async () => {
@@ -74,8 +77,8 @@ describe('manager agent and account selection', () => {
     const onChange = vi.fn()
     render(<ModelPicker runner="claude" model="opus" agentProfile="personal" onChange={onChange} />)
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Model and effort' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'codex' }))
-    expect(onChange).toHaveBeenCalledWith({ runner: 'codex', model: null, agentProfile: null })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'opencode' }))
+    expect(onChange).toHaveBeenCalledWith({ runner: 'opencode', model: null, agentProfile: null })
   })
 
   it('shows the workspace account and lets the user return to automatic account selection', async () => {
