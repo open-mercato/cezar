@@ -486,18 +486,25 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
   const root = useRef<HTMLDivElement>(null)
   // Focus was inside when the chips or the Undo it sat on unmounted: hand it to what replaced them.
   const focusedInside = useRef(false)
+  // The chip a one-tap answer was sent from, by position: the chips remount, and Enter on it retries.
+  const sentFrom = useRef(-1)
   const phase = state.kind === 'finished' ? `finished:${state.row.outcome.kind}` : state.kind
   useEffect(() => {
+    const from = sentFrom.current
+    if (state.kind === 'open') sentFrom.current = -1
     if (!focusedInside.current || (document.activeElement && document.activeElement !== document.body && document.activeElement.isConnected)) return
     // Back to answerable (a failed delivery, an Undo): the pick it was sent with, else the first chip.
     const target = state.kind === 'open'
-      ? root.current?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? root.current?.querySelector<HTMLElement>('[aria-pressed]')
+      ? root.current?.querySelectorAll<HTMLElement>('[aria-pressed]')[from]
+        ?? root.current?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? root.current?.querySelector<HTMLElement>('[aria-pressed]')
       : root.current?.querySelector<HTMLElement>('[data-slot="question-outcome"], [data-slot="question-dismissing-wrap"]')
     target?.focus({ preventScroll: true })
   }, [phase])
   const send = async (text: string) => {
     setPending(true)
     setError(undefined)
+    const chips = [...(root.current?.querySelectorAll<HTMLElement>('[aria-pressed]') ?? [])]
+    sentFrom.current = chips.indexOf(document.activeElement as HTMLElement)
     answer.start(item, text)
     try {
       answer.done(item, text, await answerQuestion(item.key, text))

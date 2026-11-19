@@ -265,6 +265,41 @@ describe('the Questions page', () => {
     expect(screen.getByText(/Your answer to «Bravo» was not delivered/)).toBeTruthy()
   })
 
+  it('a failed one-tap answer puts focus back on the option sent, so Enter retries that same option', async () => {
+    data.open = [managerItem('m1', 'Alpha', { askedAt: ago(30 * 60_000) }), managerItem('m2', 'Bravo', { askedAt: ago(20 * 60_000) })]
+    answerStatus = 500
+    renderPage()
+    const no = within(await screen.findByRole('group', { name: 'Bravo' })).getByRole('button', { name: 'No' })
+    no.focus()
+    fireEvent.click(no)
+    expect(await within(card('Bravo')).findByText(/the agent session is gone/)).toBeTruthy()
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('No'))
+    expect(document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')).toBe('m:global:m2')
+    // Enter on the restored chip: the same answer again, and it comes back to the same chip.
+    fireEvent.click(document.activeElement!)
+    await waitFor(() => expect(posts.filter((post) => post.path === 'answer m:global:m2')).toHaveLength(2))
+    expect(posts.filter((post) => post.path === 'answer m:global:m2').map((post) => post.body)).toEqual([{ text: 'Bravo: No' }, { text: 'Bravo: No' }])
+    await waitFor(() => expect(card('Bravo').getAttribute('data-state')).toBe('open'))
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('No'))
+  })
+
+  it('a failed answer leaves focus alone when the user moved it elsewhere meanwhile', async () => {
+    data.open = [managerItem('m1', 'Alpha', { askedAt: ago(30 * 60_000) }), managerItem('m2', 'Bravo', { askedAt: ago(20 * 60_000) })]
+    answerStatus = 500
+    let release!: () => void
+    answerGate = new Promise((resolve) => { release = resolve })
+    renderPage()
+    const no = within(await screen.findByRole('group', { name: 'Bravo' })).getByRole('button', { name: 'No' })
+    no.focus()
+    fireEvent.click(no)
+    await within(card('Bravo')).findByText(/Sending to/)
+    const elsewhere = within(card('Alpha')).getByRole('button', { name: 'Yes' })
+    elsewhere.focus()
+    release()
+    expect(await within(card('Bravo')).findByText(/the agent session is gone/)).toBeTruthy()
+    expect(document.activeElement).toBe(elsewhere)
+  })
+
   it('a 409 announces that the question closed first', async () => {
     data.open = [managerItem('m1', 'Design')]
     answerStatus = 409
