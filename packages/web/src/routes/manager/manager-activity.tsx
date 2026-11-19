@@ -249,7 +249,7 @@ export function useManagerActivityActions(onCloseAutoFocus?: (event: Event) => v
   const deactivateAll = useCallback(async (managers: readonly ManagerSummary[]) => {
     const active = managers.filter((manager) => !isInactive(manager))
     if (active.length === 0 || !(await confirm({ kind: 'bulk', managers: active }))) return
-    await many.mutateAsync({ managers: active, active: false }).then(
+    await many.mutateAsync({ active: false }).then(
       () => toast('All managers are inactive. Nothing runs until you reactivate them.'),
       (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
     )
@@ -258,7 +258,7 @@ export function useManagerActivityActions(onCloseAutoFocus?: (event: Event) => v
   const reactivateAll = useCallback(async (managers: readonly ManagerSummary[]) => {
     const inactive = managers.filter(isInactive)
     if (inactive.length === 0) return
-    await many.mutateAsync({ managers: inactive, active: true }).then(
+    await many.mutateAsync({ active: true }).then(
       () => toast('All managers are active again.'),
       (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
     )

@@ -56,9 +56,9 @@ export async function setManagerActive(id: string, active: boolean, opts?: { cat
   return updateManager(id, { active, ...(active && opts?.catchUp ? { catchUp: true as const } : {}) })
 }
 
-/** Every manager at once: the same PATCH per manager not already in that state. */
-export async function setManagersActive(list: readonly ManagerSummary[], active: boolean): Promise<ManagerSummary[]> {
-  return Promise.all(list.filter((manager) => (manager.inactive === undefined) !== active).map((manager) => setManagerActive(manager.id, active)))
+/** Every manager at once (the bulk route): the ids whose state changed. */
+export async function setManagersActive(active: boolean): Promise<string[]> {
+  return (await unwrap(await managers().activity.$post({ json: { active } }), '/workspace/managers/activity')).changed
 }
 
 export async function deleteManager(id: string) {
@@ -622,11 +622,7 @@ export function useSetManagerActive() {
 export function useSetManagersActive() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ managers, active }: { managers: readonly ManagerSummary[]; active: boolean }) => setManagersActive(managers, active),
-    onSuccess: (changed) => {
-      queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) =>
-        changed.reduce<ManagerListResponse | undefined>((next, manager) => applyManagerChange(next, manager.id, manager, false), list))
-    },
+    mutationFn: ({ active }: { active: boolean }) => setManagersActive(active),
     onSettled: () => queryClient.invalidateQueries({ queryKey: managerKeys.list }),
   })
 }

@@ -39,6 +39,13 @@ beforeEach(() => {
       served = served.map((manager) => (manager.id === id ? next : manager))
       return Response.json(next)
     }
+    if (path === '/api/v1/workspace/managers/activity') {
+      patches.push({ path, body })
+      const { active } = body as { active: boolean }
+      const changed = served.filter((manager) => (manager.inactive === undefined) !== active).map((manager) => manager.id)
+      served = served.map(({ inactive: _was, ...rest }) => (active ? rest : { ...rest, inactive: { since: SINCE } }))
+      return Response.json({ ok: true, changed })
+    }
     if (path === '/api/v1/workspace/managers') return Response.json({ managers: served })
     return Response.json({ ok: true })
   }))
@@ -190,15 +197,12 @@ describe('the sidebar', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Deactivate all…' }))
     const dialog = await screen.findByRole('alertdialog', { name: /Deactivate all 2 active managers\?/ })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Deactivate all' }))
-    await waitFor(() => expect(patches.map((patch) => [patch.path, patch.body])).toEqual([
-      ['/api/v1/workspace/managers/ops', { active: false }],
-      ['/api/v1/workspace/managers/triage', { active: false }],
-    ]))
+    await waitFor(() => expect(patches).toEqual([{ path: '/api/v1/workspace/managers/activity', body: { active: false } }]))
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
     patches.length = 0
     open()
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Reactivate all' }))
-    await waitFor(() => expect(patches.map((patch) => patch.body)).toEqual([{ active: true }, { active: true }, { active: true }]))
+    await waitFor(() => expect(patches).toEqual([{ path: '/api/v1/workspace/managers/activity', body: { active: true } }]))
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })
