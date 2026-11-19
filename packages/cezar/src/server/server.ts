@@ -287,7 +287,7 @@ import {
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
-import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import { branchesCheckedOutElsewhere, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
@@ -6843,6 +6843,14 @@ export function createApp(deps: ServerDeps) {
         ? await enforceWorktreeRetention(repoRoot, store, opts)
         : await reclaimSelectedWorktrees(repoRoot, store, targets, opts);
       return c.json({ reclaimed });
+    })
+
+    // `cez worktrees prune`: the boot-time orphan sweep on demand. Never throws; a tree in use stays.
+    .post('/worktrees/prune', async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const ids = new Set(store.listRuns().map((r) => r.id));
+      const removed = await pruneOrphans(repoRoot, ids, (id) => manager.lifecycle.allowOrphanPrune(id)).catch(() => [] as string[]);
+      return c.json({ removed });
     });
 
   /**

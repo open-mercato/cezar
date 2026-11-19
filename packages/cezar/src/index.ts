@@ -60,6 +60,7 @@ import { pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { runWorktreesCommand } from './worktrees-cli.ts';
 import { runImpactCommand } from './impact/impact-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
@@ -90,6 +91,9 @@ Usage:
   cezar manager <status|tasks|merge|…>  the tools a manager's agent calls on a running cockpit (needs CEZ_MANAGER_ID)
   cezar handoff <log|resume>  update a running task's handoff file (CEZ_HANDOFF_FILE)
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar worktrees <list|reclaim|prune|remove>  task worktrees on disk: sizes, reclaim idle ones
+                            (reclaim [--older-than 7d] [--all-inactive] [--dry-run] · remove <runId>);
+                            uses the running cockpit when one serves the project, else the repo directly
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
@@ -192,6 +196,18 @@ async function main(): Promise<void> {
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   if (process.argv[2] === 'runs') {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez worktrees …` (spec 2026-11-19-worktree-disk-usage): the cockpit's API when one serves the
+  // project, else the project's store directly — for SSH-only installs.
+  if (process.argv[2] === 'worktrees') {
+    process.exitCode = await runWorktreesCommand(process.argv.slice(3), {
+      fetch,
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+      cwd: process.cwd(),
+      env: process.env,
+    });
     return;
   }
   // `cez impact …` (spec 2026-10-22-html-artifacts-and-impact): local, no server, own flags.
