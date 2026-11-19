@@ -24,6 +24,7 @@ import {
   sweepAgentTmpDirs,
 } from './agent-tmpdir.ts';
 import { execFile } from 'node:child_process';
+import { createServer } from 'node:net';
 
 function gitInsideWorktree(path: string): Promise<string> {
   return new Promise((resolve) => {
@@ -333,5 +334,91 @@ describe('reaping the per-run temp directories (#785)', () => {
 
   it('is a no-op before any run has minted a directory', () => {
     expect(sweepAgentTmpDirs(dataDir, [])).toEqual([]);
+  });
+});
+
+/**
+ * #1936: tools bind Unix sockets under TMPDIR — tsx at `$TMPDIR/tsx-<uid>/<pid>.pipe` —
+ * and `sun_path` is 104 bytes on macOS, 108 on Linux. A scratch path built from a long
+ * home and a full run uuid overflowed it, so `tsx` and commit hooks died with
+ * `listen EINVAL` before doing anything.
+ */
+describe('agent scratch leaves room for a Unix socket (#1936)', () => {
+  const runId = 'e3c8a976-1b2f-4c3d-9e8f-0123456789ab';
+  let dataDir: string;
+  let homeRoot: string;
+  let longHome: string;
+  const minted: string[] = [];
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(realpathSync(tmpdir()), 'cez-agent-tmpdir-sock-'));
+    // A home that alone eats most of the budget, like `/Users/firstname.lastname/…` —
+    // outside dataDir, or the inside-the-checkout fallback would mask the overflow.
+    homeRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-agent-home-'));
+    longHome = join(homeRoot, 'h'.repeat(60), '.cezar');
+  });
+
+  afterEach(() => {
+    for (const dir of minted.splice(0)) rmSync(dirname(dir), { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(homeRoot, { recursive: true, force: true });
+  });
+
+  function mint(id: string, env: NodeJS.ProcessEnv): string {
+    const dir = agentTmpEnv(dataDir, id, env).TMPDIR as string;
+    minted.push(dir);
+    return dir;
+  }
+
+  it.skipIf(process.platform === 'win32')('binds a tsx-shaped socket under a long home and a full run uuid', async () => {
+    const dir = mint(runId, { CEZ_HOME: longHome });
+    const socketDir = join(dir, `tsx-${process.getuid?.() ?? 0}`);
+    mkdirSync(socketDir, { recursive: true });
+    const server = createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(join(socketDir, `${process.pid}.pipe`), resolve);
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('still prefers CEZ_HOME when its path fits', () => {
+    const home = mkdtempSync(join(realpathSync(tmpdir()), 'ch-'));
+    try {
+      expect(mint(runId, { CEZ_HOME: home }).startsWith(`${home}/`)).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('gives concurrent runs distinct directories, and Continue the same one', () => {
+    const other = 'e3c8a976-77aa-4c3d-9e8f-0123456789ab';
+    const env = { CEZ_HOME: longHome };
+    const a = mint(runId, env);
+    const b = mint(other, env);
+    expect(a).not.toBe(b);
+    expect(agentTmpEnv(dataDir, runId, env).TMPDIR).toBe(a);
+    removeAgentTmpDir(dataDir, other);
+    expect(existsSync(a)).toBe(true);
+  });
+
+  // A run live across the upgrade still has its #1825-layout directory, named by the full id.
+  it('keeps a live run’s pre-#1936 directory and reaps an orphan one', () => {
+    const live = mint(runId, {});
+    const ns = dirname(live);
+    const liveLegacy = join(ns, runId);
+    const orphanLegacy = join(ns, 'aaaaaaaa-1b2f-4c3d-9e8f-0123456789ab');
+    mkdirSync(liveLegacy, { recursive: true });
+    mkdirSync(orphanLegacy, { recursive: true });
+    sweepAgentTmpDirs(dataDir, [runId]);
+    expect(existsSync(live)).toBe(true);
+    expect(existsSync(liveLegacy)).toBe(true);
+    expect(existsSync(orphanLegacy)).toBe(false);
+    removeAgentTmpDir(dataDir, runId);
+    expect(existsSync(live)).toBe(false);
+    expect(existsSync(liveLegacy)).toBe(false);
   });
 });
