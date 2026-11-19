@@ -79,6 +79,18 @@ describe('dashboard insights', () => {
     expect(result.backends).toEqual([]);
   });
 
+  it('leaves an idle close out of the failure counts — nobody replied, nothing failed', () => {
+    const idle = run({
+      status: 'failed',
+      error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+      idleClosedAt: '2026-09-30T11:00:00.000Z',
+    });
+    expect(projectInsightRow('p', idle).idleClosedAt).toBe('2026-09-30T11:00:00.000Z');
+    const result = build([idle]);
+    expect(result.failures.total).toBe(0);
+    expect(result.backends).toEqual([]);
+  });
+
   it('groups failures by classified reason and keeps the most recent example', () => {
     const result = build([
       run({ status: 'failed', error: 'HTTP 429: rate limit', finishedAt: '2026-09-29T09:00:00.000Z' }),

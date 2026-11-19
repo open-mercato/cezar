@@ -10,7 +10,15 @@ vi.mock('@/api/client', () => api)
 const telemetry = vi.hoisted(() => ({ reportAttachmentStagingFailed: vi.fn(), trackAttachmentsRestaged: vi.fn() }))
 vi.mock('@/lib/telemetry', () => telemetry)
 
-import { releaseStaged, resetStaging, sendWithStaged, stageAttachment, toWireAttachment } from './attachment-staging'
+import {
+  releaseStaged,
+  resetStaging,
+  sendWithStaged,
+  STAGING_INTERRUPTED,
+  STAGING_TIMEOUT_MS,
+  stageAttachment,
+  toWireAttachment,
+} from './attachment-staging'
 import type { PendingAttachment } from './composer-attachments'
 
 const attachment = (data: string, originalName?: string): PendingAttachment => ({
@@ -86,6 +94,41 @@ describe('attachment staging (telemetry 7054e5f2)', () => {
     await expect(sendWithStaged([attachment('DDDD')], send)).rejects.toThrow('session closed')
     expect(send).toHaveBeenCalledTimes(1)
     expect(telemetry.trackAttachmentsRestaged).not.toHaveBeenCalled()
+  })
+
+  describe('an upload stuck in a dropped tunnel (relay incident 2026-11-15)', () => {
+    afterEach(() => vi.useRealTimers())
+
+    it('gives up after STAGING_TIMEOUT_MS, so the send rejects instead of hanging', async () => {
+      vi.useFakeTimers()
+      api.stageUpload.mockReturnValueOnce(new Promise(() => undefined))
+      const send = vi.fn(async (wire: unknown) => wire)
+      const sent = sendWithStaged([attachment('GGGG')], send)
+      const settled = vi.fn()
+      sent.catch(settled)
+      await vi.advanceTimersByTimeAsync(STAGING_TIMEOUT_MS - 1)
+      expect(settled).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(sent).rejects.toThrow(STAGING_INTERRUPTED)
+      expect(send).not.toHaveBeenCalled()
+    })
+
+    it('gives up at once when the device goes offline', async () => {
+      api.stageUpload.mockReturnValueOnce(new Promise(() => undefined))
+      const wire = toWireAttachment(attachment('HHHH'))
+      window.dispatchEvent(new Event('offline'))
+      await expect(wire).rejects.toThrow(STAGING_INTERRUPTED)
+    })
+
+    it('starts a fresh upload on the next send', async () => {
+      api.stageUpload.mockReturnValueOnce(new Promise(() => undefined))
+      const a = attachment('IIII')
+      const wire = toWireAttachment(a)
+      window.dispatchEvent(new Event('offline'))
+      await expect(wire).rejects.toThrow(STAGING_INTERRUPTED)
+      expect(await toWireAttachment(a)).toEqual({ uploadId: 'id1' })
+      expect(api.stageUpload).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('deletes the server copy on release', async () => {

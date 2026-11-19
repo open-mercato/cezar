@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notch-expand"
+description = "Enables the notch_expand command without any pre-configured scope."
+commands.allow = ["notch_expand"]
+
+[[permission]]
+identifier = "deny-notch-expand"
+description = "Denies the notch_expand command without any pre-configured scope."
+commands.deny = ["notch_expand"]

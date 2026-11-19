@@ -217,7 +217,7 @@ describe('createDraftPr recovery', () => {
       '[{"url":"https://github.com/acme/demo/pull/5","headRepositoryOwner":{"login":"acme"}}]',
     );
     const outcome = await createDraftPr(input());
-    expect(outcome).toEqual({ ok: true, url: 'https://github.com/acme/demo/pull/5', dryRun: false });
+    expect(outcome).toEqual({ ok: true, url: 'https://github.com/acme/demo/pull/5', dryRun: false, updated: true });
   });
 
   it('retries once when GitHub cannot see the just-pushed head yet', async () => {

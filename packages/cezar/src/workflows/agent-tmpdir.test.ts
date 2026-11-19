@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunStore } from '../runs/store.ts';
@@ -60,7 +60,7 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
       steps: [{ id: 's', name: 's', kind: 'agent' }],
     });
 
-  it('hands the spawn a TMPDIR under <dataDir>/tmp/<runId>, already created', async () => {
+  it('hands the spawn a TMPDIR outside the project tree, already created', async () => {
     const run = newRun();
     const { env } = await seam().agentEnvForStep(run.id, 'claude');
     expect(env.TMPDIR).toBe(agentTmpDir(dataDir, run.id));
@@ -99,8 +99,8 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
   // whose every shell command will come back empty.
   it('fails before spawning when the temp directory cannot be had', async () => {
     const run = newRun();
-    mkdirSync(dataDir, { recursive: true });
-    writeFileSync(join(dataDir, 'tmp'), 'not a directory', 'utf8');
+    mkdirSync(dirname(dirname(agentTmpDir(dataDir, run.id))), { recursive: true });
+    writeFileSync(dirname(agentTmpDir(dataDir, run.id)), 'not a directory', 'utf8');
     await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toBeInstanceOf(AgentTempDirError);
   });
 
@@ -118,8 +118,8 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
 
   it('the error names the path and the way out, so the thread footer is actionable', async () => {
     const run = newRun();
-    mkdirSync(dataDir, { recursive: true });
-    writeFileSync(join(dataDir, 'tmp'), 'not a directory', 'utf8');
+    mkdirSync(dirname(dirname(agentTmpDir(dataDir, run.id))), { recursive: true });
+    writeFileSync(dirname(agentTmpDir(dataDir, run.id)), 'not a directory', 'utf8');
     await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toThrow(
       /agent temp directory is not writable: .* — free disk space, or set CEZ_AGENT_TMPDIR=0/,
     );
@@ -148,8 +148,8 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
     // preflight is part of what the hatch turns off, or it is not an escape.
     it('still spawns when the temp directory could not have been created', async () => {
       const run = newRun();
-      mkdirSync(dataDir, { recursive: true });
-      writeFileSync(join(dataDir, 'tmp'), 'not a directory', 'utf8');
+      mkdirSync(dirname(dirname(agentTmpDir(dataDir, run.id))), { recursive: true });
+      writeFileSync(dirname(agentTmpDir(dataDir, run.id)), 'not a directory', 'utf8');
       await expect(seam().agentEnvForStep(run.id, 'claude')).resolves.toMatchObject({
         env: { CEZ_TASK_ID: run.id },
       });

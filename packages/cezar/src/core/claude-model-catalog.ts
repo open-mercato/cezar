@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { buildChildEnv } from './agent-env.ts';
 import { readNdjson } from './ndjson.ts';
 import { resolveClaudeExecutable } from './claude-cli-runner.ts';
-import type { ModelOption } from './runner-model-catalog.ts';
+import type { ModelOption, ReasoningEffortOption } from './runner-model-catalog.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
 export interface ClaudeModelDiscoveryOptions {
@@ -25,8 +25,25 @@ const modelSchema = z
     value: z.string(),
     displayName: z.string().optional(),
     description: z.string().optional(),
+    // Read leniently: a malformed capability must never hide an otherwise usable model.
+    supportsEffort: z.unknown().optional(),
+    supportedEffortLevels: z.unknown().optional(),
   })
   .passthrough();
+
+/** The CLI's per-model `--effort` values (#808); empty when it advertises none. */
+export function claudeEffortLevels(model: { supportsEffort?: unknown; supportedEffortLevels?: unknown }): ReasoningEffortOption[] {
+  if (model.supportsEffort === false || !Array.isArray(model.supportedEffortLevels)) return [];
+  const seen = new Set<string>();
+  const levels: ReasoningEffortOption[] = [];
+  for (const raw of model.supportedEffortLevels) {
+    const id = typeof raw === 'string' ? raw.trim() : '';
+    if (!id || id.length > 64 || seen.has(id)) continue;
+    seen.add(id);
+    levels.push({ id, description: '' });
+  }
+  return levels;
+}
 
 const listModelsSchema = z.object({ models: z.array(modelSchema) }).passthrough();
 
@@ -191,10 +208,12 @@ function toModelOptions(payload: unknown): ModelOption[] {
     if (!id || id === IMPLICIT_DEFAULT_VALUE || ids.has(id)) continue;
     if (models.length >= MAX_MODELS) throw new Error('Claude model discovery exceeded the size limit');
     ids.add(id);
+    const reasoningEfforts = claudeEffortLevels(model);
     models.push({
       id,
       label: model.displayName?.trim() || id,
       description: model.description?.trim() ?? '',
+      ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
     });
   }
 

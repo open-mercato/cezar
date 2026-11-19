@@ -31,7 +31,13 @@ export function TaskRow({
   const reconciled = useContext(DashboardReconciledContext) && !checking && !checkFailed
   const truth = useDashboardTruth(row)
   removed = removed || truth === null || (queue && truth?.archived === true)
-  if (truth) row = { ...row, status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince }
+  if (truth)
+    row = {
+      ...row,
+      status: truth.status,
+      awaitingAnswerSince: truth.awaitingAnswerSince,
+      idleClosedAt: truth.idleClosedAt,
+    }
   const attention = deriveAttention(row)
   const obsolete = queue && !isNeedsYouStatus(row)
   const inactive = removed || obsolete || !reconciled
@@ -63,7 +69,7 @@ export function TaskRow({
         </p>
       )}
       <div className="flex items-start gap-2">
-        <StatusDot tone={attention.tone} className="mt-[7px]" />
+        <StatusDot tone={attention.tone} pulse={attention.pulse && !inactive} className="mt-[7px]" />
         <div className="min-w-0 flex-1">
           <Link
             tabIndex={inactive ? -1 : undefined}
@@ -76,8 +82,8 @@ export function TaskRow({
           >
             {row.titleSummary || row.title}
           </Link>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <span className="font-mono text-meta text-soft-foreground">{row.projectId}</span>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-label text-muted-foreground">
+            <span className="font-mono text-meta">{row.projectId}</span>
             <span>
               {checkFailed
                 ? 'Could not check current state'

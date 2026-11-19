@@ -15,6 +15,7 @@ function serve(overrides: Partial<WorkspaceConfigResponse> = {}) {
   requests = []
   const config: WorkspaceConfigResponse = {
     branding: { name: 'cezar', logoUrl: null },
+    computerName: 'Test Mac',
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,

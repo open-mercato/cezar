@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jump between your own messages — design</title>
+<style>
+/* Tokens copied from packages/web/src/styles/index.css (dark theme). */
+:root{
+  --background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--sidebar:var(--card);
+  --muted:#262626;--muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;
+  --primary:#6457e8;--primary-foreground:#fff;--violet:#8f86e8;--ring:var(--violet);
+  --success:#10b981;--pending:#fbbf24;--info:#93c5fd;--danger-strong:#f87171;--success-strong:#34d399;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);
+  --sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --r-sm:8px;--r:10px;--r-lg:12px;--r-xl:16px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#080808;color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.s14{width:14px;height:14px} svg.i.s12{width:12px;height:12px} svg.i.s18{width:18px;height:18px}
+
+/* ---------- document chrome (this page, not the cockpit) ---------- */
+.doc{max-width:1280px;margin:0 auto;padding:48px 32px 96px}
+.doc h1{font-size:28px;letter-spacing:-.01em;margin:0 0 6px}
+.doc h2{font-size:20px;margin:64px 0 6px;letter-spacing:-.005em}
+.doc h3{font-size:15px;margin:28px 0 8px}
+.doc p,.doc li{color:#cfcfcf;max-width:820px}
+.doc .lede{font-size:16px;color:var(--muted-foreground);max-width:820px}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--soft-foreground)}
+.tag{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:2px 10px;font-size:12px;color:var(--muted-foreground)}
+.tag.rec{border-color:color-mix(in srgb,var(--violet) 55%,transparent);color:var(--violet)}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0 0}
+.toc a{color:var(--muted-foreground);text-decoration:none;font-size:13px;border:1px solid var(--border);border-radius:999px;padding:4px 12px}
+.toc a:hover{color:var(--foreground);background:var(--card)}
+.caption{font-size:12px;color:var(--soft-foreground);margin-top:10px}
+.callout{border:1px solid var(--border);background:var(--card);border-radius:var(--r-lg);padding:16px 18px;margin:18px 0;max-width:900px}
+.callout b{color:var(--foreground)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:28px;align-items:start}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.note{border:1px solid var(--border);background:var(--card);border-radius:var(--r-lg);padding:16px 18px}
+.note h4{margin:0 0 6px;font-size:14px}
+.note p,.note li{font-size:13px;color:#c7c7c7;margin:6px 0}
+.note ul{padding-left:18px;margin:6px 0}
+code,kbd{font-family:var(--mono);font-size:12px}
+code{background:var(--muted);border-radius:6px;padding:1px 5px}
+kbd{border:1px solid var(--border);border-bottom-width:2px;border-radius:5px;padding:0 5px;color:var(--muted-foreground);background:var(--card)}
+
+/* ---------- cockpit shell (desktop) ---------- */
+.screen{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--background);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.desk{display:flex;height:720px;font-size:13px}
+.side{width:232px;flex:none;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:14px 10px}
+.logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:18px;padding:2px 6px 12px;font-family:'Chakra Petch',var(--sans)}
+.logo .mk{width:18px;height:18px;border-radius:4px;background:var(--grad,linear-gradient(135deg,#b4f372,#eefb63 58%,#bc9aff))}
+.seg{display:flex;background:var(--background);border-radius:var(--r);padding:3px;margin-bottom:10px}
+.seg span{flex:1;text-align:center;padding:5px 0;border-radius:8px;color:var(--muted-foreground);font-size:12.5px}
+.seg span.on{background:var(--card-2);color:var(--foreground);font-weight:600}
+.newbtn{background:var(--primary);color:#fff;border-radius:var(--r);text-align:center;padding:8px 0;font-weight:600;margin-bottom:12px}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav span{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:8px;color:var(--muted-foreground)}
+.nav span.on{background:var(--muted);color:var(--foreground);font-weight:600}
+.side .sect{margin:16px 8px 6px}
+.side .foot{margin-top:auto;border-top:1px solid var(--border);padding:10px 6px 0;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--success);display:inline-block;flex:none}
+.dot.pend{background:var(--pending)} .dot.info{background:var(--info)} .dot.vio{background:var(--violet)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+
+/* run header */
+.rh{border-bottom:1px solid var(--border);padding:12px 24px 0}
+.rh .t{display:flex;align-items:center;gap:10px}
+.rh h5{margin:0;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{font-size:12px;color:var(--muted-foreground);background:var(--muted);border-radius:999px;padding:1px 9px;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--r);border:1px solid var(--border);font-size:12.5px;font-weight:500;white-space:nowrap}
+.btn.pri{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.btn.ghost{border-color:transparent;color:var(--muted-foreground)}
+.rh .sub{font-size:12px;color:var(--muted-foreground);margin:4px 0 0;display:flex;gap:8px;align-items:center}
+.rh .sub .br{font-family:var(--mono);font-size:11px;border:1px solid var(--border);border-radius:6px;padding:0 5px}
+.tabs{display:flex;gap:18px;margin-top:8px}
+.tabs span{display:flex;align-items:center;gap:6px;padding:8px 2px;color:var(--muted-foreground);font-size:13px;border-bottom:2px solid transparent}
+.tabs span.on{color:var(--foreground);font-weight:600;border-color:var(--foreground)}
+
+/* thread */
+.stage{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+.scroller{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#333 transparent}
+.col{display:flex;flex-direction:column;gap:12px;padding:20px 24px 64px}
+.ai{font-size:13.5px;line-height:1.6;color:#ededed}
+.ai p{margin:0 0 6px}
+.meta{font-size:11px;color:var(--soft-foreground);font-variant-numeric:tabular-nums}
+.tool{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground);border:1px solid var(--border);border-radius:var(--r);padding:7px 10px;background:var(--card)}
+.tool code{background:none;padding:0;color:#d6d6d6}
+.tool .ok{margin-left:auto;color:var(--success-strong);font-size:11px}
+.think{font-size:12px;color:var(--soft-foreground);display:flex;gap:6px;align-items:center}
+.boundary{align-self:center;font-size:12px;color:var(--muted-foreground);display:flex;align-items:center;gap:8px;padding:4px 0 8px}
+.boundary button{color:var(--foreground);font-weight:500}
+
+/* the user's own bubble: task (thread-items.tsx UserBubble) */
+.mine{position:relative;outline:none;transition:box-shadow .2s}
+.tb{align-self:flex-end;max-width:70%;background:var(--muted);border-radius:16px 16px 6px 16px;padding:10px 15px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.tb .acts{display:flex;justify-content:flex-end;margin-bottom:2px;color:var(--soft-foreground)}
+.tb .tm{display:flex;justify-content:flex-end;margin-top:4px}
+.att{display:flex;justify-content:flex-end;gap:6px;margin-top:8px;white-space:normal}
+.att .img{width:150px;height:84px;border-radius:8px;border:1px solid var(--border);background:linear-gradient(180deg,#1f1f1f 0 22%,#141414 22%);position:relative;overflow:hidden}
+.att .img::after{content:'';position:absolute;left:10px;right:30px;top:30px;height:6px;border-radius:3px;background:#3a2020;box-shadow:0 12px 0 #262626,0 24px 0 #262626}
+.att .file{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:rgba(13,13,13,.6);border-radius:8px;padding:4px 8px;font-size:12px;color:var(--muted-foreground)}
+/* manager (manager-message.tsx) */
+.mb{align-self:flex-end;max-width:80%;background:var(--muted);border-radius:12px;padding:10px 16px;font-size:14px;white-space:pre-wrap;word-break:break-word}
+.mrow{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.mrow .att{margin-top:0}
+.card{border:1px solid var(--border);background:var(--card);border-radius:var(--r-lg);overflow:hidden;font-size:13px}
+.card .hd{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border);font-weight:600}
+.card .hd .st{margin-left:auto;font-weight:500;font-size:12px;color:var(--muted-foreground);display:flex;align-items:center;gap:6px}
+.card .bd{padding:10px 14px;color:#d8d8d8}
+.card .ft{display:flex;gap:8px;padding:0 14px 12px}
+.taskcard{display:flex;align-items:center;border:1px solid var(--border);background:var(--card);border-radius:var(--r-lg);padding:12px 16px;max-width:380px}
+.taskcard b{display:block;font-size:13.5px}.taskcard small{color:var(--muted-foreground);font-family:var(--mono);font-size:11px}
+
+/* THE highlight after a jump — the same ring #2218 puts on a card (ring-[3px] ring-ring/50),
+   plus a brief violet wash that fades so the eye finds it mid-scroll. */
+.mine.hl .tb,.mine.hl.tb,.mine.hl .mb{box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 50%,transparent);animation:wash 1.8s ease-out}
+@keyframes wash{0%,25%{background:color-mix(in srgb,var(--violet) 26%,var(--muted))}100%{background:var(--muted)}}
+@media (prefers-reduced-motion:reduce){.mine.hl .tb,.mine.hl.tb,.mine.hl .mb{animation:none}}
+body.rm .mine.hl .tb,body.rm .mine.hl.tb,body.rm .mine.hl .mb{animation:none}
+
+/* dock */
+.dock{padding:0 24px 12px;display:flex;flex-direction:column;gap:8px}
+.hint{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground);padding:0 4px}
+.hint b{color:var(--foreground);font-weight:500}
+.composer{border:1px solid var(--border);background:var(--card);border-radius:var(--r-xl);padding:12px 14px 10px}
+.composer .ph{color:var(--soft-foreground);font-size:13.5px;margin-bottom:14px}
+.composer .row{display:flex;align-items:center;gap:12px;color:var(--muted-foreground);font-size:12.5px}
+.composer .pill{border:1px solid var(--border);border-radius:999px;padding:3px 10px}
+.composer .send{margin-left:auto;width:32px;height:32px;border-radius:var(--r);background:var(--muted);display:flex;align-items:center;justify-content:center;color:var(--muted-foreground)}
+
+/* ---------- THE CONTROL ---------- */
+/* One floating row above the composer — the same overlay row the jump-to-latest pill uses. */
+.floating{position:absolute;left:0;right:0;bottom:8px;display:flex;align-items:center;justify-content:center;padding:0 24px;pointer-events:none;z-index:5}
+.floating>*{pointer-events:auto}
+/* rev 4: the pill grows out of "Jump to latest" on every screen size; it exists only away from the tail. */
+.mmslot{margin-left:auto;position:relative;flex:none}
+.mmslot .mm{height:28px;box-shadow:none;background:transparent}
+.mmslot .mm .arr{width:28px}
+.mmslot .mm .list-b{width:32px}
+.statusline{min-height:28px}
+.qchip{border:1px solid var(--border);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--foreground);white-space:nowrap}
+
+.mmslot.float{margin:0;animation:fade .15s}
+.mmslot.float[hidden]{display:none}
+.mmslot.float .mm{height:32px;background:var(--background);box-shadow:var(--shadow-modal)}
+.mmslot.float .mm .arr{width:32px}
+.mmslot.float .mm .list-b{width:36px}
+.mm .seg-b.lat{gap:6px;padding:0 13px 0 10px;border-radius:0 999px 999px 0;font-weight:500}
+.mmslot.float .pop{right:auto;left:50%;margin-left:-170px;transform-origin:50% 100%}
+.phone .mmslot.float .mm{height:40px}
+.phone .mmslot.float .mm .arr{width:42px}
+.phone .mmslot.float .mm .list-b{width:46px}
+.phone .mm .seg-b.lat{padding:0;width:42px}
+.mm .sep{width:1px;align-self:stretch;background:var(--border)}
+.phone.mini{zoom:.78}
+.phone .mmslot:not(.float) .mm{height:32px}
+.phone .mmslot:not(.float) .mm .arr{width:34px}
+.opt{display:flex;flex-direction:column;align-items:center;gap:14px;max-width:320px}
+.opt .lab2{font-size:12.5px;color:#c9c9c9}
+.opt .lab2 b{display:flex;align-items:center;gap:8px;color:var(--foreground);font-size:14px;margin-bottom:4px}
+.badge{position:absolute;top:2px;right:-2px;font-size:9.5px;font-weight:600;background:var(--muted);border:1px solid var(--border);border-radius:999px;padding:0 4px;color:var(--foreground);font-variant-numeric:tabular-nums}
+.latest{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--border);background:var(--background);border-radius:999px;padding:0 14px;font-size:12px;font-weight:500;color:var(--muted-foreground);box-shadow:var(--shadow-modal)}
+.latest:hover{color:var(--foreground)}
+.latest.round{width:36px;min-height:36px;padding:0;justify-content:center}
+.latest[hidden]{display:none}
+
+.mm{display:inline-flex;align-items:center;height:32px;border:1px solid var(--border);background:var(--background);border-radius:999px;box-shadow:var(--shadow-modal);color:var(--muted-foreground);font-size:12px;position:relative}
+.mm[hidden]{display:none}
+.mm .seg-b{height:100%;display:inline-flex;align-items:center;justify-content:center;gap:6px;outline:none;transition:background .12s,color .12s}
+.mm .arr{width:30px}
+.mm .arr:first-child{border-radius:999px 0 0 999px;padding-left:2px}
+.mm .arr:last-child{border-radius:0 999px 999px 0;padding-right:2px}
+.mm .list-b{width:36px;border-left:1px solid var(--border);border-right:1px solid var(--border)}
+.mm .seg-b:hover:not(:disabled),.mm .seg-b.hov,.mm .list-b[aria-expanded=true]{background:var(--muted);color:var(--foreground)}
+.mm .seg-b:focus-visible,.mm .seg-b.fv{box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--ring) 70%,transparent);color:var(--foreground)}
+.mm .seg-b:disabled{opacity:.35;cursor:default}
+.mm .cnt b{color:var(--foreground);font-weight:600}
+.tip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:var(--contrast,#ebebeb);color:#171717;font-size:11.5px;font-weight:500;white-space:nowrap;padding:4px 8px;border-radius:6px;pointer-events:none}
+.tip kbd{border:0;background:rgba(0,0,0,.08);color:#444;padding:0 4px;margin-left:4px}
+
+/* the list popover */
+.pop{position:absolute;right:0;bottom:calc(100% + 8px);width:340px;background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-modal);overflow:hidden;transform-origin:100% 100%;animation:pop .14s ease-out;color:var(--foreground);z-index:20}
+.pop[hidden]{display:none}
+@keyframes pop{from{opacity:0;transform:translateY(4px) scale(.98)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.pop{animation:none}}
+.pop .ph2{display:flex;align-items:center;gap:8px;padding:10px 12px 8px;border-bottom:1px solid var(--border)}
+.pop .ph2 .eyebrow{color:var(--muted-foreground)}
+.pop .ph2 .keys{margin-left:auto;display:flex;gap:3px;align-items:center;font-size:11px;color:var(--soft-foreground)}
+.pop .ph2 kbd{font-size:10px;padding:0 4px}
+.lst{max-height:328px;overflow-y:auto;padding:4px;outline:none;scrollbar-width:thin;scrollbar-color:#333 transparent}
+.day{position:sticky;top:-4px;background:var(--card);font-size:11px;color:var(--soft-foreground);padding:8px 8px 4px;z-index:1;font-weight:500}
+.it{display:grid;grid-template-columns:40px 1fr auto;gap:2px 10px;align-items:start;padding:7px 8px 7px 10px;border-radius:8px;cursor:pointer;position:relative}
+.it .tt{font-size:11px;color:var(--soft-foreground);font-variant-numeric:tabular-nums;padding-top:1px}
+.it .tx{font-size:12.5px;line-height:1.45;color:#dcdcdc;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.it .ic{color:var(--soft-foreground);display:flex;align-items:center;gap:3px;font-size:11px;padding-top:2px}
+.it:hover{background:var(--muted)}
+.it.act{background:var(--muted);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ring) 55%,transparent)}
+.it.cur::before{content:'';position:absolute;left:2px;top:9px;bottom:9px;width:3px;border-radius:2px;background:var(--violet)}
+.it.cur .tt{color:var(--violet)}
+.it .ld{grid-column:2/4;font-size:11px;color:var(--muted-foreground);display:flex;align-items:center;gap:6px}
+.it.sending .tx{color:var(--muted-foreground);font-style:italic}
+.unl{font-size:11px;color:var(--soft-foreground);padding:6px 10px;display:flex;align-items:center;gap:8px}
+.unl::after{content:'';flex:1;height:1px;background:var(--border)}
+.spin{width:12px;height:12px;border-radius:50%;border:2px solid #444;border-top-color:var(--violet);animation:sp .7s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+.older{display:contents}.older[hidden]{display:none}
+.loadtop{align-self:center;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground);padding:4px 0}
+
+/* ---------- phone ---------- */
+.phones{display:flex;flex-wrap:wrap;gap:40px;justify-content:center}
+.phone{width:375px;height:780px;border-radius:44px;border:10px solid #1b1b1b;box-shadow:0 0 0 1px #2c2c2c,0 30px 80px rgba(0,0,0,.6);background:var(--background);overflow:hidden;display:flex;flex-direction:column;position:relative;font-size:14px}
+.sb{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 26px;font-size:13px;font-weight:600}
+.sb .isl{width:110px;height:30px;border-radius:20px;background:#000}
+.ph-h{border-bottom:1px solid var(--border);padding:6px 14px 0}
+.ph-h .t{display:flex;align-items:center;gap:8px;height:34px}
+.ph-h h5{margin:0;font-size:15px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph-h .tabs{gap:16px;margin-top:4px}
+.mh{display:flex;align-items:center;gap:6px;height:52px;padding:0 6px;border-bottom:1px solid var(--border);background:var(--card)}
+.ava{width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffe2b0,#d99a4a 55%,#8a3b2c);flex:none;position:relative}
+.ava::after{content:'';position:absolute;left:6px;right:6px;top:-2px;height:7px;border-radius:6px;background:#d7b54a;opacity:.9}
+.ib{width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:var(--muted-foreground)}
+.phone .col{padding:16px 16px 64px;gap:12px}
+.phone .tb{max-width:82%;font-size:14px}
+.phone .ai{font-size:14.5px}
+.phone .floating{padding:0 12px}
+.phone .mm{height:44px}
+.phone .mm .arr{width:44px}
+.phone .mm .list-b{width:44px}
+.phone .latest{min-height:44px}
+.phone .latest.round{width:44px}
+.phone .dock{padding:0 12px 8px}
+.tabbar{flex:none;display:flex;border-top:1px solid var(--border);background:var(--background);padding:6px 0 22px}
+.tabbar span{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--muted-foreground)}
+.tabbar span.on{color:var(--foreground);font-weight:600}
+/* the phone's list: a bottom sheet (the Tasks sheet idiom), not a popover */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:30;animation:fade .18s}
+.scrim[hidden],.sheet[hidden]{display:none}
+@keyframes fade{from{opacity:0}}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:72%;background:var(--card);border-top:1px solid var(--border);border-radius:18px 18px 0 0;z-index:31;display:flex;flex-direction:column;animation:up .22s cubic-bezier(.2,.8,.2,1);padding-bottom:22px}
+@keyframes up{from{transform:translateY(40%);opacity:0}}
+@media (prefers-reduced-motion:reduce){.sheet,.scrim{animation:none}}
+.sheet .grab{width:36px;height:5px;border-radius:3px;background:#3a3a3a;margin:8px auto 4px}
+.sheet .ph2{display:flex;align-items:center;padding:6px 16px 10px;border-bottom:1px solid var(--border)}
+.sheet .ph2 b{font-size:15px}
+.sheet .ph2 .x{margin-left:auto}
+.sheet .lst{max-height:none;flex:1;padding:4px 8px}
+.sheet .it{min-height:52px;padding:10px 10px 10px 12px;grid-template-columns:44px 1fr auto}
+.sheet .it .tx{font-size:14px}
+.sheet .it .tt{font-size:12px}
+
+/* ---------- state gallery ---------- */
+.states{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:16px}
+.st-card{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--background);overflow:hidden}
+.st-card .vis{height:150px;position:relative;display:flex;align-items:flex-end;justify-content:flex-end;padding:16px;background:
+  repeating-linear-gradient(180deg,transparent 0 22px,rgba(255,255,255,.025) 22px 30px)}
+.st-card .vis.tall{height:430px}
+.st-card.wide{grid-column:span 2}
+@media (max-width:700px){.st-card.wide{grid-column:span 1}}
+.st-card .lab{border-top:1px solid var(--border);padding:10px 14px;font-size:12.5px;color:#c9c9c9}
+.st-card .lab b{display:block;color:var(--foreground);font-size:13px;margin-bottom:2px}
+.ghost-box{border:1px dashed #3a3a3a;border-radius:999px;height:32px;width:124px;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--soft-foreground)}
+
+/* ---------- placement sketches ---------- */
+.alts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+.alt{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--card);padding:14px}
+.alt.rec{border-color:color-mix(in srgb,var(--violet) 55%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--violet) 14%,transparent)}
+.alt h4{margin:0 0 4px;font-size:14px;display:flex;align-items:center;gap:8px}
+.alt p,.alt li{font-size:12.5px;color:#c4c4c4}
+.alt ul{list-style:none;padding:0;margin:6px 0 0}
+.alt li{display:grid;grid-template-columns:14px 1fr;gap:4px;margin:6px 0}
+.alt .pro{color:var(--success-strong)}.alt .con{color:var(--danger-strong)}
+.sk{height:210px;border:1px solid var(--border);border-radius:10px;background:var(--background);position:relative;overflow:hidden;margin:10px 0}
+.sk .h{position:absolute;left:0;right:0;top:0;height:30px;border-bottom:1px solid var(--border);background:var(--card)}
+.sk .l{position:absolute;height:7px;border-radius:4px;background:#232323}
+.sk .u{position:absolute;right:14px;height:18px;border-radius:8px;background:#2f2f2f}
+.sk .c{position:absolute;left:12px;right:12px;bottom:10px;height:34px;border:1px solid var(--border);border-radius:10px;background:var(--card)}
+.sk .ctl{position:absolute;border-radius:999px;border:1px solid var(--violet);background:color-mix(in srgb,var(--violet) 18%,var(--background))}
+.sk .tick{position:absolute;right:3px;width:6px;height:3px;border-radius:2px;background:var(--violet)}
+.pc{display:flex;gap:6px;font-size:12px;margin-top:8px}
+.pc span{flex:1}
+.pc .pro{color:var(--success-strong)} .pc .con{color:var(--danger-strong)}
+
+.toolbar{display:flex;gap:10px;align-items:center;margin:14px 0;font-size:12.5px;color:var(--muted-foreground);flex-wrap:wrap}
+.toolbar label{display:flex;gap:6px;align-items:center}
+.toolbar .btn{color:var(--foreground)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+  <symbol id="down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="msg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/></symbol>
+  <symbol id="arrow-down" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></symbol>
+  <symbol id="clip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+  <symbol id="img" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></symbol>
+  <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></symbol>
+  <symbol id="file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+  <symbol id="term" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+  <symbol id="pen" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.38 3.62a1 1 0 0 1 3 3L7.37 18.64a2 2 0 0 1-.86.5l-2.87.84.84-2.87a2 2 0 0 1 .5-.86z"/></symbol>
+  <symbol id="chat" viewBox="0 0 24 24"><path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7l-4 4z"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="back" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+  <symbol id="gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="panel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.5"/></symbol>
+  <symbol id="list" viewBox="0 0 24 24"><path d="m3 7 2 2 4-4"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></symbol>
+  <symbol id="bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol>
+  <symbol id="more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="send" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+  <symbol id="mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></symbol>
+</svg>
+
+<div class="doc">
+  <div class="eyebrow">cezar · design · 2026-11-17 · phase 1</div>
+  <h1>Jump between your own messages</h1>
+  <p class="lede">A small segmented pill — <b>older ▲ · 💬 your messages · ▼ newer</b>, with no numbers — that grows out of the existing “Jump to latest” button whenever you scroll back through history, on every screen size, in both the task thread and the manager chat. At the bottom of the chat there is nothing. The arrows step through the messages you sent; the middle button opens the list of all of them. On phones the list is a bottom sheet.</p>
+  <div class="toc">
+    <a href="#rec">Recommendation</a><a href="#desk-task">Desktop · task</a><a href="#desk-mgr">Desktop · manager</a><a href="#mobile">Mobile</a><a href="#states">States</a><a href="#placement">Placement options</a><a href="#notes">Behavior notes</a>
+  </div>
+
+  <div class="callout" id="rec">
+    <span class="tag rec">Recommendation</span>
+    <p style="margin:10px 0 0"><b>One control, everywhere (revision 4).</b> The “Jump to latest” button grows into one combined pill when you scroll up: <code>▲ · 💬 · ▼ | ↓ Latest</code> on desktop and <code>▲ · 💬 · ▼ | ↓</code> on phones. It leaves again when you are back at the bottom. It sits exactly where “Jump to latest” floats today, so nothing new is spread across the screen and no space is used at rest. The manager's round ↓ button becomes the same pill, so both views match.</p>
+    <p style="margin:8px 0 0"><b>No numbers, revision 3.</b> The pill shows no counter: in a long chat the loaded range may not hold every message, and with several of your messages on one screen no single number is right. The middle 💬 segment just opens the list: a popover on desktop (hover or click) and a bottom sheet on touch screens. With no message from you, nothing is rendered.</p>
+  </div>
+
+  <!-- ============ DESKTOP TASK ============ -->
+  <h2 id="desk-task">Desktop · task transcript</h2>
+  <p>The mockup opens at the bottom, so there is no pill. <b>Scroll up</b> and “Jump to latest” grows into the pill. Then <b>▲ / ▼</b> scroll the transcript and highlight the message they land on. <b>Hover</b> the middle button to peek at the list, or <b>click</b> it to keep the list open. Inside the list, <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>Enter</kbd> jumps and <kbd>Esc</kbd> closes. The first two messages are in an older range that isn't loaded yet. Jumping to one loads that range first, as #1909 does today.</p>
+  <div class="toolbar">
+    <label><input type="checkbox" id="rmToggle"> Simulate reduced motion</label>
+    <button class="btn" id="streamBtn">Simulate: send a new message</button>
+  </div>
+  <div class="screen"><div class="desk" id="deskTask">
+    <aside class="side">
+      <div class="logo"><span class="mk"></span>cezar</div>
+      <div class="seg"><span class="on">Projects</span><span>Manager <i class="dot vio" style="width:5px;height:5px"></i></span></div>
+      <div class="newbtn">+ New task</div>
+      <div class="nav">
+        <span><svg class="i"><use href="#circle"/></svg>Now</span>
+        <span class="on"><svg class="i"><use href="#list"/></svg>Tasks</span>
+        <span><svg class="i"><use href="#term"/></svg>Terminal</span>
+      </div>
+      <div class="eyebrow sect">Current tasks</div>
+      <div class="nav"><span class="on" style="font-weight:500"><i class="dot info"></i>Add a retry with backoff…</span><span><i class="dot pend"></i>Fix flaky drawer test</span></div>
+      <div class="foot"><i class="dot"></i>Healthy<span style="margin-left:auto;font-family:var(--mono);font-size:11px">v0.21.0</span></div>
+    </aside>
+    <section class="main">
+      <div class="rh">
+        <div class="t"><i class="dot info"></i><h5>Add a retry with backoff to the GitHub poller and cover it with tests</h5><span class="chip">Waiting</span>
+          <span style="margin-left:auto;display:flex;gap:8px"><span class="btn pri">Answer</span><span class="btn" style="color:var(--danger-strong)">Stop</span><span class="btn ghost">Open in…</span></span></div>
+        <div class="sub">quick-task · <span>0 of 1 done</span> · <span class="br">cez/cbf839ca</span></div>
+        <div class="tabs"><span class="on"><svg class="i s14"><use href="#chat"/></svg>Chat</span><span>Changes</span><span>Commits</span><span>Files</span><span>Notes</span><span>Preview</span><span>Terminal</span></div>
+      </div>
+      <div class="stage">
+        <div class="scroller"><div class="col" data-thread="task"></div></div>
+        <div class="floating"><div class="mmslot float" data-mm hidden></div></div>
+      </div>
+      <div class="dock">
+        <div class="hint statusline"><i class="dot pend"></i>The agent is paused, waiting for your reply · <b>End session</b></div>
+        <div class="composer"><div class="ph">Reply — / for skills, @ for files…</div>
+          <div class="row"><svg class="i"><use href="#clip"/></svg><svg class="i"><use href="#mic"/></svg><span class="pill">claude · auto</span><span>Options ▾</span><span class="send"><svg class="i"><use href="#send"/></svg></span></div></div>
+      </div>
+    </section>
+  </div></div>
+  <div class="caption">Matches <code>task-thread.tsx</code>: the run header, the Chat tab, <code>UserBubble</code> (rounded-2xl with a small bottom-right corner, bg-muted, 13px) and the dock. The pill replaces <code>JumpToLatestPill</code> in <code>TaskDock</code>'s <code>overlay</code> slot and shows on the same <code>scroll.pillVisible</code>.</div>
+
+  <!-- ============ DESKTOP MANAGER ============ -->
+  <h2 id="desk-mgr">Desktop · manager chat</h2>
+  <p>Same pill and same behavior. It replaces the round “Scroll to bottom” button in <code>manager-floating</code> and shows on the same <code>scroll.away</code>. The bubbles are the manager's own style: rounded-xl, 14px, no timestamp. The list still shows the time from the message record.</p>
+  <div class="screen"><div class="desk" id="deskMgr">
+    <aside class="side">
+      <div class="logo"><span class="mk"></span>cezar</div>
+      <div class="seg"><span>Projects</span><span class="on">Manager</span></div>
+      <div class="newbtn">+ New manager</div>
+      <div class="eyebrow sect" style="margin-top:4px">Managers · 1</div>
+      <div class="nav"><span class="on" style="font-weight:500;align-items:flex-start"><span class="ava" style="width:26px;height:26px"></span><span style="display:flex;flex-direction:column;line-height:1.3;padding:0;align-items:flex-start;gap:0">Ops<small style="color:var(--muted-foreground);font-weight:400">Here is where things stand…</small></span></span></div>
+      <div class="eyebrow sect">Workspace</div>
+      <div class="nav"><span><svg class="i"><use href="#check"/></svg>Approvals</span><span><svg class="i"><use href="#refresh"/></svg>Jobs</span></div>
+      <div class="foot"><i class="dot"></i>Healthy</div>
+    </aside>
+    <section class="main">
+      <header style="display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:var(--card);padding:10px 20px">
+        <span class="ava" style="width:40px;height:40px"></span>
+        <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:15px">Ops</div><div style="font-size:12px;color:var(--muted-foreground)">Watching cezar · write · every 15 min · next check in 9 min</div></div>
+        <span class="btn"><svg class="i s14"><use href="#refresh"/></svg>Check now</span>
+        <span class="ib" style="width:32px;height:32px"><svg class="i"><use href="#panel"/></svg></span>
+        <span class="ib" style="width:32px;height:32px"><svg class="i"><use href="#gear"/></svg></span>
+      </header>
+      <div style="display:flex;flex:1;min-height:0">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div class="stage">
+            <div class="scroller"><div class="col" data-thread="mgr" style="max-width:720px;margin:0 auto;gap:20px;padding-top:24px"></div></div>
+            <div class="floating" style="max-width:720px;margin:0 auto"><div class="mmslot float" data-mm hidden></div></div>
+          </div>
+          <div class="dock" style="max-width:720px;margin:0 auto;width:100%">
+            <div class="hint statusline"><span class="qchip">What needs me?</span><span class="qchip">PR status</span></div>
+            <div class="composer"><div class="ph">Message Ops, or / for commands</div><div class="row"><svg class="i"><use href="#clip"/></svg><span class="send"><svg class="i"><use href="#send"/></svg></span></div></div>
+          </div>
+        </div>
+        <aside style="width:230px;border-left:1px solid var(--border);background:var(--card);padding:16px 14px;display:flex;flex-direction:column;gap:10px">
+          <div class="eyebrow">Watching</div>
+          <div class="tool" style="background:var(--background)"><i class="dot"></i>cezar<span style="margin-left:auto">write</span></div>
+          <div class="eyebrow" style="margin-top:8px">Tasks it started</div>
+          <div class="tool" style="background:var(--background)"><i class="dot info"></i>Fix flaky drawer test</div>
+          <div class="tool" style="background:var(--background)"><i class="dot" style="background:#555"></i>Task cbf839ca</div>
+        </aside>
+      </div>
+    </section>
+  </div></div>
+  <div class="caption">Matches <code>manager-chat.tsx</code>: the header with its companion, the transcript column, <code>manager-floating</code> and the watching panel. The floating row already reserves its room (<code>floating.overlap</code>), and the wider pill uses the same measurement.</div>
+
+  <!-- ============ MOBILE ============ -->
+  <h2 id="mobile">Mobile · task view and manager chat</h2>
+  <p>This is the same pill, with icons only, and the list opens as a <b>bottom sheet</b> (the manager's Tasks-sheet idiom). Scroll either transcript up and the “Latest” button becomes the combined pill. ▲ / ▼ step through your messages, the middle button opens the sheet, and ↓ returns to the tail, where the pill goes away. Segments are 40 px tall with a 44 px hit area. The pill stays above the composer and the iOS keyboard lift (<code>--kb</code>), and in the CezarBot app shell it stays above the tab bar.</p>
+  <div class="phones">
+    <div class="phone" id="phTask">
+      <div class="sb"><span>9:41</span><span class="isl"></span><span>●●●</span></div>
+      <div class="ph-h">
+        <div class="t"><i class="dot info"></i><h5>Add a retry with backoff to…</h5><svg class="i" style="color:var(--muted-foreground)"><use href="#more"/></svg></div>
+        <div class="sub" style="font-size:12px;color:var(--muted-foreground);display:flex;gap:6px;align-items:center"><span class="chip">Waiting</span> · 0 of 1 done</div>
+        <div class="tabs"><span class="on"><svg class="i s14"><use href="#chat"/></svg>Chat</span><span>Changes</span><span>Commits</span></div>
+      </div>
+      <div class="stage">
+        <div class="scroller"><div class="col" data-thread="task-m"></div></div>
+        <div class="floating"><div class="mmslot float" data-mm hidden></div></div>
+      </div>
+      <div class="dock"><div class="composer" style="padding:10px 12px 8px"><div class="ph" style="margin-bottom:10px">Reply — / for skills…</div><div class="row"><svg class="i"><use href="#clip"/></svg><svg class="i"><use href="#mic"/></svg><span class="pill">claude · auto</span><span class="send" style="width:40px;height:40px"><svg class="i"><use href="#send"/></svg></span></div></div></div>
+      <div class="tabbar"><span><svg class="i s18"><use href="#circle"/></svg>Now</span><span class="on"><svg class="i s18"><use href="#list"/></svg>Tasks</span><span><svg class="i s18"><use href="#bot"/></svg>Manager</span><span><svg class="i s18"><use href="#more"/></svg>More</span></div>
+      <div class="scrim" hidden></div><div class="sheet" hidden role="dialog" aria-label="Your messages"></div>
+    </div>
+    <div class="phone" id="phMgr">
+      <div class="sb"><span>9:41</span><span class="isl"></span><span>●●●</span></div>
+      <div class="mh"><span class="ib"><svg class="i"><use href="#back"/></svg></span><span class="ava"></span><b style="flex:1;font-size:15px;margin-left:6px">Ops</b><span class="ib"><svg class="i"><use href="#list"/></svg></span><span class="ib"><svg class="i"><use href="#gear"/></svg></span></div>
+      <div class="stage">
+        <div class="scroller"><div class="col" data-thread="mgr-m" style="gap:18px"></div></div>
+        <div class="floating"><div class="mmslot float" data-mm hidden></div></div>
+      </div>
+      <div class="dock"><div class="composer" style="padding:10px 12px 8px"><div class="ph" style="margin-bottom:10px">Message Ops, or / for commands</div><div class="row"><svg class="i"><use href="#clip"/></svg><span class="send" style="width:40px;height:40px"><svg class="i"><use href="#send"/></svg></span></div></div></div>
+      <div class="tabbar"><span><svg class="i s18"><use href="#circle"/></svg>Now</span><span><svg class="i s18"><use href="#list"/></svg>Tasks</span><span class="on"><svg class="i s18"><use href="#bot"/></svg>Manager</span><span><svg class="i s18"><use href="#more"/></svg>More</span></div>
+      <div class="scrim" hidden></div><div class="sheet" hidden role="dialog" aria-label="Your messages"></div>
+    </div>
+  </div>
+  <div class="caption" style="text-align:center">Both phones open at the tail, so no pill is showing yet. Scroll up to bring it in. Tablets (≥ md with a coarse pointer) use the desktop status-line placement with 44 px targets and the bottom sheet.</div>
+
+  <!-- ============ STATES ============ -->
+  <h2 id="states">The control, state by state</h2>
+  <p>These are the real component styles, frozen in each state.</p>
+  <div class="states" id="stateGrid"></div>
+
+  <!-- ============ PLACEMENT ============ -->
+  <h2 id="placement">Where it sits: options considered</h2>
+  <div class="alts">
+    <div class="alt">
+      <h4>A · In the chat header</h4>
+      <div class="sk"><div class="h"></div><div class="ctl" style="right:10px;top:7px;width:70px;height:16px"></div>
+        <div class="l" style="left:12px;top:46px;width:60%"></div><div class="u" style="top:66px;width:38%"></div><div class="l" style="left:12px;top:96px;width:70%"></div><div class="u" style="top:116px;width:30%"></div><div class="c"></div></div>
+      <ul><li><b class="pro">+</b> Never overlaps content, always in the same place.</li>
+      <li><b class="con">−</b> Far from where your eyes and pointer are. You read at the bottom, then travel to the top to step, back and forth.</li>
+      <li><b class="con">−</b> The task header on a phone has no room left (title, ⋯, expand, tabs), and it folds away on scroll.</li></ul>
+    </div>
+    <div class="alt rec">
+      <h4>B · Grows out of “Jump to latest” <span class="tag rec">Recommended</span></h4>
+      <div class="sk"><div class="h"></div>
+        <div class="l" style="left:12px;top:46px;width:60%"></div><div class="u" style="top:66px;width:38%"></div><div class="l" style="left:12px;top:96px;width:70%"></div><div class="u" style="top:116px;width:30%"></div>
+        <div class="ctl" style="left:50%;transform:translateX(-50%);bottom:52px;width:96px;height:16px"></div><div class="c"></div></div>
+      <ul><li><b class="pro">+</b> One control for moving through the transcript, in the one place that already does it. Nothing new is spread across the screen.</li>
+      <li><b class="pro">+</b> Takes no space at rest. It appears exactly when you are reading back, which is when you need it.</li>
+      <li><b class="pro">+</b> The same on desktop, tablet, phone and the app shell, and the same in both views.</li>
+      <li><b class="con">−</b> At the bottom you scroll up once, or press <kbd>⌥↑</kbd>, to reach it.</li></ul>
+    </div>
+    <div class="alt">
+      <h4>C · On the dock's status line (revision 2)</h4>
+      <div class="sk"><div class="h"></div>
+        <div class="l" style="left:12px;top:46px;width:60%"></div><div class="u" style="top:66px;width:38%"></div><div class="l" style="left:12px;top:96px;width:70%"></div><div class="u" style="top:116px;width:30%"></div>
+        <div class="l" style="left:14px;bottom:52px;width:42%;height:6px;background:#3a3020"></div><div class="ctl" style="right:14px;bottom:48px;width:56px;height:14px"></div><div class="c"></div></div>
+      <ul><li><b class="pro">+</b> Right above the textarea, and it never covers the transcript.</li>
+      <li><b class="con">−</b> Always visible, and a second control away from “Jump to latest”, so the transcript controls are split across two places.</li>
+      <li><b class="con">−</b> On phones it costs a permanent line when no hint is showing.</li></ul>
+    </div>
+    <div class="alt">
+      <h4>D · Ticks beside the scrollbar</h4>
+      <div class="sk"><div class="h"></div>
+        <div class="l" style="left:12px;top:46px;width:60%"></div><div class="u" style="top:66px;width:38%"></div><div class="l" style="left:12px;top:96px;width:70%"></div><div class="u" style="top:116px;width:30%"></div><div class="c"></div>
+        <div class="tick" style="top:44px"></div><div class="tick" style="top:70px"></div><div class="tick" style="top:118px"></div><div class="tick" style="top:140px"></div></div>
+      <ul><li><b class="pro">+</b> Shows how your messages are spread across the transcript at a glance.</li>
+      <li><b class="con">−</b> The positions are unknown for ranges that aren't loaded, and virtua's sizes are estimates.</li>
+      <li><b class="con">−</b> Too small to tap, and iOS hides the scrollbar entirely. Fine as a later extra, not as the control.</li></ul>
+    </div>
+  </div>
+
+  <!-- ============ NOTES ============ -->
+  <h2 id="notes">Behavior notes</h2>
+  <div class="notes">
+    <div class="note"><h4>What ▲ / ▼ do</h4>
+      <ul><li>▲ goes to the nearest message of yours whose top is <b>above</b> the top of the viewport; ▼ goes to the nearest one below it. A jump aligns the message to the top with 24 px of breathing room, so pressing it repeatedly walks back steadily.</li>
+      <li>▲ is disabled only when no message of yours exists above the viewport in <i>any</i> range, loaded or not. ▼ is disabled when every message below is already fully on screen.</li>
+      <li><b>No counter.</b> In a long chat the loaded range may not hold every message, and when several of yours share the screen no single index is right. Where you are shows in the list instead: every message of yours that is on screen gets the violet bar.</li></ul></div>
+    <div class="note"><h4>The highlight</h4>
+      <p>This is the #2218 pattern: <code>scrollIntoView</code>, then <code>focus({preventScroll})</code> on the bubble (<code>tabIndex=-1</code>), drawn with the cockpit's <code>ring-[3px] ring-ring/50</code>. A short violet wash (1.8 s) helps the eye find it after a long scroll. The ring stays until focus moves on.</p>
+      <p>With reduced motion: no smooth scroll (<code>behavior:'auto'</code>) and no wash. The ring alone marks the message. Tick the checkbox above to try it.</p></div>
+    <div class="note"><h4>Ranges that aren't loaded</h4>
+      <ul><li><b>Task:</b> <code>useRunHistory</code> keeps at most 5 pages, so the list can't be built from the loaded events. A small index route, <code>GET …/runs/:id/user-messages</code> (<code>seq, ts, preview ≤ 240 chars, attachment kinds</code>), feeds the list and the counter. A jump to an unloaded <code>seq</code> pages back with the same refill as #1909 until that <code>seq</code> is loaded, then reveals it.</li>
+      <li><b>Manager:</b> <code>?kind=user</code> on the messages route gives the list. A jump runs the #2218 loop: <code>fetchNextPage</code> until the id is loaded, then reveal.</li>
+      <li>While it loads, the list row shows a spinner and the transcript shows its normal “Loading earlier messages…” boundary. A failure shows a toast and leaves you where you were.</li></ul></div>
+    <div class="note"><h4>The list</h4>
+      <ul><li>Oldest at the top and <b>newest at the bottom</b>, like the transcript. The list opens upward from a pill at the bottom, so the newest messages sit right next to the pointer. It opens scrolled to the current message.</li>
+      <li>Day headers (“Today”, “Yesterday”, “Nov 14”) are sticky, and the time column stays HH:mm. A long chat scrolls inside a list capped at 328 px (popover) or 72 % of the screen (sheet).</li>
+      <li>The message in view gets a violet bar and <code>aria-current="true"</code>. The keyboard-active row gets a ring.</li></ul></div>
+    <div class="note"><h4>Truncation and attachments</h4>
+      <ul><li>The preview is the message as plain text: markdown stripped, newlines folded to “ · ”, whitespace collapsed, clamped to two lines with <code>line-clamp</code>. The full text is the row's <code>title</code> on desktop.</li>
+      <li>A diff-review message (comments drafted on Changes) previews as “Review · 3 comments” followed by its text.</li>
+      <li>Attachments: an image icon or a paperclip with a count, placed right of the row. A message with only an attachment previews as “Image” or “poller-notes.md”, in muted text.</li></ul></div>
+    <div class="note"><h4>While new messages stream in</h4>
+      <ul><li>A message you send is added to the list at once, as “Sending…”. A task's queued messages (<code>queuedMessages</code>) appear with a “Queued” label. Neither one moves the keyboard-active row or steals focus.</li>
+      <li>The count goes up live. If you are pinned to the tail, the stick-to-bottom behavior is unchanged. A jump un-pins you, exactly as a scroll up does, and “Jump to latest” appears.</li>
+      <li>Agent output streaming in changes nothing in the pill. If the list is open, the on-screen bars follow the scroll.</li></ul></div>
+    <div class="note"><h4>Accessibility</h4>
+      <ul><li>A <code>role="group"</code> labelled “Your messages”. The buttons are “Previous message of yours”, “Next message of yours” and “Your messages” (<code>aria-haspopup="listbox"</code>, <code>aria-expanded</code>).</li>
+      <li>The list is a <code>listbox</code> with <code>aria-activedescendant</code>: <kbd>↑</kbd><kbd>↓</kbd> <kbd>Home</kbd><kbd>End</kbd> move, <kbd>Enter</kbd> jumps, <kbd>Esc</kbd> closes and returns focus to the button. A polite live region announces “Jumped to your message from 9:41”.</li>
+      <li>Shortcuts: <kbd>⌥↑</kbd> / <kbd>⌥↓</kbd> while focus is in the transcript (never in the composer), registered in <code>keybindings.ts</code> so they can be rebound.</li></ul></div>
+    <div class="note"><h4>Hover vs click, desktop vs touch</h4>
+      <ul><li>With a pointer that can hover, hovering for 150 ms opens a <i>peek</i>, which closes 250 ms after the pointer leaves. A click <i>pins</i> it open until Esc, an outside click or a jump. Keyboard focus never opens it, but Enter does.</li>
+      <li>On <code>no-hover:</code> devices, a tap opens the bottom sheet. Arrows react to the tap itself, never to a long press.</li>
+      <li>The pill shows and hides with the existing away-from-tail signal (<code>pillVisible</code> / <code>scroll.away</code>), so it adds no new scroll listener. Returning to the bottom closes an open list.</li>
+      <li>With no message of yours in the chat, it falls back to today's plain “Jump to latest” button.</li>
+      <li>At the bottom, <kbd>⌥↑</kbd> still jumps to your last message, which brings the pill in.</li></ul></div>
+  </div>
+  <p class="caption" style="margin-top:28px">Fonts fall back to the system stack when Inter isn't installed, because this page loads no external assets. Every colour, radius and shadow is copied from <code>packages/web/src/styles/index.css</code>.</p>
+</div>
+
+<script>
+const ic = (id, cls = 's14') => `<svg class="i ${cls}" aria-hidden="true"><use href="#${id}"/></svg>`
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+
+/* ---------- content ---------- */
+const TASK = [
+  { me: 1, older: 1, day: 'Yesterday', t: '17:02', text: 'Add a retry with backoff to the GitHub poller and cover it with tests. The poller lives in packages/cezar/src/server/github.ts.' },
+  { ai: 'I\'ll start by reading the poller and its tests.', older: 1 },
+  { tool: 'Read', arg: 'packages/cezar/src/server/github.ts', older: 1 },
+  { me: 1, older: 1, day: 'Yesterday', t: '17:10', text: 'Use the existing withRetry helper if there is one — don\'t add a dependency.' },
+  { ai: 'Found <code>withRetry</code> in <code>src/util/retry.ts</code>. It takes a delay function, so exponential backoff is a three-line change.', older: 1 },
+  { tool: 'Edited', arg: 'src/server/github.ts', ok: '+24 −6', older: 1 },
+  { boundary: 1 },
+  { ai: 'The poller now retries transient failures with exponential backoff (500 ms, doubling).' },
+  { tool: 'Ran', arg: 'npm test -- github.test.ts', ok: '✓ 18 passed' },
+  { me: 1, day: 'Today', t: '09:21', text: 'Also cap the backoff at 30s' },
+  { think: 'Thought for 4s' },
+  { tool: 'Edited', arg: 'src/server/github.ts', ok: '+3 −1' },
+  { ai: 'Capped at 30 s. The cap is a named constant, <code>MAX_BACKOFF_MS</code>, beside the poller interval.' },
+  { me: 1, day: 'Today', t: '09:34', att: 'img', text: 'Here\'s the log from the failing run — it retries forever on a 401' },
+  { ai: 'Right: a 401 is not transient. I\'ll stop retrying on auth errors and surface them as <code>{ available: false, reason }</code>, like the rest of github.ts.' },
+  { tool: 'Read', arg: 'logs/poller-2026-11-17.log' },
+  { me: 1, day: 'Today', t: '09:41', text: 'Two things:\n1. a 401/403 must not retry at all\n2. log one line per retry, not per attempt\nand keep the test names in the existing style.' },
+  { tool: 'Edited', arg: 'src/server/github.ts', ok: '+11 −4' },
+  { tool: 'Edited', arg: 'src/server/github.test.ts', ok: '+38' },
+  { ai: 'Done: auth errors fail fast, there is one log line per retry, and three new tests sit beside the existing ones, named in the same style.' },
+  { me: 1, day: 'Today', t: '09:52', text: 'Looks good. Run only github.test.ts, not the whole suite.' },
+  { tool: 'Ran', arg: 'npm test -- packages/cezar/src/server/github.test.ts', ok: '✓ 21 passed' },
+  { ai: '21 tests pass. Want me to commit?' },
+  { me: 1, day: 'Today', t: '10:03', att: 'file', file: 'poller-notes.md', text: 'Compare with these notes before you commit' },
+  { ai: 'The notes agree with the change, except that they ask for jitter. I added ±20 % full jitter and a test that pins the bounds.' },
+  { tool: 'Edited', arg: 'src/server/github.ts', ok: '+5 −2' },
+  { ai: 'Ready for review: 4 files, +79 −13.' },
+]
+const MGR = [
+  { me: 1, older: 1, day: 'Nov 14', t: '16:40', text: 'Keep an eye on the release PR and tell me when CI is green.' },
+  { ai: 'Watching #2261. I\'ll tell you when the checks settle.', older: 1 },
+  { boundary: 1 },
+  { me: 1, day: 'Today', t: '08:58', text: 'What needs me this morning?' },
+  { ai: '<span class="meta">Ran 3 commands ›</span><p style="margin-top:6px">Two things need you: an approval and one stuck task.</p>' },
+  { card: 'merge' },
+  { taskcard: 'Fix flaky drawer test' },
+  { me: 1, day: 'Today', t: '09:05', text: 'Merge #2261 once CI is green' },
+  { ai: 'Queued: I\'ll merge #2261 the moment its checks pass. 2 of 9 are still running.' },
+  { me: 1, day: 'Today', t: '09:12', att: 'img', text: 'Why did the nightly automation fail? Screenshot attached' },
+  { ai: 'The nightly sweep hit the GitHub rate limit at 03:12. It used the unauthenticated budget because <code>GH_TOKEN</code> wasn\'t set in that shell. Nothing was lost; it retried at 04:00 and finished.' },
+  { notice: 'Checked at 09:30 · nothing new' },
+  { me: 1, day: 'Today', t: '09:44', text: 'Start a task to fix the flaky terminal-drawer test.\nUse codex, keep it under $2, and don\'t touch the drawer\'s keyboard handling — that\'s being reworked in #2240.' },
+  { ai: 'Started <b>Fix flaky drawer test</b> on codex with a $2 budget, scoped away from the keyboard handling.' },
+  { taskcard: 'Fix flaky drawer test' },
+  { me: 1, day: 'Today', t: '10:10', text: 'Thanks. Anything else?' },
+  { ai: 'Nothing else for now. The next check is in 15 minutes.' },
+]
+const short = (list, keep) => list.filter((x, i) => keep(x, i))
+
+function renderThread(col, data, kind) {
+  const manager = kind.startsWith('mgr')
+  let n = 0, html = '', olderOpen = false
+  for (const x of data) {
+    if (x.older && !olderOpen) { html += `<div class="older" hidden>`; olderOpen = true }
+    if (!x.older && olderOpen) { html += `</div>`; olderOpen = false }
+    if (x.boundary) { html += `<div class="boundary"><span>Earlier messages</span>·<button type="button" data-load>Load earlier</button></div>`; continue }
+    if (x.me) {
+      n += 1
+      const att = x.att === 'img' ? `<div class="att"><div class="img"></div></div>` : x.att === 'file' ? `<div class="att"><span class="file">${ic('clip')}${x.file}</span></div>` : ''
+      const data = `data-n="${n}" data-t="${x.t}" data-day="${x.day}" data-att="${x.att || ''}" data-file="${x.file || ''}" data-text="${esc(x.text)}"`
+      if (manager) html += `<div class="mrow mine" tabindex="-1" ${data}><p class="mb" style="margin:0">${esc(x.text)}</p>${att}</div>`
+      else html += `<div class="tb mine" tabindex="-1" ${data}><div class="acts">${ic('copy','s14')}</div>${esc(x.text)}${att}<div class="tm"><span class="meta">${x.t}</span></div></div>`
+    } else if (x.ai) html += `<div class="ai"><p>${x.ai}</p></div>`
+    else if (x.tool) html += `<div class="tool">${ic(x.tool === 'Ran' ? 'term' : x.tool === 'Read' ? 'file' : 'pen')}<span>${x.tool}</span><code>${x.arg}</code>${x.ok ? `<span class="ok">${x.ok}</span>` : ''}</div>`
+    else if (x.think) html += `<div class="think">${ic('chat','s12')}${x.think}</div>`
+    else if (x.notice) html += `<p class="meta" style="text-align:center;margin:0;font-size:12px">${x.notice}</p>`
+    else if (x.card) html += `<div class="card"><div class="hd">${ic('check')}Merge PR #2261<span class="st"><i class="dot info"></i>Waiting</span></div><div class="bd">chore(mobile): prepare production 0.1.1 release · CI 7/9 ✓</div><div class="ft"><span class="btn pri">Approve</span><span class="btn">Decline</span></div></div>`
+    else if (x.taskcard) html += `<div class="taskcard"><div style="flex:1"><b>${x.taskcard}</b><small>cezar · codex · running</small></div>›</div>`
+  }
+  if (olderOpen) html += `</div>`
+  col.innerHTML = html
+}
+
+/* ---------- the control ---------- */
+function pillHTML({ up = true, down = true, cur = '3', total = '7', cls = '', open = false, latest = false } = {}) {
+  return `<div class="mm" role="group" aria-label="Your messages">
+    <button type="button" class="seg-b arr ${cls.includes('hu') ? 'hov' : ''} ${cls.includes('fu') ? 'fv' : ''}" data-prev aria-label="Previous message of yours" ${up ? '' : 'disabled'}>${ic('up')}</button>
+    <button type="button" class="seg-b list-b ${cls.includes('hl') ? 'hov' : ''} ${cls.includes('fl') ? 'fv' : ''}" data-list title="Your messages" aria-haspopup="listbox" aria-expanded="${open}">${ic('msg')}<span class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Your messages</span></button>
+    <button type="button" class="seg-b arr" data-next aria-label="Next message of yours" ${down ? '' : 'disabled'}>${ic('down')}</button>
+    ${latest ? `<span class="sep" aria-hidden="true"></span><button type="button" class="seg-b ${latest === 'label' ? 'lat' : 'arr'}" data-latest aria-label="Jump to latest">${ic('arrow-down')}${latest === 'label' ? 'Latest' : ''}</button>` : ''}
+  </div>`
+}
+
+function listItems(mines, onScreen, actN, loading) {
+  let html = '', day = '', unloadedShown = false
+  mines.forEach((m) => {
+    const unloaded = m.closest('.older[hidden]') !== null
+    if (m.dataset.day !== day) { day = m.dataset.day; html += `<div class="day">${day}</div>` }
+    if (unloaded && !unloadedShown) { unloadedShown = true; html += `<div class="unl">not loaded yet: loads on jump</div>` }
+    const n = +m.dataset.n
+    const at = m.dataset.att === 'img' ? `${ic('img','s12')}1` : m.dataset.att === 'file' ? `${ic('clip','s12')}1` : ''
+    const preview = m.dataset.text.replace(/\n+/g, ' · ')
+    const cur = onScreen.includes(n)
+    html += `<div class="it ${cur ? 'cur' : ''} ${n === actN ? 'act' : ''}" role="option" id="opt-${n}-${Math.random().toString(36).slice(2,6)}" data-n="${n}" aria-current="${cur}" aria-selected="${n === actN}" title="${m.dataset.text}">
+      <span class="tt">${m.dataset.t}</span><span class="tx">${preview}</span><span class="ic">${at}</span>
+      ${loading === n ? `<span class="ld"><span class="spin"></span>Loading earlier messages…</span>` : ''}
+    </div>`
+  })
+  return html
+}
+
+class MyNav {
+  constructor(root, { mobile = false, latest = null } = {}) {
+    this.root = root; this.mobile = mobile
+    this.scroller = root.querySelector('.scroller')
+    this.col = root.querySelector('.col')
+    this.end = root.querySelector('[data-mm]')
+    this.latest = root.querySelector('.latest')
+    this.sheet = root.querySelector('.sheet'); this.scrim = root.querySelector('.scrim')
+    this.act = 0; this.pinned = false; this.loading = 0
+    this.render()
+    this.scroller.addEventListener('scroll', () => this.sync(), { passive: true })
+    this.col.addEventListener('click', (e) => { if (e.target.closest('[data-load]')) this.loadOlder() })
+    requestAnimationFrame(() => { this.scroller.scrollTop = this.scroller.scrollHeight; this.sync() })
+  }
+  mines() { return [...this.col.querySelectorAll('.mine')] }
+  loaded(m) { return m.closest('.older[hidden]') === null }
+  view() { const r = this.scroller.getBoundingClientRect(); return { top: r.top, mid: r.top + r.height / 2, bottom: r.bottom - 48 } }
+  atBottom() { const s = this.scroller; return s.scrollTop + s.clientHeight >= s.scrollHeight - 4 }
+  state() {
+    const v = this.view(), ms = this.mines()
+    const onScreen = []
+    let prev = null, next = null
+    for (const m of ms) {
+      if (!this.loaded(m)) { prev = m; continue }
+      const r = m.getBoundingClientRect()
+      // Every message of yours on screen is marked in the list; there is no single "current" one.
+      if (r.bottom > v.top + 4 && r.top < v.bottom) onScreen.push(+m.dataset.n)
+      // A jump parks its target 24 px below the top; that band counts as neither side.
+      if (r.top < v.top + 12) prev = m
+      else if (!next && r.top > v.top + 32) {
+        const fully = r.top >= v.top && r.bottom <= v.bottom
+        if (!(this.atBottom() && fully)) next = m
+      }
+    }
+    return { onScreen, prev, next }
+  }
+  render() {
+    if (this.mines().length === 0) { this.end.innerHTML = ''; return }
+    this.end.innerHTML = pillHTML({ latest: this.mobile ? true : 'label' }) + (this.mobile ? '' : `<div class="pop" hidden><div class="ph2"><span class="eyebrow">Your messages</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst" role="listbox" tabindex="-1" aria-label="Your messages"></div></div>`)
+    const $ = (s) => this.end.querySelector(s)
+    this.btnPrev = $('[data-prev]'); this.btnNext = $('[data-next]'); this.btnList = $('[data-list]'); this.pop = $('.pop')
+    this.btnPrev.onclick = () => { const s = this.state(); if (s.prev) this.jump(s.prev) }
+    this.btnNext.onclick = () => { const s = this.state(); if (s.next) this.jump(s.next) }
+    $('[data-latest]').onclick = () => { if (this.pop) this.closePop(); this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: 'smooth' }) }
+    if (this.mobile) {
+      this.btnList.onclick = () => this.openSheet()
+      this.scrim.onclick = () => this.closeSheet()
+    } else {
+      let t
+      const enter = () => { clearTimeout(t); if (this.pop.hidden) t = setTimeout(() => this.openPop(false), 150) }
+      const leave = () => { clearTimeout(t); if (!this.pinned) t = setTimeout(() => this.closePop(), 250) }
+      this.btnList.addEventListener('mouseenter', enter); this.btnList.addEventListener('mouseleave', leave)
+      this.pop.addEventListener('mouseenter', () => clearTimeout(t)); this.pop.addEventListener('mouseleave', leave)
+      this.btnList.onclick = () => { if (!this.pop.hidden && this.pinned) this.closePop(); else { this.openPop(true) } }
+      this.btnList.addEventListener('keydown', (e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); this.openPop(true, true) } })
+      const lst = $('.lst')
+      lst.addEventListener('keydown', (e) => this.listKey(e))
+      lst.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (it) this.pick(+it.dataset.n) })
+      document.addEventListener('pointerdown', (e) => { if (this.pinned && !this.end.contains(e.target)) this.closePop() })
+    }
+    this.sync()
+  }
+  sync() {
+    if (!this.btnPrev) return
+    const s = this.state()
+    this.btnPrev.disabled = !s.prev; this.btnNext.disabled = !s.next
+    if (this.latest) this.latest.hidden = this.atBottom()
+    // One pill, grown out of "Jump to latest": it exists only while you are away from the tail.
+    this.end.hidden = this.atBottom()
+    if (this.end.hidden && this.pop && !this.pop.hidden) this.closePop()
+    if (this.pop && !this.pop.hidden) this.fillList(false)
+  }
+  fillList(scrollToCur) {
+    const lst = (this.mobile ? this.sheet : this.pop).querySelector('.lst')
+    const s = this.state()
+    if (!this.act) this.act = s.onScreen[0] || this.mines().length
+    lst.innerHTML = listItems(this.mines(), s.onScreen, this.act, this.loading)
+    const a = lst.querySelector('.it.act'); if (a) lst.setAttribute('aria-activedescendant', a.id)
+    if (scrollToCur && a) a.scrollIntoView({ block: 'center' })
+  }
+  openPop(pin, focusList = false) {
+    this.pinned = this.pinned || pin
+    this.act = 0; this.pop.hidden = false; this.btnList.setAttribute('aria-expanded', 'true')
+    this.fillList(true)
+    if (focusList || pin) this.pop.querySelector('.lst').focus({ preventScroll: true })
+  }
+  closePop(refocus) { this.pop.hidden = true; this.pinned = false; this.btnList.setAttribute('aria-expanded', 'false'); if (refocus) this.btnList.focus() }
+  listKey(e) {
+    const ns = this.mines().map((m) => +m.dataset.n)
+    let i = ns.indexOf(this.act)
+    if (e.key === 'ArrowDown') i = Math.min(ns.length - 1, i + 1)
+    else if (e.key === 'ArrowUp') i = Math.max(0, i - 1)
+    else if (e.key === 'Home') i = 0
+    else if (e.key === 'End') i = ns.length - 1
+    else if (e.key === 'Enter') { e.preventDefault(); return this.pick(this.act) }
+    else if (e.key === 'Escape') { e.preventDefault(); return this.closePop(true) }
+    else return
+    e.preventDefault(); this.act = ns[i]; this.fillList(false)
+    this.pop.querySelector('.it.act')?.scrollIntoView({ block: 'nearest' })
+  }
+  openSheet() {
+    this.act = 0
+    this.sheet.innerHTML = `<div class="grab"></div><div class="ph2"><b>Your messages</b><button class="ib x" aria-label="Close" data-x>${ic('x','s18')}</button></div><div class="lst" role="listbox" aria-label="Your messages"></div>`
+    this.sheet.hidden = false; this.scrim.hidden = false
+    this.sheet.querySelector('[data-x]').onclick = () => this.closeSheet()
+    this.sheet.querySelector('.lst').onclick = (e) => { const it = e.target.closest('.it'); if (it) this.pick(+it.dataset.n) }
+    this.fillList(true)
+  }
+  closeSheet() { this.sheet.hidden = true; this.scrim.hidden = true }
+  async pick(n) {
+    const m = this.mines().find((x) => +x.dataset.n === n)
+    if (!m) return
+    if (!this.loaded(m)) {
+      this.loading = n; this.fillList(false)
+      await this.loadOlder()
+      this.loading = 0
+    }
+    if (this.mobile) this.closeSheet(); else this.closePop()
+    this.jump(m)
+  }
+  loadOlder() {
+    const older = this.col.querySelector('.older[hidden]')
+    if (!older) return Promise.resolve()
+    const b = this.col.querySelector('.boundary')
+    b.innerHTML = `<span class="spin"></span>Loading earlier messages…`
+    return new Promise((done) => setTimeout(() => {
+      const h = this.scroller.scrollHeight
+      older.hidden = false; b.remove()
+      this.scroller.scrollTop += this.scroller.scrollHeight - h // keep the reading anchor (#1909)
+      this.sync(); done()
+    }, 700))
+  }
+  async jump(m) {
+    if (!this.loaded(m)) await this.loadOlder()
+    const reduce = document.body.classList.contains('rm') || matchMedia('(prefers-reduced-motion: reduce)').matches
+    const top = m.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top + this.scroller.scrollTop - 24
+    this.scroller.scrollTo({ top, behavior: reduce ? 'auto' : 'smooth' })
+    this.mines().forEach((x) => x.classList.remove('hl'))
+    void m.offsetWidth
+    m.classList.add('hl')
+    m.focus({ preventScroll: true })
+    m.addEventListener('blur', () => m.classList.remove('hl'), { once: true })
+  }
+}
+
+/* ---------- mount ---------- */
+renderThread(document.querySelector('[data-thread="task"]'), TASK, 'task')
+renderThread(document.querySelector('[data-thread="mgr"]'), MGR, 'mgr')
+renderThread(document.querySelector('[data-thread="task-m"]'), TASK, 'task-m')
+renderThread(document.querySelector('[data-thread="mgr-m"]'), MGR, 'mgr-m')
+const navs = [
+  new MyNav(document.getElementById('deskTask')),
+  new MyNav(document.getElementById('deskMgr')),
+  new MyNav(document.getElementById('phTask'), { mobile: true }),
+  new MyNav(document.getElementById('phMgr'), { mobile: true }),
+]
+document.getElementById('rmToggle').onchange = (e) => document.body.classList.toggle('rm', e.target.checked)
+document.getElementById('streamBtn').onclick = () => {
+  const nav = navs[0], col = nav.col
+  const n = nav.mines().length + 1
+  const el = document.createElement('div')
+  el.className = 'tb mine'; el.tabIndex = -1
+  Object.assign(el.dataset, { n, t: '10:' + String(10 + n).padStart(2, '0'), day: 'Today', att: '', file: '', text: 'Commit it with a conventional message' })
+  el.innerHTML = `<div class="acts">${ic('copy')}</div>Commit it with a conventional message<div class="tm"><span class="meta">${el.dataset.t}</span></div>`
+  const stuck = nav.atBottom()
+  col.appendChild(el)
+  const ai = document.createElement('div'); ai.className = 'ai'; ai.innerHTML = '<p>Committing…</p>'; col.appendChild(ai)
+  if (stuck) nav.scroller.scrollTop = nav.scroller.scrollHeight
+  nav.sync()
+}
+
+/* ---------- state gallery ---------- */
+const STATES = [
+  ['Scrolled up (desktop)', '“Jump to latest” has grown into the pill. Neutral and muted, the same look the button has today.', pillHTML({ latest: 'label' })],
+  ['Scrolled up (phone)', 'Icons only, 40 px tall with 44 px hit areas.', `<div class="phone" style="all:unset;display:block"><div class="mmslot float">${pillHTML({ latest: true })}</div></div>`],
+  ['At the bottom', 'Nothing. No pill and no “Jump to latest”, the same as today.', `<div class="ghost-box">hidden</div>`],
+  ['Hovered (middle)', 'The segment lifts to bg-muted and a 150 ms hover opens the list (the details). The tooltip names the action and shortcut.', pillHTML({ cls: 'hl', latest: 'label' }) + `<div class="tip" style="right:20px;left:auto;transform:none">Your messages<kbd>⌥↑ ⌥↓</kbd></div>`],
+  ['Focused (keyboard)', 'Each segment has its own inset focus ring in --ring. Tab moves ▲ → list → ▼ → Latest.', pillHTML({ cls: 'fu', latest: 'label' })],
+  ['At your first message', '▲ is disabled (35 % opacity, still announced as “dimmed”): nothing of yours exists above, in any range.', pillHTML({ up: false, latest: 'label' })],
+  ['At your last message', '▼ is disabled: the newest message of yours is already fully on screen.', pillHTML({ down: false, latest: 'label' })],
+  ['No messages from you', 'Plain “Jump to latest”, exactly as today. For example, a manager that has only spoken on its own.', `<span class="latest">${ic('arrow-down')}Jump to latest</span>`],
+]
+const box = document.getElementById("stateGrid")
+box.innerHTML = STATES.map(([t, d, h]) => `<div class="st-card"><div class="vis" style="justify-content:center"><div class="mmslot float">${h}</div></div><div class="lab"><b>${t}</b>${d}</div></div>`).join('')
+  + `<div class="st-card wide"><div class="vis tall" id="stOpen" style="justify-content:center"></div><div class="lab"><b>List open</b>Every message of yours that is on screen has the violet bar; the keyboard-active row has a ring. No numbers anywhere. Older days have sticky headers. Unloaded ranges are marked and load when you jump to them.</div></div>`
+  + `<div class="st-card wide"><div class="vis tall" style="align-items:center;justify-content:center;display:flex"><div style="width:100%;max-width:420px;margin:0 auto;display:flex;flex-direction:column;gap:10px">
+      <div class="ai" style="font-size:12.5px">Capped at 30 s. The cap is a named constant…</div>
+      <div class="tb mine hl" style="max-width:85%;animation:none">${'<div class="acts">' + ic('copy') + '</div>'}Here's the log from the failing run — it retries forever on a 401<div class="att"><div class="img" style="width:110px;height:60px"></div></div><div class="tm"><span class="meta">09:34</span></div></div>
+      <div class="ai" style="font-size:12.5px;opacity:.8">Right: a 401 is not transient…</div>
+      <div style="display:flex;justify-content:center"><div class="mmslot float">${pillHTML({ latest: 'label' })}</div></div></div></div>
+    <div class="lab"><b>After a jump</b>The target is aligned 24 px below the top, focused and ringed (ring-[3px] ring-ring/50), with a 1.8 s violet wash. Its row in the list gets the on-screen bar.</div></div>`
+// A frozen, open list built from the real task data.
+const tmp = document.createElement('div'); renderThread(tmp, TASK, 'task')
+document.getElementById('stOpen').innerHTML = `<div class="mmslot float">${pillHTML({ open: true, cls: 'hl', latest: 'label' })}<div class="pop" style="animation:none"><div class="ph2"><span class="eyebrow">Your messages</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span></div><div class="lst">${listItems([...tmp.querySelectorAll('.mine')], [4, 5], 5, 0)}</div></div></div>`
+</script>
+</body>
+</html>

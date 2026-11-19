@@ -16,7 +16,7 @@
  */
 
 /** The backend that produced a session. */
-export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'antigravity' | 'gemini' | 'kimi'
+export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'omp' | 'antigravity' | 'gemini' | 'kimi'
 
 /** Tool lifecycle status (ACP-aligned; `running` ≡ ACP `in_progress`). */
 export type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined'
@@ -253,8 +253,8 @@ export interface UiAskQuestion {
 /**
  * The agent asked the user a structured multiple-choice question via a
  * `CEZ:ASK` marker. The run parks `waiting`; the cockpit renders clickable
- * option chips. Resolution is client-side (the next user message closes the
- * card) — there is no `ask.resolved` event.
+ * option chips. A task's card closes on its `ask.closed` event (Questions inbox
+ * spec); a graph gate's or a native ask's card closes client-side on the next user message.
  */
 export interface UiAskRequestedEvent {
   type: 'ask.requested'
@@ -262,6 +262,19 @@ export interface UiAskRequestedEvent {
   questions: UiAskQuestion[]
   /** Who asks: absent = the agent; `'workflow'` = a graph gate or question node. */
   source?: 'workflow'
+}
+
+/**
+ * A task's question closed without being answered from its card, or was answered (Questions inbox
+ * spec). The thread redraws the card in its quiet closed state; a replay draws the same.
+ */
+export interface UiAskClosedEvent {
+  type: 'ask.closed'
+  requestId: string
+  reason: 'answered' | 'dismissed' | 'replaced' | 'retracted' | 'expired' | 'ended'
+  detail?: string
+  replacedBy?: string
+  answer?: string
 }
 
 /** Cumulative-for-session raw telemetry. */
@@ -293,6 +306,7 @@ export type UiEvent =
   | UiPermissionRequestedEvent
   | UiPermissionResolvedEvent
   | UiAskRequestedEvent
+  | UiAskClosedEvent
   | UiUsageUpdatedEvent
   | UiImageEvent
 

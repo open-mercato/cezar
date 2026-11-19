@@ -13,6 +13,7 @@
  * is always available via the composer, so it is never an explicit option.
  */
 import { z } from 'zod';
+import { questionAboutSchema, questionCardIdSchema } from '@open-mercato/cezar-contract';
 
 /**
  * How many questions one card may carry, and how many options one question may
@@ -32,10 +33,53 @@ import { z } from 'zod';
 export const ASK_MAX_QUESTIONS = 20;
 export const ASK_MAX_OPTIONS = 10;
 
+/**
+ * A manager writes PRs, issues and tasks as `[[pr:<project>/<n>]]` markers, and the cockpit paints
+ * each as a chip that reads `#n`. The text limits below are what the user reads, so they measure
+ * the text with every marker swapped for that; the raw cap only bounds the payload.
+ */
+const REFERENCE_MARKER_RE = /\[\[(task|pr|issue):[^\]/\s]+\/([^\]\s]+)\]\]/g;
+const RAW_TEXT_FACTOR = 4;
+
+/** What a card text reads as once its reference markers are chips. */
+export function askVisibleText(text: string): string {
+  // The cockpit's fallback words (`markerText` in web `lib/managers.ts`). A PR or issue chip reads the
+  // same `#N`; a task chip shows the task's title instead, truncated to one chip's width.
+  return text.replace(REFERENCE_MARKER_RE, (_marker, kind: string, id: string) => {
+    if (kind === 'task') return `task ${id.slice(0, 8)}`;
+    return /^\d{1,7}$/.test(id) ? `#${id}` : `${kind === 'pr' ? 'PR' : 'issue'} ${id}`;
+  });
+}
+
+function cardText(min: number, max: number) {
+  return z
+    .string()
+    .min(min)
+    .max(max * RAW_TEXT_FACTOR)
+    .refine((text) => askVisibleText(text).length <= max, {
+      message: `must be at most ${max} characters, not counting reference markers`,
+    });
+}
+
+/** Clip a display-only text to `max` visible characters without cutting a marker in half. */
+function clipVisible(text: string, max: number): string {
+  let visible = 0;
+  let at = 0;
+  for (const match of text.matchAll(REFERENCE_MARKER_RE)) {
+    const before = match.index - at;
+    if (visible + before >= max) return text.slice(0, at + (max - visible));
+    const shown = askVisibleText(match[0]).length;
+    if (visible + before + shown > max) return text.slice(0, match.index);
+    visible += before + shown;
+    at = match.index + match[0].length;
+  }
+  return text.slice(0, at + Math.max(0, max - visible));
+}
+
 export const askOptionSchema = z
   .object({
-    label: z.string().min(1).max(60),
-    description: z.string().max(280).optional(),
+    label: cardText(1, 60),
+    description: cardText(0, 280).optional(),
   })
   .strict();
 
@@ -45,7 +89,7 @@ export const askQuestionSchema = z
     id: z.string().min(1).max(64).optional(),
     /** ≤12-char chip label (matches AskUserQuestion's `header`). */
     header: z.string().min(1).max(12),
-    question: z.string().min(1).max(400),
+    question: cardText(1, 400),
     options: z
       .array(askOptionSchema)
       .min(2)
@@ -59,6 +103,10 @@ export const askQuestionSchema = z
 
 export const askRequestSchema = z
   .object({
+    /** The card's stable name (Questions inbox spec): re-asking with it replaces the older card. */
+    id: questionCardIdSchema.optional(),
+    /** The PR, issue or task the card is about; its end expires the card. */
+    about: questionAboutSchema.optional(),
     questions: z
       .array(askQuestionSchema)
       .min(1)
@@ -140,13 +188,16 @@ function lastMarkerCandidate(turnText: string, keyword: string): string | null {
  * server's event loop for 85 s (CodeQL js/redos, alert #10). Only a marker on its OWN line is
  * dropped, as before.
  */
+/** A `CEZ:ASK-CLOSE` line after the card is applied separately, never part of the JSON. */
+const ASK_CLOSE_ONE_LINE_RE = /^CEZ:ASK-CLOSE[ \t]+\S/;
+
 function trimTrailingControlMarkers(candidate: string): string {
   let text = candidate.trimEnd();
   for (;;) {
     const newline = text.lastIndexOf('\n');
     if (newline < 0) return text;
     const line = text.slice(newline + 1).trim();
-    if (line !== 'CEZ:MONITORING' && line !== 'CEZ:DONE') return text;
+    if (line !== 'CEZ:MONITORING' && line !== 'CEZ:DONE' && !ASK_CLOSE_ONE_LINE_RE.test(line)) return text;
     text = text.slice(0, newline).trimEnd();
   }
 }
@@ -182,6 +233,9 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
 function normalizeAskRequest(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const request: Record<string, unknown> = {};
+  // An invalid id or about is dropped, never the card: they only help close it later.
+  if (questionCardIdSchema.safeParse(value.id).success) request.id = value.id;
+  if (questionAboutSchema.safeParse(value.about).success) request.about = value.about;
   if (!hasOwn(value, 'questions')) return request;
   request.questions = Array.isArray(value.questions)
     ? value.questions.map((question) => {
@@ -203,7 +257,7 @@ function normalizeAskRequest(value: unknown): unknown {
                 if (hasOwn(option, 'description')) {
                   next.description =
                     typeof option.description === 'string'
-                      ? option.description.slice(0, 280)
+                      ? clipVisible(option.description, 280)
                       : option.description;
                 }
                 return next;
@@ -338,4 +392,29 @@ export function parseAskMarker(turnText: string): AskRequest | null {
 export function stripAskMarker(text: string): string {
   if (parseAskMarker(text) === null) return text;
   return stripLastMarker(text, 'CEZ:ASK');
+}
+
+/** One `CEZ:ASK-CLOSE <id> [reason]` line: the agent withdraws its own card (Questions inbox spec). */
+export interface AskCloseMarker {
+  /** The card's `id`, or a header when the card had none. */
+  id: string;
+  reason?: string;
+}
+
+const ASK_CLOSE_LINE_RE = /^[ \t]*CEZ:ASK-CLOSE[ \t]+(\S{1,64})(?:[ \t]+([^\n]*?))?[ \t]*$/gm;
+export const ASK_CLOSE_REASON_MAX = 140;
+
+/** Every `CEZ:ASK-CLOSE` line in a turn, each on its own line, in order. */
+export function parseAskCloseMarkers(turnText: string): AskCloseMarker[] {
+  const found: AskCloseMarker[] = [];
+  for (const match of turnText.matchAll(ASK_CLOSE_LINE_RE)) {
+    const reason = match[2]?.trim().slice(0, ASK_CLOSE_REASON_MAX);
+    found.push({ id: match[1]!, ...(reason ? { reason } : {}) });
+  }
+  return found;
+}
+
+/** Drop `CEZ:ASK-CLOSE` lines from text the user reads: protocol, not prose. */
+export function stripAskCloseMarkers(text: string): string {
+  return text.replace(ASK_CLOSE_LINE_RE, '').replace(/\n{3,}/g, '\n\n').trimEnd();
 }

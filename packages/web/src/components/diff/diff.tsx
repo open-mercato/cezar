@@ -60,7 +60,7 @@ export function Diff(props: DiffProps) {
   // The empty state needs no engine — render it synchronously, chunk or no chunk.
   if (props.files.length === 0) {
     return (
-      <p data-slot="diff-empty" className={cn('px-1 text-xs text-soft-foreground', props.className)}>
+      <p data-slot="diff-empty" className={cn('px-1 text-label text-muted-foreground', props.className)}>
         No changes.
       </p>
     )
@@ -68,7 +68,7 @@ export function Diff(props: DiffProps) {
   if (engine === 'failed') return <DiffFallback {...props} />
   if (engine === null) {
     return (
-      <p data-slot="diff-loading" className={cn('px-1 text-xs text-soft-foreground', props.className)}>
+      <p data-slot="diff-loading" className={cn('px-1 text-label text-soft-foreground', props.className)}>
         Loading diff…
       </p>
     )
@@ -158,9 +158,9 @@ function FallbackFile({
       {shouldPreviewImage(file) ? (
         <ImagePreview file={file} imageSrc={imageSrc} oldImageSrc={oldImageSrc} onOpenInApp={onOpenInApp} />
       ) : file.binary ? (
-        <p className="px-4 py-2.5 text-xs text-soft-foreground">Binary file — no text diff.</p>
+        <p className="px-4 py-2.5 text-label text-muted-foreground">Binary file — no text diff.</p>
       ) : file.patch === '' ? (
-        <p className="px-4 py-2.5 text-xs text-soft-foreground">No content changes (metadata only).</p>
+        <p className="px-4 py-2.5 text-label text-muted-foreground">No content changes (metadata only).</p>
       ) : (
         <pre
           className={cn(

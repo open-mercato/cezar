@@ -38,6 +38,8 @@ export const worktreeLifecycleProjectionSchema = z.object({
   activeOperationId: lifecycleIdSchema.optional(),
   phase: lifecyclePhaseSchema.optional(),
   state: lifecycleStateSchema.optional(),
+  /** The operation's revision: a retry reuses the operation, so this tells its failures apart. */
+  revision: z.number().int().nonnegative().optional(),
   needsAttention: z.boolean(),
 });
 export type WorktreeLifecycleProjection = z.infer<typeof worktreeLifecycleProjectionSchema>;

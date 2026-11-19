@@ -109,11 +109,31 @@ describe('a message sent while a running task settles (telemetry 1408d7cb)', () 
     gate.hold = true;
     expect(manager!.continueRun(runId, { text: 'first' })).toEqual({ ok: true });
     await expect.poll(() => gate.release !== undefined, { timeout: 15_000 }).toBe(true);
-    // A graph CI / children wait parks the run in `waiting` with no session — no step opens one soon.
-    (manager as unknown as { waiting: Set<string> }).waiting.add(runId);
+    // A graph CI / children wait parks the run in `waiting` with no session — no step opens one
+    // soon. Its turn has not settled: the walk is still going.
+    const internals = manager as unknown as { waiting: Set<string>; active: Map<string, { turnSettled?: boolean }> };
+    internals.active.get(runId)!.turnSettled = undefined;
+    internals.waiting.add(runId);
     expect(manager!.deferMessage(runId, text('stop, do X instead'))).toBe(false);
-    (manager as unknown as { waiting: Set<string> }).waiting.delete(runId);
+    internals.waiting.delete(runId);
     expect(manager!.deferMessage(runId, text('stop, do X instead'))).toBe(true);
+  });
+
+  it('accepts a message to a `waiting` run whose session already ended and resumes with it (telemetry 2a1bd85a)', async () => {
+    const runId = await settledRun();
+    gate.hold = true;
+    expect(manager!.continueRun(runId, { text: 'first' })).toEqual({ ok: true });
+    await expect.poll(() => gate.release !== undefined, { timeout: 15_000 }).toBe(true);
+    // The session parked at `waiting` and then closed (idle timeout, the agent's DONE): the run is
+    // still in the waiting set while the settle tail runs (the record keeps reading `waiting`).
+    (manager as unknown as { waiting: Set<string> }).waiting.add(runId);
+    expect(manager!.sendMessage(runId, text('one more thing'))).toBe(false);
+    expect(manager!.deferMessage(runId, text('one more thing'))).toBe(true);
+
+    gate.hold = false;
+    gate.release!();
+    await expect.poll(() => stepStatus(runId, 'continue-2'), { timeout: 15_000 }).toBe('done');
+    expect(gate.specs[1]?.userPrompt).toContain('one more thing');
   });
 
   it('tells the thread when a deferred message cannot be delivered because the run was cancelled', async () => {

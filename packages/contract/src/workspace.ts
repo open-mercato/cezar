@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema, perRunner } from './runners.ts';
+import { managerConfirmSchema } from './managers.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
 /**
@@ -32,6 +33,8 @@ export const workspaceConfigResponseSchema = z.object({
     name: z.string(),
     logoUrl: z.string().nullable(),
   }),
+  /** This computer's name, as phones pair with it (the relay account's label): what CezarBot's Devices row shows. */
+  computerName: z.string(),
   /** Root exposed by the Add-project directory browser — stored as written (`~` kept). */
   browseRoot: z.string(),
   /** Checkout root for GUI-cloned projects — stored as written (`~` kept). */
@@ -314,6 +317,10 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
    *  project. One bad entry drops the list rather than the whole file. */
   savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** Questions inbox: days before an open question moves to Older (absent = 7, 0 = off). */
+  questions: z.looseObject({ olderAfterDays: z.number().int().min(0).max(365).optional() }).optional(),
+  /** Which approval types ask for confirmation; one value per server (mobile spec, Q13). */
+  managerConfirm: managerConfirmSchema.optional(),
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
    *  person sets up every project. */
   onboarding: z
@@ -377,6 +384,7 @@ export const setWorkspaceUiStateInputSchema = z
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
     savedLayouts: z.array(savedWorkspaceLayoutSchema).max(MAX_SAVED_WORKSPACE_LAYOUTS).optional(),
+    managerConfirm: managerConfirmSchema.strict().optional(),
     keybindings: z
       .record(z.string().min(1).max(120), z.string().min(1).max(40).nullable())
       .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
@@ -452,6 +460,10 @@ export const configResponseSchema = z.object({
   askSkill: z.string().nullable(),
   /** False when `skillsRepos` is `[]` — team skill repositories are off for this project. */
   teamSkills: z.boolean(),
+  /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`). */
+  bypassPermissions: z.boolean(),
+  /** Why `bypassPermissions` is not honored here (a git-tracked config.json), or null. */
+  bypassPermissionsBlocked: z.string().nullable(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -486,6 +498,7 @@ export const setConfigInputSchema = z.object({
       codex: z.boolean().nullable().optional(),
       opencode: z.boolean().nullable().optional(),
       pi: z.boolean().nullable().optional(),
+      omp: z.boolean().nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
@@ -507,6 +520,8 @@ export const setConfigInputSchema = z.object({
   askSkill: z.string().trim().max(200).nullable().optional(),
   /** `false` writes `skillsRepos: []`; `true` drops that override back to the default repos. */
   teamSkills: z.boolean().optional(),
+  /** `true` turns permission prompts off for Claude Code tasks; `false`/`null` turns them back on. */
+  bypassPermissions: z.boolean().nullable().optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 
@@ -528,6 +543,8 @@ export const skillsUpdateScopeStateSchema = z.object({
   status: skillsUpdateStatusSchema,
   available: z.boolean(),
   skills: z.array(z.string()),
+  /** Every tracked name, current or not; absent from an older server (#1905). */
+  tracked: z.array(z.string()).optional(),
   checkedAt: z.string().nullable(),
   updatedAt: z.string().nullable(),
   reason: z.string().optional(),
@@ -595,6 +612,14 @@ export type ProviderStatusResponse = z.infer<typeof providerStatusResponseSchema
 /** `POST /api/v1/providers/connect` — either a terminal was handed the login command, or the
  *  provider turned out to be connected already. Every other outcome is a 409/500 carrying the
  *  same `command` for the clipboard fallback. */
+export const providerConnectSchema = z.object({
+  provider: providerIdSchema,
+  profileId: z.string().max(64).optional(),
+  /** Explicitly open sign-in even when the CLI reports an existing login. */
+  reconnect: z.boolean().optional(),
+}).strict();
+export type ProviderConnectInput = z.infer<typeof providerConnectSchema>;
+
 export const providerConnectResponseSchema = z.discriminatedUnion('opened', [
   z.object({ opened: z.literal(true), command: z.string() }),
   z.object({ opened: z.literal(false), connected: z.literal(true), command: z.string() }),

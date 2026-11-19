@@ -106,7 +106,9 @@ describe('thread-time components', () => {
     render(<MessageTime ts={ts} />)
     const time = document.querySelector('[data-slot="message-time"]')!
     expect(time.getAttribute('datetime')).toBe(ts)
-    expect(time.getAttribute('title')).toBe(exactLabel(ts))
+    // The exact instant is a tooltip, not a native title (redesign 2026-11).
+    expect(time.getAttribute('title')).toBeNull()
+    expect(time.getAttribute('data-exact')).toBe(exactLabel(ts))
     expect(time.textContent).toBe(clockLabel(ts))
   })
 

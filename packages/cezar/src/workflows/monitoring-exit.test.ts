@@ -171,8 +171,10 @@ describe('a parked monitor always has an exit', () => {
     expect(store.getRun(id)?.status).toBe('waiting');
     expect(stateOf(id)?.session?.open).toBe(true);
     vi.advanceTimersByTime(1_000);
-    await waitFor(id, (r) => r?.status === 'failed');
-    expect(store.getRun(id)?.error).toBe('the session closed before you replied — continue to reply');
+    // An idle close is housekeeping: the park stays `waiting` (spec 2026-11-04-idle-closed-attention-state § Revision).
+    await waitFor(id, (r) => r?.idleClosedAt !== undefined);
+    expect(store.getRun(id)?.status).toBe('waiting');
+    expect(store.getRun(id)?.error).toBeUndefined();
   }, 30_000);
 
   it.each([null, 0])('rests at `waiting` with attention after the fallback bound when idle timeout is %s', async (idleTimeoutMinutes) => {
@@ -201,7 +203,7 @@ describe('a parked monitor always has an exit', () => {
     expect(notes(id)).toContain('monitoring with no activity for 60m; parked for your reply');
   }, 30_000);
 
-  it('settles an unanswered hand-off `failed` with Continue, never `done` or `review`', async () => {
+  it('keeps an unanswered hand-off `waiting` through the idle close, and a message reopens it', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
     boot(null);
     const id = await startMonitor();
@@ -209,18 +211,17 @@ describe('a parked monitor always has an exit', () => {
     expect(store.getRun(id)?.status).toBe('waiting');
 
     vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
-    await waitFor(id, (r) => r?.status !== 'waiting');
-    const settled = store.getRun(id);
-    expect(settled?.status).toBe('failed');
-    expect(settled?.error).toBe('the session closed before you replied — continue to reply');
-    expect(settled?.awaitingAnswerSince).toBe(settled?.finishedAt);
-    expect(settled?.steps.map((s) => s.status)).toEqual(['failed']);
-    expect(settled?.askParked).toBeUndefined();
+    await waitFor(id, (r) => r?.idleClosedAt !== undefined);
     await waitFor(id, () => stateOf(id) === undefined);
-    expect(manager.continueRun(id, { text: 'carry on' }).ok).toBe(true);
+    const parked = store.getRun(id);
+    expect(parked?.status).toBe('waiting');
+    expect(parked?.error).toBeUndefined();
+    expect(parked?.finishedAt).toBeUndefined();
+    expect(parked?.askParked).toBe(true);
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'carry on' }])).toBe(true);
   }, 30_000);
 
-  it('settles an unanswered hand-off `failed` on the continuation session too', async () => {
+  it('keeps an unanswered hand-off `waiting` through the idle close on the continuation session too', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
     boot(null);
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:done finish it', worktree: false });
@@ -236,9 +237,9 @@ describe('a parked monitor always has an exit', () => {
     expect(store.getRun(record.id)?.askParked).toBe(true);
 
     vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
-    await waitFor(record.id, (r) => r?.status !== 'waiting');
-    expect(store.getRun(record.id)?.status).toBe('failed');
-    expect(store.getRun(record.id)?.error).toBe('the session closed before you replied — continue to reply');
+    await waitFor(record.id, (r) => r?.idleClosedAt !== undefined);
+    expect(store.getRun(record.id)?.status).toBe('waiting');
+    expect(store.getRun(record.id)?.error).toBeUndefined();
   }, 30_000);
 
   it('a restart settles a handed-off monitor `failed`, not as a success', async () => {

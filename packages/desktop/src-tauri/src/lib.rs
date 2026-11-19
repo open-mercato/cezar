@@ -33,6 +33,12 @@ use std::time::{Duration, Instant};
 
 mod disclaim;
 mod node_runtime;
+#[cfg(target_os = "macos")]
+mod notch;
+#[cfg(any(target_os = "macos", test))]
+mod notch_geometry;
+#[cfg(any(target_os = "macos", test))]
+mod notch_model;
 mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
@@ -87,7 +93,8 @@ const INIT_SCRIPT: &str = r#"
     var platform = "__PLATFORM__";
     // `microphone`: this shell is entitled to it — an older macOS one refuses every dictation
     // (telemetry c55c7b0b), so the cockpit disables the mic there instead.
-    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true };
+    // `notch`: this shell has the Manager notch, so Settings offers its toggle.
+    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true, notch: platform === "macos" };
     // At document start the root element may not exist yet; the flag is a convenience, the
     // rest of this script is not.
     if (document.documentElement) document.documentElement.dataset.cezDesktop = platform;
@@ -721,15 +728,37 @@ pub fn run() {
     });
 
     let shell_for_state = shell.clone();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(notch::on_page_crashed);
+    builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
+        .invoke_handler(tauri::generate_handler![
+            update_cezar_command,
+            restart_app,
+            show_versions_menu,
+            send_error_report,
+            #[cfg(target_os = "macos")]
+            notch::notch_ready,
+            #[cfg(target_os = "macos")]
+            notch::notch_report_shape,
+            #[cfg(target_os = "macos")]
+            notch::notch_expand,
+            #[cfg(target_os = "macos")]
+            notch::notch_open_manager,
+            #[cfg(target_os = "macos")]
+            notch::notch_enabled,
+            #[cfg(target_os = "macos")]
+            notch::set_notch_enabled,
+        ])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
             build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
             register_global_shortcuts(&handle, &shell_for_setup);
+            #[cfg(target_os = "macos")]
+            notch::start(&handle, shell_for_setup.clone());
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
             std::thread::spawn(move || supervise(supervisor_handle, shell));
@@ -788,6 +817,10 @@ pub fn run() {
             _ => {}
         })
         .on_window_event(move |window, event| {
+            // Everything below is the main window's; the notch panel never moves on its own account.
+            if window.label() != "main" {
+                return;
+            }
             match event {
                 WindowEvent::Moved(position) => {
                     if cfg!(debug_assertions) {
@@ -1910,13 +1943,24 @@ fn browser_url(mut url: url::Url) -> String {
     url.to_string()
 }
 
+/// What the OS may be asked to open on a page's behalf (GHSA-7359-xf8g-8826): a web or mail
+/// address, re-serialized by the parser. Any other scheme (`file:`, `ms-msdt:`, `search-ms:`, …)
+/// launches a local handler, so it is dropped.
+fn openable_url(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    matches!(url.scheme(), "http" | "https" | "mailto").then(|| url.to_string())
+}
+
 fn open_url(url: &str) {
+    let Some(url) = openable_url(url) else { return };
     #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(url).spawn();
+    let _ = Command::new("open").arg(&url).spawn();
+    // Never through `cmd /C start`: cmd.exe re-parses `&`, `|`, `^` in the URL as commands
+    // (GHSA-7359-xf8g-8826). `FileProtocolHandler` takes the URL as one plain argument.
     #[cfg(windows)]
-    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let _ = Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", url.as_str()]).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(url).spawn();
+    let _ = Command::new("xdg-open").arg(&url).spawn();
 }
 
 /// A one-shot HTTP GET to `/api/v1/health` without an HTTP client dependency. Answers the
@@ -2328,6 +2372,14 @@ mod tests {
         assert!(INIT_SCRIPT.contains("microphone: true"));
     }
 
+    #[test]
+    fn app_nap_never_throttles_the_server_it_supervises() {
+        // A locked screen napped the app and paired phones lost the relay (2026-11-15).
+        let info = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist")).unwrap();
+        let key = info.find("<key>NSAppSleepDisabled</key>").expect("NSAppSleepDisabled is set");
+        assert!(info[key..].trim_start_matches("<key>NSAppSleepDisabled</key>").trim_start().starts_with("<true/>"));
+    }
+
     /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
     /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
     /// onto the brand row (shell 0.1.1).
@@ -2381,6 +2433,18 @@ mod tests {
         assert!(may_be_a_frame(&url("about:blank")));
         assert!(!may_be_a_frame(&url("mailto:someone@example.com")));
         assert!(!may_be_a_frame(&url("file:///etc/passwd")));
+    }
+
+    /// GHSA-7359-xf8g-8826: a page's `window.open` must not reach a local protocol handler.
+    #[test]
+    fn only_web_and_mail_addresses_are_handed_to_the_os() {
+        assert_eq!(openable_url("http://127.0.0.1/&calc").as_deref(), Some("http://127.0.0.1/&calc"));
+        assert_eq!(openable_url("https://example.com/").as_deref(), Some("https://example.com/"));
+        assert!(openable_url("mailto:someone@example.com").is_some());
+        assert_eq!(openable_url("file:///C:/Windows/System32/calc.exe"), None);
+        assert_eq!(openable_url("ms-msdt:/id PCWDiagnostic"), None);
+        assert_eq!(openable_url("search-ms:query=x"), None);
+        assert_eq!(openable_url("not a url"), None);
     }
 
     #[test]

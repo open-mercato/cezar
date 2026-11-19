@@ -158,6 +158,29 @@ describe('the General page', () => {
     expect(general()?.querySelector('[data-slot="project-location-path"]')?.textContent).toBe(ROOT)
   })
 
+  it('is two settings cards of form rows; Remove is danger-ghost on the page and destructive in the dialog', async () => {
+    renderAt('/p/demo/settings')
+    await waitFor(() => expect(document.querySelector('[data-action="project-general-remove"]')).not.toBeNull())
+    const cards = general()!.querySelectorAll('[data-slot="settings-card"]')
+    expect(cards).toHaveLength(2)
+    expect(general()!.querySelectorAll('[data-slot="form-row"]').length).toBeGreaterThanOrEqual(4)
+    expect(general()!.querySelector('[data-slot="project-folder-row"]')).not.toBeNull()
+    expect(general()!.querySelector('[data-slot="webhook-card"]')).not.toBeNull()
+    expect(document.querySelector('select')).toBeNull()
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(document.querySelector('[data-slot="project-general"] [title]')).toBeNull()
+    const remove = document.querySelector('[data-action="project-general-remove"]')!
+    expect(remove.getAttribute('data-variant')).toBe('danger-ghost')
+    fireEvent.click(remove)
+    const confirm = await waitFor(() => {
+      const el = document.querySelector('[data-action="projects-confirm-remove"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(confirm.className).toContain('bg-danger')
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('cannot be undone')
+  })
+
   it('carries the per-project concurrency ceiling, named against the workspace cap', async () => {
     renderAt('/p/demo/settings')
     const select = await screen.findByLabelText('Max parallel tasks for demo-project')

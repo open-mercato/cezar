@@ -104,7 +104,7 @@ export function MachineCard() {
     <section
       data-slot="machine-card"
       aria-labelledby="machine-card-title"
-      className="rounded-xl border border-border bg-card/60 p-4"
+      className="rounded-[10px] border border-border bg-card p-4"
     >
       <header className="flex min-w-0 items-center gap-2">
         <StatusDot tone={live ? 'success' : 'neutral'} pulse={live} />
