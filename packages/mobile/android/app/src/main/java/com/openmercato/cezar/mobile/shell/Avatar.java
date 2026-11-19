@@ -6,8 +6,11 @@ import java.util.regex.Pattern;
 /** A computer's automatic identity: colour and initials from its name, byte-identical to the web and iOS (switcher spec). */
 public final class Avatar {
     private static final int[] PALETTE = {0xFF7C6CF0, 0xFFE0912A, 0xFF2FB862, 0xFF2A9FD8, 0xFFE05A73, 0xFF22B3A0};
-    private static final Pattern SPACE = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
-    private static final Pattern EDGES = Pattern.compile("^\\s+|\\s+$", Pattern.UNICODE_CHARACTER_CLASS);
+    // JavaScript's \s, spelled out: Android's regex rejects UNICODE_CHARACTER_CLASS, and a bare \s means
+    // Unicode whitespace there but ASCII on the JVM the unit tests run on. PR #2340 smoke: crash on launch.
+    private static final String WS = "[\\t\\n\\u000B\\f\\r \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]";
+    private static final Pattern SPACE = Pattern.compile(WS + "+");
+    private static final Pattern EDGES = Pattern.compile("^" + WS + "+|" + WS + "+$");
 
     private Avatar() {}
 
