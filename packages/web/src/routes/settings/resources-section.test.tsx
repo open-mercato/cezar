@@ -63,7 +63,9 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       requests.push({ method, url, body })
       if (url === '/api/v1/workspace/config' && method === 'GET') return json(state)
       if (url === '/api/v1/workspace/config' && method === 'PUT') {
-        Object.assign(state.resources, (body?.resources ?? {}) as object)
+        const { diskGuard, ...rest } = (body?.resources ?? {}) as Partial<WorkspaceConfigResponse['resources']>
+        Object.assign(state.resources, rest)
+        if (diskGuard) state.resources.diskGuard = { ...state.resources.diskGuard, ...diskGuard }
         return json(state)
       }
       return new Promise<never>(() => {})
@@ -343,5 +345,59 @@ describe('Settings → Behaviour (the old Resources page)', () => {
     await waitFor(() => expect(puts().at(-1)?.body).toEqual({
       composerDefaults: { worktree: true },
     }))
+  })
+})
+
+describe('Settings → Resources → Worktrees (spec 2026-11-19-worktree-disk-usage)', () => {
+  const field = (slot: string) => document.querySelector<HTMLInputElement>(`[data-slot="${slot}"]`)
+  const commit = (input: HTMLInputElement, value: string) => {
+    fireEvent.change(input, { target: { value } })
+    fireEvent.blur(input)
+  }
+
+  it('renders the age default and the disk guard thresholds from the workspace config', async () => {
+    serve({ worktreeIdleDaysDefault: 14, diskGuard: { minFreePercent: 15, minFreeGb: 8, maxWorktreesGb: 40 } })
+    renderResources()
+    await waitFor(() => expect(field('resources-worktree-idle-days')).not.toBeNull())
+    expect(field('resources-worktree-idle-days')!.value).toBe('14')
+    expect(field('resources-disk-guard-min-free-percent')!.value).toBe('15')
+    expect(field('resources-disk-guard-min-free-gb')!.value).toBe('8')
+    expect(field('resources-disk-guard-max-worktrees-gb')!.value).toBe('40')
+    expect(screen.getByText(/Currently 14 days/)).not.toBeNull()
+  })
+
+  it('saves the age default, 0 included (off), to the workspace config', async () => {
+    serve()
+    renderResources()
+    await waitFor(() => expect(field('resources-worktree-idle-days')).not.toBeNull())
+    commit(field('resources-worktree-idle-days')!, '0')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { worktreeIdleDaysDefault: 0 } })
+    await waitFor(() => expect(screen.getByText(/0 = off\. Off\./)).not.toBeNull())
+  })
+
+  it('saves each guard threshold alone, so the others keep their value', async () => {
+    serve()
+    renderResources()
+    await waitFor(() => expect(field('resources-disk-guard-min-free-gb')).not.toBeNull())
+    commit(field('resources-disk-guard-min-free-gb')!, '0')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { diskGuard: { minFreeGb: 0 } } })
+    commit(field('resources-disk-guard-max-worktrees-gb')!, '50')
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { diskGuard: { maxWorktreesGb: 50 } } })
+    expect(field('resources-disk-guard-min-free-percent')!.value).toBe('10')
+    await waitFor(() =>
+      expect(field('resources-disk-guard-max-worktrees-gb')!.closest('[data-slot="form-row"]')!.getAttribute('data-saved')).toBe(''),
+    )
+  })
+
+  it('refuses a free-space percentage past the server bound (50)', async () => {
+    serve()
+    renderResources()
+    await waitFor(() => expect(field('resources-disk-guard-min-free-percent')).not.toBeNull())
+    commit(field('resources-disk-guard-min-free-percent')!, '51')
+    expect(document.querySelector('[data-slot="stepper-invalid"]')).not.toBeNull()
+    expect(puts()).toHaveLength(0)
   })
 })

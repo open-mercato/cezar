@@ -54,6 +54,11 @@ function serve(config: Partial<ConfigResponse> = {}) {
         if (body?.worktreeRetention !== undefined) {
           state.worktreeRetention = body.worktreeRetention as number
         }
+        if (body?.worktreeIdleDays !== undefined) {
+          // null clears back to the workspace default (7 in this stub).
+          state.worktreeIdleDaysOwn = body.worktreeIdleDays !== null
+          state.worktreeIdleDays = (body.worktreeIdleDays as number | null) ?? 7
+        }
         return json(state)
       }
       return new Promise<never>(() => {})
@@ -153,5 +158,55 @@ describe('Project settings → Worktrees: keep-last-N-worktrees (#483)', () => {
       expect(document.querySelector('[data-slot="stepper-invalid"]')).not.toBeNull()
     }
     expect(puts()).toHaveLength(0)
+  })
+})
+
+describe('Project settings → Worktrees: idle age (spec 2026-11-19-worktree-disk-usage)', () => {
+  const mode = () => document.querySelector<HTMLButtonElement>('[data-slot="worktrees-idle-days-mode"]')
+  const days = () => document.querySelector<HTMLInputElement>('[data-slot="worktrees-idle-days"]')
+  const idlePuts = () => requests.filter((r) => r.method === 'PUT' && (r.body as { worktreeIdleDays?: unknown })?.worktreeIdleDays !== undefined)
+  async function pick(trigger: HTMLElement, option: string) {
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: option }))
+  }
+
+  it('shows the inherited workspace value and no own field while inheriting', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    serve({ worktreeIdleDays: 7, worktreeIdleDaysOwn: false })
+    renderAt('/settings/worktrees')
+    await waitFor(() => expect(mode()).not.toBeNull())
+    expect(mode()!.getAttribute('data-value')).toBe('inherit')
+    expect(days()).toBeNull()
+    expect(screen.getByText(/Inherited from Settings → Resources: 7 days/)).not.toBeNull()
+  })
+
+  it('switching to "This project" saves the inherited value as its own; editing saves the new one', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    serve({ worktreeIdleDays: 7, worktreeIdleDaysOwn: false })
+    renderAt('/settings/worktrees')
+    await waitFor(() => expect(mode()).not.toBeNull())
+    await pick(mode()!, 'This project')
+    await waitFor(() => expect(idlePuts()).toHaveLength(1))
+    expect(idlePuts()[0]?.body).toEqual({ worktreeIdleDays: 7 })
+    await waitFor(() => expect(days()).not.toBeNull())
+    fireEvent.change(days()!, { target: { value: '0' } })
+    fireEvent.blur(days()!)
+    await waitFor(() => expect(idlePuts()).toHaveLength(2))
+    expect(idlePuts()[1]?.body).toEqual({ worktreeIdleDays: 0 })
+  })
+
+  it('"Workspace default" clears the repo key with null', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    serve({ worktreeIdleDays: 3, worktreeIdleDaysOwn: true })
+    renderAt('/settings/worktrees')
+    await waitFor(() => expect(days()).not.toBeNull())
+    expect(days()!.value).toBe('3')
+    await pick(mode()!, 'Workspace default')
+    await waitFor(() => expect(idlePuts()).toHaveLength(1))
+    expect(idlePuts()[0]?.body).toEqual({ worktreeIdleDays: null })
+    await waitFor(() => expect(days()).toBeNull())
   })
 })

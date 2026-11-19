@@ -31,6 +31,7 @@ import { GIT_ACTION_ICONS, GIT_ACTION_PENDING_LABELS } from '@/routes/task-git/g
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewAliases, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
 import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
+import { ARCHIVE_FREES_WORKTREE } from '@/lib/archive-copy'
 
 /**
  * Everything ⌘P can do to one task (spec 2026-10-17-task-palette), as a pure function of the run
@@ -211,6 +212,7 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
       label: run.archived ? 'Unarchive' : 'Archive',
       icon: icon(ArchiveIcon),
       pressed: Boolean(run.archived),
+      ...(run.archived ? {} : { detail: { text: ARCHIVE_FREES_WORKTREE } }),
       ...(live ? { unavailable: live } : {}),
       perform: on.archive,
     },

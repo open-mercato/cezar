@@ -15,6 +15,7 @@ import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { StatusDot } from '@/components/status-dot'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
@@ -193,10 +194,12 @@ export function NowView({
                 empty="Nothing finished today."
                 actions={
                   finished.length > 0 ? (
-                    <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
-                      <ArchiveIcon className="size-3.5" aria-hidden="true" />
-                      Archive all finished
-                    </Button>
+                    <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+                      <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
+                        <ArchiveIcon className="size-3.5" aria-hidden="true" />
+                        Archive all finished
+                      </Button>
+                    </IconTooltip>
                   ) : null
                 }
               >
