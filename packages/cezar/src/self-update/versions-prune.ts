@@ -17,9 +17,10 @@
  */
 
 import { execFile } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { cezarHomeDir } from '../paths.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
@@ -46,7 +47,8 @@ export interface PruneOptions {
   env?: NodeJS.ProcessEnv;
   /** The running entry file (`process.argv[1]`); decides which version is "running". */
   entry?: string;
-  /** Test seams. */
+  /** Test seams. `modulePath` stands in for this module's own file (see `runningVersionId`). */
+  modulePath?: string;
   isAlive?: (pid: number) => boolean;
   processIds?: (env: NodeJS.ProcessEnv) => Promise<Set<string>>;
 }
@@ -89,9 +91,21 @@ function segmentUnder(path: string, root: string): string | null {
   return path.slice(prefix.length).split(sep)[0] || null;
 }
 
-/** The version id an entry file runs from: `versions/<id>/…`, `current` resolved, else null. */
-export function runningVersionId(entry: string, env: NodeJS.ProcessEnv = process.env): string | null {
+/** This module's own file. Node realpaths an ESM module URL, so it names `versions/<id>/` even
+ *  when the process was started through `versions/current/…`. */
+const MODULE_PATH = fileURLToPath(import.meta.url);
+
+/**
+ * The version id this process runs from: this module's own `versions/<id>/` when it lives under
+ * one (a `current` flipped by `cezar update` after start must not rename it), else the entry
+ * file's `versions/<id>/…`, `current` resolved, else null.
+ */
+export function runningVersionId(entry: string, env: NodeJS.ProcessEnv = process.env, modulePath: string = MODULE_PATH): string | null {
   const roots = [resolve(versionsDir(env)), realOrSelf(versionsDir(env))];
+  for (const root of roots) {
+    const id = segmentUnder(realOrSelf(modulePath), root);
+    if (id && id !== CURRENT_LINK && !id.startsWith('.')) return id;
+  }
   for (const path of [resolve(entry), realOrSelf(entry)]) {
     for (const root of roots) {
       const id = segmentUnder(path, root);
@@ -131,26 +145,65 @@ export async function acquireVersionsLock(
       } finally {
         closeSync(fd);
       }
-      return () => rmSync(path, { force: true });
+      return () => releaseVersionsLock(path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
-    let owner = NaN;
-    try {
-      owner = Number(readFileSync(path, 'utf8').trim());
-    } catch {
-      continue; // released between the open and the read
-    }
-    const stale = Number.isInteger(owner) && owner > 0
-      ? !isAlive(owner)
-      : Date.now() - safeMtime(path) > UNREADABLE_LOCK_STALE_MS;
-    if (stale) {
-      rmSync(path, { force: true });
+    const owner = lockOwner(path);
+    if (owner === undefined) continue; // released between the open and the read
+    if (isStale(path, owner, isAlive)) {
+      breakStaleLock(path, owner, isAlive);
       continue;
     }
     if (Date.now() >= deadline) return null;
     await new Promise((r) => setTimeout(r, 100));
   }
+}
+
+let breakSeq = 0;
+
+/** The pid a lock file holds: NaN when unreadable as one, undefined when the file is gone. */
+function lockOwner(path: string): number | undefined {
+  try {
+    return Number(readFileSync(path, 'utf8').trim());
+  } catch {
+    return undefined;
+  }
+}
+
+function isStale(path: string, owner: number, isAlive: (pid: number) => boolean): boolean {
+  return Number.isInteger(owner) && owner > 0 ? !isAlive(owner) : Date.now() - safeMtime(path) > UNREADABLE_LOCK_STALE_MS;
+}
+
+/**
+ * Break a stale lock without deleting a fresh one a concurrent breaker just took: move it aside
+ * atomically, then check the moved file is still the dead owner's. If it is not, someone took the
+ * lock between our read and the rename — put it back (unless a third party already re-took it).
+ */
+function breakStaleLock(path: string, owner: number, isAlive: (pid: number) => boolean): void {
+  const aside = `${path}.stale-${process.pid}-${breakSeq++}`;
+  try {
+    renameSync(path, aside);
+  } catch {
+    return; // another breaker or the owner moved it first
+  }
+  const moved = lockOwner(aside);
+  if (moved !== undefined && Object.is(moved, owner) && isStale(aside, moved, isAlive)) {
+    rmSync(aside, { force: true });
+    return;
+  }
+  try {
+    // link() refuses an existing path, so a lock re-taken meanwhile is never clobbered.
+    linkSync(aside, path);
+  } catch {
+    // the lock was re-taken: the moved one's owner lost it, as any O_EXCL loser would
+  }
+  rmSync(aside, { force: true });
+}
+
+/** Release only a lock that is still ours: a stale-breaker may have handed it to someone else. */
+function releaseVersionsLock(path: string): void {
+  if (lockOwner(path) === process.pid) rmSync(path, { force: true });
 }
 
 function safeMtime(path: string): number {
@@ -288,7 +341,7 @@ export async function pruneVersions(opts: PruneOptions): Promise<PruneResult> {
     if (late) return { ...result, skipped: `an install is in progress (${late})` };
     const inUse = new Set([...leasedIds(env, isAlive, !dryRun), ...(await (opts.processIds ?? processVersionIds)(env))]);
     const current = activeId(env);
-    const running = opts.entry ? runningVersionId(opts.entry, env) : null;
+    const running = opts.entry ? runningVersionId(opts.entry, env, opts.modulePath) : null;
     const installed = listInstalled(env);
     const plan: Array<{ entry: (typeof installed)[number]; reason: KeepReason | null }> = [];
     // The running version is one of the `keep`; the rest go to the most recently installed.
