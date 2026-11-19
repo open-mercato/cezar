@@ -8,8 +8,10 @@ import { getApiScope, type ApiRun, type HealthResponse, type ManagerListResponse
 import { scopeTo } from '@/lib/project-router'
 import { managerNotificationKind, trackManagerNotificationClicked } from '@/lib/manager-telemetry'
 import {
+  describeDiskGuardNotification,
   describeManagerNotification,
   diffManagerAttention,
+  enteringDiskGuardWarning,
   diffRunTransitions,
   normalizeNotifications,
   notificationSupport,
@@ -56,12 +58,14 @@ export function RunNotifications() {
   enabledRef.current = enabled
   const statusesRef = useRef<ReadonlyMap<string, RunStatus>>(new Map())
   const managerCountsRef = useRef<ReadonlyMap<string, number> | null>(null)
+  const diskGuardRef = useRef<string | null | undefined>(undefined)
 
   useEffect(() => {
     // The watched list belongs to the project scoped at mount; its runs open under that project (#1761).
     const projectId = getApiScope()
     const listHash = hashKey(queryKeys.runs.list())
     const managersHash = hashKey(managerKeys.list)
+    const healthHash = hashKey(queryKeys.health)
 
     // Same terms as runs: tracked before the gate, seeded silently from the first list.
     const observeManagers = (list: ManagerListResponse | undefined): void => {
@@ -83,6 +87,14 @@ export function RunNotifications() {
       permission: notificationSupport(),
     })
 
+    // The disk guard's warning (spec 2026-11-19-worktree-disk-usage): health carries it, once.
+    const observeHealth = (health: HealthResponse | undefined): void => {
+      if (!health) return
+      const entering = enteringDiskGuardWarning(diskGuardRef.current, health)
+      diskGuardRef.current = health.disk?.guardWarning ?? null
+      if (entering && notificationsAllowed()) fireNotification(describeDiskGuardNotification(entering), navigateRef.current)
+    }
+
     const observe = (runs: readonly ApiRun[] | undefined): void => {
       const { entering, statuses } = diffRunTransitions(statusesRef.current, runs)
       statusesRef.current = statuses
@@ -97,11 +109,13 @@ export function RunNotifications() {
     // "enter", so a mount mid-session records the current statuses and stays silent.
     observe(queryClient.getQueryData<ApiRun[]>(queryKeys.runs.list()))
     observeManagers(queryClient.getQueryData<ManagerListResponse>(managerKeys.list))
+    observeHealth(queryClient.getQueryData<HealthResponse>(queryKeys.health))
 
     return queryClient.getQueryCache().subscribe((event) => {
       if (event.type !== 'updated') return
       if (event.query.queryHash === listHash) observe(event.query.state.data as ApiRun[] | undefined)
       else if (event.query.queryHash === managersHash) observeManagers(event.query.state.data as ManagerListResponse | undefined)
+      else if (event.query.queryHash === healthHash) observeHealth(event.query.state.data as HealthResponse | undefined)
     })
   }, [queryClient])
 

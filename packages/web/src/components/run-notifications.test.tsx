@@ -268,6 +268,31 @@ describe('a click on a notification', () => {
     act(() => client.setQueryData(managerKeys.list, { managers: [{ ...manager, pendingActions: 2 }] }))
     expect(made).toHaveLength(1)
   })
+
+  it('raises the disk guard warning once when it appears, and opens Settings → Worktrees', () => {
+    const made = stubClickable()
+    vi.spyOn(window, 'focus').mockImplementation(() => {})
+    hideTab()
+    const { client, where } = mount({ notifications: { enabled: true } }, [])
+    const health = (guardWarning?: string) => ({
+      capabilities: {},
+      disk: { freeBytes: 0, totalBytes: 1, level: 'ok', ...(guardWarning ? { guardWarning } : {}) },
+    })
+    act(() => client.setQueryData(queryKeys.health, health()))
+    act(() => client.setQueryData(queryKeys.health, health('Disk almost full — 21.0 GB in task worktrees')))
+    act(() => client.setQueryData(queryKeys.health, health('Disk almost full — 21.0 GB in task worktrees')))
+    expect(made.map((n) => n.title)).toEqual(['Disk almost full'])
+    act(() => made[0]!.onclick!())
+    expect(where()).toBe('/settings/worktrees')
+  })
+
+  it('a disk guard warning already showing at the first observation stays silent', () => {
+    const made = stubClickable()
+    hideTab()
+    const { client } = mount({ notifications: { enabled: true } }, [])
+    act(() => client.setQueryData(queryKeys.health, { capabilities: {}, disk: { freeBytes: 0, totalBytes: 1, level: 'ok', guardWarning: 'Disk almost full — 1.0 GB in task worktrees' } }))
+    expect(made).toHaveLength(0)
+  })
 })
 
 // Type-level guard: the statuses this suite drives are real RunStatus members.
