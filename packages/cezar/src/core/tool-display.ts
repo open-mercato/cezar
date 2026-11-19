@@ -97,6 +97,7 @@ export function toolDisplay(name: string, input?: unknown): ToolDisplay {
 
   switch (key) {
     case 'bash':
+    case 'shell': // OpenCode V2
     case 'commandexecution':
       return {
         toolKind: 'execute',
@@ -142,6 +143,7 @@ export function toolDisplay(name: string, input?: unknown): ToolDisplay {
     // the row says which agent, falling back to the subagent type when the
     // call carried no description.
     case 'task':
+    case 'subagent': // OpenCode V2
     case 'agent': {
       const verb = key === 'agent' ? 'Agent' : 'Task';
       const subagent = field(input, 'subagent_type', 'subagentType');

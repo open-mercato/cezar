@@ -51,7 +51,7 @@ it('never falls back to global credentials or probes vendors during connection d
   expect(await s.candidates(a, { kind: 'linear', limit: 50 })).toMatchObject({ code: 'credentials_missing' });
   expect(calls).toEqual([]);
   const saved = await s.saveConnection(a, { kind: 'linear', key: 'A' });
-  expect(saved?.connection?.kind).toBe('linear');
+  expect('connection' in saved && saved.connection?.kind).toBe('linear');
   expect(JSON.stringify(saved)).not.toContain('"key"');
   expect(await s.connection(b)).toMatchObject({ connection: null });
   expect(calls).toEqual([]);
@@ -113,7 +113,7 @@ it('keeps dry-run fixtures independent from real saved credentials', async () =>
   const demo = createTrackerService({ CEZ_HOME: join(root, 'home'), CEZ_DRY_RUN: '1' }, fetcher);
   expect(await demo.connection(a)).toEqual({ connection: null, demo: true });
   expect(await demo.removeConnection(a)).toBe(false);
-  expect(await demo.saveConnection(a, { kind: 'linear', key: 'replacement' })).toBeNull();
+  expect(await demo.saveConnection(a, { kind: 'linear', key: 'replacement' })).toEqual({ saveFailure: null });
   expect(await demo.candidates(a, { kind: 'linear', limit: 1 })).toMatchObject({ available: true });
   expect(calls).toEqual([]);
   expect(await s.connection(a)).toMatchObject({ connection: { kind: 'linear' } });
@@ -128,8 +128,8 @@ it('blocks cached providers and late results after a manual env edit with unchan
   const read = d.getItem('ENG-1');
   await vi.waitFor(() => expect(entered).toHaveBeenCalled());
   const directory = join(root, 'home', 'tracker-connections');
-  const file = join(directory, (await readdir(directory)).find(name => name.endsWith('.env'))!);
-  await writeFile(file, (await readFile(file, 'utf8')).replace('before-edit', 'after-edit'));
+  const file = join(directory, (await readdir(directory)).find(name => name.endsWith('.vault'))!);
+  await writeFile(file, '{broken');
   release();
   expect(await read).toMatchObject({ code: 'source_changed' });
   const before = calls.length;

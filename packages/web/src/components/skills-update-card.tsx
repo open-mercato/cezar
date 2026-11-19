@@ -33,6 +33,10 @@ const SETTLE_LIMIT_MS = 5 * 60_000
  * itself: follow the server's `updating` state to its end instead (telemetry edd8c83e). The
  * original error stands only when the server shows no apply finished.
  */
+/** Names the scope tracks, current or not; an older server only sends the updatable ones (#1905). */
+export const trackedNames = (scope: Pick<SkillsUpdateState['scopes'][number], 'skills' | 'tracked'>): string[] =>
+  scope.tracked ?? scope.skills
+
 export async function applySkillsUpdateSettled(
   projectId: string,
   previousUpdatedAt: string | null,
@@ -156,10 +160,11 @@ export function SkillsUpdateCard({
   }
 
   const scopes = state?.scopes ?? []
-  const trackedScopes = scopes.filter((scope) => scope.skills.length > 0)
+  const trackedScopes = scopes.filter((scope) => trackedNames(scope).length > 0)
   const tracked = trackedScopes.length > 0
+  const updatable = scopes.some((scope) => scope.skills.length > 0)
   const retryable = state?.status === 'error'
-  const canApply = tracked && (state?.available || retryable)
+  const canApply = updatable && (state?.available || retryable)
   const pending = applyMutation.isPending || state?.status === 'updating'
   const failed = scopes.filter((scope) => scope.status === 'error' || scope.status === 'unavailable')
   const succeeded = scopes.filter((scope) => scope.updatedAt && !failed.includes(scope))
@@ -185,23 +190,23 @@ export function SkillsUpdateCard({
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <p className="text-[13px] font-medium text-foreground">{message}</p>
+            <p className="text-ui font-medium text-foreground">{message}</p>
             {state?.checkedAt ? (
-              <p className="mt-1 text-xs text-soft-foreground">
+              <p className="mt-1 text-label text-muted-foreground">
                 Last checked {new Date(state.checkedAt).toLocaleString()}.
               </p>
             ) : null}
             {trackedScopes.length > 0 ? (
-              <ul className="mt-1 text-xs text-soft-foreground">
+              <ul className="mt-1 text-label text-muted-foreground">
                 {trackedScopes.map((scope) => (
                   <li key={scope.scope}>
-                    {scopeLabel(scope.scope)} · {scope.skills.length} tracked
+                    {scopeLabel(scope.scope)} · {trackedNames(scope).length} tracked
                   </li>
                 ))}
               </ul>
             ) : null}
             {failed.length > 0 ? (
-              <p className="mt-1 text-xs text-destructive">
+              <p className="mt-1 text-label text-danger">
                 Failed: {failed.map((scope) => scopeLabel(scope.scope)).join(', ')}
                 {succeeded.length
                   ? '; updated: ' + succeeded.map((scope) => scopeLabel(scope.scope)).join(', ')
@@ -241,7 +246,7 @@ export function SkillsUpdateCard({
           ) : null}
         </div>
         {state?.status === 'unavailable' || loadError ? (
-          <div className="mt-2 text-xs text-soft-foreground">
+          <div className="mt-2 text-label text-muted-foreground">
             Manual examples: <code>npx skills update -p</code> · <code>npx skills update -g</code>. These broad
             commands may update other tracked sources.
           </div>

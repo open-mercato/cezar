@@ -6,6 +6,7 @@ import type {
   healthResponseSchema,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  runUserMessagesSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -41,10 +42,13 @@ describe('src/contract schemas match the routes exactly', () => {
   type History200 = InferResponseType<(typeof client.api.v1.runs)[':id']['history']['$get'], 200>;
   type HistoryContext200 = InferResponseType<(typeof client.api.v1.runs)[':id']['history-context']['$get'], 200>;
 
+  type UserMessages200 = InferResponseType<(typeof client.api.v1.runs)[':id']['user-messages']['$get'], 200>;
+
   type _Checks = [
     Assert<Exact<z.infer<typeof healthResponseSchema>, Health200>>,
     Assert<Exact<z.infer<typeof runHistoryPageSchema>, History200>>,
     Assert<Exact<z.infer<typeof runHistoryContextSchema>, HistoryContext200>>,
+    Assert<Exact<z.infer<typeof runUserMessagesSchema>, UserMessages200>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

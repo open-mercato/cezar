@@ -48,6 +48,7 @@ import {
 
 interface HealthBody {
   version: string;
+  runtimeId: string;
   repoRoot: string;
   repo: unknown;
   checks: unknown[];
@@ -554,6 +555,40 @@ describe('workspace projects API', () => {
       expect(allowed.body.project.root).toBe(await realpath(inside));
     });
 
+    it('hosted mode: the private runtime lease token authorizes same-user CLI handoff only', async () => {
+      const checkoutRoot = join(home, 'checkouts');
+      mkdirSync(checkoutRoot, { recursive: true });
+      await mergeWriteWorkspaceConfig((config) => {
+        config.browseRoot = checkoutRoot;
+      });
+      process.env.CEZ_REMOTE = '1';
+      const token = '00000000-0000-4000-8000-000000000001';
+      const app = makeApp({ runtimeHandoffToken: token });
+      const wrong = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-cezar-runtime-handoff': 'wrong' },
+        body: JSON.stringify({ root: otherRoot }),
+      });
+      expect(wrong.status).toBe(400);
+      const wrongSameLength = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-cezar-runtime-handoff': '00000000-0000-4000-8000-000000000002',
+        },
+        body: JSON.stringify({ root: otherRoot }),
+      });
+      expect(wrongSameLength.status).toBe(400);
+
+      const trusted = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-cezar-runtime-handoff': token },
+        body: JSON.stringify({ root: otherRoot }),
+      });
+      expect(trusted.status).toBe(200);
+      expect(((await trusted.json()) as RegisterProjectResponse).project.root).toBe(await realpath(otherRoot));
+    });
+
     it('hosted mode: an out-of-root path answers identically whether or not it exists', async () => {
       // The containment check runs BEFORE the stat, so a remote caller cannot
       // use the route as an existence oracle — probing `/etc/nginx` vs
@@ -763,9 +798,10 @@ describe('workspace projects API', () => {
       expect((await getProjects()).projects.map((p) => p.id)).toContain(other.id);
       expect(contexts.peek(other.id)).toBeDefined();
 
-      // Settle the run and the same call succeeds — the 409 is about live work, not about the
-      // project having history.
-      ctx!.store.updateRun(run.id, { status: 'done' });
+      // An idle park has no process to strand (spec 2026-11-04-idle-closed-attention-state § Revision).
+      ctx!.store.updateRun(run.id, { status: 'waiting' });
+      ctx!.store.updateRun(run.id, { status: 'waiting', idleClosedAt: new Date().toISOString() });
+      expect(ctx!.store.getRun(run.id)?.idleClosedAt).toBeDefined();
       const allowed = await del(other.id, { contexts });
       expect(allowed.status).toBe(200);
       // The store/manager handles are dropped with the entry (step 2.1's dispose).
@@ -963,7 +999,7 @@ describe('workspace projects API', () => {
       expect(body.bootProject).toBe(boot.id);
     });
 
-    it('keeps the pre-workspace shape byte-identical and adds only projects + bootProject', async () => {
+    it('keeps the protected shape and includes workspace + runtime identity additions', async () => {
       const boot = await registerProject(repoRoot);
       const other = await registerProject(otherRoot);
       const body = await getHealth();
@@ -982,11 +1018,13 @@ describe('workspace projects API', () => {
           'projects',
           'repo',
           'repoRoot',
+          'runtimeId',
           'version',
         ].sort(),
       );
       // Pre-existing field values, unchanged by the workspace additions.
       expect(body.version).toBe('0.0.0-test');
+      expect(body.runtimeId).toMatch(/^[0-9a-f-]{36}$/);
       expect(body.repoRoot).toBe(repoRoot);
       expect(body.repo).toBeNull(); // tmp dir — not a git repo
       expect(Array.isArray(body.checks)).toBe(true);
@@ -997,8 +1035,11 @@ describe('workspace projects API', () => {
         terminal: true,
         designMode: true,
         followups: false,
+        phonePairing: true,
         singleProject: false,
         automations: true,
+        managers: true,
+        managerSystemNotifications: expect.any(Boolean),
         dispatch: true,
         tokenMetrics: true,
       webhooks: false,

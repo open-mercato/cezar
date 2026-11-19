@@ -142,13 +142,15 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
 
   /** Body normalizer for routes whose DRY-RUN mock stamps `new Date()` per
    *  request (`/github*` — two back-to-back unprefixed calls differ by a
-   *  millisecond too, so this is route-inherent, not alias drift). */
+   *  millisecond too, so this is route-inherent, not alias drift). The
+   *  automations export stamps its own `exportedAt` the same way. */
   const stripTimestamps = (body: string): string => body.replace(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, '<ts>');
 
   /** Assert the three spellings of `path` answer byte-identically. Requests
    *  run sequentially so per-route caches can never race the comparison. */
   const expectParity = async (path: string, init?: () => RequestInit | undefined): Promise<void> => {
-    const normalize = path.startsWith('/github') ? stripTimestamps : (body: string): string => body;
+    const stamped = path.startsWith('/github') || path === '/automations/export';
+    const normalize = stamped ? stripTimestamps : (body: string): string => body;
     const [a, b, c] = spellings(bootId, path);
     const unprefixed = await answer(a, init?.());
     const scoped = await answer(b, init?.());
@@ -173,6 +175,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       'GET /runs/:id/events',
       'GET /runs/:id/history',
       'GET /runs/:id/history-context',
+      'GET /runs/:id/user-messages',
       'POST /runs',
       'POST /runs/archive-finished',
       'PUT /ui-state',
@@ -184,6 +187,9 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       'PATCH /runs/:id',
       'POST /todos/:id/start',
       'GET /repo/commit/:sha',
+      'POST /impact',
+      'GET /artifacts',
+      'GET /assets',
     ]) {
       expect(keys, expected).toContain(expected);
     }
@@ -240,6 +246,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     // 404: unknown ids.
     await expectParity('/runs/no-such-run/archive', json('POST', {}));
     await expectParity('/runs/no-such-run/pin', json('POST', {}));
+    await expectParity('/runs/no-such-run/promote', json('POST', {}));
     await expectParity('/runs/no-such-run', json('PATCH', { title: 't' }));
     await expectParity('/workflows/no-such-workflow', () => ({
       method: 'DELETE',
@@ -249,6 +256,12 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     await expectParity('/todos/t1/start', json('POST', {}));
     // 200 non-GET without observable side effects (no worktrees exist).
     await expectParity('/worktrees/reclaim', json('POST', {}));
+    // Assess Impact (spec 2026-10-22): 400 on a bad body, 409 on a subject it refuses.
+    await expectParity('/impact', json('POST', { subject: { kind: 'pr', number: -1 } }));
+    await expectParity('/impact', json('POST', { subject: { kind: 'spec', path: 'README.md' } }));
+    await expectParity('/artifacts?subject=pr:42');
+    await expectParity('/artifacts?subject=spec:.ai/specs/x.md');
+    await expectParity('/assets');
   });
 
   /** Read one SSE response until its first ping, then hang up. */

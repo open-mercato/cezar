@@ -3,10 +3,11 @@ import { useMutation } from '@tanstack/react-query'
 import { openProjectIn } from '@/api/client'
 import { useHealth, useOpenTargets, useProjects } from '@/api/queries'
 import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
+import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
-import { SettingsField } from './settings-field'
+import { FormRow } from './form-row'
 import { writeClipboard } from '@/lib/clipboard'
 
 /**
@@ -49,37 +50,41 @@ export function ProjectFolderField() {
   const root = useActiveProjectRoot()
   if (root === null) return null
   return (
-    <SettingsField
-      title="Project folder"
-      hint="Where this project lives on disk. Every task worktree, git command and agent run resolves against it."
+    <FormRow
+      stacked
+      slot="project-folder-row"
+      label="Project folder"
+      description="Where this project lives on disk. Every task worktree, git command and agent run resolves against it."
     >
       <div
         data-slot="project-location"
         data-variant="field"
-        className="flex items-start gap-3 rounded-md border border-border bg-card p-3"
+        className="flex flex-wrap items-center gap-3"
       >
         {/* `break-all`, not `truncate`: a deep checkout path is exactly the case this row exists
-            for, and half of it is not an answer. */}
+            for, and half of it is not an answer. A 16rem basis wraps the buttons below on a phone
+            instead of squeezing the path to a ten-character column. */}
         <span
           data-slot="project-location-path"
-          className="min-w-0 flex-1 font-mono text-xs break-all text-foreground"
+          className="min-w-0 flex-[1_1_16rem] font-mono text-ui break-all text-foreground"
         >
           {root}
         </span>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             data-action="project-location-copy"
-            title="Copy the project folder path"
+            aria-label="Copy the project folder path"
             onClick={() => copyPath(root)}
-            className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             Copy
-          </button>
+          </Button>
           <OpenWithMenu root={root} />
         </div>
       </div>
-    </SettingsField>
+    </FormRow>
   )
 }
 
@@ -88,13 +93,15 @@ export function ProjectLocationNav() {
   if (root === null) return null
   return (
     <div data-slot="project-location" data-variant="nav" className="mt-auto px-2.5 pt-3">
-      <p className="text-[11px] text-soft-foreground">Project folder</p>
+      <p className="text-meta text-soft-foreground">Project folder</p>
       <button
         type="button"
         data-action="project-location-copy"
-        title={`${root} — click to copy`}
+        aria-label={`Copy the project folder path ${root}`}
+        // The rail truncates the path; a native title reveals all of it on hover.
+        title={root}
         onClick={() => copyPath(root)}
-        className="block w-full truncate text-left font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        className="block w-full truncate text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
       >
         {root}
       </button>
@@ -129,7 +136,6 @@ function OpenWithMenu({ root }: { root: string }) {
       slot="project-location-open"
       label="Open with"
       triggerVariant="outline"
-      title={root}
       disabled={open.isPending}
       choices={choices}
       // An app launches detached and may take seconds to paint its window — without a word here

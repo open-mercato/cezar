@@ -1,9 +1,18 @@
 import type { RunnerId } from './agent-runner.ts';
 
+export interface ReasoningEffortOption {
+  id: string;
+  description: string;
+}
+
 export interface ModelOption {
   id: string;
   label: string;
   description: string;
+  /** Capabilities from the native runner catalog, absent when the runner has none. */
+  reasoningEfforts?: ReasoningEffortOption[];
+  /** Native runner's suggested value; never a cezar-generated default. */
+  defaultReasoningEffort?: string;
 }
 
 export type ModelCatalogSource = 'live' | 'cache' | 'unavailable';
@@ -52,6 +61,13 @@ export class RunnerModelCatalog {
     this.#now = options.now ?? Date.now;
     this.#ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.#usableTtlMs = options.usableTtlMs ?? DEFAULT_USABLE_TTL_MS;
+  }
+
+  /** A user's account recheck must bypass both healthy and failed pre-login discoveries. */
+  async refresh(runner: RunnerId): Promise<RunnerModelCatalogResult> {
+    await this.#inFlight.get(runner);
+    this.#cache.delete(runner);
+    return this.get(runner);
   }
 
   get(runner: RunnerId): Promise<RunnerModelCatalogResult> {
@@ -146,6 +162,10 @@ const RUNNER_LABEL: Record<RunnerId, string> = {
   pi: 'pi',
   junie: 'Junie',
   copilot: 'GitHub Copilot',
+  omp: 'OMP',
+  antigravity: 'Antigravity',
+  gemini: 'Gemini CLI',
+  kimi: 'Kimi',
 };
 
 function unavailableReason(runner: RunnerId): string {

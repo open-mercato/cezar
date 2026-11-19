@@ -73,7 +73,7 @@ describe('request validation bounds (#429)', () => {
       body: JSON.stringify(body),
     });
 
-  // ---- startRunSchema.task -------------------------------------------------
+  // ---- createRunInputSchema.task -------------------------------------------------
   const stepsBody = { steps: [{ id: 'work', prompt: '{{task}}' }] };
 
   it('accepts a 100k-char task', async () => {

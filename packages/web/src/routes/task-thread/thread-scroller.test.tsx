@@ -404,11 +404,83 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
 
     expect(scroller.scrollTop).toBe(900)
   })
+
+  describe('nav keys (#1800)', () => {
+    it('an up key on <body> after a click in the thread releases the pin', () => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey="run-key-body:main" />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+      fireEvent.pointerUp(scroller)
+
+      fireEvent.keyDown(document.body, { key: 'PageUp' })
+      scroller.scrollTop = 900
+      grow()
+
+      expect(scroller.scrollTop).toBe(900)
+    })
+
+    it.each(['ArrowUp', 'Home'])('%s on <body> releases the pin too', (key) => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey={`run-key-${key}:main`} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+      fireEvent.keyDown(document.body, { key })
+      scroller.scrollTop = 900
+      grow()
+      expect(scroller.scrollTop).toBe(900)
+    })
+
+    it('a body key after a click OUTSIDE the thread leaves the pin alone', () => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey="run-key-other:main" />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(document.body)
+
+      fireEvent.keyDown(document.body, { key: 'PageUp' })
+      scroller.scrollTop = 900
+      grow()
+
+      expect(scroller.scrollTop).toBe(1_500)
+    })
+
+    it('an up key in an input outside the thread (the composer) leaves the pin alone', () => {
+      const grow = stubGrowthObserver()
+      render(
+        <>
+          <PinnedHarness viewKey="run-key-composer:main" />
+          <textarea aria-label="composer" />
+        </>,
+      )
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+
+      fireEvent.keyDown(document.querySelector('textarea')!, { key: 'ArrowUp' })
+      scroller.scrollTop = 900
+      grow()
+
+      expect(scroller.scrollTop).toBe(1_500)
+    })
+
+    it('a down key still only records re-pin intent', () => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey="run-key-down:main" />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+      fireEvent.keyDown(document.body, { key: 'PageUp' })
+      scroller.scrollTop = 900
+      fireEvent.keyDown(document.body, { key: 'End' })
+      scroller.scrollTop = 1_500
+      fireEvent.scroll(scroller)
+      grow()
+      expect(scroller.scrollTop).toBe(1_500)
+    })
+  })
 })
 
 describe('useThreadScroll — route arrival (#761)', () => {
-  function ArrivalHarness({ viewKey }: { viewKey: string }) {
-    const controls = useThreadScroll(viewKey)
+  function ArrivalHarness({ viewKey, startAtLatest }: { viewKey: string; startAtLatest?: boolean }) {
+    const controls = useThreadScroll(viewKey, { startAtLatest })
     return (
       <main
         ref={(element) => {
@@ -433,6 +505,12 @@ describe('useThreadScroll — route arrival (#761)', () => {
     render(<ArrivalHarness viewKey="run-a:main" />)
 
     expect((document.querySelector('[data-slot="main"]') as HTMLElement).scrollTop).toBe(640)
+  })
+
+  it('opens an explicit latest-status link at the tail despite a saved reading position', () => {
+    saveThreadScroll('manager-source:main', { top: 640, atBottom: false })
+    render(<ArrivalHarness viewKey="manager-source:main" startAtLatest />)
+    expect((document.querySelector('[data-slot="main"]') as HTMLElement).scrollTop).toBe(1_500)
   })
 
   it('lands a live-tail destination at the bottom before passive effects observe it', () => {

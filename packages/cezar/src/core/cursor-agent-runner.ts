@@ -24,7 +24,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
+import { assertReasoningEffortSupported, isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimActive, disclaimedCommand, readHead, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
@@ -90,12 +90,14 @@ export type BuildCursorArgsInput = {
   userPrompt: string;
   systemPrompt?: string;
   model?: string;
+  enforceReadOnly?: boolean;
 };
 
 /** CLI argv for headless write mode (prompt is the final positional). */
 export function buildCursorArgs(input: BuildCursorArgsInput): string[] {
   const prompt = prependSystemPrompt(input.systemPrompt, input.userPrompt);
-  const args = ['-p', '--force', '--trust', '--output-format', 'stream-json'];
+  // `--force` is what lets it run anything, so ask mode goes without it.
+  const args = ['-p', ...(input.enforceReadOnly ? ['--mode', 'ask'] : ['--force']), '--trust', '--output-format', 'stream-json'];
   if (input.model?.trim()) {
     args.push('--model', input.model.trim());
   }
@@ -169,10 +171,12 @@ export class CursorAgentRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('cursor', spec.reasoningEffort);
     const args = buildCursorArgs({
       userPrompt: spec.userPrompt,
       systemPrompt: spec.systemPrompt,
       model: spec.model,
+      ...(spec.enforceReadOnly ? { enforceReadOnly: true } : {}),
     });
 
     let child: ChildProcessWithoutNullStreams;
@@ -202,6 +206,9 @@ export class CursorAgentRunner implements AgentRunner {
     let sessionId = spec.sessionId;
     let tokensUsed = 0;
     let open = true;
+    child.once('exit', () => {
+      open = false;
+    });
     let terminatedByCezar = false;
     let timedOut = false;
     // A `result` frame with `is_error: true` can still exit 0 — the stream is the source of

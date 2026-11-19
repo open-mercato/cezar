@@ -4,7 +4,7 @@ import { expect } from 'e2e';
 test('the cockpit shell renders', async ({ app, screen }) => {
   await app.open('/');
   await expect(screen.getByRole('main')).toBeVisible();
-  await expect(screen.getByRole('navigation')).toBeVisible();
+  await expect(screen.getByRole('navigation', { name: 'Main', exact: true })).toBeVisible();
 });
 
 // With OPENAI_API_KEY in the environment, uncomment:

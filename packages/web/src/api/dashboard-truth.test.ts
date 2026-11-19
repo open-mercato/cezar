@@ -50,6 +50,18 @@ it('keeps an awaiting answer through a reconcile from rows that carry it, and cl
   expect(dashboardTruth('awaiting', 'task')).toHaveProperty('awaitingAnswerSince', undefined)
 })
 
+it('carries an idle close through a transition and a reconcile, and clears it on resume', () => {
+  const at = '2026-11-04T10:00:00.000Z'
+  dashboardTransition('idle', { id: 'task', status: 'failed', archived: false, idleClosedAt: at })
+  expect(dashboardTruth('idle', 'task')?.idleClosedAt).toBe(at)
+  reconcileDashboardTruth(dashboardTruthRevision(), [
+    { projectId: 'idle', id: 'task', status: 'failed', archived: false, idleClosedAt: at },
+  ])
+  expect(dashboardTruth('idle', 'task')?.idleClosedAt).toBe(at)
+  dashboardTransition('idle', { id: 'task', status: 'running', archived: false })
+  expect(dashboardTruth('idle', 'task')).toHaveProperty('idleClosedAt', undefined)
+})
+
 it.each(['running', 'done'] as const)('does not replay historical rows over a fresh %s confirmation', (status) => {
   const project = `confirmation-${status}`
   dashboardTransition(project, { id: 'task', status: 'running', archived: false })

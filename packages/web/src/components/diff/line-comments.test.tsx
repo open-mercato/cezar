@@ -26,7 +26,8 @@ const MODIFIED: DiffFileChange = {
 
 async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
   const view = render(ui)
-  await screen.findByText(settleText)
+  // The engine chunk's first import in a busy worker can exceed findBy's 1s default.
+  await screen.findByText(settleText, {}, { timeout: 5000 })
   return view
 }
 
@@ -438,6 +439,8 @@ describe('Diff line comments after the agent changed the code', () => {
     await renderDiff(<Diff files={[MODIFIED]} comments={stale} />)
     const card = document.querySelector('[data-slot="diff-line-comment"]')!
     expect(card.querySelector('[data-slot="diff-line-comment-outdated"]')?.textContent).toContain('const two = 99')
+    // "Outdated" is the parked-amber StatusDot beside plain text, not amber ink (redesign 2026-11).
+    expect(card.querySelector<HTMLElement>('[data-slot="diff-line-comment-outdated"] [data-slot="status-dot"]')!.dataset.tone).toBe('pending')
   })
 
   it('leaves a comment whose line still reads the same unmarked', async () => {

@@ -56,7 +56,9 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
               runs={[]}
               view="active"
               now={NOW}
-              expandedColumns={{ branch: true }}
+              // Every column open, so the cell assertions below read the whole row; the Mem
+              // default (folded) has its own test.
+              expandedColumns={{ branch: true, memory: true }}
               {...props}
               onViewChange={onViewChange}
               onArchiveFinished={onArchiveFinished}
@@ -182,6 +184,19 @@ describe('TasksOverview — the table', () => {
     expect(document.querySelector('th[data-column-id="status"] button')).toBeNull()
     expect(document.querySelector('th[data-column-id="task"] button')).toBeNull()
     expect(document.querySelector('[data-slot="tasks-table"] table')?.className).not.toContain('min-w-[1040px]')
+    // The floor follows the folded state: Branch folded (42px) is what the default already has.
+    expect(document.querySelector<HTMLElement>('[data-slot="tasks-table"] table')?.style.minWidth).toMatch(/^\d+px$/)
+  })
+
+  it('floors the fixed table at the Task column minimum instead of collapsing titles to 0px', () => {
+    renderOverview({ runs: [run({ id: 'narrow' })] })
+    const table = document.querySelector<HTMLElement>('[data-slot="tasks-table"] table')!
+    const fixed = [...table.querySelectorAll<HTMLElement>('col')]
+      .filter((col) => col.dataset.columnId !== 'task')
+      .reduce((sum, col) => sum + Number.parseFloat(col.style.width), 0)
+    expect(Number.parseFloat(table.style.minWidth)).toBe(fixed + 220)
+    // The wrapper scrolls the table sideways rather than squeezing it.
+    expect(table.parentElement?.closest('[data-slot="tasks-table"]')?.className).toContain('overflow-x-auto')
   })
 
   it('disables optional headers while workspace column state is loading', () => {
@@ -224,10 +239,15 @@ describe('TasksOverview — the table', () => {
     const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
     expect(pillOf('w')?.textContent).toBe('needs you')
     expect(pillOf('v')?.textContent).toBe('needs review')
-    expect(pillOf('d')?.textContent).toBe('done')
     expect(pillOf('f')?.textContent).toBe('failed')
-    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
-    expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+    // The status grammar (spec: attention-first cockpit, Proposal 7): a finished row wears its
+    // dot and no word — the word only where the state is still open, the colour always.
+    expect(pillOf('d')).toBeNull()
+    const quiet = tableRow('d')?.querySelector('[data-slot="status-quiet"]')
+    expect(quiet?.textContent).toBe('')
+    expect(quiet?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('success')
+    expect(quiet?.querySelector('[data-slot="status-mark"]')?.getAttribute('aria-label')).toBe('done')
   })
 
   it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
@@ -353,8 +373,8 @@ describe('TasksOverview — the table', () => {
     )
     expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Updated'])
     expect(cellsOf('hidden')).toEqual([
-      'done',
-      'Hidden metrics',
+      '', // done: a mark, no word (Proposal 7)
+      'Hidden metricsdone', // + the link's hidden aria-describedby state
       'default',
       '—',
       '—',
@@ -849,6 +869,7 @@ describe('TasksOverview — usage cells', () => {
               onMarkAllRead={vi.fn()}
               onRename={vi.fn()}
               now={NOW}
+              expandedColumns={{ memory: true }}
             />
           </MemoryRouter>
         </GlobalEventsProvider>
@@ -900,6 +921,19 @@ describe('TasksOverview — header', () => {
     fireEvent.click(archived)
     expect(onViewChange).toHaveBeenCalledWith('archived')
   })
+
+  it('keeps the Active/Archived tabs reachable at phone width, where the rest of the header folds', () => {
+    renderOverview({ runs: [run({ status: 'done' }), run({ status: 'done', archived: true })] })
+    // No ancestor of the tabs is display:none below `md` — a phone must reach (and restore) archived tasks.
+    let el: HTMLElement | null = screen.getByRole('button', { name: /^Archived/ })
+    while (el) {
+      expect(el.className.split(/\s+/)).not.toContain('hidden')
+      el = el.parentElement
+    }
+    // The desktop-only parts of the band stay off the phone: the shell's top bar already names the page.
+    expect(screen.getByRole('heading', { level: 1, name: 'Tasks' }).className.split(/\s+/)).toContain('hidden')
+  })
+
 
   it('offers Archive finished only while finished runs exist, and only on the Active tab', () => {
     const { onArchiveFinished, unmount } = renderOverview({
@@ -1141,12 +1175,44 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(location()).toBe('/tasks/c1')
   })
 
+  it('lets Manager own mobile task creation while retaining the capability fallback', () => {
+    renderOverview({ runs: [run()], managersAvailable: true })
+    expect(document.querySelector('[data-slot="new-task-fab"]')).toBeNull()
+  })
+
+  it('gives a phone card title its own full-width line under the status pill and age', () => {
+    renderOverview({ runs: [run({ id: 'wide-title', status: 'running', title: 'Rework the relay pairing flow' })] })
+    const head = card('wide-title')!.querySelector('[data-slot="task-card-head"]')!
+    const title = head.querySelector('[data-slot="task-card-title"]')!
+    expect(head.className).toContain('flex-wrap')
+    expect(title.className).toContain('basis-full')
+    // No CSS reordering: the title is the head's last child, so DOM and focus order match the
+    // visual one (pin, then title).
+    expect(title.className).not.toContain('order-')
+    expect(head.lastElementChild).toBe(title)
+    const focusable = [...head.querySelectorAll('a, button')]
+    expect(focusable.at(-1)).toBe(title)
+    // ...and it comes after the status pill in the DOM, where it is drawn.
+    const pill = head.querySelector('[data-slot="pill"]')!
+    expect(pill.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps a quiet (finished) card title inline beside its small status dot', () => {
+    renderOverview({ runs: [run({ id: 'quiet-title', status: 'done', title: 'Shipped' })] })
+    const title = card('quiet-title')!.querySelector('[data-slot="task-card-title"]')!
+    expect(title.className).not.toContain('basis-full')
+    // Inline: the title still follows the status dot, before the age and pin.
+    expect(card('quiet-title')!.querySelector('[data-slot="task-card-head"]')!.lastElementChild).not.toBe(title)
+  })
+
   it('floats the New task FAB, linking to /new', () => {
     // A non-empty list, so the FAB is the only "New task" link (the empty state carries its own).
     renderOverview({ runs: [run()] })
     const fab = document.querySelector('[data-slot="new-task-fab"]')
     expect(fab?.getAttribute('href')).toBe('/new')
     expect(fab?.getAttribute('aria-label')).toBe('New task')
+    // Fixed to the viewport, so it has to clear the phone bottom bar itself.
+    expect(fab?.className).toContain('var(--phone-bar,0px)')
   })
 })
 
@@ -1384,6 +1450,46 @@ describe('dispatched subtasks nest under their parent', () => {
   const toggleOf = (el: Element | null) =>
     el?.querySelector<HTMLButtonElement>('[data-slot="subtask-toggle"]') ?? null
 
+  it('gives a nested title the room its chips and hidden actions would take (#979)', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'a', createdAt: ago(30_000) }),
+        run({ id: 'b', createdAt: ago(20_000), dispatch: { rootRunId: 'a', parentRunId: 'a', kind: 'implement' } }),
+        run({ id: 'c', createdAt: ago(10_000), dispatch: { rootRunId: 'a', parentRunId: 'b' } }),
+      ],
+    })
+    fireEvent.click(toggleOf(tableRow('a')) as HTMLButtonElement)
+    const child = tableRow('b') as HTMLElement
+    // jsdom has no layout: these classes are the contract, measured in Chromium on the PR.
+    expect(child.querySelector('[data-slot="row-actions"]')?.className).toContain('w-0')
+    expect(child.querySelector('[data-slot="dispatch-kind"]')?.className).toContain('@max-[300px]:hidden')
+    const toggle = toggleOf(child) as HTMLButtonElement
+    expect(toggle.querySelector('span')?.className).toContain('@max-[260px]:hidden')
+    // Compacting is visual only: the name still says what the handle unfolds.
+    expect(toggle.textContent).toBe('1 subtask')
+    expect(toggle.getAttribute('aria-label')).toBe('Expand 1 subtask')
+  })
+
+  it('keeps the actions of a pinned row laid out (#979)', () => {
+    renderOverview({ runs: [run({ id: 'a', createdAt: ago(30_000), pinned: true })] })
+    expect(tableRow('a')?.querySelector('[data-slot="row-actions"]')?.className).not.toContain('w-0')
+  })
+
+  it('widens the Task cell floor by the indent so a nested title keeps its room (#979)', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'a', createdAt: ago(30_000) }),
+        run({ id: 'b', createdAt: ago(20_000), dispatch: { rootRunId: 'a', parentRunId: 'a' } }),
+        run({ id: 'c', createdAt: ago(10_000), dispatch: { rootRunId: 'a', parentRunId: 'b' } }),
+      ],
+    })
+    fireEvent.click(toggleOf(tableRow('a')) as HTMLButtonElement)
+    fireEvent.click(toggleOf(tableRow('b')) as HTMLButtonElement)
+    const floor = (id: string) =>
+      (tableRow(id)?.querySelector('td[data-column-id="task"]') as HTMLElement).style.minWidth
+    expect([floor('a'), floor('b'), floor('c')]).toEqual(['220px', '234px', '248px'])
+  })
+
   it('folds a child behind its parent by default; the chip unfolds it in the parent’s place', () => {
     renderOverview({
       runs: [
@@ -1569,6 +1675,15 @@ describe('TasksOverview — origin and facet filters', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Filter by automation' }))
     fireEvent.click(await screen.findByRole('option', { name: /Nightly sweep job/ }))
     expect(shownIds()).toEqual(['nightly'])
+  })
+
+  it('labels a deleted automation readably, never by its UUID (#2100)', async () => {
+    const names = new Map([['auto-nightly', 'Nightly sweep job']])
+    renderOverview({ runs: fixture(), origin: 'all', automationNames: names })
+    fireEvent.click(screen.getByRole('button', { name: 'Filter by automation' }))
+    const options = (await screen.findAllByRole('option')).map((o) => o.textContent ?? '')
+    expect(options.some((t) => /Removed automation · /.test(t))).toBe(true)
+    expect(options.some((t) => /^[0-9a-f-]{20,}/.test(t))).toBe(false)
   })
 
   it('hides the Automation facet under Regular, where it could only empty the table', () => {

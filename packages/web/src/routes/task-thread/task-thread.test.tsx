@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { queryKeys } from '@/api/queries'
+import type { RunHistoryState } from '@/api/run-history'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { createQueryClient } from '@/api/query-client'
 import type {
@@ -20,6 +21,8 @@ import type {
 import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
 import { reduceThread, type ThreadTurn } from './thread-state'
+import quotaFailure from './__fixtures__/codex-usage-limit.json'
+import { clearThreadScrollCaches, saveThreadScroll } from './thread-scroll'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -111,6 +114,23 @@ const transcriptRows = (fixture: ApiRun, thread = reduceThread(EVENTS)) =>
   buildTranscriptRows(mainTranscriptSections(fixture, thread), fixture.id)
 
 describe('ThreadView', () => {
+  it.each([
+    [{}, 'showing the complete session'],
+    [{ isFetchingOlder: true }, 'loading earlier items'],
+    [{ isFetchingOlder: true, olderError: 'Could not load earlier items' }, 'earlier items could not be loaded'],
+  ])('claims a complete fallback session only once nothing is left to refill (#882): %j', (state, copy) => {
+    const history = {
+      fallback: true,
+      hasOlder: false,
+      isFetchingOlder: false,
+      retainedPages: 0,
+      ...state,
+    } as unknown as RunHistoryState
+    renderView(<ThreadView run={run('done')} thread={reduceThread([])} history={history} />)
+
+    expect(document.querySelector('[data-slot="history-fallback"]')?.textContent).toContain(copy)
+  })
+
   it('keeps provider authorization recovery visible after the run reaches done', () => {
     const authRequired = [
       line(1, 'provider-auth-required', { provider: 'codex', authFailureId: 'incident-1' }),
@@ -249,7 +269,7 @@ describe('ThreadView', () => {
   it('shows the header title (auto-summary, never the raw title) and the status pill', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Do the thing')
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('needs you')
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('Asked')
   })
 
   it('waiting → the paused hint (pulsing dot) in the dock, right above an ENABLED composer', () => {
@@ -257,6 +277,11 @@ describe('ThreadView', () => {
     const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="paused-hint"]')
     expect(hint?.textContent).toContain('The agent is paused, waiting for your reply')
     expect(hint?.querySelector('[data-slot="status-dot"]')).not.toBeNull()
+    // A phone wraps the hint text in its own column; End session stays one line and finger-sized.
+    const end = hint?.querySelector('[data-slot="end-session"]')
+    expect(end?.className).toContain('whitespace-nowrap')
+    expect(end?.className).toContain('pointer-coarse:max-md:min-h-11')
+    expect(hint?.querySelector('[aria-hidden="true"].max-sm\\:hidden')?.textContent).toBe('·')
     // No body footer for waiting — the dock owns that state now.
     expect(document.querySelector('[data-slot="thread-footer"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
@@ -278,7 +303,7 @@ describe('ThreadView', () => {
       'Budget reached — spent $20.83 of $10.00; send a message to continue.',
     )
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('Budget reached')
   })
 
   it('failed by a transient provider error → the dock says it retries, not that a limit was hit', () => {
@@ -316,8 +341,9 @@ describe('ThreadView', () => {
     // 2026-08-03-auto-resume-after-usage-limit).
     expect(hint?.querySelector('time')?.getAttribute('datetime')).toBe('2026-08-03T17:00:30.000Z')
     // The other half of an automation nobody opted into: one click to switch it off.
+    // Straight to the auto-resume row (Settings → Behaviour), not the resources page.
     expect(screen.getByRole('link', { name: 'Auto-resume settings' }).getAttribute('href')).toBe(
-      '/settings/global/resources',
+      '/settings/global/behaviour#auto-resume',
     )
   })
 
@@ -436,8 +462,7 @@ describe('ThreadView', () => {
 
   it('running → ■ Stop confirms before it cancels', async () => {
     renderView(<ThreadView run={run('running')} thread={reduceThread(EVENTS)} />)
-    // The header no longer carries Stop on this tab — the composer is where it lives.
-    expect(document.querySelector('[data-slot="run-actions"]')?.textContent).not.toContain('Stop')
+    // The composer's ■ is the one exercised here; the header's companion button is the same confirm.
     fireEvent.click(screen.getByRole('button', { name: 'Stop the run' }))
     const cancelled = () =>
       vi.mocked(fetch).mock.calls.some(
@@ -506,7 +531,7 @@ describe('ThreadView', () => {
     renderView(<ThreadView run={run('running', { activity: 'monitoring' })} thread={reduceThread(EVENTS)} />)
     // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner.
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('monitoring')
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('Monitoring')
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
@@ -666,6 +691,22 @@ describe('ThreadView', () => {
     expect(toastEl?.textContent ?? '').not.toContain('run is still active')
   })
 
+  it('renders the recorded Codex quota error once across the transcript and footer', () => {
+    const message = quotaFailure[0]!.message!
+    const { container } = renderView(
+      <ThreadView
+        run={run('failed', {
+          error: `continue failed: ${message}`,
+          autoResumeAt: '2026-10-16T14:39:30.000Z',
+        })}
+        thread={reduceThread(quotaFailure as RunEvent[])}
+      />,
+    )
+    expect(container.textContent!.split(message)).toHaveLength(2)
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe('Session failed')
+    expect(screen.getByText(/this task resumes automatically at/)).toBeTruthy()
+  })
+
   it('a failure already scheduled to resume itself offers no extra Continue', () => {
     renderView(
       <ThreadView
@@ -685,6 +726,26 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
   })
 
+  it('a legacy idle-closed run reads as a quiet closed session, not a failure', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+          idleClosedAt: '2026-11-04T10:00:00.000Z',
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
+    expect(footer.textContent).toContain('Session closed')
+    expect(footer.textContent).not.toContain('Session failed')
+    expect(footer.textContent).not.toContain('inactivity')
+    expect(document.querySelector('[data-slot="outcome-card"]')?.getAttribute('data-kind')).toBe('idle')
+  })
+
   it('the same advice stays plain text when there is no session to continue', () => {
     renderView(
       <ThreadView
@@ -697,6 +758,8 @@ describe('ThreadView', () => {
   })
 
   it('closed but resumable → the composer stays enabled, and sending is Continue', async () => {
+    // Closing the usage popover hands focus back to its chip, whose tooltip arrow measures itself.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     renderView(
       <ThreadView
         run={run('done', {
@@ -718,9 +781,9 @@ describe('ThreadView', () => {
     // The header badge is now a second, discoverable entrance to that SAME picker. Exercise the
     // real nested controls: a decorative test node would miss the Radix-menu interaction that
     // matters here (opening the model catalog without dismissing the agent badge first).
-    // Two renderings of the badge (tabs line on desktop, details row on phones) — CSS shows one.
-    fireEvent.pointerDown(screen.getAllByRole('button', { name: /^Agent:/ })[0]!)
-    const badgeMenu = await screen.findByRole('menu')
+    // The usage chip's popover carries the picker under the run's own runner/model facts.
+    fireEvent.click(screen.getByRole('button', { name: /^Agent:/ }))
+    const badgeMenu = await screen.findByRole('dialog')
     const headerModel = badgeMenu.querySelector(
       '[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]',
     ) as HTMLElement
@@ -732,9 +795,44 @@ describe('ThreadView', () => {
       expect(opus).toBeDefined()
     })
     fireEvent.click(opus as HTMLElement)
-    // Both entrances are renderings of one hook state. Once the menus close, the dock's model
+    // Both entrances are renderings of one hook state. Once the popover closes, the dock's model
     // pill reflects the header pick, which is therefore what its eventual /continue POST sends.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('opus'))
+  })
+
+  it('the usage chip sits in the dock, right-aligned under the composer, carrying the continuation picker', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    renderView(
+      <ThreadView
+        run={run('done', {
+          runner: 'codex',
+          model: 'gpt-5.2-codex',
+          inputTokens: 24_600,
+          outputTokens: 2_400,
+          costUsd: 0.83,
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const dock = document.querySelector('[data-slot="thread-dock"]') as HTMLElement
+    const badge = dock.querySelector('[data-slot="session-usage"] [data-slot="agent-badge"]') as HTMLElement
+    expect(badge).not.toBeNull()
+    expect(badge.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('24.6k in · 2.4k out · $0.83')
+    // Under the composer, not above it — and nowhere in the header.
+    const composer = dock.querySelector('[data-slot="composer"]') as HTMLElement
+    expect(composer.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.querySelector('[data-slot="run-header"] [data-slot="agent-badge"]')).toBeNull()
+    // The picker rides inside the chip's popover once the run is continuable.
+    const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+    await waitFor(() => expect(textarea.disabled).toBe(false))
+    fireEvent.click(badge)
+    const details = await screen.findByRole('dialog')
+    expect(details.querySelector('[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]')).not.toBeNull()
   })
 
   /** #472 — stacked messages render as their own bubbles, after the task. */
@@ -883,6 +981,21 @@ describe('ThreadView', () => {
 
       const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
       await waitFor(() => expect(composer.value).toBe('the correction I was half-way through'))
+    })
+
+    it('keeps the draft under the one-row composer: text, then attach · engine chip · send', async () => {
+      withDrafts({ composer: { text: 'still here after the redesign' } })
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      await waitFor(() => expect(composer.value).toBe('still here after the redesign'))
+      // The engine chip is ONE value on the control row (design Proposal 5), after the paperclip.
+      const row = document.querySelector('[data-slot="composer-footer-start"]') as HTMLElement
+      expect(row.querySelector('[data-slot="run-engine"]')?.textContent).toBe('claude·auto')
+      expect(row.querySelector('[data-slot="run-engine"] button')).toBeNull()
+      expect(screen.getByLabelText('Attach files').compareDocumentPosition(row.querySelector('[data-slot="run-engine"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      // The send chord is a kbd hint beside Send; a live session has no Options to offer.
+      expect(document.querySelector('[data-slot="composer-send-hint"]')?.textContent).toBe('↵')
+      expect(screen.queryByRole('button', { name: 'Options' })).toBeNull()
     })
 
     /**
@@ -1552,6 +1665,17 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="start-now"]')).toBeNull()
   })
 
+  it('the queued placeholder\'s Run First posts promote, also under a usage-limit hold', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const fetchMock = vi.fn((_input: RequestInfo | URL) =>
+      Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })),
+    )
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock)
+    fireEvent.click(document.querySelector('[data-slot="promote-run"]') as HTMLElement)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/promote'))).toBe(true))
+  })
+
   it('the first real event replaces the queued placeholder', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([line(1, 'lifecycle', { message: 'cezar restarted — task re-queued' })])} />)
     expect(document.querySelector('[data-slot="queued-state"]')).toBeNull()
@@ -1746,7 +1870,8 @@ describe('TaskThreadRoute', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Task not found')
     })
-    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/')
+    // `/` is the Now page; the task list is `/tasks`.
+    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/tasks')
     expect(document.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
   })
 })
@@ -1917,10 +2042,10 @@ describe('TaskThreadRoute — read receipts', () => {
     visit('r1')
     await clickMarkUnread()
     await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
-    // The icon flips rather than disappearing — the way back is right where the click was.
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark read' }))
+    // The row flips rather than disappearing — the way back is right where the click was.
+    fireEvent.click(await headerMenuItem('Mark read'))
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
-    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+    expect(await headerMenuItem('Mark unread')).not.toBeNull()
   })
 
   it('the control appears as soon as opening the task has marked it read', async () => {
@@ -1931,13 +2056,20 @@ describe('TaskThreadRoute — read receipts', () => {
     const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
     visit('r1')
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
-    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+    expect(await headerMenuItem('Mark unread')).not.toBeNull()
   })
 })
 
-/** Mark unread is an icon of its own among the task actions. */
+/** A row of the header's ⋯ menu (the palette's actions), the menu opened on the way. */
+async function headerMenuItem(name: string): Promise<HTMLElement> {
+  fireEvent.pointerDown(await screen.findByRole('button', { name: 'More actions' }))
+  const menu = await screen.findByRole('menu')
+  return waitFor(() => within(menu).getByRole('menuitem', { name }))
+}
+
+/** Mark unread is a row of the header's ⋯ menu. */
 async function clickMarkUnread(): Promise<void> {
-  fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+  fireEvent.click(await headerMenuItem('Mark unread'))
 }
 
 describe('liveTurnStart — where the Working… counter starts', () => {
@@ -1972,9 +2104,60 @@ it('shows lifecycle recovery before agent activity and prevents misleading reply
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('[]', {status:200,headers:{'content-type':'application/json'}}))))
   const fixture = run('waiting', {worktreeLifecycle:{worktreeId:operationId,generation:1,activeOperationId:operationId,phase:'setup',state:'needs_attention',needsAttention:true}})
   render(<QueryClientProvider client={queryClient}><MemoryRouter><ThreadView run={fixture} thread={reduceThread([])} /></MemoryRouter></QueryClientProvider>)
-  expect(await screen.findByText('Setup needs attention')).toBeTruthy()
+  // Once beside the title, once on the phone's chip line — CSS shows one.
+  expect((await screen.findAllByText('Setup needs attention')).length).toBeGreaterThan(0)
   expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
   expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
   expect(screen.getByText('Resolve the worktree operation above before continuing this task.')).toBeTruthy()
   expect(screen.queryByRole('textbox')).toBeNull()
+  // No composer, no usage line under it either.
+  expect(document.querySelector('[data-slot="session-usage"]')).toBeNull()
+})
+
+describe('Manager source task arrivals', () => {
+  const questions = [{ header: 'Publish', question: 'Publish this report?', options: [{ label: 'Publish report' }, { label: 'Hold report' }] }]
+
+  function renderSourceTask(events: RunEvent[]) {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2000)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(500)
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    saveThreadScroll('r1:main', { top: 640, atBottom: false })
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/alpha/tasks/r1/chat#ask']}>
+          <main data-slot="main"><ThreadView run={run('waiting')} thread={reduceThread(events)} /></main>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  afterEach(() => {
+    cleanup()
+    clearThreadScrollCaches()
+    vi.restoreAllMocks()
+  })
+
+  it.each([false, true])('opens a plain-text waiting request at latest (historical answered card: %s)', (answeredCard) => {
+    const earlier = answeredCard ? [
+      line(8, 'ask.requested', { requestId: 'old-ask', questions }),
+      line(9, 'user-message', { text: 'Publish: Hold report' }),
+      line(9.5, 'ask.closed', { requestId: 'old-ask', reason: 'answered', answer: 'Publish: Hold report' }),
+    ] : []
+    renderSourceTask([...EVENTS, ...earlier, line(10, 'text', { text: 'Please review the updated report before I publish it.' })])
+    expect(screen.queryByRole('button', { name: 'Publish report' })).toBeNull()
+    expect((document.querySelector('[data-slot="main"]') as HTMLElement).scrollTop).toBe(1500)
+  })
+
+  it('still reveals and focuses an unanswered structured question', () => {
+    const reveal = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: reveal })
+    try {
+      renderSourceTask([...EVENTS, line(8, 'ask.requested', { requestId: 'open-ask', questions })])
+      const choice = screen.getByRole('button', { name: 'Publish report' })
+      expect(document.activeElement).toBe(choice)
+      expect(reveal).toHaveBeenCalledWith({ block: 'center' })
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+    }
+  })
 })

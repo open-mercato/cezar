@@ -9,9 +9,9 @@ import { reclaimWorktrees } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from '../workflows/run.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { getRepoInfo } from './git.ts';
-import { resolveTrackerAgentEnv } from './tracker/agent-credentials.ts';
 
 /**
  * Per-project server context (spec 2026-07-20-multi-project-workspace,
@@ -66,6 +66,8 @@ export interface ProjectContextDeps {
    *  When omitted, the map still shares one private instance across the
    *  managers it builds (workspace defaults, never refreshed). */
   semaphore?: WorkspaceSemaphore;
+  /** A hosted cockpit: each project's RunManager keeps `bypassPermissions` off. */
+  hosted?: () => boolean;
 }
 
 export type ProjectContextFailure = 'unknown-project' | 'missing-root';
@@ -119,12 +121,13 @@ export class ProjectContexts {
     if (existing) return existing;
     const inFlight = this.building.get(projectId);
     if (inFlight) return inFlight;
-    const build = this.build(projectId);
+    // A context outlives the request that first touched it, whoever that was.
+    const build = outsideRelayScope(() => this.build(projectId));
     this.building.set(projectId, build);
     try {
       const ctx = await build;
       this.contexts.set(projectId, ctx);
-      this.notifyBuilt(ctx);
+      outsideRelayScope(() => this.notifyBuilt(ctx));
       return ctx;
     } finally {
       this.building.delete(projectId);
@@ -252,7 +255,7 @@ export class ProjectContexts {
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
     this.notifyStoreCreated(store);
-    const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, resolveTrackerEnv: resolveTrackerAgentEnv });
+    const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, ...(this.deps.hosted ? { hosted: this.deps.hosted } : {}) });
     let context: ProjectContext | undefined;
     try {
       const launchKey = ensureLaunchKey(dataDir);

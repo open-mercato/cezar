@@ -77,7 +77,7 @@ const MAX_ENTRIES = 1000;
  * clicked anything. They are still listed; opening one is the user's choice, and so is the
  * prompt that follows. Their `isRepo` is simply `false`.
  */
-const PRIVACY_PROTECTED_HOME_DIRS = new Set(['Desktop', 'Documents', 'Downloads', 'Library', 'Movies', 'Music', 'Pictures']);
+export const PRIVACY_PROTECTED_HOME_DIRS = new Set(['Desktop', 'Documents', 'Downloads', 'Library', 'Movies', 'Music', 'Pictures']);
 
 /** The 403 a macOS privacy denial answers with; the picker offers System Settings beside it. */
 export const MACOS_PRIVACY_BLOCKED = 'macOS privacy settings do not allow cezar to read this folder.';

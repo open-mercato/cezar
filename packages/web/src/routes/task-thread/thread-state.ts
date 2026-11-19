@@ -1,10 +1,12 @@
-import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
 import { isOutdatedBackendError } from '@/lib/agent-errors'
 import {
+  runnerSchema,
   toolDisplay,
   type PlanEntry,
   type PlanStatus,
+  type QuestionClosed,
   type StopReason,
   type UiAskQuestion,
   type UiItem,
@@ -41,7 +43,8 @@ export interface ThreadNote {
   kind: 'note'
   id: string
   text: string
-  tone: 'dim' | 'danger'
+  /** `info`: an event the user should notice without alarm — another agent taking a task over. */
+  tone: 'dim' | 'danger' | 'info'
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -54,10 +57,8 @@ export interface ThreadImage {
 
 /**
  * A structured AskUser question the agent posed via `CEZ:ASK` (#473, v2
- * `ask.requested`). The cockpit renders it as clickable option chips. Resolution
- * is client-side: the next `user-message` for the run flips `resolved` and
- * records the reply as `answer`, so a reloaded thread reconstructs the same
- * resolved/pending state from the persisted stream.
+ * `ask.requested`). The cockpit renders it as clickable option chips. It closes on the
+ * server's `ask.closed` (Questions inbox spec), so a reloaded thread draws the same state.
  */
 export interface ThreadAsk {
   kind: 'ask'
@@ -65,6 +66,8 @@ export interface ThreadAsk {
   questions: UiAskQuestion[]
   resolved: boolean
   answer?: string
+  /** Why it closed, from `ask.closed`. Absent on a recording made before that event existed. */
+  closed?: Pick<QuestionClosed, 'reason' | 'detail' | 'replacedBy' | 'answer' | 'answeredIn'> & { at?: string }
   /** A workflow gate/question rather than the agent (spec 2026-09-30-workflow-node-editor). */
   fromWorkflow?: boolean
 }
@@ -73,7 +76,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot'
+  provider: Runner
   authFailureId: string
   /** The named agent account the rejection came from; absent for the default login. */
   profileId?: string
@@ -131,6 +134,10 @@ export interface ThreadReduceOptions {
   activeTurn?: boolean
   /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
   runner?: string
+  /** The run record's `asks` (`[]` for a record without any). An ask it does not track and the
+   *  stream never closes (a pre-inbox card, a graph gate, a native ask) keeps the old rule: the
+   *  next user message closes it. Absent (record not loaded): no ask is read as legacy. */
+  trackedAsks?: ReadonlyArray<{ requestId: string }>
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -176,7 +183,23 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-export function threadFooter(status: RunStatus, error?: string, awaitingAnswer = false): ThreadFooter {
+const FAILURE_PREFIX = /^(?:continue failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+
+/** Engine failure summaries wrap the provider text; compare the detail, not its wrapper. */
+function failureText(text: string): string {
+  let detail = text.trim()
+  while (FAILURE_PREFIX.test(detail)) detail = detail.replace(FAILURE_PREFIX, '').trim()
+  return detail
+}
+
+export function threadFooter(
+  status: RunStatus,
+  error?: string,
+  awaitingAnswer = false,
+  idleClosed = false,
+  thread?: ThreadState,
+  cancel?: { reason?: string | undefined; by?: string | undefined },
+): ThreadFooter {
   switch (status) {
     case 'waiting':
       return { state: 'waiting' }
@@ -186,11 +209,24 @@ export function threadFooter(status: RunStatus, error?: string, awaitingAnswer =
       if (awaitingAnswer) {
         return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
       }
-      return { state: 'closed', tone: 'danger', label: error ? `Session failed — ${error}` : 'Session failed' }
+      // Legacy idle close: housekeeping, so it reads like `done` (spec 2026-11-04-idle-closed-attention-state).
+      if (idleClosed) {
+        return { state: 'closed', tone: 'dim', label: 'Session closed' }
+      }
+      const alreadyShown = error && thread?.turns.at(-1)?.items.some((item) =>
+        item.kind === 'note' && (item.tone === 'danger' || FAILURE_PREFIX.test(item.text)) &&
+        failureText(item.text) === failureText(error),
+      )
+      return { state: 'closed', tone: 'danger', label: error && !alreadyShown ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }
-    case 'done':
     case 'cancelled':
+      // A manager's `task cancel` says why (spec 2026-10-31-managers).
+      if (cancel?.reason || cancel?.by) {
+        return { state: 'closed', tone: 'dim', label: `Cancelled${cancel.by ? ` by ${cancel.by}` : ''}${cancel.reason ? ` — ${cancel.reason}` : ''}` }
+      }
+      return { state: 'closed', tone: 'dim', label: 'Session closed' }
+    case 'done':
       return { state: 'closed', tone: 'dim', label: 'Session closed' }
     default:
       // queued/running: the stream itself is the status.
@@ -205,6 +241,7 @@ export function threadFooter(status: RunStatus, error?: string, awaitingAnswer =
 interface DraftEntry {
   origin: 'v1' | 'v2' | 'meta'
   entry: ThreadEntry
+  failure?: { message: string; stepId: unknown; summary: boolean }
 }
 
 interface DraftTurn {
@@ -242,18 +279,12 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return (
-    value === 'claude' ||
-    value === 'codex' ||
-    value === 'junie' ||
-    value === 'opencode' ||
-    value === 'cursor' ||
-    value === 'pi' ||
-    value === 'copilot'
-  )
-    ? value
-    : undefined
+  const parsed = runnerSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
+
+const CLOSE_REASONS: ReadonlySet<string> = new Set<QuestionClosed['reason']>(['answered', 'dismissed', 'replaced', 'retracted', 'expired', 'ended'])
+const isCloseReason = (value: string | undefined): value is QuestionClosed['reason'] => value !== undefined && CLOSE_REASONS.has(value)
 
 const isAskQuestion = (value: unknown): value is UiAskQuestion =>
   isRecord(value) && typeof value.header === 'string' && Array.isArray(value.options)
@@ -373,6 +404,11 @@ function planFromTodos(input: unknown): PlanEntry[] | undefined {
   return entries
 }
 
+const NO_ASKS: ReadonlyArray<{ requestId: string }> = []
+/** `trackedAsks` for `reduceThread`: undefined until the record loads, then its `asks` (or none). */
+export const trackedAsks = (run: { asks?: ReadonlyArray<{ requestId: string }> | undefined } | undefined) =>
+  run === undefined ? undefined : run.asks ?? NO_ASKS
+
 export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = {}): ThreadState {
   const turns: DraftTurn[] = []
   /** stepId:itemId → live item. Runner sessions restart ids at `item_1`, while every current
@@ -385,6 +421,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  it client-side (only one ask is ever pending — the agent asks once, then
    *  parks `waiting` until the user answers). */
   let pendingAsk: ThreadAsk | undefined
+  const asksById = new Map<string, ThreadAsk>()
+  // Decided per ask: a pre-inbox card closed on the next reply; a tracked one stays open, flagged.
+  const tracked = options.trackedAsks === undefined ? undefined : new Set(options.trackedAsks.map((ask) => ask.requestId))
+  const legacyAsks = new WeakSet<ThreadAsk>()
+  // Graph gates and native asks are never tracked nor closed server-side, whatever closed before them.
+  const serverClosed = new Set(events.flatMap((event) => event.type === 'ask.closed' && typeof event.requestId === 'string' ? [event.requestId] : []))
   let lastEventAt: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
@@ -411,6 +453,28 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       origin: 'meta',
       entry: { kind: 'agent-update-required', id: `${noteId}:update`, provider: sessionBackend },
     })
+  }
+
+  // Pair only opposite-channel copies, within the same turn and workflow step.
+  // Same-channel repetitions and unrelated failures must remain visible.
+  const errorTwins = new WeakMap<DraftTurn, Map<string, { v1: number; v2: number }>>()
+  const isErrorTwin = (event: RunEvent, text: string, origin: 'v1' | 'v2'): boolean => {
+    const turn = currentTurn()
+    let counts = errorTwins.get(turn)
+    if (!counts) {
+      counts = new Map()
+      errorTwins.set(turn, counts)
+    }
+    const key = JSON.stringify([event.stepId, text])
+    const pending = counts.get(key) ?? { v1: 0, v2: 0 }
+    counts.set(key, pending)
+    const opposite = origin === 'v1' ? 'v2' : 'v1'
+    if (pending[opposite] > 0) {
+      pending[opposite] -= 1
+      return true
+    }
+    pending[origin] += 1
+    return false
   }
 
   const itemKey = (event: RunEvent, itemId: string) => {
@@ -454,9 +518,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {
         const text = str(event.text) ?? ''
-        // Client-side resolution of the pending AskUser card (#473): the reply
-        // that follows an ask closes it and records the answer.
-        if (pendingAsk && !pendingAsk.resolved) {
+        // Legacy recordings only: the reply that followed an ask closed it (#473).
+        if (pendingAsk && !pendingAsk.resolved && legacyAsks.has(pendingAsk)) {
           pendingAsk.resolved = true
           if (text !== '') pendingAsk.answer = text
           pendingAsk = undefined
@@ -604,18 +667,21 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // `tone: 'danger'` when it reports something the user actually lost, so
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
-        const tone = event.tone === 'danger' ? 'danger' : 'dim'
+        const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
         currentTurn().entries.push({
           origin: 'meta',
+          ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
+            ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
         })
         break
       }
       case 'error': {
         const text = str(event.message) ?? ''
-        if (text === '') break
+        if (text === '' || isErrorTwin(event, text, 'v1')) break
         currentTurn().entries.push({
           origin: 'meta',
+          failure: { message: failureText(text), stepId: event.stepId, summary: false },
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'danger' },
         })
         offerAgentUpdate(text, `v1:${event.seq}`)
@@ -623,24 +689,34 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'session.error': {
         const text = str(event.message) ?? ''
-        if (text === '') break
+        if (text === '' || (event.fatal === true && isErrorTwin(event, text, 'v2'))) break
         currentTurn().entries.push({
           origin: 'meta',
+          ...(event.fatal === true
+            ? { failure: { message: failureText(text), stepId: event.stepId, summary: false } } : {}),
           entry: { kind: 'note', id: `v2:${event.seq}`, text, tone: 'danger' },
         })
         offerAgentUpdate(text, `v2:${event.seq}`)
         break
       }
-      case 'session.started':
+      case 'session.started': {
         sessionBackend = providerId(event.backend) ?? sessionBackend
+        const turn = turns.at(-1)
+        if (turn) errorTwins.delete(turn)
         break
+      }
       case 'step-end': {
         // Steps stay out of the thread (they are header material) except the one thing the
         // transcript must not hide: a step that failed — mirroring the legacy renderer.
         if (event.status !== 'failed') break
+        // An idle close is not a failure: the "session closed after Nm of inactivity" note already
+        // says what happened (spec 2026-11-04-idle-closed-attention-state).
+        if (event.idleClosed === true) break
         const suffix = str(event.error) ? ` — ${str(event.error)}` : ''
         currentTurn().entries.push({
           origin: 'meta',
+          ...(str(event.error)
+            ? { failure: { message: failureText(str(event.error)!), stepId: event.stepId, summary: true } } : {}),
           entry: { kind: 'note', id: `v1:${event.seq}`, text: `step ${str(event.stepId) ?? '?'} failed${suffix}`, tone: 'danger' },
         })
         break
@@ -731,6 +807,29 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         }
         currentTurn().entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
+        asksById.set(requestId, ask)
+        if (tracked !== undefined && !tracked.has(requestId) && !serverClosed.has(requestId)) legacyAsks.add(ask)
+        break
+      }
+      case 'ask.closed': {
+        // The server closed the card: answered (on the card or its linked copy), dismissed,
+        // replaced, withdrawn, expired or ended. The card redraws in its quiet closed state.
+        const requestId = str(event.requestId)
+        const reason = str(event.reason)
+        const ask = requestId === undefined ? undefined : asksById.get(requestId)
+        if (!ask || !isCloseReason(reason)) break
+        const answer = str(event.answer)
+        ask.resolved = true
+        ask.closed = {
+          reason,
+          ...(str(event.detail) !== undefined ? { detail: str(event.detail) } : {}),
+          ...(str(event.replacedBy) !== undefined ? { replacedBy: str(event.replacedBy) } : {}),
+          ...(answer !== undefined ? { answer } : {}),
+          ...(str(event.answeredIn) !== undefined ? { answeredIn: str(event.answeredIn) } : {}),
+          ...(stamp(event.ts) !== undefined ? { at: stamp(event.ts) } : {}),
+        }
+        if (reason === 'answered' && answer !== undefined && answer !== '') ask.answer = answer
+        if (pendingAsk === ask) pendingAsk = undefined
         break
       }
 
@@ -770,6 +869,11 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   // persisting, while v2 items carry the raw text and are stripped below at render time.
   // Anything left unmatched is prose that exists ONLY in v1 — it renders rather than vanishing.
   for (const draft of turns) {
+    // Match summaries after replay so event order cannot hide the only error detail.
+    const failures = draft.entries.flatMap(({ failure }) => failure && !failure.summary ? [failure] : [])
+    draft.entries = draft.entries.filter(({ failure }) => !failure?.summary || !failures.some((source) =>
+      source.message === failure.message && (failure.stepId === undefined || source.stepId === failure.stepId),
+    ))
     if (!draft.v2Items) continue
     const v2Texts = new Set<string>()
     for (const { origin, entry } of draft.entries) {

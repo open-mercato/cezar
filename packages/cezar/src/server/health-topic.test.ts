@@ -264,7 +264,9 @@ describe('health topic + cache (live-server path)', () => {
     if (!health) throw new Error('no health topic registered');
     const viaSocket = await health.snapshot();
     const response = await apiRequest(app, '/api/v1/health');
-    expect(await response.json()).toEqual(viaSocket);
+    const viaHttp = await response.json() as { runtimeId?: string };
+    expect(viaHttp).toEqual(viaSocket);
+    expect(viaHttp.runtimeId).toMatch(/^[0-9a-f-]{36}$/);
   }, TEST_BUDGET_MS);
 
   it('shares one compute between concurrent reads (in-flight dedupe)', async () => {
@@ -279,7 +281,8 @@ describe('health topic + cache (live-server path)', () => {
     // Both are past the ceiling, so both take the awaited-refresh path; the dedupe means they
     // resolve from ONE snapshot rather than racing two sets of CLI spawns.
     const [a, b] = await Promise.all([health.snapshot(), health.snapshot()]);
-    expect(a).toBe(b); // the very same object — one compute
+    // Scope-dependent fields are stamped per send, so the shared compute shows in what it built.
+    expect((a as { checks: unknown }).checks).toBe((b as { checks: unknown }).checks);
   }, TEST_BUDGET_MS);
 
   it('a hub-less app is unchanged: no cache, every request computes fresh', async () => {

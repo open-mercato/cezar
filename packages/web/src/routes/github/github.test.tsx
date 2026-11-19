@@ -134,8 +134,8 @@ const THREAD: GithubCommentsData = { available: true, comments: [COMMENT_TEXT, C
 
 const WORKFLOWS: WorkflowsResponse = {
   workflows: [
-    { name: 'quick-task', description: 'one step', steps: [], source: 'built-in' },
-    { name: 'ship-it', description: 'plan, build, review', steps: [], source: 'file' },
+    { name: 'quick-task', description: 'one step', steps: [], source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true } },
+    { name: 'ship-it', description: 'plan, build, review', steps: [], source: 'file', capabilities: { push: true, openPr: true, postToGithub: true } },
   ],
   issues: [],
 }
@@ -229,7 +229,17 @@ function stubFetch(
       if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse(PROVIDERS_CONNECTED)
       }
-      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({
+        runner: 'codex',
+        models: [{
+          id: 'gpt-future',
+          label: 'gpt-future',
+          description: 'Newest',
+          reasoningEfforts: [{ id: 'high', description: 'Thorough reasoning' }],
+        }],
+        source: 'live',
+        stale: false,
+      })
       if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/v1/runs') {
@@ -249,6 +259,8 @@ function stubFetch(
       // is not a health payload at all — a reader would crash on it rather than degrade — so the
       // default here is a real one, with automations off exactly as a default server reports.
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(['claude']))
+      // The detail's Related tasks reads the registry for the repo base (#1048); `{}` is not one.
+      if (method === 'GET' && path === '/api/v1/projects') return jsonResponse({ projects: [], bootProject: 'default' })
       return jsonResponse({})
     }),
   )
@@ -295,6 +307,76 @@ it('/github/prs/:n/changes renders PR-only file review navigation and completene
   expect(screen.getByRole('navigation', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
   expect(screen.getByRole('status').textContent).toContain('One patch was omitted.')
   expect(screen.getByLabelText('Next file').hasAttribute('disabled')).toBe(false)
+  // The desktop file list truncates a long path; the native title reveals it.
+  const listed = [...document.querySelectorAll('ul button')].map((button) => [button.textContent, button.getAttribute('title')])
+  expect(listed).toContainEqual([expect.stringContaining('src/new.ts'), 'src/new.ts'])
+
+})
+
+
+/** A run record carrying only what reference resolution reads. */
+function refRun(id: string, createdAt: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    title: `Task ${id}`,
+    workflow: 'quick-task',
+    task: 't',
+    status: 'done',
+    createdAt,
+    tokensUsed: 0,
+    archived: false,
+    steps: [],
+    ...over,
+  }
+}
+
+function relatedFetch(runs: unknown[]) {
+  const github = { ...health(['claude']), repo: { root: '/repo', branch: 'main', remote: 'https://github.com/acme/demo.git' }, forge: { kind: 'github' } }
+  stubFetch({
+    'GET /api/v1/runs': () => jsonResponse(runs),
+    'GET /api/v1/health': () => jsonResponse(github),
+  })
+}
+
+const relatedRows = () => [...document.querySelectorAll<HTMLAnchorElement>('[data-slot="gh-related-task"]')]
+
+describe('Related tasks (#1048)', () => {
+  it('lists active and archived issue tasks newest first, linking each, and skips foreign repos', async () => {
+    relatedFetch([
+      refRun('old', '2026-07-01T08:00:00.000Z', { archived: true, markerRefs: { issue: 142 } }),
+      refRun('new', '2026-07-03T08:00:00.000Z', { referencedIssueUrl: 'https://github.com/acme/demo/issues/142' }),
+      refRun('foreign', '2026-07-04T08:00:00.000Z', { referencedIssueUrl: 'https://github.com/other/repo/issues/142' }),
+      refRun('other-number', '2026-07-05T08:00:00.000Z', { markerRefs: { issue: 7 } }),
+    ])
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(relatedRows()).toHaveLength(2))
+    expect(relatedRows().map((a) => a.getAttribute('href'))).toEqual(['/tasks/new', '/tasks/old'])
+    expect(relatedRows()[1]!.textContent).toContain('archived')
+  })
+
+  it('shows PR tasks (created and about) on both Conversation and Changes', async () => {
+    relatedFetch([
+      refRun('created', '2026-07-02T08:00:00.000Z', { pullRequestUrl: 'https://github.com/acme/demo/pull/137' }),
+      refRun('about', '2026-07-03T08:00:00.000Z', { referencedPullRequestUrl: 'https://github.com/acme/demo/pull/137' }),
+      refRun('issue-subject', '2026-07-04T08:00:00.000Z', {
+        markerRefs: { issue: 142 },
+        referencedPullRequestUrl: 'https://github.com/acme/demo/pull/137',
+      }),
+    ])
+    renderAt('/github/prs/137')
+    await waitFor(() => expect(relatedRows()).toHaveLength(2))
+    expect(relatedRows().map((a) => a.getAttribute('href'))).toEqual(['/tasks/about', '/tasks/created'])
+    cleanup()
+    relatedFetch([refRun('created', '2026-07-02T08:00:00.000Z', { pullRequestUrl: 'https://github.com/acme/demo/pull/137' })])
+    renderAt('/github/prs/137/changes')
+    await waitFor(() => expect(relatedRows()).toHaveLength(1))
+  })
+
+  it('says so when no task references the item', async () => {
+    relatedFetch([refRun('x', '2026-07-02T08:00:00.000Z', { markerRefs: { issue: 7 } })])
+    renderAt('/github/issues/142')
+    expect((await screen.findByText(/No retained tasks/)).textContent).toContain('reference this')
+  })
 })
 
 /** What the composer PRE-FILLS the box with for issue 142 (#524): the item's reference, and
@@ -307,6 +389,18 @@ const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 // ---- lists + detail ---------------------------------------------------------------------------
 
 describe('the GitHub tab lists', () => {
+  it('shows issue ownership beside row navigation with separate external PR links (#1620)', async () => {
+    stubFetch({ 'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, issues: [{ ...ISSUE_142, assignees: ['grace'], linkedPrs: [{ number: 180, title: 'Fix the session refresh', url: 'https://github.com/acme/demo/pull/180', state: 'open', isDraft: false }] }] }) })
+    renderAt('/github')
+    const group = await screen.findByRole('group', { name: 'Issue #142 ownership' })
+    expect(within(group).getByText('Assigned to @grace')).toBeTruthy()
+    const pr = within(group).getByRole('link', { name: 'PR #180 · Open: Fix the session refresh' })
+    expect(pr.parentElement?.closest('a')).toBeNull()
+    const row = screen.getByRole('link', { name: /Login form drops session on refresh/ })
+    fireEvent.click(row)
+    expect(await screen.findByRole('heading', { name: 'Login form drops session on refresh' })).toBeTruthy()
+  })
+
   it('/github renders the header, both count tabs, the issue rows, and the first issue’s detail', async () => {
     stubFetch()
     renderAt('/github')
@@ -329,6 +423,9 @@ describe('the GitHub tab lists', () => {
     expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139'])
     // Rows are deep links, not click handlers.
     expect(rows()[0]?.getAttribute('href')).toBe('/github/issues/142')
+    // The drag-to-composer gesture's only hint.
+    expect(rows()[0]?.getAttribute('title')).toBe('Drag into the composer to prefill a task')
+
 
     // No URL selection → the first item's detail renders (legacy parity), marked current.
     expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
@@ -553,6 +650,28 @@ describe('scroll-driven paging', () => {
     // The last page is in: no sentinel, no observer, nothing left to offer.
     expect(sentinel()).toBeNull()
     expect(live()).toHaveLength(0)
+  })
+
+  it('marks the exhausted side done so the server does not restart it (#1750)', async () => {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(sent.some((r) => r.path.includes('issuesCursor=c1'))).toBe(true))
+    const next = sent.find((r) => r.path.includes('issuesCursor=c1'))!
+    expect(next.path).toContain('prsDone=1')
+    expect(next.path).not.toContain('issuesDone')
   })
 
   it('does not fetch while the sentinel stays out of view', async () => {
@@ -918,6 +1037,9 @@ describe('the GitHub detail pane', () => {
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-merge-box"]')?.textContent).toContain('Ready to merge'))
     expect(document.querySelectorAll('[data-slot="gh-merge-status-passing"]')).toHaveLength(3)
+    // The merge method is the cockpit select (native <select> is retired), named for the keyboard.
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Merge method' }).textContent).toContain('Squash and merge')
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(sent.some((request) => request.path.endsWith('merge-state?refresh=1'))).toBe(true))
     fireEvent.click(screen.getByRole('button', { name: 'Squash and merge' }))
@@ -1101,6 +1223,39 @@ describe('the comment thread', () => {
     await waitFor(() => expect(threadSection()).not.toBeNull())
     const img = document.querySelector<HTMLImageElement>('[data-slot="gh-thread-body"] img')
     expect(img?.getAttribute('src')).toBe('https://example.com/shot.png')
+  })
+
+  it.each(['issue', 'pr'] as const)('loads private %s body and comment images through the authenticated API without changing link policy', async (kind) => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    const content = `![Markdown shot](${url})\n\n<img src="${url}" alt="HTML shot" width="200" />\n\n[local](/tmp/private.txt)`
+    const number = kind === 'issue' ? 142 : 137
+    stubFetch(thread(kind, number, { available: true, detail: { body: content }, comments: [{ ...COMMENT_TEXT, body: content }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/github/asset')) {
+        expect(init?.credentials).toBe('include')
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({ url })
+        return new Response(JSON.stringify({ available: true, dataUrl: 'data:image/png;base64,aGVsbG8=' }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      return base(input, init)
+    })
+    renderAt(`/github/${kind === 'issue' ? 'issues' : 'prs'}/${number}`)
+    await waitFor(() => expect(document.querySelectorAll('img[src="data:image/png;base64,aGVsbG8="]')).toHaveLength(4))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+    expect(document.querySelector('a[href="/tmp/private.txt"]')).toBeNull()
+    expect(document.querySelector('[data-local-only-link]')).not.toBeNull()
+  })
+
+  it('shows an unavailable attachment without retrying a private URL directly', async () => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    stubFetch(thread('issue', 142, { available: true, comments: [{ ...COMMENT_TEXT, body: `![Private screenshot](${url})` }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).endsWith('/github/asset')
+      ? new Response(JSON.stringify({ available: false }), { headers: { 'Content-Type': 'application/json' } }) : base(input, init))
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Private screenshot' }).textContent).toContain('unavailable'))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
   })
 
   it('renders nothing when BOTH streams are empty — the count badge already said so', async () => {
@@ -1339,7 +1494,8 @@ describe('the comment thread', () => {
   it.each([
     ['passing', '✓', 'text-success'],
     ['failing', '✗', 'text-danger'],
-    ['pending', '○', 'text-muted-foreground'],
+    // Amber ink for pending (one meaning per hue, redesign 2026-11) — `--warning` is the readable token.
+    ['pending', '○', 'text-warning'],
   ])('renders the %s CI glyph on a commit row', async (state, glyph, tone) => {
     stubFetch(thread('pr', 137, {
       available: true, comments: [],
@@ -1488,6 +1644,7 @@ async function openDetail(entry = '/github/issues/142') {
  *  (the pre-#471 shape silently rotted here until the merge fixed the inbox's copy). */
 const health = (backends: readonly Runner[]): HealthResponse => ({
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -1495,7 +1652,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -1563,7 +1720,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(postedRun(sent)).toMatchObject({ runner: 'claude' })
   })
 
-  it('a runner + model pick rides the POST alongside the workflow routing', async () => {
+  it('a runner, model, and effort pick ride the POST alongside workflow routing', async () => {
     const sent = stubFetch({
       // Health describes the boot project; config describes the scoped GitHub project.
       'GET /api/v1/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
@@ -1575,6 +1732,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
     await pickPill('runner-pill', 'codex')
     await pickPill('model-pill', 'gpt-future')
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+    await pickPill('effort-pill', 'high')
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1583,6 +1742,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
       workflow: 'quick-task',
       runner: 'codex',
       model: 'gpt-future',
+      reasoningEffort: 'high',
     })
   })
 
@@ -2393,7 +2553,7 @@ describe('the remembered last selection (#408 item 3)', () => {
  */
 describe('a remembered pick the catalog no longer has (#408)', () => {
   const WITHOUT_SHIP_IT: WorkflowsResponse = {
-    workflows: [{ name: 'quick-task', description: 'one step', steps: [], source: 'built-in' }],
+    workflows: [{ name: 'quick-task', description: 'one step', steps: [], source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true } }],
     issues: [],
   }
 

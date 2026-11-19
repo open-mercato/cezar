@@ -170,7 +170,7 @@ never shadow the alias or a route.
 cezar serve (in /Users/x/proj-b)
   ├─ runMigrations()                       # ~/.cezar schemaVersion → latest (idempotent)
   ├─ ws = loadWorkspaceConfig()            # degrade: unreadable → in-memory defaults
-  ├─ boot = registerProject(cwd-repoRoot)  # only while the registry is empty (or the root is known); bumps lastOpenedAt
+  ├─ boot = registerProject(cwd-repoRoot)  # serve is an explicit add/open gesture; bumps lastOpenedAt
   ├─ contexts = ProjectContexts(ws)        # lazy — nothing instantiated yet
   ├─ context(boot.id)                      # boot project eagerly: recover(), pruneOrphans()
   ├─ startServer({contexts, bootId, …})    # one port, loopback, as today
@@ -184,19 +184,15 @@ worktrees and nested `cez` invocations — the same nesting reality the
 `CEZ_TODOS_FILE=''` guard in `run.ts:294-305` acknowledges), or the user's
 home directory itself. Headless `cezar run` applies the same guards.
 
-**Seed once** — boot registration is additionally suppressed once the registry
-holds ANY project and the boot root is not one of them. Booting in a folder is
-an implicit "this is my project" only for the very first run; after that the
-cwd is where the cockpit was *opened from*, and adding a project stays an
-explicit gesture (`cezar projects add`, the cockpit's Add project dialog —
-both keep using the path-shape guard alone). An unregistered boot root is
-served exactly as a suppressed one is: `resolveBootProject` falls back to its
-would-be slug and `/p/<slug>/` binds to the boot context; only the registry
-file stays untouched. `CEZ_SINGLE_PROJECT=1` is exempt — there the launch
-context IS the project and its identity is read back out of the registry.
+**Serve add/open supersession (#1732)** — the original boot design seeded the
+registry only once. Plain `cezar serve` now supersedes that decision: launching
+from an eligible root is an explicit add/open gesture, even when other projects
+already exist. Headless `cezar run`, single-project `projects list`, and other
+`initWorkspace` callers keep the seed-once rule. Guarded roots (the user's home
+and cezar task worktrees) remain unregistered and use the fallback boot slug.
 
-Because that state is now ORDINARY rather than an edge case, two things follow
-and are load-bearing:
+Guarded roots, registry failures and legacy/non-serve constructors can still
+produce that unregistered state, so two load-bearing rules remain:
 
 - **`GET /api/projects` lists the boot folder while the registry is EMPTY**,
   flagged `unregistered: true` (see API Contracts). With nothing registered the
@@ -206,11 +202,10 @@ and are load-bearing:
   **Add project** instead of Remove and the per-project cap, the sidebar marks
   it "not saved", and everything else treats it as a project.
 
-  Once the registry holds ANY project the row is **not listed**: the same
-  "seed once" rule, applied to the read. Listing it put a row the user never
-  asked for in their sidebar, their ⌘K palette and their Settings table on
-  every launch from a worktree or a scratch checkout — the sidebar noise #774
-  set out to end, arriving through the other door. The folder is still SERVED:
+  Once the registry holds ANY project the row is **not listed**. Listing a
+  guarded worktree put a row the user never asked for in their sidebar, their
+  ⌘K palette and their Settings table — the sidebar noise #774 set out to end,
+  arriving through the other door. The folder is still SERVED:
   `bootProject` names it, `/p/<slug>/` and the unscoped alias answer for it (the
   cockpit's scope gate treats `bootProject` as known whether or not the registry
   lists it), so legacy flat URLs and pasted deep links still resolve. A bare `/`
@@ -236,10 +231,10 @@ Other registered projects get their `ProjectContext` on first API touch
 context is built. A registered project whose `root` no longer exists (or is
 unreadable) is listed with `status: 'missing'` and never instantiated.
 
-Concurrent `cezar serve` processes remain allowed (each picks its own port, as
-today). Registry writes are read-modify-write + atomic rename, and
-registration is additive, so the worst race outcome is a lost `lastOpenedAt`
-bump — never a lost project.
+Concurrent launches for the same role are serialized by the safe singleton
+runtime lease (#1732): one process starts, while the other registers through it
+and exits. Deliberately distinct installed/named/strict-remote roles retain
+separate slots. Registry writes remain read-modify-write + atomic rename.
 
 ### Resource governance (why resources go global)
 
@@ -605,14 +600,14 @@ bookmarklets keep working via the redirect (boot project).
 | Scenario | Behavior |
 |---|---|
 | `~/.cezar` unwritable / read-only home | Boot proceeds with an in-memory single-project workspace (boot repo only); one boot-time warning. Nothing requires the file. |
-| Corrupt `~/.cezar/config.json` | Restore from `config.json.bak` when it still holds projects, else degrade to defaults + warning (rebuild with `cezar projects add` — opening a project no longer re-registers it). Never crash, never overwrite the corrupt file until the next successful merge-write. |
+| Corrupt `~/.cezar/config.json` | Restore from `config.json.bak` when it still holds projects, else degrade to defaults + warning. A later normal serve registers its launch project; other roots can be rebuilt with `cezar projects add`. Never crash, never overwrite the corrupt file until the next successful merge-write. |
 | Registered project folder deleted/moved | `status: 'missing'`: greyed in sidebar, panes 409, remove offered. Never auto-removed. |
 | Project registered twice (symlink, trailing slash) | Realpath-normalized on registration → dedupe to the existing entry. |
 | `cezar` invoked inside a task worktree / nested `cez` / `$HOME` | Registration guard suppresses the registry write; the process still serves that folder normally. |
 | Deep link `/p/default/…` or unprefixed legacy URL | Resolves to the boot project (reserved alias / redirect); normalized to the real slug in the address bar. |
 | Slug collision (`~/work/api`, `~/personal/api`) | Second registration gets `api-2`; sidebar disambiguates with the parent-dir segment like the group header tooltip. |
 | Deep link to unknown `projectId` | Cockpit shows a "project not registered here" screen with the registry list; API returns 404 `{ error }`. |
-| Two `cezar serve` processes concurrently | Both serve the full registry on different ports; registry writes merge additively; per-project `.ai/cezar` files keep their existing single-writer-per-repo assumptions (unchanged from today — two processes in *one* repo were never supported). |
+| Two same-role `cezar serve` processes concurrently | One owns the recoverable runtime lease; the other waits for verified health, registers through the owner, opens/prints its scoped URL and exits. A live but unverifiable owner blocks a duplicate. |
 | Run started in project B while A's tasks run | Independent stores/managers; workspace semaphore caps total agent processes at global `maxParallel`. |
 | `gh` missing / unauthenticated | Clone option disabled with reason (same degradation contract as the GitHub pane). |
 | Clone fails mid-way (network, auth) | Partial target dir removed if the clone created it; dialog shows the error; nothing registered. |

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
-import { ToolsMenu, diskNote, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
+import { ToolsMenu, ToolsMenuItems, diskNote, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
 
 afterEach(cleanup)
 
@@ -30,6 +30,7 @@ beforeEach(() => {
  *  one carrying the server's setup hint. The names/hints mirror `src/core/backend-detect.ts`. */
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/home/me/cezar',
@@ -46,7 +47,7 @@ const HEALTH: HealthResponse = {
     },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const ALL_GOOD: HealthResponse = {
@@ -298,7 +299,7 @@ describe('ToolsMenu in the app shell', () => {
     return render(
       <ThemeProvider>
         <MemoryRouter initialEntries={['/']}>
-          <AppShell toolsMenu={<ToolsMenu health={HEALTH} forge={HEALTH.forge} />}>
+          <AppShell toolsMenu={<ToolsMenuItems health={HEALTH} forge={HEALTH.forge} />}>
             <p>route content</p>
           </AppShell>
         </MemoryRouter>
@@ -306,12 +307,13 @@ describe('ToolsMenu in the app shell', () => {
     )
   }
 
-  it('sits in the desktop sidebar footer', () => {
+  it('sits under the desktop sidebar footer\u2019s ⋯ menu, as a submenu', () => {
     renderShell()
     const footer = document.querySelector(
       '[data-slot="sidebar"] [data-slot="sidebar-footer"]'
     ) as HTMLElement
-    expect(footer.querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+    fireEvent.pointerDown(within(footer).getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    expect(screen.getByRole('menu').querySelector('[data-slot="tools-menu"]')?.textContent).toBe('Tools')
   })
 
   it('comes along into the mobile drawer — same component, both framings', async () => {
@@ -319,7 +321,8 @@ describe('ToolsMenu in the app shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
 
     const drawer = await screen.findByRole('dialog', { name: 'Navigation' })
-    expect(drawer.querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+    fireEvent.pointerDown(within(drawer).getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    expect(screen.getByRole('menu').querySelector('[data-slot="tools-menu"]')).not.toBeNull()
   })
 })
 

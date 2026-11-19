@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isOpenMercatoSkillsSource, SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService } from './skills-update.ts';
+import { isOpenMercatoSkillsSource, resolveWindowsNpxCli, SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService } from './skills-update.ts';
 
 const oldDryRun = process.env.CEZ_DRY_RUN;
 afterEach(() => { if (oldDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = oldDryRun; });
@@ -24,6 +24,30 @@ describe('SkillsUpdateService', () => {
     expect(['evil/open-mercato/skills', 'https://github.com.evil.test/open-mercato/skills', 'git@github.com:open-mercato/skills.git'].some(isOpenMercatoSkillsSource)).toBe(false);
   });
 
+  it('reports tracked names even when every skill is current (#1905)', async () => {
+    const { home, repo } = await fixture({ skills: { b: { source: 'open-mercato/skills' }, a: { source: 'open-mercato/skills' } } });
+    const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run: async () => ({ stdout: 'All project skills are up to date', stderr: '' }) });
+    const state = await service.check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'current', skills: [], tracked: ['a', 'b'] });
+    expect(state.scopes[1]).not.toHaveProperty('tracked');
+  });
+
+  it('resolves npx-cli.js on Windows, global prefix first, never an npx.cmd (#1958)', async () => {
+    const env = { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' };
+    const global = 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npx-cli.js';
+    const bundled = 'C:\\node\\node_modules\\npm\\bin\\npx-cli.js';
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async () => true)).toBe(global);
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async (p) => p === bundled)).toBe(bundled);
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async () => false)).toBeNull();
+  });
+
+  it('gives a launcher failure its own reason (#1958)', async () => {
+    const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
+    const run = vi.fn(async () => { throw Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' }); });
+    const state = await new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx.cmd' }).check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'error', reason: 'npx could not be launched' });
+  });
+
   it('fails closed for malformed and unknown locks without executing', async () => {
     for (const value of ['{oops', { version: 99, skills: {} }, { version: 3, nope: {} }]) {
       const { home, repo } = await fixture(value); const run = vi.fn();
@@ -41,6 +65,14 @@ describe('SkillsUpdateService', () => {
     expect(state.scopes.map((s) => s.skills)).toEqual([['alpha'], ['alpha']]);
   });
 
+  it('does not flag every skill because a name in the CLI header contains "update" (#1740)', async () => {
+    const lock = { version: 3, skills: { 'om-fix': { source: 'open-mercato/skills' }, 'om-auto-update-changelog': { source: 'open-mercato/skills' } } };
+    const { home, repo } = await fixture(lock);
+    const out = 'Updating om-auto-update-changelog, om-fix\n\u2713 All project skills are up to date\n';
+    const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run: async () => ({ stdout: out, stderr: '' }) });
+    const state = await service.check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'current', available: false, skills: [] });
+  });
   it('normalizes offline failures and never leaks command output', async () => {
     const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
     const run = vi.fn(async () => { throw new Error('fetch failed token=super-secret'); });

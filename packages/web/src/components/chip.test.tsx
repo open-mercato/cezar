@@ -13,13 +13,14 @@ function chipOf(ui: React.ReactElement) {
 }
 
 describe('Chip', () => {
-  it('is a 26px bordered pill button by default', () => {
+  it('is a 28px bordered pill button on the row grammar by default', () => {
     const chip = chipOf(<Chip>quick-task</Chip>)
 
     expect(chip.tagName).toBe('BUTTON')
     expect(chip.type).toBe('button')
-    expect(chip.className).toContain('h-[26px]')
+    expect(chip.className).toContain('h-7')
     expect(chip.className).toContain('rounded-full')
+    expect(chip.className).toContain('text-ui')
     expect(chip.className).toContain('border-border')
     expect(chip.getAttribute('data-active')).toBeNull()
   })
@@ -32,12 +33,13 @@ describe('Chip', () => {
     expect(chip.className).toContain('font-semibold')
   })
 
-  it('renders the skill grammar: violet border, mono', () => {
+  it('renders the skill grammar: violet border, the row\'s own face and weight', () => {
     const chip = chipOf(<Chip skill>om-spec-writing</Chip>)
 
     expect(chip.getAttribute('data-skill')).toBe('true')
     expect(chip.className).toContain('border-violet')
-    expect(chip.className).toContain('font-mono')
+    expect(chip.className).not.toContain('font-mono')
+    expect(chip.className).not.toContain('font-semibold')
   })
 
   it('renders the dashed affordance, an icon and the chevron', () => {
@@ -69,7 +71,7 @@ describe('Chip', () => {
 
   // The composer's PickerPill shares this exact string — one chip grammar, one place to change it.
   it('exposes the shared class string', () => {
-    expect(chipClass).toContain('h-[26px]')
+    expect(chipClass).toContain('h-7')
     expect(chipOf(<Chip>x</Chip>).className.startsWith(chipClass)).toBe(true)
   })
 })

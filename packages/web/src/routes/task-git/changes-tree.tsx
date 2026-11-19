@@ -1,10 +1,12 @@
-import { ChevronRightIcon, FileIcon, FolderIcon } from 'lucide-react'
+import { ChevronRightIcon, FileIcon, FolderIcon, ImageIcon } from 'lucide-react'
 import { createContext, useContext, useState } from 'react'
 
 import { CommentCount } from '@/components/comment-count'
 import { cn } from '@/lib/utils'
 
-import type { TreeDir, TreeFile } from './file-tree'
+import { isJunkPath, partitionJunk, type TreeDir, type TreeFile } from './file-tree'
+import { JunkFold } from './junk-fold'
+import { isImagePath } from './worktree-files'
 
 /**
  * The Changes tab's file tree (spec #390: "file tree (left, folders collapsible, per-file ±)").
@@ -26,14 +28,12 @@ export function ChangesTree({
 }) {
   return (
     <CommentCountsContext.Provider value={commentCounts}>
-    <nav data-slot="changes-tree" aria-label="Changed files" className="min-w-0 text-[13px]">
+    <nav data-slot="changes-tree" aria-label="Changed files" className="min-w-0 text-ui">
       <ul className="flex flex-col gap-px">
         {root.dirs.map((dir) => (
           <DirNode key={dir.path} dir={dir} depth={0} selected={selected} onSelect={onSelect} />
         ))}
-        {root.files.map((file) => (
-          <FileNode key={file.path} file={file} depth={0} selected={selected} onSelect={onSelect} />
-        ))}
+        <FileRows files={root.files} depth={0} selected={selected} onSelect={onSelect} />
       </ul>
     </nav>
     </CommentCountsContext.Provider>
@@ -54,7 +54,7 @@ function dirCommentCount(dir: TreeDir, counts: ReadonlyMap<string, number>): num
 /** ±12/−3 in miniature — the tree's per-row counts (the aggregate label lives in the toolbar). */
 function Counts({ adds, dels }: { adds: number; dels: number }) {
   return (
-    <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums">
+    <span className="shrink-0 font-mono text-meta font-medium tabular-nums">
       {adds > 0 ? <span className="text-success">+{adds}</span> : null}
       {adds > 0 && dels > 0 ? ' ' : null}
       {dels > 0 ? <span className="text-danger">−{dels}</span> : null}
@@ -106,12 +106,38 @@ function DirNode({
           {dir.dirs.map((child) => (
             <DirNode key={child.path} dir={child} depth={depth + 1} selected={selected} onSelect={onSelect} />
           ))}
-          {dir.files.map((file) => (
-            <FileNode key={file.path} file={file} depth={depth + 1} selected={selected} onSelect={onSelect} />
-          ))}
+          <FileRows files={dir.files} depth={depth + 1} selected={selected} onSelect={onSelect} />
         </ul>
       ) : null}
     </li>
+  )
+}
+
+/** One folder's files: source rows first, then the junk (images, binaries, OS cruft) muted and,
+ *  when there are many, folded — see `JunkFold`. Both lists keep the tree's alphabetical order. */
+function FileRows({
+  files,
+  depth,
+  selected,
+  onSelect,
+}: {
+  files: TreeFile[]
+  depth: number
+  selected: string | null
+  onSelect: (path: string) => void
+}) {
+  const { source, junk } = partitionJunk(files, (file) => isJunkPath(file.path, file.binary))
+  return (
+    <>
+      {source.map((file) => (
+        <FileNode key={file.path} file={file} depth={depth} selected={selected} onSelect={onSelect} />
+      ))}
+      <JunkFold count={junk.length} depth={depth} forceOpen={junk.some((file) => file.path === selected)}>
+        {junk.map((file) => (
+          <FileNode key={file.path} file={file} depth={depth} junk selected={selected} onSelect={onSelect} />
+        ))}
+      </JunkFold>
+    </>
   )
 }
 
@@ -124,31 +150,40 @@ const statusTone: Partial<Record<TreeFile['status'], string>> = {
 function FileNode({
   file,
   depth,
+  junk = false,
   selected,
   onSelect,
 }: {
   file: TreeFile
   depth: number
+  /** De-emphasised: an image, a binary, OS cruft — listed, but in the tertiary ink. */
+  junk?: boolean
   selected: string | null
   onSelect: (path: string) => void
 }) {
   const active = selected === file.path
   const comments = useContext(CommentCountsContext).get(file.path) ?? 0
+  const Icon = isImagePath(file.path) ? ImageIcon : FileIcon
   return (
     <li>
       <button
         type="button"
         data-slot="tree-file"
         data-path={file.path}
+        data-junk={junk ? 'true' : undefined}
         aria-current={active ? 'true' : undefined}
         onClick={() => onSelect(file.path)}
         className={cn(
           'flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-muted',
-          active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+          active
+            ? 'bg-muted font-medium text-foreground'
+            : junk
+              ? 'text-soft-foreground hover:text-muted-foreground'
+              : 'text-muted-foreground hover:text-foreground',
         )}
         style={{ paddingLeft: `${24 + depth * 14}px` }}
       >
-        <FileIcon aria-hidden="true" className={cn('size-3.5 shrink-0', statusTone[file.status])} />
+        <Icon aria-hidden="true" className={cn('size-3.5 shrink-0', !junk && statusTone[file.status])} />
         <span className="min-w-0 truncate">{file.name}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
           <CommentCount count={comments} />

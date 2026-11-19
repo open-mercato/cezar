@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Start System task — composer</title><link rel="stylesheet" href="tokens.css"><script>if(location.hash==="#light")document.documentElement.classList.add("light")</script></head><body>
+<div class="app"><aside class="side"><div class="brand">cezar</div><div class="nav">Dashboard</div><div class="nav">Tasks (all projects)</div><div class="navsec">Projects</div><div class="nav on">api</div><div class="nav">infra</div><div class="nav">payments-sdk</div><div class="nav">web</div><div class="nav">worker</div></aside>
+<main class="main" style="max-width:860px">
+ <div class="crumb">api / New task</div>
+ <div class="row" style="justify-content:space-between"><h1>New task</h1><span class="chip lime">System: storefront</span></div>
+ <div class="card" style="margin-top:18px">
+  <div class="label">Objective</div>
+  <div class="input ta" style="min-height:96px;color:var(--foreground)">Add an optional "discount code" to checkout: accept it in the API, show the field in the web checkout form, and apply it when the worker finalises the order.</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px">
+   <div><div class="label">Lead project</div><div class="input" style="justify-content:space-between"><span><b>api</b> <span class="soft">— provides 2 links (default)</span></span><span class="soft">▾</span></div></div>
+   <div><div class="label">Workflow</div><div class="input" style="justify-content:space-between"><span><b>system-task</b> <span class="chip" style="height:18px">built-in</span></span><span class="soft">▾</span></div></div>
+   <div><div class="label">Runner · model</div><div class="input">Claude · default</div></div>
+   <div><div class="label">Worktree</div><div class="input">On — required for a lead</div></div>
+  </div>
+  <div class="card" style="margin-top:16px;background:var(--card-2)">
+   <h3>Dispatch limits <span class="chip">existing dispatch intent</span></h3>
+   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    <div><div class="label">Max worker tasks</div><div class="input">3 <span class="soft" style="margin-left:6px">= other members</span></div></div>
+    <div><div class="label">Budget (whole tree)</div><div class="input">$ 12.00</div></div>
+    <div><div class="label">In flight at once</div><div class="input">4 <span class="soft" style="margin-left:6px">max</span></div></div>
+   </div>
+   <p class="note" style="margin-top:8px">Workers are one level deep: they never create tasks themselves. Each worker gets its own worktree, branch, review gate and PR in its repo.</p>
+  </div>
+  <div class="banner" style="margin-top:14px"><b style="color:var(--foreground)">What happens:</b> the lead plans per repo → changes the contract here first → creates a worker in each affected repo → waits without holding a slot → finishes with one branch per repo and a merge order (providers first). Nothing runs until you press Start.</div>
+  <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn btn-outline">Cancel</button><button class="btn btn-primary">Start</button></div>
+ </div>
+</main></div><span class="tag-mock">mockup — illustrative</span></body></html>

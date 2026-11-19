@@ -16,7 +16,7 @@ Cezar runs from `npx`, so there is nothing to install globally. It starts a loca
 ## Requirements
 
 - Node.js 20 or later.
-- At least one agent CLI that you have signed in to: [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai), [Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli), or [pi](https://github.com/badlogic/pi-mono).
+- An agent CLI you have signed in to: [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai), [Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli), or [pi](https://github.com/badlogic/pi-mono). If you have none, Cezar can set one up when it opens.
 - Optional: `git`, so each task can work in its own worktree, and `gh`, for GitHub issues and pull requests.
 
 ## Open the cockpit
@@ -31,6 +31,22 @@ npx cezar-run
 The cockpit opens at `http://localhost:4321`. If that port is busy, Cezar uses the next free one.
 
 > **Good to know**: `npx cezar-cli` starts the same package under its older name.
+
+## Set up an agent
+
+Cezar looks for a signed-in agent when it opens. If it finds one, you go straight on to your project.
+
+If it does not, the first page lists the agents it can install: Claude Code, Codex, OpenCode, Cursor and GitHub Copilot CLI. Each row shows the command it will run.
+
+1. Press **Install**. The install runs in a terminal on the page.
+2. Sign in when the login starts on its own. Answer its questions in the same terminal, and use **Open sign-in page** if your browser did not open.
+3. Cezar moves on by itself once the login lands.
+
+An agent that is installed but signed out gets a **Sign in** button instead.
+
+> **Good to know**: A global npm install that needs root runs the vendor's installer when there is one. Otherwise it uses `sudo`, and you type your password in the terminal.
+
+On a cockpit hosted on another machine, or with the terminal turned off (`CEZ_TERMINAL=0`), Cezar shows the commands to run yourself.
 
 ## Try Cezar without signing in
 

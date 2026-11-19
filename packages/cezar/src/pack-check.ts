@@ -8,6 +8,14 @@
  *  `npm pack` invocation and the exit code.
  */
 
+export const IMPACT_PACK_FILES = [
+  'dist/impact/template.html',
+  'dist/impact/demo-review.json',
+  'skills/change-impact/SKILL.md',
+  'skills/change-impact/references/analysis-contract.md',
+  'skills/change-impact/references/visual-contract.md',
+  'skills/change-impact/references/public-api.md',
+] as const;
 /** One package's entry in `npm pack --json` output. */
 export interface PackReport {
   filename?: string;
@@ -30,6 +38,11 @@ export function firstPackReport(packJson: unknown): PackReport | undefined {
  */
 export function findPackGaps(packedFiles: readonly string[]): string[] {
   const gaps: string[] = [];
+  // The impact renderer reads its template beside the compiled module, and the bundled
+  // change-impact skill ships as files (spec 2026-10-22-html-artifacts-and-impact, Q6/Q7).
+  for (const asset of IMPACT_PACK_FILES) {
+    if (!packedFiles.includes(asset)) gaps.push(`${asset} is missing — \`cez impact\` would ship without it (scripts/copy-assets.mjs, "files")`);
+  }
   if (!packedFiles.includes('web/dist/index.html')) {
     gaps.push('web/dist/index.html is missing — the tarball would ship no UI shell (run `npm run build:web`)');
   }

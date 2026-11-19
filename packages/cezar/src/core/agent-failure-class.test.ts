@@ -3,6 +3,7 @@ import {
   accountStateHint,
   classifyAgentFailure,
   MAX_TRANSIENT_RETRIES,
+  transientRetryCap,
   transientRetryDelayMs,
 } from './agent-failure-class.ts';
 
@@ -12,6 +13,8 @@ describe('classifyAgentFailure — the agent CLIs\' own words (telemetry fingerp
     ['API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com', 'transient'], // 76aa46a9
     ['API Error: No response from API (waited 3m). If a proxy or gateway on your network holds responses until they complete, raise API_TIMEOUT_MS or CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS to wait longer.', 'transient'], // 9dd88886
     ['Selected model is at capacity. Please try a different model.', 'transient'], // a1c2fcc2 codex
+    ['API Error: 402 {"error":{"message":"This request requires more credits, or fewer max_tokens."}}', 'billing'], // cb147fae
+    ["You've hit your 5-hour limit · resets 3:10pm (UTC)", 'usage_limit'], // d1523f7c
     ['Error running remote compact task: workspace routing discovery failed', 'transient'], // 5919c71a codex
     ['Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again', 'transient'], // 204c5e03
     ['opencode: Provider is overloaded — retry at 2026-10-26T07:00:00.000Z', 'transient'],
@@ -63,8 +66,21 @@ describe('transientRetryDelayMs', () => {
 
   it('waits at least the minute the CLI asks for on the OAuth refresh race', () => {
     const race = 'Failed to refresh OAuth token: another Claude Code process is refreshing it';
-    expect(transientRetryDelayMs(1, race)).toBe(60_000);
-    expect(transientRetryDelayMs(2, race)).toBe(120_000);
+    expect(transientRetryDelayMs(1, race, () => 0)).toBe(60_000);
+    expect(transientRetryDelayMs(2, race, () => 0)).toBe(120_000);
+  });
+
+  it('spreads the OAuth refresh race by up to 45 s so runs that lost it together do not retry together (#1480)', () => {
+    const race = 'Failed to refresh OAuth token: another Claude Code process is refreshing it';
+    expect(transientRetryDelayMs(1, race, () => 0.999999)).toBe(60_000 + 44_999);
+    expect(transientRetryDelayMs(1, race, () => 0.5)).toBe(60_000 + 22_500);
+    // Other transient failures keep their fixed backoff.
+    expect(transientRetryDelayMs(1, 'API Error: 529 Overloaded', () => 0.9)).toBe(30_000);
+  });
+
+  it('gives the OAuth refresh race three retries and every other transient failure two (#1480)', () => {
+    expect(transientRetryCap('Failed to refresh OAuth token: another Claude Code process is refreshing it')).toBe(3);
+    expect(transientRetryCap('API Error: 529 Overloaded')).toBe(2);
   });
 });
 

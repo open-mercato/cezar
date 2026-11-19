@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-/** Jira Cloud and Linear are the two read-only tracker providers supported by this contract. */
+/** Jira Cloud and Linear are the two tracker providers supported by this contract. */
 export const trackerKindSchema = z.enum(['jira', 'linear']);
 export type TrackerKind = z.infer<typeof trackerKindSchema>;
 

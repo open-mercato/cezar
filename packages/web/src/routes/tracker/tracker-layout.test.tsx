@@ -87,3 +87,15 @@ it('clears implicit detail for an explicit search with no matches', async () => 
   expect(screen.queryByText('Full description OPS-1')).toBeNull()
   expect(screen.getByText('Nothing selected')).toBeTruthy()
 })
+
+it('offers the issue state through the cockpit select and the label filter as a chip — no native select', async () => {
+  mount()
+  await screen.findByText('Full description OPS-1')
+  expect(document.querySelector('select')).toBeNull()
+  const state = screen.getByRole('combobox', { name: 'Issue state' })
+  expect(state.textContent).toContain('Active')
+  fireEvent.keyDown(state, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: 'All states' }))
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Issue state' }).textContent).toContain('All states'))
+  expect(screen.getByRole('button', { name: 'Filter labels' }).className).toContain('rounded-full')
+})

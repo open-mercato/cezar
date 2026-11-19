@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */
@@ -14,7 +14,7 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'gh', 'git']),
+  name: z.enum([...runnerSchema.options, 'gh', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
@@ -49,6 +49,12 @@ export const capabilitiesSchema = z.object({
    */
   designMode: z.boolean(),
   followups: z.boolean(),
+  /**
+   * `true` means Settings offers Connect a phone: `CEZ_RELAY=0` is not set. The relay address is a
+   * setting, reported by `GET /workspace/phones` (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`).
+   * Always false in a relay scope, so a phone cannot pair another phone.
+   */
+  phonePairing: z.boolean(),
   singleProject: z.boolean(),
   /**
    * `true` means `CEZ_AUTOMATIONS=1` opted this server into GitHub automations (#801). Off — the
@@ -58,6 +64,10 @@ export const capabilitiesSchema = z.object({
    * REQUIRED for the same reason as `tokenMetrics` below: this server always sends it.
    */
   automations: z.boolean(),
+  /** Managers (spec 2026-10-31-managers): default-on, `CEZ_MANAGERS=0` off. */
+  managers: z.boolean().optional(),
+  /** The server can raise an OS notification here, so a manager's browser one would be a double. */
+  managerSystemNotifications: z.boolean().optional(),
   /** Project lifecycle notifications; independent of graph notify steps. */
   webhooks: z.boolean(),
   /** Present on unsupported server platforms, regardless of the opt-in flag. */
@@ -110,6 +120,8 @@ export type DiskInfo = z.infer<typeof diskInfoSchema>;
  */
 export const healthResponseSchema = z.object({
   version: z.string(),
+  /** Random identity of this exact server process; stable until the process restarts. */
+  runtimeId: z.string().uuid(),
   latestVersion: z.string().optional(),
   repoRoot: z.string(),
   repo: repoInfoSchema.nullable(),
@@ -126,5 +138,14 @@ export const healthResponseSchema = z.object({
   instanceId: z.string().optional(),
   /** Absent where `statfs` is unavailable or fails. */
   disk: diskInfoSchema.optional(),
+  /**
+   * What waits on the user, counts only — sent to an authenticated reader alone (a phone through
+   * the relay, or a hosted cockpit) and absent in local mode, where health is CORS-open. Absent
+   * means "unknown". `waiting` is the push badge's own total; `failed` the cockpit's failed rows.
+   */
+  attention: z.object({
+    waiting: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+  }).optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

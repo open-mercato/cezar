@@ -16,13 +16,14 @@ const identitySchema = z.strictObject({
 // character to six bytes. A 2 KiB cap used to make a long-path identity writable but
 // permanently unreadable; keep a cap above the schema worst case, far below memory risk.
 const MAX_OWNER_BYTES = 32 * 1024;
-type Identity = z.infer<typeof identitySchema>;
+export type OwnershipIdentity = z.infer<typeof identitySchema>;
 async function ownIdentity(directory: string): Promise<Identity> {
   const own = await ownProcessIdentity();
   const namespace = own.pidNamespace === undefined ? {} : { pidNamespace: own.pidNamespace };
   const fields = { token: randomUUID(), directory, pid: own.pid, start: own.start, boot: own.boot, host: hostname() };
   return identitySchema.parse({ ...fields, ...namespace });
 }
+type Identity = OwnershipIdentity;
 function readIdentity(directory: string, name: string, unpublished = false): Identity | undefined {
   let fd: number | undefined;
   try {
@@ -44,6 +45,11 @@ function readIdentity(directory: string, name: string, unpublished = false): Ide
     if (unpublished && (error instanceof SyntaxError || error instanceof z.ZodError)) return undefined;
     throw new Error('Invalid webhook owner metadata');
   } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+/** Read the authoritative published owner for consumers that bind ready state to its token. */
+export function readOwnershipIdentity(directory: string): OwnershipIdentity | undefined {
+  return readIdentity(directory, 'owner.lock');
 }
 /** An owner whose pid this process cannot see; it is never declared dead, only left alone. */
 class ForeignOwnerError extends Error {
@@ -69,7 +75,12 @@ async function alive(identity: Identity, own: Identity): Promise<boolean> {
   // A probe failure throws (fail closed): an unverifiable owner is never declared dead.
   return (await processStarts([identity.pid])).get(identity.pid) === identity.start;
 }
-export interface WebhookOwnership { valid(): boolean; release(): Promise<void>; recovered: boolean }
+export interface WebhookOwnership {
+  valid(): boolean;
+  release(): Promise<void>;
+  recovered: boolean;
+  readonly identity: OwnershipIdentity;
+}
 /** Transfers failed acquisition cleanup into the caller's already-bounded reservation. */
 export class OwnershipCleanupError extends Error {
   constructor(readonly ownership: WebhookOwnership, cause: unknown) {
@@ -89,6 +100,7 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
   const file = await open(candidate, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   let acquired = false, recovered = false, handedOff = false;
   const owner: WebhookOwnership = {
+    identity: own,
     get recovered() { return recovered; },
     valid() {
       // Token check only: our own start token cannot change while this process lives, so a

@@ -1,11 +1,11 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
@@ -17,11 +17,15 @@ import {
   writeClaudeSystemPromptFile,
   claudeCostDelta,
   claudeExitMessage,
+  claudeMcpServers,
+  writeClaudeSettingsFile,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
+import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import type { UiEvent } from './ui-events.ts';
+import { connectorCallFence, connectorCallPrompt } from '../managers/connectors.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
  *  file keeps spawning its real stub binary through the untouched `spawn`. */
@@ -74,6 +78,61 @@ describe('buildClaudeArgs systemPrompt', () => {
   });
 });
 
+describe('buildClaudeArgs enforceReadOnly', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Grep', 'Glob'] };
+
+  it('denies the write tools, so settings allow rules cannot grant them back', () => {
+    const args = buildClaudeArgs({ ...spec, enforceReadOnly: true });
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash,Edit,Write,MultiEdit,NotebookEdit');
+  });
+
+  it('denies nothing on an ordinary run', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--disallowedTools');
+  });
+});
+
+describe('buildClaudeArgs bashHookCommand', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr view'] };
+
+  it('installs it as a Bash PreToolUse hook beside the prefix rules', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: "'/usr/bin/node' '/x/hook.js'" });
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Bash(gh pr view:*)');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "'/usr/bin/node' '/x/hook.js'" }] }] },
+    });
+  });
+
+  it('adds no settings without a hook, or when Bash is not allowed at all', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--settings');
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], bashHookCommand: 'x' })).not.toContain('--settings');
+  });
+
+  // The Seatbelt sandbox denies the loopback connect, so `cez-manager` failed with `fetch failed`.
+  it('excludes sandboxExcludedCommands from the sandbox in the same settings as the hook', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: 'h', sandboxExcludedCommands: ['cez-manager *'] });
+    expect(args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'h' }] }] },
+      sandbox: { excludedCommands: ['cez-manager *'] },
+    });
+    const alone = buildClaudeArgs({ ...spec, sandboxExcludedCommands: ['cez-manager *'] });
+    expect(JSON.parse(alone[alone.indexOf('--settings') + 1]!)).toEqual({ sandbox: { excludedCommands: ['cez-manager *'] } });
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], sandboxExcludedCommands: ['cez-manager *'] })).not.toContain('--settings');
+  });
+});
+
+describe('buildClaudeArgs bypassPermissions', () => {
+  const spec = { userPrompt: 'go', cwd: '/tmp' };
+  const mode = (args: string[]) => args[args.indexOf('--permission-mode') + 1];
+
+  it('skips every prompt only when the project opted in, and never for a read-only run', () => {
+    expect(mode(buildClaudeArgs(spec))).toBe('dontAsk');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true }))).toBe('bypassPermissions');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true }, { CEZ_APPROVAL_GATE: '1' }))).toBe('bypassPermissions');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true, enforceReadOnly: true }))).toBe('dontAsk');
+  });
+});
+
 describe('buildClaudeArgs output mode', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 
@@ -83,6 +142,21 @@ describe('buildClaudeArgs output mode', () => {
 
   it('asks for partial messages so text streams as deltas', () => {
     expect(buildClaudeArgs(spec)).toContain('--include-partial-messages');
+  });
+
+  it('passes a reasoning effort as --effort (#808)', () => {
+    const args = buildClaudeArgs({ ...spec, reasoningEffort: 'xhigh' });
+    expect(args[args.indexOf('--effort') + 1]).toBe('xhigh');
+  });
+
+  it('re-sends the effort on a resumed session, since --effort is session-scoped', () => {
+    const args = buildClaudeArgs({ ...spec, sessionId: 's1', resume: true, reasoningEffort: 'low' });
+    expect(args).toContain('--resume');
+    expect(args[args.indexOf('--effort') + 1]).toBe('low');
+  });
+
+  it('leaves the native effort untouched when none is chosen', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--effort');
   });
 });
 
@@ -163,6 +237,45 @@ describe('a teardown cezar initiated', () => {
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
+  }, 15_000);
+});
+
+// Telemetry 3ac6bbe3: a SIGTERM that reached cezar too (a unit stop, a logout, the group's Ctrl-C)
+// made claude exit 143 mid-shutdown, and the run was failed and reported as a crash.
+describe('a 143 exit while cezar itself is being signalled', () => {
+  const stubBin = fileURLToPath(new URL('./__fixtures__/claude/stub-exits-143-on-its-own.mjs', import.meta.url));
+  afterEach(() => resetOwnSignalsForTests());
+
+  it('stays unsettled through the shutdown, then settles as an interruption', async () => {
+    resetOwnSignalsForTests(1_000);
+    const events: AgentEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, (event) => events.push(event));
+    recordOwnSignal('SIGTERM');
+    let settled = false;
+    const outcome = session.result.then(
+      () => 'resolved',
+      (err: Error) => err.message,
+    ).finally(() => { settled = true; });
+
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(settled).toBe(false);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    expect(await outcome).toBe('interrupted — cezar received SIGTERM and the claude CLI stopped with it (code 143)');
+  }, 15_000);
+
+  it('still fails with the signal named when only the CLI was signalled', async () => {
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, () => {});
+    await expect(session.result).rejects.toThrow('claude CLI exited with code 143 (SIGTERM: a signal cezar did not send)');
+  }, 15_000);
+
+  it('ignores a signal cezar received before the session started', async () => {
+    recordOwnSignal('SIGTERM', Date.now() - 60_000);
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, () => {});
+    await expect(session.result).rejects.toThrow('a signal cezar did not send');
   }, 15_000);
 });
 
@@ -489,5 +602,71 @@ describe('claudeCostDelta (#1704)', () => {
   it('passes the raw total when there is no session id', () => {
     expect(claudeCostDelta(undefined, 4)).toBe(4);
     expect(claudeCostDelta(undefined, 4)).toBe(4);
+  });
+});
+
+describe('ClaudeCliRunner connectors (spec 2026-11-12-manager-connectors)', () => {
+  const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+  const tool = 'mcp__claude_ai_Google_Calendar__create_event';
+
+  it('reads mcp_servers and tools off system/init, and nothing off other frames', () => {
+    expect(claudeMcpServers({ type: 'system', subtype: 'init', mcp_servers: [{ name: 'claude.ai Gmail', status: 'failed' }, { bogus: 1 }], tools: ['Read', 7, 'mcp__a__b'] }))
+      .toEqual({ type: 'mcp-servers', servers: [{ name: 'claude.ai Gmail', status: 'failed' }], tools: ['Read', 'mcp__a__b'] });
+    expect(claudeMcpServers({ type: 'system', subtype: 'init' })).toBeUndefined();
+  });
+
+  it('passes --settings as a path, never the JSON, and only when settings are given', () => {
+    const settings = { hooks: { PreToolUse: [] } };
+    const args = buildClaudeArgs({ userPrompt: 'x', cwd: '/', claudeSettings: settings }, {}, undefined, undefined, '/tmp/s.json');
+    expect(args.slice(args.indexOf('--settings'), args.indexOf('--settings') + 2)).toEqual(['--settings', '/tmp/s.json']);
+    expect(args.join(' ')).not.toContain('PreToolUse');
+    expect(buildClaudeArgs({ userPrompt: 'x', cwd: '/' }, {}, undefined, undefined, '/tmp/s.json')).not.toContain('--settings');
+  });
+
+  it('writes the settings to a 0600 file its cleanup removes', () => {
+    const file = writeClaudeSettingsFile({ a: 1 })!;
+    try {
+      expect(JSON.parse(readFileSync(file.path, 'utf8'))).toEqual({ a: 1 });
+      if (process.platform !== 'win32') expect((statSync(file.path).mode & 0o777).toString(8)).toBe('600');
+    } finally {
+      file.cleanup();
+    }
+    expect(existsSync(file.path)).toBe(false);
+    expect(writeClaudeSettingsFile(undefined)).toBeUndefined();
+  });
+
+  const call = async (args: Record<string, unknown>) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-connector-'));
+    const fence = connectorCallFence(tool, args);
+    const events: AgentEvent[] = [];
+    try {
+      await new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 }).run({
+        userPrompt: connectorCallPrompt(tool, args),
+        cwd,
+        env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: '', CEZ_TODOS_FILE: '', CEZ_MANAGER_ID: 'm1' },
+        allowedTools: [tool],
+        claudeSettings: fence.settings,
+      }, (event) => events.push(event));
+    } finally {
+      fence.cleanup();
+      rmSync(cwd, { force: true, recursive: true });
+    }
+    return events;
+  };
+
+  it('emits the init servers and lets the approved input through the PreToolUse hook', async () => {
+    const events = await call({ summary: 'Kick-Off', when: { start: '2027-01-21' } });
+    expect(events.find((event) => event.type === 'mcp-servers')).toMatchObject({
+      servers: [{ name: 'claude.ai Google Calendar', status: 'connected' }],
+      tools: expect.arrayContaining([tool]),
+    });
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ isError: false });
+  });
+
+  it('denies an input that differs from the approved one', async () => {
+    const events = await call({ summary: 'mock:tamper' });
+    const result = events.find((event) => event.type === 'tool-result');
+    expect(result).toMatchObject({ isError: true });
+    expect(result?.type === 'tool-result' && result.result).toContain('differs from the one the user approved');
   });
 });

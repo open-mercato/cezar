@@ -3,6 +3,7 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronRightIcon,
+  ClipboardIcon,
   CopyIcon,
   FileTextIcon,
   FolderInputIcon,
@@ -25,6 +26,7 @@ import { ApiError, updateProvider } from '@/api/client'
 import { useAgentProfiles } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
@@ -51,6 +53,15 @@ import { writeClipboard } from '@/lib/clipboard'
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
 export { isNearBottom }
+
+/**
+ * The thread's reading measure (redesign 2026-11, type scale): prose is `text-lead` and no
+ * paragraph runs wider than 72ch. The cap sits on the Markdown's prose BLOCKS, not the
+ * container, so diffs, tables and code blocks keep the full column. One string, so every
+ * reading surface (assistant turns, reasoning, notes, skill and issue bodies) measures alike.
+ */
+export const THREAD_PROSE_MEASURE =
+  'text-lead [&_.thread-markdown>:is(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6)]:max-w-[72ch]'
 
 /**
  * The thread's per-entry building blocks (mockup: docs/mockups/thread.html). Presentational
@@ -191,7 +202,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
       >
         <textarea
           autoFocus
@@ -209,7 +220,7 @@ export function UserBubble({
               void save()
             }
           }}
-          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[13.5px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-ui outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
         <span className="mt-1.5 flex justify-end gap-1.5">
           <button
@@ -237,34 +248,43 @@ export function UserBubble({
   return (
     <div
       data-slot="user-bubble"
-      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
     >
-      {onEdit || onRemove ? (
+      {text.trim() !== '' || onEdit || onRemove ? (
         <span
           data-slot="bubble-actions"
-          className="mb-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+          className="mb-1 flex justify-end gap-0.5"
         >
-          {onEdit ? (
-            <button
-              type="button"
-              aria-label={editLabel}
-              onClick={startEditing}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <SquarePenIcon className="size-3.5" />
-            </button>
-          ) : null}
-          {onRemove ? (
-            <button
-              type="button"
-              aria-label={removeLabel}
-              onClick={() => void remove()}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <Trash2Icon className="size-3.5" />
-            </button>
+          {text.trim() !== '' ? <CopyMessageButton text={text} /> : null}
+          {onEdit || onRemove ? (
+            <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {onEdit ? (
+                <IconTooltip label={editLabel}>
+                  <button
+                    type="button"
+                    aria-label={editLabel}
+                    onClick={startEditing}
+                    disabled={busy}
+                    className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    <SquarePenIcon className="size-3.5" />
+                  </button>
+                </IconTooltip>
+              ) : null}
+              {onRemove ? (
+                <IconTooltip label={removeLabel}>
+                  <button
+                    type="button"
+                    aria-label={removeLabel}
+                    onClick={() => void remove()}
+                    disabled={busy}
+                    className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </button>
+                </IconTooltip>
+              ) : null}
+            </span>
           ) : null}
         </span>
       ) : null}
@@ -299,7 +319,7 @@ export function UserBubble({
         </span>
       ) : null}
       {missing > 0 ? (
-        <span className="mt-1 block text-xs text-soft-foreground">
+        <span className="mt-1 block text-label text-muted-foreground">
           {missing} image{missing > 1 ? 's' : ''} attached
         </span>
       ) : null}
@@ -331,9 +351,66 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 text-[15px] leading-[1.65]">
+    <div data-slot="assistant-message" className={cn('group min-w-0 leading-[1.65]', THREAD_PROSE_MEASURE)}>
+      {text.trim() !== '' ? (
+        <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div>
+      ) : null}
       <Markdown>{text}</Markdown>
     </div>
+  )
+}
+
+/**
+ * Copies the original message source, rather than the rendered Markdown. The control is always
+ * in the tab order (including touch and keyboard use); only edit/remove remain hover-revealed.
+ * Clipboard support is optional in local/embedded browsers, so every access is guarded and
+ * rejected writes become honest, non-throwing feedback.
+ */
+export function CopyMessageButton({ text }: { text: string }) {
+  const [feedback, setFeedback] = useState<'idle' | 'success' | 'failure'>('idle')
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+  }, [])
+
+  const copy = async () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+    try {
+      const writeText = typeof navigator !== 'undefined' ? navigator.clipboard?.writeText : undefined
+      if (typeof writeText !== 'function') throw new Error('Clipboard unavailable')
+      await writeText.call(navigator.clipboard, text)
+      setFeedback('success')
+    } catch {
+      setFeedback('failure')
+    }
+    timer.current = setTimeout(() => setFeedback('idle'), 2200)
+  }
+
+  const label =
+    feedback === 'success' ? 'Message copied' : feedback === 'failure' ? 'Could not copy message' : 'Copy message'
+  return (
+    <span className="inline-flex items-center gap-1">
+      <IconTooltip label="Copy message">
+        <button
+          type="button"
+          aria-label="Copy message"
+          onClick={() => void copy()}
+          className="rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          {feedback === 'success' ? (
+            <CheckIcon aria-hidden className="size-3.5" />
+          ) : (
+            <ClipboardIcon aria-hidden className="size-3.5" />
+          )}
+        </button>
+      </IconTooltip>
+      {feedback !== 'idle' ? (
+        <span role="status" aria-live="polite" aria-label={label} className="text-meta text-soft-foreground">
+          {label}
+        </span>
+      ) : null}
+    </span>
   )
 }
 
@@ -343,9 +420,12 @@ export function NoteLine({ note }: { note: ThreadNote }) {
     <div
       data-slot="note-line"
       data-tone={note.tone}
-      className={cn('px-0.5 text-xs', note.tone === 'danger' ? 'text-danger' : 'text-soft-foreground')}
+      className={cn(
+        'px-0.5 text-label',
+        note.tone === 'danger' ? 'text-danger' : note.tone === 'info' ? 'text-foreground' : 'text-soft-foreground',
+      )}
     >
-      {note.tone === 'danger' ? '✗ ' : '· '}
+      {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
     </div>
   )
@@ -359,6 +439,10 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
+  antigravity: 'Antigravity CLI',
+  gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */
@@ -375,7 +459,7 @@ export function ProviderAuthRequiredCard({
       data-slot="provider-auth-required"
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">
+      <p className="text-ui font-semibold text-foreground">
         This run needed {label} authorization
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -411,7 +495,7 @@ function AccountAuthRequiredCard({
       data-profile-id={profileId}
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">
+      <p className="text-ui font-semibold text-foreground">
         This run needed {label} account “{account}” to be signed in
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -430,7 +514,9 @@ function AccountAuthRequiredCard({
 
 /** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
  *  update the way they were installed, so the card says so instead of offering a 409. */
-const SELF_UPDATING = new Set<ThreadProviderAuthRequired['provider']>(['claude', 'opencode', 'cursor'])
+const SELF_UPDATING: Record<ThreadProviderAuthRequired['provider'], boolean> = {
+  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, omp: false, antigravity: false, gemini: false, kimi: false,
+}
 
 /** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
  *  or shows the command to run when no terminal can be opened. */
@@ -460,8 +546,8 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
       data-slot="agent-update-required"
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">{label} needs an update</p>
-      {SELF_UPDATING.has(incident.provider) ? (
+      <p className="text-ui font-semibold text-foreground">{label} needs an update</p>
+      {SELF_UPDATING[incident.provider] ? (
         <>
           <p className="mt-1 text-xs text-muted-foreground">
             Update it, then continue the task.
@@ -514,7 +600,7 @@ export function ReasoningItem({ text }: { text: string }) {
     <Collapsible data-slot="reasoning" className="group/reasoning min-w-0">
       <div
         id={previewId}
-        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-[13px] text-soft-foreground hover:text-muted-foreground"
+        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-ui text-soft-foreground hover:text-muted-foreground"
       >
         <ChevronRightIcon
           aria-hidden
@@ -533,7 +619,7 @@ export function ReasoningItem({ text }: { text: string }) {
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-[13px] leading-[1.6] text-soft-foreground">
+        <div className={cn('px-6 py-1.5 leading-[1.6] text-muted-foreground', THREAD_PROSE_MEASURE)}>
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>
@@ -562,19 +648,23 @@ export function WorkingIndicator({ since, lastActivityAt }: { since?: string; la
     <div
       data-slot="working-indicator"
       // Wraps rather than overflows: with both stamps the line outgrows a 320px phone column.
-      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-[13px] text-soft-foreground"
+      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-ui text-soft-foreground"
     >
       <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
       <span className="shimmer font-medium">Working…</span>
       {elapsed !== undefined ? (
-        <span data-slot="working-elapsed" title={`Started ${exactLabel(since)}`} className="font-mono text-xs tabular-nums">
-          {elapsed}
-        </span>
+        <IconTooltip label={`Started ${exactLabel(since)}`}>
+          <span data-slot="working-elapsed" className="font-mono text-label tabular-nums">
+            {elapsed}
+          </span>
+        </IconTooltip>
       ) : null}
       {quiet !== undefined && lastClock !== undefined ? (
-        <span data-slot="working-last-activity" title={exactLabel(lastActivityAt)} className="text-xs">
-          · last activity {lastClock} ({quiet} ago)
-        </span>
+        <IconTooltip label={exactLabel(lastActivityAt) ?? ''}>
+          <span data-slot="working-last-activity" className="text-label">
+            · last activity {lastClock} ({quiet} ago)
+          </span>
+        </IconTooltip>
       ) : null}
     </div>
   )
@@ -652,7 +742,7 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
           type="button"
           data-slot="tool-output-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-meta font-medium text-soft-foreground hover:text-foreground"
         >
           {expanded ? 'Show less' : `Show all ${lines} lines`}
         </button>
@@ -671,7 +761,7 @@ export function InlineDiffPreview({ diffs }: { diffs: FileDiff[] }) {
     <>
       {diffs.map((diff, index) => (
         <div key={`${diff.path}:${index}`} data-slot="diff-preview" className="min-w-0">
-          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-[11px] text-soft-foreground">
+          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-meta text-soft-foreground">
             {diff.path}
           </div>
           <pre className="overflow-x-auto py-2 font-mono text-xs leading-[1.7] whitespace-pre">
@@ -736,25 +826,34 @@ export function toolCommand(item: UiToolItem): string | undefined {
   return command !== undefined && command.trim() !== '' ? command : undefined
 }
 
-/** Copy for an expanded command — a sibling of the header trigger, since a button cannot nest one. */
-function CopyCommandButton({ command }: { command: string }) {
+/** Copy for any command — a sibling of the header trigger, since a button cannot nest one.
+ *  `reveal` hides it until the row is hovered or focused (pointer devices only), so a collapsed
+ *  row stays quiet; touch screens always show it. */
+function CopyCommandButton({ command, reveal = false }: { command: string; reveal?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
-    <button
-      type="button"
-      aria-label={copied ? 'Copied' : 'Copy command'}
-      onClick={() => {
-        void writeClipboard(command)
-          .then(() => {
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-          })
-          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
-      }}
-      className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
-    >
-      {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
-    </button>
+    <IconTooltip label={copied ? 'Copied' : 'Copy command'}>
+      <button
+        type="button"
+        aria-label={copied ? 'Copied' : 'Copy command'}
+        onClick={() => {
+          void writeClipboard(command)
+            .then(() => {
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            })
+            .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
+        }}
+        className={cn(
+          'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
+          reveal &&
+            !copied &&
+            '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
+        )}
+      >
+        {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+      </button>
+    </IconTooltip>
   )
 }
 
@@ -825,11 +924,11 @@ export function ToolCard({
         item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
-      <div className="flex min-w-0 items-start">
+      <div className="group/tool-row flex min-w-0 items-start">
       <CollapsibleTrigger
         disabled={!hasDetail}
         className={cn(
-          'group flex min-h-[28px] w-full min-w-0 gap-1.5 px-2.5 py-0.5 text-left text-[13px] enabled:hover:bg-muted',
+          'group flex min-h-[28px] w-full min-w-0 gap-1.5 px-2.5 py-0.5 text-left text-ui enabled:hover:bg-muted',
           // A wrapped multi-line command pins the chevron, verb and chips to its first line.
           expandedCommand !== undefined ? 'items-start [&>svg]:mt-[7px] [&>span]:mt-[2px]' : 'items-center',
         )}
@@ -868,13 +967,13 @@ export function ToolCard({
           {busy ? (
             <LoaderCircleIcon role="status" aria-label="Running" className="size-3.5 animate-spin text-soft-foreground" />
           ) : null}
-          {item.status === 'failed' ? <span className="text-xs text-muted-foreground">failed</span> : null}
-          {item.status === 'declined' ? <span className="text-xs text-soft-foreground">declined</span> : null}
+          {item.status === 'failed' ? <span className="text-label text-muted-foreground">failed</span> : null}
+          {item.status === 'declined' ? <span className="text-label text-muted-foreground">declined</span> : null}
           {item.toolKind === 'execute' && typeof item.exitCode === 'number' ? (
             <span
               data-slot="tool-exit"
               className={cn(
-                'rounded-full px-2 py-px font-mono text-[10.5px] font-semibold',
+                'rounded-full px-2 py-px font-mono text-micro font-semibold',
                 item.exitCode === 0 ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger',
               )}
             >
@@ -883,7 +982,9 @@ export function ToolCard({
           ) : null}
         </span>
       </CollapsibleTrigger>
-      {expandedCommand !== undefined ? <CopyCommandButton command={expandedCommand} /> : null}
+      {/* Every command is copyable, short ones too: the header text sits inside a button and
+          cannot be reliably selected. Copies the raw input, never the capped title. */}
+      {command !== undefined ? <CopyCommandButton command={command} reveal={expandedCommand === undefined} /> : null}
       </div>
       <CollapsibleContent>
         <div className="border-t border-border bg-card-2 empty:hidden">
@@ -912,7 +1013,7 @@ export function ToolCard({
 export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope?: string }) {
   return (
     <Collapsible data-slot="ctx-group" className="min-w-0">
-      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-ui font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
         <ChevronRightIcon
           aria-hidden
           className="size-3.5 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-90"
@@ -935,7 +1036,7 @@ export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope
 export function ToolStreak({ count, children }: { count: number; children: ReactNode }) {
   return (
     <Collapsible data-slot="tool-streak" className="min-w-0">
-      <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-xs text-soft-foreground hover:text-muted-foreground">
+      <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-label text-muted-foreground hover:text-foreground">
         <ChevronRightIcon
           aria-hidden
           className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"

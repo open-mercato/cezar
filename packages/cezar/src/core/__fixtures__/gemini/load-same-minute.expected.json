@@ -1,0 +1,7 @@
+[
+  {
+    "type": "session.error",
+    "message": "Internal error: No previous sessions found for this project.",
+    "fatal": false
+  }
+]

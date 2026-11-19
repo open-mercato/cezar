@@ -1,0 +1,44 @@
+/// Where a cold launch goes: the "In the shell" table of the spec, and nothing else.
+enum StartDecision {
+    enum Route {
+        case manager, rootManagersOff, rootOldServer, rootLogin
+        case askCredentials, passwordRejected, localMode, connectionError
+        case cezarOffline, relayDown, deviceRemoved, protocolMismatch, emailUnconfirmed, accountRequired, suspended, termsRequiredDevice
+    }
+
+    static func decide(_ health: HealthAnswer, passwordSaved: Bool) -> Route {
+        switch health.kind {
+        case .cezar:
+            guard let managers = health.managers else { return .rootOldServer }
+            return managers ? .manager : .rootManagersOff
+        case .basicGate:
+            return passwordSaved ? .passwordRejected : .askCredentials
+        case .localMode:
+            return .localMode
+        case .loginPage:
+            return .rootLogin
+        case .cezarOffline, .notAnswering:
+            return .cezarOffline
+        case .relayDown, .quota:
+            return .relayDown
+        case .deviceRemoved:
+            return .deviceRemoved
+        case .updateApp, .updateCezar:
+            return .protocolMismatch
+        case .emailUnconfirmed:
+            return .emailUnconfirmed
+        case .accountRequired:
+            return .accountRequired
+        case .suspended:
+            return .suspended
+        case .termsRequiredDevice:
+            return .termsRequiredDevice
+        default:
+            return .connectionError
+        }
+    }
+
+    static func path(_ route: Route) -> String {
+        route == .manager ? "/manager" : "/"
+    }
+}

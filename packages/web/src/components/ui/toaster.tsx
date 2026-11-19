@@ -165,7 +165,7 @@ export function Toaster() {
           data-tone={item.tone}
           data-state={item.exiting ? 'closed' : 'open'}
           className={cn(
-            'pointer-events-auto max-w-[min(360px,calc(100vw-32px))] rounded-md px-3.5 py-2.5 text-[13px] font-medium shadow-modal',
+            'pointer-events-auto max-w-[min(360px,calc(100vw-32px))] rounded-md px-3.5 py-2.5 text-ui font-medium shadow-modal',
             // tw-animate-css utilities (imported in styles/index.css), the same vocabulary the
             // shadcn primitives use. motion-safe: so `prefers-reduced-motion` keeps the instant
             // appear/disappear it had before.

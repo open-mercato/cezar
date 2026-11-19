@@ -1,9 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { queryKeys } from '@/api/queries'
 import { resetViewMemory } from '@/lib/view-memory'
 import type { ApiRun, HealthResponse } from '@open-mercato/cezar-api-client'
 
@@ -12,8 +13,8 @@ import { reviveState, type ViewId } from './layout-state'
 // The terminal needs xterm and a PTY; this suite is about the layout, so the view stands in and
 // says how it was mounted (a column fills, the drawer docks).
 vi.mock('./terminal-drawer', () => ({
-  TerminalDrawer: ({ runId, fill }: { runId: string; fill?: boolean }) => (
-    <section data-testid="terminal" data-run={runId} data-fill={fill ? '' : undefined} />
+  TerminalDrawer: ({ scope, fill }: { scope: { runId: string | null }; fill?: boolean }) => (
+    <section data-testid="terminal" data-run={scope.runId ?? undefined} data-fill={fill ? '' : undefined} />
   ),
 }))
 vi.mock('../workflow-graph/task-graph', () => ({
@@ -23,6 +24,8 @@ vi.mock('../workflow-graph/task-graph', () => ({
 const { TaskWorkspaceRoute, classifyReference } = await import('./task-workspace')
 
 let hostLayouts: Record<string, unknown> = {}
+/** `GET /runs/r1/artifacts` (spec 2026-10-22-html-artifacts-and-impact). */
+let hostArtifacts: { artifacts: unknown[]; truncated: boolean } = { artifacts: [], truncated: false }
 /** `~/.cezar/ui-state.json`: where layouts saved for every task live (`savedLayouts`). */
 let hostUiState: Record<string, unknown> = {}
 
@@ -30,6 +33,7 @@ beforeEach(() => {
   localStorage.clear()
   hostLayouts = {}
   hostUiState = {}
+  hostArtifacts = { artifacts: [], truncated: false }
   // jsdom lays nothing out; give the strip room so it does not fold every card into `…`.
   vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(2000)
 })
@@ -63,6 +67,7 @@ const RUN: ApiRun = {
 
 const health = (terminal: boolean): HealthResponse => ({
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -78,6 +83,7 @@ const health = (terminal: boolean): HealthResponse => ({
     tokenUsageMetrics: true,
     costMetrics: true,
     followups: false,
+    phonePairing: false,
     singleProject: false,
     automations: false,
     webhooks: false,
@@ -105,6 +111,7 @@ function stubFetch({ terminal = true }: { terminal?: boolean } = {}) {
         return jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } })
       }
       if (method === 'GET' && path.startsWith(`/api/v1/runs/${RUN.id}/commits`)) return jsonResponse({ commits: [] })
+      if (method === 'GET' && path === `/api/v1/runs/${RUN.id}/artifacts`) return jsonResponse(hostArtifacts)
       if (method === 'GET' && path.startsWith(`/api/v1/runs/${RUN.id}/files`)) {
         return jsonResponse({ type: 'dir', path: '', entries: [] })
       }
@@ -173,7 +180,7 @@ describe('the task workspace (main)', () => {
     await ready()
 
     // Changes second; Terminal last, as a tab that toggles the drawer.
-    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Terminal'])
+    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Terminal'])
     expect(activeCard()).toBe('Chat')
     // One strip, never both: the old route links are gone from the header.
     expect(screen.queryByRole('link', { name: 'Changes' })).toBeNull()
@@ -195,7 +202,7 @@ describe('the task workspace (main)', () => {
 
     fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
     // The six views, then Notes — saved layouts are not numbered.
-    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6', '7']))
+    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']))
     fireEvent.keyUp(window, { key: 'Meta' })
     await waitFor(() => expect(hints()).toEqual([]))
     vi.unstubAllGlobals()
@@ -616,6 +623,18 @@ describe('the task workspace (main)', () => {
   })
 })
 
+describe('the task workspace — unknown run', () => {
+  it('"Back to tasks" goes to the task list — `/` is the Now page', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ error: 'not found' }, 404)),
+    )
+    renderWorkspace()
+    const link = await screen.findByRole('link', { name: 'Back to tasks' })
+    expect(link.getAttribute('href')).toBe('/tasks')
+  })
+})
+
 describe('classifyReference', () => {
   it('claims task paths and commit shas, and leaves prose alone', () => {
     expect(classifyReference('src/app.ts:12')).toEqual({ view: 'files', value: 'src/app.ts' })
@@ -623,5 +642,215 @@ describe('classifyReference', () => {
     expect(classifyReference('3f7eaf02')).toEqual({ view: 'commits', value: '3f7eaf02' })
     expect(classifyReference('/etc/passwd')).toBeNull()
     expect(classifyReference('e.g')).toBeNull()
+  })
+})
+
+describe('the task workspace — Assets (spec 2026-10-22-html-artifacts-and-impact)', () => {
+  const DEMO = { name: 'demo.html', kind: 'html', title: 'Dry-run demo', size: 10, updatedAt: '2026-10-22T10:00:00.000Z' }
+  const NOTES = { name: 'notes.md', kind: 'markdown', title: 'Notes', size: 10, updatedAt: '2026-10-22T11:00:00.000Z' }
+  const badge = () => document.querySelector('[data-fixed="assets"] [data-slot="tab-badge"]')?.textContent ?? null
+
+  it('deep-links to the Assets view, framing the published page, with a count on its tab', async () => {
+    stubFetch()
+    hostArtifacts = { artifacts: [DEMO], truncated: false }
+    renderWorkspace('assets' as ViewId)
+    await ready()
+    await waitFor(() => expect(document.querySelector('iframe[title="Dry-run demo"]')).not.toBeNull())
+    expect(activeCard()).toBe('Assets1')
+    expect(badge()).toBe('1')
+  })
+
+  it('the listing the SSE frame replaces bumps the tab badge live', async () => {
+    stubFetch()
+    hostArtifacts = { artifacts: [DEMO], truncated: false }
+    const client = createQueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskWorkspaceRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await ready()
+    await waitFor(() => expect(badge()).toBe('1'))
+    act(() => {
+      client.setQueryData(queryKeys.runs.artifacts('r1'), { artifacts: [DEMO, NOTES], truncated: false })
+    })
+    await waitFor(() => expect(badge()).toBe('2'))
+  })
+
+  it('shows no badge while the run has published nothing', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(document.querySelector('[data-fixed="assets"]')).not.toBeNull())
+    expect(badge()).toBeNull()
+  })
+})
+
+describe('the grouped view strip (design 2026-11, Proposal 3)', () => {
+  const RUN_WITH_DIFF: ApiRun = { ...RUN, diffStat: { adds: 68, dels: 15, files: 3 } }
+  const stubWithRun = (record: ApiRun) => {
+    stubFetch()
+    const base = vi.mocked(fetch)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      if ((init.method ?? 'GET') === 'GET' && (path === `/api/v1/runs/${record.id}` || path === '/api/v1/runs')) {
+        return jsonResponse(path === '/api/v1/runs' ? [record] : record)
+      }
+      return base(input, init)
+    }))
+  }
+
+  it("reads Chat | Changes · Commits · Files | Notes · Preview · Assets · Terminal — main's 1–9 order", async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const strip = document.querySelector('[data-slot="layout-cards"]') as HTMLElement
+    const row = [...strip.querySelectorAll('[data-strip-item], [data-strip-separator]')].map((node) =>
+      node.hasAttribute('data-strip-separator') ? '|' : text(node),
+    )
+    expect(row).toEqual(['Chat', '|', 'Changes', 'Commits', 'Files', '|', 'Notes', 'Preview', 'Assets', 'Terminal'])
+    expect(strip.querySelectorAll('[role="separator"]')).toHaveLength(2)
+  })
+
+  it('the Changes tab counts the files the run changed; nothing while it changed none', async () => {
+    stubWithRun(RUN_WITH_DIFF)
+    renderWorkspace()
+    await ready()
+    const changes = document.querySelector('[data-slot="layout-card"][data-fixed="changes"]') as HTMLElement
+    expect(changes.querySelector('[data-slot="tab-badge"]')?.textContent).toBe('3')
+    cleanup()
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    expect(document.querySelector('[data-fixed="changes"] [data-slot="tab-badge"]')).toBeNull()
+  })
+
+  it('a grouped tab still carries the view drag payload, and ⌥-click still opens it beside', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const files = document.querySelector('[data-slot="layout-card"][data-fixed="files"]') as HTMLElement
+    expect(files.getAttribute('draggable')).toBe('true')
+    const data = new Map<string, string>()
+    const dataTransfer = {
+      setData: (type: string, value: string) => data.set(type, value),
+      getData: (type: string) => data.get(type) ?? '',
+      get types() {
+        return [...data.keys()]
+      },
+      effectAllowed: 'all',
+      dropEffect: 'none',
+    }
+    fireEvent.dragStart(files, { dataTransfer })
+    expect(data.get('text/cez-view')).toBe('files')
+    fireEvent.dragEnd(files, { dataTransfer })
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="graph"], [data-fixed="commits"]')!, { altKey: true })
+    await waitFor(() => expect(activeCard()).toBe('Custom'))
+    expect(columnViews()).toEqual(['session', 'commits'])
+  })
+
+  it('on a phone the row scrolls, every tab on it, instead of folding into …', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 767px)',
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(300)
+    vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
+      if (this.getAttribute('data-slot') !== 'layout-cards') return 0
+      return this.querySelectorAll('[data-slot="layout-card"]').length * 100 + 60
+    })
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Terminal']))
+    expect(screen.queryByRole('button', { name: /more views/ })).toBeNull()
+    const strip = document.querySelector('[data-slot="layout-cards"]') as HTMLElement
+    expect(strip.className).toContain('overflow-x-auto')
+    expect(strip.querySelector('[data-slot="strip-fade"]')).not.toBeNull()
+  })
+})
+
+describe('the built-in Review layout', () => {
+  it('is offered in every task, marked built-in, and opens Chat beside Changes', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    expect(activeCard()).toBe('Chat')
+    openLayoutMenu()
+    const row = await screen.findByRole('menuitem', { name: /Review/ })
+    expect(row.getAttribute('data-layout-kind')).toBe('built-in')
+    expect(row.querySelector('[data-slot="layout-built-in"]')?.textContent).toBe('Built-in')
+    fireEvent.click(row)
+    await waitFor(() => expect(activeCard()).toBe('Review'))
+    expect(columnViews()).toEqual(['session', 'changes'])
+    // A choice the user made is the task's saved state, as any layout switch is; nothing new.
+    await waitFor(() => expect(reviveState(hostLayouts.r1 ?? null).active).toBe('Review'))
+    expect(hostUiState.savedLayouts).toBeUndefined()
+  })
+
+  it('is never the default of a never-opened task: Chat alone, even on a wide window', async () => {
+    // Owner review (2026-11-12): Changes is opened by the user, not for them.
+    vi.stubGlobal('innerWidth', 1400)
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    expect(activeCard()).toBe('Chat')
+    expect(columnViews()).toEqual(['session'])
+    // Merely opening the task writes nothing: the host still has never heard of it.
+    expect(hostLayouts.r1).toBeUndefined()
+  })
+
+  it('a task with saved layouts keeps them — the default is for the first visit only', async () => {
+    vi.stubGlobal('innerWidth', 1400)
+    hostLayouts.r1 = { layouts: [{ name: 'Files', columns: [{ view: 'files', width: 100 }] }], active: 'Files' }
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    expect(activeCard()).toBe('Files')
+  })
+
+  it('a user layout saved under the same name stands in for it; deleting that brings it back', async () => {
+    hostUiState = { savedLayouts: [{ name: 'Review', columns: [{ view: 'files', width: 50 }, { view: 'changes', width: 50 }] }] }
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    openLayoutMenu()
+    const rows = await screen.findAllByRole('menuitem', { name: /Review/ })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.getAttribute('data-layout-kind')).toBe('saved')
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete saved layout Review' }))
+    await waitFor(() => expect(hostUiState.savedLayouts).toEqual([]))
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: /Review/ }).getAttribute('data-layout-kind')).toBe('built-in'))
+  })
+
+  it('can be hidden on this browser, and shown again — never deleted', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    openLayoutMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Review/ }))
+    await waitFor(() => expect(activeCard()).toBe('Review'))
+    openLayoutMenu()
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide built-in layout Review' }))
+    // Gone from the saved list; the card this task already opened stays its own ("This task").
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: /^Review/ }).getAttribute('data-layout-kind')).toBe('task'))
+    expect(localStorage.getItem('cez:hidden-layouts')).toBe('["Review"]')
+    // A fresh task opens on Chat, hidden or not.
+    cleanup()
+    hostLayouts = {}
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    expect(activeCard()).toBe('Chat')
+    openLayoutMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Show built-in layouts' }))
+    openLayoutMenu()
+    expect((await screen.findByRole('menuitem', { name: /Review/ })).getAttribute('data-layout-kind')).toBe('built-in')
+    expect(localStorage.getItem('cez:hidden-layouts')).toBeNull()
   })
 })

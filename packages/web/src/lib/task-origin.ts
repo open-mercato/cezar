@@ -69,6 +69,33 @@ export function automationIdOf<T extends OriginInput>(
   return root === undefined ? undefined : ownAutomationId(root)
 }
 
+/**
+ * A readable label for an automation id in the Tasks facet (#2100). The live definition wins, then
+ * a name the run itself recorded; once the definitions are known, an id with neither is a deleted
+ * automation, and a UUID is never shown. `names` is undefined while they are still loading.
+ */
+export function automationFacetLabel(
+  id: string,
+  names: ReadonlyMap<string, string> | undefined,
+  recorded?: ReadonlyMap<string, string>,
+): string {
+  const known = names?.get(id) ?? recorded?.get(id)
+  if (known) return known
+  return `${names ? 'Removed automation' : 'Automation'} · ${id.slice(0, 8)}`
+}
+
+/** Names runs carry on their own automation provenance (absent on older records). */
+export function recordedAutomationNames(runs: readonly OriginInput[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const run of runs) {
+    for (const source of [run.automation, run.automationTrigger, run.automationTracker]) {
+      const name = (source as { automationName?: unknown } | undefined)?.automationName
+      if (source && typeof name === 'string' && name.trim() && !out.has(source.automationId)) out.set(source.automationId, name)
+    }
+  }
+  return out
+}
+
 /** Does a run with this automation id (or none) belong under `origin`? */
 export function matchesOrigin(automationId: string | undefined, origin: TaskOrigin): boolean {
   if (origin === 'all') return true

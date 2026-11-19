@@ -1,7 +1,8 @@
 import { FolderSearchIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { Link, useParams } from 'react-router'
 
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
+import { ManagerBackLink } from './manager/manager-back-link'
 import { CenteredState } from '@/components/centered-state'
 
 /**
@@ -20,6 +21,7 @@ export function UnknownProjectRoute({
   projectId: string
   registry: ProjectsResponse
 }) {
+  const { id } = useParams()
   // The boot project is always openable even when the registry list is degraded-empty
   // (read-only home: the workspace file may not exist, but the boot repo is being served).
   const projects = registry.projects.length
@@ -28,6 +30,7 @@ export function UnknownProjectRoute({
 
   return (
     <div data-route="unknown-project" className="flex min-h-full flex-col">
+      {id ? <div className="px-4"><ManagerBackLink runId={id} /></div> : null}
       <CenteredState
         icon={<FolderSearchIcon />}
         tone="neutral"
@@ -47,7 +50,7 @@ export function UnknownProjectRoute({
                 className="flex items-baseline gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground shadow-xs transition-colors hover:bg-card-2"
               >
                 {project.name || project.id}
-                <span className="font-mono text-[11px] font-normal text-soft-foreground">/p/{project.id}</span>
+                <span className="font-mono text-meta font-normal text-soft-foreground">/p/{project.id}</span>
               </Link>
             </li>
           ))}

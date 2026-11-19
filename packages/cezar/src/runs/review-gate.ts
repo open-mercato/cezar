@@ -20,3 +20,17 @@ export function reviewGateEnabled(
   if (config.reviewGate !== undefined) return config.reviewGate;
   return env.CEZ_REVIEW_GATE === '1';
 }
+
+/** True when `diff` (a `worktreeDiff` answer) holds changes; a failed diff holds none. */
+export function diffHasChanges(diff: string): boolean {
+  return diff.trim().length > 0 && !diff.startsWith('(diff failed');
+}
+
+/**
+ * An Assess Impact run (spec 2026-10-22-html-artifacts-and-impact Q11) changes nothing in its
+ * worktree by construction: it still reaches the review gate — the report is what is reviewed —
+ * but there is no draft PR to offer for it.
+ */
+export function assessedWithoutChanges(run: { subject?: unknown }, diff: string): boolean {
+  return run.subject !== undefined && !diffHasChanges(diff);
+}

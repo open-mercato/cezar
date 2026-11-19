@@ -1,3 +1,4 @@
+import { bounded } from '@/api/bounded'
 import { deleteStagedUpload, stageUpload } from '@/api/client'
 import { reportAttachmentStagingFailed, trackAttachmentsRestaged } from '@/lib/telemetry'
 import { ATTACHMENT_UPLOAD_MISSING, type AttachmentEntry } from '@open-mercato/cezar-api-client'
@@ -14,6 +15,12 @@ import { toAttachmentInput, type PendingAttachment } from './composer-attachment
  */
 
 const staged = new Map<string, Promise<string | null>>()
+/** Uploads a size limit refused (#1735): sending the same bytes inline would meet the same wall. */
+const tooLarge = new Map<string, Error>()
+
+function isPayloadTooLarge(error: unknown): error is Error {
+  return error instanceof Error && (error as { status?: unknown }).status === 413
+}
 
 /** Start uploading now; idempotent per content. */
 export function stageAttachment(attachment: PendingAttachment): Promise<string | null> {
@@ -22,6 +29,7 @@ export function stageAttachment(attachment: PendingAttachment): Promise<string |
     pending = stageUpload(toAttachmentInput(attachment)).then(
       (upload) => (typeof upload?.uploadId === 'string' ? upload.uploadId : null),
       (error: unknown) => {
+        if (isPayloadTooLarge(error)) tooLarge.set(attachment.data, error)
         reportAttachmentStagingFailed(error)
         return null
       },
@@ -35,9 +43,23 @@ export function stageAttachment(attachment: PendingAttachment): Promise<string |
   return pending
 }
 
+/** How long a send waits for an upload. One stuck in a dropped tunnel never settles, and the
+ *  composer would sit on Sending… with it (relay incident 2026-11-15). */
+export const STAGING_TIMEOUT_MS = 90_000
+export const STAGING_INTERRUPTED =
+  "Couldn't reach cezar to upload your files, so this message was not sent. It's back in the box: send it again once you're reconnected."
+
 /** What goes on the wire: a reference once staged, the bytes inline when staging failed. */
 export async function toWireAttachment(attachment: PendingAttachment): Promise<AttachmentEntry> {
-  const uploadId = await stageAttachment(attachment)
+  const pending = stageAttachment(attachment)
+  const uploadId = await bounded(() => pending, STAGING_TIMEOUT_MS, STAGING_INTERRUPTED).catch((error: unknown) => {
+    // The hung upload is forgotten, so the next send starts a fresh one.
+    if (staged.get(attachment.data) === pending) staged.delete(attachment.data)
+    throw error
+  })
+  // #1735: a 413 on the upload (a proxy's body limit) cannot be dodged by sending the bytes inline.
+  const refused = tooLarge.get(attachment.data)
+  if (uploadId === null && refused) throw refused
   if (uploadId === null) return toAttachmentInput(attachment)
   return { uploadId, ...(attachment.originalName ? { name: attachment.originalName } : {}) }
 }
@@ -48,13 +70,17 @@ export function releaseStaged(attachments: readonly PendingAttachment[]): void {
     const pending = staged.get(attachment.data)
     if (!pending) continue
     staged.delete(attachment.data)
+    tooLarge.delete(attachment.data)
     void pending.then((id) => (id === null ? undefined : deleteStagedUpload(id))).catch(() => {})
   }
 }
 
 /** Forget the staged copies WITHOUT deleting them — the server no longer has them. */
 export function forgetStaged(attachments: readonly PendingAttachment[]): void {
-  for (const attachment of attachments) staged.delete(attachment.data)
+  for (const attachment of attachments) {
+    staged.delete(attachment.data)
+    tooLarge.delete(attachment.data)
+  }
 }
 
 export function isUploadMissing(error: unknown): boolean {
@@ -90,4 +116,5 @@ export async function sendWithStaged<T>(
 /** Test seam. */
 export function resetStaging(): void {
   staged.clear()
+  tooLarge.clear()
 }

@@ -1,6 +1,7 @@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import type { ReactNode } from 'react'
-import { cn } from '@/lib/utils'
+import { StatusDot } from '@/components/status-dot'
+import { deriveAttention, type AttentionInput } from '@/lib/attention'
 
 import type { SubagentSummary } from './subagent-dock'
 import type { ThreadAsk, ThreadEntry } from './thread-state'
@@ -62,18 +63,18 @@ function SheetBody({
   return (
     <>
       <SheetHeader className="gap-1.5 border-b border-border px-5 py-4">
-        <SheetTitle className="flex min-w-0 items-center gap-2 text-[15px]">
+        <SheetTitle className="flex min-w-0 items-center gap-2 text-lead">
           <span className="min-w-0 truncate">{agent.title}</span>
           {agent.agentType !== undefined ? (
             <span
               data-slot="agent-type"
-              className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
+              className="shrink-0 rounded-full bg-muted px-2 py-0.5 eyebrow text-muted-foreground"
             >
               {agent.agentType}
             </span>
           ) : null}
         </SheetTitle>
-        <SheetDescription data-slot="subagent-meta" className="flex items-center gap-2 text-xs">
+        <SheetDescription data-slot="subagent-meta" className="flex items-center gap-2 text-label">
           <StatusPill status={agent.status} />
           <span className="tabular-nums">
             {agent.toolCalls} {agent.toolCalls === 1 ? 'tool call' : 'tool calls'}
@@ -87,13 +88,24 @@ function SheetBody({
         mode="panel"
         renderAsk={renderAsk}
         empty={
-          <div data-slot="subagent-empty" className="py-2 text-[13px] text-muted-foreground">
+          <div data-slot="subagent-empty" className="py-2 text-ui text-muted-foreground">
             No attributed output — see the thread card for this agent&apos;s result.
           </div>
         }
       />
     </>
   )
+}
+
+/** The run state each sub-agent status stands for, so its dot is `deriveAttention`'s tone
+ *  (redesign 2026-11): a finished agent is calm plain text beside a still dot, a working one
+ *  the violet pulse — never a tinted pill. */
+const AGENT_RUN: Record<SubagentSummary['status'], AttentionInput> = {
+  completed: { status: 'done' },
+  failed: { status: 'failed' },
+  declined: { status: 'failed' },
+  running: { status: 'running' },
+  pending: { status: 'queued' },
 }
 
 /** Status as a word, not only a hue — the dock's glyphs do not survive being read aloud. */
@@ -108,17 +120,15 @@ function StatusPill({ status }: { status: SubagentSummary['status'] }) {
           : status === 'pending'
             ? 'Pending'
             : 'Running'
+  const attention = deriveAttention(AGENT_RUN[status])
   return (
     <span
       data-slot="subagent-status"
       data-status={status}
-      className={cn(
-        'rounded-full px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] uppercase',
-        status === 'completed' && 'bg-success/15 text-success',
-        (status === 'failed' || status === 'declined') && 'bg-danger/15 text-danger',
-        (status === 'running' || status === 'pending') && 'bg-muted text-muted-foreground',
-      )}
+      data-tone={attention.tone}
+      className="inline-flex items-center gap-1.5 text-label text-muted-foreground"
     >
+      <StatusDot tone={attention.tone} pulse={attention.pulse} />
       {label}
     </span>
   )

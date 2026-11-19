@@ -17,7 +17,7 @@ export function ScheduledTasks({ compact = false, enabled = true }: { compact?: 
   const items = query.data?.automations.filter(a => a.deferredStart) ?? []
   if (!items.length && !startedRuns.length) return null
   return <section aria-label="Scheduled tasks" className={compact ? 'px-2 py-3' : 'border-b p-4 md:px-5'}>
-    <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Scheduled · {items.length}</h2>
+    <h2 className="mb-2 eyebrow text-muted-foreground">Scheduled · {items.length}</h2>
     {startedRuns.length > 0 && <p role="status">This scheduled task already started. {startedRuns.map((id, index) => <Link key={id} to={`/tasks/${id}`} className="mr-3 underline">View run {index + 1}</Link>)}</p>}
     {compact ? items.map(item => <Link key={item.id} to={`/#scheduled-${item.id}`} className="block truncate rounded px-2 py-1.5 text-sm">◷ {item.name}</Link>) :
       <div className="grid gap-3">{items.map(item => <ScheduledTask key={item.id} item={item} onAlreadyStarted={setStartedRuns} />)}</div>}

@@ -38,8 +38,9 @@ export const MAX_SESSIONS = 32;
  *  cannot lock the user out of a terminal — and a wall of terminals cannot stop the stack. */
 export const MAX_SERVICE_SESSIONS = 24;
 
-/** The owner key of a project's own terminals (the Code page) — never a run id, which is a UUID. */
-export const projectTerminalOwner = (projectId: string): string => `project:${projectId}`;
+/** The owner key of a project's own terminals (the Terminal page) — never a run id, which is a UUID.
+ *  Keyed by the realpath'd ROOT, not the slug: the boot project answers to `default` and to its slug. */
+export const projectTerminalOwner = (projectRoot: string): string => `project:${projectRoot}`;
 /** The owner key of one pinned service's session. */
 export const serviceTerminalOwner = (projectId: string, serviceId: string): string => `service:${projectId}:${serviceId}`;
 

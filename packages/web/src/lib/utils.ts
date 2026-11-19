@@ -6,9 +6,13 @@ import { extendTailwindMerge } from 'tailwind-merge'
  * shadow *color* and let it coexist with `shadow-md` instead of overriding it. Teaching it the extra
  * step keeps "last utility wins" true for shadows too.
  * The radius scale needs no extension: sm/md/lg/xl are all stock names.
+ * The type scale (`--text-micro` … `--text-lead`, typography audit 2026-10-30) is the same story:
+ * unknown to it, `text-ui` reads as a text COLOUR, so `cn('text-ui', 'text-muted-foreground')`
+ * silently dropped the size — and `cn('text-primary-foreground', 'text-ui')` the colour.
  */
+export const TYPE_SCALE = ['text-micro', 'text-meta', 'text-label', 'text-ui', 'text-body', 'text-lead'] as const
 const twMerge = extendTailwindMerge({
-  extend: { classGroups: { shadow: ['shadow-modal'] } },
+  extend: { classGroups: { shadow: ['shadow-modal'], 'font-size': [...TYPE_SCALE] } },
 })
 
 /** Join conditional class names, letting later Tailwind utilities win over earlier conflicting ones. */

@@ -1,8 +1,9 @@
-import { XIcon } from 'lucide-react'
+import { PanelLeftCloseIcon, XIcon } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import {
   DEFAULT_SIDEBAR_WIDTH,
@@ -14,6 +15,7 @@ import {
   readStoredSidebarWidth,
   writeStoredSidebarWidth,
 } from '@/lib/sidebar-width'
+import { formatChord, isApplePlatform } from '@/lib/keybindings'
 import { cn } from '@/lib/utils'
 
 /**
@@ -103,6 +105,77 @@ function setSidebarWidth(next: number): void {
 export function useSidebarWidth(): [number, (width: number) => void] {
   const width = React.useSyncExternalStore(subscribeSidebarWidth, readSidebarWidth, readSidebarWidth)
   return [width, setSidebarWidth]
+}
+
+/** Whether the desktop column is folded into its rail. Browser-local, like the width (#788). */
+export const SIDEBAR_FOLDED_STORAGE_KEY = 'cez-sidebar-folded'
+
+const foldedListeners = new Set<() => void>()
+let unsavedFolded: boolean | null = null
+
+function readStoredFolded(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_FOLDED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function readSidebarFolded(): boolean {
+  return unsavedFolded ?? readStoredFolded()
+}
+
+function subscribeSidebarFolded(listener: () => void): () => void {
+  foldedListeners.add(listener)
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== SIDEBAR_FOLDED_STORAGE_KEY) return
+    unsavedFolded = null
+    listener()
+  }
+  window.addEventListener('storage', onStorage)
+  return () => {
+    foldedListeners.delete(listener)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+function setSidebarFolded(folded: boolean): void {
+  try {
+    if (folded) localStorage.setItem(SIDEBAR_FOLDED_STORAGE_KEY, '1')
+    else localStorage.removeItem(SIDEBAR_FOLDED_STORAGE_KEY)
+  } catch {
+    // Private mode / storage disabled: the fold still applies for this page.
+  }
+  unsavedFolded = readStoredFolded() === folded ? null : folded
+  for (const listener of foldedListeners) listener()
+}
+
+export function useSidebarFolded(): [boolean, (folded: boolean) => void] {
+  const folded = React.useSyncExternalStore(subscribeSidebarFolded, readSidebarFolded, readSidebarFolded)
+  return [folded, setSidebarFolded]
+}
+
+/** `aria-keyshortcuts` for the fold toggle (⌘B / Ctrl+B). */
+export const FOLD_ARIA_KEYS = isApplePlatform() ? 'Meta+B' : 'Control+B'
+
+/** The header button that folds the desktop column away. */
+export function SidebarFoldButton({ onFold, ref }: { onFold: () => void; ref?: React.Ref<HTMLButtonElement> }) {
+  return (
+    <IconTooltip label={`Hide sidebar (${formatChord('Mod+B')})`}>
+      <Button
+        ref={ref}
+        variant="ghost"
+        size="icon-sm"
+        data-slot="sidebar-fold"
+        aria-label="Hide sidebar"
+        aria-keyshortcuts={FOLD_ARIA_KEYS}
+        onClick={onFold}
+        className="-mr-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <PanelLeftCloseIcon className="size-4" aria-hidden="true" />
+      </Button>
+    </IconTooltip>
+  )
 }
 
 /**
@@ -211,27 +284,30 @@ function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
   }
 
   return (
-    <div
-      data-slot="sidebar-resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize the sidebar"
-      aria-valuenow={width}
-      aria-valuemin={MIN_SIDEBAR_WIDTH}
-      aria-valuemax={MAX_SIDEBAR_WIDTH}
-      tabIndex={0}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onKeyDown={onKeyDown}
-      onDoubleClick={() => onWidthChange(DEFAULT_SIDEBAR_WIDTH)}
-      title="Drag to resize the sidebar — double-click to reset"
-      // A 5px grab strip straddling the border, invisible until you reach for it. `touch-none`
-      // is load-bearing rather than decorative: without it a touch drag is claimed by the
-      // browser's own panning and scrolls the page instead of resizing the column.
-      className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
-    />
+    // The double-click reset is otherwise undiscoverable to a pointer (#788).
+    <IconTooltip label="Drag to resize — double-click to reset" side="right">
+      <div
+        data-slot="sidebar-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the sidebar"
+        aria-valuenow={width}
+        aria-valuemin={MIN_SIDEBAR_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        tabIndex={0}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onKeyDown={onKeyDown}
+        onDoubleClick={() => onWidthChange(DEFAULT_SIDEBAR_WIDTH)}
+        aria-description="Drag to resize, double-click to reset"
+        // A 5px grab strip straddling the border, invisible until you reach for it. `touch-none`
+        // is load-bearing rather than decorative: without it a touch drag is claimed by the
+        // browser's own panning and scrolls the page instead of resizing the column.
+        className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+      />
+    </IconTooltip>
   )
 }
 
@@ -247,9 +323,11 @@ function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
  * The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where there is no
  * second column to trade width with and no pointer to drag a border.
  */
-export function SidebarDrawer({ slot, title, children }: {
+export function SidebarDrawer({ slot, title, everyWidth = false, children }: {
   /** The `data-slot` the tests and e2e address this drawer by. */
   slot: string
+  /** The phone navigation's drawer: no sidebar takes over at `md`, so it stays. */
+  everyWidth?: boolean
   /** The dialog's accessible name — visually redundant with the brand lockup inside. */
   title: string
   /** The content, handed the drawer's close button to place in its header row — so every
@@ -270,7 +348,7 @@ export function SidebarDrawer({ slot, title, children }: {
       showCloseButton={false}
       // The drawer is the sidebar: same width, same surface token, and no padding of its own —
       // the content brings its own. `sm:max-w-none` sheds the primitive's sheet width cap.
-      className="w-[264px] gap-0 border-border bg-sidebar p-0 sm:max-w-none md:hidden"
+      className={cn('w-[264px] gap-0 border-border bg-sidebar p-0 sm:max-w-none', !everyWidth && 'md:hidden')}
       // Nav needs no prose description, and Radix warns when it cannot find the one it links to.
       aria-describedby={undefined}
     >

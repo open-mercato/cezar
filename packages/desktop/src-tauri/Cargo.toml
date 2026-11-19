@@ -18,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-global-shortcut = "2"
 ctrlc = { version = "3", features = ["termination"] }
 # The managed Node runtime (`node_runtime.rs`): the same crates the updater plugin already links.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
@@ -27,9 +28,13 @@ flate2 = "1"
 tar = "0.4"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 
-# The macOS agent trampoline (`disclaim.rs`) calls posix_spawn directly.
+# The macOS agent trampoline (`disclaim.rs`) calls posix_spawn directly. The notch (`notch.rs`) is
+# an NSPanel, which tao does not build: the same objc2 crates wry already links.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSObject"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSColor", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSScreen", "NSWindow"] }
 
 # Windows links `current` with a junction — a directory link that needs no privilege.
 [target.'cfg(windows)'.dependencies]

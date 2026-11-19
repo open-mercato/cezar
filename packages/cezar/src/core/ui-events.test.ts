@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RunnerId } from './agent-runner.ts';
+import type { Runner } from '@open-mercato/cezar-contract';
 import type {
   PlanEntry,
   StopReason,
@@ -29,7 +30,9 @@ function assertType<_T extends true>(): void {}
 describe('UiEvent vocabulary (compile-time contract)', () => {
   it('UiBackend stays in lockstep with RunnerId (no drift with agent-runner.ts)', () => {
     assertType<Equal<UiBackend, RunnerId>>();
-    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']).toBeDefined();
+    // …and both to the contract's own union, the single source every enumeration derives from.
+    assertType<Equal<UiBackend, Runner>>();
+    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'gemini']).toBeDefined();
   });
 
   it('enums match the research §7 vocabulary exactly', () => {
@@ -77,13 +80,14 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
       'permission.requested': 'reserved',
       'permission.resolved': 'reserved',
       'ask.requested': 'thread',
+      'ask.closed': 'thread',
       'usage.updated': 'gauge',
       'image': 'thread',
     } as const satisfies Record<UiEventType, 'thread' | 'meta' | 'dock' | 'gauge' | 'reserved'>;
 
     // And the map has no extra keys either: its key set IS the event set.
     assertType<Equal<keyof typeof renderRelevance, UiEventType>>();
-    expect(Object.keys(renderRelevance)).toHaveLength(15);
+    expect(Object.keys(renderRelevance)).toHaveLength(16);
   });
 
   it('the event union narrows on `type`', () => {
@@ -110,6 +114,7 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
         case 'permission.requested':
         case 'permission.resolved':
         case 'ask.requested':
+        case 'ask.closed':
         case 'image':
           return event.type;
         default: {

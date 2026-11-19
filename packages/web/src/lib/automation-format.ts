@@ -2,6 +2,7 @@ import {
   WEEKDAY_NAMES,
   hm,
   scheduleLabel,
+  schedulesOf,
   zonedParts,
   type AutomationDefinition,
   type RunStatus,
@@ -73,13 +74,14 @@ export function usd(value: number): string {
   return value >= 10 ? `$${value.toFixed(1)}` : `$${value.toFixed(2)}`
 }
 
-/** The dot beside a run's state: done → success, running → pending, failed → danger, review → violet. */
+/** The dot beside a run's state: done → success, running → pending, failed → danger, review → info
+ *  (waiting on a person — the status grammar's blue, never the violet accent). */
 export function statusTone(status: RunStatus): StatusDotTone {
   switch (status) {
     case 'done': return 'success'
     case 'running': case 'queued': case 'waiting': return 'pending'
     case 'failed': case 'cancelled': return 'danger'
-    case 'review': return 'violet'
+    case 'review': return 'info'
   }
 }
 
@@ -93,8 +95,8 @@ export function statusLabel(status: RunStatus): string {
 }
 
 /** The trigger cell: `on issue.opened · every 5 min` for a poll, `scheduleLabel` for a schedule. */
-export function triggerLabel(automation: Pick<AutomationDefinition, 'kind' | 'events' | 'intervalSeconds' | 'schedule' | 'trackerTrigger'>): string {
-  if (automation.kind === 'schedule' && automation.schedule) return scheduleLabel(automation.schedule)
+export function triggerLabel(automation: Pick<AutomationDefinition, 'kind' | 'events' | 'intervalSeconds' | 'schedule' | 'schedules' | 'trackerTrigger'>): string {
+  if (automation.kind === 'schedule') return schedulesOf(automation).map(scheduleLabel).join('; ')
   if (automation.kind === 'tracker') {
     const trigger = automation.trackerTrigger
     const provider = trigger?.association.kind === 'jira' ? 'Jira' : trigger?.association.kind === 'linear' ? 'Linear' : 'Tracker'

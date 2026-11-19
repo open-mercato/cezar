@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import quotaFailure from './__fixtures__/codex-usage-limit.json'
 
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
+import { isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiMessageItem, UiToolItem } from '@open-mercato/cezar-api-client'
 
@@ -256,6 +259,106 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(kinds(turns[1]!.items)).toEqual(['message', 'note'])
 
     expect(sessionEnded).toEqual({ reason: 'end_turn' })
+  })
+
+  it('does not render a provider failure twice when v1 error and v2 settle are both present', () => {
+    const { turns, sessionEnded } = reduceThread([
+      line(1, 'error', { message: "You've hit your usage limit. [usageLimitExceeded]" }),
+      line(2, 'session.ended', { reason: 'error' }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.items).toEqual([
+      {
+        kind: 'note',
+        id: 'v1:1',
+        text: "You've hit your usage limit. [usageLimitExceeded]",
+        tone: 'danger',
+      },
+    ])
+    expect(sessionEnded).toEqual({ reason: 'error' })
+  })
+
+  it.each(['mixed', 'reversed', 'v2-only'] as const)('preserves failure details once in a %s stream', (mode) => {
+    const message = "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]"
+    const v1 = line(1, 'error', { message, stepId: 'task' })
+    const v2 = line(2, 'session.error', { message, fatal: true, stepId: 'task' })
+    const events = mode === 'mixed' ? [v1, v2] : mode === 'reversed' ? [v2, v1] : [v2]
+    const { turns, sessionEnded } = reduceThread([
+      ...events,
+      line(3, 'session.ended', { reason: 'error', message, stepId: 'task' }),
+    ])
+    expect(turns.flatMap((turn) => turn.items)).toHaveLength(1)
+    expect(turns[0]!.items[0]).toMatchObject({ kind: 'note', text: message, tone: 'danger' })
+    expect(sessionEnded).toEqual({ reason: 'error', message })
+  })
+
+  it('retains distinct errors, repeated same-channel errors and errors from different steps', () => {
+    const { turns } = reduceThread([
+      line(1, 'error', { message: 'quota', stepId: 'one' }),
+      line(2, 'error', { message: 'quota', stepId: 'one' }),
+      line(3, 'session.error', { message: 'quota', fatal: true, stepId: 'two' }),
+      line(4, 'session.error', { message: 'other', fatal: true, stepId: 'one' }),
+      line(5, 'session.error', { message: 'quota', fatal: false, stepId: 'one' }),
+    ])
+    expect(turns.flatMap((turn) => turn.items)).toHaveLength(5)
+  })
+
+  it('does not pair identical errors across turns or sessions', () => {
+    const { turns } = reduceThread([
+      line(1, 'error', { message: 'quota' }),
+      line(2, 'session.started', { sessionId: 'next', backend: 'codex' }),
+      line(3, 'session.error', { message: 'quota', fatal: true }),
+      line(4, 'user-message', { text: 'try again' }),
+      line(5, 'error', { message: 'quota' }),
+    ])
+    expect(turns.flatMap((turn) => turn.items)).toHaveLength(3)
+  })
+
+  it('replays the actual Codex quota failure with one error and its scheduling note', () => {
+    const thread = reduceThread(quotaFailure as RunEvent[])
+    const message = quotaFailure[0]!.message!
+    const notes = thread.turns.flatMap((turn) => turn.items).filter((item) => item.kind === 'note')
+    expect(notes.map((note) => note.text)).toEqual([
+      message,
+      'usage limit reached — resuming automatically at Oct 16, 2026, 2:39:30 PM UTC',
+    ])
+    expect(threadFooter('failed', `continue failed: ${message}`, false, false, thread))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed' })
+    // The protocol keeps its full v2 failure payload.
+    expect(thread.sessionEnded?.message).toBe(message)
+  })
+
+  it('deduplicates a failure summary even if it arrives before its provider error', () => {
+    const thread = reduceThread([
+      line(1, 'lifecycle', { message: 'continue failed — quota' }),
+      line(2, 'session.error', { message: 'quota', fatal: true, stepId: 'work' }),
+      line(3, 'step-end', { stepId: 'work', status: 'failed', error: 'quota' }),
+      line(4, 'step-end', { stepId: 'work', status: 'failed', error: 'different error' }),
+    ])
+    expect(thread.turns.flatMap((turn) => turn.items).map((item) => item.kind === 'note' ? item.text : item.kind))
+      .toEqual(['quota', 'step work failed — different error'])
+  })
+
+  it('keeps failure summaries without a matching error and failures from other steps or turns', () => {
+    const thread = reduceThread([
+      line(1, 'error', { message: 'quota', stepId: 'one' }),
+      line(2, 'step-end', { stepId: 'two', status: 'failed', error: 'quota' }),
+      line(3, 'user-message', { text: 'try again' }),
+      line(4, 'lifecycle', { message: 'continue failed — quota' }),
+    ])
+    expect(thread.turns.flatMap((turn) => turn.items)).toHaveLength(3)
+    expect(threadFooter('failed', 'another failure', false, false, thread)?.state).toBe('closed')
+    expect(threadFooter('failed', 'another failure', false, false, thread))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed — another failure' })
+    expect(threadFooter('failed', 'continue failed: quota', false, false, thread))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed' })
+    const previousFailure = reduceThread([
+      line(1, 'error', { message: 'quota' }),
+      line(2, 'user-message', { text: 'try again' }),
+    ])
+    expect(threadFooter('failed', 'quota', false, false, previousFailure))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed — quota' })
   })
 
   it('the drop also works when a v1 line slips in BEFORE its v2 twin', () => {
@@ -605,17 +708,13 @@ describe('reduceThread — provider authorization recovery', () => {
     }])
   })
 
-  it('persists a junie authorization incident (the runner deliberately left unknown-but-usable)', () => {
+  it.each(RUNNER_IDS)('persists an incident for the %s runner', (provider) => {
     expect(reduceThread([
-      line(1, 'provider-auth-required', {
-        provider: 'junie',
-        authFailureId: 'incident-1',
-        stepId: 'work',
-      }),
+      line(1, 'provider-auth-required', { provider, authFailureId: 'incident-1' }),
     ]).turns[0]?.items).toEqual([{
       kind: 'provider-auth-required',
       id: 'v1:1',
-      provider: 'junie',
+      provider,
       authFailureId: 'incident-1',
     }])
   })
@@ -663,6 +762,20 @@ describe('reduceThread — outdated agent CLI', () => {
     ])
   })
 
+  it.each([false, true])('retains one update card while deduplicating fatal error twins (reversed=%s)', (reversed) => {
+    const twins = [
+      line(2, 'error', { message: OUTDATED }),
+      line(3, 'session.error', { message: OUTDATED, fatal: true }),
+    ]
+    const { turns } = reduceThread([
+      line(1, 'session.started', { sessionId: 's', backend: 'opencode' }),
+      ...(reversed ? twins.reverse() : twins),
+    ])
+    expect(turns[0]?.items.filter((item) => item.kind === 'note')).toHaveLength(1)
+    expect(turns[0]?.items.filter((item) => item.kind === 'agent-update-required'))
+      .toEqual([expect.objectContaining({ provider: 'opencode' })])
+  })
+
   it('offers nothing for other errors, or without a known backend', () => {
     const items = (events: RunEvent[]) => reduceThread(events).turns.flatMap((turn) => turn.items)
     expect(items([
@@ -705,6 +818,51 @@ describe('threadFooter', () => {
     })
     // The flag means nothing on any other status.
     expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
+  })
+
+  it('a cancelled run says who stopped it and why (spec 2026-10-31-managers)', () => {
+    expect(threadFooter('cancelled', undefined, false, false, undefined, { reason: 'review only', by: 'Coding Manager' })).toEqual({
+      state: 'closed',
+      tone: 'dim',
+      label: 'Cancelled by Coding Manager — review only',
+    })
+    expect(threadFooter('cancelled', undefined, false, false, undefined, {})).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
+  })
+
+  it('a legacy idle-closed run reads like done, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
+    const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
+    expect(threadFooter('failed', IDLE, false, true)).toEqual(threadFooter('done'))
+    expect(threadFooter('failed', IDLE, false, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
+    // Without the marker (an old record) it is still the red failure it always was.
+    expect(threadFooter('failed', IDLE)).toMatchObject({ tone: 'danger' })
+    // An unanswered question wins: the answer, not Continue, is the way forward.
+    expect(threadFooter('failed', IDLE, true, true)).toMatchObject({
+      label: 'Session closed — waiting for your answer, which reopens it',
+    })
+  })
+
+  it('a waiting run the timer closed keeps the plain waiting footer — no idle special case', () => {
+    const parked = { status: 'waiting', idleClosedAt: '2026-11-04T10:00:00.000Z' } as const
+    expect(threadFooter(parked.status, undefined, isAwaitingAnswer(parked), isIdleClosed(parked))).toEqual({ state: 'waiting' })
+  })
+})
+
+describe('an idle close in the transcript (spec 2026-11-04-idle-closed-attention-state)', () => {
+  const texts = (events: RunEvent[]) =>
+    reduceThread(events).turns.flatMap((t) => t.items).flatMap((i) => (i.kind === 'note' ? [[i.text, i.tone]] : []))
+
+  it('drops the red step failure for a flagged idle close, keeping the dim lines', () => {
+    const notes = texts([
+      line(1, 'lifecycle', { message: 'session closed after 1m of inactivity' }),
+      line(2, 'step-end', { stepId: 'task', status: 'failed', error: 'closed', idleClosed: true }),
+    ])
+    expect(notes).toEqual([['session closed after 1m of inactivity', 'dim']])
+  })
+
+  it('still shows an unflagged step failure in red (old records, real failures)', () => {
+    expect(texts([line(1, 'step-end', { stepId: 'task', status: 'failed', error: 'boom' })])).toEqual([
+      ['step task failed — boom', 'danger'],
+    ])
   })
 })
 
@@ -875,28 +1033,86 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(ask).toMatchObject({ kind: 'ask', id: 'ask_1', resolved: false })
   })
 
-  it('the next user-message resolves the ask and records the answer', () => {
-    const ask = allItems([
+  // Questions inbox: the card closes on the server's `ask.closed`, never on a reply alone.
+  it('a typed reply leaves the ask open; ask.closed answered resolves it with the answer', () => {
+    const events = [
       line(1, 'text', { text: 'options' }),
       line(2, 'ask.requested', ASK),
       line(3, 'user-message', { text: 'Library: date-fns', imageCount: 0 }),
-    ]).find((i) => i.kind === 'ask')
-    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    ]
+    expect(allItems(events).find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+    const ask = allItems([...events, line(4, 'ask.closed', { requestId: ASK.requestId, reason: 'answered', answer: 'Library: date-fns' })])
+      .find((i) => i.kind === 'ask')
+    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns', closed: { reason: 'answered' } })
   })
 
-  // The card outlives its session: the run closed with the question unanswered, and the
-  // answer arrives as the opening `user-message` of a CONTINUATION step (`POST /continue`,
-  // `runContinuation`). Nothing about resolution is session-scoped, and this pins that —
-  // it is what makes answering a closed run's question read the same as answering a live one.
-  it('a continuation step resolves an ask left pending when the session ended', () => {
+  it.each(['dismissed', 'replaced', 'retracted', 'expired', 'ended'] as const)('ask.closed %s closes the card with its reason', (reason) => {
     const ask = allItems([
-      line(1, 'text', { text: 'options', stepId: 'task' }),
-      line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
-      line(3, 'lifecycle', { message: 'session closed by user' }),
-      line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
-      line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+      line(1, 'ask.requested', ASK),
+      line(2, 'ask.closed', { requestId: ASK.requestId, reason, detail: 'why', replacedBy: 'ask_9', ts: '2026-11-18T10:00:00.000Z' }),
     ]).find((i) => i.kind === 'ask')
-    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    expect(ask).toMatchObject({ resolved: true, closed: { reason, detail: 'why', replacedBy: 'ask_9' } })
+    expect(ask).not.toHaveProperty('answer')
+  })
+
+  it('ignores an ask.closed for another card or with an unknown reason', () => {
+    const items = allItems([
+      line(1, 'ask.requested', ASK),
+      line(2, 'ask.closed', { requestId: 'someone-else', reason: 'dismissed' }),
+      line(3, 'ask.closed', { requestId: ASK.requestId, reason: 'vanished' }),
+    ])
+    expect(items.find((i) => i.kind === 'ask')).toMatchObject({ resolved: false })
+  })
+
+  // A recording made before `ask.closed` existed keeps the rule it was made under: the reply that
+  // followed an ask was its answer. Decided per ask from the record's `asks`, whatever the run status.
+  const askOf = (events: RunEvent[], options: Parameters<typeof reduceThread>[1], id = ASK.requestId) =>
+    reduceThread(events, options).turns.flatMap((turn) => turn.items).find((i) => i.kind === 'ask' && i.id === id)
+  const legacyEvents = [
+    line(1, 'text', { text: 'options', stepId: 'task' }),
+    line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
+    line(3, 'lifecycle', { message: 'session closed by user' }),
+    line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
+    line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+  ]
+
+  it('a pre-upgrade recording (record tracks no asks) reads the next user-message as the answer, whatever the run status', () => {
+    expect(askOf(legacyEvents, { trackedAsks: [] })).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+  })
+
+  it('a tracked ask stays open after a typed reply; an unloaded record reads nothing as legacy', () => {
+    expect(askOf(legacyEvents, { trackedAsks: [{ requestId: ASK.requestId }] })).toMatchObject({ resolved: false })
+    expect(askOf(legacyEvents, {})).toMatchObject({ resolved: false })
+  })
+
+  it('a run spanning the upgrade keeps the legacy rule for asks before it and the new one after', () => {
+    const NEW = { ...ASK, requestId: 'ask_2' }
+    const NEWER = { ...ASK, requestId: 'ask_3' }
+    const events = [
+      ...legacyEvents,
+      line(6, 'ask.requested', NEW),
+      line(7, 'ask.closed', { requestId: NEW.requestId, reason: 'dismissed' }),
+      line(8, 'ask.requested', NEWER),
+      line(9, 'user-message', { text: 'something else', imageCount: 0 }),
+    ]
+    // The record keeps only post-upgrade asks; the cap may already have dropped ask_2.
+    const options = { trackedAsks: [{ requestId: NEWER.requestId }] }
+    expect(askOf(events, options)).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+    expect(askOf(events, options, NEW.requestId)).toMatchObject({ resolved: true, closed: { reason: 'dismissed' } })
+    expect(askOf(events, options, NEWER.requestId)).toMatchObject({ resolved: false })
+  })
+
+  it('a graph gate asked after a closed CEZ:ASK card still closes on the next reply', () => {
+    const CARD = { ...ASK, requestId: 'ask_2' }
+    const GATE = { ...ASK, requestId: 'gate_1', source: 'workflow' }
+    const events = [
+      line(1, 'ask.requested', CARD),
+      line(2, 'ask.closed', { requestId: CARD.requestId, reason: 'answered', answer: 'Library: date-fns' }),
+      line(3, 'ask.requested', GATE),
+      line(4, 'user-message', { text: 'Library: luxon', imageCount: 0 }),
+    ]
+    // The record tracks CEZ:ASK cards only; the server never closes a gate.
+    expect(askOf(events, { trackedAsks: [{ requestId: CARD.requestId }] }, GATE.requestId)).toMatchObject({ resolved: true, answer: 'Library: luxon' })
   })
 
   it('drops an ask.requested with no valid questions', () => {

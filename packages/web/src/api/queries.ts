@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { hashKey, useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
@@ -7,6 +7,15 @@ import { mergeRun } from './events'
 import {
   ApiError,
   browseFs,
+  cancelAgentSetup,
+  cancelGithubLogin,
+  getAgentSetup,
+  startAgentSetup,
+  getGithubLogin,
+  getRepoSuggestions,
+  initProjectGit,
+  publishProjectGithub,
+  startGithubLogin,
   checkoutProject,
   createProject,
   getGithubOwners,
@@ -19,6 +28,8 @@ import {
   getAgentAccountDetails,
   getAgentAccountStatus,
   getAgentProfiles,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
   getConfig,
   getGithub,
   getGithubChecks,
@@ -48,6 +59,12 @@ import {
   getRunGitStatus,
   getRunDiff,
   getRunDrafts,
+  getRunArtifacts,
+  getImpactForSubject,
+  getProjectAssets,
+  impactSubjectKey,
+  startImpact,
+  getRunArtifactText,
   getRunFile,
   getRunHandoff,
   getRuns,
@@ -112,6 +129,8 @@ import type { ContinueOptions, RepoSyncAction } from './client'
 import type {
   RunsIndexResponse,
   CheckoutProjectInput,
+  ImpactSubjectInput,
+  StartImpactInput,
   CreateProjectInput,
   CreateAgentProfileInput,
   ApiRun,
@@ -123,10 +142,17 @@ import type {
   OpenAgentAccountFileInput,
   ProjectListEntry,
   ProjectsResponse,
+  GithubLoginState,
   GithubRefStatusData,
+  AgentSetupAction,
+  AgentSetupProvider,
+  AgentSetupState,
+  AgentProfilesResponse,
+  ProviderConnectInput,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
+  AgentFallbackCandidate,
   SelectAgentProfileInput,
   SetAgentConfigInput,
   TaskActionSurface,
@@ -196,6 +222,21 @@ export const queryKeys = {
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
     gitStatus: (id: string) => [queryScope(), 'runs', 'git-status', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
+    /** Under `runs`, so the reconnect reconcile (`runs.all`) refetches it too. */
+    artifacts: (id: string) => [queryScope(), 'runs', 'artifacts', id] as const,
+    /** The newest impact run per subject (`pr:<n>` / `spec:<path>`), under `runs` for the same
+     *  reconnect reconcile; the `artifacts` SSE frame patches it in place. */
+    impactSubject: (subjectKey: string) => [queryScope(), 'runs', 'impact-subject', subjectKey] as const,
+    get impactSubjects() {
+      return [queryScope(), 'runs', 'impact-subject'] as const
+    },
+    /** The project Assets page; the `artifacts` SSE frame invalidates it (global-events.tsx). */
+    get projectAssets() {
+      return [queryScope(), 'runs', 'project-assets'] as const
+    },
+    /** Keyed by `updatedAt`: a rewritten file is a new key, so the SSE listing alone refreshes it. */
+    artifactText: (id: string, name: string, updatedAt: string) =>
+      [queryScope(), 'runs', 'artifact-text', id, name, updatedAt] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
     /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
      *  background — see `useRunDrafts`. */
@@ -422,9 +463,14 @@ export const workspaceQueryKeys = {
   dashboard: ['workspace', 'dashboard'] as const,
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
+  agentSetup: ['workspace', 'providers', 'setup'] as const,
   projects: ['workspace', 'projects'] as const,
   /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
   githubOwners: ['workspace', 'github-owners'] as const,
+  /** `POST/GET/DELETE /api/v1/github/login` — the device flow cezar runs for the user. */
+  githubLogin: ['workspace', 'github-login'] as const,
+  /** `GET /api/v1/fs/repos` — the first-run "Pick a project" list. */
+  repoSuggestions: ['workspace', 'repo-suggestions'] as const,
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
@@ -444,6 +490,7 @@ export const workspaceQueryKeys = {
   /** Agent accounts via `GET /api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles).
    *  Workspace-led like the registry: an account describes the machine, not a repo. */
   agentProfiles: ['workspace', 'agent-profiles'] as const,
+  agentFallbackPolicy: (projectId: string) => ['workspace', 'agent-profiles', 'fallback-policy', projectId] as const,
   /** One account's identity, keyed by its route id. A child of `agentProfiles` so removing an
    *  account drops any details cached for it in the same invalidation. */
   agentAccountDetails: (routeId: string) =>
@@ -513,7 +560,11 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot }
+  const omp = useRunnerModels('omp', enabled)
+  const antigravity = useRunnerModels('antigravity', enabled)
+  const gemini = useRunnerModels('gemini', enabled)
+  const kimi = useRunnerModels('kimi', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, omp, antigravity, gemini, kimi }
 }
 
 export function useProviderStatus() {
@@ -551,6 +602,51 @@ export function useRefreshProviderStatus() {
       workspaceQueryKeys.providerStatus,
       (cached) => mergeProviderStatusResponse(requestStart, cached, result),
     ),
+  })
+}
+
+/** While a setup terminal runs, its exit code is the page's only signal: read it often, in a hidden
+ *  tab too, because the server forgets an exited session after a minute. Nothing is kept for a later
+ *  visit: a session remembered as running would read as one that vanished. */
+export function useAgentSetup() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentSetup,
+    queryFn: ({ signal }) => getAgentSetup({ signal }),
+    retry: false,
+    gcTime: 0,
+    refetchInterval: (state) => {
+      const data = state.state.data
+      return data?.available && data.session?.exitCode === null ? AGENT_SETUP_POLL_MS : false
+    },
+    refetchIntervalInBackground: true,
+  })
+}
+
+const AGENT_SETUP_POLL_MS = 1_000
+
+/** An install changes which runners the composer can offer. */
+export function useInvalidateHealth() {
+  const queryClient = useQueryClient()
+  return useCallback(() => void queryClient.invalidateQueries({ queryKey: queryKeys.health }), [queryClient])
+}
+
+export function useStartAgentSetup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ provider, action }: { provider: AgentSetupProvider; action: AgentSetupAction }) => startAgentSetup(provider, action),
+    retry: false,
+    // Written straight in: the polling above starts from this, even if the next read fails.
+    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
+  })
+}
+
+export function useCancelAgentSetup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (sessionId: string) => cancelAgentSetup(sessionId),
+    retry: false,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }
 
@@ -827,8 +923,8 @@ export function useAgentAccountStatus(routeId: string, enabled: boolean) {
 export function useConnectAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, profileId }: { provider: ProviderId; profileId?: string }) =>
-      connectProvider(provider, profileId),
+    mutationFn: ({ provider, profileId, reconnect }: ProviderConnectInput) =>
+      connectProvider(provider, profileId, reconnect),
     retry: false,
     onSuccess: async () => {
       await Promise.all([
@@ -849,10 +945,36 @@ export function useConnectAgentAccount() {
 export function useRecheckAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { recheck: true }),
+    mutationFn: async (routeId: string) => {
+      if (routeId === 'default:cursor') {
+        const cached = queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)
+        const profiles = queryClient.getQueryData<AgentProfilesResponse>(workspaceQueryKeys.agentProfiles)
+        const observed = cached?.providers.find((row) => row.provider === 'cursor')
+          ?? profiles?.profiles.find((row) => row.isDefault && row.provider === 'cursor')?.status
+        // Verify is explicit recovery; the retry endpoint refuses an incident newer than this click.
+        if (observed?.authFailureId) await retryProviderAuth('cursor', observed.authFailureId)
+      }
+      return getAgentAccountStatus(routeId, { recheck: true })
+    },
     retry: false,
-    onSuccess: (answer, routeId) => {
-      queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)
+    onMutate: () => queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus),
+    onSuccess: (answer, routeId, requestStart) => {
+      let verified = answer
+      const cached = queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)
+      if (routeId === `default:${answer.status.provider}` && cached) {
+        const response = { providers: cached.providers.map((row) => row.provider === answer.status.provider
+          ? { ...answer.status, enabled: answer.status.enabled ?? row.enabled }
+          : row) }
+        const merged = mergeProviderStatusResponse(requestStart, cached, response)
+        queryClient.setQueryData(workspaceQueryKeys.providerStatus, merged)
+        const status = merged.providers.find((row) => row.provider === answer.status.provider)
+        if (status) verified = { status }
+      }
+      queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), verified)
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentAccountDetails(routeId) })
+      if (answer.status.provider === 'cursor') {
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.models('cursor') })
+      }
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles })
     },
   })
@@ -889,6 +1011,114 @@ export function useCreateProject() {
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
   })
+}
+
+/** Repositories the first-run "Pick a project" list offers (spec 2026-10-26-first-run-onboarding).
+ *  Asked only while that screen is up; the list does not change while it is open. */
+export function useRepoSuggestions(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.repoSuggestions,
+    queryFn: ({ signal }) => getRepoSuggestions({ signal }),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/** "Initialize git here". A git init changes what the project IS, so every reader of its git
+ *  state — the registry status, the scoped repo info, health — is refetched. No retry: a second
+ *  attempt would only meet the 409 the first one caused. */
+export function useInitProjectGit() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (projectId: string) => initProjectGit(projectId),
+    retry: false,
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+      ]),
+  })
+}
+
+/** "Publish to GitHub". The project gains a GitHub remote, so the registry (forge), the scoped repo
+ *  info (remote) and health (forge availability) are refetched. No retry: a second attempt would
+ *  try to create the GitHub repository twice. */
+export function usePublishProjectGithub() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projectId, owner, name }: { projectId: string; owner: string; name: string }) =>
+      publishProjectGithub(projectId, { owner, name }),
+    retry: false,
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+      ]),
+  })
+}
+
+/**
+ * The GitHub sign-in cezar runs (spec 2026-10-26-first-run-onboarding, "Sign in does the work").
+ * `start` resolves with the one-time code; the query then polls every two seconds while `gh`
+ * waits for GitHub, and stops on `done`, `failed` or `idle`. `done` refetches everything that
+ * reads the signed-in state — owners, the GitHub tab, the registry's forge flags, health — and
+ * is reported through `onDone` exactly once, so the dialog can close itself.
+ */
+export function useGithubLogin(onDone?: (login: string | undefined) => void) {
+  const queryClient = useQueryClient()
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  // A login THIS hook started. Until it starts, nothing is read: the server keeps answering the
+  // previous login's `done` or `failed`, and a dialog must not close or fail on that before its
+  // own login has even begun. The cache is reset to `starting` the moment it does.
+  const watched = useRef(false)
+  const start = useMutation({
+    mutationFn: startGithubLogin,
+    retry: false,
+    onMutate: () => {
+      watched.current = true
+      queryClient.setQueryData<GithubLoginState>(workspaceQueryKeys.githubLogin, { status: 'starting' })
+    },
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.githubLogin, state),
+  })
+  const cancel = useMutation({
+    mutationFn: cancelGithubLogin,
+    retry: false,
+    onMutate: () => {
+      watched.current = false
+    },
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.githubLogin, state),
+  })
+  const query = useQuery({
+    queryKey: workspaceQueryKeys.githubLogin,
+    queryFn: ({ signal }) => getGithubLogin({ signal }),
+    enabled: start.isSuccess,
+    refetchInterval: (state) => {
+      const status = state.state.data?.status
+      return status === 'pending' || status === 'starting' ? 2_000 : false
+    },
+    staleTime: 0,
+    retry: false,
+  })
+  const state = watched.current || start.isPending || start.isSuccess ? query.data : undefined
+  const status = state?.status
+  const login = state?.status === 'done' ? state.login : undefined
+  useEffect(() => {
+    if (status !== 'done' || !watched.current) return
+    watched.current = false
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.githubOwners }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+      queryClient.invalidateQueries({ queryKey: [queryScope(), 'github'] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+    ])
+    doneRef.current?.(login)
+  }, [status, login, queryClient])
+  return { state, start, cancel }
 }
 
 /** The GitHub accounts (login + orgs) a new repo may belong to. Cached for the session: org
@@ -1229,6 +1459,62 @@ export function useRunFile(id: string | undefined, path: string | undefined) {
   })
 }
 
+/** A run's published artifacts. Kept live by the `artifacts` SSE frame, which REPLACES this
+ *  answer (global-events.tsx) — so no polling here. */
+export function useRunArtifacts(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.runs.artifacts(id ?? ''),
+    queryFn: ({ signal }) => getRunArtifacts(id as string, { signal }),
+    enabled: Boolean(id),
+    retry: false,
+  })
+}
+
+/** A markdown/JSON artifact's text, for the Assets view. */
+export function useRunArtifactText(id: string, name: string | undefined, updatedAt: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.runs.artifactText(id, name ?? '', updatedAt ?? ''),
+    queryFn: ({ signal }) => getRunArtifactText(id, name as string, { signal }),
+    enabled: name !== undefined && updatedAt !== undefined,
+    retry: false,
+    staleTime: Infinity,
+  })
+}
+
+/** "Open impact" for a PR or a spec (spec 2026-10-22-html-artifacts-and-impact § UI/UX). Kept live
+ *  without polling: the `artifacts` SSE frame patches its listing, and the run's status is read
+ *  from the stream-patched runs list by the control. */
+export function useImpactForSubject(subject: ImpactSubjectInput | null) {
+  return useQuery({
+    queryKey: queryKeys.runs.impactSubject(subject ? impactSubjectKey(subject) : ''),
+    queryFn: ({ signal }) => getImpactForSubject(subject as ImpactSubjectInput, { signal }),
+    enabled: subject !== null,
+    retry: false,
+  })
+}
+
+/** Every artifact across the project's runs (the project Assets page). Event-driven, never a
+ *  poll: the `artifacts` frame invalidates it, and it sits under `runs` for the reconnect reconcile. */
+export function useProjectAssets() {
+  return useQuery({
+    queryKey: queryKeys.runs.projectAssets,
+    queryFn: ({ signal }) => getProjectAssets({ signal }),
+    retry: false,
+  })
+}
+
+/** `POST /impact`; refreshes that subject's answer so the control flips to Assessing… at once. */
+export function useStartImpact() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: StartImpactInput) => startImpact(input),
+    onSuccess: (_result, input) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.impactSubject(impactSubjectKey(input.subject)) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })
+    },
+  })
+}
+
 /** The variant-compare data for `/compare/:groupId` (spec 010). Freshness while variants are
  *  still running is the ROUTE's concern: the group endpoint is not on the SSE stream, so the
  *  compare view invalidates this key when the run list (which IS stream-patched) shows a member
@@ -1348,8 +1634,12 @@ export function useSkills(enabled = true) {
   useEffect(() => {
     // Treat the follow-up as best-effort. The fast catalog remains authoritative
     // if an older server/proxy answers this additive request unexpectedly.
-    if (Array.isArray(ready.data)) queryClient.setQueryData([skillsScope, 'skills'], ready.data)
-  }, [queryClient, ready.data, skillsScope])
+    if (!Array.isArray(ready.data)) return
+    // Never let a cached snapshot replace a newer catalog (a later mount after Refresh, #1904).
+    const catalogUpdatedAt = queryClient.getQueryState([skillsScope, 'skills'])?.dataUpdatedAt ?? 0
+    if (ready.dataUpdatedAt < catalogUpdatedAt) return
+    queryClient.setQueryData([skillsScope, 'skills'], ready.data)
+  }, [queryClient, ready.data, ready.dataUpdatedAt, skillsScope])
 
   return skills
 }
@@ -1576,26 +1866,56 @@ export function useAgentProfiles() {
   })
 }
 
-/** The chip's refresh cadence — matches the server's `STAR_CACHE_TTL_MS`, which also paces
- *  itself to GitHub's rate limit, so a poll never costs more than one cached read. */
-export const STAR_COUNT_REFRESH_MS = 10_000
-
-/**
- * cezar's own star count, for the sidebar's ⭐ ask — refreshed every ten seconds while the tab is
- * visible (TanStack pauses `refetchInterval` in the background). No retry: the server answers
- * `{ available: false }` for every failure, and the next tick is the retry.
- */
-export function useStarCount(enabled = true) {
+export function useAgentFallbackPolicy(projectId: string | null) {
   return useQuery({
-    queryKey: workspaceQueryKeys.starCount,
-    queryFn: ({ signal }) => getStarCount({ signal }),
-    enabled,
-    staleTime: STAR_COUNT_REFRESH_MS,
-    refetchInterval: STAR_COUNT_REFRESH_MS,
+    queryKey: workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'),
+    queryFn: ({ signal }) => getAgentFallbackPolicy({ projectId: projectId ?? 'default' }, { signal }),
+    enabled: projectId !== null,
     retry: false,
-    refetchOnMount: false,
   })
 }
+
+export function useSaveAgentFallbackPolicy(projectId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { expectedRevision: number; expectedIncarnation: string | null; enabled: boolean; candidates: AgentFallbackCandidate[] }) =>
+      putAgentFallbackPolicy({ projectId: projectId ?? 'default', ...input }),
+    retry: false,
+    onSuccess: (data) => queryClient.setQueryData(workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'), data),
+  })
+}
+
+/** How old the count may get before the next re-read — matches the server's `STAR_CACHE_TTL_MS`. */
+export const STAR_COUNT_REFRESH_MS = 15 * 60_000
+
+/**
+ * cezar's own star count, for the sidebar's ⭐ ask. No timer of its own: once the count is
+ * fifteen minutes old, it is re-read only when some other query finishes a fetch, so a cockpit
+ * making no requests asks for nothing. No retry: the server answers `{ available: false }` for
+ * every failure, and the next piggybacked read is the retry.
+ */
+export function useStarCount(enabled = true) {
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    if (!enabled) return
+    return queryClient.getQueryCache().subscribe((event) => {
+      // A real fetch only — `setQueryData` (SSE patches) is `manual` and is not a request.
+      if (event.type !== 'updated' || event.action.type !== 'success' || event.action.manual) return
+      if (event.query.queryHash === starCountQueryHash) return
+      // Skips the request while the cached count is younger than `staleTime`.
+      void queryClient.prefetchQuery(starCountQueryOptions)
+    })
+  }, [enabled, queryClient])
+  return useQuery({ ...starCountQueryOptions, enabled, refetchOnMount: false })
+}
+
+const starCountQueryOptions = {
+  queryKey: workspaceQueryKeys.starCount,
+  queryFn: ({ signal }: { signal: AbortSignal }) => getStarCount({ signal }),
+  staleTime: STAR_COUNT_REFRESH_MS,
+  retry: false,
+} as const
+const starCountQueryHash = hashKey(workspaceQueryKeys.starCount)
 
 /** The opt-in telemetry answer. Read by the consent bar and Settings → Privacy; both write
  *  through `putTelemetryConsent` and set this cache from the answer. */
@@ -2018,12 +2338,20 @@ export function useGithubInfinite(limit = 50, enabled = true) {
   return useInfiniteQuery({
     queryKey: queryKeys.githubPages(limit),
     queryFn: ({ pageParam, signal }) =>
-      getGithub({ limit, issuesCursor: pageParam.issuesCursor, prsCursor: pageParam.prsCursor }, { signal }),
-    initialPageParam: { issuesCursor: undefined as string | undefined, prsCursor: undefined as string | undefined },
+      getGithub({ limit, ...pageParam }, { signal }),
+    initialPageParam: {
+      issuesCursor: undefined as string | undefined,
+      prsCursor: undefined as string | undefined,
+      issuesDone: false,
+      prsDone: false,
+    },
+    // A side with no next cursor is marked done so the server does not restart it (#1750).
     getNextPageParam: (last) => {
       const issuesCursor = last.issuesNextCursor ?? undefined
       const prsCursor = last.prsNextCursor ?? undefined
-      return issuesCursor || prsCursor ? { issuesCursor, prsCursor } : undefined
+      return issuesCursor || prsCursor
+        ? { issuesCursor, prsCursor, issuesDone: !issuesCursor, prsDone: !prsCursor }
+        : undefined
     },
     enabled,
     staleTime: 60_000,
@@ -2123,6 +2451,9 @@ export interface ReferenceStatusEntry {
    * `true` may paint anything.
    */
   conflicting?: boolean
+  /** What the forge says this number IS, when it is not what the chip asked for: `#2104` asked as
+   *  an issue that is really a pull request. Absent = the asked kind, or nothing known. */
+  kind?: 'PR' | 'Issue'
 }
 
 export type ReferenceStatusLookup = (ref: ReferenceStatusRequest) => ReferenceStatusEntry
@@ -2177,6 +2508,22 @@ function rememberStatus(key: string, status: ReferenceStatus): void {
  */
 const rememberedConflicts = new Set<string>(restoreRememberedConflicts())
 
+/** References whose real kind differs from the asked one (an issue ref naming a PR), so the chip
+ *  keeps the PR's treatment between answers — and across a reload, beside the status it explains. */
+const rememberedKinds = new Map<string, 'PR' | 'Issue'>(restoreRememberedKinds())
+
+function rememberKind(key: string, kind: 'PR' | 'Issue' | undefined): void {
+  if (rememberedKinds.get(key) === kind) return
+  if (kind) rememberedKinds.set(key, kind)
+  else rememberedKinds.delete(key)
+  while (rememberedKinds.size > REMEMBERED_MAX) {
+    const oldest = rememberedKinds.keys().next().value
+    if (oldest === undefined) break
+    rememberedKinds.delete(oldest)
+  }
+  scheduleRememberedSave()
+}
+
 function rememberConflict(key: string, conflicting: boolean): void {
   if (rememberedConflicts.has(key) === conflicting) return
   if (conflicting) {
@@ -2215,6 +2562,8 @@ const REMEMBERED_STORAGE_KEY = 'cez.reference-statuses.v1'
  *  make an older one discard every status it found there. A key it has never heard of it simply
  *  never reads. */
 const REMEMBERED_CONFLICTS_STORAGE_KEY = 'cez.reference-conflicts.v1'
+/** The real-kind overrides, under their own key for the same reason. */
+const REMEMBERED_KINDS_STORAGE_KEY = 'cez.reference-kinds.v1'
 
 /** Exported for tests: it runs once at module load, which is not a moment a test can observe. */
 export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
@@ -2239,6 +2588,21 @@ export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
 
 /** Exported for tests, like its sibling. A key list, and anything else in the slot is ignored —
  *  the file is best-effort in every direction. */
+export function restoreRememberedKinds(): [string, 'PR' | 'Issue'][] {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(REMEMBERED_KINDS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (entry): entry is [string, 'PR' | 'Issue'] =>
+        Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && (entry[1] === 'PR' || entry[1] === 'Issue'),
+    )
+  } catch {
+    return []
+  }
+}
+
 export function restoreRememberedConflicts(): string[] {
   try {
     const raw = globalThis.sessionStorage?.getItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
@@ -2266,6 +2630,7 @@ function scheduleRememberedSave(): void {
         REMEMBERED_CONFLICTS_STORAGE_KEY,
         JSON.stringify([...rememberedConflicts]),
       )
+      globalThis.sessionStorage?.setItem(REMEMBERED_KINDS_STORAGE_KEY, JSON.stringify([...rememberedKinds]))
     } catch {
       // Quota, private mode, storage disabled — the in-memory map still works.
     }
@@ -2322,11 +2687,13 @@ export function rememberReferenceStatuses(
 export function __clearRememberedStatusesForTests(): void {
   rememberedStatuses.clear()
   rememberedConflicts.clear()
+  rememberedKinds.clear()
   clearTimeout(rememberedSave)
   rememberedSave = undefined
   try {
     globalThis.sessionStorage?.removeItem(REMEMBERED_STORAGE_KEY)
     globalThis.sessionStorage?.removeItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
+    globalThis.sessionStorage?.removeItem(REMEMBERED_KINDS_STORAGE_KEY)
   } catch {
     // Nothing to clear.
   }
@@ -2417,7 +2784,7 @@ export function useReferenceStatuses(
 
   const { byRef, learned } = useMemo(() => {
     const map = new Map<string, ReferenceStatusEntry>()
-    const learned: Array<{ key: string; status: ReferenceStatus; conflicting: boolean | undefined }> = []
+    const learned: Array<{ key: string; status: ReferenceStatus; conflicting: boolean | undefined; kind: 'PR' | 'Issue' | undefined }> = []
     results.forEach((result, index) => {
       const group = groups[index]
       if (!group) return
@@ -2436,6 +2803,8 @@ export function useReferenceStatuses(
         // Same rule as the status, one axis over: the last thing we were told stands until a
         // newer answer replaces it, and `undefined` stays available to mean "never told".
         const rememberedConflict = rememberedConflicts.has(key) ? true : undefined
+        const rememberedKind = rememberedKinds.get(key)
+        const kindOf = rememberedKind ? { kind: rememberedKind } : {}
         if (data?.available) {
           // Either bucket. A repository numbers its issues and pull requests from one sequence, so
           // #774 is exactly one of the two — and which one the cockpit GUESSED (`taskReferences`
@@ -2447,14 +2816,18 @@ export function useReferenceStatuses(
             // A server from before the field omits `conflicts` entirely, and that absence is not
             // an answer: leave the memory alone rather than clearing it to "merges cleanly".
             const conflicting = data.conflicts ? data.conflicts.includes(ref.number) : undefined
-            learned.push({ key, status, conflicting })
+            // The bucket it came back in is the forge's word on what it is.
+            const real = data.prs[ref.number] ? 'PR' : 'Issue'
+            const kind = real === ref.kind ? undefined : real
+            learned.push({ key, status, conflicting, kind })
             map.set(key, {
               state: 'ready',
               status,
               ...((conflicting ?? rememberedConflict) ? { conflicting: true } : {}),
+              ...(kind ? { kind } : {}),
             })
           } else {
-            map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}) })
+            map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}), ...kindOf })
           }
         } else if (data) {
           map.set(key, {
@@ -2462,6 +2835,7 @@ export function useReferenceStatuses(
             reason: data.reason,
             ...(remembered ? { status: remembered } : {}),
             ...(rememberedConflict ? { conflicting: true } : {}),
+            ...kindOf,
           })
         } else if (result.isError) {
           // A transport failure, as opposed to the server's own "I could not reach gh" payload.
@@ -2470,12 +2844,14 @@ export function useReferenceStatuses(
             reason: result.error instanceof Error ? result.error.message : undefined,
             ...(remembered ? { status: remembered } : {}),
             ...(rememberedConflict ? { conflicting: true } : {}),
+            ...kindOf,
           })
         } else {
           map.set(key, {
             state: 'loading',
             ...(remembered ? { status: remembered } : {}),
             ...(rememberedConflict ? { conflicting: true } : {}),
+            ...kindOf,
           })
         }
       }
@@ -2486,8 +2862,9 @@ export function useReferenceStatuses(
 
   // Committed answers only: a render React throws away must not teach the shared memory.
   useEffect(() => {
-    for (const { key, status, conflicting } of learned) {
+    for (const { key, status, conflicting, kind } of learned) {
       rememberStatus(key, status)
+      rememberKind(key, kind)
       if (conflicting !== undefined) rememberConflict(key, conflicting)
     }
   }, [learned])
@@ -2500,10 +2877,12 @@ export function useReferenceStatuses(
       // Not in any batch on this surface — past the cap, or asked about by a different surface
       // that has since unmounted. Whatever was learned then is still the best answer there is.
       const remembered = rememberedStatuses.get(key)
+      const kind = rememberedKinds.get(key)
       return {
         state: 'idle',
         ...(remembered ? { status: remembered } : {}),
         ...(rememberedConflicts.has(key) ? { conflicting: true } : {}),
+        ...(kind ? { kind } : {}),
       }
     },
     [byRef],

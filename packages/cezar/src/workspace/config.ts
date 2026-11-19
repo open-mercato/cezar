@@ -6,7 +6,7 @@ import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-r
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
-import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH, perRunner } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 
@@ -24,11 +24,11 @@ import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } 
  * - a corrupt file degrades to in-memory defaults plus ONE warning line, and
  *   is left in place until the next successful merge-write replaces it. What
  *   makes that survivable is the `config.json.bak` snapshot below, which the
- *   load path restores from before degrading — NOT re-registration: since boot
- *   registration became seed-once (`shouldAutoRegisterProject`), opening a
- *   project no longer writes it back, so a registry lost with its snapshot is
- *   re-added with `cezar projects add <dir>` (or the cockpit's Add project),
- *   one gesture per project. Nothing inside any repo is ever at stake.
+ *   load path restores from before degrading. A normal serve launch can
+ *   re-register its eligible project; headless/non-serve callers retain the
+ *   seed-once `shouldAutoRegisterProject` rule, and any remaining roots can be
+ *   restored with `cezar projects add <dir>` (or the cockpit's Add project).
+ *   Nothing inside any repo is ever at stake.
  */
 
 /** `id` slug rule — mirrors the spec: `^[a-z0-9][a-z0-9-]{0,63}$`. */
@@ -151,16 +151,7 @@ const composerDefaultsSchema = z
 const agentDefaultsSchema = z
   .object({
     runner: z.enum(PROVIDER_IDS).optional().catch(undefined),
-    models: z
-      .object({
-        claude: z.string().trim().min(1).max(200).optional().catch(undefined),
-        codex: z.string().trim().min(1).max(200).optional().catch(undefined),
-        opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
-        cursor: z.string().trim().min(1).max(200).optional().catch(undefined),
-        pi: z.string().trim().min(1).max(200).optional().catch(undefined),
-        junie: z.string().trim().min(1).max(200).optional().catch(undefined),
-        copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
-      })
+    models: perRunner(z.string().trim().min(1).max(200).optional().catch(undefined))
       .passthrough()
       .optional()
       .catch(undefined),
@@ -192,7 +183,7 @@ const orgSkillsRepoSchema = z
   .object({ repo: z.string().min(1).max(500), ref: z.string().min(1).max(200).default('main') })
   .passthrough();
 
-const workspaceConfigSchema = z
+export const workspaceConfigSchema = z
   .object({
     /** Optional instance name shown in the cockpit; absent keeps the product default. */
     branding: z.object({
@@ -248,9 +239,13 @@ const workspaceConfigSchema = z
       .catch(undefined),
     /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
     lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
-    /** Global instructions: read by every agent step in every project, merged BEFORE the
-     *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
+    /** Global instructions: read by every agent step in every project and take precedence over
+     *  repository, project and workflow instructions (`resolveExtraSystemPrompt`). */
     systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
+    /** A custom phone relay, from Settings. Absent means the default, so a new default reaches
+     *  whoever never chose. `CEZ_RELAY_URL` wins over it. Checked where it is
+     *  read (`resolveRelayAddress`), not here, so a form a newer cezar accepts survives this one. */
+    relayAddress: z.string().max(300).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),
@@ -382,10 +377,17 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
   return readWorkspaceConfig(path, false);
 }
 
+/** For a caller that must tell "not set" from "could not tell": a file that exists but
+ *  neither reads, parses nor restores throws, while a missing one is still the default. */
+export async function loadWorkspaceConfigOrThrow(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
+  return readWorkspaceConfig(path, true, true);
+}
+
 /** `strict` (merge-writes): a file that exists but cannot be read throws
  *  instead of degrading to defaults, which the write would then persist over
- *  both the config and its snapshot — the Windows registry wipe this guards. */
-async function readWorkspaceConfig(path: string, strict: boolean): Promise<WorkspaceConfig> {
+ *  both the config and its snapshot — the Windows registry wipe this guards.
+ *  `refuseCorrupt` throws for a malformed file too; a merge-write replaces one. */
+async function readWorkspaceConfig(path: string, strict: boolean, refuseCorrupt = false): Promise<WorkspaceConfig> {
   let raw: string | null = null;
   let unreadable: { path: string; error: unknown } | undefined;
   try {
@@ -420,6 +422,7 @@ async function readWorkspaceConfig(path: string, strict: boolean): Promise<Works
     return defaultWorkspaceConfig();
   }
   if (raw === null) return defaultWorkspaceConfig();
+  if (refuseCorrupt) throw new WorkspaceConfigUnreadableError(`[cez] ${path} is corrupt`);
   console.warn(
     `[cez] workspace config ${path} is corrupt — using defaults (re-add projects with \`cezar projects add\`)`,
   );

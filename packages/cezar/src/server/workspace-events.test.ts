@@ -142,7 +142,7 @@ describe('GET /api/v1/workspace/events', () => {
   it("carries BOTH projects' store events, each stamped with its project id", async () => {
     const other = await buildOtherContext();
 
-    const ws = await openStream('/api/v1/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events?slim=1');
     await ws.readUntil('event: ping');
 
     const bootRun = store.createRun({
@@ -171,8 +171,23 @@ describe('GET /api/v1/workspace/events', () => {
     expect(payloadsOf(withDeleted, 'run-deleted')).toEqual([{ id: otherRun.id, project: other.id }]);
   });
 
-  it('keeps the thread-only keys off the run frame, and the frame inside its contract', async () => {
+  it('keeps steps on the run frame for a client that did not ask for the slim one (#1848)', async () => {
     const ws = await openStream('/api/v1/workspace/events');
+    await ws.readUntil('event: ping');
+    const run = store.createRun({
+      title: 'old-tab',
+      workflow: 'quick-task',
+      task: 'prompt',
+      steps: [{ id: 'agent', name: 'agent', kind: 'agent' }],
+    });
+    const body = await ws.readUntil(`"id":"${run.id}"`);
+    const [frame] = payloadsOf<Record<string, unknown>>(body, 'run');
+    expect(frame).toMatchObject({ id: run.id, task: 'prompt', project: bootId });
+    expect(Array.isArray(frame?.steps)).toBe(true);
+  });
+
+  it('keeps the thread-only keys off the run frame, and the frame inside its contract', async () => {
+    const ws = await openStream('/api/v1/workspace/events?slim=1');
     await ws.readUntil('event: ping');
     const run = store.createRun({
       title: 'fat-run',
@@ -299,7 +314,7 @@ describe('GET /api/v1/workspace/events', () => {
   it("a late-built context's events appear after its first touch — and subscribing never force-instantiates", async () => {
     const other = await registerProject(otherRoot);
 
-    const ws = await openStream('/api/v1/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events?slim=1');
     await ws.readUntil('event: ping');
     // Opening the stream did NOT build the registered-but-untouched project.
     expect(contexts.peek(other.id)).toBeUndefined();
@@ -421,7 +436,7 @@ describe('GET /api/v1/workspace/events', () => {
   it('a removed project re-added on the same slug resumes flowing on an already-open stream', async () => {
     const other = await buildOtherContext();
 
-    const ws = await openStream('/api/v1/workspace/events');
+    const ws = await openStream('/api/v1/workspace/events?slim=1');
     await ws.readUntil('event: ping');
 
     // Remove the project through the API — the stream must drop its attach

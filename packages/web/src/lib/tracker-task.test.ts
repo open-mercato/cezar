@@ -54,10 +54,10 @@ describe('tracker handoff', () => {
   })
 
   it('preserves workflow, skill-chain, quick-task, and engine fields', () => {
-    const engine = { runner: 'codex' as const, model: 'gpt-6', agentProfile: 'work' }
+    const engine = { runner: 'codex' as const, model: 'gpt-6', reasoningEffort: 'high', agentProfile: 'work' }
     expect(trackerRunBody(item, 'ship', ['review'], engine, {}).workflow).toBe('ship')
     expect(trackerRunBody(item, null, ['review'], engine, {})).toMatchObject({
-      runner: 'codex', model: 'gpt-6', agentProfile: 'work', steps: [{ skill: 'review' }],
+      runner: 'codex', model: 'gpt-6', reasoningEffort: 'high', agentProfile: 'work', steps: [{ skill: 'review' }],
     })
     expect(trackerRunBody(item, null, [], engine, {}).workflow).toBe('quick-task')
   })

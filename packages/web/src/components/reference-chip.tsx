@@ -28,14 +28,29 @@ import {
 } from '@/lib/reference-status'
 import { cn, isHttpUrl } from '@/lib/utils'
 
-/** Border + text per status tone. `violet` IS the chip's own resting look, which is why a
- *  reference with no status known keeps it: nothing has been learned, so nothing changes. */
+/** The ink per status tone — the chip's text and the status card's headline. The `-strong`
+ *  tokens, not the fills: emerald-500 and red-500 fail AA as words on the light theme. */
+const TONE_TEXT: Record<ReferenceStatusTone, string> = {
+  success: 'text-success-strong',
+  danger: 'text-danger-strong',
+  merged: 'text-merged',
+  closed: 'text-closed',
+  neutral: 'text-muted-foreground',
+  info: 'text-info',
+  pending: 'text-pending-strong',
+  conflict: 'text-conflict',
+}
+
+/** Border + text per status tone (see `REFERENCE_STATUS`). A reference with no status known is
+ *  the NEUTRAL chip: nothing has been learned, so nothing is claimed. The accent violet is not here
+ *  on purpose — `merged` is GitHub's redder purple, its own token. */
 const TONE_CLASS: Record<ReferenceStatusTone, string> = {
-  success: 'border-success/40 text-success',
-  danger: 'border-danger/40 text-danger',
-  violet: 'border-violet/35 text-violet',
-  info: 'border-info/40 text-info',
+  success: 'border-success/40 text-success-strong',
+  danger: 'border-danger/40 text-danger-strong',
+  merged: 'border-merged/45 text-merged',
+  closed: 'border-closed/45 text-closed',
   neutral: 'border-border text-muted-foreground',
+  info: 'border-info/40 text-info',
   // The WHOLE chip goes amber while checks run, not just its dot: "something is happening to this
   // right now" is the state a table is scanned for, and a neutral chip with a coloured dot reads
   // as neutral at a glance. `text-pending-strong`, not `text-pending` — the dot's amber-400 is a
@@ -52,7 +67,8 @@ const TONE_CLASS: Record<ReferenceStatusTone, string> = {
 const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   success: 'hover:bg-success/10',
   danger: 'hover:bg-danger/10',
-  violet: 'hover:bg-violet/10',
+  merged: 'hover:bg-merged/10',
+  closed: 'hover:bg-closed/10',
   info: 'hover:bg-info/10',
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
@@ -77,6 +93,10 @@ const STATUS_ICON: Record<ReferenceStatus, LucideIcon | null> = {
 }
 
 /**
+ * Family: CHIP (static fact) — an inline chip (h-5, rounded-full, `text-ui font-mono` because a
+ * `#402` is an identifier) that is also a link. Its tone is the forge's answer, not the task's
+ * attention state; the hover card is a Popover with labelled lines, not a tooltip.
+ *
  * A task's out-of-app tracker link.
  *
  * Without a `status` this is the neutral chip it has always been: the record itself carries no
@@ -125,11 +145,15 @@ export function ReferenceChip({
    */
   compact?: boolean
 }) {
-  const { kind, number, url } = reference
+  const { number } = reference
   // An explicit `status` wins — it is what a test or a one-off caller passes — and otherwise the
   // surface's provider answers. Outside a provider neither exists and this is the chip the cockpit
   // has always painted.
-  const entry = useReferenceStatus(kind, number, projectId)
+  const entry = useReferenceStatus(reference.kind, number, projectId)
+  // What the forge says the number IS wins over the caller's guess: `#2104` asked as an issue that
+  // is a pull request paints, links and acts as that pull request, the same as every other #2104.
+  const kind = entry.kind ?? reference.kind
+  const url = kind === reference.kind ? reference.url : retargetReferenceUrl(reference.url, kind)
   const status = explicitStatus ?? entry.status
   // A status this bundle has never heard of resolves to `undefined` here and is then treated
   // exactly like no status at all — the neutral chip, no glyph, no claim in the accessible name.
@@ -145,8 +169,8 @@ export function ReferenceChip({
   const conflicting = kind === 'PR' && (explicitConflicting ?? entry.conflicting) === true
   const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
-    TONE_CLASS[presentation?.tone ?? 'violet'],
+    'inline-flex h-5 items-center gap-1 rounded-full border px-2 font-mono text-ui font-medium',
+    TONE_CLASS[presentation?.tone ?? 'neutral'],
     className,
   )
   // The overridden status rides along into the tooltip whenever the conflict took the chip.
@@ -199,7 +223,7 @@ export function ReferenceChip({
         // element is a browser popup fighting a designed one.
         title={tooltip ? undefined : url}
         aria-label={ariaLabel}
-        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'violet'])}
+        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'neutral'])}
       >
         {body}
         <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />
@@ -212,7 +236,20 @@ export function ReferenceChip({
     <>
       <span className="block font-medium">
         {kind === 'PR' ? 'Pull request' : 'Issue'}
-        {number ? ` #${number}` : ''} · {tooltip.headline}
+        {number ? ` #${number}` : ''} ·{' '}
+        {/* The status word in the chip's own ink and glyph, so the card and the chip agree. */}
+        <span data-slot="reference-status-headline" className={presentation && TONE_TEXT[presentation.tone]}>
+          {presentation ? (
+            <span className="mr-1 inline-flex align-middle">
+              {conflicting ? (
+                <TriangleAlertIcon className="size-2.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <StatusGlyph status={status} />
+              )}
+            </span>
+          ) : null}
+          {tooltip.headline}
+        </span>
       </span>
       <span className="block">{tooltip.detail}</span>
       {/* The status the conflict painted over. It is still true — a conflicting PR can also be
@@ -459,6 +496,12 @@ function statusTooltip(
  *  character, so an acronym a future label opens with keeps its case. */
 function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1)
+}
+
+/** `…/issues/12` ⇄ `…/pull/12` on a github-shaped URL; anything else is left alone. */
+export function retargetReferenceUrl(url: string | undefined, kind: 'PR' | 'Issue'): string | undefined {
+  if (!url) return url
+  return kind === 'PR' ? url.replace(/\/issues\/(\d+)(?=$|[?#/])/, '/pull/$1') : url.replace(/\/pull\/(\d+)(?=$|[?#/])/, '/issues/$1')
 }
 
 /** The status channel that is not color: an icon, or — for checks still running — the pulsing dot

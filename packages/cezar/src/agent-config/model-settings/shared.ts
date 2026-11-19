@@ -1,4 +1,5 @@
 import { parse as parseToml } from 'smol-toml';
+import { parse as parseYaml } from 'yaml';
 import type { RunnerId } from '../../core/agent-runner.ts';
 import { CONFIG_FILES, type ConfigFileDef, type ConfigFormat } from '../catalog.ts';
 import { readConfigFile } from '../files.ts';
@@ -45,10 +46,22 @@ function valueAtPath(value: unknown, path: string): unknown {
   }, value);
 }
 
+/**
+ * Parse an omp `config.yml` with the REAL YAML parser (the `yaml` dependency the repo already
+ * uses for workflow files): a malformed settings file must not silently read as valid, and a
+ * valid one (document markers, block scalars, anchors) must keep its meaning.
+ */
+export function parseYamlMapping(content: string): Record<string, unknown> {
+  const parsed = parseYaml(content);
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+}
+
 function parseConfigContent(content: string, format: ConfigFormat): unknown {
-  return format === 'toml'
-    ? parseToml(content)
-    : JSON.parse(format === 'jsonc' ? stripJsonTrailingCommas(stripJsonComments(content)) : content);
+  if (format === 'toml') return parseToml(content);
+  if (format === 'yaml') return parseYamlMapping(content);
+  return JSON.parse(format === 'jsonc' ? stripJsonTrailingCommas(stripJsonComments(content)) : content);
 }
 
 function stringAtPath(content: string, format: ConfigFormat, path: string): string | undefined {

@@ -1,5 +1,6 @@
 import { queueWaitLabel } from '@/lib/queue-wait-label'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
@@ -38,6 +39,7 @@ import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { ImpactChip } from '@/routes/task-assets/impact-chip'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -103,7 +105,7 @@ export function TaskQuickList({
       </div>
 
       {buckets.length === 0 ? (
-        <p className="px-3 py-3.5 text-xs text-soft-foreground">
+        <p className="px-3 py-3.5 text-label text-muted-foreground">
           {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
         </p>
       ) : (
@@ -160,7 +162,7 @@ export function QuickListBuckets({
     <>
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          <h2 className="px-3 pt-2.5 pb-1 eyebrow text-soft-foreground">
             {bucket.label}
           </h2>
           {nestRows(bucket.rows).map((node) => (
@@ -233,13 +235,13 @@ function ViewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-[12.5px] font-medium text-muted-foreground',
+        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-label font-medium text-muted-foreground',
         isActive && 'bg-card font-semibold text-foreground shadow-xs'
       )}
     >
       {children}
       {/* No "0": an empty bucket says so by being empty. */}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      {count > 0 ? <span className="font-mono text-meta tabular-nums">{count}</span> : null}
     </button>
   )
 }
@@ -309,20 +311,21 @@ function Row({
           />
           {/* Same width-priority rule as `RunRow`: the shared title has a floor, and the `×N`
               badge and the compare link give way before it does. */}
-          <span className="min-w-[7rem] flex-1 truncate text-[13px] font-medium">{row.title}</span>
-          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground">
+          <span className="min-w-[7rem] flex-1 truncate text-ui font-medium">{row.title}</span>
+          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-micro font-semibold text-muted-foreground">
             ×{row.members.length}
           </span>
         </button>
-        <Link
-          to={scopeTo(scope, `/compare/${row.groupId}`)}
-          data-slot="group-compare"
-          title="Compare the variants"
-          aria-label={`Compare the variants of ${row.title}`}
-          className="mr-1.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground hover:bg-violet/10 hover:text-violet"
-        >
-          <ScaleIcon className="size-3.5" aria-hidden="true" />
-        </Link>
+        <IconTooltip label="Compare the variants">
+          <Link
+            to={scopeTo(scope, `/compare/${row.groupId}`)}
+            data-slot="group-compare"
+            aria-label={`Compare the variants of ${row.title}`}
+            className="mr-1.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground hover:bg-violet/10 hover:text-violet"
+          >
+            <ScaleIcon className="size-3.5" aria-hidden="true" />
+          </Link>
+        </IconTooltip>
       </div>
       {/* No pin on the TILE (#935): a pin is per task, and the tile is a stand-in for two or
           three of them. Expanding it pins the variant you mean, and the tile rises to `Pinned`
@@ -392,13 +395,13 @@ function Row({
  * already says it is pinned.
  */
 // Spelled out, not generated: Tailwind only emits classes it finds literally in the source.
-const ROW_ACTIONS_CLASS =
+export const ROW_ACTIONS_CLASS =
   'flex w-0 shrink-0 items-center gap-0.5 overflow-hidden opacity-0' +
   ' group-hover/task-row:mr-1.5 group-hover/task-row:w-auto group-hover/task-row:opacity-100' +
   ' group-focus-within/task-row:mr-1.5 group-focus-within/task-row:w-auto group-focus-within/task-row:opacity-100' +
   ' no-hover:mr-1.5 no-hover:w-auto no-hover:opacity-100'
-const ROW_ACTION_BUTTON_CLASS = 'no-hover:size-7'
-const ROW_META_YIELD_CLASS = 'group-hover/task-row:hidden group-focus-within/task-row:hidden'
+export const ROW_ACTION_BUTTON_CLASS = 'no-hover:size-7'
+export const ROW_META_YIELD_CLASS = 'group-hover/task-row:hidden group-focus-within/task-row:hidden'
 /** Without hover the actions never go away, so only the droppable metadata yields; the age and
  *  the queue position stay — a queue position is carried nowhere else. */
 const ROW_META_TOUCH_YIELD_CLASS = 'no-hover:hidden'
@@ -441,6 +444,7 @@ const RunRow = React.memo(function RunRow({
   const canArchive = Boolean(onToggleArchive) && (Boolean(run.archived) || !isRunActive(run.status))
   const hasActions = Boolean(onTogglePin) || canArchive
   const attention = deriveAttention(run)
+  const statusId = React.useId()
   const isActive = run.id === currentRunId
   // The strongest tracker reference the run knows about — the PR once one exists, else the issue
   // it was opened on. It is the row's leading chip AND the reason the title may drop its `NNN: `
@@ -489,9 +493,17 @@ const RunRow = React.memo(function RunRow({
         variant && 'pl-[26px]'
       )}
     >
-      {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
-          navigation target, and the wrapper still owns the row's hover surface. */}
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      {/* Leads the reference chip, and also opens the task: chips can leave the title link no width.
+          A pointer-only duplicate, so the row link carries the status via `aria-describedby`. */}
+      <Link
+        to={scopeTo(scope, `/tasks/${run.id}`)}
+        tabIndex={-1}
+        aria-hidden="true"
+        data-slot="task-row-dot-link"
+        className="-ml-2.5 flex shrink-0 items-center self-stretch pl-2.5"
+      >
+        <StatusDot id={statusId} tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      </Link>
       {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
           prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
       {reference ? (
@@ -499,7 +511,7 @@ const RunRow = React.memo(function RunRow({
           run={run}
           reference={reference}
           compact
-          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro"
         />
       ) : null}
       <Link
@@ -508,6 +520,8 @@ const RunRow = React.memo(function RunRow({
         // visible text drop — so hover always gives back everything the column could not show.
         title={title}
         aria-current={isActive ? 'page' : undefined}
+        aria-describedby={statusId}
+        data-slot="task-row-link"
         // `pr-0.5` when actions follow: the row's `gap-2` before the (zero-width) actions supplies
         // the rest of the right inset. No actions, no gap: `pr-2.5`.
         className={cn('flex min-w-0 flex-1 items-center gap-2 py-[7px]', hasActions ? 'pr-0.5' : 'pr-2.5')}
@@ -522,13 +536,13 @@ const RunRow = React.memo(function RunRow({
           className={cn(
             // `min-w-[7rem]`: the floor of the width-priority rule above. The title never gives
             // way past ~17 characters; metadata drops instead.
-            'min-w-[7rem] flex-1 truncate text-[13px]',
+            'min-w-[7rem] flex-1 truncate text-ui',
             hasActions && ROW_TITLE_YIELD_CLASS,
             unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
           )}
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
-          {run.queueWaitReason && <span className="block truncate text-[11px] font-normal text-muted-foreground">{queueWaitLabel(run.queueWaitReason)}</span>}
+          {run.queueWaitReason && <span className="block truncate text-meta font-normal text-muted-foreground">{queueWaitLabel(run.queueWaitReason)}</span>}
         </span>
         {/* The trailing metadata, as one unit that gives its place to the row's actions whenever
             they show — see `ROW_ACTIONS_CLASS`. `contents`, so each item still lays out in the
@@ -541,7 +555,7 @@ const RunRow = React.memo(function RunRow({
             {dispatchKind ? (
               <span
                 data-slot="dispatch-kind"
-                className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+                className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
               >
                 {dispatchKind}
               </span>
@@ -564,7 +578,7 @@ const RunRow = React.memo(function RunRow({
             {run.diffStat ? (
               <DiffStatLabel
                 stat={run.diffStat}
-                className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
+                className="hidden shrink-0 text-micro @min-[23rem]/sidebar:inline"
               />
             ) : null}
             {/* What this task dispatched, counted rather than listed — the children are the indented
@@ -574,7 +588,7 @@ const RunRow = React.memo(function RunRow({
               <span
                 data-slot="subtask-count"
                 title={subtasks}
-                className="hidden shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground @min-[19rem]/sidebar:inline"
+                className="hidden shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground @min-[19rem]/sidebar:inline"
               >
                 {childCount}
               </span>
@@ -599,7 +613,7 @@ const RunRow = React.memo(function RunRow({
             <span
               data-slot="task-row-age"
               className={cn(
-                'shrink-0 text-[11px] text-soft-foreground tabular-nums',
+                'shrink-0 text-meta text-soft-foreground tabular-nums',
                 dispatchKind && depth > 0 && queuePosition === null && 'hidden @min-[19rem]/sidebar:inline',
               )}
             >
@@ -610,6 +624,9 @@ const RunRow = React.memo(function RunRow({
         {/* Unread is the title's weight; this only says it to a screen reader. */}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      {/* An impact run's report, one click away (spec 2026-10-22-html-artifacts-and-impact). Active
+          project only — the listing is read through the active scope. A sibling, like the chip. */}
+      {scope === null && run.subject ? <ImpactChip run={run} className={hasActions ? 'mr-0.5' : 'mr-2.5'} /> : null}
       {/* The actions, SIBLINGS of the Link for the same reason the status dot and the reference
           chip are: a button inside an anchor is invalid, and each has its own target. */}
       {hasActions ? (

@@ -414,6 +414,24 @@ describe('workspace runs index API', () => {
     });
   });
 
+  it('carries `idleClosedAt`, so an idle close reads as "closed · idle" rather than "failed"', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'idle',
+        title: 'Nobody replied',
+        status: 'failed',
+        finishedAt: '2026-07-14T11:00:00Z',
+        idleClosedAt: '2026-07-14T11:00:00.000Z',
+      }),
+    ]);
+
+    const body = await getIndex();
+
+    expect(body.runs[0]).toMatchObject({ id: 'idle', status: 'failed', idleClosedAt: '2026-07-14T11:00:00.000Z' });
+  });
+
   it('carries `automationId` from every provenance key, so the origin filter can split the rows', async () => {
     await registerProject(repoRoot);
     await registerProject(otherRoot);

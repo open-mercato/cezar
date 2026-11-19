@@ -1,5 +1,5 @@
-import { copyFile, cp, lstat, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { copyFile, cp, lstat, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Skill } from './skills.ts';
 import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
 import { reportError } from './telemetry.ts';
@@ -16,6 +16,24 @@ import { reportError } from './telemetry.ts';
 
 /** Claude Code (and OpenCode) read `.claude/skills`; Codex, Cursor and OpenCode read `.agents/skills`. */
 export const PROVISION_SKILL_DIRS = ['.claude/skills', '.agents/skills'] as const;
+
+/** Canonical targets of the skill links cezar itself made (or found already made from the same
+ *  catalog skill) per worktree — the only links OpenCode's permission reply may follow (#2103). */
+const linkedTargets = new Map<string, Set<string>>();
+
+/** The link targets cezar provisioned into `cwd`; a repo-committed or agent-made link is never here. */
+export function provisionedLinkTargets(cwd: string): string[] {
+  return [...(linkedTargets.get(resolve(cwd)) ?? [])];
+}
+
+async function recordLink(cwd: string, dest: string, target: string): Promise<void> {
+  const [actual, expected] = await Promise.all([realpath(dest), realpath(target)]).catch(() => [undefined, null]);
+  if (actual !== expected) return;
+  const key = resolve(cwd);
+  const set = linkedTargets.get(key) ?? new Set<string>();
+  set.add(expected!);
+  linkedTargets.set(key, set);
+}
 
 /** Bound on one closure — a skill that names the whole catalog must not copy all of it. */
 const MAX_CLOSURE = 24;
@@ -98,16 +116,27 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promi
     );
   }
   const onDisk = skill.source !== 'team' && skill.source !== 'builtin' && isAbsolute(skill.path);
+  // A skill directory cezar ships in its package (`skills/change-impact`), references/ included.
+  const bundled = skill.source === 'builtin' && basename(skill.path) === 'SKILL.md' && (await exists(skill.path));
   // Already part of this checkout (an in-place run): the agent finds it where it is.
   const inCwd = relative(cwd, skill.path);
   if (onDisk && inCwd && !inCwd.startsWith('..') && !isAbsolute(inCwd)) return false;
-  if (await exists(dest)) return false;
+  const linkable = onDisk && basename(skill.path) === 'SKILL.md';
+  if (await exists(dest)) {
+    // Continue / restart: the link a previous run made still points at this catalog skill.
+    if (linkable && (await lstat(dest)).isSymbolicLink()) await recordLink(cwd, dest, dirname(skill.path));
+    return false;
+  }
   await mkdir(dirname(dest), { recursive: true });
-  if (onDisk && basename(skill.path) === 'SKILL.md') {
+  if (bundled) {
+    // Copied, never linked: a link would let the agent edit cezar's installed package.
+    await cp(dirname(skill.path), dest, { recursive: true, dereference: true });
+  } else if (linkable) {
     // Link, not copy: the agent reads the current installed copy, references/ included.
     // A junction needs no privilege on Windows; a copy covers a filesystem with no links at all.
-    await symlink(dirname(skill.path), dest, process.platform === 'win32' ? 'junction' : 'dir').catch(() =>
-      cp(dirname(skill.path), dest, { recursive: true, dereference: true }),
+    await symlink(dirname(skill.path), dest, process.platform === 'win32' ? 'junction' : 'dir').then(
+      () => recordLink(cwd, dest, dirname(skill.path)),
+      () => cp(dirname(skill.path), dest, { recursive: true, dereference: true }),
     );
   } else if (onDisk) {
     await mkdir(dest);
@@ -131,7 +160,9 @@ export async function provisionSkills(
   catalog: readonly Skill[],
 ): Promise<string[]> {
   const installed: string[] = [];
-  for (const skill of skillClosure(roots, catalog)) {
+  // Commands are delivered inline: a link would point the task at the main checkout's file.
+  const skills = (list: readonly Skill[]) => list.filter((skill) => skill.kind !== 'command');
+  for (const skill of skillClosure(skills(roots), skills(catalog))) {
     let any = false;
     for (const dir of PROVISION_SKILL_DIRS) {
       const ok = await provisionOne(cwd, dir, skill).catch((err: unknown) => {

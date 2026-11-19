@@ -72,6 +72,8 @@ export interface ThreadScrollControls {
   /** Re-pin if stuck — the keyboard-settled hook (content height didn't change, but the
    *  visual viewport did, so the RO won't fire). */
   restickIfStuck: () => void
+  /** Unpin and scroll a row to `inset` px below the scroller's top ("your messages" jumps). */
+  revealRow: (key: string, inset: number) => boolean
 }
 
 /**
@@ -88,12 +90,14 @@ export function useThreadScroll(
   viewKey: string,
   options: {
     surface?: 'document' | 'panel'
+    /** Explicit status/result links override an old reading position on arrival. */
+    startAtLatest?: boolean
     onLoadOlder?: () => Promise<void>
     onJumpToLatest?: () => Promise<void>
     rowKeys?: readonly string[]
   } = {},
 ): ThreadScrollControls {
-  const { surface = 'document', onLoadOlder, onJumpToLatest, rowKeys = [] } = options
+  const { startAtLatest = false, surface = 'document', onLoadOlder, onJumpToLatest, rowKeys = [] } = options
   const scrollElRef = useRef<HTMLElement | null>(null)
   // State, not a ref: crossing the virtualization threshold mid-replay REPLACES the rows
   // container, and the observers below must re-subscribe to the new element.
@@ -130,7 +134,7 @@ export function useThreadScroll(
     if (!scroller) return
     if (arrivedForRef.current !== viewKey) {
       arrivedForRef.current = viewKey
-      const memory = readThreadScroll(viewKey)
+      const memory = startAtLatest ? undefined : readThreadScroll(viewKey)
       if (memory && !memory.atBottom) {
         stuckRef.current = false
         pendingRestoreRef.current = memory.top
@@ -141,7 +145,7 @@ export function useThreadScroll(
     }
     if (pendingRestoreRef.current !== null) setOffset(pendingRestoreRef.current)
     else if (stuckRef.current) toBottom()
-  }, [viewKey, setOffset, toBottom])
+  }, [viewKey, startAtLatest, setOffset, toBottom])
 
   // The callback ref runs in the destination commit itself. Applying arrival here closes the
   // gap between the route render and the follow-up state update that installs subscriptions;
@@ -228,6 +232,25 @@ export function useThreadScroll(
       })
     })
   }, [onJumpToLatest])
+
+  const revealRow = useCallback((key: string, inset: number) => {
+    const scroller = scrollElRef.current
+    if (!scroller) return false
+    // A jump is the reader leaving the tail, exactly as a scroll up is.
+    pendingRestoreRef.current = null
+    stuckRef.current = false
+    const handle = virtualizerRef.current
+    const index = rowKeysRef.current.indexOf(key)
+    if (handle && index >= 0) {
+      handle.scrollToIndex(index, { align: 'start', offset: -inset })
+      return true
+    }
+    const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(key) : key.replace(/["\\]/g, '\\$&')
+    const row = scroller.querySelector<HTMLElement>(`[data-slot="thread-row"][data-row-key="${escaped}"]`)
+    if (!row) return false
+    setOffset(scroller.scrollTop + row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - inset)
+    return true
+  }, [setOffset])
 
   // Arrival is the route-owned pre-paint write. AppShell deliberately does not reset task
   // routes, so a destination thread never exposes an intermediate top-of-transcript frame.
@@ -351,7 +374,17 @@ export function useThreadScroll(
       }
       else markDown()
     }
+    // After a click on prose the focus is <body>, so the key never passes through the scroller
+    // (#1800). It is thread intent only if the last pointerdown landed in THIS scroller — body
+    // keys scroll whichever region was clicked last, which may be another column.
+    let pointerInScroller = false
+    const onWindowPointerDown = (event: PointerEvent) => {
+      pointerInScroller = event.target instanceof Node && scroller.contains(event.target)
+    }
     const onKey = (event: KeyboardEvent) => {
+      const target = event.target
+      const onBody = target === document.body || target === document.documentElement
+      if (!(target instanceof Node && scroller.contains(target)) && !(onBody && pointerInScroller)) return
       if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
         unstick()
         if (!event.repeat && isNearHistoryStart(scroller)) loadOlder()
@@ -434,7 +467,8 @@ export function useThreadScroll(
     window.addEventListener('touchcancel', onTouchEnd, { passive: true })
     scroller.addEventListener('pointerdown', onPointerDown, { passive: true })
     window.addEventListener('pointerup', onPointerUp, { passive: true })
-    scroller.addEventListener('keydown', onKey)
+    window.addEventListener('pointerdown', onWindowPointerDown, { capture: true, passive: true })
+    window.addEventListener('keydown', onKey)
 
     // Content growth (streamed items, replay, virtua's total-size updates) re-applies the
     // stick or the pending restore. jsdom has no ResizeObserver; the hook degrades to
@@ -482,12 +516,13 @@ export function useThreadScroll(
       window.removeEventListener('touchcancel', onTouchEnd)
       scroller.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('pointerup', onPointerUp)
-      scroller.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerdown', onWindowPointerDown, { capture: true })
+      window.removeEventListener('keydown', onKey)
       observer?.disconnect()
     }
   }, [viewKey, contentEl, loadOlder, setOffset, toBottom])
 
-  return { attachContent, scrollElRef, virtualizerRef, pillVisible, jumpToLatest, loadOlder, restickIfStuck }
+  return { attachContent, scrollElRef, virtualizerRef, pillVisible, jumpToLatest, loadOlder, restickIfStuck, revealRow }
 }
 
 /**

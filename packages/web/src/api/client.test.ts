@@ -40,6 +40,7 @@ import {
   putUiState,
   refreshSkills,
   removeTodo,
+  runArtifactRawUrl,
   runFileRawUrl,
   sendMessage,
   setProviderEnabled,
@@ -47,6 +48,7 @@ import {
   retryProviderAuth,
 } from './client'
 import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
+import { connectionStatus, nativeConnectionStatus } from './connection-status'
 
 /** A message's idempotency key (telemetry 1a212342) — fixed here so the request shape is exact. */
 const KEY = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f'
@@ -220,7 +222,7 @@ describe('request shapes', () => {
       method: 'POST',
       body: { task: 'do it', workflow: 'quick-task', variants: 2 },
     },
-    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/v1/runs/run-1/cancel', method: 'POST' },
+    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/v1/runs/run-1/cancel', method: 'POST', body: {} },
     {
       name: 'archiveRun (default)',
       call: () => archiveRun('run-1'),
@@ -277,12 +279,13 @@ describe('request shapes', () => {
       body: { prompt: 'Also add tests.' },
     },
     {
-      // #401: an Inbox card that picked a backend. No pick → the bodyless POST above, unchanged.
-      name: 'startTodo (runner + model override, #401)',
-      call: () => startTodo('todo/1', { runner: 'codex', model: 'gpt-5.1-codex' }),
+      // An Inbox card that picked every discovered Codex setting. No pick → the bodyless POST
+      // above, unchanged.
+      name: 'startTodo (runner + model + effort override)',
+      call: () => startTodo('todo/1', { runner: 'codex', model: 'gpt-5.1-codex', reasoningEffort: 'high' }),
       path: '/api/v1/todos/todo%2F1/start',
       method: 'POST',
-      body: { runner: 'codex', model: 'gpt-5.1-codex' },
+      body: { runner: 'codex', model: 'gpt-5.1-codex', reasoningEffort: 'high' },
     },
     {
       // Auto ('') and a single-backend host are filtered out by the caller, so a body that
@@ -347,6 +350,13 @@ describe('request shapes', () => {
     // as every case above: unscoped means exactly the pre-multi-project path.
     expect(runFileRawUrl('run-1', 'shots/final.png')).toBe('/api/v1/runs/run-1/files?path=shots%2Ffinal.png&raw=1')
     expect(runFileRawUrl('run-1', 'a.png', 'abc123')).toBe('/api/v1/runs/run-1/files?path=a.png&raw=1&rev=abc123')
+  })
+
+  it('hands out the raw artifact URL, the name encoded as one segment', () => {
+    expect(runArtifactRawUrl('run-1', 'impact.html')).toBe('/api/v1/runs/run-1/artifacts/impact.html')
+    expect(runArtifactRawUrl('run-1', 'a b.html')).toBe('/api/v1/runs/run-1/artifacts/a%20b.html')
+    expect(runArtifactRawUrl('run-1', 'impact.html', 2)).toBe('/api/v1/runs/run-1/artifacts/impact.html?v=2')
+    expect(runArtifactRawUrl('run-1', 'shots/a b.png')).toBe('/api/v1/runs/run-1/artifacts/shots/a%20b.png')
   })
 
   it('forwards an abort signal to fetch', async () => {
@@ -425,6 +435,7 @@ describe('project scope (multi-project spec, step 3.1)', () => {
     // The non-send() site scopes the same way — the <img> URL it hands out must hit the
     // scoped route or another project's cockpit would render this project's bytes as a 404.
     expect(runFileRawUrl('run-1', 'x.png')).toBe('/api/v1/p/proj-a/runs/run-1/files?path=x.png&raw=1')
+    expect(runArtifactRawUrl('run-1', 'demo.html')).toBe('/api/v1/p/proj-a/runs/run-1/artifacts/demo.html')
   })
 
   it('keeps workspace-level routes unprefixed under a scope — health is single-mount', async () => {
@@ -711,6 +722,14 @@ describe('errors', () => {
     expect((error as Error).name).toBe('ApiError')
   })
 
+  it('explains a proxy 413 instead of printing the status line (#1735)', async () => {
+    fail(413, '<html>413 Request Entity Too Large</html>', 'text/html')
+    const error = (await getRuns().catch((e: unknown) => e)) as ApiError
+    expect(error.status).toBe(413)
+    expect(error.message).toContain('too large')
+    expect(error.message).toContain('client_max_body_size')
+  })
+
   it('survives an empty error body', async () => {
     fail(404, '')
     const error = (await getRun('nope').catch((e: unknown) => e)) as ApiError
@@ -831,5 +850,43 @@ describe('history responses are validated at the boundary (#827)', () => {
     const error = (await getRunHistory('nope').catch((e: unknown) => e)) as ApiError
     expect(error.status).toBe(404)
     expect(error.message).toBe('run not found')
+  })
+})
+
+describe("the CezarBot shell's 502", () => {
+  afterEach(() => nativeConnectionStatus.clear())
+
+  it('carries why the relay is down, and the next answer that gets through clears it', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', {
+      status: 502,
+      headers: { 'X-Cezar-Unreachable': 'peer-offline', 'X-Cezar-Computer': encodeURIComponent('Studio Mac') },
+    }))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(nativeConnectionStatus.current()).toEqual({ reason: 'peer-offline', computerName: 'Studio Mac' })
+    reply({ ok: true })
+    await getHealth()
+    expect(nativeConnectionStatus.current()).toBeUndefined()
+  })
+})
+
+describe('whether cezar still answers plain requests', () => {
+  afterEach(() => connectionStatus.requestSettled(false))
+
+  it("is cezar's own answer, not a gateway's 502/503/504 or no answer at all", async () => {
+    reply({ ok: true })
+    await getHealth()
+    expect(connectionStatus.answering()).toBe(true)
+    for (const status of [502, 503, 504]) {
+      connectionStatus.requestSettled(true)
+      fetchMock.mockResolvedValueOnce(new Response('', { status }))
+      await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+      expect(connectionStatus.answering()).toBe(false)
+    }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'nope' }), { status: 404 }))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(connectionStatus.answering()).toBe(true)
+    fetchMock.mockRejectedValueOnce(new TypeError('Load failed'))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(connectionStatus.answering()).toBe(false)
   })
 })

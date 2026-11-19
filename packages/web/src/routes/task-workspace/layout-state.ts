@@ -27,14 +27,14 @@ import { drawerStorageKey } from './drawer-state'
  *  `graph` is the task's live workflow graph. It is offered on every task, like `browser` and for
  *  the same reason: a task with no stored definition gets the view's own honest empty state
  *  ("No workflow graph") rather than a tile that silently is not there. */
-export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'terminal'
+export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'assets' | 'terminal'
 
-export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
+export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']
 
-/** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
- *  rarely opened Graph sits near the end, and Notes (its own page) lands before Preview
- *  (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'terminal']
+/** The view tabs, left to right — main's order, so the 1–9 keys open what they always did: Chat;
+ *  the review — Changes, Commits, Files; the run — Graph, Notes (its own page), Preview, Assets,
+ *  Terminal (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
@@ -44,6 +44,7 @@ export const VIEW_PATHS: Record<ViewId, string> = {
   files: 'files',
   browser: 'preview',
   graph: 'graph',
+  assets: 'assets',
   terminal: 'terminal',
 }
 
@@ -57,6 +58,8 @@ const VIEW_LABELS: Record<ViewId, string> = {
   // The task's app, with Design Mode (spec 2026-10-09-design-mode).
   browser: 'Preview',
   graph: 'Graph',
+  // What the run's agent published (spec 2026-10-22-html-artifacts-and-impact).
+  assets: 'Assets',
   terminal: 'Terminal',
 }
 
@@ -95,6 +98,13 @@ const LEGACY_VIEW_NAMES: Partial<Record<ViewId, readonly string[]>> = {
 /** Whether `name` is the automatic name of `view`'s own layout, under any label it has had. */
 export function isViewName(name: string, view: ViewId): boolean {
   return name === VIEW_LABELS[view] || (LEGACY_VIEW_NAMES[view]?.includes(name) ?? false)
+}
+
+/** Names a returning user may still search for: every label the view has had, plus what moved
+ *  into it (Design Mode lives in Preview). The task palette matches them as keywords. */
+export function viewAliases(view: ViewId): readonly string[] {
+  const moved: Partial<Record<ViewId, readonly string[]>> = { browser: ['Design Mode'], terminal: ['Shell'] }
+  return [...(LEGACY_VIEW_NAMES[view] ?? []), ...(moved[view] ?? [])]
 }
 
 export function viewLabel(view: ViewId): string {
@@ -213,8 +223,9 @@ export const DEFAULT_LAYOUT_NAME = VIEW_LABELS.session
  *  default for everyone else. */
 export function defaultState(): WorkspaceState {
   return {
-    // Terminal is not pre-seeded: its card is minted on first use, like any deep link.
-    layouts: VIEW_IDS.filter((view) => view !== 'terminal').map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
+    // Terminal and Assets are not pre-seeded: their cards are minted on first use, like any deep
+    // link — most tasks never publish an asset.
+    layouts: VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'assets').map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
     active: DEFAULT_LAYOUT_NAME,
   }
 }
@@ -804,6 +815,28 @@ function toWorking(state: WorkspaceState, columns: WorkspaceColumn[]): Workspace
 export interface SavedLayout {
   name: string
   columns: readonly { view: ViewId; width: number }[]
+  /** Shipped with cezar (`BUILT_IN_LAYOUTS`): hideable, never deleted. */
+  builtIn?: boolean
+}
+
+/** The layouts cezar ships (design 2026-11, task view): offered in every task's Layout menu like a
+ *  saved one, but code rather than stored state — a layout the user saves under the same name
+ *  stands in for it, and deleting that one brings the built-in back. */
+export const REVIEW_LAYOUT_NAME = 'Review'
+export const BUILT_IN_LAYOUTS: readonly SavedLayout[] = [
+  { name: REVIEW_LAYOUT_NAME, columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }], builtIn: true },
+]
+
+export function isBuiltInLayoutName(name: string): boolean {
+  return BUILT_IN_LAYOUTS.some((layout) => layout.name === name)
+}
+
+/** The state a task opens with on its FIRST visit — nothing saved on the host yet: Chat alone,
+ *  whatever the viewport. Changes is never opened for the user (owner review, 2026-11-12); the
+ *  built-in Review layout waits in the menu. Nothing is written for it: the visit saves nothing,
+ *  and the first change saves the whole state exactly as the user left it. */
+export function firstVisitState(): WorkspaceState {
+  return defaultState()
 }
 
 /** The active layout as a saved one, or `null` when there is nothing to save. */

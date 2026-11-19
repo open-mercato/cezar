@@ -13,6 +13,10 @@ sources:
   - label: "Specification"
     path: .ai/specs/2026-07-25-github-automations.md
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Export and import"
+    path: packages/web/src/routes/automations/automations-transfer.tsx
+    line: 123
+    commit: 5bc829f9c
 ---
 Choose GitHub events, the polling interval, and filters for authors, assignees, labels, or reviewers. When an event matches, the rule creates a normal task with the saved prompt, workflow, and agent.
 
@@ -27,3 +31,20 @@ Automations → New automation → When GitHub changes
 3. Enable the rule to process future changes.
 
 > **Good to know**: The feature has been available by default since the interface redesign. `CEZ_AUTOMATIONS=0` disables it. A rule starts working after the user enables it and does not create tasks for earlier matches.
+
+## Export and import
+
+Move automations between projects or machines as one JSON file. **Export** beside **New automation** downloads every automation of the project. **Import** opens a preview of a file before anything is written.
+
+1. Select Automations → Import and pick a `.json` file that cezar exported.
+2. Review the preview. A name that already exists is skipped unless you choose **Rename** (it lands as "`<name>` (imported)") or **Replace** (it replaces and pauses the existing automation). A row marked **runs shell commands** imports only after you tick its acknowledgement.
+3. Select **Import N automations (paused)**. The button stays disabled while a row you are importing still lists an issue.
+
+The same flow is available from the terminal. `import` without `--apply` prints the preview and writes nothing:
+
+```bash title="Terminal"
+cez automation export [<id>…] [--out <file>]
+cez automation import <file> [--on-conflict skip|rename|replace] [--apply]
+```
+
+> **Good to know**: Every imported automation lands paused, so nothing runs until you enable it. A file written by a newer cezar, an invalid file, or one that is not valid JSON is refused with one message and no preview. If the project changes between the preview and the import, the import is refused and asks you to review again. `--on-conflict` defaults to `skip`.

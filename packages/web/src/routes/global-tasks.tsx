@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
+  ArrowLeftIcon,
   EyeIcon,
   EyeOffIcon,
   LayersIcon,
@@ -11,9 +12,10 @@ import {
   XIcon,
 } from 'lucide-react'
 import * as React from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { Link, useLocation, useNavigationType, useSearchParams } from 'react-router'
 
 import { archiveProjectRun, setProjectRunRead } from '@/api/client'
+import { useManagers } from '@/api/managers'
 import {
   queryKeys,
   rememberReferenceStatuses,
@@ -22,13 +24,14 @@ import {
   useRunsIndex,
   workspaceQueryKeys,
 } from '@/api/queries'
-import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
+import type { ManagerSummary, ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
 import { Segmented } from '@/components/segmented'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
+import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ReferenceOverflow } from '@/components/reference-overflow'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
@@ -38,7 +41,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { UnreadMarker } from '@/components/unread-marker'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isIdleClosed, type Attention } from '@/lib/attention'
 import {
   formatCost,
   taskReferences,
@@ -67,8 +70,10 @@ import {
   tagValuesOf,
   tasksExcludingFacet,
   resetCount,
+  tasksScroll,
   toGlobalTasks,
   toggleFacetValue,
+  wantsScrollRestore,
   toggleGroupBy,
   truncatedProjectNames,
   type FacetId,
@@ -78,6 +83,7 @@ import {
   type GroupBy,
   type SortBy,
 } from '@/lib/global-tasks'
+import type { ManagerOrigin } from '@/lib/managers'
 import { scopeTo } from '@/lib/project-router'
 import { allProjectTags } from '@/lib/project-tags'
 import { canBeUnread, isReadDoneItem, isUnread } from '@/lib/read-state'
@@ -130,6 +136,40 @@ const pollWhileLive = (data: RunsIndexResponse | undefined): number | false =>
   data?.runs.some((run) => run.usage !== undefined) ? RUNS_INDEX_POLL_MS : false
 
 const AGE_TICK_MS = 30_000
+
+/** Router state every row link leaves on its task: set while the table shows one manager's tasks,
+ *  so the task's header offers the way back here and to that manager. */
+const RowLinkStateContext = React.createContext<{ manager: ManagerOrigin } | undefined>(undefined)
+
+/** Keeps the shell's scroller position for this list, and puts it back on Back or the breadcrumb. */
+function useTasksScroll(rootRef: React.RefObject<HTMLElement | null>, ready: boolean) {
+  const { search, state } = useLocation()
+  const navigationType = useNavigationType()
+  const restore = React.useRef(navigationType === 'POP' || wantsScrollRestore(state))
+  React.useEffect(() => {
+    const main = rootRef.current?.closest<HTMLElement>('[data-slot="main"]')
+    if (!main) return
+    const save = () => tasksScroll.save(search, main.scrollTop)
+    main.addEventListener('scroll', save, { passive: true })
+    return () => main.removeEventListener('scroll', save)
+  }, [rootRef, search])
+  React.useEffect(() => {
+    if (!ready || !restore.current) return
+    restore.current = false
+    const top = tasksScroll.get(search)
+    const main = rootRef.current?.closest<HTMLElement>('[data-slot="main"]')
+    if (!main || top === undefined) return
+    // A passive effect lands after the shell's layout-time reset; the frames cover rows still painting.
+    let frames = 0
+    let handle = 0
+    const apply = () => {
+      main.scrollTop = top
+      if (Math.abs(main.scrollTop - top) > 1 && ++frames < 10) handle = requestAnimationFrame(apply)
+    }
+    apply()
+    return () => cancelAnimationFrame(handle)
+  }, [ready, rootRef, search])
+}
 
 /** How long the search box waits before writing the URL. Long enough that a typed word is one
  *  history write rather than eight, short enough that a paste-and-share feels immediate. */
@@ -237,19 +277,24 @@ function useIndexedRunMutation<V extends { task: GlobalTask }>({
 
 export function GlobalTasksRoute() {
   const projects = useProjects()
+  const health = useHealth()
   // The same host gate the per-project table honours: `CEZ_HIDE_COST` and friends turn these
   // columns off everywhere, and a cross-project view is not an exception.
-  const metrics = usageMetricVisibility(useHealth().data)
+  const metrics = usageMetricVisibility(health.data)
   // Always enabled here — unlike the ⌘K palette, which parks it in a single-project workspace:
   // this page IS the index, so there is nothing else for it to fall back to. Any project's run
   // event invalidates this index through the one workspace stream, so a task that is renamed or
   // finishes while you watch updates on its own; the interval runs only while a live usage
   // sample is on screen (see `pollWhileLive`).
   const index = useRunsIndex(true, pollWhileLive)
+  const managerList = useManagers(health.data?.capabilities.managers === true).data?.managers
   // The URL is the state, not a mirror of it: read here, written by the setters below. One
   // source of truth means a refresh, a pasted link and the Back button all land on the same
   // filtered view, with no effect syncing two copies that can disagree.
   const [searchParams, setSearchParams] = useSearchParams()
+  const { search: locationSearch } = useLocation()
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  useTasksScroll(rootRef, index.data !== undefined && projects.data !== undefined)
   const { filters, groupBy, sortBy, view } = React.useMemo(
     () => urlStateFromSearchParams(searchParams),
     [searchParams],
@@ -341,8 +386,8 @@ export function GlobalTasksRoute() {
   }, [indexedStatuses])
   const registry = React.useMemo(() => projects.data?.projects ?? [], [projects.data])
   const allTasks = React.useMemo(
-    () => toGlobalTasks(index.data?.runs ?? [], registry),
-    [index.data, registry],
+    () => toGlobalTasks(index.data?.runs ?? [], registry, managerList),
+    [index.data, registry, managerList],
   )
   // Who started each row (a person, or an automation) — the remembered origin split narrows the
   // list before any facet does, so the facet counts are counts of the list actually on screen.
@@ -384,6 +429,15 @@ export function GlobalTasksRoute() {
       ),
     [visible],
   )
+  // One manager's tasks: its name for the way back, and the origin each opened task carries.
+  const backId = filters.managers.length === 1 ? filters.managers[0]! : undefined
+  const backName = backId === undefined ? undefined : managerList?.find((manager) => manager.id === backId)?.name
+  const rowLinkState = React.useMemo(
+    () => (backId !== undefined && backName !== undefined
+      ? { manager: { id: backId, name: backName, tasks: `/tasks${locationSearch}` } }
+      : undefined),
+    [backId, backName, locationSearch],
+  )
   const truncated = truncatedProjectNames(index.data?.truncated ?? [], registry)
 
   const toggle = (facet: FacetId, value: string) =>
@@ -411,6 +465,19 @@ export function GlobalTasksRoute() {
           tone="danger"
           title="Tasks across projects did not load"
           subtitle={(index.error ?? projects.error)?.message}
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              data-action="retry-global-tasks"
+              onClick={() => {
+                void index.refetch()
+                void projects.refetch()
+              }}
+            >
+              Try again
+            </Button>
+          }
         />
       </div>
     )
@@ -428,33 +495,54 @@ export function GlobalTasksRoute() {
         onChange={(event) => setQueryDraft(event.target.value)}
         placeholder="Search every project…"
         aria-label="Search tasks across projects"
-        className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-[13px] text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-ui text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
       />
     </div>
   )
 
   return (
-    <div data-route="global-tasks" className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">All tasks</h1>
-        <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
-          <ViewTab view="active" current={view} onSelect={setView}>
-            Active
-          </ViewTab>
-          <ViewTab view="archived" current={view} onSelect={setView}>
-            Archived
-          </ViewTab>
-        </div>
+    <div ref={rootRef} data-route="global-tasks" className="flex min-h-full flex-col">
+      {/* Below `md` only the Active/Archived switch stays up here — the one way to reach (and
+          restore) archived tasks on a phone; the search rides in the body instead. */}
+      <header
+        data-slot="global-tasks-header"
+        className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3 md:h-14 md:px-5"
+      >
+        <h1 className="hidden text-base font-semibold md:block">All tasks</h1>
+        {/* These re-slice one list in place, they do not switch panels — the shared segmented
+            control's `aria-pressed` is the honest reading, the same as the per-project table. */}
+        <Segmented<ListView>
+          slot="overview-tabs"
+          label="Which tasks"
+          value={view}
+          options={[
+            { value: 'active', label: 'Active' },
+            { value: 'archived', label: 'Archived' },
+          ]}
+          onChange={setView}
+        />
         <div className="flex-1" />
-        <span data-slot="global-tasks-count" className="text-[12.5px] text-soft-foreground tabular-nums">
+        <span data-slot="global-tasks-count" className="hidden text-label text-soft-foreground tabular-nums md:inline">
           {visible.length} of {allTasks.length}
         </span>
-        {search}
+        <div className="hidden md:block">{search}</div>
       </header>
+
 
       <div className="flex flex-1 flex-col gap-3 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
         {/* Below `md` the header above is hidden, so the search box rides here instead. */}
         <div className="md:hidden">{search}</div>
+
+        {backId !== undefined && backName !== undefined ? (
+          <Link
+            to={`/manager/${encodeURIComponent(backId)}`}
+            data-slot="global-tasks-manager-back"
+            className="inline-flex items-center gap-1 self-start rounded-sm text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <ArrowLeftIcon aria-hidden="true" className="size-3.5" />
+            Back to {backName}
+          </Link>
+        ) : null}
 
         <FilterBar
           filters={filters}
@@ -470,6 +558,7 @@ export function GlobalTasksRoute() {
           sortBy={sortBy}
           onSortByChange={setSortBy}
           projects={registry}
+          managers={managerList}
           tasks={tasks}
           view={view}
           origin={origin}
@@ -478,7 +567,7 @@ export function GlobalTasksRoute() {
         />
 
         {truncated.length > 0 ? (
-          <p data-slot="global-tasks-truncated" className="text-[11.5px] text-soft-foreground">
+          <p data-slot="global-tasks-truncated" className="text-meta text-soft-foreground">
             Showing the {index.data?.perProjectLimit} most recently active tasks per project — older ones in{' '}
             {truncated.join(', ')} are only in that project&rsquo;s own Tasks page.
           </p>
@@ -496,11 +585,12 @@ export function GlobalTasksRoute() {
           // No `projectId` on the provider, uniquely on this page: every chip under it names its
           // own, because the rows next to each other belong to different repositories.
           <LiveNowProvider intervalMs={AGE_TICK_MS}>
+          <RowLinkStateContext.Provider value={rowLinkState}>
           <ReferenceStatusProvider requests={referenceRequests}>
             {groups.map((group) => (
               <section key={group.key} data-slot="task-group" data-group-key={group.key}>
                 {groupBy === 'none' ? null : (
-                  <h2 className="mb-1.5 flex items-center gap-2 text-[12px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+                  <h2 className="mb-1.5 flex items-center gap-2 eyebrow text-soft-foreground">
                     {/* A project heading is a DOOR, not a label: that project's own Tasks page is
                         the better version of "just this project" (live SSE, the full column set,
                         the composer), which is why there is no project filter here at all. */}
@@ -515,7 +605,7 @@ export function GlobalTasksRoute() {
                     ) : (
                       group.label
                     )}
-                    <span className="font-mono text-[11px] font-medium tabular-nums">
+                    <span className="font-mono text-meta font-medium tabular-nums">
                       {group.tasks.length}
                     </span>
                   </h2>
@@ -534,41 +624,11 @@ export function GlobalTasksRoute() {
               </section>
             ))}
           </ReferenceStatusProvider>
+          </RowLinkStateContext.Provider>
           </LiveNowProvider>
         )}
       </div>
     </div>
-  )
-}
-
-function ViewTab({
-  view,
-  current,
-  onSelect,
-  children,
-}: {
-  view: ListView
-  current: ListView
-  onSelect: (view: ListView) => void
-  children: React.ReactNode
-}) {
-  const isActive = view === current
-  return (
-    <button
-      type="button"
-      data-slot="overview-tab"
-      data-view={view}
-      // Same rationale as the per-project table's tabs: these filter one list in place, they do
-      // not switch panels — `aria-pressed` is what that actually is.
-      aria-pressed={isActive}
-      onClick={() => onSelect(view)}
-      className={cn(
-        'flex h-7 items-center justify-center rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground',
-        isActive && 'bg-card font-semibold text-foreground shadow-xs',
-      )}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -600,6 +660,7 @@ function FilterBar({
   sortBy,
   onSortByChange,
   projects,
+  managers,
   tasks,
   view,
   origin,
@@ -615,6 +676,8 @@ function FilterBar({
   sortBy: SortBy
   onSortByChange: (next: SortBy) => void
   projects: readonly ProjectListEntry[]
+  /** Undefined while loading or with managers off: the facet then shows only a selection. */
+  managers: readonly ManagerSummary[] | undefined
   tasks: readonly GlobalTask[]
   view: ListView
   origin: TaskOrigin
@@ -633,8 +696,18 @@ function FilterBar({
       tags: per('tags', tagValuesOf),
       statuses: per('statuses', (task) => [task.run.status]),
       workflows: per('workflows', (task) => [task.run.workflow]),
+      managers: per('managers', (task) => task.managers),
     }
   }, [tasks, filters, view])
+
+  // Managers with tasks to show, plus any the URL names — a deleted one stays removable.
+  const managerOptions = React.useMemo(() => {
+    const options = (managers ?? [])
+      .filter((manager) => manager.followedTasks.length > 0 || filters.managers.includes(manager.id))
+      .map((manager) => ({ value: manager.id, label: manager.name }))
+    const unknown = filters.managers.filter((id) => !options.some((option) => option.value === id))
+    return [...options, ...unknown.map((id) => ({ value: id, label: managers ? 'Deleted manager' : 'Manager' }))]
+  }, [managers, filters.managers])
 
   const withCount = (map: Map<string, number>) => (option: { value: string; label: string }) => ({
     ...option,
@@ -679,8 +752,19 @@ function FilterBar({
             .map(withCount(counts.workflows))}
           emptyLabel="No tasks to filter"
         />
+        {managerOptions.length > 0 ? (
+          <FacetFilter
+            slot="manager"
+            label="Started by"
+            selected={filters.managers}
+            onToggle={(value) => onToggle('managers', value)}
+            onClear={() => onClearFacet('managers')}
+            options={managerOptions.map(withCount(counts.managers))}
+            searchPlaceholder="Search managers…"
+          />
+        ) : null}
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-soft-foreground">Group by</span>
+        <span className="text-meta font-medium text-soft-foreground">Group by</span>
         {/* Pressing the pressed one releases it — see `toggleGroupBy`, which is why there is
             no "None" button to hunt for. */}
         <SegmentedControl
@@ -692,7 +776,7 @@ function FilterBar({
         />
         {/* Same labelled-segmented grammar as Group by beside it. */}
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-soft-foreground">Sort by</span>
+        <span className="text-meta font-medium text-soft-foreground">Sort by</span>
         <Segmented
           slot="sort-by"
           label="Sort tasks by"
@@ -705,7 +789,7 @@ function FilterBar({
             type="button"
             data-action="clear-filters"
             onClick={onClearAll}
-            className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2 text-label font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <XIcon className="size-3" aria-hidden="true" />
             Clear
@@ -716,7 +800,7 @@ function FilterBar({
 
       {tags.length > 0 ? (
         <div data-slot="tag-filters" className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-medium text-soft-foreground">Tags</span>
+          <span className="text-meta font-medium text-soft-foreground">Tags</span>
           {tags.map((tag) => (
             <ToggleChip
               key={tag}
@@ -742,7 +826,7 @@ function FilterBar({
         // Not silence: a workspace with no tags anywhere is the ONE state where the feature is
         // invisible, and the sentence that fixes it is one line long — with the door in it,
         // since the pane that fixes it is two clicks away and outside this page.
-        <p data-slot="no-tags-hint" className="text-[11px] text-soft-foreground">
+        <p data-slot="no-tags-hint" className="text-meta text-soft-foreground">
           Tag connected repositories in{' '}
           <Link to="/settings/global/projects" className="font-medium text-violet hover:underline">
             Settings → Projects
@@ -870,7 +954,7 @@ function Th({ children, className }: { children: React.ReactNode; className?: st
     <th
       scope="col"
       className={cn(
-        'h-[38px] border-b border-border px-2.5 text-left text-[11px] font-semibold tracking-[0.05em] whitespace-nowrap text-soft-foreground uppercase first:pl-4 last:pr-4',
+        'h-[38px] border-b border-border px-2.5 text-left eyebrow whitespace-nowrap text-soft-foreground first:pl-4 last:pr-4',
         className,
       )}
     >
@@ -880,6 +964,26 @@ function Th({ children, className }: { children: React.ReactNode; className?: st
 }
 
 const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4 last:pr-4'
+
+/**
+ * The status grammar (redesign 2026-11, Proposal 7) — the per-project table's rule, applied to
+ * the cross-project row: a word only where the state is still open. A finished, cancelled,
+ * idle-closed or archived row shows its mark and no pill; the mark keeps the state's colour (green
+ * done, grey cancelled, orange idle — owner review, 2026-11-12), the news is elsewhere.
+ */
+function isQuietStatus(run: RunIndexEntry): boolean {
+  return run.archived || run.status === 'done' || run.status === 'cancelled' || isIdleClosed(run)
+}
+
+/** A shape per outcome, not a colour alone (WCAG 1.4.1); the Archived view also prints the word. */
+function QuietStatus({ attention, archived }: { attention: Attention; archived: boolean }) {
+  return (
+    // `px-2.5` is the pill's own padding, so the mark sits on one vertical line down the column.
+    <span data-slot="status-quiet" className="inline-flex h-5 items-center px-2.5">
+      <StatusMark attention={attention} showLabel={archived} />
+    </span>
+  )
+}
 
 /**
  * One cross-project run.
@@ -923,6 +1027,7 @@ const TaskRow = React.memo(function TaskRow({
   const { run } = task
   const attention = deriveAttention(run)
   const to = scopeTo(run.projectId, `/tasks/${run.id}`)
+  const linkState = React.useContext(RowLinkStateContext)
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
   // The SAME rule every other surface applies (#407, #526) — the index carries the six inputs
@@ -939,6 +1044,8 @@ const TaskRow = React.memo(function TaskRow({
   // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
   // is project-scoped and so cannot reach forty projects at once.
   const usage = usageCells(run, run.usage)
+  const statusId = React.useId()
+  const quiet = isQuietStatus(run)
 
   return (
     <tr
@@ -947,12 +1054,16 @@ const TaskRow = React.memo(function TaskRow({
       aria-rowindex={ariaRowIndex}
       data-project={run.projectId}
       data-depth={depth}
-      className="hover:bg-muted"
+      className="group/row hover:bg-muted"
     >
       <td className={TD_BASE}>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
-          {attention.label}
-        </Pill>
+        {quiet ? (
+          <QuietStatus attention={attention} archived={Boolean(run.archived)} />
+        ) : (
+          <Pill dot={attention.tone} pulse={attention.pulse}>
+            {attention.label}
+          </Pill>
+        )}
       </td>
       {/* The one column with no fixed width, so every pixel the others give up lands here — and
           dropping Branch gave up 140 of them. A cross-project list is read by TITLE. */}
@@ -967,17 +1078,20 @@ const TaskRow = React.memo(function TaskRow({
             <span
               aria-hidden="true"
               data-slot="subtask-tick"
-              className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+              className="shrink-0 font-mono text-meta leading-none text-soft-foreground"
             >
               &#9492;
             </span>
           ) : null}
           <Link
             to={to}
+            state={linkState}
             title={runTitle(run)}
+            aria-describedby={quiet ? statusId : undefined}
             className={cn(
-              'min-w-0 truncate text-[13px]',
+              'min-w-0 truncate text-ui',
               unread
+
                 ? 'font-semibold text-foreground'
                 : readDone
                   ? 'font-medium text-muted-foreground'
@@ -985,13 +1099,14 @@ const TaskRow = React.memo(function TaskRow({
             )}
           >
             {runTitle(run)}
+            {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
             {unread ? <UnreadMarker /> : null}
           </Link>
           {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
           {dispatchKindLabel(run) ? (
             <span
               data-slot="dispatch-kind"
-              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
             >
               {dispatchKindLabel(run)}
             </span>
@@ -1008,7 +1123,7 @@ const TaskRow = React.memo(function TaskRow({
         </span>
       </td>
       {showProject ? (
-        <td className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>
+        <td className={cn(TD_BASE, 'text-label text-muted-foreground')}>
           <Link to={scopeTo(run.projectId, '/')} className="truncate hover:text-foreground">
             {task.projectName}
           </Link>
@@ -1032,7 +1147,7 @@ const TaskRow = React.memo(function TaskRow({
           <Dash />
         )}
       </td>
-      <td className={cn(TD_BASE, 'hidden text-[12.5px] text-muted-foreground xl:table-cell')}>
+      <td className={cn(TD_BASE, 'hidden text-label text-muted-foreground xl:table-cell')}>
         {run.workflow}
       </td>
       {showCost ? (
@@ -1047,11 +1162,16 @@ const TaskRow = React.memo(function TaskRow({
       ) : null}
       <UsageTd column="cpu" cell={usage.cpu} />
       <UsageTd column="memory" cell={usage.mem} />
-      <td className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
+      <td className={cn(TD_BASE, 'text-right text-label text-muted-foreground tabular-nums')}>
         <RelativeAge at={sortTimestamp(run, sortBy)} />
       </td>
+      {/* Row actions show on hover or focus, never as a column of icons (the per-project table's
+          `row-controls`). Always in the DOM, so the keyboard reaches them — focus reveals. */}
       <td className={cn(TD_BASE, 'text-right')}>
-        <span className="inline-flex items-center gap-0.5">
+        <span
+          data-slot="row-controls"
+          className="inline-flex items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 no-hover:opacity-100"
+        >
           <ReadToggle task={task} busy={busy} onSetRead={onSetRead} />
           <ArchiveToggle task={task} busy={busy} onArchive={onArchive} />
         </span>
@@ -1235,7 +1355,7 @@ export function TagChip({ tag, className }: { tag: string; className?: string })
     <span
       data-slot="project-tag"
       className={cn(
-        'inline-flex max-w-full items-center truncate rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground',
+        'inline-flex max-w-full items-center truncate rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground',
         className,
       )}
     >
@@ -1259,8 +1379,8 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
         TD_BASE,
         'hidden text-right font-mono tabular-nums xl:table-cell',
         cell.kind === 'live' && 'bg-violet/5 text-xs font-medium text-foreground',
-        cell.kind === 'peak' && 'text-[11.5px] text-soft-foreground',
-        cell.kind === 'none' && 'text-xs text-soft-foreground',
+        cell.kind === 'peak' && 'text-meta text-soft-foreground',
+        cell.kind === 'none' && 'text-label text-soft-foreground',
       )}
     >
       {cell.text || '—'}
@@ -1268,8 +1388,9 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
   )
 }
 
+/** An honest absence — tertiary, so `text-soft-foreground` is right here. */
 function Dash() {
-  return <span className="text-xs text-soft-foreground">—</span>
+  return <span className="text-label text-soft-foreground">—</span>
 }
 
 /** What an empty global list honestly means, given how it got empty. */

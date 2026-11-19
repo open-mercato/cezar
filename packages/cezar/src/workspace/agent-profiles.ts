@@ -52,6 +52,10 @@ const PROVIDER_HOME: Record<ProviderId, (home: ReturnType<typeof agentHomePaths>
   pi: (home) => home.pi,
   junie: (home) => home.junie,
   copilot: (home) => home.copilot,
+  omp: (home) => home.omp,
+  antigravity: (home) => home.antigravity,
+  gemini: (home) => home.gemini,
+  kimi: (home) => home.kimi,
 };
 
 /**
@@ -132,6 +136,17 @@ export function selectProfile(
   if (chosen === undefined || chosen === DEFAULT_AGENT_ACCOUNT_ID) return defaultAgentProfile(provider, env);
   const stored = store.accounts.find((a) => a.id === chosen && a.provider === provider);
   return stored ? resolveStoredProfile(stored) : defaultAgentProfile(provider, env);
+}
+
+/**
+ * The id of the account a run on `provider` ends up on — `selectProfile`'s answer, as the key the
+ * usage-limit hold uses (#1722). One resolver so the hold and the spawn cannot drift apart.
+ */
+export function resolveAccountId(
+  store: AgentAccountStore,
+  options: { provider: ProviderId; repoRoot?: string; profileId?: string },
+): string {
+  return selectProfile(store, options).id;
 }
 
 /**

@@ -41,6 +41,7 @@ const RUN: ApiRun = {
 
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -48,7 +49,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** The PROJECT-scoped `/repo` answer. The remote that gates Push is read from here rather than
@@ -224,12 +225,13 @@ describe('the Changes tab route', () => {
       current: a.getAttribute('aria-current'),
     }))
     expect(tabs).toEqual([
-      { text: 'Session', href: '/tasks/r1', current: null },
+      { text: 'Chat', href: '/tasks/r1', current: null },
       { text: 'Changes', href: '/tasks/r1/changes', current: 'page' },
       { text: 'Commits', href: '/tasks/r1/commits', current: null },
       { text: 'Files', href: '/tasks/r1/files', current: null },
       { text: 'Notes', href: '/tasks/r1/notes', current: null },
       { text: 'Preview', href: '/tasks/r1/preview', current: null },
+      { text: 'Assets', href: '/tasks/r1/assets', current: null },
     ])
   })
 
@@ -884,6 +886,19 @@ describe('the Changes tab composer dock', () => {
     renderChangesRoute()
     await screen.findByText('notes.md +1')
     await waitFor(() => expect(sent.some((r) => r.path.startsWith('/api/v1/models'))).toBe(true))
+  })
+
+  it('carries the usage line under the docked composer — a Changes-only layout still shows spend', async () => {
+    stubFetch({
+      'GET /api/v1/providers/status': PROVIDERS,
+      'GET /api/v1/runs/r1/drafts': () => diffCommentsDraft(STORED),
+    })
+    renderChangesRoute()
+    const chip = await screen.findByText('notes.md +1')
+    const dock = chip.closest<HTMLElement>('[data-slot="thread-dock"]')!
+    const usage = dock.querySelector('[data-slot="changes-usage"]') as HTMLElement
+    expect(usage.className).toContain('justify-end')
+    expect(usage.querySelector('[data-slot="run-usage"]')).not.toBeNull()
   })
 
   /** The whole loop without leaving the diff: the chips sit in the docked composer, a message can

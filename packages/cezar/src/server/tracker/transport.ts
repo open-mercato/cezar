@@ -8,6 +8,12 @@ export class TrackerRequestError extends Error {
   ) { super(reason); }
 }
 
+const SIZE_LIMIT_REASON = 'Tracker response exceeded the size limit. Narrow the request.';
+/** An oversized page is a degradable limitation for context reads, not a broken tracker. */
+export function isResponseSizeLimit(error: unknown): boolean {
+  return error instanceof TrackerRequestError && error.code === 'invalid_response' && error.reason === SIZE_LIMIT_REASON;
+}
+
 /** The same deadline covers discovery, fallback, fetch and streaming the response. */
 export async function runOperation<T>(read: (signal: AbortSignal) => Promise<T>, timeout = 10_000): Promise<T> {
   const controller = new AbortController();
@@ -43,7 +49,7 @@ export class TrackerHttp {
     throw new TrackerRequestError('rate_limited', 'Tracker rate limit reached. Retry after the cooldown.', bounded);
   }
 
-  async json(url: string, init: RequestInit, signal: AbortSignal, inspectHeaders?: (headers: Headers, status: number) => number | undefined): Promise<unknown> {
+  async json(url: string, init: RequestInit, signal: AbortSignal, inspectHeaders?: (headers: Headers, status: number) => number | undefined, options: { allowEmpty?: boolean; allowGraphqlErrors?: boolean } = {}): Promise<unknown> {
     if (this.cooldownUntil > Date.now()) throw new TrackerRequestError('rate_limited', 'Tracker rate limit reached. Retry after the cooldown.', Math.ceil((this.cooldownUntil - Date.now()) / 1000));
     const response = await this.fetcher(url, { ...init, signal, redirect: 'error' });
     const rateLimitHint = inspectHeaders?.(response.headers, response.status);
@@ -60,15 +66,16 @@ export class TrackerHttp {
       await response.body?.cancel();
       throw new TrackerRequestError('not_found', 'The requested tracker item was not found in this scope.');
     }
-    // GraphQL reports rate limits with HTTP 400; its adapter interprets the bounded JSON body.
-    if (!response.ok && response.status !== 400) {
+    // Only GraphQL callers opt into HTTP 400 bodies to interpret vendor errors.
+    if (!response.ok && !(options.allowGraphqlErrors && response.status === 400)) {
       await response.body?.cancel();
       throw new TrackerRequestError('unavailable', 'Tracker request failed. Try again later.');
     }
+    if (options.allowEmpty && response.status === 204) return null;
     const cap = 2 * 1024 * 1024;
     if (Number(response.headers.get('content-length') ?? 0) > cap) {
       await response.body?.cancel();
-      throw new TrackerRequestError('invalid_response', 'Tracker response exceeded the size limit. Narrow the request.');
+      throw new TrackerRequestError('invalid_response', SIZE_LIMIT_REASON);
     }
     const reader = response.body?.getReader();
     if (!reader) throw new TrackerRequestError('invalid_response', 'Tracker returned an empty response.');
@@ -79,7 +86,7 @@ export class TrackerHttp {
         const chunk = await reader.read();
         if (chunk.done) break;
         bytes += chunk.value.byteLength;
-        if (bytes > cap) throw new TrackerRequestError('invalid_response', 'Tracker response exceeded the size limit. Narrow the request.');
+        if (bytes > cap) throw new TrackerRequestError('invalid_response', SIZE_LIMIT_REASON);
         chunks.push(chunk.value);
       }
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }

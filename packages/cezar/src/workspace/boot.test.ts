@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { initWorkspace } from './boot.ts';
+import { initServeWorkspace, initWorkspace } from './boot.ts';
 import { loadWorkspaceConfig } from './config.ts';
 import { clearProjectProbeCache, registerProject } from './projects.ts';
 
@@ -81,5 +81,26 @@ describe('initWorkspace', () => {
     // The migration cursor is the observable proof migrations ran — the
     // suppressed registration must not short-circuit the rest of boot.
     expect((await loadWorkspaceConfig()).schemaVersion).toBeGreaterThan(0);
+  });
+
+  it('registers an eligible serve launch even when other projects already exist', async () => {
+    await registerProject(makeRepo('kept'));
+    const launched = makeRepo('launched');
+
+    expect(await initServeWorkspace(launched)).toBe('launched');
+    expect(await registeredRoots()).toEqual([
+      realpathSync(join(repos, 'kept')),
+      realpathSync(launched),
+    ]);
+  });
+
+  it('keeps serve registration idempotent and preserves the existing slug', async () => {
+    const launched = makeRepo('known-serve');
+    const first = await registerProject(launched);
+    await registerProject(makeRepo('other-serve'));
+
+    expect(await initServeWorkspace(launched)).toBe(first.id);
+    expect((await loadWorkspaceConfig()).projects.filter((project) => project.root === realpathSync(launched)))
+      .toHaveLength(1);
   });
 });

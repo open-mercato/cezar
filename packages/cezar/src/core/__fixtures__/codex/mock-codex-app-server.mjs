@@ -8,7 +8,15 @@
 // `MOCK_CODEX_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
 // server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
 // and handles SIGTERM itself, exiting 143 rather than dying from the signal.
+import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+
+// The same fixture can stand in for the executable at provider-auth time.
+// `codex login status` is the only probe that precedes `codex app-server`.
+if (process.argv.slice(2).join(' ') === 'login status') {
+  process.stdout.write('Logged in using ChatGPT\n');
+  process.exit(0);
+}
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
@@ -37,6 +45,8 @@ const rl = createInterface({ input: process.stdin });
  *   mock:compaction-badask   the turn emits a MALFORMED CEZ:ASK and THEN compacts
  *   mock:child-compaction    a CHILD thread compacts and ends its turn; the parent works on
  *   mock:steer-reject        the turn stays open, so a follow-up steers — and is REFUSED
+ *
+ *   mock:abandoned-commentary  an unfinished commentary item, then a final_answer ending CEZ:MONITORING (#2197)
  *
  * The continuation cezar sends after a boundary carries no `mock:` marker, so
  * the scenario is latched from the opening turn rather than re-read per turn.
@@ -90,6 +100,8 @@ function resumeLocked() {
 }
 
 const ignoreEof = process.env.MOCK_CODEX_IGNORE_EOF === '1';
+const requestsFile = process.env.CEZ_MOCK_CODEX_REQUESTS_FILE;
+let heldTurnId;
 if (ignoreEof) {
   process.on('SIGTERM', () => process.exit(143));
   // Keep the event loop alive so EOF alone can never end the process.
@@ -102,6 +114,13 @@ rl.on('line', (line) => {
     msg = JSON.parse(line);
   } catch {
     return;
+  }
+  if (requestsFile) {
+    try {
+      appendFileSync(requestsFile, `${JSON.stringify(msg)}\n`);
+    } catch {
+      // Test capture must never change the protocol behavior.
+    }
   }
   if (msg.id === 'ask-1' && msg.result) {
     const answer = msg.result.answers?.library?.answers;
@@ -121,7 +140,10 @@ rl.on('line', (line) => {
       emit({ id: msg.id, error: { code: -32602, message: 'workspace-write override is obsolete in full-access mode' } });
       return;
     }
-    if (msg.method === 'thread/start') {
+    if (msg.method === 'thread/start' && process.env.MOCK_CODEX_REJECT_START === '1') {
+      emit({ id: msg.id, error: { code: -32603, message: 'authentication failed: session token missing from configuration' } });
+      rl.close();
+    } else if (msg.method === 'thread/start') {
       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
       emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
     } else if (msg.method === 'thread/fork') {
@@ -146,6 +168,8 @@ rl.on('line', (line) => {
       return;
     }
     emit({ id: msg.id, result: {} });
+    // `mock:hold-turn` stays open until a follow-up steers it, so the session can end.
+    if (heldTurnId) emit({ method: 'turn/completed', params: { turn: { id: heldTurnId, status: 'completed' } } });
   } else if (msg.method === 'turn/start') {
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
     turnSeq += 1;
@@ -210,7 +234,7 @@ rl.on('line', (line) => {
       } });
       return;
     }
-    if (turnText.includes('mock:turn-completed-failed')) {
+    if (turnText.includes('mock:turn-completed-failed') && !turnText.includes('mock:turn-failed')) {
       emit({ method: 'turn/completed', params: {
         threadId: 'th_mock_1',
         turn: { id: 'turn_mock_1', status: 'failed', error: { message: "The 'fable' model is not supported", codexErrorInfo: 'other' } },
@@ -218,10 +242,33 @@ rl.on('line', (line) => {
       return;
     }
     if (turnText.includes('mock:turn-failed')) {
-      emit({ method: 'turn/failed', params: {
-        turn: { id: 'turn_mock_1', status: 'failed' },
-        error: { message: 'model unavailable' },
+      // Wire shape checked with codex-cli 0.160.0 app-server generate-ts:
+      // v2/TurnCompletedNotification, Turn, TurnError and ErrorNotification.
+      const futureClock = new Date(Date.now() + 2 * 60 * 60_000);
+      const clock = `${String(futureClock.getUTCHours()).padStart(2, '0')}:${String(futureClock.getUTCMinutes()).padStart(2, '0')}`;
+      const usage = { message: turnText.includes('mock:clock-limit')
+        ? `You've hit your usage limit. Try again at ${clock} (UTC).`
+        : "You've hit your usage limit. Try again in 60 minutes.", codexErrorInfo: 'usageLimitExceeded', additionalDetails: null };
+      const terminal = turnText.includes('mock:nested-limit') ? usage
+        : { message: 'exceeded retry limit, last status: 429 Too Many Requests', codexErrorInfo: 'rateLimitExceeded', additionalDetails: null };
+      if (turnText.includes('mock:retry-error')) {
+        emit({ method: 'error', params: { threadId: 'th_mock_1', turnId,
+          error: { message: 'Reconnecting... 1/5', codexErrorInfo: null, additionalDetails: null }, willRetry: true } });
+      }
+      if (turnText.includes('mock:usage-limit')) {
+        emit({ method: 'error', params: { threadId: 'th_mock_1', turnId, error: usage, willRetry: false } });
+      }
+      const nested = turnText.includes('mock:nested-error') || turnText.includes('mock:nested-limit');
+      emit({ method: turnText.includes('mock:turn-completed-failed') ? 'turn/completed' : 'turn/failed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: turnId, status: 'failed', items: [], error: nested ? terminal : null },
+        // Retain coverage of the legacy turn/failed shape and absent terminal details.
+        ...(!nested && !turnText.includes('mock:usage-limit') ? { error: { message: 'model unavailable' } } : {}),
       } });
+      return;
+    }
+    if (turnText.includes('mock:hold-turn')) {
+      heldTurnId = turnId;
       return;
     }
     if (turnText.includes('mock:subagent-activity')) {
@@ -230,6 +277,14 @@ rl.on('line', (line) => {
       emit({ method: 'item/started', params: { item: { type: 'collabAgentToolCall', id: 'wait_1', tool: 'wait', status: 'inProgress', receiverThreadIds: [] } } });
       emit({ method: 'item/completed', params: { item: { type: 'collabAgentToolCall', id: 'wait_1', tool: 'wait', status: 'completed', receiverThreadIds: [] } } });
       emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } });
+      return;
+    }
+    if (turnText.includes('mock:abandoned-commentary')) {
+      emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_c1', phase: 'commentary', text: '' } } });
+      emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', itemId: 'item_c1', delta: 'abandoned fragment' } });
+      const text = 'Still working.\nCEZ:MONITORING';
+      emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_f1', phase: 'final_answer', text } } });
+      emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: 'turn_mock_1', status: 'completed' } } });
       return;
     }
     if (turnText.includes('mock:child-turn')) {

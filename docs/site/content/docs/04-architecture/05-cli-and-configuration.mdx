@@ -52,7 +52,7 @@ npx cezar-run serve --repo /path/to/project --port 4321 --no-open
 
 | Command | What it does |
 | --- | --- |
-| `cezar run` "&lt;task>" --workflow quick-task | Runs a workflow without a server or browser. It executes agent work, which can change files and consume provider quota. |
+| `cezar run` "&lt;task>" --workflow quick-task | Runs a workflow without a server or browser. It executes agent work, which can change files and consume provider quota. `--model` overrides the model, and `--effort` the reasoning effort of a Codex or Claude run; any other runner refuses `--effort`. |
 | cezar projects / projects add &lt;directory> | Reads or changes the local project registry. No server is required. |
 | cezar runs list --json | Reads tasks from the running server specified by `CEZ_API_URL`. |
 | `cezar task` / `cezar automation` | Controls dispatch and automations on the running server. |
@@ -98,5 +98,7 @@ The example below is part of an optional project configuration. `reviewGate` is 
   "reviewGate": true
 }
 ```
+
+`bypassPermissions` is also disabled by default. Setting it to true (Settings → Agents → **Skip all permission prompts**) runs the project's Claude Code tasks with `--permission-mode bypassPermissions`: every tool call is approved without asking, including commands outside the Claude Code Bash sandbox. Read-only tasks and a manager's own turns are never affected. cezar ignores the key while `.ai/cezar/config.json` is tracked by git, so a cloned repository cannot turn approvals off, and while it runs as root, because Claude Code refuses bypass mode for root. It is local-only: a hosted cockpit refuses to turn it on and ignores it.
 
 > **Good to know**: Set `baseBranch` to the correct branch for the repository. Missing or invalid configuration usually falls back to defaults. Configured lifecycle transitions have separate, strict validation.

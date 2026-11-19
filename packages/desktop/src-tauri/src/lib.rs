@@ -33,12 +33,19 @@ use std::time::{Duration, Instant};
 
 mod disclaim;
 mod node_runtime;
+#[cfg(target_os = "macos")]
+mod notch;
+#[cfg(any(target_os = "macos", test))]
+mod notch_geometry;
+#[cfg(any(target_os = "macos", test))]
+mod notch_model;
 mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
 use telemetry::Failure;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 /// Exit status the sidecar uses to say "relaunch me" after a self-update (EX_TEMPFAIL).
 const RESTART_EXIT_CODE: i32 = 75;
@@ -48,6 +55,8 @@ const LOG_TAIL: usize = 60;
 /// beside the app whenever it can; a busy one falls through to the next few, then to any.
 const PREFERRED_PORTS: std::ops::Range<u16> = 4321..4331;
 const PACKAGE: &str = "@open-mercato/cezar";
+/// System-wide: bring the cockpit forward on its new-task composer from any app.
+const NEW_TASK_SHORTCUT: &str = "CmdOrCtrl+Alt+N";
 
 /// Everything the supervisor thread and the menu handler share.
 struct Shell {
@@ -84,7 +93,8 @@ const INIT_SCRIPT: &str = r#"
     var platform = "__PLATFORM__";
     // `microphone`: this shell is entitled to it — an older macOS one refuses every dictation
     // (telemetry c55c7b0b), so the cockpit disables the mic there instead.
-    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true };
+    // `notch`: this shell has the Manager notch, so Settings offers its toggle.
+    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true, notch: platform === "macos" };
     // At document start the root element may not exist yet; the flag is a convenience, the
     // rest of this script is not.
     if (document.documentElement) document.documentElement.dataset.cezDesktop = platform;
@@ -238,6 +248,23 @@ const FRAME_SCRIPT: &str = r#"
   })();
 "#;
 
+/// Client-side navigation to the active project's `/new` (react-router follows `popstate`), so
+/// the cockpit keeps its state instead of reloading. A legacy flat `/new` redirects to the boot
+/// project. The composer focuses itself on mount.
+const OPEN_NEW_TASK_SCRIPT: &str = r#"
+  (function () {
+    var scope = location.pathname.match(/^\/p\/[^/]+/);
+    var to = (scope ? scope[0] : '') + '/new';
+    if (location.pathname === to) {
+      var box = document.querySelector('[data-slot="composer"] textarea');
+      if (box) box.focus();
+      return;
+    }
+    history.pushState(null, '', to);
+    dispatchEvent(new PopStateEvent('popstate', { state: null }));
+  })();
+"#;
+
 fn platform_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -328,6 +355,22 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
         });
     }
     Ok(window)
+}
+
+/// The global shortcut lands here: the main window comes forward, on the new-task composer once
+/// the cockpit is up (before that, on the splash that says why it is not).
+fn open_new_task(app: &AppHandle, shell: &Shell) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    let on_cockpit = window
+        .url()
+        .map(|url| url.scheme() == "http" && is_own_origin(&url, shell.port.load(Ordering::SeqCst)))
+        .unwrap_or(false);
+    if on_cockpit {
+        let _ = window.eval(OPEN_NEW_TASK_SCRIPT);
+    }
 }
 
 fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
@@ -616,6 +659,42 @@ fn offer_update(window: &WebviewWindow, version: &str) {
     ));
 }
 
+/// The chords that reach the window from ANY app: ⌃⌥↑ / ⌃⌥↓ step to the previous / next task
+/// that needs you (spec 2026-10-17-task-palette § Switching by arrow). ⌃⌥ because ⌥-arrows alone
+/// are every text field's paragraph jump, and a global registration takes them from every app.
+const TASK_SWITCH_SHORTCUTS: [(Code, &str); 2] = [(Code::ArrowUp, "previous"), (Code::ArrowDown, "next")];
+
+/// What the shell runs in the page on a press: the cockpit does the stepping
+/// (`use-task-switch-shortcut.ts` listens); a cockpit that predates the event ignores it.
+fn task_switch_script(direction: &str) -> String {
+    format!(
+        "window.dispatchEvent(new CustomEvent('cezar:switch-task', {{ detail: {} }}))",
+        js_string(direction)
+    )
+}
+
+/// Registers the global task-switch chords. Another app may already own one — then that chord
+/// is logged and skipped; the in-window ⌥-arrows still work.
+fn register_task_switch_shortcuts(app: &AppHandle) {
+    for (code, direction) in TASK_SWITCH_SHORTCUTS {
+        let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), code);
+        let registered = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                let _ = window.eval(&task_switch_script(direction));
+            }
+        });
+        if let Err(error) = registered {
+            eprintln!("[shortcut] ctrl+alt+{direction} task switch not registered: {error}");
+        }
+    }
+}
+
 pub fn run() {
     telemetry::install_panic_hook();
     let shell = Arc::new(Shell {
@@ -649,14 +728,37 @@ pub fn run() {
     });
 
     let shell_for_state = shell.clone();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(notch::on_page_crashed);
+    builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
+        .invoke_handler(tauri::generate_handler![
+            update_cezar_command,
+            restart_app,
+            show_versions_menu,
+            send_error_report,
+            #[cfg(target_os = "macos")]
+            notch::notch_ready,
+            #[cfg(target_os = "macos")]
+            notch::notch_report_shape,
+            #[cfg(target_os = "macos")]
+            notch::notch_expand,
+            #[cfg(target_os = "macos")]
+            notch::notch_open_manager,
+            #[cfg(target_os = "macos")]
+            notch::notch_enabled,
+            #[cfg(target_os = "macos")]
+            notch::set_notch_enabled,
+        ])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
             build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
+            register_global_shortcuts(&handle, &shell_for_setup);
+            #[cfg(target_os = "macos")]
+            notch::start(&handle, shell_for_setup.clone());
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
             std::thread::spawn(move || supervise(supervisor_handle, shell));
@@ -715,6 +817,10 @@ pub fn run() {
             _ => {}
         })
         .on_window_event(move |window, event| {
+            // Everything below is the main window's; the notch panel never moves on its own account.
+            if window.label() != "main" {
+                return;
+            }
             match event {
                 WindowEvent::Moved(position) => {
                     if cfg!(debug_assertions) {
@@ -771,6 +877,25 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+/// The shell's system-wide chords: new task and the task switch. Another app may already own a
+/// combination; the shell then runs without it rather than failing to start.
+fn register_global_shortcuts(app: &AppHandle, shell: &Arc<Shell>) {
+    if let Err(error) = app.plugin(tauri_plugin_global_shortcut::Builder::new().build()) {
+        eprintln!("[shortcut] global shortcuts unavailable: {error}");
+        return;
+    }
+    let shell = shell.clone();
+    let registered = app.global_shortcut().on_shortcut(NEW_TASK_SHORTCUT, move |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            open_new_task(app, &shell);
+        }
+    });
+    if let Err(error) = registered {
+        eprintln!("[shortcut] {NEW_TASK_SHORTCUT} is taken by another app: {error}");
+    }
+    register_task_switch_shortcuts(app);
 }
 
 /// Silent self-update of the shell. `CEZ_DESKTOP_NO_UPDATE=1` disables it (development builds
@@ -1818,13 +1943,24 @@ fn browser_url(mut url: url::Url) -> String {
     url.to_string()
 }
 
+/// What the OS may be asked to open on a page's behalf (GHSA-7359-xf8g-8826): a web or mail
+/// address, re-serialized by the parser. Any other scheme (`file:`, `ms-msdt:`, `search-ms:`, …)
+/// launches a local handler, so it is dropped.
+fn openable_url(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    matches!(url.scheme(), "http" | "https" | "mailto").then(|| url.to_string())
+}
+
 fn open_url(url: &str) {
+    let Some(url) = openable_url(url) else { return };
     #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(url).spawn();
+    let _ = Command::new("open").arg(&url).spawn();
+    // Never through `cmd /C start`: cmd.exe re-parses `&`, `|`, `^` in the URL as commands
+    // (GHSA-7359-xf8g-8826). `FileProtocolHandler` takes the URL as one plain argument.
     #[cfg(windows)]
-    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let _ = Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", url.as_str()]).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(url).spawn();
+    let _ = Command::new("xdg-open").arg(&url).spawn();
 }
 
 /// A one-shot HTTP GET to `/api/v1/health` without an HTTP client dependency. Answers the
@@ -2182,6 +2318,16 @@ mod tests {
         assert_eq!(failure.message, "The cockpit process exited with status 1.");
     }
 
+    /// The cockpit listens for exactly this event name and detail (`use-task-switch-shortcut.ts`).
+    #[test]
+    fn a_global_chord_dispatches_the_switch_event_the_cockpit_listens_for() {
+        assert_eq!(
+            task_switch_script("next"),
+            "window.dispatchEvent(new CustomEvent('cezar:switch-task', { detail: \"next\" }))"
+        );
+        assert_eq!(TASK_SWITCH_SHORTCUTS.map(|(_, direction)| direction), ["previous", "next"]);
+    }
+
     #[test]
     fn the_development_channel_follows_no_dist_tag() {
         assert_eq!(channel_tag(Some("development")), None);
@@ -2224,6 +2370,14 @@ mod tests {
         assert!(info.contains("NSMicrophoneUsageDescription"));
         assert!(info.contains("NSSpeechRecognitionUsageDescription"));
         assert!(INIT_SCRIPT.contains("microphone: true"));
+    }
+
+    #[test]
+    fn app_nap_never_throttles_the_server_it_supervises() {
+        // A locked screen napped the app and paired phones lost the relay (2026-11-15).
+        let info = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist")).unwrap();
+        let key = info.find("<key>NSAppSleepDisabled</key>").expect("NSAppSleepDisabled is set");
+        assert!(info[key..].trim_start_matches("<key>NSAppSleepDisabled</key>").trim_start().starts_with("<true/>"));
     }
 
     /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
@@ -2279,6 +2433,18 @@ mod tests {
         assert!(may_be_a_frame(&url("about:blank")));
         assert!(!may_be_a_frame(&url("mailto:someone@example.com")));
         assert!(!may_be_a_frame(&url("file:///etc/passwd")));
+    }
+
+    /// GHSA-7359-xf8g-8826: a page's `window.open` must not reach a local protocol handler.
+    #[test]
+    fn only_web_and_mail_addresses_are_handed_to_the_os() {
+        assert_eq!(openable_url("http://127.0.0.1/&calc").as_deref(), Some("http://127.0.0.1/&calc"));
+        assert_eq!(openable_url("https://example.com/").as_deref(), Some("https://example.com/"));
+        assert!(openable_url("mailto:someone@example.com").is_some());
+        assert_eq!(openable_url("file:///C:/Windows/System32/calc.exe"), None);
+        assert_eq!(openable_url("ms-msdt:/id PCWDiagnostic"), None);
+        assert_eq!(openable_url("search-ms:query=x"), None);
+        assert_eq!(openable_url("not a url"), None);
     }
 
     #[test]

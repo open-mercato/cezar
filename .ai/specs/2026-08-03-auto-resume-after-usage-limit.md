@@ -72,7 +72,7 @@ A limit closes an **account**, not a run — so freeing the slot and starting th
 
 So `pump()` will not start a queued run while any run **on the same agent account** holds a future `autoResumeAt`:
 
-- **Keyed, not global** — `runner:agentProfile` (`runAccountKey`). A Claude limit must not stall Codex tasks, and a second login is a second budget.
+- **Keyed, not global** — `runner:account` (`runAccountKey`), where the account is the RESOLVED one: a run with no `agentProfile` keys on the project selection, else `defaults[runner]`, else `default` (#1722). A Claude limit must not stall Codex tasks, and a second login is a second budget.
 - **Derived, not tracked** — `RunManager.heldAccounts()` reads the durable records (`usageLimitHolder`), so the hold survives a restart, expires by itself, and lifts when a user cancels a resume or archives the task. There is no new state and no config key.
 - **Held until a resume PROVES the window** — a run holds its account while parked on a future deadline *and* while its automatic resume is in flight (`autoResumeAttempts` set, status queued or running). Ending the hold when the resume fires ends it at the moment the account is least proven: every cycle then let a queued task dequeue, walk to the repo-root lease and get handed back, which is what filled one reported transcript with six identical `run started … held in the queue` blocks. The counter is retired by the first completed turn — a settled run, or one that parks for the user — which is the only evidence the limit actually lifted.
 - **Two kinds of hold, because they bind different work** (`AccountHolds`, `accountHeldFor`) — and getting this wrong produced a bug in each direction:

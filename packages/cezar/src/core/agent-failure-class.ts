@@ -26,6 +26,7 @@ const BILLING_RES = [
   /\bcredit balance is too low\b/i, // claude (7d0a1d6d)
   /\binsufficient[_\s]quota\b/i, // OpenAI-backed codex/opencode
   /\bexceeded your current quota\b/i,
+  /\bapi error:\s*402\b|\brequires more credits\b/i, // claude via a credit-billed gateway (cb147fae)
 ] as const;
 
 const CONTEXT_TOO_LARGE_RES = [
@@ -69,15 +70,36 @@ const TRANSIENT_BACKOFF_MS = [30_000, 120_000] as const;
 /** The CLI's own advice for the refresh race: "retry in a minute". */
 const OAUTH_REFRESH_RACE_MIN_MS = 60_000;
 
-/** The wait before retry `attempt` (1-based) of a transient failure. */
-export function transientRetryDelayMs(attempt: number, error: string | undefined): number {
+/** Runs that lose the race together would retry in lockstep and lose it again without a spread. */
+const OAUTH_REFRESH_RACE_JITTER_MS = 45_000;
+/** The race gets one more retry than other transient failures: it is cezar's own parallelism. */
+const OAUTH_REFRESH_RACE_MAX_RETRIES = 3;
+
+/** The wait before retry `attempt` (1-based) of a transient failure; `random` is injectable for tests. */
+export function transientRetryDelayMs(attempt: number, error: string | undefined, random: () => number = Math.random): number {
   const base = TRANSIENT_BACKOFF_MS[Math.min(Math.max(attempt, 1), TRANSIENT_BACKOFF_MS.length) - 1]!;
-  return OAUTH_REFRESH_RACE_RE.test(error ?? '') ? Math.max(base, OAUTH_REFRESH_RACE_MIN_MS) : base;
+  if (!OAUTH_REFRESH_RACE_RE.test(error ?? '')) return base;
+  return Math.max(base, OAUTH_REFRESH_RACE_MIN_MS) + Math.floor(random() * OAUTH_REFRESH_RACE_JITTER_MS);
+}
+
+/** How many automatic retries one streak of this transient failure earns. */
+export function transientRetryCap(error: string | undefined): number {
+  return OAUTH_REFRESH_RACE_RE.test(error ?? '') ? OAUTH_REFRESH_RACE_MAX_RETRIES : MAX_TRANSIENT_RETRIES;
+}
+
+/** Whether the failure is the OAuth refresh race — its exhaustion message names the cause. */
+export function isOauthRefreshRace(error: string | undefined): boolean {
+  return OAUTH_REFRESH_RACE_RE.test(error ?? '');
 }
 
 const BACKEND_NAMES: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot',
 };
+
+/** The product name a user knows a backend by, or undefined for one without a fixed name. */
+export function agentBackendName(backend: string | undefined): string | undefined {
+  return BACKEND_NAMES[backend ?? ''];
+}
 
 /**
  * What the user can do about an account- or conversation-state failure, or undefined when the
@@ -92,7 +114,7 @@ export function accountStateHint(
   const name = BACKEND_NAMES[backend ?? ''];
   switch (failure) {
     case 'auth':
-      return `${name ?? 'The agent'} is not signed in or its login expired — sign in again (Settings → Agent accounts, or the agent's own login command in a terminal), then Continue this task`;
+      return `${name ?? 'The agent'} is not signed in or its login expired — sign in again (Settings → Agents → Accounts, or the agent's own login command in a terminal), then Continue this task`;
     case 'billing':
       return `the ${name ?? 'agent'} account has run out of credit — top up its balance or switch this task to another account, then Continue`;
     case 'usage_limit':

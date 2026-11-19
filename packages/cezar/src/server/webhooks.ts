@@ -10,9 +10,12 @@ import { jsonZodValidator, paramZodValidator, queryZodValidator } from './valida
 import type { WebhookService } from '../webhooks/service.ts';
 import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from '../webhooks/platform.ts';
 import { WebhookStateError } from '../webhooks/endpoints.ts';
+import { inRelayScope } from '../relay/scope.ts';
 type WebhookEnv = { Variables: { project: ProjectContext; webhookService: WebhookService } };
 export function createWebhookRoutes(resolve: (context: ProjectContext) => Promise<WebhookService>) {
   const gate: MiddlewareHandler<WebhookEnv> = async (c, next) => {
+    // The coordinator's mode is fixed at boot, so a laptop's `local` would admit private addresses.
+    if (inRelayScope() && c.req.method !== 'GET') return c.json({ error: 'webhooks are set up from the computer' }, 403);
     if (!webhookPlatformSupported()) return c.json({ error: WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE }, 409);
     if (process.env.CEZ_WEBHOOKS !== '1') return c.json({ error: 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar' }, 409);
     if (!c.get('webhookService')) c.set('webhookService', await resolve(c.get('project')));

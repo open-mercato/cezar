@@ -122,14 +122,15 @@ describe('dashboard complete summary snapshots', () => {
     reader.dispose();
     store.flush();
   });
-  it('retains failed owned-store load coverage rather than claiming an empty complete project', async () => {
+  it('retains a failed owned-store record in coverage rather than claiming a complete project', async () => {
     const p = root();
     disk(p, [record('valid-review', 'review'), { broken: true }]);
     const store = RunStore.open(join(p, '.ai/cezar'));
     const reader = new DashboardReader({ projects: async () => [{ id: 'p', root: p, store }] });
     const s = await reader.snapshot();
-    expect(s.counts.reviews).toBe(0); // The owning manager does not have this row.
-    expect(s.coverage.projects[0]).toMatchObject({ state: 'unavailable', omittedRuns: 2 });
+    // Per-record salvage (Phase 0): one unreadable row costs only itself, and coverage says so.
+    expect(s.counts.reviews).toBe(1);
+    expect(s.coverage.projects[0]).toMatchObject({ state: 'partial', omittedRuns: 1 });
     reader.dispose();
     store.flush();
   });
