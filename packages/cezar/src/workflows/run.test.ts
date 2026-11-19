@@ -133,7 +133,7 @@ describe('RunManager directional usage accounting', () => {
   afterEach(() => {
     manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function fixture() {
@@ -288,7 +288,7 @@ it('parallel variants ignore a worktree opt-out and retain isolated mode', () =>
     expect(records.map((record) => record.worktree)).toEqual([undefined, undefined]);
   } finally {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -318,7 +318,7 @@ describe('RunManager.recordTurnEnd', () => {
   afterAll(() => {
     manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   /** A run with a real worktree forked off main, holding an edit + a new file. */
@@ -501,7 +501,7 @@ describe('RunManager.continueRun override', () => {
   afterEach(() => {
     manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   /** A finished run with a resumable session on the `claude`/`sonnet` backend. */
@@ -944,7 +944,7 @@ describe('RunManager.settleSuccess — optional review gate', () => {
 
   afterAll(() => {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (savedGate === undefined) delete process.env.CEZ_REVIEW_GATE;
     else process.env.CEZ_REVIEW_GATE = savedGate;
   });
@@ -1053,7 +1053,7 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('runs both skill steps to completion, and the second step\'s prompt carries the chain guard', async () => {
@@ -1143,7 +1143,7 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("leaves the lone agent step's prompt untouched", async () => {
@@ -1282,7 +1282,7 @@ describe('check-step mutations stay out of autosave commits (#1079)', () => {
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('keeps the tracked check artifact out of the autosave commit', async () => {
@@ -1366,7 +1366,7 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
@@ -1628,7 +1628,7 @@ describe('a turn that parks on its sub-agents while declaring its PR is not "nee
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
@@ -1752,7 +1752,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
@@ -2743,7 +2743,7 @@ describe('recover() over a mid-workflow ask park (#917)', () => {
 
   afterEach(() => {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   /** A two-step run persisted exactly as a park leaves it on disk. */
@@ -2865,7 +2865,7 @@ describe('RunManager.persistAttachment without a session (#472)', () => {
 
   afterEach(() => {
     manager.dispose(); // see DISPOSE at the top of this file
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('persists two attachments with no ActiveRun and gives them distinct names', () => {
@@ -2951,7 +2951,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
 
   afterEach(() => {
     manager.dispose(); // see DISPOSE at the top of this file
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('appends messages in order while queued', () => {
@@ -3271,7 +3271,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
 
   afterEach(() => {
     manager.dispose(); // see DISPOSE at the top of this file
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('folds the task and every stacked message, in order, blank-line joined', () => {
@@ -3432,7 +3432,8 @@ describe('queued stacking reaches the backend (#472)', () => {
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    // A settling dry-run session may still write under `.ai/cezar` under full-suite load (ENOTEMPTY).
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('delivers the task plus every stacked message, with the edit applied', async () => {
@@ -3495,7 +3496,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
   });
 
   afterEach(() => {
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('folds once across repeated recoveries', async () => {
@@ -3556,7 +3557,7 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const waitFor = async (predicate: () => boolean, ms = 15_000) => {
@@ -3638,7 +3639,7 @@ describe('a context-compaction boundary keeps the run working (#955)', () => {
       if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
       if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
       store.flush();
-      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -3835,7 +3836,7 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const eventsOf = (id: string) =>
@@ -4002,7 +4003,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (teamRepo) {
       rmSync(bareDirFor(teamRepo), { recursive: true, force: true });
       rmSync(teamRepo, { recursive: true, force: true });
