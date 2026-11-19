@@ -41,17 +41,49 @@ mark, and a 28rem column floating on an iPad.
 - **Navigation.** Manager → switcher sheet → Manage cezars → Your cezars. The ← carries the name of the
   cezar you came from and returns to it (`cameFrom`); Back and the edge swipe pop one level.
 
-## Phase 2 work (after approval)
+## Decisions (approved 2026-11-19)
 
-- Native `list` rows add `status`, `words`, `need`, `initials`, `color`, `current`, `relay`, computed by the
-  existing `DeviceSwitch.rows` (iOS `Shell/Switcher/`, Android `shell/`), plus a pushed redraw when a probe
-  answers; new `rename` method; the outcome adds `notificationsAllowed` and `version`.
-- `connect.js`/`screens.js`/`connect.css`: the list, detail, sheet and empty state; `nav.js` gains a
-  per-cezar level. Native switcher, banner and status strings renamed.
-- Tests in `packages/mobile/test` (screens, nav, connect) and the native plain-class tests; before/after
-  screenshots on phone and tablet.
+The noun is **Your cezars**. Rename ships in this change.
 
-## Open questions
+## Native ↔ page contract (phase 2)
 
-1. The noun: Your cezars (proposed), Machines, Servers or Connections?
-2. Rename: ship in this change, or leave the row out until a later one?
+Identical on iOS (`ConnectionPlugin.swift`) and Android (`ConnectionPlugin.java`). Additive only: an older
+page ignores the new fields, and the page treats every new field as optional (an older app draws today's
+"Checking…"-free card with no status line).
+
+**Every listed outcome** (`listed(...)`, so `launch`, `list`, `pushSet`, … alike):
+
+| Field | Shape | Source |
+| --- | --- | --- |
+| `servers[].initials` | string, may be empty (the page draws a generic glyph) | `DeviceIdentity.initials(label)` |
+| `servers[].color` | `#rrggbb` | `DeviceIdentity.color(label)` |
+| `servers[].status` | `checking` \| `online` \| `offline` \| `other` | last probe reading, else `checking` |
+| `servers[].words` | string | `DeviceSwitch.words` (`Online`, `Offline since 14:02`, `Checking…`, `Sign in needed`, …) |
+| `servers[].reason` | for `other` only: `sign-in` \| `removed` \| `email` \| `account` \| `terms` \| `suspended` \| `update-app` \| `update-cezar` \| `quota` \| `broken` | the status's kind |
+| `servers[].need` | int or null | reading's attention, else `DeviceBook` |
+| `notifications` | `allowed` \| `denied` \| `unknown` | the OS permission for the app |
+| `version` | string, e.g. `0.1.1 (87)` | bundle / `BuildConfig` |
+
+**New methods**
+
+- `probe({ current })` → listed outcome. Runs `DeviceProbes` once over every saved server (the one whose id
+  is `current` counts online, as in `DeviceSwitch.rows`), resolves when all answered or at
+  `DeviceProbes.boundMs`, notes each reading in `DeviceBook` as the switcher does, then releases the warm
+  links (`stop()`). Readings are kept in memory so the next `listed` carries them. A second `probe` while one
+  runs joins it. The page calls it after drawing the list, on return to the foreground, and every 60 s while
+  the list is up.
+- `rename({ id, label })` → listed outcome. Trims; 1–60 characters; saves `ServerRecord.label`. Unknown id or
+  empty label → listed outcome plus `renameError` (a sentence for the user).
+- `notificationSettings()` → `{}`. Opens the OS's notification settings for the app.
+
+**Native copy** (switcher sheet, banner, status words, prompts): "Devices" → "Your cezars", "Add a device" →
+"Connect another cezar", "Manage devices" → "Manage cezars", the banner's "Devices" → "Cezars", "Removed
+from this computer" → "This phone was removed", and the push prompt's "on the Devices list" → "in Your
+cezars".
+
+## Phase 2 split
+
+- iOS native: `packages/mobile/ios/**` and `packages/mobile/test/swift/**`.
+- Android native: `packages/mobile/android/**`.
+- Page: `packages/mobile/connect/**` and `packages/mobile/test/*.test.mjs` (list, per-cezar page, Forget
+  sheet, empty state, iPad split ≥ 900 px, rename, probe loop).
