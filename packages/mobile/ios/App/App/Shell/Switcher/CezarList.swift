@@ -123,7 +123,8 @@ final class CezarProbe {
             lock.unlock()
             return
         }
-        readings = snapshot
+        // DeviceProbes' own bound runs on another queue and may not have turned these offline yet; stop() would drop it.
+        readings = atBound ? snapshot.mapValues { $0.status == .checking ? DeviceSwitch.Reading(.offline) : $0 } : snapshot
         running = nil
         let done = waiters
         waiters = []

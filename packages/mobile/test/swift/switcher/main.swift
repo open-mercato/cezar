@@ -377,6 +377,11 @@ do {
     expect(done == 1, "still waiting for counts")
     manual.fire()
     expect(done == 2, "the bound ends it without counts")
+    cezars.probe([relayServer, directServer], currentId: nil) { done += 1 }
+    reports["r"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    // CezarProbe's bound before DeviceProbes' own: on iOS they share no queue.
+    manual.pending.removeLast()()
+    expect(done == 3 && cezars.rows([directServer], now: noon)[0].status == .offline, "a reading still checking at the bound reads offline")
 }
 
 print("\(checks) checks, \(failures) failed")

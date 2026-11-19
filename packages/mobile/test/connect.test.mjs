@@ -672,11 +672,16 @@ test('a phone removed from its cezar offers Pair again, which starts a pairing',
 });
 
 test('statuses come from one probe round once the list shows, and redraw it', async () => {
+  // The round answers only when the test says so: a probe started on the first draw cannot win the race.
+  let answer;
+  const answered = new Promise((resolve) => { answer = resolve; });
   const { app, sent } = await boot(none, () => none, listed([live, saved]), {
-    probe: () => listed([{ ...live, status: 'offline', words: 'Offline since 09:41' }, saved]),
+    probe: () => answered,
   });
   assert.match(app.text, /Checking…/);
   await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.match(app.text, /Checking…/);
+  answer(listed([{ ...live, status: 'offline', words: 'Offline since 09:41' }, saved]));
   await settle();
   assert.deepEqual(sent.find(([method]) => method === 'probe'), ['probe', { current: '' }]);
   assert.match(app.text, /Offline since 09:41/);
