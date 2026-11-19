@@ -25,6 +25,7 @@ import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/e
 import { TOGGLE_ON_ICON_CLASS } from '@/components/pin-toggle'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceLabels } from '@/components/reference-labels'
 import { ReferenceOverflow } from '@/components/reference-overflow'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
@@ -890,6 +891,12 @@ function MetaRow({
         className={cn('h-5', desktopOnly)}
       />,
     )
+    // Labels (#2032) sit right after the issue chip they belong to; desktop row only.
+    if (number) {
+      parts.push(
+        <ReferenceLabels key="issue-labels" kind="Issue" number={Number(number)} className={desktopOnly} />,
+      )
+    }
   }
   if (run.automation) {
     // Provenance is history and is always shown; only the LINK is gated. Following it with the
@@ -1023,6 +1030,8 @@ function prChipNodes(run: ApiRun, references: ReturnType<typeof taskReferences>)
         // hands its chips, so both send the same prompt on the same seam.
         conflictAction={<ResolveConflictsButton run={run} prNumber={first.number} />}
       />
+      {/* Labels of the visible PR (#2032); the others show theirs in their hover cards. */}
+      <ReferenceLabels kind="PR" number={first.number} className="max-md:hidden" />
       {prReferences.length > 1 ? (
         <ReferenceOverflow
           references={prReferences}

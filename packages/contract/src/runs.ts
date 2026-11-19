@@ -6,7 +6,7 @@ import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
 import { runSubjectSchema } from './artifacts.ts';
-import { referenceStatusSchema } from './github.ts';
+import { referenceLabelsSchema, referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
@@ -672,6 +672,8 @@ export const referenceStatusesByProjectSchema = z.record(
   z.object({
     prs: z.record(z.number(), referenceStatusSchema),
     issues: z.record(z.number(), referenceStatusSchema),
+    /** Warm labels (#2032), same absent-means-unknown rule as `githubRefStatusDataSchema.labels`. */
+    labels: referenceLabelsSchema.optional(),
   }),
 );
 

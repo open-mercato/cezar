@@ -202,6 +202,24 @@ const recheckAfterMsSchema = z.number().nullable();
  */
 export const REFERENCE_STATUS_MAX = 100;
 
+/** One label on a linked issue or PR: forge-neutral name plus an optional 6-hex colour (no `#`). */
+export const referenceLabelSchema = z.object({ name: z.string(), color: z.string().optional() });
+export type ReferenceLabel = z.infer<typeof referenceLabelSchema>;
+
+/** A reference's labels, capped server-side; `more` is how many the forge has beyond `items`. */
+export const referenceLabelSetSchema = z.object({
+  items: z.array(referenceLabelSchema),
+  more: z.number().int().positive().optional(),
+});
+export type ReferenceLabelSet = z.infer<typeof referenceLabelSetSchema>;
+
+/** Labels per kind, keyed by number. A number with no labels is simply absent. */
+export const referenceLabelsSchema = z.object({
+  prs: z.record(z.number(), referenceLabelSetSchema),
+  issues: z.record(z.number(), referenceLabelSetSchema),
+});
+export type ReferenceLabels = z.infer<typeof referenceLabelsSchema>;
+
 export const githubRefStatusDataSchema = z.discriminatedUnion('available', [
   z.object({
     available: z.literal(true),
@@ -227,6 +245,12 @@ export const githubRefStatusDataSchema = z.discriminatedUnion('available', [
      * also what it answers while it is still computing) is never listed.
      */
     conflicts: z.array(z.number()).optional(),
+    /**
+     * Labels of the answered references (#2032). Optional, and absent means *not known* (a server
+     * from before the field, a forge without labels), never *no labels*; once present, a number
+     * without an entry has none. Same GraphQL node as the statuses, so no extra request.
+     */
+    labels: referenceLabelsSchema.optional(),
     recheckAfterMs: recheckAfterMsSchema,
   }),
   z.object({

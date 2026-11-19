@@ -13,6 +13,7 @@ import {
 } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import { ReferenceChip } from './reference-chip'
+import { ReferenceLabels } from './reference-labels'
 import { ReferenceStatusProvider, ReferenceStatusRegistry } from './reference-status'
 
 /**
@@ -439,5 +440,57 @@ describe('statuses survive a reload', () => {
     await waitFor(() => expect(chip().getAttribute('data-status')).toBe('queued-for-merge'))
     expect(chip().className).toContain('text-muted-foreground')
     expect(chip().getAttribute('aria-label')).toBe('Open the pull request for Add checkout')
+  })
+})
+
+describe('labels on a chip (#2032)', () => {
+  const answerWithLabels = {
+    available: true,
+    prs: { 774: 'ready' },
+    issues: {},
+    labels: {
+      prs: {
+        774: {
+          items: [
+            { name: 'bug', color: 'd73a4a' },
+            { name: 'prio:high', color: 'ff0000' },
+            { name: 'needs-qa' },
+            { name: 'frontend', color: '0e8a16' },
+          ],
+          more: 2,
+        },
+      },
+      issues: {},
+    },
+  }
+
+  function renderWithLabels(max?: number) {
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider projectId="api" requests={REQUESTS}>
+          <ReferenceChip reference={PR} taskTitle="Add checkout" />
+          <ReferenceLabels kind="PR" number={774} max={max} />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('caps the strip with a +N that counts the forge overflow, and lists all in the card', async () => {
+    answers = [answerWithLabels]
+    renderWithLabels(2)
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="reference-labels"] [data-slot="reference-label"]')).toHaveLength(2))
+    expect(document.querySelector('[data-slot="reference-labels-more"]')?.textContent).toBe('+4')
+    openPanel()
+    await waitFor(() => expect(panelText()).toContain('frontend'))
+    expect(panelText()).toContain('+2 more')
+  })
+
+  it('paints nothing when the server sent no labels', async () => {
+    answers = [{ available: true, prs: { 774: 'ready' }, issues: {} }]
+    renderWithLabels()
+    await waitFor(() => expect(chip().getAttribute('data-status')).toBe('ready'))
+    expect(document.querySelector('[data-slot="reference-labels"]')).toBeNull()
+    openPanel()
+    expect(document.querySelector('[data-slot="reference-label-list"]')).toBeNull()
   })
 })
