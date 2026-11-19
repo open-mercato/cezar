@@ -58,6 +58,17 @@ describe('Questions inbox: merge, Older and counts', () => {
     expect(list.counts).toEqual({ live: 0, older: 0 });
   });
 
+  it('lists an inactive manager\'s questions but leaves them out of both counts (spec 2026-11-19-manager-deactivate)', async () => {
+    const { inbox } = setup({
+      tasks: [taskItem('p1', 'run1', 'q1', { askedMsAgo: 10_000 })],
+      managers: [managerItem('a', 'm1', { askedMsAgo: 5_000 }), managerItem('b', 'm2', { askedMsAgo: 9 * DAY })],
+      managerInactive: (managerId) => managerId === 'a' || managerId === 'b',
+    });
+    const list = await inbox.list();
+    expect(list.open.map((item) => item.key)).toEqual(['m:a:m1', 'r:p1:run1:q1', 'm:b:m2']);
+    expect(list.counts).toEqual({ live: 1, older: 0 });
+  });
+
   it('serves task questions alone when managers are off', async () => {
     const { inbox } = setup({ tasks: [taskItem('p1', 'run1', 'q1')], managers: [managerItem('a', 'm1')], managersEnabled: () => false });
     expect((await inbox.list()).open.map((item) => item.key)).toEqual(['r:p1:run1:q1']);

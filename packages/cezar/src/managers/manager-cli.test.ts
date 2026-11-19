@@ -191,6 +191,13 @@ describe('cez manager', () => {
     expect(watching.calls).toEqual([]);
   });
 
+  it('cannot switch a manager off or on: rename sends the name alone, and nothing reaches the activity route', async () => {
+    const { run, calls } = harness();
+    expect(await run('rename', '{"active":false}')).toBe(0);
+    expect(calls.at(-1)).toEqual(expect.objectContaining({ method: 'PATCH', body: { name: '{"active":false}' } }));
+    expect(calls.some((call) => call.url.includes('/activity'))).toBe(false);
+  });
+
   it('refuses to set up automations on a read-only project, and still reads them', async () => {
     const { run, calls } = harness({}, { access: 'read' });
     expect(await run('automation', '--project', 'alpha', 'create', '--json', '{"name":"n"}')).toBe(1);
