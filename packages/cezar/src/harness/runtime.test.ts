@@ -32,16 +32,7 @@ import {
 // validation-sandbox.test.ts exercises the real isolation boundary.
 vi.mock('./validation-sandbox.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./validation-sandbox.js')>(),
-  createValidationSandbox: vi.fn(() => {
-    const root = mkdtempSync(join(tmpdir(), 'cez-gate-unit-'));
-    const gh = join(root, 'gh');
-    mkdirSync(gh);
-    return {
-      env: { GH_CONFIG_DIR: gh, TMPDIR: root },
-      command: (args: string[]) => ({ executable: 'bash', args }),
-      cleanup: () => rmSync(root, { recursive: true, force: true }),
-    };
-  }),
+  createValidationSandbox: vi.fn((await import('../test-fixtures/harness-validation.testkit.js')).createTestValidationLauncher),
 }));
 
 /**

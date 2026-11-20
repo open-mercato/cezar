@@ -15,6 +15,13 @@ import * as profiles from '../workspace/agent-profiles.ts';
 import { RunManager } from './run.ts';
 import { QUICK_TASK_WORKFLOW } from './types.ts';
 
+// Keep the real validation runner and its exit evidence. These tests exercise retries,
+// not host sandbox installation or policy (covered by validation-sandbox.test.ts).
+vi.mock('../harness/validation-sandbox.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../harness/validation-sandbox.ts')>(),
+  createValidationSandbox: (await import('../test-fixtures/harness-validation.testkit.ts')).createTestValidationLauncher,
+}));
+
 const model = vi.hoisted(() => ({
   calls: [] as Array<{ phase: string; runner: RunnerId; timeoutMs?: number; prompt: string }>,
   behavior: (_phase: string, _runner: RunnerId, _spec: AgentRunSpec): string | null | undefined => undefined,

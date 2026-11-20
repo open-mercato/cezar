@@ -1,12 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const owner = fileURLToPath(new URL('./__fixtures__/process-tree/harness-owner.mjs', import.meta.url));
-const fakeAgent = fileURLToPath(new URL('./__fixtures__/process-tree/fake-agent.mjs', import.meta.url));
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -54,9 +53,6 @@ describe.skipIf(process.platform === 'win32')('harness process groups die with c
   async function startOwner(mode: 'exit' | 'handled' | 'signal', leaderExits = false) {
     const dir = mkdtempSync(join(tmpdir(), 'cez-tree-exit-'));
     dirs.push(dir);
-    const bin = join(dir, 'fake-agent.mjs');
-    copyFileSync(fakeAgent, bin);
-    chmodSync(bin, 0o755);
     if (leaderExits) writeFileSync(join(dir, 'leader-exits'), '');
     const child = spawn(process.execPath, ['--import', 'tsx', owner, dir, mode], {
       stdio: ['ignore', 'pipe', 'inherit'],

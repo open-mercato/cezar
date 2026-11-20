@@ -16,6 +16,12 @@ import * as profiles from '../workspace/agent-profiles.ts';
 import { RunManager } from './run.ts';
 import { QUICK_TASK_WORKFLOW } from './types.ts';
 
+// Exercise the real validation runner on fixture commands without requiring a host sandbox.
+vi.mock('../harness/validation-sandbox.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../harness/validation-sandbox.ts')>(),
+  createValidationSandbox: (await import('../test-fixtures/harness-validation.testkit.ts')).createTestValidationLauncher,
+}));
+
 const OVERLOAD = 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
 const model = vi.hoisted(() => ({ phases: [] as string[] }));
 vi.mock('../core/runner-factory.ts', () => ({
