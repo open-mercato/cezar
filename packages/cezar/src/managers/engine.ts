@@ -3376,13 +3376,14 @@ const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): strin
   `Your ${message.turn} turn asked the user, who answers in their next message: ${(message.ask?.questions ?? []).map((question) => `${question.header}: ${question.question}`).join(' / ')}`.slice(0, 2_000);
 
 /** The writes a manager makes without a card, and what each one changes. */
-type DirectChange = 'rename' | 'job-remove' | 'automation-create' | 'automation-update' | 'automation-report';
+type DirectChange = 'rename' | 'job-remove' | 'automation-create' | 'automation-update' | 'automation-report' | 'automation-pause';
 const DIRECT_CATEGORY: Record<DirectChange, ManagerActionCategory> = {
   rename: 'managers',
   'job-remove': 'jobs',
   'automation-create': 'automations',
   'automation-update': 'automations',
   'automation-report': 'automations',
+  'automation-pause': 'automations',
 };
 
 const withProject = (projectId: string | undefined): { projectId?: string } => (projectId === undefined ? {} : { projectId });

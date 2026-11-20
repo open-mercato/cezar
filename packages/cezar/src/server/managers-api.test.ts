@@ -434,12 +434,12 @@ describe('the managers routes', () => {
       const [projectId] = connectedProjectIds;
       const created = ((await (await request(`/api/v1/p/${projectId}/automations`, { method: 'POST', body: { ...schedule, enable: true } })).json()) as { automation: { id: string; enabled: boolean } }).automation;
       expect(created.enabled).toBe(true);
-      const paused = await request(`${BASE}/${id}/automations/${created.id}/pause`, { method: 'POST', body: { projectId } });
+      const paused = await tool(`${BASE}/${id}/automations/${created.id}/pause`, { method: 'POST', body: { projectId } });
       expect(paused.status).toBe(200);
       expect(((await paused.json()) as { automation: { enabled: boolean } }).automation.enabled).toBe(false);
       expect(await changes()).toEqual([expect.objectContaining({ type: 'automation-pause', kind: 'direct', by: 'manager', projectId })]);
       const reader = await createManager({ instructions: 'Watch', projects: 'all', access: 'read' });
-      const refused = await request(`${BASE}/${reader.id}/automations/${created.id}/pause`, { method: 'POST', body: { projectId } });
+      const refused = await tool(`${BASE}/${reader.id}/automations/${created.id}/pause`, { method: 'POST', body: { projectId } });
       expect(refused.status).toBe(403);
     });
 
@@ -448,12 +448,12 @@ describe('the managers routes', () => {
       const other = await createManager();
       const [projectId] = connectedProjectIds;
       const created = ((await (await request(`/api/v1/p/${projectId}/automations`, { method: 'POST', body: { ...schedule, report: { managerId: other.id, mode: 'post-result' } } })).json()) as { automation: { id: string } }).automation;
-      const unlink = await request(`${BASE}/${id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: null } });
+      const unlink = await tool(`${BASE}/${id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: null } });
       expect(unlink.status).toBe(403);
-      const takeOver = await request(`${BASE}/${id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: { managerId: id, mode: 'post-result' } } });
+      const takeOver = await tool(`${BASE}/${id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: { managerId: id, mode: 'post-result' } } });
       expect(takeOver.status).toBe(403);
       // Its owner may still unlink it.
-      expect((await request(`${BASE}/${other.id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: null } })).status).toBe(200);
+      expect((await tool(`${BASE}/${other.id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: null } })).status).toBe(200);
     });
 
     it('refuses automation writes on a read-only project or one it is not connected to, and still previews', async () => {
