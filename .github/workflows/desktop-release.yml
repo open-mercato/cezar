@@ -563,3 +563,59 @@ jobs:
             [ "$HAS_SIGNPATH" = "true" ] || echo "⚠️ The Windows installer is UNSIGNED (no SIGNPATH_* secrets) — SmartScreen will warn on install."
             [ "$HAS_UPDATER_KEY" = "true" ] || echo "⚠️ No updater manifest (no TAURI_SIGNING_PRIVATE_KEY) — installed shells will not auto-update to this version."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # `brew install --cask open-mercato/tap/cezar` (packages/desktop/homebrew/). Points the tap's
+  # cask at this release; the tap's first commit is made by hand, so this job only ever bumps it.
+  homebrew-tap:
+    name: Update Homebrew tap
+    needs: [prepare, publish]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Homebrew tap status
+        id: tap
+        env:
+          HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          echo "token=$HAS_TAP_TOKEN" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_TAP_TOKEN" != "true" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set — open-mercato/homebrew-tap was NOT updated; brew users stay on the previous version until Casks/cezar.rb is bumped by hand."
+            echo "⚠️ Homebrew tap not updated (no HOMEBREW_TAP_TOKEN)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check out repository
+        if: steps.tap.outputs.token == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packages/desktop/scripts
+
+      - name: Bump Casks/cezar.rb
+        if: steps.tap.outputs.token == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir sums
+          gh release download "$TAG" --repo "$REPO" --dir sums \
+            --pattern cezar-macos-aarch64.dmg.sha256 --pattern cezar-macos-x86_64.dmg.sha256
+          ARM=$(cut -d' ' -f1 sums/cezar-macos-aarch64.dmg.sha256)
+          INTEL=$(cut -d' ' -f1 sums/cezar-macos-x86_64.dmg.sha256)
+          git clone --depth 1 --branch main "https://x-access-token:${TAP_TOKEN}@github.com/open-mercato/homebrew-tap.git" tap
+          if [ ! -f tap/Casks/cezar.rb ]; then
+            echo "::warning::open-mercato/homebrew-tap has no Casks/cezar.rb on main — push the initial cask (packages/desktop/homebrew/) first."
+            exit 0
+          fi
+          node packages/desktop/scripts/bump-homebrew-cask.mjs tap/Casks/cezar.rb "$VERSION" "$ARM" "$INTEL"
+          cd tap
+          if git diff --quiet; then
+            echo "Casks/cezar.rb already at $VERSION"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -qam "cezar $VERSION"
+          git push origin HEAD:main
+          echo "🍺 Homebrew tap: cezar $VERSION" >> "$GITHUB_STEP_SUMMARY"
