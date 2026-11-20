@@ -129,7 +129,8 @@ The npm package also needs **Node 20+**; the desktop app uses yours, or download
 ### Downloads
 
 The desktop app (beta) runs the same local cockpit in its own window. It installs cezar on first launch,
-keeps it up to date, and switches between stable and nightly from the menu.
+keeps it up to date on the stable or nightly channel you pick in the cockpit, and switches between installed
+versions from its menu.
 
 | Platform | Download | For |
 | --- | --- | --- |
