@@ -77,7 +77,7 @@ import {
   type CockpitLease,
   type CockpitRuntimeRecord,
 } from './runtime/cockpit-runtime.ts';
-import { handoffProject } from './runtime/cockpit-handoff.ts';
+import { handoffMarkerLine, handoffProject } from './runtime/cockpit-handoff.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -333,6 +333,7 @@ async function serveCommand(
     const url = launchPageUrl(runtime.origin);
     console.log(`  cockpit already running (pid ${runtime.owner.pid}) — launch root is not registrable`);
     console.log(`  cockpit → ${url}`);
+    console.log(handoffMarkerLine(url));
     if (openBrowser) openUrl(url);
   };
 
