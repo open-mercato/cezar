@@ -897,6 +897,8 @@ export const managerChangeSchema = z.object({
   /** A proposal's action type, or the direct write (`rename`, `job-remove`, `automation-create`, …). */
   type: z.string(),
   kind: z.enum(['proposal', 'direct']),
+  /** What it changed, for the history's filter; absent on lines written before it. */
+  category: managerActionCategorySchema.optional(),
   /** The card, for a proposal. */
   actionId: z.string().optional(),
   projectId: z.string().optional(),
@@ -911,6 +913,8 @@ export const managerChangeSchema = z.object({
 export type ManagerChange = z.infer<typeof managerChangeSchema>;
 export const managerChangesQuerySchema = z.object({
   managerId: managerIdSchema.optional(),
+  projectId: boundedId.optional(),
+  category: managerActionCategorySchema.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 export const managerChangesResponseSchema = z.object({ changes: z.array(managerChangeSchema) });

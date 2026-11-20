@@ -315,6 +315,9 @@ describe('the managers routes', () => {
       await propose(130);
       expect(await changes()).toHaveLength(2);
       expect(await changes('?managerId=someone-else')).toEqual([]);
+      expect((await changes('?category=pull-requests')).map((entry) => entry.category)).toEqual(['pull-requests', 'pull-requests']);
+      expect(await changes('?category=automations')).toEqual([]);
+      expect(await changes(`?projectId=${projectId}&limit=1`)).toHaveLength(1);
     });
 
     it('answers the agent\'s tools only to its own live turn, and refuses that token on the cockpit\'s writes', async () => {

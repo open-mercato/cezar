@@ -6,7 +6,9 @@ import {
   type AttachmentEntry,
   type CreateManagerInput,
   type ManagerDeltaEvent,
+  type ManagerActionCategory,
   type ManagerActionDecisionInput,
+  type ManagerChangesResponse,
   type ManagerConnectorsResponse,
   type ManagerListResponse,
   type ManagerMessage,
@@ -15,6 +17,7 @@ import {
   type UpdateManagerInput,
 } from '@open-mercato/cezar-api-client'
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -230,6 +233,27 @@ export async function decideManagerAction(id: string, actionId: string, decision
   )
 }
 
+/** `GET /workspace/admin-audit`: every decided card and direct manager write, newest first. */
+export async function getManagerChanges(query: ManagerChangesQuery, opts?: { signal?: AbortSignal }): Promise<ManagerChangesResponse> {
+  const params = {
+    ...(query.managerId ? { managerId: query.managerId } : {}),
+    ...(query.projectId ? { projectId: query.projectId } : {}),
+    ...(query.category ? { category: query.category } : {}),
+    ...(query.limit ? { limit: String(query.limit) } : {}),
+  }
+  return unwrap(await cez.api.v1.workspace['admin-audit'].$get({ query: params }, { init: { signal: opts?.signal } }), '/workspace/admin-audit')
+}
+
+export interface ManagerChangesQuery { managerId?: string; projectId?: string; category?: ManagerActionCategory; limit?: number }
+
+export function useManagerChanges(query: ManagerChangesQuery) {
+  return useQuery({
+    queryKey: [...managerKeys.changes, query] as const,
+    queryFn: ({ signal }) => getManagerChanges(query, { signal }),
+    placeholderData: keepPreviousData,
+  })
+}
+
 export async function getManagerConnectors(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerConnectorsResponse> {
   return unwrap(await managers()[':id'].connectors.$get({ param: managerParam(id) }, { init: { signal: opts?.signal } }), managerPath(id, '/connectors'))
 }
@@ -247,6 +271,8 @@ export const managerKeys = {
   approvals: (id: string) => ['workspace', 'managers', 'approvals', id] as const,
   allApprovals: ['workspace', 'managers', 'approvals'] as const,
   connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
+  /** The change log (spec 2026-11-20 § 3.3), one entry per filter. */
+  changes: ['workspace', 'managers', 'changes'] as const,
 }
 
 type MessagePages = InfiniteData<ManagerMessagesResponse, number | undefined>
@@ -423,6 +449,8 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
     if (message.kind === 'action') {
       refreshInFlightManagerList(queryClient)
       void refreshManagerApprovals(queryClient, managerId)
+      // A settled card is a new change-log line; only a mounted history refetches.
+      if (message.status !== 'pending' && message.status !== 'running') void queryClient.invalidateQueries({ queryKey: managerKeys.changes })
     }
     return
   }
@@ -430,6 +458,8 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
   if (!parsed.success) return
   const { id, manager, deleted = false } = parsed.data
   refreshInFlightManagerList(queryClient)
+  // A manager's direct writes (a rename, a removed job) arrive as a change frame.
+  void queryClient.invalidateQueries({ queryKey: managerKeys.changes })
   const before = queryClient.getQueryData<ManagerListResponse>(managerKeys.list)?.managers.find((row) => row.id === id)
   queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, deleted))
   if (deleted) {

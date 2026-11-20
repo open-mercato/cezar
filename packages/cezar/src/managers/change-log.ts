@@ -59,13 +59,15 @@ export class ManagerChangeLog {
   }
 
   /** Newest first. */
-  list(query: { managerId?: string; limit?: number } = {}): ManagerChange[] {
+  list(query: { managerId?: string; projectId?: string; category?: string; limit?: number } = {}): ManagerChange[] {
     const path = changeLogPath();
     const limit = query.limit ?? 100;
     const found: ManagerChange[] = [];
     for (const file of [path, rotatedPath(path)]) {
       for (const entry of readEntries(file).reverse()) {
         if (query.managerId !== undefined && entry.managerId !== query.managerId) continue;
+        if (query.projectId !== undefined && entry.projectId !== query.projectId) continue;
+        if (query.category !== undefined && entry.category !== query.category) continue;
         found.push(entry);
         if (found.length >= limit) return found;
       }

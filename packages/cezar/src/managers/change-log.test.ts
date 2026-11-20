@@ -33,6 +33,9 @@ describe('the manager change log (spec 2026-11-20-manager-admin-actions § 3.3)'
     expect(log.list().map((change) => change.id)).toEqual(['c3', 'c2', 'c1']);
     expect(log.list({ managerId: 'm1' }).map((change) => change.id)).toEqual(['c3', 'c1']);
     expect(log.list({ limit: 1 }).map((change) => change.id)).toEqual(['c3']);
+    log.append(entry(4, { projectId: 'beta', category: 'automations' }));
+    expect(log.list({ projectId: 'beta' }).map((change) => change.id)).toEqual(['c4']);
+    expect(log.list({ category: 'automations' }).map((change) => change.id)).toEqual(['c4']);
   });
 
   it('is empty when the file is missing, and skips a bad line instead of failing', () => {

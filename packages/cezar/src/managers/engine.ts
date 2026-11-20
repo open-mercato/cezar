@@ -14,6 +14,7 @@ import {
   type CreateManagerInput,
   type Manager,
   type AttachmentInput,
+  type ManagerActionCategory,
   type ManagerActionOp,
   type ManagerActionRequest,
   type ManagerAutomationCheckInput,
@@ -3098,6 +3099,7 @@ export class ManagerEngine {
         managerName: manager.name,
         type: message.action.type,
         kind: 'proposal',
+        category: actionOp(message.action).category,
         actionId: message.id,
         ...withProject(actionProject(message.action)),
         summary: describeAction(message.action),
@@ -3325,11 +3327,11 @@ export class ManagerEngine {
   }
 
   /** The change log, newest first (spec 2026-11-20 § 3.3). */
-  changeLogEntries(query: { managerId?: string; limit?: number }): ManagerChange[] {
+  changeLogEntries(query: { managerId?: string; projectId?: string; category?: string; limit?: number }): ManagerChange[] {
     return this.changeLog.list(query);
   }
 
-  private logDirect(manager: Manager, type: string, summary: string, projectId?: string): void {
+  private logDirect(manager: Manager, type: DirectChange, summary: string, projectId?: string): void {
     this.changeLog.append({
       id: randomUUID(),
       at: this.iso(),
@@ -3337,6 +3339,7 @@ export class ManagerEngine {
       managerName: manager.name,
       type,
       kind: 'direct',
+      category: DIRECT_CATEGORY[type],
       ...withProject(projectId),
       summary,
       outcome: 'done',
@@ -3371,6 +3374,16 @@ function descendantsOf(runs: RunRecord[], rootId: string): RunRecord[] {
 /** The question alone: the rest of a watch or job reply stays out of the session that can act. */
 const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): string =>
   `Your ${message.turn} turn asked the user, who answers in their next message: ${(message.ask?.questions ?? []).map((question) => `${question.header}: ${question.question}`).join(' / ')}`.slice(0, 2_000);
+
+/** The writes a manager makes without a card, and what each one changes. */
+type DirectChange = 'rename' | 'job-remove' | 'automation-create' | 'automation-update' | 'automation-report';
+const DIRECT_CATEGORY: Record<DirectChange, ManagerActionCategory> = {
+  rename: 'managers',
+  'job-remove': 'jobs',
+  'automation-create': 'automations',
+  'automation-update': 'automations',
+  'automation-report': 'automations',
+};
 
 const withProject = (projectId: string | undefined): { projectId?: string } => (projectId === undefined ? {} : { projectId });
 
