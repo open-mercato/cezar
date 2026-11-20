@@ -180,7 +180,7 @@
     <div class="cz"><div><b>CI box</b><div style="color:#8b93a7;font-size:11px">last seen 2 d ago</div></div><span class="chip z">—</span></div>
     <div class="foot" style="margin-top:auto"><span>Icon badge: 5</span><a>Notifications…</a></div>
   </div></div>
-  <div style="flex:1;min-width:280px"><h3>C's native part</h3><p>The chip is the computer's count; a tap opens that cezar straight on its <b>Needs you</b> tab. An offline computer shows "—" and is left out of the icon rather than kept at an old number (a probe that fails twice drops its last count).</p></div>
+  <div style="flex:1;min-width:280px"><h3>C's native part</h3><p>The chip is the computer's count; a tap opens that cezar's <b>Now</b> on <b>All</b> (variant D). An offline computer shows "—" and is left out of the icon rather than kept at an old number (a probe that fails twice drops its last count).</p></div>
 </div>
 
 <h2>5 · Desktop</h2>
@@ -246,11 +246,12 @@
   <tr><td>APNs</td><td><code>push-type alert</code>, priority 10, <code>aps.alert + badge</code></td><td><code>push-type background</code>, priority 5, <code>{aps:{content-available:1}, s, c}</code></td></tr>
   <tr><td>FCM</td><td>data, high</td><td>data <code>{s, count, t:"count"}</code>, normal</td></tr>
   <tr><td>Collapse / TTL</td><td><code>cezarId</code> / 1 h</td><td><code>cezarId</code> / 1 h</td></tr>
-  <tr><td>Limit</td><td>existing</td><td>6 per grant per hour, separate</td></tr>
+  <tr><td>Limit</td><td>existing</td><td>6 per grant per hour, separate; cezar sends at most one per 10 min, newest value wins, so the final 0 always goes out</td></tr>
+  <tr><td>Who gets it</td><td>every grant</td><td>only a phone that declared <code>count</code> in its prefs: released Android builds post a notification for every data push</td></tr>
 </table>
 
-<h2>Decide</h2>
-<ol><li>Variant <b>A</b>, <b>B</b>, <b>C</b> or <b>D</b> (recommended: D with C's native chips).</li><li>Ship the <i>Fix first</i> PR now?</li><li>Failed tasks on the icon by default?</li><li>Quiet hours in the first cut?</li></ol>
+<h2>Decided (owner, 2026-11-20)</h2>
+<ol><li><b>Variant D</b>, with C's native chips on <i>Your cezars</i>.</li><li><i>Fix first</i> (B1–B3) ships separately; D builds on it.</li><li>Failed tasks push but do not count on the icon by default. Every other kind does both.</li><li>Quiet hours are in the first cut, on the settings page, stored on the computer with the phone's time zone.</li></ol>
 </main>
 </body>
 </html>

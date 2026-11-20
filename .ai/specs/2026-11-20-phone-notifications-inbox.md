@@ -79,11 +79,24 @@ Add `kind: "count"` to `POST /v1/push` (protocol `v` stays 1; the relay already 
 - **FCM**: data-only, `priority: normal`, `ttl: 3600s`, `collapse_key` `cezarId`,
   `data: { "s": "<cezarId>", "count": "N", "t": "count" }`.
 - Its own rate limit: at most 6 per grant per hour, not counted against `attention`'s.
-- Answers as for `attention`. RELAY_PROTOCOL.md § 7 gains the row and both payloads.
+- Answers as for `attention`. RELAY_PROTOCOL.md § 7 gains the row and both payloads. This adds to v1 and
+  does not replace anything: § 7's "`attention` is the only value" becomes "`attention` or `count`", and
+  `test-vectors/relay/` gains the `count` cases. The request keeps § 7's six fields, so AGENTS.md's
+  phone-push exception still holds.
 
-cezar sends one only after an `attention` push went to that grant and the count has since gone down, at most
-one a minute, and a final one when it reaches 0. The app, on receipt: store the count, set the badge, remove
-the delivered notification if 0.
+**Only phones that understand it.** Released Android builds post a notification for *every* data push
+(`CezarMessagingService.onMessageReceived` reads only `s` and `count`), so a `count` push would show them
+"Cezar needs you", even for a count of 0. The phone therefore declares the push kinds it understands when
+it hands over its grant, through the prefs route below (`kinds: ["attention", "count"]`). cezar sends `count` only to a
+device that declared it. A device that has not declared it gets no `count` push and relies on the on-open
+refresh. Released iOS builds have no background handler and drop the push, but they are gated the same way.
+
+cezar sends one only after an `attention` push went to that grant and the count has since gone down. It sends
+at most one per 10 minutes per grant, which fits the relay's 6 an hour. Changes in between are merged, and
+the newest count goes out at the next free slot, so the final 0 always gets sent and is never rate-limited
+away. A 429 moves the next slot to the `Retry-After` time and leaves the pending value in place. Tests pin
+the gate (no `count` push to a device that did not declare it) and the cadence (a falling count ends with one
+push of 0). The app, on receipt: store the count, set the badge, remove the delivered notification if 0.
 
 ## Design
 
@@ -96,8 +109,13 @@ no list shows:
 | --- | --- | --- |
 | `question` | a task or manager card is open and not Older | answer, dismiss |
 | `approval` | a manager action is pending | approve, reject |
-| `task` | a task waits on the user with no question card, or failed | open, mark seen |
+| `task` | sub-kind `needs-you`: waits on the user with no question card; `review`: at the review gate; `failed`: failed and not yet seen | open, mark seen |
 | `message` | a manager's important message is unread | open, mark read |
+
+Each switch in § Settings filters one of these: Questions → `question`, Approvals → `approval`, Tasks that
+need me → `task/needs-you`, Tasks ready for review → `task/review`, Failed tasks → `task/failed`, Important
+manager messages → `message`. "Mark seen" on a task reuses the run's existing read receipt (`RunRecord.seenAt`,
+`isUnread()` in `lib/read-state.ts`) and needs no new store.
 
 - Desktop Questions badge = `question`; Approvals = `approval`; Needs you total = all four.
 - Push count for a phone = the kinds that phone counts (settings below). The icon = the sum over computers.
@@ -182,9 +200,16 @@ Where the per-cezar **Notify me** switch is today (*Your cezars → cezar → No
 - **Quiet hours** (cheap, server-side): pushes held; a single push at the end if anything is still waiting;
   `count` pushes still go out.
 
-The choice must live on the server, because the relay carries no kind: the phone sends it with the grant on
-`PUT /api/v1/workspace/phone/push` (an added optional `prefs` object, stored per device in `devices.json`).
-Per-manager "Notify me when important" stays as it is and still gates `message`.
+The choice must live on the server, because the relay carries no kind. It has **its own route**,
+`GET`/`PUT /api/v1/workspace/phone/push/prefs`, stored per device in `devices.json`:
+`{ push: Kind[], icon: Kind[], quiet?: { from: "HH:MM", to: "HH:MM", timeZone: <IANA zone> }, kinds: PushKind[] }`.
+Same scope rules as its siblings: 403 outside a relay scope, and it acts only on the device that scope proved.
+The time zone is the phone's own, sent with each `PUT`, because the cezar host's clock is wrong for a phone
+that is travelling. Prefs do not go on `PUT /workspace/phone/push`: that body is `.strict()` (BACKWARD_COMPATIBILITY.md
+§2, "takes exactly `{grant, grantId, expiresAt}`"), so a new phone sending `prefs` to an older cezar would get
+a 400 and lose its push grant. On the separate route, an older cezar answers 404. The phone then shows the
+settings page read-only with the defaults and keeps its grant. The route gets its BACKWARD_COMPATIBILITY.md §2
+line in the code PR. Per-manager "Notify me when important" stays as it is and still gates `message`.
 
 ## Delivery
 
@@ -193,4 +218,5 @@ Per-manager "Notify me when important" stays as it is and still gates `message`.
 3. Relay `kind: "count"`: task `rome/a753ea6e`. cezar's sender lands once the relay accepts the kind.
 4. D, in the code PR: the server attention list and its route; Now's Needs you reads it, with a From-managers
    group and the This project · All switch; the Now tab's count badge; the per-phone prefs (push kinds, icon kinds,
-   quiet hours) on `PUT /api/v1/workspace/phone/push` and their settings page; the count chips on *Your cezars*.
+   quiet hours, declared push kinds) on `PUT /api/v1/workspace/phone/push/prefs` and their settings page; the count
+   chips on *Your cezars*.
