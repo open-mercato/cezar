@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { attachmentListSchema } from './runs.ts';
 import { runnerSchema } from './runners.ts';
+import { questionAboutSchema, questionCardReplaces, questionClosedSchema, questionStaleSchema } from './questions.ts';
 
 /**
  * Managers (spec `.ai/specs/2026-10-31-managers.md`): global, long-lived agents the user talks to
@@ -386,6 +387,9 @@ export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;
 
 /** The questions of a `CEZ:ASK` line, the same shape a task's ask card shows. */
 export const managerAskSchema = z.object({
+  /** The card's stable name; re-asking with it replaces the older card (Questions inbox spec). */
+  id: z.string().optional(),
+  about: questionAboutSchema.optional(),
   questions: z.array(z.object({
     id: z.string().optional(),
     header: z.string(),
@@ -438,10 +442,21 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     ask: managerAskSchema.optional(),
     /** What the user answered; the next message they send answers an open card. */
     askAnswer: z.string().optional(),
+    /** Closed without a card answer: dismissed, replaced, withdrawn, expired, or answered on its linked copy. */
+    askClosed: questionClosedSchema.optional(),
+    /** Suspected out of date: still open and counted, with the reason shown on the card. */
+    askStale: questionStaleSchema.optional(),
     commands: z.array(managerCommandSchema),
     stopped: z.boolean().optional(),
     error: z.string().optional(),
-    /** A provider usage limit ended this turn; the manager resumes it at this instant. Dropped once it does, or is cancelled. */
+    /** The turn failed because this agent account's login was rejected (spec 2026-11-18-inline-account-reconnect):
+     *  the chat renders the reconnect card. Dropped once the turn is resumed. */
+    authFailure: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
+    /** Set when a reconnect re-ran this failed turn. */
+    reconnectedAt: z.string().optional(),
+    /** The account whose reconnect re-ran it (`authFailure` before the resume). */
+    reconnectedFrom: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
+    /** A provider usage limit ended this turn); the manager resumes it at this instant. Dropped once it does, or is cancelled. */
     resumeAt: z.string().optional(),
     costUsd: z.number().optional(),
     /** Posted by the server for a linked automation's run, with no model turn (`turn: 'job'`,
@@ -476,6 +491,23 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
   z.object({ ...managerMessageBase, kind: z.literal('notice'), text: z.string() }),
 ]);
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;
+
+/** Close rule "replaced" for manager cards; the one definition lives in `questions.ts`. */
+export const askReplaces = (newer: ManagerAsk, older: ManagerAsk): boolean => questionCardReplaces(newer, older);
+
+/** Unanswered, still-open question cards a later card replaces (`askReplaces`). Covers history written before
+ *  the engine persisted `askClosed: replaced` (#2307). */
+export function supersededAskIds(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const superseded = new Set<string>();
+  const cards = [...messages]
+    .filter((message): message is Extract<ManagerMessage, { kind: 'assistant' }> & { ask: ManagerAsk } => message.kind === 'assistant' && message.ask !== undefined)
+    .sort((a, b) => a.seq - b.seq);
+  cards.forEach((older, index) => {
+    if (older.askAnswer !== undefined || older.askClosed !== undefined) return;
+    if (cards.slice(index + 1).some((newer) => askReplaces(newer.ask, older.ask))) superseded.add(older.id);
+  });
+  return superseded;
+}
 
 export const managerMessagesQuerySchema = z.object({
   /** Page older history: only messages with a lower `seq`. */
@@ -569,6 +601,8 @@ export const managerSnapshotTaskSchema = z.object({
   runner: z.string().optional(),
   /** The model the run uses: the resolved identity when known, else what was asked for. */
   model: z.string().optional(),
+  /** The model the agent reported actually running — what "auto" or an alias resolved to. */
+  actualModel: z.string().optional(),
   effort: z.string().optional(),
   /** The pull request the task opened, else the one it declared it is about. */
   prNumber: z.number().int().optional(),
@@ -717,7 +751,14 @@ export const managerProposeActionInputSchema = z.object({
 });
 export type ManagerProposeActionInput = z.infer<typeof managerProposeActionInputSchema>;
 
-export const managerProposeActionResponseSchema = z.object({ actionId: z.string(), status: managerActionStatusSchema });
+export const managerProposeActionResponseSchema = z.object({
+  actionId: z.string(),
+  status: managerActionStatusSchema,
+  /** Older waiting cards for the same PR or automation this proposal closed as `dismissed`. */
+  replaced: z.array(z.string()).optional(),
+  /** Other managers whose chats already wait on a card for the same PR or automation. */
+  alsoWaitingIn: z.array(z.string()).optional(),
+});
 
 export const managerTaskDetailQuerySchema = z.object({
   projectId: boundedId,

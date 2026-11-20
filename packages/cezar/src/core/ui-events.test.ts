@@ -80,13 +80,14 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
       'permission.requested': 'reserved',
       'permission.resolved': 'reserved',
       'ask.requested': 'thread',
+      'ask.closed': 'thread',
       'usage.updated': 'gauge',
       'image': 'thread',
     } as const satisfies Record<UiEventType, 'thread' | 'meta' | 'dock' | 'gauge' | 'reserved'>;
 
     // And the map has no extra keys either: its key set IS the event set.
     assertType<Equal<keyof typeof renderRelevance, UiEventType>>();
-    expect(Object.keys(renderRelevance)).toHaveLength(15);
+    expect(Object.keys(renderRelevance)).toHaveLength(16);
   });
 
   it('the event union narrows on `type`', () => {
@@ -113,6 +114,7 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
         case 'permission.requested':
         case 'permission.resolved':
         case 'ask.requested':
+        case 'ask.closed':
         case 'image':
           return event.type;
         default: {

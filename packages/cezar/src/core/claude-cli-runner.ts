@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve as resolvePath } from 'node:path';
+import { cezarHomeDir } from '../paths.ts';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -141,6 +142,8 @@ export class ClaudeCliRunner implements AgentRunner {
     let child: ChildProcessWithoutNullStreams;
     try {
       const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      // Mock auth replays share one marker directory across worktrees.
+      if (this.bin === mockClaudePath()) env.CEZ_HOME = resolvePath(cezarHomeDir(env));
       const [file, argv] = disclaimedCommand(this.bin, args, env);
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {

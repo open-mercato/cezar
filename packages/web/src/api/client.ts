@@ -19,6 +19,7 @@ import type {
   WorkspaceLayoutsResponse,
 } from '@open-mercato/cezar-api-client'
 import type { TaskActionSurface, TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
+import type { LoginSession, LoginSessionInput, LoginSessionStartInput } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
   AgentConfigFileContent,
@@ -1517,6 +1518,27 @@ export async function connectProvider(
   )
 }
 
+/** Start an inline sign-in (spec 2026-11-18-inline-account-reconnect). A 4xx carries `command`
+ *  for the terminal fallback (hosted cockpit without `CEZ_REMOTE_AGENT_ACCOUNTS=1`). */
+export async function startLoginSession(input: LoginSessionStartInput): Promise<LoginSession> {
+  return unwrap(await cez.api.v1.providers.login.$post({ json: input }), '/providers/login')
+}
+
+/** A pasted code or API key, straight to the CLI. The caller must not keep `input` anywhere. */
+export async function sendLoginSessionInput(sessionId: string, input: LoginSessionInput): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].input.$post({ param: { sessionId }, json: input }),
+    '/providers/login/:sessionId/input',
+  )
+}
+
+export async function cancelLoginSession(sessionId: string): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].$delete({ param: { sessionId } }),
+    '/providers/login/:sessionId',
+  )
+}
+
 /** Opens a terminal running the agent CLI's own update (`opencode upgrade`). A 409 carries
  *  `command` for the clipboard fallback, or none when the CLI cannot update itself. */
 export async function updateProvider(provider: ProviderId): Promise<ProviderUpdateResponse> {
@@ -1881,6 +1903,8 @@ export interface ContinueOptions {
   agentProfile?: string
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey?: string
+  /** Sent from an ask card: the reopened session answers that card (Questions inbox spec). */
+  askRequestId?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1894,6 +1918,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+    ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
@@ -1920,6 +1945,7 @@ export async function continueProjectRun(
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
         ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+        ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
       },
     }),
     runPath(id, '/continue'),
@@ -2165,7 +2191,13 @@ export async function postMessageWithRetry(
   message: MessageInput,
   wait: (delayMs: number) => Promise<void> = delayMessageRetry,
 ): Promise<MessageResponse> {
-  const json = { text: message.text ?? '', images: message.images ?? [], idempotencyKey: message.idempotencyKey ?? uuidv7() }
+  const json = {
+    text: message.text ?? '',
+    images: message.images ?? [],
+    idempotencyKey: message.idempotencyKey ?? uuidv7(),
+    // An answer from an ask card names its card (Questions inbox); a composer reply does not.
+    ...(message.askRequestId ? { askRequestId: message.askRequestId } : {}),
+  }
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await post(json)

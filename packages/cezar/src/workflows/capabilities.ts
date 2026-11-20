@@ -121,7 +121,7 @@ const TOOL_LIMITS_ENFORCED: Record<AgentBackend, boolean> = {
   claude: true,
   'claude-cli': true,
   pi: true,
-  codex: false,
+  codex: true,
   opencode: false,
   cursor: false,
   junie: false,
@@ -138,5 +138,5 @@ const TOOL_LIMITS_ENFORCED: Record<AgentBackend, boolean> = {
  */
 export function readOnlyWorkflowRefusal(def: WorkflowDef | undefined, backend: AgentBackend): string | undefined {
   if (!def || TOOL_LIMITS_ENFORCED[backend] || !isReadOnlyWorkflow(def)) return undefined;
-  return `${backend} does not enforce a step's tool limits, so the read-only workflow "${def.name}" will not run on it — pick Claude Code or Pi for this task.`;
+  return `${backend} does not enforce a step's tool limits, so the read-only workflow "${def.name}" will not run on it — pick Claude Code, Codex or Pi for this task.`;
 }

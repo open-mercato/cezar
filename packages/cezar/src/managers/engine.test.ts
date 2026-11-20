@@ -4,17 +4,18 @@ import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
-import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
+import { managerAccessOf, type GithubData, type ManagerAsk, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
 import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { MANAGER_QUIET, managerSystemPrompt } from './prompts.ts';
+import { followupPrompt, MANAGER_QUIET, managerSystemPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
+import { createManagerQuestionProvider } from './questions.ts';
 
 interface Script {
   /** Runs when the session opens. */
@@ -266,7 +267,7 @@ describe('ManagerEngine', () => {
       expect(watch?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
       // Elsewhere the rules are no fence, and Pi reads tool names only.
       backend.scripts.push(say('ok'));
-      await engine.update(id, { runner: 'codex' });
+      await engine.update(id, { runner: 'pi' });
       engine.send(id, 'again');
       await settled(engine);
       expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
@@ -351,7 +352,7 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.resume).toBeUndefined();
     });
 
-    it('uses the selected account environment after switching agent and account', async () => {
+    it('refuses Codex after switching agent and account before opening another session', async () => {
       const configDir = join(home, 'codex-work');
       mkdirSync(configDir);
       await mergeWriteAgentAccounts((accounts) => ({
@@ -366,9 +367,9 @@ describe('ManagerEngine', () => {
       await engine.update(id, { runner: 'codex', agentProfile: 'work' });
       engine.send(id, 'two');
       await settled(engine);
-      expect(runnerFor).toHaveBeenLastCalledWith('codex');
-      expect(backend.specs.at(-1)?.env?.CODEX_HOME).toBe(configDir);
-      expect(backend.specs.at(-1)?.resume).toBeUndefined();
+      expect(runnerFor).toHaveBeenCalledTimes(1);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
     });
 
     it('a turn that throws before its agent starts closes its message', async () => {
@@ -637,6 +638,62 @@ describe('ManagerEngine', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(SIGNED_OUT));
     });
 
+    describe('reconnect (spec 2026-11-18-inline-account-reconnect)', () => {
+      it('a rejected login marks the chat turn, and a reconnect of that account re-runs it once', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        backend.scripts.push(cliFails(SIGNED_OUT));
+        engine.send(id, 'ship the release notes');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ turn: 'chat', authFailure: { provider: 'claude', profileId: 'default' } });
+
+        expect(engine.resumeAuthFailed('claude', 'work')).toEqual([]);
+        expect(engine.resumeAuthFailed('codex', 'default')).toEqual([]);
+        backend.scripts.push(say('Done'));
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([{ managerId: id, title: store.get(id)!.name }]);
+        // The same reconnect seen twice restarts nothing more.
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([]);
+        await settled(engine);
+
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('ship the release notes');
+        const [failed, retried] = assistants(id);
+        expect(failed).not.toHaveProperty('authFailure');
+        expect(failed?.reconnectedAt).toBeDefined();
+        expect(failed?.reconnectedFrom).toEqual({ provider: 'claude', profileId: 'default' });
+        expect(retried).toMatchObject({ turn: 'chat', text: 'Done' });
+        expect(store.state(id).authRetry).toBeUndefined();
+      });
+
+      it('only the latest chat turn counts: a job turn that failed on the login is not re-run', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        store.persistMessage(id, {
+          id: 'job-1', seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'job', jobName: 'Digest',
+          text: '', streaming: false, commands: [], error: 'Sign in again', authFailure: { provider: 'claude', profileId: 'default' },
+        });
+        expect(engine.resumeAuthFailed('claude', 'default')).toEqual([]);
+        await settled(engine);
+        expect(backend.specs).toHaveLength(0);
+      });
+
+      it('switching the account re-runs the failed chat turn on the new one', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        backend.scripts.push(cliFails(SIGNED_OUT));
+        engine.send(id, 'hi there');
+        await settled(engine);
+        backend.scripts.push(say('Hello'));
+        const updated = await engine.update(id, { agentProfile: 'work' });
+        expect(updated).not.toHaveProperty('error');
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('hi there');
+        expect(assistants(id)[0]).not.toHaveProperty('authFailure');
+        expect(assistants(id)[1]).toMatchObject({ text: 'Hello' });
+      });
+    });
+
     it('a passing network failure is retried once, after a pause, and the user never sees it', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -849,7 +906,7 @@ describe('ManagerEngine', () => {
     });
 
     it('a watch on a backend the allowlist does not fence runs read-only', async () => {
-      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
+      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'opencode' });
       const id = await create(engine);
       backend.scripts.push(say('PR 7 is ready'), say('ok'));
       due(id);
@@ -862,6 +919,22 @@ describe('ManagerEngine', () => {
       expect(watch?.env?.GH_TOKEN).toBe('');
       expect(chat?.env?.CEZ_MANAGER_TURN).toBe('chat');
       expect(chat?.enforceReadOnly).toBeUndefined();
+    });
+
+    it('refuses Codex watches and chats before opening an executor', async () => {
+      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
+      const id = await create(engine);
+      due(id);
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toEqual([]);
+      expect(store.state(id).lastFailure?.cause).toContain('tool-policy enforcement unavailable');
+      expect(store.state(id).lastFailure?.cause).toContain('Pick Claude Code for this manager.');
+      expect(store.state(id).lastFailure?.cause).not.toMatch(/\bPi\b/);
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.specs).toEqual([]);
+      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {
@@ -985,7 +1058,7 @@ describe('ManagerEngine', () => {
       engine.tick();
       await settled(engine);
       backend.scripts.push(say('On it.'));
-      engine.send(id, 'Merge: Yes');
+      engine.send(id, 'Merge: Yes', [], assistants(id).find((message) => message.ask)!.id);
       await settled(engine);
       expect(backend.specs.at(-1)?.userPrompt).toContain('Merge #7 now?');
       expect(store.state(id).notes).toEqual([]);
@@ -1370,20 +1443,20 @@ describe('ManagerEngine', () => {
       expect((await engine.summary(id))?.pendingQuestions).toBe(1);
     });
 
-    it('the next message closes it, from the card or the composer', async () => {
+    it('an answer from the card closes it', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);
       backend.scripts.push(say(line));
       engine.send(id, 'hi');
       await settled(engine);
       backend.scripts.push(say('Thanks'));
-      engine.send(id, 'Shell: A');
+      engine.send(id, 'Shell: A', [], assistants(id)[0]!.id);
       await settled(engine);
       expect(assistants(id)[0]?.askAnswer).toBe('Shell: A');
       expect((await engine.summary(id))?.pendingQuestions).toBe(0);
     });
 
-    it('a card answers itself alone; the composer closes every open card', async () => {
+    it('a card answers itself alone; the composer only flags the open cards, which still count', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);
       const card = (messageId: string, header: string): ManagerMessage => ({
@@ -1404,8 +1477,76 @@ describe('ManagerEngine', () => {
       backend.scripts.push(say('Thanks'));
       engine.send(id, 'go with main');
       await settled(engine);
-      expect(answer('ask-base')).toBe('go with main');
-      expect((await engine.summary(id))?.pendingQuestions).toBe(0);
+      expect(answer('ask-base')).toBeUndefined();
+      const base = assistants(id).find((message) => message.id === 'ask-base');
+      expect(base?.askStale).toMatchObject({ why: 'replied-in-chat', detail: expect.stringMatching(/^you replied in the chat .* after it was asked$/) });
+      // The answered card is not flagged: only open cards are.
+      expect(assistants(id).find((message) => message.id === 'ask-shell')?.askStale).toBeUndefined();
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+      // The agent is asked to re-check it.
+      expect(backend.specs.at(-1)?.userPrompt).toContain('Your questions still waiting on the user:\n- base (Base), asked');
+      expect(backend.specs.at(-1)?.userPrompt).toContain('may be out of date: you replied in the chat');
+    });
+
+    it('drops a duplicate answer for an already answered card without waking the manager', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const card = (messageId: string, header: string): ManagerMessage => ({
+        id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '',
+        ask: { questions: [{ header, question: `${header}?`, options: [{ label: 'A' }, { label: 'B' }] }] },
+      } as ManagerMessage);
+      store.persistMessage(id, card('ask-1', 'PR 2225'));
+      backend.scripts.push(say('First response'));
+      engine.send(id, 'PR 2225: A', [], 'ask-1');
+      await settled(engine);
+      expect(assistants(id)[0]?.askAnswer).toBe('PR 2225: A');
+
+      // Resending for the same ask-1: should be dropped, no new user message, no turn executed
+      const userMessagesBefore = store.messages(id).filter((m) => m.kind === 'user').length;
+      const turnCountBefore = backend.scripts.length;
+      const ok = engine.send(id, 'PR 2225: A', [], 'ask-1');
+      expect(ok).toBe(true);
+      await settled(engine);
+      const userMessagesAfter = store.messages(id).filter((m) => m.kind === 'user').length;
+      expect(userMessagesAfter).toBe(userMessagesBefore);
+      expect(backend.scripts.length).toBe(turnCountBefore);
+    });
+
+    it('leaves a superseded card out of pendingQuestions and the composer flag, but still takes its own answer', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const card = (messageId: string, header: string): ManagerMessage => ({
+        id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '',
+        ask: { questions: [{ header, question: `${header}?`, options: [{ label: 'A' }, { label: 'B' }] }] },
+      } as ManagerMessage);
+      store.persistMessage(id, card('ask-old', 'PR 2225'));
+      store.persistMessage(id, card('ask-new', 'PR 2225'));
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+
+      backend.scripts.push(say('Understood'));
+      engine.send(id, 'rebase it');
+      await settled(engine);
+      // A composer reply answers nothing cezar can name: the open card is flagged, the superseded one left alone.
+      expect(assistants(id).find((m) => m.id === 'ask-new')?.askAnswer).toBeUndefined();
+      expect(assistants(id).find((m) => m.id === 'ask-new')?.askStale?.why).toBe('replied-in-chat');
+      expect(assistants(id).find((m) => m.id === 'ask-old')?.askStale).toBeUndefined();
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+
+      // Sent from the old card while the new one arrived: the user's choice is still delivered.
+      backend.scripts.push(say('Noted'));
+      engine.send(id, 'PR 2225: A', [], 'ask-old');
+      await settled(engine);
+      expect(assistants(id).find((m) => m.id === 'ask-old')?.askAnswer).toBe('PR 2225: A');
+      expect(store.messages(id).filter((m) => m.kind === 'user').map((m) => m.text)).toEqual(['rebase it', 'PR 2225: A']);
+    });
+
+    it('delivers an answer for a card the chat does not hold as a plain message', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('Got it'));
+      engine.send(id, 'Shell: Tauri', [], 'gone');
+      await settled(engine);
+      expect(store.messages(id).filter((m) => m.kind === 'user').map((m) => m.text)).toEqual(['Shell: Tauri']);
     });
 
     it('leaves a malformed marker readable rather than losing the question', async () => {
@@ -1416,6 +1557,401 @@ describe('ManagerEngine', () => {
       await settled(engine);
       expect(assistants(id)[0]?.ask).toBeUndefined();
       expect(assistants(id)[0]?.text).toContain('CEZ:ASK');
+    });
+  });
+
+  describe('questions inbox (spec 2026-11-17-questions-inbox)', () => {
+    const ask = (header: string, extra: Partial<ManagerAsk> = {}): ManagerAsk => ({ ...extra, questions: [{ header, question: `${header}?`, options: [{ label: 'A' }, { label: 'B' }] }] });
+    const marker = (value: ManagerAsk) => `CEZ:ASK ${JSON.stringify(value)}`;
+    const persistCard = (id: string, messageId: string, value: ManagerAsk, extra: Partial<Extract<ManagerMessage, { kind: 'assistant' }>> = {}) =>
+      store.persistMessage(id, {
+        id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '', streaming: false, commands: [], ask: value, ...extra,
+      } as ManagerMessage);
+    const byId = (id: string, messageId: string) => assistants(id).find((message) => message.id === messageId);
+    const reply = async (engine: ManagerEngine, id: string, text: string) => {
+      backend.scripts.push(say(text));
+      engine.send(id, 'go');
+      await settled(engine);
+      return assistants(id).at(-1)!;
+    };
+
+    it('keeps the card id and about on the message', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const message = await reply(engine, id, marker(ask('Merge', { id: 'merge-7', about: [{ pr: 7 }] })));
+      expect(message.ask).toMatchObject({ id: 'merge-7', about: [{ pr: 7 }] });
+    });
+
+    it('stops counting a card past the Older threshold, without closing it; 0 turns Older off', async () => {
+      let days: number | undefined;
+      const engine = makeEngine({ olderAfterDays: () => days });
+      const id = await create(engine, 0);
+      persistCard(id, 'old', ask('Old'), { at: new Date(Date.now() - 8 * 86_400_000).toISOString() });
+      persistCard(id, 'new', ask('New'));
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+      days = 0;
+      expect((await engine.summary(id))?.pendingQuestions).toBe(2);
+      days = 30;
+      expect((await engine.summary(id))?.pendingQuestions).toBe(2);
+      days = 7;
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+      expect(byId(id, 'old')?.askClosed).toBeUndefined();
+    });
+
+    describe('replaced', () => {
+      it('by a newer card with the same id', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        persistCard(id, 'first', ask('Merge', { id: 'merge-7' }));
+        persistCard(id, 'other', ask('Other', { id: 'other' }));
+        const newer = await reply(engine, id, marker(ask('Renamed', { id: 'merge-7' })));
+        expect(byId(id, 'first')?.askClosed).toMatchObject({ reason: 'replaced', replacedBy: newer.id });
+        expect(byId(id, 'other')?.askClosed).toBeUndefined();
+        expect(newer.askClosed).toBeUndefined();
+        expect((await engine.summary(id))?.pendingQuestions).toBe(2);
+      });
+
+      it('without ids, by a card whose headers cover every older header; partial overlap stays open', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const two = (a: string, b: string): ManagerAsk => ({ questions: [ask(a).questions[0]!, ask(b).questions[0]!] });
+        persistCard(id, 'covered', ask('Shell'));
+        persistCard(id, 'partial', two('Shell', 'Base'));
+        persistCard(id, 'with-id', ask('Shell', { id: 'shell' }));
+        const newer = await reply(engine, id, marker(two('shell', 'Model')));
+        expect(byId(id, 'covered')?.askClosed).toMatchObject({ reason: 'replaced', replacedBy: newer.id });
+        // Partly re-asked: stays open and counted, with the amber flag naming what was asked again.
+        expect(byId(id, 'partial')?.askClosed).toBeUndefined();
+        expect(byId(id, 'partial')?.askStale).toMatchObject({ why: 'partly-reasked', detail: 'a newer question asked «Shell» again' });
+        // A card with an id is replaced only by its id; a header re-asked under no id only flags it.
+        expect(byId(id, 'with-id')?.askClosed).toBeUndefined();
+        expect(byId(id, 'with-id')?.askStale?.why).toBe('partly-reasked');
+        expect(byId(id, 'covered')?.askStale).toBeUndefined();
+        expect((await engine.summary(id))?.pendingQuestions).toBe(3);
+      });
+
+      it('from a watch check too: the other turn-end handler', async () => {
+        const engine = makeEngine({ github: readyPrGithub });
+        const id = await create(engine);
+        persistCard(id, 'first', ask('Merge', { id: 'merge-7' }));
+        backend.scripts.push(say(marker(ask('Merge', { id: 'merge-7' }))));
+        engine.check(id);
+        await settled(engine);
+        const newer = assistants(id).at(-1)!;
+        expect(newer.turn).toBe('watch');
+        expect(byId(id, 'first')?.askClosed).toMatchObject({ reason: 'replaced', replacedBy: newer.id });
+      });
+    });
+
+    describe('withdrawn', () => {
+      it('closes the card a CEZ:ASK-CLOSE line names, by id or by header, and strips the line', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        persistCard(id, 'by-id', ask('Merge', { id: 'merge-7' }));
+        persistCard(id, 'by-header', ask('Base branch'));
+        persistCard(id, 'kept', ask('Keep', { id: 'keep' }));
+        const message = await reply(engine, id, 'Done with those.\nCEZ:ASK-CLOSE merge-7 merged by hand\nCEZ:ASK-CLOSE base-branch');
+        expect(message.text).toBe('Done with those.');
+        expect(byId(id, 'by-id')?.askClosed).toMatchObject({ reason: 'retracted', detail: 'merged by hand' });
+        expect(byId(id, 'by-header')?.askClosed).toMatchObject({ reason: 'retracted' });
+        expect(byId(id, 'kept')?.askClosed).toBeUndefined();
+      });
+
+      it('ignores an unknown id with a note for the agent, and a reply may withdraw one card and ask another', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        persistCard(id, 'old', ask('Old', { id: 'old' }));
+        const message = await reply(engine, id, `CEZ:ASK-CLOSE nope\nCEZ:ASK-CLOSE old\n${marker(ask('New', { id: 'new' }))}`);
+        expect(message.ask?.id).toBe('new');
+        expect(message.askClosed).toBeUndefined();
+        expect(byId(id, 'old')?.askClosed?.reason).toBe('retracted');
+        expect(store.state(id).notes.some((note) => note.includes('CEZ:ASK-CLOSE nope'))).toBe(true);
+      });
+
+      it('a quiet watch check still withdraws its cards', async () => {
+        const engine = makeEngine({ github: readyPrGithub });
+        const id = await create(engine);
+        persistCard(id, 'old', ask('Old', { id: 'old' }));
+        backend.scripts.push(say(`CEZ:ASK-CLOSE old task finished\n${MANAGER_QUIET}`));
+        engine.check(id);
+        await settled(engine);
+        expect(byId(id, 'old')?.askClosed).toMatchObject({ reason: 'retracted', detail: 'task finished' });
+      });
+    });
+
+    describe('expired', () => {
+      it('a declared PR merging closes the card; a mentioned one only flags it', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        persistCard(id, 'about', ask('Merge', { about: [{ pr: 7 }] }));
+        persistCard(id, 'mention', ask('Next'), { text: 'After [[pr:alpha/7]] lands, what next?' });
+        persistCard(id, 'other', ask('Other', { about: [{ pr: 8 }] }));
+        await engine.pullRequestClosed('/alpha', 7, 'merged');
+        expect(byId(id, 'about')?.askClosed).toMatchObject({ reason: 'expired', detail: 'PR #7 merged' });
+        expect(byId(id, 'mention')?.askClosed).toBeUndefined();
+        expect(byId(id, 'mention')?.askStale).toMatchObject({ why: 'mentioned-work-ended' });
+        expect(byId(id, 'other')?.askClosed).toBeUndefined();
+        expect((await engine.summary(id))?.pendingQuestions).toBe(2);
+      });
+
+      it('a PR closed in a project the manager does not reach, or a poll the forge does not confirm, changes nothing', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        persistCard(id, 'about', ask('Merge', { about: [{ pr: 7 }] }));
+        await engine.pullRequestClosed('/elsewhere', 7, 'closed');
+        // The test forge still says open.
+        await engine.pullRequestClosed('/alpha', 7, 'closed', true);
+        expect(byId(id, 'about')?.askClosed).toBeUndefined();
+      });
+
+      it('a declared task ending closes the card; failed stays open (#2286); a mentioned one only flags', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const ended = (runId: string, over: Partial<RunRecord> | undefined) =>
+          engine.taskEnded('alpha', runId, over && ({ id: runId, title: 't', status: 'running', archived: false, ...over } as RunRecord));
+        for (const runId of ['done', 'review', 'cancelled', 'archived', 'deleted', 'failed']) persistCard(id, runId, ask(runId, { about: [{ task: `alpha/${runId}` }] }));
+        persistCard(id, 'mention', ask('Mention'), { text: 'See [[task:alpha/done]]' });
+        ended('done', { status: 'done' });
+        ended('review', { status: 'review' });
+        ended('cancelled', { status: 'cancelled' });
+        ended('archived', { status: 'failed', archived: true });
+        ended('deleted', undefined);
+        ended('failed', { status: 'failed', idleClosedAt: new Date().toISOString() });
+        expect(byId(id, 'done')?.askClosed).toMatchObject({ reason: 'expired', detail: 'Task finished' });
+        expect(byId(id, 'review')?.askClosed?.reason).toBe('expired');
+        expect(byId(id, 'cancelled')?.askClosed).toMatchObject({ reason: 'expired', detail: 'Task was cancelled' });
+        expect(byId(id, 'archived')?.askClosed).toMatchObject({ reason: 'expired', detail: 'Task was archived' });
+        expect(byId(id, 'deleted')?.askClosed).toMatchObject({ reason: 'expired', detail: 'Task was deleted' });
+        expect(byId(id, 'failed')?.askClosed).toBeUndefined();
+        expect(byId(id, 'mention')?.askClosed).toBeUndefined();
+        expect(byId(id, 'mention')?.askStale).toMatchObject({ why: 'mentioned-work-ended' });
+      });
+
+      it('at attach, a card about a task that ended or vanished meanwhile expires', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        persistCard(id, 'gone', ask('Gone', { about: [{ task: 'alpha/gone' }] }));
+        persistCard(id, 'live', ask('Live', { about: [{ task: 'alpha/live' }] }));
+        engine.reconcileProject('alpha', '/data', [{ id: 'live', title: 't', status: 'running', archived: false } as RunRecord]);
+        expect(byId(id, 'gone')?.askClosed).toMatchObject({ reason: 'expired', detail: 'Task was deleted' });
+        expect(byId(id, 'live')?.askClosed).toBeUndefined();
+      });
+
+      it('at attach, a card asked after its task already ended survives; one asked before still expires', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+        persistCard(id, 'follow-up', ask('Merge', { about: [{ task: 'alpha/r1' }] }), { text: '[[task:alpha/r2]] too?' });
+        persistCard(id, 'earlier', ask('Earlier', { about: [{ task: 'alpha/r3' }] }), { at: new Date(Date.now() - 7_200_000).toISOString() });
+        engine.reconcileProject('alpha', '/data', [
+          { id: 'r1', title: 't', status: 'review', archived: false, finishedAt: hourAgo } as RunRecord,
+          { id: 'r2', title: 't', status: 'failed', archived: true, archivedAt: hourAgo } as RunRecord,
+          { id: 'r3', title: 't', status: 'done', archived: false, finishedAt: hourAgo } as RunRecord,
+        ]);
+        expect(byId(id, 'follow-up')?.askClosed).toBeUndefined();
+        expect(byId(id, 'follow-up')?.askStale).toBeUndefined();
+        expect(byId(id, 'earlier')?.askClosed).toMatchObject({ reason: 'expired', detail: 'Task finished' });
+      });
+
+      it('a declared PR closes only in its own project; with no project to pin and many reached, it is flagged', async () => {
+        const beta: ManagerProjectSource = { ...connected, id: 'beta', name: 'beta', root: '/beta' };
+        const engine = makeEngine({ projects: async () => [connected, beta] });
+        const id = await create(engine, 0);
+        persistCard(id, 'alpha-pr', ask('A', { about: [{ pr: 7 }] }), { text: 'Merge [[pr:alpha/7]]?' });
+        persistCard(id, 'alpha-task', ask('T', { about: [{ pr: 7 }, { task: 'alpha/r1' }] }));
+        persistCard(id, 'beta-pr', ask('B', { about: [{ pr: 7 }] }), { text: 'Merge [[pr:beta/7]]?' });
+        persistCard(id, 'bare', ask('Bare', { about: [{ pr: 7 }] }));
+        await engine.pullRequestClosed('/beta', 7, 'merged');
+        expect(byId(id, 'alpha-pr')?.askClosed).toBeUndefined();
+        expect(byId(id, 'alpha-pr')?.askStale).toBeUndefined();
+        expect(byId(id, 'alpha-task')?.askClosed).toBeUndefined();
+        expect(byId(id, 'beta-pr')?.askClosed).toMatchObject({ reason: 'expired', detail: 'PR #7 merged' });
+        expect(byId(id, 'bare')?.askClosed).toBeUndefined();
+        expect(byId(id, 'bare')?.askStale).toMatchObject({ why: 'mentioned-work-ended', detail: 'a PR #7 was merged in beta' });
+      });
+
+      it('bounds a flag detail to the schema\'s 300 characters', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        // 20 re-asked twelve-character headers: «…», «…» runs past 300.
+        const questions = (count: number) => Array.from({ length: count }, (_, n) => ({ header: `Header-${n}`.padEnd(12, 'x'), question: `Which ${n}?`, options: [{ label: 'A' }, { label: 'B' }] }));
+        persistCard(id, 'older', { questions: questions(21) });
+        await reply(engine, id, marker({ questions: questions(20) }));
+        const stale = byId(id, 'older')?.askStale;
+        expect(stale?.why).toBe('partly-reasked');
+        expect(stale!.detail.length).toBeLessThanOrEqual(300);
+      });
+    });
+
+    it('flags a card the manager acted on since: a task it messaged, a merge it proposed', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      persistCard(id, 'task', ask('Task'), { text: 'Should [[task:alpha/r1]] continue?' });
+      persistCard(id, 'pr', ask('Merge', { about: [{ pr: 7 }] }));
+      persistCard(id, 'unrelated', ask('Other'), { text: '[[task:alpha/r2]]' });
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r1', text: 'carry on' })).toMatchObject({ ok: true });
+      expect(byId(id, 'task')?.askStale).toMatchObject({ why: 'manager-acted', detail: 'you messaged that task since' });
+      expect(byId(id, 'pr')?.askStale).toBeUndefined();
+      expect(await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } })).toMatchObject({ status: 'pending' });
+      expect(byId(id, 'pr')?.askStale).toMatchObject({ why: 'manager-acted' });
+      expect(byId(id, 'unrelated')?.askStale).toBeUndefined();
+      // Flagged cards still count.
+      expect((await engine.summary(id))?.pendingQuestions).toBe(3);
+    });
+
+    it('re-checks its open cards in every turn kind: chat, watch and job', async () => {
+      const engine = makeEngine({ github: readyPrGithub });
+      const id = await create(engine);
+      persistCard(id, 'open', ask('Shell', { id: 'shell' }));
+      backend.scripts.push(say('ok'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say(MANAGER_QUIET));
+      engine.check(id);
+      await settled(engine);
+      await engine.update(id, { jobs: [{ name: 'Daily', prompt: 'Report', everyMinutes: 60, enabled: true }] });
+      store.update(id, (manager) => ({ ...manager, jobs: manager.jobs.map((job) => ({ ...job, lastRunAt: '2020-01-01T00:00:00.000Z' })) }));
+      backend.scripts.push(say('Reported'));
+      engine.tick();
+      await settled(engine);
+      const prompts = backend.specs.map((spec) => spec.userPrompt);
+      expect(prompts.filter((prompt) => prompt.includes('Your questions still waiting on the user:\n- shell (Shell), asked'))).toHaveLength(3);
+      expect(prompts[0]).toContain('CEZ:ASK-CLOSE <id> <reason>');
+      expect(prompts.some((prompt) => prompt.includes('[cez-manager:job]'))).toBe(true);
+    });
+
+    it("hands a watch check each waiting task's open question id, for a relayed card", async () => {
+      const waiting = { id: 'w1', title: 'Wait', status: 'waiting', waitingSince: new Date().toISOString(), archived: false, workflow: 'quick-task', steps: [], tokensUsed: 0, createdAt: new Date().toISOString(),
+        asks: [{ requestId: 'req-1', askedAt: new Date().toISOString(), cardId: 'base', questions: [] }] } as unknown as RunRecord;
+      const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [waiting] }] });
+      const id = await create(engine);
+      backend.scripts.push(say(MANAGER_QUIET));
+      engine.check(id);
+      await settled(engine);
+      expect(backend.specs[0]?.userPrompt).toContain('"openTaskQuestions":[{"task":"alpha/w1","ask":"base"}]');
+    });
+
+    describe('provider', () => {
+      it('lists open cards and those closed in the last 7 days, an answer as closed answered, with source tasks', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const provider = createManagerQuestionProvider(engine);
+        persistCard(id, 'open', ask('Open', { id: 'o', about: [{ pr: 3 }] }), { text: 'About [[task:alpha/r1]]', sourceTasks: [{ projectId: 'alpha', runId: 'r2' }] });
+        persistCard(id, 'old-close', ask('Gone'), { askClosed: { reason: 'dismissed', at: new Date(Date.now() - 8 * 86_400_000).toISOString() } });
+        persistCard(id, 'answered', ask('Done'));
+        engine.send(id, 'Done: A', [], 'answered');
+        await settled(engine);
+        const items = await provider.list();
+        expect(items.map((item) => item.key).sort()).toEqual([`m:${id}:answered`, `m:${id}:open`]);
+        const open = items.find((item) => item.key.endsWith(':open'))!;
+        expect(open).toMatchObject({ source: { kind: 'manager', managerId: id, name: 'Manager' }, cardId: 'o', about: [{ pr: 3 }], older: false });
+        expect(open.sourceTasks).toEqual([{ projectId: 'alpha', runId: 'r2' }, { projectId: 'alpha', runId: 'r1' }]);
+        expect(open.closed).toBeUndefined();
+        expect(items.find((item) => item.key.endsWith(':answered'))?.closed).toMatchObject({ reason: 'answered', answer: 'Done: A' });
+        expect(provider.owns(`m:${id}:open`)).toBe(true);
+        expect(provider.owns('r:p:r:q')).toBe(false);
+      });
+
+      it('a card a newer one re-asked before replaced was persisted lists as replaced, matching the count (#2307)', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const provider = createManagerQuestionProvider(engine);
+        const long = new Date(Date.now() - 9 * 86_400_000).toISOString();
+        persistCard(id, 'first', ask('Merge', { id: 'merge-7' }));
+        persistCard(id, 'second', ask('Merge', { id: 'merge-7' }));
+        // Replaced past the 7-day window: gone from the list.
+        persistCard(id, 'ancient', ask('Old', { id: 'old' }), { at: long });
+        persistCard(id, 'ancient-2', ask('Old', { id: 'old' }), { at: long });
+        persistCard(id, 'ancient-3', ask('Old', { id: 'old' }));
+        const items = await provider.list();
+        expect(items.find((item) => item.key === `m:${id}:first`)?.closed).toMatchObject({ reason: 'replaced', replacedBy: 'second' });
+        expect(items.some((item) => item.key === `m:${id}:ancient`)).toBe(false);
+        expect(items.find((item) => item.key === `m:${id}:ancient-2`)?.closed).toMatchObject({ reason: 'replaced', replacedBy: 'ancient-3' });
+        expect(items.filter((item) => !item.closed).map((item) => item.key).sort()).toEqual([`m:${id}:ancient-3`, `m:${id}:second`]);
+        expect((await engine.summary(id))?.pendingQuestions).toBe(2);
+      });
+
+      it('answering a card that copies a task question tells the manager cezar delivered it, so it does not relay', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        persistCard(id, 'relayed', ask('Merge', { about: [{ task: 'alpha/r1', ask: 'q1' }] }));
+        persistCard(id, 'plain', ask('Base', { about: [{ task: 'alpha/r2' }] }));
+        backend.scripts.push(say('ok'), say('ok'));
+        engine.send(id, 'Merge: A', [], 'relayed');
+        await settled(engine);
+        expect(backend.specs[0]?.userPrompt).toContain("cezar already delivers the user's answer to «Merge» to [[task:alpha/r1]]: do not pass it on with `cez-manager task say`.");
+        engine.send(id, 'Base: B', [], 'plain');
+        await settled(engine);
+        expect(backend.specs[1]?.userPrompt).not.toContain('already delivers');
+        expect(followupPrompt(['x'], [])).toContain('Only for a card without that "ask" link, pass the answers on with `cez-manager task say`.');
+      });
+
+      it('answers as the card would, and a closed card answers 409', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const provider = createManagerQuestionProvider(engine);
+        persistCard(id, 'card', ask('Shell'), { turn: 'watch' });
+        backend.scripts.push(say('ok'));
+        const answered = await provider.answer(`m:${id}:card`, 'Shell: A');
+        expect(answered).toMatchObject({ ok: true, item: { closed: { reason: 'answered', answer: 'Shell: A' } } });
+        await settled(engine);
+        expect(store.messages(id).some((message) => message.kind === 'user' && message.text === 'Shell: A')).toBe(true);
+        expect(await provider.answer(`m:${id}:card`, 'again')).toMatchObject({ ok: false, status: 409 });
+        expect(await provider.answer(`m:${id}:nope`, 'x')).toMatchObject({ ok: false, status: 404 });
+      });
+
+      it('dismiss closes the card, starts no turn, and the next turn hears the user skipped it', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const provider = createManagerQuestionProvider(engine);
+        persistCard(id, 'card', ask('Shell'));
+        expect(await provider.dismiss(`m:${id}:card`)).toMatchObject({ ok: true, item: { closed: { reason: 'dismissed', detail: 'You skipped «Shell»' } } });
+        await settled(engine);
+        expect(backend.specs).toHaveLength(0);
+        expect((await engine.summary(id))?.pendingQuestions).toBe(0);
+        expect(await provider.dismiss(`m:${id}:card`)).toMatchObject({ ok: false, status: 409 });
+        backend.scripts.push(say('ok'));
+        engine.send(id, 'hi');
+        await settled(engine);
+        expect(backend.specs[0]?.userPrompt).toContain("The user skipped your question «Shell». Don't wait for an answer; decide yourself, or ask again later only if it still blocks you.");
+      });
+
+      it('close from the linked task copy: answered there queues a note; a closed card is a no-op', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const provider = createManagerQuestionProvider(engine);
+        persistCard(id, 'card', ask('Base', { about: [{ task: 'alpha/r1', ask: 'base' }] }));
+        const closed = { reason: 'answered' as const, at: new Date().toISOString(), answer: 'Base: main', answeredIn: 'task:alpha/r1' };
+        expect(await provider.close(`m:${id}:card`, closed)).toMatchObject({ ok: true, item: { closed } });
+        expect(store.state(id).notes).toEqual(['The user answered your question «Base» in the task [[task:alpha/r1]]: Base: main']);
+        expect(await provider.close(`m:${id}:card`, { reason: 'ended', at: new Date().toISOString() })).toMatchObject({ ok: true, item: { closed } });
+        expect(store.state(id).notes).toHaveLength(1);
+      });
+
+      it('onChange fires on open, flag and close, with closedItem for any close, a chat answer included', async () => {
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        const provider = createManagerQuestionProvider(engine);
+        const changes: Array<string | undefined> = [];
+        const off = provider.onChange((change) => changes.push(change.closedItem?.closed?.reason));
+        const first = await reply(engine, id, marker(ask('Shell')));
+        expect(changes).toEqual([undefined]);
+        backend.scripts.push(say('ok'));
+        engine.send(id, 'free text');
+        await settled(engine);
+        expect(changes).toEqual([undefined, undefined]);
+        backend.scripts.push(say('ok'));
+        engine.send(id, 'Shell: A', [], first.id);
+        await settled(engine);
+        expect(changes).toEqual([undefined, undefined, 'answered']);
+        persistCard(id, 'card', ask('Base'));
+        await provider.dismiss(`m:${id}:card`);
+        expect(changes.at(-1)).toBe('dismissed');
+        off();
+        persistCard(id, 'card2', ask('Model'));
+        await provider.dismiss(`m:${id}:card2`);
+        expect(changes).toHaveLength(4);
+      });
     });
   });
 
@@ -1682,7 +2218,7 @@ describe('ManagerEngine', () => {
     it('gives a non-Claude manager no rules and answers its list unavailable', async () => {
       const engine = makeEngine();
       const id = await granted(engine, { [CAL]: { level: 'read' } });
-      await engine.update(id, { runner: 'codex' });
+      await engine.update(id, { runner: 'pi' });
       backend.scripts.push(say('ok'));
       engine.send(id, 'hi');
       await settled(engine);
@@ -1850,6 +2386,102 @@ describe('ManagerEngine', () => {
       if ('error' in first || 'error' in again) throw first;
       expect(again).toEqual({ actionId: first.actionId, status: 'pending' });
       expect(engine.messages(id, { pending: '1' }).messages.map((message) => message.id)).toEqual([first.actionId]);
+    });
+
+    describe('one waiting card per PR', () => {
+      let head = 'sha-1';
+      const headEngine = () => makeEngine({
+        request: async (path) => path.includes('/merge-state')
+          ? Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: head, defaultMethod: 'squash', methods: ['squash', 'merge'] } })
+          : Response.json({ ok: true }),
+      });
+      beforeEach(() => { head = 'sha-1'; });
+
+      it('a repeat for the same head returns the waiting card, even with another reason', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: merge, reason: 'Green.' });
+        const again = await engine.propose(id, { action: merge, reason: 'Still green.' });
+        if ('error' in first || 'error' in again) throw first;
+        expect(again).toEqual({ actionId: first.actionId, status: 'pending' });
+        expect(store.message(id, first.actionId)).toMatchObject({ reason: 'Green.' });
+        expect(actions(id)).toHaveLength(1);
+      });
+
+      it('a new head replaces the older card, which closes quietly', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: merge });
+        if ('error' in first) throw first;
+        head = 'sha-2-pushed-later';
+        const second = await engine.propose(id, { action: merge });
+        if ('error' in second) throw second;
+        expect(second).toMatchObject({ status: 'pending', replaced: [first.actionId] });
+        expect(store.message(id, first.actionId)).toMatchObject({ status: 'dismissed', result: 'Replaced by a newer proposal for head sha-2-pushed' });
+        expect(engine.messages(id, { pending: '1' }).messages.map((message) => message.id)).toEqual([second.actionId]);
+      });
+
+      it('another method replaces the card instead of changing it under the user', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const first = await engine.propose(id, { action: { ...merge, method: 'squash' } });
+        const second = await engine.propose(id, { action: { ...merge, method: 'merge' } });
+        if ('error' in first || 'error' in second) throw first;
+        expect(second.actionId).not.toBe(first.actionId);
+        expect(store.message(id, first.actionId)).toMatchObject({ status: 'dismissed' });
+        expect(engine.messages(id, { pending: '1' }).messages).toHaveLength(1);
+      });
+
+      it('another PR never replaces the card', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        await engine.propose(id, { action: merge });
+        const other = await engine.propose(id, { action: { ...merge, number: 8 } });
+        expect(other).not.toHaveProperty('replaced');
+        expect(engine.messages(id, { pending: '1' }).messages).toHaveLength(2);
+      });
+
+      it('racing proposals for the same PR leave one card', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const [one, two] = await Promise.all([engine.propose(id, { action: merge }), engine.propose(id, { action: merge })]);
+        if ('error' in one || 'error' in two) throw one;
+        expect(two.actionId).toBe(one.actionId);
+        expect(actions(id)).toHaveLength(1);
+      });
+
+      it('duplicates already stored collapse to the newest at boot and at a watch check', async () => {
+        const engine = headEngine();
+        const id = await create(engine);
+        const card = (messageId: string, headSha: string) => store.persistMessage(id, {
+          id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'action', status: 'pending',
+          action: { ...merge, headSha }, sourceTasks: [],
+        } as ManagerMessage);
+        card('old', 'sha-1');
+        card('dup', 'sha-1');
+        card('new', 'sha-1');
+        expect(engine.recover()).toBe(true);
+        expect(actions(id).map((message) => [message.id, message.status])).toEqual([['old', 'dismissed'], ['dup', 'dismissed'], ['new', 'pending']]);
+        card('later', 'sha-2');
+        store.updateState(id, (current) => ({ ...current, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        backend.scripts.push(say(MANAGER_QUIET));
+        engine.tick();
+        await settled(engine);
+        expect(store.message(id, 'new')).toMatchObject({ status: 'dismissed', result: 'Replaced by a newer proposal for head sha-2' });
+        expect(store.message(id, 'later')).toMatchObject({ status: 'pending' });
+      });
+
+      it('allows a card in another manager\'s chat for the same PR, and says so', async () => {
+        const engine = headEngine();
+        const a = await create(engine);
+        const b = await create(engine);
+        const first = await engine.propose(a, { action: merge });
+        const second = await engine.propose(b, { action: merge });
+        if ('error' in first || 'error' in second) throw first;
+        expect(second).toMatchObject({ status: 'pending', alsoWaitingIn: [store.get(a)?.name] });
+        expect(store.message(a, first.actionId)).toMatchObject({ status: 'pending' });
+        expect(first).not.toHaveProperty('alsoWaitingIn');
+      });
     });
 
     it('stamps the merge card with the forge title, not the agent\'s', async () => {
@@ -2095,6 +2727,86 @@ describe('ManagerEngine', () => {
         expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already closed' });
       });
 
+      it('a PR read as merged elsewhere closes its card at once, and tells the manager once', async () => {
+        const engine = makeEngine({ request: forge(() => 'open') });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        requests = [];
+        // Another repository's #7, and this one's #8, are not this card.
+        await engine.pullRequestClosed('/beta', 7, 'merged');
+        await engine.pullRequestClosed('/alpha', 8, 'merged');
+        expect(actions(id)[0]?.status).toBe('pending');
+        await engine.pullRequestClosed('/alpha/', 7, 'merged');
+        await engine.pullRequestClosed('/alpha', 7, 'merged');
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(store.state(id).notes.filter((note) => note.includes('#7 was already'))).toHaveLength(1);
+        // Trusted as read: no second GitHub call.
+        expect(requests).toEqual([]);
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toMatchObject({ status: 409 });
+      });
+
+      it('an automation poll signal is checked against the card\'s own repo before it closes anything', async () => {
+        // The poll reads `origin`: in a fork clone its #7 is not the card's #7.
+        let state = 'open';
+        const engine = makeEngine({ request: forge(() => state) });
+        const id = await create(engine);
+        await engine.propose(id, { action: merge });
+        requests = [];
+        await engine.pullRequestClosed('/alpha', 7, 'merged', true);
+        expect(actions(id)[0]?.status).toBe('pending');
+        expect(requests.map((request) => request.path)).toEqual(['/api/v1/p/alpha/github/prs/7/merge-state?refresh=1']);
+        state = 'merged';
+        await engine.pullRequestClosed('/alpha', 7, 'merged', true);
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+      });
+
+      it('a PR read as closed unmerged closes its card as closed', async () => {
+        const engine = makeEngine({ request: forge(() => 'open') });
+        const id = await create(engine);
+        await engine.propose(id, { action: merge });
+        await engine.pullRequestClosed('/alpha', 7, 'closed');
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already closed' });
+      });
+
+      it('a running merge is not closed by the read that found it merged', async () => {
+        let engine: ManagerEngine | undefined;
+        const engineRef = () => engine!;
+        engine = makeEngine({
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET' });
+            if (path.endsWith('?refresh=1')) await engineRef().pullRequestClosed('/alpha', 7, 'merged');
+            const state = path.endsWith('?refresh=1') ? 'merged' : 'open';
+            return Response.json({ available: true, mergeState: { title: 'Ship', state, headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+          },
+        });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'approve')).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(store.state(id).notes.filter((note) => note.includes('#7 was already'))).toHaveLength(1);
+      });
+
+      it('an onlyIfStale dismiss whose own read closed the card answers ok, with one note', async () => {
+        let engine: ManagerEngine | undefined;
+        const engineRef = () => engine!;
+        engine = makeEngine({
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET' });
+            const state = path.endsWith('?refresh=1') ? 'merged' : 'open';
+            if (state === 'merged') await engineRef().pullRequestClosed('/alpha', 7, 'merged');
+            return Response.json({ available: true, mergeState: { title: 'Ship', state, headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+          },
+        });
+        const id = await create(engine);
+        const proposed = await engine.propose(id, { action: merge });
+        if ('error' in proposed) throw proposed;
+        expect(await engine.decide(id, proposed.actionId, 'dismiss', {}, true)).toEqual({ ok: true });
+        expect(actions(id)[0]).toMatchObject({ status: 'dismissed', result: '#7 was already merged' });
+        expect(store.state(id).notes.filter((note) => note.includes('#7 was already'))).toHaveLength(1);
+      });
+
       it('a watch check asks GitHub about no card whose PR is still listed open', async () => {
         const engine = makeEngine({ request: forge(() => 'merged'), github: readyPrGithub });
         const id = await create(engine);
@@ -2235,6 +2947,15 @@ describe('ManagerEngine', () => {
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', text: 'more' })).toEqual({ ok: true });
       expect(requests.at(-1)?.path).toBe('/api/v1/p/alpha/runs/r/continue');
     });
+  });
+
+  it('the system prompt tells the manager to write PRs, issues and tasks in a card as markers (#2306)', async () => {
+    const created = await makeEngine().create({ instructions: '', projects: 'all', cronMinutes: 0 });
+    if ('error' in created) throw created;
+    const prompt = managerSystemPrompt(created, [{ id: 'alpha', name: 'Alpha', access: 'write' }]);
+    expect(prompt).toContain('Inside the question, labels and descriptions, write every pull request as [[pr:<projectId>/<number>]], every issue as [[issue:<projectId>/<number>]] and every task as [[task:<projectId>/<runId>]]');
+    expect(prompt).toContain('never a bare number, "#123" or "<project>/123"');
+    expect(prompt).toContain('The header is a short plain label: no markers in it.');
   });
 
   describe('task agent selection', () => {
@@ -2970,6 +3691,57 @@ describe('ManagerEngine', () => {
       backend.open[0]!.finish();
       await settled(engine);
       expect(assistants(id).at(-1)).toMatchObject({ ask, sourceTasks: [{ projectId: 'alpha', runId: 'read-task' }] });
+    });
+
+    it('gives each merge card its own PR\'s task, never one the turn read', async () => {
+      const at = later(0);
+      runs.push(
+        run({ id: 'auto-review', title: '8251 auto-review with autofix to mergeable', markerRefs: { pr: 8251 } }),
+        run({ id: 'owner-9783', pullRequestUrl: 'https://github.com/o/r/pull/9783' }),
+        run({ id: 'declared-9783', prRefs: [{ number: 9783, origin: 'marker', at }] }),
+      );
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ ...say('Both are ready.'), hold: true });
+      engine.send(id, 'Merge what is ready');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      // The turn reads an unrelated task first: that read must not ride onto either card.
+      expect(await engine.taskDetail(id, 'alpha', 'auto-review')).toMatchObject({ task: { runId: 'auto-review' } });
+      const first = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9783 }, reason: 'Green, see [[task:alpha/auto-review]]' });
+      const second = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9800 }, reason: 'Green too' });
+      const third = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9801 }, reason: 'Checked in [[task:alpha/declared-9783]]' });
+      backend.open[0]!.finish();
+      await settled(engine);
+      if ('error' in first || 'error' in second || 'error' in third) throw first;
+      expect(store.message(id, first.actionId)).toMatchObject({ sourceTasks: [{ projectId: 'alpha', runId: 'owner-9783' }] });
+      expect(store.message(id, second.actionId)).toMatchObject({ sourceTasks: [] });
+      expect(store.message(id, third.actionId)).toMatchObject({ sourceTasks: [] });
+    });
+
+    it('takes a named task that carries the PR when no task opened or declared it', async () => {
+      runs.push(run({ id: 'mentions-9800', prRefs: [{ number: 9800, origin: 'derived', at: later(0) }] }), run({ id: 'unrelated' }));
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      const proposed = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 9800 }, reason: 'See [[task:alpha/mentions-9800]] and [[task:alpha/unrelated]]' });
+      if ('error' in proposed) throw proposed;
+      expect(store.message(id, proposed.actionId)).toMatchObject({ sourceTasks: [{ projectId: 'alpha', runId: 'mentions-9800' }] });
+    });
+
+    it('an enable card takes only the tasks its reason names, not the turn\'s', async () => {
+      runs.push(run({ id: 'read-task' }), run({ id: 'named' }));
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ ...say('Proposed.'), hold: true });
+      engine.send(id, 'Turn it on');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      await engine.taskDetail(id, 'alpha', 'read-task');
+      const bare = await engine.propose(id, { action: { type: 'enable-automation', projectId: 'alpha', automationId: 'a1' } });
+      const job = await engine.propose(id, { action: { type: 'add-job', name: 'Digest', prompt: 'p', everyMinutes: 5 }, reason: 'For [[task:alpha/named]]' });
+      backend.open[0]!.finish();
+      await settled(engine);
+      if ('error' in bare || 'error' in job) throw bare;
+      expect(store.message(id, bare.actionId)).toMatchObject({ sourceTasks: [] });
+      expect(store.message(id, job.actionId)).toMatchObject({ sourceTasks: [{ projectId: 'alpha', runId: 'named' }] });
     });
 
     it('marks a failure and a wait on the user important, and raises the notification', async () => {

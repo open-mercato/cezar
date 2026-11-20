@@ -8,6 +8,7 @@ import type {
   ManagerSnapshotTask,
   ManagerTaskReportState,
 } from '@open-mercato/cezar-contract';
+import { taskAskRecordSchema } from '@open-mercato/cezar-contract';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -73,6 +74,7 @@ function taskRow(run: RunRecord, childCount: number): ManagerSnapshotTask {
     ...(run.startedByManager ? { startedByManager: run.startedByManager.name } : {}),
     ...(run.runner ? { runner: run.runner } : {}),
     ...(run.modelIdentity ?? run.model ? { model: run.modelIdentity ?? run.model } : {}),
+    ...(run.actualModel ? { actualModel: run.actualModel } : {}),
     ...(run.reasoningEffort ? { effort: run.reasoningEffort } : {}),
     ...pullRequestOf(run),
     ...(run.cancelReason ? { cancelReason: run.cancelReason } : {}),
@@ -90,7 +92,20 @@ function pullRequestOf(run: RunRecord): { prNumber?: number; prUrl?: string } {
   return { ...(number !== undefined ? { prNumber: number } : {}), ...(url ? { prUrl: url } : {}) };
 }
 
-const childCounts = (runs: RunRecord[]): Map<string, number> => {
+/**
+ * How a task is tied to PR `number`: 0 opened it, 1 declared it (`CEZ:PR`), 2 only carries it
+ * (a derived or legacy ref); `undefined` when it does not carry it at all. The cockpit's
+ * `ownershipTier` ranks the same way.
+ */
+export function prTie(run: RunRecord, number: number): 0 | 1 | 2 | undefined {
+  const refs = run.prRefs ?? [];
+  const urlNumber = run.pullRequestUrl ? Number(PR_NUMBER.exec(run.pullRequestUrl)?.[1]) : undefined;
+  if (urlNumber === number || refs.some((ref) => ref.origin === 'created' && ref.number === number)) return 0;
+  if (run.markerRefs?.pr === number || refs.some((ref) => ref.origin === 'marker' && ref.number === number)) return 1;
+  return refs.some((ref) => ref.number === number) ? 2 : undefined;
+}
+
+const childCounts =(runs: RunRecord[]): Map<string, number> => {
   const counts = new Map<string, number>();
   for (const run of runs) {
     const parent = run.dispatch?.parentRunId;
@@ -197,6 +212,22 @@ export interface TaskEvent {
   /** The watch's keys for it, marked reported once the card is posted. */
   attentionKeys: string[];
   detail?: string;
+}
+
+/**
+ * The question a waiting task is parked on, as a manager's relayed card names it (`about.ask`,
+ * Questions inbox spec): the newest open `RunRecord.asks` entry's card id, else its `requestId`,
+ * else the dispatch Guard's. `asks` is read defensively: older records have none.
+ */
+export function openTaskAskId(run: RunRecord): string | undefined {
+  const asks = (run as { asks?: unknown }).asks;
+  if (Array.isArray(asks)) {
+    for (let index = asks.length - 1; index >= 0; index -= 1) {
+      const parsed = taskAskRecordSchema.safeParse(asks[index]);
+      if (parsed.success && !parsed.data.closed) return parsed.data.cardId ?? parsed.data.requestId;
+    }
+  }
+  return run.dispatch?.pendingAsk?.requestId;
 }
 
 /** Pure, so the live listener, the boot sweep and the watch agree on what one event is. */

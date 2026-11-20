@@ -44,12 +44,13 @@ import { useDesignNotes } from '../task-preview/design-notes'
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
 import { FilesView } from '../task-git/task-files'
+import { latestOpenAskCard, revealAskCard } from '../task-thread/ask-card'
 import { useDiffComments } from '../task-thread/diff-comments'
 import { RunHeader, type RunTab } from '../task-thread/run-header'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { ThreadView } from '../task-thread/task-thread'
 import { ThreadLoading } from '../task-thread/thread-loading'
-import { reduceThread } from '../task-thread/thread-state'
+import { reduceThread, trackedAsks } from '../task-thread/thread-state'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
 import {
@@ -631,6 +632,10 @@ function WorkspaceView({
       get focusComposer() {
         return composer() ? () => composer()?.focus() : null
       },
+      get focusQuestion() {
+        const card = stage() ? latestOpenAskCard(stage()!) : null
+        return card ? () => revealAskCard(card) : null
+      },
       openFile: (path: string) => openReference({ view: 'files', value: path }),
       markedUnread,
     }
@@ -969,12 +974,12 @@ export function ConversationColumn({
 }) {
   const history = useRunHistory(run.id)
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.visibleEvents, run.status, run.runner],
+    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner, trackedAsks: trackedAsks(run) }),
+    [history.visibleEvents, run.status, run.runner, run.asks],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.currentEvents, run.status, run.runner],
+    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner, trackedAsks: trackedAsks(run) }),
+    [history.currentEvents, run.status, run.runner, run.asks],
   )
   useRunRecordReconcile(run, history.visibleEvents)
 

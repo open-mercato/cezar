@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
@@ -11,6 +11,7 @@ import {
   runnerSupportsReasoningEffort,
   MANAGER_DEFAULT_CRON_MINUTES,
   MODEL_DISCOVERY_RUNNERS,
+  QUESTIONS_OLDER_DEFAULT_DAYS,
   type CreateManagerInput,
   type Manager,
   type AttachmentInput,
@@ -26,22 +27,29 @@ import {
   type ManagerForwarded,
   type ManagerJob,
   type ManagerMessage,
+  type ManagerTaskSource,
   type ManagerMessagesResponse,
   type ManagerProposeActionInput,
   type ManagerRetryTaskInput,
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
-  type ManagerTaskSource,
   type ManagerTaskAgent,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
+  type QuestionClosed,
+  type QuestionStale,
   type UpdateManagerInput,
+  supersededAskIds,
+  questionCardPartlyReasked,
+  questionCardSharedHeaders,
 } from '@open-mercato/cezar-contract';
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
+import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
-import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
+import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
+import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
@@ -87,7 +95,27 @@ import {
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
 import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
-import { buildSnapshot, findRun, gateAttention, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
+import {
+  ageLabel,
+  cardHeaders,
+  closeMarkerMatches,
+  isOlder,
+  namedWork,
+  namesWork,
+  openAsk,
+  openCardsBlock,
+  aboutPrProjects,
+  prRefs,
+  replaces,
+  taskSources,
+  type AskMessage,
+  type AssistantMessage,
+  type ManagerAskCard,
+  type ManagerAskChange,
+  type ManagerAskResult,
+  type PrRef,
+} from './questions.ts';
 import { finalAssistantText, resumeLabel } from './automation-reports.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
 import { outsideRelayScope } from '../relay/scope.ts';
@@ -123,6 +151,9 @@ export interface ManagerEngineDeps {
   /** Usage telemetry (docs/telemetry.md); absent sends nothing. Consent is the sender's to check. */
   telemetry?: ManagerTelemetry;
   now?: () => number;
+  /** Workspace ui-state `questions.olderAfterDays`: an open card older than this stops counting
+   *  (Questions inbox spec). Absent, or `undefined` from it, is `QUESTIONS_OLDER_DEFAULT_DAYS`; 0 is off. */
+  olderAfterDays?: () => number | undefined | Promise<number | undefined>;
   /** Test seam for `TURN_LIMIT_MS`. */
   turnLimitMs?: number;
   /** Test seam for `RETRY_BACKOFF_MS`. */
@@ -225,15 +256,6 @@ type QueueItem =
   | { kind: 'followup' }
   /** The chat a usage limit cut off; read from state under the lease, so only one cockpit replays it. */
   | { kind: 'resume' };
-
-/** Explicit task references only: never guess a task from a title or an unrelated prior card. */
-function taskSources(text: string): ManagerTaskSource[] {
-  const sources = new Map<string, ManagerTaskSource>();
-  for (const match of text.matchAll(/\[\[task:([^\]/\s]+)\/([^\]\s]+)\]\]/g)) {
-    sources.set(match[0], { projectId: match[1]!, runId: match[2]! });
-  }
-  return [...sources.values()];
-}
 
 interface ActiveTurn {
   sourceTasks?: ReturnType<typeof taskSources>;
@@ -415,11 +437,16 @@ interface Judged {
   important: boolean;
   headline?: string;
   ask?: ManagerAsk;
+  /** `CEZ:ASK-CLOSE` lines, stripped from `text` (Questions inbox spec). */
+  closes: AskCloseMarker[];
 }
 
 function judged(raw: string): Judged {
-  const ask = parseAskMarker(raw) ?? undefined;
-  const body = ask ? stripAskMarker(raw) : raw;
+  const closes = parseAskCloseMarkers(raw);
+  // Before the ask parse: a close line after `CEZ:ASK` would end up in its JSON.
+  const plain = closes.length > 0 ? stripAskCloseMarkers(raw) : raw;
+  const ask = parseAskMarker(plain) ?? undefined;
+  const body = ask ? stripAskMarker(plain) : plain;
   const match = IMPORTANT_LINE.exec(body);
   const headline = (match?.[1] ?? '').trim().slice(0, HEADLINE_LIMIT);
   return {
@@ -427,6 +454,7 @@ function judged(raw: string): Judged {
     important: match !== null,
     ...(headline ? { headline } : {}),
     ...(ask ? { ask } : {}),
+    closes,
   };
 }
 
@@ -488,6 +516,8 @@ export class ManagerEngine {
   private readonly changes = new Map<string, number>();
   /** Attention keys already pushed, so a watch that keeps failing does not push the same task again. */
   private readonly pushedAttention = new Map<string, Set<string>>();
+  /** The Questions inbox provider's listeners: every card opened, closed or flagged. */
+  private readonly askListeners = new Set<(change: ManagerAskChange) => void>();
 
   constructor(private readonly deps: ManagerEngineDeps) {}
 
@@ -563,6 +593,7 @@ export class ManagerEngine {
       }
     }
     if (!answering && messages.at(-1)?.kind === 'user') this.addNotice(id, 'cezar restarted before answering this. Send it again if you still need it.');
+    this.collapseDuplicateCards(id);
   }
 
   dispose(): void {
@@ -666,8 +697,10 @@ export class ManagerEngine {
       ? onePlainLine(lastTalk.text) || (lastTalk.kind === 'user' ? 'Sent attachments' : '')
       : '';
     const dueAt = this.checkDueAt(manager, state);
+    const olderDays = await this.olderAfterDays();
     const important = messages.flatMap((message) =>
       message.kind === 'assistant' && message.important && !message.streaming && unseen(state, message) ? [message] : []);
+    const superseded = supersededAskIds(messages);
     return {
       ...manager,
       status: working ? 'working' : lastAssistant?.kind === 'assistant' && lastAssistant.error ? 'error' : 'idle',
@@ -678,13 +711,21 @@ export class ManagerEngine {
       important: important.length,
       ...(important.at(-1)?.headline ? { headline: important.at(-1)!.headline } : {}),
       pendingActions: messages.filter(pendingAction).length,
-      pendingQuestions: messages.filter(openAsk).length,
+      pendingQuestions: messages.filter((message) => openAsk(message) && !superseded.has(message.id) && !isOlder(message.at, this.now(), olderDays)).length,
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
       followedTasks: followedTasks(state),
       ...denialsOf(manager, state.bashDenials),
     };
+  }
+
+  private async olderAfterDays(): Promise<number> {
+    try {
+      return (await this.deps.olderAfterDays?.()) ?? QUESTIONS_OLDER_DEFAULT_DAYS;
+    } catch {
+      return QUESTIONS_OLDER_DEFAULT_DAYS;
+    }
   }
 
   async list(): Promise<ManagerSummary[]> {
@@ -856,6 +897,9 @@ export class ManagerEngine {
     const updated = this.deps.store.update(id, () => next);
     if (!updated) return { error: 'manager not found', status: 404 };
     if (input.clearBashDenials) this.deps.store.updateState(id, (state) => ({ ...state, bashDenials: [] }));
+    // "Use another account" (spec 2026-11-18-inline-account-reconnect): the chat turn the old login
+    // failed re-runs on the new one, in a fresh session (the session key follows the account).
+    if (current.agentProfile !== updated.agentProfile || current.runner !== updated.runner) this.retryAuthFailedChat(id);
     for (const field of changedSettingFields(current, updated)) this.deps.telemetry?.track('manager_settings_changed', field, ctx);
     if (JSON.stringify(current.projects) !== JSON.stringify(updated.projects)) {
       const names = (await this.sources(updated)).map((source) => source.name);
@@ -900,12 +944,27 @@ export class ManagerEngine {
 
   send(id: string, text: string, attachments: AttachmentInput[] = [], askId?: string): boolean {
     if (!this.deps.store.get(id)) return false;
-    // A card answers itself alone; the composer closes every open card, their one sure exit.
-    const answered = this.deps.store.messages(id).filter(openAsk).filter((message) => askId === undefined || message.id === askId);
+    const messages = this.deps.store.messages(id);
+    // A second answer to one card is a double submit: the first already woke the manager (#2293).
+    const target = askId === undefined ? undefined : messages.find((message) => message.id === askId);
+    if (target?.kind === 'assistant' && target.ask && target.askAnswer !== undefined) return true;
+    // A card answers itself alone, superseded or not. A composer reply answers nothing cezar can
+    // name, so it only flags the open cards no newer card re-asked (Questions inbox spec § Relevance).
+    const superseded = supersededAskIds(messages);
+    const open = messages.filter(openAsk);
+    const answered = askId === undefined ? [] : open.filter((message) => message.id === askId);
     for (const message of answered) {
-      this.publish(id, { ...message, askAnswer: text || 'Sent attachments' }, true);
+      const written = this.publish(id, { ...message, askAnswer: text || 'Sent attachments' }, true);
       // Asked from a session the chat never saw: `Header: choice` alone answers nothing.
       if (message.turn !== 'chat') this.addNote(id, askNote(message));
+      // The inbox hands this answer to the task question it copies (`about.ask`); a relay would send it twice.
+      const relayed = (message.ask.about ?? []).flatMap((ref) => ('task' in ref && ref.ask ? [`[[task:${ref.task}]]`] : []));
+      if (relayed.length > 0) this.addNote(id, `cezar already delivers the user's answer to «${cardHeaders(message.ask)}» to ${relayed.join(', ')}: do not pass it on with \`cez-manager task say\`.`.slice(0, 2_000));
+      if (written.kind === 'assistant') this.askChanged(id, written, true);
+    }
+    const replied = askId === undefined ? open.filter((message) => !superseded.has(message.id)) : [];
+    for (const message of replied) {
+      this.flagAsk(id, message, { why: 'replied-in-chat', detail: `you replied in the chat ${ageLabel(this.now() - msOf(message.at))} after it was asked`, since: this.iso() });
     }
     const seq = this.deps.store.nextSeq(id);
     const files = attachments.map((attachment) => this.deps.store.saveAttachment(id, attachment, seq));
@@ -915,7 +974,7 @@ export class ManagerEngine {
       seq,
       at: this.iso(),
       kind: 'user',
-      sourceTasks: answered.flatMap((message) => message.sourceTasks ?? taskSources(message.text)),
+      sourceTasks: [...answered, ...replied].flatMap((message) => message.sourceTasks ?? taskSources(message.text)),
       text,
       ...(files.length > 0 ? { attachments: files.map((file) => file.saved) } : {}),
     }, true);
@@ -942,6 +1001,49 @@ export class ManagerEngine {
     this.interrupt(runtime);
     // Also "Don't resume": the limit still holds, but nothing replays when it lifts.
     this.clearResume(id, true);
+    return true;
+  }
+
+  /**
+   * An agent account is signed in again (spec 2026-11-18-inline-account-reconnect): every manager
+   * whose latest chat turn failed on that login re-runs it, once. Watch and job turns wait for
+   * their next tick.
+   */
+  /** Does any manager's latest chat turn wait on this login? */
+  hasAuthFailed(provider: string, profileId: string): boolean {
+    return this.deps.store.list().some((manager) => {
+      const failure = this.latestAuthFailedChat(manager.id)?.authFailure;
+      return failure?.provider === provider && failure.profileId === profileId;
+    });
+  }
+
+  resumeAuthFailed(provider: string, profileId: string): Array<{ managerId: string; title: string }> {
+    const resumed: Array<{ managerId: string; title: string }> = [];
+    for (const manager of this.deps.store.list()) {
+      const failed = this.latestAuthFailedChat(manager.id);
+      if (!failed?.authFailure || failed.authFailure.provider !== provider || failed.authFailure.profileId !== profileId) continue;
+      if (this.retryAuthFailedChat(manager.id)) resumed.push({ managerId: manager.id, title: manager.name });
+    }
+    return resumed;
+  }
+
+  private latestAuthFailedChat(id: string): Extract<ManagerMessage, { kind: 'assistant' }> | undefined {
+    const latest = [...this.deps.store.messages(id)].reverse().find((message) => message.kind === 'assistant' && message.turn === 'chat');
+    return latest?.kind === 'assistant' && latest.authFailure && !latest.streaming ? latest : undefined;
+  }
+
+  /** Drops the card and replays the cut-off chat. Cleared before the enqueue, so a repeat finds nothing. */
+  private retryAuthFailedChat(id: string): boolean {
+    const { store } = this.deps;
+    const failed = this.latestAuthFailedChat(id);
+    if (!failed || this.runtime(id).deleted) return false;
+    const { authFailure, ...rest } = failed;
+    this.publish(id, { ...rest, reconnectedAt: this.iso(), ...(authFailure ? { reconnectedFrom: authFailure } : {}) }, true);
+    const retry = store.state(id).authRetry;
+    store.updateState(id, (state) => ({ ...state, authRetry: undefined }));
+    // A follow-up's events already moved to the notes: the next chat hears them.
+    if (retry?.messageId !== failed.id) return true;
+    this.enqueue(id, { kind: 'chat', ...retry.chat, images: [] });
     return true;
   }
 
@@ -1115,6 +1217,7 @@ export class ManagerEngine {
       const snapshot = await this.snapshot(id);
       // Deleted meanwhile: writing the gate's state would bring the directory back.
       if (!snapshot || !store.get(id)) return;
+      this.collapseDuplicateCards(id);
       await this.dismissStaleMerges(id, snapshot);
       await this.dismissStaleEnables(id, snapshot);
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
@@ -1134,7 +1237,7 @@ export class ManagerEngine {
       // Task events still owed a follow-up ride along: the user asking first answers them too.
       const { notes, followups } = store.state(id);
       turn.sourceTasks = [...item.messageIds.flatMap((messageId) => store.message(id, messageId)?.sourceTasks ?? []), ...taskSources([item.text, ...notes, ...followups.map((entry) => entry.line)].join('\n'))];
-      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line)), 'chat', turn, undefined, item)) === 'heard';
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line), this.openCards(id)), 'chat', turn, undefined, item)) === 'heard';
       if (heard) this.consumeNotes(id, notes, followups);
       return;
     }
@@ -1143,7 +1246,7 @@ export class ManagerEngine {
       // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
       if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
       turn.sourceTasks = taskSources(followups.map((entry) => entry.line).join('\n'));
-      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes), 'chat', turn);
+      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes, this.openCards(id)), 'chat', turn);
       if (outcome === 'heard') this.consumeNotes(id, notes, followups);
       // Failed: no retry that could bill in a loop; the next chat hears them instead.
       else if (outcome === 'failed' && store.get(id)) {
@@ -1165,7 +1268,7 @@ export class ManagerEngine {
       jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
     }));
     turn.sourceTasks = taskSources(job.prompt);
-    const outcome = await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt), 'job', turn, job.name);
+    const outcome = await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt, this.openCards(id)), 'job', turn, job.name);
     // Due again, so it runs as soon as the limit lifts.
     if (outcome === 'limited') {
       store.update(id, (current) => ({
@@ -1251,10 +1354,20 @@ export class ManagerEngine {
     const resetAt = this.usageLimit(result, turn);
     const cause = result.error ? failureCause(result.error, result.text) : undefined;
     const failed = cause && !turn.stopped && !resetAt ? this.recordFailure(id, kind, cause, result.runner) : undefined;
+    // A rejected login renders the reconnect card, and a reconnect of that account re-runs the chat.
+    const authFailure = failed && !turn.timedOut && classifyManagerFailure(cause!) === 'auth'
+      ? { provider: result.runner ?? await this.runnerOf(manager), profileId: manager.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID }
+      : undefined;
+    if (kind === 'chat' && chat) {
+      store.updateState(id, (state) => ({
+        ...state,
+        authRetry: authFailure ? { messageId: base.id, chat: { text: chat.text, paths: chat.paths, messageIds: chat.messageIds } } : undefined,
+      }));
+    }
     // The CLI's own error line, echoed as the reply, is the cause the human line replaces.
     const reply = failed && result.text.trim() === cause?.trim() ? '' : result.text;
     const judgement = judged(reply.replace(QUIET_LINE, '').trim());
-    this.publish(id, {
+    const final = this.publish(id, {
       ...base,
       text: judgement.text,
       sourceTasks: taskSources(judgement.text).length ? taskSources(judgement.text) : turn.sourceTasks,
@@ -1263,8 +1376,10 @@ export class ManagerEngine {
       commands: result.commands,
       ...(turn.timedOut ? { error: TURN_LIMIT_ERROR } : turn.stopped ? { stopped: true } : {}),
       ...(resetAt ? { resumeAt: resetAt.toISOString() } : failed ? { error: failed } : {}),
+      ...(authFailure ? { authFailure } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
+    this.settleAsks(id, final, judgement.closes);
     if (resetAt) {
       this.armResume(id, resetAt, base.id, chat);
       return 'limited';
@@ -1341,6 +1456,266 @@ export class ManagerEngine {
     return written;
   }
 
+  // ---- questions (spec 2026-11-17-questions-inbox) -----------------------------------------
+
+  clock(): number {
+    return this.now();
+  }
+
+  /** The Questions inbox provider's subscription: every card opened, closed or flagged. */
+  onAskChange(listener: (change: ManagerAskChange) => void): () => void {
+    this.askListeners.add(listener);
+    return () => this.askListeners.delete(listener);
+  }
+
+  private askChanged(id: string, message: AssistantMessage, closed: boolean): void {
+    if (!message.ask || this.askListeners.size === 0) return;
+    const manager = this.deps.store.get(id);
+    if (!manager) return;
+    const card: ManagerAskCard = { managerId: id, managerName: manager.name, message: message as AskMessage, ...(message.askAnswer !== undefined ? { answeredAt: this.iso() } : {}) };
+    for (const listener of this.askListeners) {
+      try {
+        listener({ card, closed });
+      } catch (error) {
+        console.warn(`[cezar] manager questions: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  /**
+   * Every manager's cards, open or closed since `closedSince` (ms); a card answered on itself carries the
+   * reply's time. A card a newer one re-asked before `askClosed: replaced` was persisted reads as replaced (#2307).
+   */
+  askCards(closedSince = 0): ManagerAskCard[] {
+    return this.deps.store.list().flatMap((manager) => {
+      const messages = this.deps.store.messages(manager.id);
+      const cards = messages.filter((message): message is AskMessage => message.kind === 'assistant' && message.ask !== undefined)
+        .sort((a, b) => a.seq - b.seq);
+      const superseded = supersededAskIds(cards);
+      // Indexed by text once: a per-card scan of the whole chat is O(cards × messages).
+      const replies = new Map<string, ManagerMessage[]>();
+      for (const other of messages) {
+        if (other.kind !== 'user') continue;
+        const text = other.text || 'Sent attachments';
+        replies.set(text, [...(replies.get(text) ?? []), other]);
+      }
+      return cards.flatMap((message, index): ManagerAskCard[] => {
+        const card = { managerId: manager.id, managerName: manager.name };
+        if (message.askClosed) return msOf(message.askClosed.at) >= closedSince ? [{ ...card, message }] : [];
+        if (message.askAnswer !== undefined) {
+          const reply = replies.get(message.askAnswer)?.find((other) => other.seq > message.seq);
+          return msOf(reply?.at ?? message.at) >= closedSince ? [{ ...card, message, ...(reply ? { answeredAt: reply.at } : {}) }] : [];
+        }
+        if (superseded.has(message.id)) {
+          const newer = cards.slice(index + 1).find((other) => replaces(other.ask, message.ask))!;
+          if (msOf(newer.at) < closedSince) return [];
+          return [{ ...card, message: { ...message, askClosed: { reason: 'replaced', at: newer.at, replacedBy: newer.id } } }];
+        }
+        return [{ ...card, message }];
+      });
+    });
+  }
+
+  private askCard(id: string, messageId: string): { card: ManagerAskCard } | ManagerAskResult {
+    const manager = this.deps.store.get(id);
+    const message = manager ? this.deps.store.message(id, messageId) : undefined;
+    if (!manager || message?.kind !== 'assistant' || !message.ask) return { ok: false, status: 404, error: 'question not found' };
+    return { card: { managerId: id, managerName: manager.name, message: message as AskMessage } };
+  }
+
+  private refreshed(id: string, messageId: string): ManagerAskResult {
+    const found = this.askCard(id, messageId);
+    return 'card' in found ? { ok: true, card: found.card } : found;
+  }
+
+  /** The inbox's Answer: the same as answering on the card. A card closed meanwhile is a 409. */
+  answerAsk(id: string, messageId: string, text: string): ManagerAskResult {
+    const found = this.askCard(id, messageId);
+    if (!('card' in found)) return found;
+    if (!openAsk(found.card.message)) return { ok: false, status: 409, error: 'question already closed' };
+    this.send(id, text, [], messageId);
+    return this.refreshed(id, messageId);
+  }
+
+  /** Dismissed: the agent hears it on its next turn, which this starts no sooner. */
+  dismissAsk(id: string, messageId: string): ManagerAskResult {
+    const found = this.askCard(id, messageId);
+    if (!('card' in found)) return found;
+    const { message } = found.card;
+    if (!openAsk(message)) return { ok: false, status: 409, error: 'question already closed' };
+    const headers = cardHeaders(message.ask);
+    this.closeCard(id, message, { reason: 'dismissed', at: this.iso(), detail: `You skipped «${headers}»`.slice(0, 300) });
+    this.addNote(id, `The user skipped your question «${headers}». Don't wait for an answer; decide yourself, or ask again later only if it still blocks you.`);
+    return this.refreshed(id, messageId);
+  }
+
+  /** Closed from outside (its linked task copy closed). No-op on a card already closed. */
+  closeAsk(id: string, messageId: string, closed: QuestionClosed): ManagerAskResult {
+    const found = this.askCard(id, messageId);
+    if (!('card' in found)) return found;
+    const { message } = found.card;
+    if (!openAsk(message)) return { ok: true, card: found.card };
+    this.closeCard(id, message, closed);
+    if (closed.reason === 'answered' && closed.answeredIn) {
+      const where = closed.answeredIn.replace(/^task:/, '');
+      this.addNote(id, `The user answered your question «${cardHeaders(message.ask)}» in the task ${closed.answeredIn.startsWith('task:') ? `[[task:${where}]]` : where}: ${closed.answer ?? ''}`.slice(0, 2_000));
+    }
+    return this.refreshed(id, messageId);
+  }
+
+  private closeCard(id: string, message: AskMessage, closed: QuestionClosed): void {
+    const current = this.deps.store.message(id, message.id);
+    if (!current || !openAsk(current)) return;
+    // The schema caps `detail` at 300: a longer one fails it, and the store drops the whole message on reload.
+    const written = this.publish(id, { ...current, askClosed: closed.detail === undefined ? closed : { ...closed, detail: closed.detail.slice(0, 300) } }, true);
+    this.emitChange(id);
+    if (written.kind === 'assistant') this.askChanged(id, written, true);
+  }
+
+  /** Suspected out of date: the card stays open and counted; the first reason stays. */
+  private flagAsk(id: string, message: AskMessage, stale: QuestionStale): void {
+    const current = this.deps.store.message(id, message.id);
+    // The first flag stays, except that a partial re-ask names what changed more precisely than any other.
+    if (!current || !openAsk(current) || (current.askStale && stale.why !== 'partly-reasked')) return;
+    const written = this.publish(id, { ...current, askStale: { ...stale, detail: stale.detail.slice(0, 300) } }, true);
+    if (written.kind === 'assistant') this.askChanged(id, written, false);
+  }
+
+  private openCards(id: string): string {
+    return openCardsBlock(this.deps.store.messages(id).filter(openAsk), this.now());
+  }
+
+  /** Waiting tasks' open questions, so a relayed card can name the one it copies (`about.ask`). */
+  private async taskQuestions(manager: Manager): Promise<Array<{ task: string; ask: string }>> {
+    return (await this.sources(manager)).filter((source) => source.available).flatMap((source) => source.runs()
+      .filter((run) => !run.archived && (run.status === 'waiting' || run.awaitingAnswerSince !== undefined))
+      .flatMap((run) => {
+        const ask = openTaskAskId(run);
+        return ask ? [{ task: `${source.id}/${run.id}`, ask }] : [];
+      }));
+  }
+
+  /** A turn's reply: its `CEZ:ASK-CLOSE` lines first, then a new card replaces the ones it re-asks. */
+  private settleAsks(id: string, written: ManagerMessage, closes: AskCloseMarker[]): void {
+    this.closeMarked(id, closes, written.id);
+    if (written.kind !== 'assistant' || !written.ask) return;
+    const ask = written.ask;
+    for (const older of this.deps.store.messages(id).filter(openAsk)) {
+      if (older.id === written.id || older.seq > written.seq) continue;
+      if (replaces(ask, older.ask)) {
+        this.closeCard(id, older, { reason: 'replaced', at: this.iso(), replacedBy: written.id });
+      } else if (questionCardPartlyReasked(ask, older.ask)) {
+        // Partly re-asked: its other questions still need an answer, so it stays open, flagged.
+        const headers = questionCardSharedHeaders(ask, older.ask).map((header) => `«${header}»`).join(', ');
+        this.flagAsk(id, older, { why: 'partly-reasked', detail: `a newer question asked ${headers} again`.slice(0, 300), since: this.iso() });
+      }
+    }
+    this.askChanged(id, written, false);
+  }
+
+  private closeMarked(id: string, closes: AskCloseMarker[], except?: string): void {
+    for (const marker of closes) {
+      const matches = this.deps.store.messages(id).filter(openAsk)
+        .filter((message) => message.id !== except && closeMarkerMatches(message.ask, marker.id));
+      if (matches.length === 0) {
+        this.addNote(id, `CEZ:ASK-CLOSE ${marker.id}: none of your open questions has that id, so nothing closed.`);
+        continue;
+      }
+      for (const message of matches) {
+        this.closeCard(id, message, { reason: 'retracted', at: this.iso(), ...(marker.reason ? { detail: marker.reason } : {}) });
+      }
+    }
+  }
+
+  /** The manager acted on a task or PR an open card names, since asking: the card may be moot. */
+  private managerActed(id: string, work: { tasks?: string[]; prs?: PrRef[] }, detail: string): void {
+    if ((work.tasks?.length ?? 0) === 0 && (work.prs?.length ?? 0) === 0) return;
+    for (const message of this.deps.store.messages(id).filter(openAsk)) {
+      if (namesWork(message, work)) this.flagAsk(id, message, { why: 'manager-acted', detail, since: this.iso() });
+    }
+  }
+
+  /**
+   * A run reached an end the inbox counts (done, review, cancelled, archived, deleted; never
+   * `failed`, #2286): a card declaring it in `about` expires, one only mentioning it is flagged.
+   */
+  taskEnded(projectId: string, runId: string, run: RunRecord | undefined): void {
+    this.endAsks(projectId, runId, run, false);
+  }
+
+  /** `replayed`: read from the run list, not seen live; a card asked after that end is about the ended run. */
+  private endAsks(projectId: string, runId: string, run: RunRecord | undefined, replayed: boolean): void {
+    if (this.disposed) return;
+    const end = !run ? 'was deleted' : run.archived ? 'was archived'
+      : run.status === 'done' ? 'finished' : run.status === 'review' ? 'finished, ready for review'
+        : run.status === 'cancelled' ? 'was cancelled' : undefined;
+    if (!end) return;
+    // Deleted, or an end without a stamp: unknown, so it counts as after the card.
+    const endedAt = run?.archived ? run.archivedAt : run?.finishedAt;
+    const key = `${projectId}/${runId}`;
+    for (const manager of this.deps.store.list()) {
+      if (!connectedTo(manager, projectId)) continue;
+      for (const message of this.deps.store.messages(manager.id).filter(openAsk)) {
+        if (replayed && endedAt !== undefined && msOf(endedAt) <= msOf(message.at)) continue;
+        const named = namedWork(message);
+        if (named.aboutTasks.has(key)) this.closeCard(manager.id, message, { reason: 'expired', at: this.iso(), detail: `Task ${end}` });
+        else if (named.mentionedTasks.has(key)) this.flagAsk(manager.id, message, { why: 'mentioned-work-ended', detail: `a task it mentions ${end}`, since: this.iso() });
+      }
+    }
+  }
+
+  /** A project's whole list: a card naming a run that ended (or is gone) while nobody listened. */
+  private reconcileAsks(projectId: string, runs: RunRecord[]): void {
+    const byId = new Map(runs.map((run) => [run.id, run]));
+    const named = new Set<string>();
+    for (const manager of this.deps.store.list()) {
+      if (!connectedTo(manager, projectId)) continue;
+      for (const message of this.deps.store.messages(manager.id).filter(openAsk)) {
+        const work = namedWork(message);
+        for (const key of [...work.aboutTasks, ...work.mentionedTasks]) if (key.startsWith(`${projectId}/`)) named.add(key.slice(projectId.length + 1));
+      }
+    }
+    for (const runId of named) this.endAsks(projectId, runId, byId.get(runId), true);
+  }
+
+  /** `pullRequestClosed`'s half for cards: `about: [{pr}]` expires, a `[[pr:…]]` mention is flagged. */
+  private async expireAsksForPr(root: string, number: number, state: 'merged' | 'closed', verify: boolean): Promise<void> {
+    const candidates = this.deps.store.list().flatMap((manager) => this.deps.store.messages(manager.id).filter(openAsk)
+      .filter((message) => namesWork(message, { prs: [{ number }] }))
+      .map((message) => ({ manager, message })));
+    if (candidates.length === 0) return;
+    const target = resolve(root);
+    const all = await this.deps.projects();
+    const projects = all.filter((project) => resolve(project.root) === target).map((project) => project.id);
+    const confirmed = new Map<string, boolean>();
+    // An automation poll reads `origin`: in a fork clone that is another repo's number, so ask the card's own route.
+    const closedIn = async (projectId: string): Promise<boolean> => {
+      if (!verify) return true;
+      if (!confirmed.has(projectId)) confirmed.set(projectId, (await this.prStateOf(projectId, number)) !== undefined);
+      return confirmed.get(projectId)!;
+    };
+    for (const { manager, message } of candidates) {
+      const reached = projects.filter((projectId) => connectedTo(manager, projectId));
+      if (reached.length === 0) continue;
+      const named = namedWork(message);
+      if (named.aboutPrs.has(number)) {
+        // `{pr}` names no project: pin it from the card's own [[pr:…]] or its tasks, else a reach of one.
+        const pinned = aboutPrProjects(message, number);
+        if (!await someAsync(pinned.size > 0 ? reached.filter((projectId) => pinned.has(projectId)) : reached, closedIn)) continue;
+        if (pinned.size > 0 || all.filter((project) => connectedTo(manager, project.id)).length <= 1) {
+          this.closeCard(manager.id, message, { reason: 'expired', at: this.iso(), detail: `PR #${number} ${state}` });
+        } else {
+          this.flagAsk(manager.id, message, { why: 'mentioned-work-ended', detail: `a PR #${number} was ${state} in ${reached.join(', ')}`, since: this.iso() });
+        }
+        continue;
+      }
+      const mentioned = named.mentionedPrs.filter((ref) => ref.number === number && ref.projectId !== undefined && reached.includes(ref.projectId));
+      if (mentioned.length > 0 && await someAsync(mentioned.map((ref) => ref.projectId!), closedIn)) {
+        this.flagAsk(manager.id, message, { why: 'mentioned-work-ended', detail: `PR #${number} it mentions was ${state}`, since: this.iso() });
+      }
+    }
+  }
+
   // ---- followed tasks (spec § Followed tasks) --------------------------------------------
 
   /** `cez-manager task follow|unfollow`; `task create` follows on its own. */
@@ -1396,10 +1771,15 @@ export class ManagerEngine {
   reconcileProject(projectId: string, dataDir: string, runs: RunRecord[]): void {
     const byId = new Map(runs.map((run) => [run.id, run]));
     this.deliverFollowed(projectId, dataDir, runs, (runId) => byId.get(runId));
+    this.reconcileAsks(projectId, runs);
   }
 
   private async reconcileFollows(): Promise<void> {
-    const prefixes = new Set(this.deps.store.list().flatMap((manager) => Object.keys(this.deps.store.state(manager.id).follows).map((key) => key.split('/')[0])));
+    const prefixes = new Set(this.deps.store.list().flatMap((manager) => [
+      ...Object.keys(this.deps.store.state(manager.id).follows),
+      // Cards naming a task: one that ended while cezar was down expires or is flagged now.
+      ...this.deps.store.messages(manager.id).filter(openAsk).flatMap((message) => { const work = namedWork(message); return [...work.aboutTasks, ...work.mentionedTasks]; }),
+    ].map((key) => key.split('/')[0])));
     if (prefixes.size === 0) return;
     for (const source of await this.deps.projects()) {
       if (this.disposed) return;
@@ -1460,7 +1840,10 @@ export class ManagerEngine {
       fields: { taskReport: { projectId, runId: run.id, state: event.state, ...(root ? { rootRunId: root.id } : {}) } },
       attentionKeys: event.attentionKeys,
     });
-    const line = `${card} "${title}": ${state}${clipped ? ' Its final message is on the card; `cez-manager task` reads the rest.' : ''}`;
+    const askId = event.state === 'needs-you' ? openTaskAskId(run) : undefined;
+    // The id a relayed card names, so the inbox shows one question, not two (Questions inbox spec).
+    const relay = askId ? ` Its open question's id is "${askId}": a card that asks it for the task declares "about":[{"task":"${projectId}/${run.id}","ask":"${askId}"}].` : '';
+    const line = `${card} "${title}": ${state}${clipped ? ' Its final message is on the card; `cez-manager task` reads the rest.' : ''}${relay}`;
     // The follow-up acts on what the task said, so it gets the words, not just the state.
     const excerpt = final ? (final.length > FOLLOWUP_EXCERPT_LIMIT ? `${final.slice(0, FOLLOWUP_EXCERPT_LIMIT)}…` : final) : undefined;
     const followup = excerpt ? `${line}${FINAL_MESSAGE_MARK}${excerpt}` : line;
@@ -1537,7 +1920,7 @@ export class ManagerEngine {
     const { store } = this.deps;
     turn.sourceTasks = fresh.flatMap((item) => item.runId ? [{ projectId: item.projectId, runId: item.runId }] : []);
     const startedAt = this.now();
-    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh), turn, () => undefined).catch(turnFailure);
+    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.openCards(id), await this.taskQuestions(manager)), turn, () => undefined).catch(turnFailure);
     this.reportTurn(manager, turn, startedAt, result);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
@@ -1586,8 +1969,11 @@ export class ManagerEngine {
       watchNoticeId: undefined,
       reported: { ...state.reported, ...Object.fromEntries(snapshot.attention.map((item) => [item.key, reportedAt])) },
     }));
-    const raw = result.text.trim();
+    // A quiet check may still withdraw its own cards.
+    const closes = parseAskCloseMarkers(result.text);
+    const raw = stripAskCloseMarkers(result.text).trim();
     if (!raw || QUIET_LINE.test(raw)) {
+      this.closeMarked(id, closes);
       if (forced) this.addNotice(id, 'Checked: nothing needs you right now.');
       return;
     }
@@ -1605,6 +1991,7 @@ export class ManagerEngine {
       commands: result.commands,
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
+    this.settleAsks(id, written, closes);
     const body = alertBody(judgement);
     if (body) this.alert(id, written, body);
   }
@@ -1660,6 +2047,8 @@ export class ManagerEngine {
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
+    // Every manager turn requires a tool fence, including chats and unattended watches.
+    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError('a manager needs its cez-manager shell fence, which Codex cannot enforce', 'Refusing this manager turn; no model turn was started. Pick Claude Code for this manager.')), runner };
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
@@ -2200,6 +2589,8 @@ export class ManagerEngine {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);
     }
     this.rememberTaskSource(id, input.projectId, run.id);
+    const named = `${input.title ?? ''}\n${input.task ?? ''}`;
+    this.managerActed(id, { tasks: taskSources(named).map((task) => followKey(task.projectId, task.runId)), prs: prRefs(named) }, 'you started a task on it since');
     return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
   }
 
@@ -2218,6 +2609,7 @@ export class ManagerEngine {
     const body = { text: composed.text, ...(forward && forward.images.length > 0 ? { images: forward.images } : {}) };
     this.rememberTaskSource(id, input.projectId, input.runId);
     const sent = { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
+    this.managerActed(id, { tasks: [followKey(input.projectId, input.runId)] }, 'you messaged that task since');
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
     if (input.model || input.effort) {
       // A live session cannot change engine mid-turn: only a Continue takes a model.
@@ -2281,6 +2673,7 @@ export class ManagerEngine {
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
     const { cancelled } = (await response.json()) as { cancelled: boolean };
+    this.managerActed(id, { tasks: [followKey(input.projectId, run.id)] }, 'you cancelled that task since');
     const after = new Map((source?.runs() ?? []).map((candidate) => [candidate.id, candidate.status]));
     return {
       runId: run.id,
@@ -2304,7 +2697,7 @@ export class ManagerEngine {
     const allowed = scope.manager.taskAgents
       ? scope.manager.taskAgents.some((agent) => agent.runner === run.runner && agent.agentProfile === run.agentProfile)
       : !scope.manager.taskRunner || scope.manager.taskRunner === run.runner;
-    return this.createTask(id, {
+    const created = await this.createTask(id, {
       projectId: input.projectId,
       task: run.task,
       // The task text was checked when it first started; a placeholder there is the user's own.
@@ -2316,6 +2709,8 @@ export class ManagerEngine {
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
     });
+    if (!('error' in created)) this.managerActed(id, { tasks: [followKey(input.projectId, run.id)] }, 'you retried that task since');
+    return created;
   }
 
   /** Checked against the forge now, so a card never offers a merge that was already impossible. */
@@ -2342,7 +2737,7 @@ export class ManagerEngine {
     return { ...action, name: automation.name.slice(0, 1000), revision: automation.revision, summary: clipSummary(JSON.stringify(definition)) };
   }
 
-  async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus } | ManagerRefusal> {
+  async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus; replaced?: string[]; alsoWaitingIn?: string[] } | ManagerRefusal> {
     const scope = await this.toolScope(id, actionProject(input.action), true);
     if ('error' in scope) return scope;
     const refused = accessRefusal(scope.manager, input.action);
@@ -2355,33 +2750,83 @@ export class ManagerEngine {
     }
     const action = await this.stampAction(id, input.action);
     if ('error' in action) return action;
-    const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action);
+    // From here to `publish` nothing awaits, so two racing proposals see each other's card.
+    const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action) && sameMethod(other, action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
     if (pending) return { actionId: pending.id, status: 'pending' };
-    if (action.type === 'enable-automation') {
-      // An edit bumps the revision: the older card can never be approved, so it must not wait on the user.
-      for (const older of this.deps.store.messages(id)) {
-        if (older.kind !== 'action' || older.status !== 'pending' || older.action.type !== 'enable-automation') continue;
-        if (older.action.projectId !== action.projectId || older.action.automationId !== action.automationId) continue;
-        this.settleAction(id, older, 'dismissed', `Replaced by a newer proposal (revision ${action.revision})`);
-      }
+    // One waiting card per PR or automation: a new head, method or revision replaces the older card.
+    const replaced: string[] = [];
+    for (const older of this.deps.store.messages(id)) {
+      if (older.kind !== 'action' || older.status !== 'pending' || cardSubject(older.action) === undefined || cardSubject(older.action) !== cardSubject(action)) continue;
+      this.settleAction(id, older, 'dismissed', replacedBy(action));
+      replaced.push(older.id);
     }
+    const alsoWaitingIn = this.alsoWaitingIn(id, action);
     const message: ManagerMessage = {
       id: randomUUID(),
       seq: this.deps.store.nextSeq(id),
       at: this.iso(),
       kind: 'action',
-      sourceTasks: taskSources(input.reason ?? '').length ? taskSources(input.reason ?? '') : this.runtime(id).active?.sourceTasks ?? [],
+      sourceTasks: this.actionSources(action, input.reason ?? '', scope.source?.runs() ?? []),
       action,
       ...(input.reason ? { reason: input.reason } : {}),
       status: 'pending',
     };
     this.publish(id, message, true);
+    if (action.type === 'merge-pr') this.managerActed(id, { prs: [{ projectId: action.projectId, number: action.number }] }, `you proposed merging #${action.number} since`);
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
     this.alert(id, message, `Needs your approval: ${describe(action)}`);
-    return { actionId: message.id, status: 'pending' };
+    return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
+  }
+
+  /**
+   * A card's Source task, never the turn's context (a task read or followed earlier names an
+   * unrelated card): a merge card takes the task that opened or declared its PR, plus any task the
+   * reason names that carries the same PR; other cards only what their reason names.
+   */
+  private actionSources(action: ManagerActionRequest, reason: string, runs: RunRecord[]): ManagerTaskSource[] {
+    const named = taskSources(reason);
+    if (action.type !== 'merge-pr') return named;
+    const tied = runs
+      .map((run) => ({ run, tie: prTie(run, action.number) }))
+      .filter((entry): entry is { run: RunRecord; tie: 0 | 1 | 2 } => entry.tie !== undefined);
+    const owner = tied
+      .filter((entry) => entry.tie < 2)
+      .sort((a, b) => a.tie - b.tie || Number(Boolean(a.run.archived)) - Number(Boolean(b.run.archived)) || (a.run.createdAt < b.run.createdAt ? 1 : a.run.createdAt > b.run.createdAt ? -1 : 0))[0]?.run;
+    const sources = owner ? [{ projectId: action.projectId, runId: owner.id }] : [];
+    for (const source of named) {
+      if (source.projectId !== action.projectId || sources.some((entry) => entry.runId === source.runId)) continue;
+      if (tied.some((entry) => entry.run.id === source.runId)) sources.push(source);
+    }
+    return sources;
+  }
+
+  /** Other managers' chats with a card waiting on the same PR or automation: allowed, but said. */
+  private alsoWaitingIn(id: string, action: ManagerActionRequest): string[] {
+    const subject = cardSubject(action);
+    if (subject === undefined) return [];
+    return this.deps.store.list()
+      .filter((manager) => manager.id !== id && this.deps.store.messages(manager.id).some((message) => message.kind === 'action' && message.status === 'pending' && cardSubject(message.action) === subject))
+      .map((manager) => manager.name);
+  }
+
+  /** Cards stored before one-per-PR (or written by two cockpits at once): the newest stays waiting. */
+  private collapseDuplicateCards(id: string): void {
+    const newest = new Map<string, Extract<ManagerMessage, { kind: 'action' }>>();
+    const cards = this.deps.store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'action' }> => message.kind === 'action' && message.status === 'pending');
+    for (const card of cards) {
+      const subject = cardSubject(card.action);
+      if (subject === undefined) continue;
+      const kept = newest.get(subject);
+      if (!kept || card.seq > kept.seq) newest.set(subject, card);
+    }
+    for (const card of cards) {
+      const subject = cardSubject(card.action);
+      const kept = subject === undefined ? undefined : newest.get(subject);
+      if (kept && kept.id !== card.id) this.settleAction(id, card, 'dismissed', replacedBy(kept.action));
+    }
   }
 
   /** The only path to a merge or an enabled automation; the agent's tools cannot reach it. */
@@ -2404,6 +2849,8 @@ export class ManagerEngine {
       if (onlyIfStale && !stale) return { error: 'this proposal is still current', status: 409 };
       // Re-read after the forge call: another tab may have decided meanwhile.
       const current = this.deps.store.message(id, actionId);
+      // That read itself may have closed the card (`pullRequestClosed`): the dismissal asked for is done.
+      if (stale && current?.kind === 'action' && current.status === 'dismissed') return { ok: true as const };
       if (current?.kind !== 'action' || current.status !== 'pending') return { error: 'this action was already decided', status: 409 };
       message = current;
       if (!onlyIfStale) this.deps.telemetry?.track('manager_action_decided', `${managerActionLabel(message.action)}:dismiss`, ctx);
@@ -2449,12 +2896,18 @@ export class ManagerEngine {
 
   /** Why a merge card is moot ("#12 was already merged"), or `undefined` while its PR is open or unknown. */
   private async closedPr(action: Extract<ManagerActionRequest, { type: 'merge-pr' }>): Promise<string | undefined> {
+    const state = await this.prStateOf(action.projectId, action.number);
+    return state ? `#${action.number} was already ${state}` : undefined;
+  }
+
+  /** `merged`/`closed` as the forge says now, or `undefined` while open or unknown. */
+  private async prStateOf(projectId: string, number: number): Promise<'merged' | 'closed' | undefined> {
     try {
-      const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/github/prs/${action.number}/merge-state?refresh=1`);
+      const response = await this.forward(`/p/${encodeURIComponent(projectId)}/github/prs/${number}/merge-state?refresh=1`);
       if (!response.ok) return undefined;
       const body = (await response.json()) as { available?: boolean; mergeState?: { state?: string } };
       const state = body.available ? body.mergeState?.state : undefined;
-      return state === 'merged' || state === 'closed' ? `#${action.number} was already ${state}` : undefined;
+      return state === 'merged' || state === 'closed' ? state : undefined;
     } catch {
       return undefined;
     }
@@ -2471,6 +2924,30 @@ export class ManagerEngine {
       const stale = await this.closedPr(message.action);
       const current = this.deps.store.message(id, message.id);
       if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale);
+    }
+  }
+
+  /**
+   * cezar just read from GitHub that a PR left the open state (a chip's status, a merge-state read,
+   * a poll): close every pending merge card for it, without asking GitHub again. Only a pending
+   * card settles, so a second signal for the same PR changes nothing and tells the manager nothing.
+   * `verify`: an automation poll reads `origin`, which in a fork clone is not the repo the card's
+   * number belongs to, so its signal only triggers the card's own stale check.
+   */
+  async pullRequestClosed(root: string, number: number, state: 'merged' | 'closed', verify = false): Promise<void> {
+    await this.expireAsksForPr(root, number, state, verify);
+    const pending = this.deps.store.list().flatMap((manager) => this.deps.store.messages(manager.id)
+      .filter((message) => message.kind === 'action' && message.status === 'pending' && message.action.type === 'merge-pr' && message.action.number === number)
+      .map((message) => ({ id: manager.id, message })));
+    if (pending.length === 0) return;
+    const target = resolve(root);
+    const projects = new Set((await this.deps.projects()).filter((project) => resolve(project.root) === target).map((project) => project.id));
+    for (const { id, message } of pending) {
+      if (message.kind !== 'action' || message.action.type !== 'merge-pr' || !projects.has(message.action.projectId)) continue;
+      const current = this.deps.store.message(id, message.id);
+      if (current?.kind !== 'action' || current.status !== 'pending') continue;
+      if (verify) await this.decide(id, current.id, 'dismiss', {}, true);
+      else this.settleAction(id, current, 'dismissed', `#${number} was already ${state}`);
     }
   }
 
@@ -2572,9 +3049,6 @@ const clipSummary = (text: string): string =>
 
 const pendingAction = (message: ManagerMessage): boolean => message.kind === 'action' && message.status === 'pending';
 
-const openAsk = (message: ManagerMessage): message is Extract<ManagerMessage, { kind: 'assistant' }> =>
-  message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined;
-
 const LIVE_STATUSES: ReadonlySet<string> = new Set(['queued', 'running', 'waiting']);
 
 /** Every task a run dispatched, recursively (`dispatch.parentRunId`). */
@@ -2618,6 +3092,23 @@ const actionKey = (action: ManagerActionRequest): string => {
   return `job:${action.name}:${action.everyMinutes}:${action.prompt}`;
 };
 
+/** What one waiting card may exist for: a PR or an automation. Other kinds may repeat. */
+const cardSubject = (action: ManagerActionRequest): string | undefined => {
+  if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}`;
+  if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}`;
+  return undefined;
+};
+
+const sameMethod = (a: ManagerActionRequest, b: ManagerActionRequest): boolean =>
+  a.type !== 'merge-pr' || b.type !== 'merge-pr' || a.method === b.method;
+
+/** The closed card's line, in the dismissed wording of #2241/#2292. */
+const replacedBy = (action: ManagerActionRequest): string => {
+  if (action.type === 'merge-pr') return `Replaced by a newer proposal${action.headSha ? ` for head ${action.headSha.slice(0, 12)}` : ''}${action.method ? ` (${action.method})` : ''}`;
+  if (action.type === 'enable-automation') return `Replaced by a newer proposal (revision ${action.revision})`;
+  return 'Replaced by a newer proposal';
+};
+
 const describe = (action: ManagerActionRequest): string => {
   if (action.type === 'merge-pr') return `Merge of ${action.projectId}#${action.number}`;
   if (action.type === 'enable-automation') return `Enabling automation ${action.name ?? action.automationId}`;
@@ -2629,3 +3120,9 @@ const RESULT_LIMIT = 4_000;
 
 const clipResult = (text: string): string =>
   text.length > RESULT_LIMIT ? `${text.slice(0, RESULT_LIMIT)}… (cut)` : text.trim();
+
+/** True when `test` holds for any item, asked one at a time. */
+async function someAsync<T>(items: T[], test: (item: T) => Promise<boolean>): Promise<boolean> {
+  for (const item of items) if (await test(item)) return true;
+  return false;
+}

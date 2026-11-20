@@ -74,7 +74,7 @@ describe('terminals stop on every archive / worktree-removal path', () => {
     createApp({
       repoRoot,
       store,
-      manager: { isActive: () => false } as unknown as RunManager,
+      manager: { isActive: () => false, reclaimWorktreesOf: async () => [] } as unknown as RunManager,
       version: '0.0.0-test',
       terminalSessions: sessions,
       ...over,

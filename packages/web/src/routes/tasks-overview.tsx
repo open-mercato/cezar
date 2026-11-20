@@ -1,5 +1,6 @@
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
+import { runModelLine, titleWithModel } from '@/lib/actual-model'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
@@ -52,6 +53,7 @@ import { Segmented } from '@/components/segmented'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -354,17 +356,19 @@ export function TasksOverview({
         ) : null}
         {/* Only when there is something to sweep, like the legacy header's count-gated broom. */}
         {view === 'active' && finished > 0 ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-slot="archive-finished"
-            className="hidden md:inline-flex"
-            onClick={onArchiveFinished}
-          >
-            <ArchiveIcon className="size-3.5" aria-hidden="true" />
-            Archive finished
-          </Button>
+          <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-slot="archive-finished"
+              className="hidden md:inline-flex"
+              onClick={onArchiveFinished}
+            >
+              <ArchiveIcon className="size-3.5" aria-hidden="true" />
+              Archive finished
+            </Button>
+          </IconTooltip>
         ) : null}
         <div className="relative hidden w-60 md:block">
           <SearchIcon
@@ -1387,6 +1391,7 @@ function TaskTableCell({
       return (
         <td
           data-column-id={column.id}
+          title={runModelLine(run)}
           className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}
         >
           {cost || <Dash />}
@@ -1479,7 +1484,7 @@ function TitleCell({
       ) : null}
       <Link
         to={to}
-        title={title}
+        title={titleWithModel(title, run)}
         aria-describedby={quiet ? statusId : undefined}
         className={cn(
           'min-w-0 truncate text-ui',

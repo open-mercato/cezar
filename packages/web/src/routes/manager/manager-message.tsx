@@ -2,15 +2,18 @@ import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, MessageCirc
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
+import { useQueryClient } from '@tanstack/react-query'
+
 import { checkManager, managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
+import { scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
+import { ReconnectCard, ReconnectedLine } from '@/components/reconnect/reconnect-card'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { StaticChip } from '@/components/chip'
-import { chipClass } from '@/components/picker-pill'
 import {
   checkFailureCause,
   ISSUE_LINK_PREFIX,
@@ -29,8 +32,12 @@ import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
 import { AskForm } from '@/routes/task-thread/ask-card'
 import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
 import { AskAnswerSummary, askAnswerLines } from '@/routes/task-thread/ask-answer-summary'
+import { DismissingNote, QuietClosedAsk, StaleNote } from '@/routes/questions/question-states'
 import {
   isImageAttachmentName,
+  questionKey,
+  type QuestionClosed,
+  type QuestionStale,
   type ManagerAsk,
   type ManagerAttachment,
   type ManagerCommand,
@@ -40,8 +47,8 @@ import {
 import { ActionCard, type DecideAction } from './manager-approval'
 import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
-import { ForgeReference } from './manager-reference'
-import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
+import { ForgeReference, ManagerAskText, ManagerProjectsContext, TaskReference } from './manager-reference'
+import { SessionCard, taskPath } from './manager-session-card'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
@@ -57,13 +64,7 @@ function ManagerLink({ href, children, ...props }: ComponentProps<'a'>) {
   const issue = parseReferenceLink(href, ISSUE_LINK_PREFIX)
   if (issue) return <ForgeReference kind="Issue" projectId={issue.projectId} number={Number(issue.id)} />
   const task = parseReferenceLink(href, TASK_LINK_PREFIX)
-  if (task) {
-    return (
-      <Link to={taskPath(task.projectId, task.id)} state={{ manager: origin }} data-slot="manager-task-chip" className={cn(chipClass, 'inline-flex no-underline')}>
-        <TaskChipLabel projectId={task.projectId} runId={task.id} />
-      </Link>
-    )
-  }
+  if (task) return <TaskReference projectId={task.projectId} runId={task.id} origin={origin} />
   return <TranscriptLink href={href} {...props}>{children}</TranscriptLink>
 }
 
@@ -139,36 +140,70 @@ export function answersShownOnCard(messages: readonly ManagerMessage[]): Readonl
 
 /** A `CEZ:ASK` card. Answering is just the user's next message, so the composer answers it too. */
 function ManagerQuestions({
-  managerId,
+  origin,
   messageId,
   ask,
   answer,
   answerOnCard,
   source,
+  closed: closedOnServer,
+  stale,
+  superseded = false,
 }: {
-  managerId: string
+  origin: ManagerOrigin
   messageId: string
   ask: ManagerAsk
   source: ReactNode
   answer: string | undefined
+  /** Closed without a card answer (Questions inbox): one quiet line instead of the form. */
+  closed?: QuestionClosed | undefined
+  /** Suspected out of date: the card stays open, with the amber note. */
+  stale?: QuestionStale | undefined
   /** The next row is this answer and is not drawn: the card says it instead. */
   answerOnCard: boolean
+  /** Re-asked in full by a later card, in history written before the server closed it (#2307). */
+  superseded?: boolean
 }) {
+  const managerId = origin.id
+  const closed = closedOnServer ?? (superseded ? { reason: 'replaced' as const, at: '' } : undefined)
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
+  const [localAnswer, setLocalAnswer] = useState<string | undefined>()
+  const effectiveAnswer = answer ?? localAnswer
+  const effectiveAnswerOnCard = answerOnCard || localAnswer !== undefined
   const card = useMemo(() => ({ id: messageId, questions: ask.questions }), [messageId, ask])
   const answered = useRef<HTMLDivElement>(null)
   // Answered from this card: its chips unmount, so focus lands on what replaced them.
   const sentHere = useRef(false)
   useEffect(() => {
-    if (answer === undefined) return
+    if (effectiveAnswer === undefined) return
     forgetAskSelections(managerId, card)
     if (!sentHere.current) return
     sentHere.current = false
     const active = document.activeElement
     if (!active || active === document.body || !active.isConnected) answered.current?.focus({ preventScroll: true })
-  }, [answer, card, managerId])
-  const lines = answer !== undefined && answerOnCard ? askAnswerLines(ask, answer) : null
+  }, [effectiveAnswer, card, managerId])
+  const queryClient = useQueryClient()
+  const key = questionKey({ kind: 'manager', managerId, messageId })
+  const dismissing = usePendingDismissals().find((entry) => entry.key === key && !entry.error)
+  const lines = effectiveAnswer !== undefined && effectiveAnswerOnCard ? askAnswerLines(ask, effectiveAnswer) : null
+  if (effectiveAnswer === undefined && closed) {
+    const answeredIn = closed.answeredIn?.startsWith('task:') ? closed.answeredIn.slice('task:'.length).split('/') : undefined
+    return (
+      <QuietClosedAsk
+        id={`decision-${messageId}`}
+        closed={closed}
+        questions={ask.questions}
+        asker="manager"
+        link={closed.reason === 'replaced' && closed.replacedBy ? (
+          <Link to={{ hash: `#decision-${encodeURIComponent(closed.replacedBy)}` }} data-slot="ask-closed-newer" className="font-medium text-foreground underline underline-offset-4">Go to the newer question ↓</Link>
+        ) : answeredIn?.length === 2 ? (
+          <Link to={`${taskPath(answeredIn[0]!, answeredIn[1]!)}/chat`} className="font-medium text-foreground underline underline-offset-4">Open task</Link>
+        ) : undefined}
+      />
+    )
+  }
+  if (effectiveAnswer === undefined && dismissing) return <DismissingNote label={dismissing.label} onUndo={() => undoDismiss(key)} />
   if (lines) {
     return (
       <div
@@ -183,11 +218,13 @@ function ManagerQuestions({
           <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
           Answered
         </span>
-        <AskAnswerSummary questions={ask.questions} lines={lines} slot="manager-ask-answers" />
+        <ManagerAskText ask={ask} origin={origin}>
+          <AskAnswerSummary questions={ask.questions} lines={lines} slot="manager-ask-answers" />
+        </ManagerAskText>
       </div>
     )
   }
-  if (answer !== undefined) {
+  if (effectiveAnswer !== undefined) {
     return (
       <div
         ref={answered}
@@ -212,6 +249,7 @@ function ManagerQuestions({
     setError(undefined)
     try {
       await sendManagerMessage(managerId, text, undefined, messageId)
+      setLocalAnswer(text)
       trackManagerMessageSent('question_card', false)
       trackManagerQuestionAnswered('card')
       return undefined
@@ -234,17 +272,19 @@ function ManagerQuestions({
       title="Your decision"
       status={<><StatusDot tone="info" />Open</>}
     >
+      {stale ? <StaleNote detail={stale.detail} disabled={isPending} onDismiss={() => scheduleDismiss(queryClient, key, ask.questions[0]?.header ?? 'Question')} /> : null}
       {source}
-      {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
-          chips per question are the design's ghost actions. */}
-      <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
+      {/* The card draws the box and the status, so the form is unframed; its "Other…" and "Need more
+          info" chips per question are the design's ghost actions. */}
+      <ManagerAskText ask={ask} origin={origin}>
         <AskForm
           ask={card}
           ownerId={managerId}
           delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
           asker="Your decision"
+          framed={false}
         />
-      </div>
+      </ManagerAskText>
     </ManagerCard>
   )
 }
@@ -271,12 +311,17 @@ function AssistantMessage({
   origin,
   projects,
   answerOnCard,
+  superseded = false,
+  authLive = true,
   onRetry,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
+  superseded?: boolean
+  /** The newest failure on its account: the live card. Older ones collapse to a quiet line. */
+  authLive?: boolean
   onRetry?: (() => void) | undefined
 }) {
   const segments = useMemo(
@@ -314,12 +359,21 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
+          <ManagerQuestions source={<DecisionSources message={message} origin={origin} />} origin={origin} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} closed={message.askClosed} stale={message.askStale} superseded={superseded} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.resumeAt ? <ResumeHint managerId={origin.id} at={message.resumeAt} /> : null}
-      {message.error && message.turn !== 'chat' ? (
+      {message.authFailure && message.turn === 'chat' ? (
+        // The reconnect card replaces the red line (spec 2026-11-18-inline-account-reconnect).
+        authLive ? (
+          <ReconnectCard provider={message.authFailure.provider} profileId={message.authFailure.profileId} place="manager" />
+        ) : (
+          <ReconnectedLine provider={message.authFailure.provider} profileId={message.authFailure.profileId} signedOutHere />
+        )
+      ) : message.reconnectedAt ? (
+        <ReconnectedLine provider={message.reconnectedFrom?.provider} profileId={message.reconnectedFrom?.profileId} at={message.reconnectedAt} />
+      ) : message.error && message.turn !== 'chat' ? (
         <CheckFailedCard managerId={origin.id} turn={message.turn} jobName={message.jobName} error={message.error} at={message.at} />
       ) : message.error ? (
         // No `role="alert"`: a chat opened on old failures must not shout them all; the announcer says new ones.
@@ -459,16 +513,48 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   onDecide,
   projects = NO_PROJECTS,
   answerOnCard = false,
+  superseded = false,
+  authLive = true,
   onRetry,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** False for an older failure on an account whose newest failure draws the live card. */
+  authLive?: boolean
   /** Sends the question again; only the newest failed chat reply has one. */
   onRetry?: (() => void) | undefined
   /** An answered card whose answer, the next message, is drawn here and not as its own row. */
   answerOnCard?: boolean
   /** Connected projects: what a bare `#12` or a GitHub URL resolves against. */
   projects?: readonly ManagerReferenceProject[]
+  /** Whether this question card is superseded by a newer card with the same header. */
+  superseded?: boolean
+  onDecide: DecideAction
+}) {
+  return (
+    <ManagerProjectsContext.Provider value={projects}>
+      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} />
+    </ManagerProjectsContext.Provider>
+  )
+})
+
+function MessageBody({
+  message,
+  origin,
+  onDecide,
+  projects,
+  answerOnCard,
+  superseded,
+  authLive,
+  onRetry,
+}: {
+  message: ManagerMessage
+  origin: ManagerOrigin
+  onRetry: (() => void) | undefined
+  answerOnCard: boolean
+  superseded: boolean
+  authLive: boolean
+  projects: readonly ManagerReferenceProject[]
   onDecide: DecideAction
 }) {
   switch (message.kind) {
@@ -482,10 +568,10 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} onRetry={onRetry} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} />
     case 'action':
       return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }
-})
+}

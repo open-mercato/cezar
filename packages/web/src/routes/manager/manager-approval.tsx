@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import { useProjects, useRunsIndex, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
 import { chipClass } from '@/components/chip'
 import { prTaskRuns } from '@/components/reference-conflict-action'
-import { ReferenceStatusProvider } from '@/components/reference-status'
+import { ReferenceStatusProvider, useReferenceStatus } from '@/components/reference-status'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -19,7 +19,7 @@ import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage, RunReco
 
 import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
-import { ForgeReference } from './manager-reference'
+import { ForgeReference, ManagerReferenceText } from './manager-reference'
 import { taskPath } from './manager-session-card'
 
 export type DecideAction = (actionId: string, decision: 'approve' | 'reject' | 'dismiss', opts?: { onlyIfStale?: boolean }) => Promise<unknown>
@@ -33,6 +33,15 @@ const ACTION_STATUS: Record<ManagerActionStatus, { tone: StatusDotTone; label: s
   rejected: { tone: 'neutral', label: 'Rejected' },
   failed: { tone: 'danger', label: 'Failed' },
   dismissed: { tone: 'neutral', label: 'Dismissed' },
+}
+
+/** A merge says what it did: "Merging…" then "Merged" (the Approvals page shows it live). */
+const MERGE_STATUS: Partial<Record<ManagerActionStatus, string>> = { running: 'Merging…', done: 'Merged' }
+
+const statusOf = (message: ActionMessage) => {
+  const base = ACTION_STATUS[message.status]
+  const merge = message.action.type === 'merge-pr' ? MERGE_STATUS[message.status] : undefined
+  return merge ? { ...base, label: merge } : base
 }
 
 /** Keyed by string: a type from a newer server must still get a sheet, never a crash. */
@@ -315,14 +324,35 @@ export function useDismissStaleMerges(messages: readonly ManagerMessage[], onDec
   }, [messages, onDecide])
 }
 
+/** Merge cards whose chip already reported the PR merged or closed, so the ask goes out once. */
+const closedChecked = new Set<string>()
+
+/**
+ * The fallback for a PR that merges while the chat is open: the chip's own status, which the
+ * cockpit already polls, re-sends the onlyIfStale dismiss. The server confirms before closing.
+ */
+function DismissWhenPrCloses({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
+  const { action } = message
+  const merge = action.type === 'merge-pr' ? action : undefined
+  const status = useReferenceStatus('PR', merge?.number, merge?.projectId).status
+  const closed = message.status === 'pending' && (status === 'merged' || status === 'closed')
+  useEffect(() => {
+    if (!closed || closedChecked.has(message.id)) return
+    closedChecked.add(message.id)
+    onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
+  }, [closed, message.id, onDecide])
+  return null
+}
+
 export function forgetStaleChecks(): void {
   staleChecked.clear()
+  closedChecked.clear()
 }
 
 export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigin; message: ActionMessage; onDecide: DecideAction }) {
   const managerId = origin.id
   const { action } = message
-  const status = ACTION_STATUS[message.status]
+  const status = statusOf(message)
   const detail = actionPreview(action)
   const own = useManagers().data?.managers.find((entry) => entry.id === managerId)?.confirm
   const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
@@ -404,6 +434,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
     >
       <DecisionSources message={message} origin={origin} />
       <ReferenceStatusProvider requests={references}>
+        {action.type === 'merge-pr' && message.status === 'pending' ? <DismissWhenPrCloses message={message} onDecide={onDecide} /> : null}
         <dl className="flex flex-col gap-1.5">
           <CardFacts action={action} projectName={projectName} origin={origin} />
         </dl>
@@ -422,7 +453,7 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
           </button>
         </div>
       ) : null}
-      {message.reason ? <p className="text-sm">{message.reason}</p> : null}
+      {message.reason ? <p className="text-sm"><ManagerReferenceText text={message.reason} origin={origin} /></p> : null}
       {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
       <div role="status" data-slot="manager-action-outcome" className="empty:hidden">
         {message.status === 'pending' ? null : (

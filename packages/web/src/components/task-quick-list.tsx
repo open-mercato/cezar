@@ -1,4 +1,5 @@
 import { queueWaitLabel } from '@/lib/queue-wait-label'
+import { titleWithModel } from '@/lib/actual-model'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
@@ -518,7 +519,7 @@ const RunRow = React.memo(function RunRow({
         to={scopeTo(scope, `/tasks/${run.id}`)}
         // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let the
         // visible text drop — so hover always gives back everything the column could not show.
-        title={title}
+        title={titleWithModel(title, run)}
         aria-current={isActive ? 'page' : undefined}
         aria-describedby={statusId}
         data-slot="task-row-link"

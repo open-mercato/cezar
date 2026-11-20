@@ -38,6 +38,7 @@ import {
   needsYouCount,
   needsYouLabel,
   parseManagerCommand,
+  liveAuthFailures,
   retryOf,
   streamingReply,
   turnKindLabel,
@@ -49,12 +50,13 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
-import { managerAccessOf, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
+import { managerAccessOf, supersededAskIds, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
+import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
 import { useManagerMyMessages } from './use-manager-my-messages'
 import type { ManagerPatch } from './manager-pickers'
@@ -535,6 +537,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  const superseded = useMemo(() => supersededAskIds(chat.messages), [chat.messages])
   // "Your messages" (spec 2026-11-17-my-message-navigation): the ↓ button grows into ▲ · 💬 · ▼ | ↓.
   const myMessages = useManagerMyMessages({
     id,
@@ -547,7 +550,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     revealAt: scroll.revealAt,
   })
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
-  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
+  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && message.askClosed === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
   const subline = watchingLine({
@@ -596,6 +599,19 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
 
   // What a card can ask of the chat: the gear, opened on the account picker.
   const chatActions = useMemo<ManagerChatActions>(() => ({ switchAccount: () => settings.current?.openAccount() }), [])
+  const authLive = useMemo(() => liveAuthFailures(chat.messages), [chat.messages])
+  // "Use <other> instead" on a reconnect card: the manager's own account, then the failed turn again.
+  const latestMessages = useRef(chat.messages)
+  latestMessages.current = chat.messages
+  const reconnectSurface = useMemo<ReconnectSurface>(() => ({
+    kind: 'manager',
+    ownId: id,
+    switchTo: async (agentProfile: string) => {
+      await update.mutateAsync({ agentProfile })
+      const failed = retryOf(latestMessages.current)
+      if (failed) await sendManagerMessage(id, failed.text, [])
+    },
+  }), [id, update])
 
   const lastSent = useRef(0)
   const stop = useCallback(() => {
@@ -762,6 +778,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </p>
           ) : null}
           <ManagerChatActionsContext.Provider value={chatActions}>
+            <ReconnectSurfaceContext.Provider value={reconnectSurface}>
             <PrTitlesContext.Provider value={prTitles}>
               {chat.messages.map((message, index) => (onCard.has(message.id) ? null : (
                 <ManagerMessageRow
@@ -770,11 +787,14 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   origin={origin}
                   onDecide={onDecide}
                   projects={connected}
+                  superseded={superseded.has(message.id)}
+                  authLive={authLive.has(message.id)}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
                 />
               )))}
             </PrTitlesContext.Provider>
+            </ReconnectSurfaceContext.Provider>
           </ManagerChatActionsContext.Provider>
         </div>
       </section>

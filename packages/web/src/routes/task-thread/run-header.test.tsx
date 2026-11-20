@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectScopeProvider } from '@/api/project-scope-context'
@@ -113,6 +113,11 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
+/** The router's current hash, so a test can see where a header action sent the user. */
+function HashProbe() {
+  return <div data-slot="hash-probe">{useLocation().hash}</div>
+}
+
 function renderHeader(
   record: ApiRun,
   onMarkedUnread?: () => void,
@@ -137,6 +142,7 @@ function renderHeader(
           {/* Delete lands on the task list (\`/tasks\`), not Now (\`/\`). */}
           <Route path="/tasks" element={<div data-slot="home-probe" />} />
         </Routes>
+        <HashProbe />
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -180,6 +186,7 @@ const bridge = (overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBrid
   splitView: null,
   terminal: { allowed: false, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
   focusComposer: vi.fn(),
+  focusQuestion: null,
   openFile: vi.fn(),
   markedUnread: vi.fn(),
   ...overrides,
@@ -479,6 +486,24 @@ describe('the primary action follows the state (design 2026-11, Proposal 3)', ()
     expect(workspace.focusComposer).toHaveBeenCalledTimes(2)
   })
 
+  it('"Answer" focuses the open question card, not the composer (#2297)', () => {
+    stubFetch()
+    const focusQuestion = vi.fn()
+    const workspace = { ...bridge(), focusQuestion }
+    publishTaskWorkspace(workspace)
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(focusQuestion).toHaveBeenCalledTimes(1)
+    expect(workspace.focusComposer).not.toHaveBeenCalled()
+  })
+
+  it('"Answer" outside a workspace deep-links to the question card (#2297)', () => {
+    stubFetch()
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(document.querySelector('[data-slot="hash-probe"]')?.textContent).toBe('#ask')
+  })
+
   it('"Open PR" is the primary once the PR exists and nothing is left to push', async () => {
     stubFetch({
       '/api/v1/health': () => jsonResponse({ bootProject: 'acme', forge: { kind: 'github', available: true } }),
@@ -581,6 +606,7 @@ describe('the status word (Proposal 7): open states only', () => {
     ['review', run('review'), 'Needs review'],
     ['waiting', run('waiting'), 'Asked'],
     ['a closed, unanswered question', run('failed', { awaitingAnswerSince: '2026-07-14T13:00:00.000Z' }), 'Asked'],
+    ['parked on an expired login', run('waiting', { parked: { kind: 'auth', provider: 'claude', profileId: 'work', at: '2026-07-14T13:00:00.000Z' } }), 'Needs sign-in'],
     ['budget stop', run('waiting', { costUsd: 12, dispatch: { rootRunId: 'p', parentRunId: 'p', budgetUsd: 10, overBudget: true } }), 'Budget reached'],
     ['running, one step', run('running'), 'Running'],
     ['running, several steps', run('running', { steps: [step({ id: 'a', name: 'Plan', status: 'done' }), step({ id: 'b', name: 'Verify', status: 'running' })] }), 'Running · Verify'],

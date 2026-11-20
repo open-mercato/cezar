@@ -13,6 +13,7 @@ import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo
 import { Link, useNavigate } from '@/lib/project-router'
 
 import {
+  useConfig,
   useHealth,
   usePatchRun,
   useProjectRepoBase,
@@ -305,6 +306,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
     case 'review':
       return 'Needs review'
     case 'waiting':
+      if (run.parked?.kind === 'auth') return 'Needs sign-in'
       return budgetStop(run) ? 'Budget reached' : 'Asked'
     case 'queued':
       return run.fallbackEpisode?.pending ? 'Switching agent' : `Queued${queuePosition !== undefined ? ` #${queuePosition}` : ''}`
@@ -382,6 +384,7 @@ function HeaderActions({
   const canTerminal = useCanOpenTerminal(run)
   const { choices, canResumeHere, open: openIn } = useRunOpenChoices(run, canTerminal)
   const terminalAvailable = useHealth().data?.capabilities?.terminal === true
+  const archivedDeleteDays = useConfig().data?.archivedTaskDeleteDays
   const navigate = useNavigate()
   const { bindings } = useKeybindings()
   const owned = ownedTaskPr(run)
@@ -402,6 +405,7 @@ function HeaderActions({
       terminalAvailable,
       openChoices: choices,
       ...(prUrl ? { prUrl } : {}),
+      ...(archivedDeleteDays !== undefined ? { archivedDeleteDays } : {}),
       taskUrl: '',
     },
     {
@@ -449,9 +453,17 @@ function HeaderActions({
     if (bridge) return bridge.openView('changes')
     navigate(`/tasks/${run.id}/changes`)
   }
+  // Answer goes to the open question card; the composer only when there is no structured question (#2297).
+  const toQuestion = () => {
+    const bridge = taskWorkspaceFor(run.id)
+    if (bridge?.focusQuestion) return bridge.focusQuestion()
+    if (bridge) return toComposer()
+    navigate(`/tasks/${run.id}#ask`)
+  }
   const perform = (kind: Exclude<NonNullable<typeof primary>['kind'], 'git'>) => {
     switch (kind) {
       case 'answer':
+        return toQuestion()
       case 'retry':
         return toComposer()
       case 'review':

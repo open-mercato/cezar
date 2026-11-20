@@ -821,7 +821,8 @@ describe('/manager/:id', () => {
     beforeEach(() => {
       vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
     })
-    const names = () => [...document.querySelectorAll('[data-route="manager-list"] a[href^="/manager/"]')]
+    // The manager cards only: the Workspace rows above them link to Questions and Approvals.
+    const names = () => [...document.querySelectorAll('[data-route="manager-list"] a[href^="/manager/"]:not([data-slot^="manager-index-"])')]
       .map((row) => row.getAttribute('href'))
       .filter((href) => href !== '/manager/new')
 

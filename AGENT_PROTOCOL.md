@@ -130,13 +130,14 @@ Notable fields (full doc-comments in the source):
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
   Codex sends the current `systemPrompt` with each invocation's opening user turn, preserving
-  native configured guidance. `developerInstructions` replaces native config and does not
+  native configured guidance for unrestricted tasks. Restricted tasks use the isolated profile
+  described below. `developerInstructions` replaces native config and does not
   refresh retained developer history on resume/fork; it is unsuitable for task instructions.
 - `enforceReadOnly?` — set only for a manager's read-only work (its read-only tasks and its
   unattended watch turns, spec `2026-10-31-managers`); an Ask task never sets it and keeps only its
   read-only `allowedTools`. When set, the task must not change the repository or publish anything, on every backend:
   Claude through `allowedTools` plus `--disallowedTools` for the write tools (settings allow
-  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex `sandbox: read-only`,
+  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex through an isolated home, environment-free native turns and cezar’s read broker,
   OpenCode denied `edit`/`bash` in `OPENCODE_CONFIG_CONTENT` at the top level and in every agent, Cursor `--mode ask` without `--force`, Copilot
   `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
   refused, Gemini `--approval-mode default` with its prompts refused. Kimi, omp and Antigravity
@@ -144,7 +145,10 @@ Notable fields (full doc-comments in the source):
   that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes
-  unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.
+  unrestricted `Bash`. OpenCode does not honor `allowedTools`. Codex preserves the historical
+  omitted/exact-default unrestricted grant; explicit read-only subsets and an empty grant use
+  isolated execution. Unsupported write tools, MCP grants, shell hooks and Bash prefixes refuse
+  before spawning. A native sandbox or prompt alone is never considered enforcement.
   Treat the default `auto` permission mode as full shell access, not a
   sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
   OpenCode runs under its own permission config: a prompt it still raises is
@@ -153,6 +157,44 @@ Notable fields (full doc-comments in the source):
   specified by `2026-07-17-permission-modes` (#475).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
+
+**Restricted Codex execution** — `codex-restricted-policy.ts` snapshots the grant. The runner
+accepts only the verified 0.169.0 protocol on macOS/Linux, validates the isolated config and its
+layers, requires no managed requirements/hooks/MCP, and verifies thread sandbox/approval settings
+before the first model turn. Unknown versions, active system policy, unavailable controls and
+ambiguous legacy graph policies fail closed.
+
+Restricted steps use a separate account-and-cwd state directory under `cezarHomeDir()/codex-restricted/`.
+Only supported model/provider settings and the selected account's file-backed authentication
+travel; native hooks, rules, plugins and private MCP configuration do not. An auth symlink lets
+native refresh update the selected account. Keyring-only authentication and unsupported provider
+settings may be unavailable; cezar never silently picks another account. `CEZ_DRY_RUN=1` loads
+neither native credentials nor native config.
+
+Native shell/image/agent tools, apps/connectors, plugins and browser/computer features are disabled. Every `thread/start` and `turn/start` sends
+`environments: []`; resume can restore a local environment, so the turn override is mandatory.
+Every turn also pins read-only/network-off sandbox and `approvalPolicy: never`. All native
+approval/permission/MCP requests are denied; unknown requests return an RPC error. The dynamic
+`cezar_read` tool alone executes granted Read/Grep/Glob operations and supported read-only
+git/GitHub commands. It validates arguments at execution, starts no shell or PTY, closes stdin,
+bounds concurrency/output/time and aborts processes when the session closes. Files must remain
+inside cwd/additional read roots; Read accepts regular files up to 2 MB. Grep/Glob need `rg`.
+`CEZ_CODEX_NETWORK=0` also denies brokered GitHub reads. Write, push, PR mutation, arbitrary HTTP,
+interpreters, jq/templates and shell syntax are unavailable. GitHub positional repositories, explicit
+`--repo` values and inferred Git remote hosts must match github.com or `GH_HOST`; enterprise
+tokens travel only with an explicit `GH_HOST`. Restricted private MCP requests refuse.
+
+Each launched step persists an optional contract `toolPolicy` snapshot. Continue, restart and
+fresh-session retries reuse the owning snapshot, including synthetic/nested step policies and
+`enforceReadOnly`. Older linear definitions retain their existing fallback; a legacy graph step
+whose grant cannot be reconstructed refuses instead of widening it. Isolated resumes never load
+an unrestricted native thread's config; the existing missing-session recovery starts a fresh
+restricted session when appropriate.
+
+Native adversarial verification (local loopback provider, temporary fake accounts, no paid calls):
+`TMPDIR=/tmp node --import tsx packages/cezar/test/native/codex-restricted.mts`.
+This checks native shell/apply_patch refusal, real broker reads, narrowed grants, resume and the
+writer-lock fork path. Ordinary unit tests use the mock transport and need no Codex installation.
 
 **System prompt channel** — a backend without a dedicated system-prompt input
 must deliver `spec.systemPrompt` as a leading block of the opening user message.
@@ -293,7 +335,7 @@ type UiEvent =
   | UiSessionEndedEvent      // 'session.ended'    — reason: StopReason (replaces v1 done / fatal error)
   | UiSessionErrorEvent      // 'session.error'    — message, fatal (v1 note + error unified)
   | UiTurnStartedEvent       // 'turn.started'     — turnId
-  | UiTurnCompletedEvent     // 'turn.completed'   — turnId, stopReason, usage?, costUsd?
+  | UiTurnCompletedEvent     // 'turn.completed'   — turnId, stopReason, usage?, costUsd?, models? (models reported for the turn, with shares when known)
   | UiItemStartedEvent       // 'item.started'     — item (tools usually pending/running)
   | UiItemDeltaEvent         // 'item.delta'       — itemId, field:'text'|'reasoning'|'output', delta
   | UiItemUpdatedEvent       // 'item.updated'     — item (status flips, streamed snapshots)
@@ -302,6 +344,7 @@ type UiEvent =
   | UiPermissionRequestedEvent  // 'permission.requested' — RESERVED (types only; wired when approvals become optional)
   | UiPermissionResolvedEvent   // 'permission.resolved'  — RESERVED
   | UiAskRequestedEvent      // 'ask.requested'    — requestId, questions[] (AskUser; the cockpit renders option chips)
+  | UiAskClosedEvent         // 'ask.closed'       — requestId, reason, detail?, replacedBy?, answer? (the card closes)
   | UiUsageUpdatedEvent      // 'usage.updated'    — usage: TokenUsage, costUsd? (cumulative-for-session)
   | UiImageEvent;            // 'image'            — itemId?, mediaType, data (base64; manager re-emits URL)
 ```
@@ -316,9 +359,18 @@ work — validates the payload (`packages/cezar/src/core/ask.ts`, shaped after C
 2–`ASK_MAX_OPTIONS` options each — 20 and 10, finite for payload size and a
 scrollable card rather than for parity with that tool's 4 and 4), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
-chips; the user's pick (or a free-form reply) rides the normal reply seam
-(`POST /api/runs/:id/messages`), and the card resolves client-side when that
-message lands (no `ask.resolved` event). Codex additionally bridges its native
+chips; the user's pick rides the normal reply seam (`POST /api/v1/runs/:id/messages`
+with `askRequestId`). A `CEZ:ASK` card closes only with an **`ask.closed`** event in the
+run's NDJSON (Questions inbox spec, `.ai/specs/2026-11-17-questions-inbox.md`), so a replay
+draws the same closed card: `answered` (a message carrying its `askRequestId`), `dismissed`
+(the Questions inbox), `replaced` (a newer card with the same top-level `id`, or one whose
+headers cover every header of the old one; `replacedBy` names it), `retracted` (the agent's
+own `CEZ:ASK-CLOSE <id> [reason]` line, stripped from the transcript), `expired` (the card's
+declared `about` PR merged or closed, or its `{task}` finished) and `ended` (the run reached
+done, review or cancelled, or was archived; `failed` keeps it open for Continue). A free-form
+composer reply closes nothing: it flags the card "may be out of date" on the run record
+(`RunRecord.asks`). The run record keeps each card's state; the event only redraws the
+thread. Codex additionally bridges its native
 `item/tool/requestUserInput` server request onto the same event and routes the
 next answer back as the documented JSON-RPC response. Malformed or unsupported
 native requests receive an error response rather than hanging the turn. A

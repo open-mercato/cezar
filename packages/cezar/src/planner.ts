@@ -2,6 +2,7 @@ import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createRunner } from './core/runner-factory.ts';
+import { CodexToolPolicyError } from './core/codex-tool-policy.ts';
 import { loadConfig } from './config.ts';
 import { discoverSkills, type Skill } from './skills.ts';
 import { resolveProfileEnvForRoot } from './workspace/agent-profiles.ts';
@@ -81,6 +82,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   // 2026-07-29-agent-profiles). Without this the planner would quietly bill the personal
   // subscription for a project the user pointed at their work account.
   const { env: profileEnv } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+  let refusal: string | undefined;
   // One retry on an unparseable answer; a runner error goes straight to fallback.
   for (let attempt = 0; attempt < 2; attempt++) {
     let text: string;
@@ -95,7 +97,8 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
         timeoutMs: PLANNER_TIMEOUT_MS,
       });
       text = result.text;
-    } catch {
+    } catch (err) {
+      if (err instanceof CodexToolPolicyError) refusal = err.message;
       break;
     }
     const parsed = parseStructured(text, plannerResponseSchema);
@@ -108,7 +111,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
 
   return {
     steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
-    rationale: 'planner unavailable — single-step plan',
+    rationale: refusal ?? 'planner unavailable — single-step plan',
     fallback: true,
   };
 }

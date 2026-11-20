@@ -1,5 +1,6 @@
 import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
+import { applyAccountReconnectedEvent, applyAgentLoginEvent } from './agent-login'
 import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerApprovalLists, refreshManagerChats } from './managers'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
@@ -34,6 +35,7 @@ import {
 } from './events'
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
+import { noteQuestionsMaybeChanged, questionKeys, useQuestionsSubscription } from './questions'
 import { ApiError, getHealth, getProjectRun } from './client'
 import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
 import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
@@ -488,6 +490,8 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     workspaceQueryKeys.skillsUpdateAll,
     // Replies and approvals produced while the stream was down; the chats catch up below.
     managerKeys.list,
+    // Questions opened or closed while we were away; a remote cockpit has no topic for them.
+    questionKeys.all,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
@@ -825,6 +829,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // in a background tab, so coming back to one showed yesterday's rows until a reload.
           runsIndexRefresher.onEvent(parsed.event)
           if (parsed.event.type === 'run' || parsed.event.type === 'run-deleted') {
+            noteQuestionsMaybeChanged(queryClient)
             stageDashboardRefresh()
             if (parsed.project) dashboardTransition(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run)
             if (parsed.project && (parsed.event.type === 'run-deleted' || parsed.event.run.status !== 'running')) dashboardLive.remove(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run.id)
@@ -939,6 +944,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           if (disposed || source !== current) return
           lastFrameAt = Date.now()
           applyManagerEvent(queryClient, name, (event as MessageEvent<string>).data)
+          if (name !== 'manager-delta') noteQuestionsMaybeChanged(queryClient)
         })
       }
 
@@ -958,6 +964,23 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           return
         }
         applyProviderStatusEvent(row)
+      })
+
+      // Inline account reconnect (spec 2026-11-18-inline-account-reconnect): host-wide, like
+      // provider-status, so neither event passes the project filter.
+      current.addEventListener('agent-login', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        applyAgentLoginEvent(queryClient, payload)
+      })
+      current.addEventListener('account-reconnected', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        applyAccountReconnectedEvent(queryClient, payload)
       })
 
       current.addEventListener('error', () => {
@@ -1140,6 +1163,8 @@ export function GlobalEventsProvider({ children }: { children: ReactNode }) {
   // mounted for the app's whole life, so health stays live continuously instead of flapping with
   // the lifecycles of the ~15 `useHealth` readers below.
   useHealthSubscription()
+  // The same, for the Questions badge (spec 2026-11-17-questions-inbox § Counts).
+  useQuestionsSubscription()
   return <UsageContext.Provider value={usage}>{children}</UsageContext.Provider>
 }
 

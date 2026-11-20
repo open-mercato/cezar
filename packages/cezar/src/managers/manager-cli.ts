@@ -10,6 +10,7 @@ import { managerAccessOf, managerTaskEffortSchema, type Manager } from '@open-me
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { sameModel } from '../runs/reported-model.ts';
 
 export interface ManagerCliEnv {
   CEZ_API_URL?: string;
@@ -102,7 +103,7 @@ const HELP: Record<string, string> = {
   task: `cez manager task <run> [--project <id>]
 cez manager task create|say|cancel|retry|follow|unfollow …   (each takes --help)
 
-One task as JSON: status, startedBy, runner, model, effort, prNumber/prUrl, its last message and its children.
+One task as JSON: status, startedBy, runner, model, actualModel (what the agent reported running), effort, prNumber/prUrl, its last message and its children.
   --project <id>   the task's project; found from the snapshot when omitted`,
   'task create': `cez manager task create --project <id> [flags] "<objective>"
 
@@ -244,6 +245,12 @@ function workflowLine(workflow: WorkflowRow): string {
   return `${workflow.name}  ${workflow.description?.replace(/\s+/g, ' ').trim() || '-'}  ${tag}`;
 }
 
+/** "opus → claude-opus-5-5", "auto → …" when no model was asked for; one name when the two agree. */
+export function taskModelLabel(requested: string | undefined, actual: string | undefined): string {
+  const asked = requested || 'auto';
+  return actual && !sameModel(asked, actual) ? `${asked} → ${actual}` : asked;
+}
+
 /** A long paste never has to fit a shell argument: Claude Code refuses commands over ~10k characters. */
 const CONTENT_OPTIONS = {
   'attach-last-user-message': { type: 'boolean' },
@@ -352,11 +359,13 @@ export async function runManagerCommand(
    */
   const propose = async (body: { action: Record<string, unknown>; reason?: string }, what: string) => {
     const before = await call<{ messages: Array<{ id: string; at: string }> }>('/messages?pending=1&limit=500');
-    const proposed = await call<{ actionId: string }>('/actions', { method: 'POST', body });
+    const proposed = await call<{ actionId: string; replaced?: string[]; alsoWaitingIn?: string[] }>('/actions', { method: 'POST', body });
     const waiting = before.messages.find((message) => message.id === proposed.actionId);
     io.log(waiting
       ? `already pending ${proposed.actionId} (proposed ${waiting.at}): ${what} still waits for the user's approval on that card, earlier in the chat. No new card was added; point the user to it instead of asking again.`
       : `proposed ${proposed.actionId}: ${what} waits for the user's approval in the chat`);
+    if (proposed.replaced?.length) io.log(`replaced ${proposed.replaced.join(', ')}: the older card for the same target was closed, only the new one waits.`);
+    if (proposed.alsoWaitingIn?.length) io.log(`also waiting in ${proposed.alsoWaitingIn.join(', ')}: another manager's chat has a card for the same target. Either approval does it; say so to the user.`);
   };
   const printJson = (value: unknown) => io.log(JSON.stringify(value, null, 2));
 
@@ -402,7 +411,7 @@ export async function runManagerCommand(
           for (const project of projects) for (const task of project.tasks) {
             const facts = [
               task.startedBy === 'manager' ? `by ${task.startedByManager ?? 'a manager'}` : 'by the user',
-              task.model && `${task.model}${task.effort ? `/${task.effort}` : ''}`,
+              (task.model || task.actualModel) && `${taskModelLabel(task.model, task.actualModel)}${task.effort ? `/${task.effort}` : ''}`,
               task.prNumber !== undefined && `PR #${task.prNumber}`,
               task.childCount > 0 && `${task.childCount} dispatched`,
             ].filter(Boolean).join(', ');

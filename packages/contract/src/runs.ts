@@ -6,10 +6,12 @@ import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
 import { runSubjectSchema } from './artifacts.ts';
+import { runParkedSchema } from './agent-login.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+import { taskAskRecordSchema } from './questions.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
@@ -87,6 +89,23 @@ export type StepStatus = z.infer<typeof stepStatusSchema>;
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
+/** Effective grants captured at launch, including nested/synthetic steps. Optional on old records. */
+export const stepToolPolicySchema = z.object({
+  allowedTools: z.array(z.string()),
+  bashAllowlist: z.array(z.string()).optional(),
+  enforceReadOnly: z.boolean().optional(),
+});
+export type StepToolPolicy = z.infer<typeof stepToolPolicySchema>;
+
+/** One model's share of a step's turns, as the agent reported it (`turn.completed.models`). */
+export const modelUsageSchema = z.object({
+  model: z.string(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  costUsd: z.number().optional(),
+});
+export type ModelUsage = z.infer<typeof modelUsageSchema>;
+
 /** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
@@ -118,11 +137,18 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),
   /** Raw model this turn was spawned with ('' = deliberately auto); absent on older records. */
   model: z.string().optional(),
+  /** The model the agent reported actually running (latest main one) — what "auto" or an alias
+   *  resolved to. Absent when the backend never reports it and on older records. */
+  actualModel: z.string().optional(),
+  /** Every model this step's turns used, first-seen order, with shares when the backend
+   *  reports them (claude's `modelUsage`). Absent when unreported. */
+  modelsUsed: z.array(modelUsageSchema).optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -202,10 +228,16 @@ export const runRecordSchema = z.object({
   reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
+  /** The latest main model any step reported actually running; absent until one does. */
+  actualModel: z.string().optional(),
+  /** Every model the run's steps reported, first-seen order (a model switch keeps the earlier). */
+  modelsUsed: z.array(z.string()).optional(),
   runner: runnerSchema.optional(),
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Set while the run waits on an expired agent login (spec 2026-11-18-inline-account-reconnect). */
+  parked: runParkedSchema.optional(),
   /** Enabled policy captured at task creation; manual Continue does not refresh it. */
   fallbackPolicy: z.object({
     enabled: z.boolean(),
@@ -300,6 +332,10 @@ export const runRecordSchema = z.object({
   status: runStatusSchema,
   attentionRequest: webhookAttentionRequestSchema.optional(),
   completionReason: webhookCompletionReasonSchema.optional(),
+  /** The run's `CEZ:ASK` questions, newest last, at most `TASK_ASKS_MAX` (Questions inbox spec). */
+  asks: z.array(taskAskRecordSchema).optional(),
+  /** Notes for the next Continue: a question the user skipped while the session was closed. */
+  askNotes: z.array(z.string()).optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
@@ -541,6 +577,9 @@ export const runIndexEntrySchema = z.object({
   awaitingAnswerSince: z.string().optional(),
   /** The inactivity timer closed the run's session: housekeeping on `waiting`, a quiet "idle" on legacy `failed`. */
   idleClosedAt: z.string().optional(),
+  /** The run waits on an expired agent login, so a cross-project row can say "needs sign-in"
+   *  (spec 2026-11-18-inline-account-reconnect). */
+  parked: runParkedSchema.optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
@@ -597,6 +636,9 @@ export const runIndexEntrySchema = z.object({
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */
   costUsd: z.number().optional(),
+  /** The requested model and the one the agent reported running — the row's hover line. */
+  model: z.string().optional(),
+  actualModel: z.string().optional(),
   /** The persisted high-water marks a FINISHED run leaves behind. `usage` below stops existing
    *  the moment the process tree does, so without these a finished row could say nothing at all
    *  about what it took to run. */
@@ -1336,6 +1378,8 @@ export const messageInputSchema = z
     images: attachmentListSchema.default([]),
     /** One per message, reused by its retries: a key that already landed is not delivered again. */
     idempotencyKey: z.string().uuid().optional(),
+    /** Sent from an ask card: answers that card. Absent (typed in the composer): open cards stay open, flagged. */
+    askRequestId: z.string().min(1).max(200).optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
@@ -1359,6 +1403,8 @@ export const continueInputSchema = z.object({
   agentProfile: z.string().max(64).optional(),
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey: z.string().uuid().optional(),
+  /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
+  askRequestId: z.string().min(1).max(200).optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 

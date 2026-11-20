@@ -9,6 +9,7 @@ import {
   needsYouReason,
   needsYouRows,
   runningRows,
+  signInGroups,
   todayLabel,
 } from './now-model'
 
@@ -149,5 +150,24 @@ describe('finishedTodayRows', () => {
 describe('todayLabel', () => {
   it('spells the weekday and date in the given locale', () => {
     expect(todayLabel(NOW, 'en-US')).toBe('Wednesday, November 11')
+  })
+})
+
+describe('signInGroups (spec 2026-11-18-inline-account-reconnect)', () => {
+  const parked = (provider: 'claude' | 'codex', profileId: string, at: string, over: Partial<RunRecord> = {}) =>
+    run({ status: 'waiting', parked: { kind: 'auth', provider, profileId, at }, ...over })
+
+  it('groups parked runs per account, newest first, and takes them out of Needs you', () => {
+    const a = parked('claude', 'work', ago(60_000))
+    const b = parked('codex', 'default', ago(10_000))
+    const c = parked('claude', 'work', ago(30_000))
+    const archived = parked('claude', 'work', ago(1_000), { archived: true })
+    const groups = signInGroups([a, b, c, archived])
+    expect(groups.map((group) => [group.provider, group.profileId, group.runs.map((r) => r.id)])).toEqual([
+      ['codex', 'default', [b.id]],
+      ['claude', 'work', [a.id, c.id]],
+    ])
+    expect(needsYouReason(a)).toBeUndefined()
+    expect(needsYouRows([a, b, c])).toEqual([])
   })
 })

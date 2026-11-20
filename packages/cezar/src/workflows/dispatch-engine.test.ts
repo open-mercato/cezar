@@ -162,6 +162,13 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
   // ---- dispatch ------------------------------------------------------------------------------
 
   describe('dispatch()', () => {
+    it('preserves an explicit empty child tool grant instead of restoring unrestricted defaults', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot();
+      const child = dispatchOk(parent.id, order('mock:done no tools', { allowed_tools: [], runner: 'codex' }));
+      expect(store.getRun(child.id)?.workflowDef?.steps[0]?.allowedTools).toEqual([]);
+    }, 40_000);
+
     it('creates a child forked off the parent branch, with its order, budget and tree files', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(20);

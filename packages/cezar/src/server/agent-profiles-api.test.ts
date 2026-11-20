@@ -6,14 +6,15 @@ import { agentFallbackPolicySchema } from '@open-mercato/cezar-contract';
 import type { AgentAccountStatusResponse, AgentProfilesResponse, AgentProfileResponse } from '@open-mercato/cezar-contract';
 import { agentAccountsPath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
-import type { RunManager } from '../workflows/run.ts';
+import { RunManager } from '../workflows/run.ts';
 import { loadAgentAccounts, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
-import { clearProjectProbeCache, registerProject } from '../workspace/projects.ts';
+import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { PROFILE_CAPABLE_PROVIDERS } from '../core/agent-profiles.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
-import { createApp, type ServerDeps } from './server.ts';
+import { ProjectContexts } from './project-context.ts';
+import { createApp, WorkspaceEventBus, type ServerDeps } from './server.ts';
 
 // `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
 // executable these cases assert on would otherwise be whatever the DEVELOPER has. Pinned to the
@@ -695,6 +696,55 @@ describe('agent profiles API', () => {
       };
       expect(await statusOf('refresh=1')).toBe('disconnected');
       expect(await statusOf('recheck=1')).toBe('connected');
+    });
+  });
+
+  describe('auth park recovery', () => {
+    it.each(['work', 'default'])('rechecks a %s account parked in an unopened project with a partially unreadable index', async (profileId) => {
+      if (profileId === 'work') {
+        await send('POST', '/api/v1/workspace/agent-profiles', {
+          provider: 'claude', label: 'work', configDir: claudeDir('claude-work'),
+        });
+      }
+      const projectRoot = join(home, 'unopened');
+      mkdirSync(projectRoot);
+      const project = await registerProject(projectRoot);
+      const dataDir = join(project.root, '.ai/cezar');
+      const parkedStore = RunStore.open(dataDir);
+      const run = parkedStore.createRun({ title: 'Parked task', task: 'work', workflow: 'quick-task', steps: [] });
+      const at = new Date(Date.now() - 1_000).toISOString();
+      parkedStore.updateRun(run.id, { status: 'waiting', idleClosedAt: at, parked: { kind: 'auth', provider: 'claude', profileId, at } });
+      parkedStore.flush();
+      const indexPath = join(dataDir, 'runs.json');
+      const savedRuns = JSON.parse(readFileSync(indexPath, 'utf8')) as unknown[];
+      writeFileSync(indexPath, JSON.stringify([...savedRuns, { id: 'unreadable', createdAt: at }]));
+
+      const contexts = new ProjectContexts({ listProjects });
+      const workspaceEvents = new WorkspaceEventBus();
+      const emit = vi.spyOn(workspaceEvents, 'emit');
+      const continueRun = vi.spyOn(RunManager.prototype, 'continueRun').mockReturnValue({ ok: true });
+      const disposers: Array<() => void> = [];
+      try {
+        const app = makeApp({
+          contexts, workspaceEvents, onDispose: (dispose) => disposers.push(dispose),
+          manager: { resumeAuthParked: () => [] } as unknown as RunManager,
+        });
+        const routeId = profileId === 'default' ? 'default:claude' : profileId;
+        const statusUrl = `/api/v1/workspace/agent-profiles/${routeId}/status`;
+        await expect((await apiRequest(app, `${statusUrl}?refresh=1`)).json()).resolves.toMatchObject({ status: { status: 'connected' } });
+        expect(emit).not.toHaveBeenCalledWith('account-reconnected', expect.anything());
+        expect((await apiRequest(app, `${statusUrl}?recheck=1`)).status).toBe(200);
+        await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('account-reconnected', expect.objectContaining({ provider: 'claude', profileId })));
+        expect(contexts.peek(project.id)).toBeUndefined();
+
+        const opened = await contexts.context(project.id);
+        expect(opened.store.getRun(run.id)?.parked).toBeUndefined();
+        expect(continueRun).toHaveBeenCalledWith(run.id, expect.objectContaining({ text: expect.any(String) }), true);
+      } finally {
+        for (const dispose of disposers.reverse()) dispose();
+        contexts.disposeAll();
+        continueRun.mockRestore();
+      }
     });
   });
 
