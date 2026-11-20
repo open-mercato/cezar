@@ -209,6 +209,7 @@ describe('the badge while a dismissal is pending', () => {
     return renders
   }
   const lowest = (renders: Array<number | undefined>) => Math.min(...renders.filter((count) => count !== undefined))
+  const usePendingDismissalsSnapshot = () => renderHook(() => usePendingDismissals()).result.current
 
   it('never reads below the true count when the live counts drop while the dismissal is sent', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -246,15 +247,52 @@ describe('the badge while a dismissal is pending', () => {
     const renders = renderBadge()
     act(() => scheduleDismiss(client, a.key, 'Design'))
     expect(renders.at(-1)).toBe(1)
+    // The counts alone cannot say which card closed: the badge holds until the list says.
     await act(async () => { applyQuestionCounts(client, { live: 1, older: 0 }); await vi.advanceTimersByTimeAsync(20) })
-    // A keeps its place (and its Undo); the drop is B's, so the badge reads 0, not 1.
     expect(client.getQueryData<QuestionsResponse>(questionKeys.all)?.open.map((row) => row.key)).toContain(a.key)
+    expect(renders.at(-1)).toBe(1)
+    await act(async () => { list(); await vi.advanceTimersByTimeAsync(20) })
+    // B's drop: A keeps its place and its Undo.
     expect(renders.at(-1)).toBe(0)
+    expect(usePendingDismissalsSnapshot().map((entry) => entry.key)).toEqual([a.key])
     act(() => undoDismiss(a.key))
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
     expect(renders.at(-1)).toBe(1)
-    await act(async () => { list(); await vi.advanceTimersByTimeAsync(50) })
-    expect(renders.at(-1)).toBe(1)
+    expect(lowest(renders)).toBe(0)
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/dismiss'))).toBe(false)
+  })
+
+  it.each(['answered', 'replaced', 'expired', 'ended'] as const)('A closed on the server during its own undo window (%s): no double count, nothing sent', async (reason) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let list!: () => void
+    const listHeld = new Promise<void>((resolve) => { list = resolve })
+    const closedA = { ...a, closed: { reason, at: new Date().toISOString() } }
+    fetchMock.mockImplementation(async () => { await listHeld; return Response.json({ ...response([b]), closed: [closedA] }) })
+    const renders = renderBadge()
+    act(() => scheduleDismiss(client, a.key, 'Design'))
+    expect(renders.at(-1)).toBe(1)
+    await act(async () => { applyQuestionCounts(client, { live: 1, older: 0 }); await vi.advanceTimersByTimeAsync(20) })
+    await act(async () => { list(); await vi.advanceTimersByTimeAsync(20) })
+    // A is gone and no longer subtracted; B is still waiting.
+    expect(renders.at(-1)).toBe(1)
+    expect(usePendingDismissalsSnapshot()).toEqual([])
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS + 100) })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/dismiss'))).toBe(false)
+    expect(renders.at(-1)).toBe(1)
+    expect(lowest(renders)).toBe(1)
+  })
+
+  it('A closed on the server during its undo window, seen by the list re-read alone: nothing sent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const closedA = { ...a, closed: { reason: 'answered' as const, at: new Date().toISOString() } }
+    fetchMock.mockImplementation(async () => Response.json({ ...response([b]), closed: [closedA] }))
+    const renders = renderBadge()
+    act(() => scheduleDismiss(client, a.key, 'Design'))
+    await act(async () => { await client.invalidateQueries({ queryKey: questionKeys.all }); await vi.advanceTimersByTimeAsync(20) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS + 100) })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/dismiss'))).toBe(false)
+    expect(lowest(renders)).toBe(1)
+    expect(renders.at(-1)).toBe(1)
   })
 
   it('Undo puts the card back on the badge, never below the true count on the way', async () => {
