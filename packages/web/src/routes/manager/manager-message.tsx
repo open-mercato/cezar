@@ -248,7 +248,11 @@ function ManagerQuestions({
   }
   const send = async (text: string) => {
     const reactivate = chatActions.confirmReactivate
-    if (reactivate && !(await reactivate(text))) return `Not sent: ${origin.name} is still inactive. Dismiss closes the question without waking it.`
+    if (reactivate && !(await reactivate(text))) {
+      const message = `Not sent: ${origin.name} is still inactive. Dismiss closes the question without waking it.`
+      setError(message)
+      return message
+    }
     sentHere.current = true
     setPending(true)
     setError(undefined)

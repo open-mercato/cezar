@@ -354,7 +354,7 @@ it('also reconciles a summary received during the follow-up manager-list read', 
   expect(await screen.findByText('Job 2')).toBeTruthy()
 })
 
-const sectionNames = () => [...document.querySelectorAll('[data-route="manager-approvals"] > section')].map((section) => section.getAttribute('aria-label'))
+const sectionNames = () => [...document.querySelectorAll('[data-slot="approval-group"]')].map((section) => section.getAttribute('aria-label'))
 const actionIds = () => [...document.querySelectorAll('[data-slot="manager-action"]')].map((card) => card.getAttribute('data-action-id'))
 
 it('keeps a decided card in its slot even when its manager’s activity re-sorts the list', async () => {
@@ -409,6 +409,29 @@ it('lingers a finished card, with its failure reason, for 30 seconds and then sh
   expect(document.querySelector('[data-slot="manager-action"]')).toBeNull()
   expect(screen.getByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Clear results' })).toBeNull()
+})
+
+it('holds a finished card while the pointer is over the list or the reader just scrolled, then collapses it', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, confirm: { 'merge-pr': false } })]
+  messages = { shop: [actionMessage(2)] }
+  onDecision = () => { messages.shop = [actionMessage(2, { status: 'failed', result: 'Required checks are failing.' })] }
+  renderApprovals()
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+  expect(await screen.findByText('Required checks are failing.')).toBeTruthy()
+  const list = document.querySelector<HTMLElement>('[data-slot="approvals-list"]')!
+  fireEvent.pointerEnter(list)
+  await act(async () => { await vi.advanceTimersByTimeAsync(40_000) })
+  expect(screen.getByText('Required checks are failing.')).toBeTruthy()
+  fireEvent.pointerLeave(list)
+  fireEvent.scroll(window)
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
+  expect(screen.getByText('Required checks are failing.')).toBeTruthy()
+  await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+  expect(document.querySelector('[data-slot="approval-slot"][data-leaving="true"]')).not.toBeNull()
+  await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+  expect(document.querySelector('[data-slot="manager-action"]')).toBeNull()
+  expect(screen.getByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
 })
 
 it('does not bring finished cards back when the reader leaves and returns', async () => {

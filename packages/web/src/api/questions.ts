@@ -149,9 +149,20 @@ type Entry = PendingDismissal & { timer?: ReturnType<typeof setTimeout>; remaini
 const dismissals = new Map<string, Entry>()
 let snapshot: readonly PendingDismissal[] = []
 const listeners = new Set<() => void>()
+/** Answers in flight from the Questions page: the badge drops on the click, not on the reply. */
+const answering = new Set<string>()
+let answeringSnapshot: ReadonlySet<string> = new Set()
 
 function publish(): void {
   snapshot = [...dismissals.values()].map(({ key, label, paused, error }) => ({ key, label, paused, ...(error ? { error } : {}) }))
+  for (const listener of [...listeners]) listener()
+}
+
+export function markAnswering(key: string, inFlight: boolean): void {
+  if (answering.has(key) === inFlight) return
+  if (inFlight) answering.add(key)
+  else answering.delete(key)
+  answeringSnapshot = new Set(answering)
   for (const listener of [...listeners]) listener()
 }
 
@@ -168,9 +179,14 @@ async function commit(key: string): Promise<void> {
   entry.timer = undefined
   try {
     const item = await dismissQuestion(key)
-    dismissals.delete(key)
-    publish()
     settleQuestion(entry.queryClient, item)
+    // After the cache's batched notify: the Questions page swaps the undo note for "Dismissed"
+    // when the card leaves the open list, and must not draw the open card for a frame in between.
+    setTimeout(() => {
+      if (dismissals.get(key) !== entry) return
+      dismissals.delete(key)
+      publish()
+    }, 0)
   } catch (failure) {
     // 409: it closed meanwhile (answered, replaced, ended). Nothing to retry; the refetch shows why.
     if (failure instanceof ApiError && failure.status === 409) {
@@ -184,6 +200,8 @@ async function commit(key: string): Promise<void> {
     entry.paused = true
     publish()
     void entry.queryClient.invalidateQueries({ queryKey: questionKeys.all })
+    // The page dropped its manager's "Waiting for N answers" on the click: put it back.
+    void entry.queryClient.invalidateQueries({ queryKey: managerKeys.list })
   }
 }
 
@@ -232,18 +250,22 @@ export function resumePausedDismissals(): void {
 export function resetDismissals(): void {
   for (const entry of dismissals.values()) clearTimeout(entry.timer)
   dismissals.clear()
+  answering.clear()
+  answeringSnapshot = new Set()
   publish()
 }
 
+const subscribe = (listener: () => void) => {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
 export function usePendingDismissals(): readonly PendingDismissal[] {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    () => snapshot,
-    () => snapshot,
-  )
+  return useSyncExternalStore(subscribe, () => snapshot, () => snapshot)
+}
+
+export function useAnsweringQuestions(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => answeringSnapshot, () => answeringSnapshot)
 }
 
 /** Open questions minus the ones waiting out their undo window: what every screen shows. */
@@ -253,16 +275,17 @@ export function visibleOpen(data: QuestionsResponse | undefined, pending: readon
 }
 
 const NO_MANAGERS: ReadonlySet<string> = new Set()
+const NO_KEYS: ReadonlySet<string> = new Set()
 
 const fromInactive = (item: QuestionItem, inactive: ReadonlySet<string>) => item.source.kind === 'manager' && inactive.has(item.source.managerId)
 
-/** The badge: the server's live count, less a dismissal still inside its undo window. Undefined
- *  until the first answer (or when the route is missing), so the badge says nothing rather than 0.
- *  The server leaves inactive managers' cards out of `live` (spec 2026-11-19-manager-deactivate),
- *  so dismissing one of them takes nothing off it. */
-export function liveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[], inactive: ReadonlySet<string> = NO_MANAGERS): number | undefined {
+/** The badge: the server's live count, less a dismissal still inside its undo window and an answer
+ *  in flight. Undefined until the first answer (or when the route is missing), so the badge says
+ *  nothing rather than 0. The server leaves inactive managers' cards out of `live` (spec
+ *  2026-11-19-manager-deactivate), so hiding one of them takes nothing off it. */
+export function liveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[], inactive: ReadonlySet<string> = NO_MANAGERS, inFlight: ReadonlySet<string> = NO_KEYS): number | undefined {
   if (!data) return undefined
-  const hidden = new Set(pending.filter((entry) => !entry.error).map((entry) => entry.key))
+  const hidden = new Set([...pending.filter((entry) => !entry.error).map((entry) => entry.key), ...inFlight])
   const leaving = data.open.filter((item) => hidden.has(item.key) && !item.older && !fromInactive(item, inactive)).length
   return Math.max(0, data.counts.live - leaving)
 }
@@ -283,7 +306,7 @@ export function useInactiveManagerIds(): ReadonlySet<string> {
 
 export function useLiveQuestionCount(enabled = true): number | undefined {
   const query = useQuestions(enabled)
-  return liveQuestionCount(query.data, usePendingDismissals(), useInactiveManagerIds())
+  return liveQuestionCount(query.data, usePendingDismissals(), useInactiveManagerIds(), useAnsweringQuestions())
 }
 
 export function useInactiveQuestionCount(): number {
