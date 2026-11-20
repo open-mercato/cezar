@@ -176,7 +176,7 @@ describe('model option resolution', () => {
     // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
     // list is the single source both the route and the picker compile against — this asserts they
     // still agree on who discovers, and that a runner is never added to it by accident.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity', 'kimi'])
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'copilot', 'antigravity', 'kimi'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
@@ -185,14 +185,9 @@ describe('model option resolution', () => {
     expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
   })
 
-  it('copilot stays OUT of discovery: free text plus its own presets, and no /models request', () => {
-    // Copilot's catalog is fetched from GitHub per account, so cezar cannot list it truthfully and
-    // `GET /models?runner=copilot` would 400. The picker therefore offers Copilot's own documented
-    // `auto` and whatever the user types (#582; spec § API Contracts, same rule as pi).
-    expect(runnerDiscoversModels('copilot')).toBe(false)
-    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('copilot')
+  it('copilot discovers its models (#1903): auto plus the live catalog, auto alone without one', () => {
+    expect(runnerDiscoversModels('copilot')).toBe(true)
     expect(modelsForRunner('copilot').map((m) => m.id)).toEqual([''])
-    // …and a host catalog handed in anyway is ignored rather than rendered.
     expect(
       modelsForRunner('copilot', {
         runner: 'copilot',
@@ -200,7 +195,8 @@ describe('model option resolution', () => {
         source: 'live',
         stale: false,
       }).map((m) => m.id),
-    ).toEqual([''])
+    ).toEqual(['', 'gpt-5.4'])
+    expect(modelCatalogStatus('copilot', { runner: 'copilot', models: [], source: 'unavailable', stale: false })).toBe('Latest Copilot models unavailable')
   })
 
   it('gemini stays OUT of discovery: its presets plus free text, and no /models request', () => {

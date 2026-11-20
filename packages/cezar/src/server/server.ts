@@ -176,6 +176,7 @@ import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverAntigravityModels } from '../core/antigravity-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
+import { discoverCopilotModels } from '../core/copilot-model-catalog.ts';
 import { discoverKimiModels } from '../core/kimi-model-catalog.ts';
 import {
   PROVIDER_IDS,
@@ -1486,6 +1487,7 @@ export function createApp(deps: ServerDeps) {
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
+      copilot: { discover: () => discoverCopilotModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
       antigravity: { discover: () => discoverAntigravityModels() },
       kimi: { discover: () => discoverKimiModels() },
@@ -2283,7 +2285,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, copilot, antigravity, or kimi' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });

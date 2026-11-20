@@ -71,8 +71,7 @@ export class CopilotAcpRunner implements AgentRunner {
   private lastSession: AgentSession | null = null;
 
   constructor(opts: CopilotAcpRunnerOptions = {}) {
-    this.bin =
-      opts.bin ?? process.env.CEZ_COPILOT_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockCopilotPath() : 'copilot');
+    this.bin = resolveCopilotBin(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -590,6 +589,11 @@ function delay(ms: number): Promise<void> {
     const timer = setTimeout(resolve, ms);
     timer.unref?.();
   });
+}
+
+/** The Copilot executable: an explicit override, `CEZ_COPILOT_BIN`, the bundled mock under dry run, else `copilot`. */
+export function resolveCopilotBin(override?: string): string {
+  return override ?? process.env.CEZ_COPILOT_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockCopilotPath() : 'copilot');
 }
 
 /** Path to the bundled mock (`scripts/mock-copilot-acp.mjs`), for CEZ_DRY_RUN=1. */
