@@ -40,6 +40,8 @@ History cursors/endOffsets/liveCursor and old transcripts must retain their cont
 
 ### Phase2: Security continuation
 
-- [ ] 2.1 Integrate latest main and extend metadata/read-failure cleanup coverage
+- [x] 2.1 Integrate latest main and extend metadata/read-failure cleanup coverage —a5374494229587385b221fe6692baea22db60434
 - [ ] 2.2 Prove regressions red on main and run all five configured npm gates
 - [ ] 2.3 Review, refresh evidence and labels, and release the PR claim
+
+Evidence: current main fails7/10 dedicated regressions; the fixed reader plus existing history suite pass41/41. Source frozen before the full gate.
