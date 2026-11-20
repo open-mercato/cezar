@@ -48,7 +48,7 @@ PR: #2364
 ### Phase 3: Review and publication
 
 - [x] 3.1 Complete authoritative independent review and any fixes — 73a9e742d
-- [ ] 3.2 Finalize evidence, labels, deduplication and exact owned lock release
+- [x] 3.2 Finalize evidence, labels, deduplication and exact owned lock release — 9b295ad3a
 
 ## Verification so far
 BaselineNext16.4.2: new regression suite fails5/10 with5controls passing. Patched16.4.5:10/10 new cases and7/7 existing compression cases pass. Reproduces SVG/ftyp bypass, Edge cookie-header disclosure and gzip response-framing flaws; no claim of independently reproducing the other four cache findings. Docs check/typecheck/build,17security cases,3preview pages+3script assets, npm ls and audit(0vulnerabilities) pass. Installed and all locked Next copies16.4.5 are outside all7source intervals. Only Next/env/SWC patch entries change; root lock unchanged. Node24/Linux; no separateNode20/Windows/macOS/browser QA claim.
