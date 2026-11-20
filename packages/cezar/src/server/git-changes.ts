@@ -576,7 +576,7 @@ export interface DirEntry {
 
 export type FilesResult =
   | { kind: 'dir'; path: string; entries: DirEntry[] }
-  | { kind: 'file'; path: string; size: number; binary: boolean; tooLarge: boolean; content?: string }
+  | { kind: 'file'; path: string; size: number; binary: boolean; tooLarge: boolean; content?: string; bytes?: Buffer }
   | { kind: 'invalid'; error: string }
   | { kind: 'missing'; error: string };
 
@@ -687,6 +687,7 @@ export async function readWorktreePath(
   root: string,
   relPath: string,
   contentCap = FILE_CONTENT_CAP,
+  includeImageBytes = false,
 ): Promise<FilesResult> {
   if (relPath.includes('\0')) return { kind: 'invalid', error: 'invalid path' };
   const rootAbs = resolve(root);
@@ -762,11 +763,16 @@ export async function readWorktreePath(
     }
     const binary = await sniffBinary(handle, opened.size).catch(() => true);
     const tooLarge = opened.size > contentCap;
+    // The raw-image routes must not reopen the pathname after this handle closes (#2006).
+    // Keep the internal bytes out of JSON responses and allocate them only for eligible images.
+    const bytes = includeImageBytes && !tooLarge && imageMimeType(display) !== null
+      ? await handle.readFile()
+      : undefined;
     if (binary || tooLarge) {
-      return { kind: 'file', path: display, size: opened.size, binary, tooLarge };
+      return { kind: 'file', path: display, size: opened.size, binary, tooLarge, ...(bytes !== undefined ? { bytes } : {}) };
     }
-    const content = await handle.readFile('utf8');
-    return { kind: 'file', path: display, size: opened.size, binary: false, tooLarge: false, content };
+    const content = bytes !== undefined ? bytes.toString('utf8') : await handle.readFile('utf8');
+    return { kind: 'file', path: display, size: opened.size, binary: false, tooLarge: false, content, ...(bytes !== undefined ? { bytes } : {}) };
   } finally {
     await handle.close();
   }
