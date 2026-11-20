@@ -143,7 +143,15 @@ public final class ShellServices {
             waiters = probeWaiters;
             probeWaiters = null;
         }
-        if (waiters != null) for (Consumer<RuntimeException> each : waiters) each.accept(error);
+        if (waiters == null) return;
+        // One caller's failure must not skip the next: a badge round left unanswered never runs again.
+        for (Consumer<RuntimeException> each : waiters) {
+            try {
+                each.accept(error);
+            } catch (RuntimeException ignored) {
+                // The failing caller's own problem.
+            }
+        }
     }
 
     public static synchronized RelayConnections relay(Context context) {
