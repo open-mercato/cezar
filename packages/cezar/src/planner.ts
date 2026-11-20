@@ -6,6 +6,8 @@ import { CodexToolPolicyError } from './core/codex-tool-policy.ts';
 import { loadConfig } from './config.ts';
 import { discoverSkills, type Skill } from './skills.ts';
 import { resolveProfileEnvForRoot } from './workspace/agent-profiles.ts';
+import { INTERNAL_CONSUMERS, trackOneShot } from './usage-ledger/recorder.ts';
+import { oneShotAccountRef } from './usage-ledger/identity.ts';
 import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.ts';
 import { E2E_CONFIG_FILES } from './e2e-setup.ts';
 
@@ -81,21 +83,28 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   // Plan under the SAME agent account this project's tasks run on (spec
   // 2026-07-29-agent-profiles). Without this the planner would quietly bill the personal
   // subscription for a project the user pointed at their work account.
-  const { env: profileEnv } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+  const { env: profileEnv, profile } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+  const planAccount = await oneShotAccountRef(config.defaultRunner, profile);
   let refusal: string | undefined;
   // One retry on an unparseable answer; a runner error goes straight to fallback.
   for (let attempt = 0; attempt < 2; attempt++) {
     let text: string;
     try {
-      const result = await runner.run({
-        systemPrompt,
-        userPrompt,
-        cwd: repoRoot,
-        allowedTools: [],
-        ...(Object.keys(profileEnv).length > 0 ? { env: profileEnv } : {}),
-        model: plannerModel,
-        timeoutMs: PLANNER_TIMEOUT_MS,
-      });
+      const tracked = trackOneShot(config.defaultRunner, planAccount, INTERNAL_CONSUMERS.planner);
+      let result: Awaited<ReturnType<typeof runner.run>> | undefined;
+      try {
+        result = await runner.run({
+          systemPrompt,
+          userPrompt,
+          cwd: repoRoot,
+          allowedTools: [],
+          ...(Object.keys(profileEnv).length > 0 ? { env: profileEnv } : {}),
+          model: plannerModel,
+          timeoutMs: PLANNER_TIMEOUT_MS,
+        }, tracked.onEvent);
+      } finally {
+        tracked.done(result);
+      }
       text = result.text;
     } catch (err) {
       if (err instanceof CodexToolPolicyError) refusal = err.message;

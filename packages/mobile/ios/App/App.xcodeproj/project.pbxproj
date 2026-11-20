@@ -110,6 +110,7 @@
 		E5D3DCA49B640E476F4CA0E2 /* NotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8B2B4440444941A5D4349722 /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		9577AC492E3EEB5D8D58DDD0 /* NetworkChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2538D2293E3C9833B322E9CC /* NetworkChange.swift */; };
 		A6686A55E8AB397B6B0C43DB /* StartupLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */; };
+		61B693B35D540287B21185A1 /* CezarList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1131421F12FEA5067FEF625D /* CezarList.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -243,6 +244,7 @@
 		B0935F76FB2053614441A3D6 /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
 		2538D2293E3C9833B322E9CC /* NetworkChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkChange.swift; sourceTree = "<group>"; };
 		BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupLog.swift; sourceTree = "<group>"; };
+		1131421F12FEA5067FEF625D /* CezarList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CezarList.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -450,6 +452,7 @@
 				DE0C3DB5A07541DCE76A23BB /* DeviceBook.swift */,
 				82AB1FD74D5CC322812C7D20 /* DeviceBookKeychain.swift */,
 				4A3F72AABAE006BD697A11F4 /* DeviceIdentity.swift */,
+				1131421F12FEA5067FEF625D /* CezarList.swift */,
 			);
 			path = Switcher;
 			sourceTree = "<group>";
@@ -660,6 +663,7 @@
 				422DC6230E862F6BD3F5B386 /* DeviceIdentity.swift in Sources */,
 				9577AC492E3EEB5D8D58DDD0 /* NetworkChange.swift in Sources */,
 				A6686A55E8AB397B6B0C43DB /* StartupLog.swift in Sources */,
+				61B693B35D540287B21185A1 /* CezarList.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

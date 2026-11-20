@@ -50,7 +50,8 @@ export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'pr
 export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 
 // Quick prompts have no label: the server enforces a closed set, and they are not a turn setting.
-const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials'>, ManagerSettingField> = {
+// Neither does the active toggle: it is not a stored setting (spec 2026-11-19-manager-deactivate).
+const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials' | 'active' | 'catchUp'>, ManagerSettingField> = {
   cronMinutes: 'watch',
   runner: 'runner',
   taskRunner: 'runner',

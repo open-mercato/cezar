@@ -105,6 +105,12 @@ public final class DeviceSwitch {
         return state(of(kind), kind.name(), lastSeen, clock);
     }
 
+    /** A probe's reading: checking, offline at the bound, or its kind's words. */
+    public static State state(DeviceProbes.Reading reading, long lastSeen, Clock clock) {
+        if (reading.kind == null) return reading.status == Status.CHECKING ? State.CHECKING : offline(lastSeen, clock);
+        return state(reading.status, reading.kind, lastSeen, clock);
+    }
+
     public static State offline(long lastSeen, Clock clock) {
         return new State(Status.OFFLINE, offlineWords(lastSeen, clock));
     }
@@ -125,13 +131,13 @@ public final class DeviceSwitch {
             case "ACCOUNT_REQUIRED":
             case "BASIC_GATE":
             case "LOGIN_PAGE":
-                return "Sign-in needed";
+                return "Sign in needed";
             case "SUSPENDED":
                 return "Suspended";
             case "TERMS_REQUIRED_DEVICE":
                 return "Terms not accepted";
             case "DEVICE_REMOVED":
-                return "Removed";
+                return "This phone was removed";
             case "UPDATE_APP":
                 return "Update the app";
             case "UPDATE_CEZAR":
@@ -140,7 +146,6 @@ public final class DeviceSwitch {
                 return "Over the limit";
             case "LOCAL_MODE":
                 return "Local only";
-            case "RELAY_DOWN":
             case "BROKEN":
             case "TLS_FAILURE":
             case "NOT_CEZAR":

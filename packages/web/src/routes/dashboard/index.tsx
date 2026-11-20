@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/sheet'
 import { shortAge } from '@/lib/format'
 import { DashboardUsageCosts } from './costs'
+import { PlanLimits } from './plan-limits'
 import { DashboardTrends } from './trends'
 import { Queue } from './queue'
 import { Feed } from './feed'
@@ -378,6 +379,8 @@ function DashboardView({ entryKey }: { entryKey: string }) {
             />
           )}
           {view === 'automations' && <AutomationOutcomes />}
+          {/* Plan limits lead Usage & cost (spec 2026-11-19-plan-usage): mandatory, all projects. */}
+          {view === 'costs' && <PlanLimits />}
           <Overview active={view === 'overview'} onCurrent={open}>
             {(overviewModules) =>
               preferences.ready && (

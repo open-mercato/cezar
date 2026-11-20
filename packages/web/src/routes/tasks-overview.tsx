@@ -13,6 +13,8 @@ import {
   CpuIcon,
   DollarSignIcon,
   FileDiffIcon,
+  GaugeIcon,
+  InfoIcon,
   GitBranchIcon,
   ListChecksIcon,
   LinkIcon,
@@ -34,10 +36,12 @@ import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProje
 import { useRunUsage } from '@/api/global-events'
 import { CacheStatusChip } from '@/components/cache-status'
 import { isCezarShell } from '@/lib/phone-app'
-import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { usePlanUsageConsumers } from '@/api/plan-usage'
+import { queryKeys, useConfig, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
+import type { PlanUsageConsumerWindow, RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { TaskQuickActions, TaskSelectionCheckbox, TasksSelectionToolbar, useTasksOverviewSelection, type TasksOverviewActionHandler } from './tasks-overview-actions'
+import { planLimitCell, planWindowsByRun, PlanLimitCellView } from './tasks-plan-limit'
 import { CenteredState } from '@/components/centered-state'
 import { FirstRun } from '@/components/first-run'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -133,6 +137,7 @@ import { cn } from '@/lib/utils'
 import { useAutomationsGate, useAutomationsQuery } from '@/routes/automations/use-automations'
 
 const NO_RUNS: RunRecord[] = []
+const NO_PLAN_WINDOWS: PlanUsageConsumerWindow[] = []
 const DEFAULT_EXPANDED_COLUMNS = normalizeExpandedColumns(undefined)
 const noToggle = (): void => undefined
 const AGE_TICK_MS = 30_000
@@ -174,7 +179,13 @@ export function TasksOverview({
   initialQuery = '',
   cacheStatus,
   managersAvailable = false,
+  planUsage,
+  defaultRunner,
 }: {
+  /** Plan-limit consumers (one query for the list); undefined until it answers or while folded. */
+  planUsage?: PlanUsageConsumerWindow[]
+  /** The project's default runner, for rows that did not pick one ("not reported" vs "not measured yet"). */
+  defaultRunner?: string
   /** Manager owns task creation on mobile/app navigation when available. */
   managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
@@ -253,6 +264,7 @@ export function TasksOverview({
     [all, origin, filters, automations],
   )
   const counts = React.useMemo(() => listCounts(narrowed), [narrowed])
+  const planByRun = React.useMemo(() => (planUsage ? planWindowsByRun(planUsage) : undefined), [planUsage])
   const matching = React.useMemo(() => filterRuns(narrowed, query), [narrowed, query])
   const visible = React.useMemo(() => sortTableRuns(matching, view, sortBy), [matching, view, sortBy])
   // A live search overrides the fold wholesale: `filterRuns` keeps a child whose parent also
@@ -533,6 +545,8 @@ export function TasksOverview({
                         sortBy={sortBy}
                         columns={columns}
                         expandedColumns={expandedColumns}
+                        planWindows={planByRun ? (planByRun.get(item.node.run.id) ?? NO_PLAN_WINDOWS) : undefined}
+                        defaultRunner={defaultRunner}
                       />
                     ))}
                     <RowSpacer height={tableWindow.padBottom} colSpan={columns.length + (onTaskAction ? 1 : 0)} />
@@ -986,8 +1000,10 @@ function TaskColumnHeader({
   }
 
   const action = expanded ? 'Fold' : 'Expand'
+  const hint = expanded ? column.hint : undefined
   return (
     <Th columnId={column.id} right={column.align === 'right'} folded={!expanded}>
+      <span className={cn('flex items-center gap-0.5', hint ? '' : 'contents')}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -1018,6 +1034,19 @@ function TaskColumnHeader({
         </TooltipTrigger>
         <TooltipContent side="top">{column.label} · {action} column</TooltipContent>
       </Tooltip>
+      {hint ? (
+        <IconTooltip label={hint} side="top">
+          <span
+            data-slot="column-hint"
+            tabIndex={0}
+            aria-label={`About ${column.label}: ${hint}`}
+            className="inline-flex shrink-0 rounded-sm outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <InfoIcon className="size-3" aria-hidden="true" />
+          </span>
+        </IconTooltip>
+      ) : null}
+      </span>
     </Th>
   )
 }
@@ -1041,6 +1070,8 @@ function TaskColumnIconView({ icon }: { icon?: TaskColumnIcon }) {
       return <CpuIcon className={className} aria-hidden="true" />
     case 'memory':
       return <MemoryStickIcon className={className} aria-hidden="true" />
+    case 'planLimit':
+      return <GaugeIcon className={className} aria-hidden="true" />
     case 'started':
       return <Clock3Icon className={className} aria-hidden="true" />
     default:
@@ -1152,8 +1183,13 @@ const TableRow = React.memo(function TableRow({
   sortBy,
   columns,
   expandedColumns,
+  planWindows,
+  defaultRunner,
   selectable, selectionMode, selected, onSelect, actionsBusy, onAction,
 }: {
+  /** This run's 5-hour plan windows; undefined while the ledger has not answered. */
+  planWindows?: PlanUsageConsumerWindow[]
+  defaultRunner?: string
   ariaRowIndex?: number
   run: RunRecord
   /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
@@ -1269,6 +1305,8 @@ const TableRow = React.memo(function TableRow({
             scheduled={scheduled}
             reference={reference}
             cost={cost}
+            planWindows={planWindows}
+            defaultRunner={defaultRunner}
             to={to}
             onRename={onRename}
             onTogglePin={onTogglePin}
@@ -1293,11 +1331,15 @@ function TaskTableCell({
   scheduled,
   reference,
   cost,
+  planWindows,
+  defaultRunner,
   to,
   onRename,
   onTogglePin,
   sortBy,
 }: {
+  planWindows?: PlanUsageConsumerWindow[]
+  defaultRunner?: string
   column: TaskColumnDefinition
   expanded: boolean
   run: RunRecord
@@ -1397,6 +1439,14 @@ function TaskTableCell({
           {cost || <Dash />}
         </td>
       )
+    case 'planLimit': {
+      const cell = planLimitCell(run, planWindows, defaultRunner)
+      return (
+        <td data-column-id={column.id} title={cell.kind === 'share' ? cell.title : undefined} className={cn(TD_BASE, 'text-right')}>
+          <PlanLimitCellView cell={cell} />
+        </td>
+      )
+    }
     case 'started':
       return (
         <td data-column-id={column.id} className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
@@ -1882,6 +1932,9 @@ export function TasksOverviewRoute() {
     [pinMutate],
   )
   const taskTableColumns = useTaskTableColumns()
+  // One consumers query for the whole list, asked only while the Plan limit column is open.
+  const planUsage = usePlanUsageConsumers(taskTableColumns.isExpanded('planLimit'))
+  const defaultRunner = useConfig().data?.defaultRunner
   const [origin, setOrigin] = useTaskOrigin()
   // Names for the Automation facet and the Scheduled group. Only asked for while automations are
   // on AND automation rows are on screen or a schedule is known — a project that never ran or
@@ -1951,6 +2004,8 @@ export function TasksOverviewRoute() {
         // table does) instead of guessing, so it never shows the welcome page to a plain folder.
         firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
         initialQuery={initialQuery}
+        planUsage={planUsage.data?.entries}
+        defaultRunner={defaultRunner}
         cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
     </ReferenceStatusProvider>

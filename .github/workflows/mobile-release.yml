@@ -257,7 +257,9 @@ jobs:
     name: iOS
     needs: version
     if: ${{ github.event_name == 'push' || inputs.ios }}
-    runs-on: macos-latest
+    # App Store Connect requires the iOS 27 SDK (ITMS-90725). Only the xcode-27 image ships Xcode 27;
+    # macos-26 and macos-latest stop at Xcode 26.x. Keep in step with mobile-check.yml.
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       MARKETING: ${{ needs.version.outputs.marketing }}
@@ -297,6 +299,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Select Xcode 27 or later
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: ${{ env.MOBILE_DIR }}
+        run: sh scripts/select-xcode.sh 27
+
       - name: Install and sync
         if: steps.gate.outputs.ready == 'true'
         working-directory: ${{ env.MOBILE_DIR }}
@@ -330,6 +337,20 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic \
             MARKETING_VERSION="$MARKETING" CURRENT_PROJECT_VERSION="$CODE"
+
+      - name: Check the archive's SDK
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          plist="$RUNNER_TEMP/cezar.xcarchive/Products/Applications/App.app/Info.plist"
+          sdk=$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$plist")
+          xcode=$(/usr/libexec/PlistBuddy -c 'Print :DTXcode' "$plist")
+          echo "Archive built with SDK $sdk (DTXcode $xcode)"
+          version=${sdk#iphoneos}
+          if [ "${version%%.*}" -lt 27 ]; then
+            echo "::error title=iOS SDK too old::The archive was built with $sdk; App Store Connect requires iphoneos27 or later."
+            exit 1
+          fi
+          echo "::notice title=Archive SDK::$sdk (DTXcode $xcode)"
 
       - name: Export for App Store Connect
         if: steps.gate.outputs.ready == 'true'
