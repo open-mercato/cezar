@@ -2272,7 +2272,12 @@ fn attach_to_running(window: &WebviewWindow, shell: &Shell, log: &Mutex<VecDeque
     for _ in 0..10 {
         let lines = log.lock().unwrap().iter().cloned().collect::<Vec<_>>();
         if let Some(url) = handoff_url(&lines) {
-            shell.port.store(url.port().unwrap_or_default(), Ordering::SeqCst);
+            // The marker is only a claim: trust the port (and IPC via is_own_origin) once a cezar answers there.
+            let port = url.port().unwrap_or_default();
+            if health_version(port).is_none() {
+                return false;
+            }
+            shell.port.store(port, Ordering::SeqCst);
             let _ = window.navigate(url);
             return true;
         }
