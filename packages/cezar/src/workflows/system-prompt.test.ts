@@ -44,12 +44,14 @@ describe('resolveExtraSystemPrompt', () => {
     expect(resolveExtraSystemPrompt(override, configDefault)).toBe(expected);
   });
 
-  it('global instructions alone ride along unlabelled', () => {
-    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe('Global rule');
-    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe('Global rule');
+  it('labels global instructions even without a project prompt, so repository rules cannot override them', () => {
+    const expected = `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule`;
+    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe(expected);
+    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe(expected);
+    expect(GLOBAL_INSTRUCTIONS_HEADING).toContain('take precedence over repository, project, workflow and skill instructions');
   });
 
-  it('merges global FIRST and the project prompt after it, labelled as winning', () => {
+  it('merges global FIRST and the project prompt after it, labelled as yielding', () => {
     const merged = resolveExtraSystemPrompt(undefined, 'Project rule', 'Global rule');
     expect(merged).toBe(
       `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule\n\n---\n\n${PROJECT_INSTRUCTIONS_HEADING}\n\nProject rule`,

@@ -96,7 +96,7 @@ a question card's answer or a command chip; with attachments or not; phone or de
 `composer:no:desktop`), `manager_turn_completed` (`user`, `watch` or `job`, and `ok`, `error` or
 `stopped`), `manager_task_started` (`builtin` or `custom` workflow, never its name),
 `manager_action_proposed` (`merge`, `automation`, `job`, `connector` — never which connector or tool), `manager_action_decided` (that, plus
-`approve` or `reject`), `manager_question_answered` (`card`, `typed`) and
+`approve`, `reject` or `dismiss`), `manager_question_answered` (`card`, `typed`) and
 `manager_notification_clicked` (`approval`, `question`, `important`).
 
 Timings, sent in a batch at most every 15 seconds with no index key: `manager_turn` (how long a

@@ -30,6 +30,10 @@ sources:
     path: packages/cezar/src/dispatch/engine.ts
     line: 50
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Restricted Codex execution"
+    path: packages/cezar/src/core/codex-app-server-runner.ts
+    line: 531
+    commit: 49ffb98e20cb00d1a0abbdafba51ba95a7ef1dea
 ---
 ## What the shared interface provides
 
@@ -49,7 +53,9 @@ RUNNER_IDS and the adapter factory contain the seven backends listed below. This
 
 ## Permissions depend on the adapter
 
-Codex starts sessions with sandbox: danger-full-access and `approvalPolicy`: never by default. Setting `CEZ_CODEX_NETWORK=0` changes the sandbox to workspace-write and disables network access. This option applies only to the Codex runner.
+Codex keeps full access for omitted or exact-default grants. Explicit read-only grants use a separate account-and-checkout profile, native turns with no execution environments, and cezar’s read broker. The broker validates each file read and supported Git/GitHub command before execution. Unknown protocol versions, active hooks/MCP, unsupported tools and unavailable controls refuse before the model starts. The verified protocol is Codex 0.169.0 on macOS/Linux; Windows restricted execution is unavailable. The version check is exact on purpose: a newer Codex can add native tools that the isolation does not know to disable. On any other version, task naming, planning and commit messages fall back to their built-in heuristics, and read-only Codex steps refuse with a diagnostic. Run those steps on Claude Code or Pi instead.
+
+Restricted steps always disable native network. `CEZ_CODEX_NETWORK=0` also blocks their brokered GitHub reads. For unrestricted tasks, the variable retains the network-blocked workspace-write sandbox. Continue and retries restore the saved step policy; isolated sessions retain their own history. Managers refuse Codex, and the cockpit does not offer it as a manager's agent, because Codex cannot enforce the `cez-manager` shell grant. Before this release, Codex managers ran with Codex's unrestricted shell.
 
 Claude passes `allowedTools`. If the list includes Bash and `bashAllowlist` is unset, shell commands are unrestricted. Junie approves permission requests automatically. OpenCode follows its own permission config. In a non-autonomous cockpit run, a request it raises appears as a card to allow or reject; autonomous and headless runs refuse it. Copilot starts with --allow-all-tools and automatically handles the remaining ACP permission requests too. Assess the permissions of each backend separately.
 

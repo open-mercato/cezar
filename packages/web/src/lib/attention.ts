@@ -29,10 +29,9 @@ export const ATTENTION_RANK = {
 export type AttentionBucket = keyof typeof ATTENTION_RANK
 
 /** The dot tones the design system defines (`--success`/`--pending`/`--danger`/`--violet`, the
- *  blue `--info` for "waiting on a person", the orange `--conflict` for an idle close, plus the
- *  neutral `--soft-foreground`). Named here rather than imported from `StatusDot` to keep
+ *  blue `--info` for "waiting on a person", plus the neutral `--soft-foreground`). Named here rather than imported from `StatusDot` to keep
  *  this module UI-free; `attention.test.ts` asserts the two sets stay identical. */
-export type AttentionTone = 'success' | 'pending' | 'danger' | 'violet' | 'info' | 'neutral' | 'idle'
+export type AttentionTone = 'success' | 'pending' | 'danger' | 'violet' | 'info' | 'neutral'
 
 export interface Attention {
   bucket: AttentionBucket
@@ -88,6 +87,7 @@ export type AttentionInput = Pick<
   | 'dispatch'
   | 'costUsd'
   | 'worktreeLifecycle'
+  | 'parked'
 >
 
 export type BudgetStop = {
@@ -113,8 +113,8 @@ export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswer
 }
 
 /**
- * A `failed` run the inactivity timer closed because nobody replied: not a failure, not a gate —
- * "closed · idle", and Continue still picks it up (spec 2026-11-04-idle-closed-attention-state).
+ * A legacy `failed` run the inactivity timer closed: housekeeping, not a failure — a quiet "idle",
+ * and a message still picks it up (spec 2026-11-04-idle-closed-attention-state).
  */
 export function isIdleClosed(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'idleClosedAt'>): boolean {
   return run.status === 'failed' && run.idleClosedAt !== undefined && !isAwaitingAnswer(run)
@@ -148,6 +148,12 @@ export function closingStepId(
     if (!Number.isNaN(at) && (latest === undefined || at >= latest.at)) latest = { id: step.id, at }
   }
   return latest?.id ?? lastFailed
+}
+
+/** A run waiting on an expired agent login, as `provider:profileId`; undefined otherwise. Lists
+ *  group these per account so one Reconnect unblocks them all. */
+export function signInAccountKey(run: Pick<RunRecord, 'status' | 'parked'>): string | undefined {
+  return run.status === 'waiting' && run.parked?.kind === 'auth' ? `${run.parked.provider}:${run.parked.profileId}` : undefined
 }
 
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
@@ -191,13 +197,18 @@ export function deriveAttention(run: AttentionInput): Attention {
   if (isAwaitingAnswer(run)) {
     return { bucket: 'waiting', tone: 'info', pulse: true, label: 'needs you' }
   }
-  // Nobody replied and the idle timer freed the process: an outcome, but not a failure — out of
-  // the error bucket and its notification, and out of "Needs you" (#690).
+  // Legacy idle close: invisible housekeeping — neutral, no error bucket, no notification (#690).
+  // New idle closes stay `waiting` and take the rung below.
   if (isIdleClosed(run)) {
-    return { bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' }
+    return { bucket: 'none', tone: 'neutral', pulse: false, label: 'idle' }
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
+  }
+  // Parked on an expired agent login (spec 2026-11-18-inline-account-reconnect): it needs you, but
+  // for a sign-in, not a reply — amber, like the "Needs sign-in" chip.
+  if (run.status === 'waiting' && run.parked?.kind === 'auth') {
+    return { bucket: 'waiting', tone: 'pending', pulse: false, label: 'sign-in needed' }
   }
   if (run.status === 'waiting') {
     return {

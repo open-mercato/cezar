@@ -569,6 +569,14 @@ export async function autosaveCommit(
   return commit.ok ? 'committed' : 'failed';
 }
 
+/** Does the worktree hold content no commit has? Unreadable state counts as yes: automatic
+ *  retention must never discard on uncertainty (#2215). A directory that is gone holds nothing. */
+export async function worktreeHasUnpreservedWork(dir: string): Promise<boolean> {
+  if (!existsSync(dir)) return false;
+  const status = await git(dir, ['status', '--porcelain', '--untracked-files=all']);
+  return !status.ok || status.stdout.trim().length > 0;
+}
+
 /** Return paths currently changed in the worktree, including untracked files. */
 export async function worktreeChangedPaths(dir: string): Promise<string[]> {
   const status = await git(dir, ['status', '--porcelain=v1', '--untracked-files=all', '-z']);
@@ -747,6 +755,20 @@ export async function worktreeDiff(
   const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
   const res = await git(worktreePath, ['diff', base]);
+  if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
+  if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
+  return res.stdout;
+}
+
+/**
+ * `worktreeDiff` for a task whose tree was reclaimed (spec 2026-11-19-worktree-disk-usage): the
+ * kept branch against its merge-base with the base, read from the main repo without a checkout.
+ */
+export async function branchDiff(repoRoot: string, baseBranch: string, branch: string, cap = DIFF_CAP): Promise<string> {
+  if (!isSafeGitRef(baseBranch) || !isSafeGitRef(branch)) return '(diff failed: refusing option-like ref)';
+  const mergeBase = await git(repoRoot, ['merge-base', baseBranch, branch]);
+  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+  const res = await git(repoRoot, ['diff', base, branch]);
   if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
   if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
   return res.stdout;

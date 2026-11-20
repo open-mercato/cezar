@@ -50,6 +50,9 @@ export function isRunnerId(value: string): value is RunnerId {
   return (RUNNER_IDS as readonly string[]).includes(value);
 }
 
+/** Historical default: unrestricted shell access, not a capability boundary. */
+export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'];
+
 export interface AgentRunSpec {
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
@@ -68,6 +71,15 @@ export interface AgentRunSpec {
   allowedTools?: string[];
   /** When `Bash` is allowed, restrict it to commands starting with one of these. */
   bashAllowlist?: string[];
+  /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
+   *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
+  bashHookCommand?: string;
+  /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
+   *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
+  bypassPermissions?: boolean;
+  /** Claude only: `sandbox.excludedCommands` patterns, for a command that must reach the loopback
+   *  cockpit the user's Bash sandbox blocks (a manager's `cez-manager`). Other backends ignore it. */
+  sandboxExcludedCommands?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control
@@ -104,7 +116,7 @@ export interface AgentRunSpec {
 }
 
 /**
- * Backends without a dedicated system-prompt channel (codex app-server,
+ * Backends without a replaceable system-prompt channel (codex app-server,
  * opencode serve) deliver `spec.systemPrompt` as a leading block of the
  * opening user message — the documented per-backend mapping (spec §protocol
  * v2: claude = `--append-system-prompt`, codex/opencode = prepended here).

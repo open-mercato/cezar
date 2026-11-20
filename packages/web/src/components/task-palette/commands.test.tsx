@@ -72,6 +72,7 @@ function workspace(overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceB
     splitView: null,
     terminal: { allowed: true, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
     focusComposer: vi.fn(),
+    focusQuestion: null,
     openFile: vi.fn(),
     markedUnread: vi.fn(),
     ...overrides,
@@ -103,6 +104,13 @@ describe('the actions follow the header’s own rules (runActionFlags)', () => {
   it('a worktree operation in flight blocks Delete with its own reason', () => {
     const gated = run('done', { worktreeLifecycle: { activeOperationId: 'op1' } as ApiRun['worktreeLifecycle'] })
     expect(build(gated).byId.get('delete')?.unavailable).toBe('Resolve the worktree operation first')
+  })
+
+  it('Archive says it frees the worktree, and the archived-task lifetime when the project has one', () => {
+    expect(build(run('done')).byId.get('archive')?.detail?.text).toBe('Frees its worktree on disk; the branch is kept and Continue restores it')
+    expect(build(run('done'), { archivedDeleteDays: 0 }).byId.get('archive')?.detail?.text).not.toMatch(/Deleted/)
+    expect(build(run('done'), { archivedDeleteDays: 90 }).byId.get('archive')?.detail?.text).toMatch(/Deleted after 90 days archived$/)
+    expect(build(run('done', { archived: true }), { archivedDeleteDays: 90 }).byId.get('archive')?.detail).toBeUndefined()
   })
 
   it('pin flips its label and is unavailable on an archived run', () => {

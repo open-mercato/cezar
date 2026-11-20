@@ -3,13 +3,14 @@ import type { ReactNode } from 'react'
 
 import { useRunClaudeAccount } from '@/api/agent-accounts'
 import { useHealth } from '@/api/queries'
-import type { ApiRun } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ModelUsage } from '@open-mercato/cezar-api-client'
 import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { compactTokens, formatDuration } from '@/lib/format'
 import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { formatCost } from '@/lib/tasks-table'
+import { otherRunModels, stepModelRows } from '@/lib/actual-model'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -24,24 +25,35 @@ import { useRunEngine } from './run-engine'
 export function RunUsage({
   run,
   continuationEngine,
+  reportedModel,
   className,
 }: {
   run: ApiRun
   /** The Session tab's engine picker for the next continuation, shown inside the chip's popover. */
   continuationEngine?: ReactNode
+  /** The thread's last `session.started.model` — the actual model of a run recorded before
+   *  `RunRecord.actualModel` existed. */
+  reportedModel?: string
   className?: string
 }) {
   // Token and cost visibility is a server capability; read here so no caller has to plumb it.
   const visibility = usageMetricVisibility(useHealth().data)
   const showLiveUsage = useLiveUsageEnabled() && liveUsageParts(run.liveUsage).length > 0
   const account = accountPart(useRunClaudeAccount(run, showLiveUsage))
+  // Shrinkable: a fixed-width strip in the right-aligned dock overflowed off the phone's left edge.
   return (
     <span
       data-slot="run-usage"
-      className={cn('flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-1.5 text-meta text-muted-foreground', className)}
+      className={cn('flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-meta text-muted-foreground', className)}
     >
       {showLiveUsage ? <LiveUsage usage={run.liveUsage} account={account} /> : null}
-      <UsageChip run={run} showTokens={visibility.tokens} showCost={visibility.cost} continuationEngine={continuationEngine} />
+      <UsageChip
+        run={run}
+        showTokens={visibility.tokens}
+        showCost={visibility.cost}
+        continuationEngine={continuationEngine}
+        reportedModel={reportedModel}
+      />
     </span>
   )
 }
@@ -58,13 +70,17 @@ function UsageChip({
   showTokens,
   showCost,
   continuationEngine,
+  reportedModel,
 }: {
   run: ApiRun
   showTokens: boolean
   showCost: boolean
   continuationEngine?: ReactNode
+  reportedModel?: string
 }) {
-  const { runner, account, model, identity, summary } = useRunEngine(run)
+  const { runner, account, model, actualModel, modelLabel, identity, summary } = useRunEngine(run, reportedModel)
+  const steps = stepModelRows(run)
+  const earlier = otherRunModels(run, actualModel)
   const startedAt = run.startedAt ? Date.parse(run.startedAt) : Number.NaN
   const live = isRunActive(run.status) && !run.finishedAt
   // A running task's clock ticks; a finished one is a fact.
@@ -89,18 +105,25 @@ function UsageChip({
           <button
             type="button"
             data-slot="agent-badge"
-            aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
+            aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${modelLabel}`}
             className="flex shrink-0 items-center gap-1 rounded-sm border border-border bg-card px-1.5 py-px font-mono text-meta tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <span data-slot="usage-summary" className="max-md:hidden">
               {wide.length > 0 ? wide.join(' · ') : summary}
             </span>
+            {/* The model the agent actually ran, beside what was asked: "auto → claude-opus-…".
+                The bare summary above already names it when there are no numbers yet. */}
+            {wide.length > 0 && actualModel ? (
+              <span data-slot="agent-badge-model" title={modelLabel} className="max-w-64 truncate max-md:hidden">
+                · {modelLabel}
+              </span>
+            ) : null}
             <span className="md:hidden">{narrow.length > 0 ? narrow.join(' · ') : summary}</span>
             <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
           </button>
         </PopoverTrigger>
       </IconTooltip>
-      <PopoverContent align="end" data-slot="run-usage-details" className="w-64 p-3 text-label">
+      <PopoverContent align="end" data-slot="run-usage-details" className="w-72 p-3 text-label">
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
           {duration ? (
             <>
@@ -134,6 +157,18 @@ function UsageChip({
           ) : null}
           <dt className="text-muted-foreground">Model</dt>
           <dd className="font-mono">{model}</dd>
+          {actualModel ? (
+            <>
+              <dt className="text-muted-foreground">Ran as</dt>
+              <dd data-slot="agent-badge-actual-model" className="font-mono break-all">{actualModel}</dd>
+            </>
+          ) : null}
+          {earlier.length > 0 ? (
+            <>
+              <dt className="text-muted-foreground">Also used</dt>
+              <dd data-slot="agent-badge-other-models" className="font-mono break-all">{earlier.join(', ')}</dd>
+            </>
+          ) : null}
           {identity ? (
             <>
               <dt className="text-muted-foreground">Identity</dt>
@@ -141,6 +176,27 @@ function UsageChip({
             </>
           ) : null}
         </dl>
+        {steps.length > 1 || steps.some((row) => row.others.length > 0) ? (
+          <div data-slot="agent-badge-step-models" className="mt-3 border-t border-border pt-2">
+            <p className="pb-1 text-meta text-muted-foreground">Models per step</p>
+            <ul className="flex flex-col gap-0.5">
+              {steps.map((row) => (
+                <li key={row.stepId} data-step-id={row.stepId} className="flex min-w-0 gap-2">
+                  <span className="shrink-0 text-muted-foreground">{row.name}</span>
+                  <span className="min-w-0 break-all font-mono">
+                    {row.actual}
+                    {row.others.length > 0 ? (
+                      <span className="text-muted-foreground">
+                        {' + '}
+                        {row.others.map((entry) => modelShare(entry, showTokens, showCost)).join(', ')}
+                      </span>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {continuationEngine ? (
           <div data-slot="agent-badge-engine-picker" className="mt-3 border-t border-border pt-2">
             <p className="pb-1 text-meta text-muted-foreground">Next continuation</p>
@@ -150,4 +206,13 @@ function UsageChip({
       </PopoverContent>
     </Popover>
   )
+}
+
+/** A side model with the first available share the cockpit is configured to show. */
+function modelShare(entry: ModelUsage, showTokens: boolean, showCost: boolean): string {
+  if (showCost && entry.costUsd !== undefined && entry.costUsd > 0) {
+    return `${entry.model} (${formatCost(entry.costUsd)})`
+  }
+  const tokens = (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0)
+  return showTokens && tokens > 0 ? `${entry.model} (${compactTokens(tokens)} tokens)` : entry.model
 }

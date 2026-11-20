@@ -110,64 +110,30 @@ it.each([
   expect(finishedDeliveries()).toBe(previousDeliveries);
 }, 30_000);
 
-it.each([false, true])('idle continuation respects cancellation during review Git (replacement: %s)', async (replace) => {
+// Idle park (spec 2026-11-04-idle-closed-attention-state § Revision): no settlement, so no webhook.
+it('an idle continuation parks as it was, with no webhook and no review Git probe', async () => {
   const id = manager.startRun(workflow, { task: 'mock:done initial', worktree: true }).id;
   await waitFor(() => store.getRun(id)?.status === 'done' && !manager.isActive(id));
   await service.tick();
-  const finishedDeliveries = () => service.deliveries(receiverId).filter(delivery => delivery.body?.includes('task.finished')).length;
-  const deliveriesBefore = finishedDeliveries();
-  // Observe the entire retired continuation, including its finally block, without
-  // mocking settlement or relying on the replacement's isActive flag to await it.
-  const continuation = vi.spyOn(manager as unknown as {
-    runContinuation: (...args: unknown[]) => Promise<void>;
-  }, 'runContinuation');
+  const deliveries = () => service.deliveries(receiverId).length;
+  const deliveriesBefore = deliveries();
   expect(manager.continueRun(id, { text: 'ordinary followup' }).ok).toBe(true);
-  const retiring = continuation.mock.results.at(-1)!.value as Promise<void>;
   await waitFor(() => store.getRun(id)?.status === 'waiting');
-  const stepId = store.getRun(id)!.currentStepId!;
-  expect(stepId).toBeDefined();
-  const bin = join(root, '.ai/bin');
-  mkdirSync(bin);
-  const signal = join(bin, 'probing');
-  const release = join(bin, 'release');
-  const git = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
-  // Gate the real review-gate diff, leaving all other Git operations untouched.
-  writeFileSync(join(bin, 'git'), `#!/bin/sh\nif [ "$1" = diff ] && [ "$#" = 2 ]; then\n touch '${signal}'\n while [ ! -f '${release}' ]; do sleep 0.02; done\nfi\nexec '${git}' "$@"\n`);
-  chmodSync(join(bin, 'git'), 0o755);
-  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
+  await service.tick();
+  const parkedDeliveries = deliveries();
+  const reviewGate = vi.spyOn(manager as unknown as { reviewGateApplies: (runId: string) => Promise<boolean> }, 'reviewGateApplies');
   const live = (manager as unknown as {
     active: Map<string, { idleClosed?: boolean; session: { end: () => void } }>;
   }).active.get(id)!;
   live.idleClosed = true;
   live.session.end();
-  try {
-    await waitFor(() => existsSync(signal));
-    expect(manager.cancel(id)).toBe(true);
-    expect(store.getRun(id)?.status).toBe('cancelled');
-    if (replace) {
-      await waitFor(() => !manager.isActive(id));
-      expect(manager.continueRun(id, { text: 'mock:ask replacement question' }).ok).toBe(true);
-      await waitFor(() => store.getRun(id)?.status === 'waiting');
-    }
-    const before = structuredClone(store.getRun(id)!);
-    expect(before.steps.find(step => step.id === stepId)).toBeDefined();
-    if (replace) expect(before.attentionRequest?.questions.length).toBeGreaterThan(0);
-    writeFileSync(release, '');
-    await retiring;
-    await service.tick();
-    const after = store.getRun(id)!;
-    expect(after.status).toBe(replace ? 'waiting' : 'cancelled');
-    expect(after.attentionRequest).toEqual(before.attentionRequest);
-    expect(after.currentStepId).toBe(before.currentStepId);
-    expect(after.steps.find(step => step.id === stepId)).toEqual(before.steps.find(step => step.id === stepId));
-    expect(after.error).toBe(before.error);
-    expect(after.completionReason).toBeUndefined();
-    expect(manager.isActive(id)).toBe(replace);
-    expect(finishedDeliveries()).toBe(deliveriesBefore);
-  } finally {
-    writeFileSync(release, '');
-    await retiring;
-  }
+  await waitFor(() => !manager.isActive(id));
+  await service.tick();
+  expect(store.getRun(id)).toMatchObject({ status: 'waiting' });
+  expect(store.getRun(id)?.idleClosedAt).toBeDefined();
+  expect(reviewGate).not.toHaveBeenCalled();
+  expect(parkedDeliveries).toBeGreaterThanOrEqual(deliveriesBefore);
+  expect(deliveries()).toBe(parkedDeliveries);
 }, 30_000);
 
 it('recovers a persisted unanswered native Codex question without reporting success', async () => {

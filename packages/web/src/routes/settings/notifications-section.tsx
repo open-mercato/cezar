@@ -12,6 +12,7 @@ import {
   type NotificationSupport,
 } from '@/lib/notifications'
 import { CardNote, FormRow, SettingsCard, useSavedFlash } from './form-row'
+import { NotchToggle, shellHasNotch } from './notch-toggle'
 
 /**
  * Settings → Notifications (R6 Step 1.7, spec §"Cross-cutting").
@@ -50,6 +51,8 @@ export function NotificationsSection() {
   const save = React.useCallback(
     (next: boolean) => {
       setEnabled(next)
+      // A first load still in flight would land after the answer below and flip the switch back.
+      void queryClient.cancelQueries({ queryKey: workspaceQueryKeys.uiState })
       putWorkspaceUiState({ notifications: { enabled: next } })
         .then((merged) => {
           queryClient.setQueryData(workspaceQueryKeys.uiState, merged)
@@ -135,6 +138,8 @@ export function NotificationsSection() {
           />
         </FormRow>
       </SettingsCard>
+
+      {shellHasNotch() ? <NotchToggle /> : null}
     </div>
   )
 }

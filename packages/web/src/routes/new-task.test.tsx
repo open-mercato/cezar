@@ -65,7 +65,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -129,8 +129,8 @@ const SKILLS: Skill[] = [
 
 const WORKFLOWS: WorkflowsResponse = {
   workflows: [
-    { name: 'quick-task', description: 'Single step, no gates', source: 'built-in', steps: [] },
-    { name: 'fix-and-verify', source: 'built-in', steps: [] },
+    { name: 'quick-task', description: 'Single step, no gates', source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [] },
+    { name: 'fix-and-verify', source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [] },
   ],
   issues: [],
 }
@@ -155,14 +155,15 @@ const CONFIG: ConfigResponse = {
   modelsLocked: false,
   maxParallel: 2,
   memoryLimitMb: null,
-  worktreeRetention: 10,
+  worktreeRetention: 10, worktreeIdleDays: 7, worktreeIdleDaysOwn: false, archivedTaskDeleteDays: 90, archivedTaskDeleteDaysOwn: false,
   liveTitleUpdates: null,
   reviewGate: null,
-  profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
+  profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,
 }
 
 const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   branding: { name: 'cezar', logoUrl: null },
+  computerName: 'Test Mac',
   agentDefaults: {},
   browseRoot: '~/',
   projectsDir: '~/cezar/projects',
@@ -183,7 +184,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
     monitoringWakeIntervalMinutes: null,
     autoResumeOnUsageLimit: true,
     memoryLimitMb: null,
-    worktreeRetentionDefault: 10,
+    worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
   },
 }
 
@@ -433,6 +434,26 @@ async function pickSelect(label: string, option: string) {
 // ---- the hero surface -------------------------------------------------------------------------
 
 describe('the hero surface', () => {
+  it('prefills Cursor from the connection page without starting a task or keeping another runner\'s model', async () => {
+    writeDraft({ ...readDraft(), text: 'Keep my prompt', runner: 'claude', agentProfile: 'claude-work', model: 'opus', reasoningEffort: 'high' })
+    serve({ health: { ...HEALTH, checks: [...HEALTH.checks, { name: 'cursor', available: true }] },
+      providerStatus: { providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'cursor', status: 'connected', enabled: true },
+      ] },
+    })
+    renderNewTask('/new?runner=cursor')
+    await pillReady()
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('cursor'))
+    expect(textarea().value).toBe('Keep my prompt')
+    expect(readDraft()).toMatchObject({ runner: 'cursor', agentProfile: null, model: null, reasoningEffort: null })
+    expect(requests.some((r) => r.method === 'POST' && r.url.endsWith('/runs'))).toBe(false)
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Composer 2.5/ }))
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'cursor', model: 'composer-2.5', task: 'Keep my prompt' })
+  })
+
   it('offers one Start action without a plan-mode switcher', async () => {
     serve()
     renderNewTask()
@@ -1290,7 +1311,7 @@ describe('submit', () => {
           workflows: {
             workflows: [
               ...WORKFLOWS.workflows,
-              { name: 'one-step', source: 'file', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
+              { name: 'one-step', source: 'file', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
             ],
             issues: [],
           },
@@ -1494,6 +1515,7 @@ describe('submit', () => {
           {
             name: 'fix-and-verify',
             source: 'file',
+            capabilities: { push: true, openPr: true, postToGithub: true },
             steps: [
               { id: 'fix', name: 'Fix', prompt: '{{task}}' },
               { id: 'verify', name: 'Verify', command: 'npm test' },
@@ -1518,7 +1540,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')

@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { GithubData, ManagerSnapshot } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
-import { buildSnapshot, gateAttention, prAttention, readColdRuns, snapshotTasks, taskAttention, type ManagerProjectSource } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, openTaskAskId, prAttention, readColdRuns, snapshotTasks, taskAttention, taskDetailRows, taskEventOf, type ManagerProjectSource } from './snapshot.ts';
 
 const NOW = Date.parse('2026-10-31T12:00:00.000Z');
+const NOW_ISO = new Date(NOW).toISOString();
 const run = (over: Partial<RunRecord> & { id: string }): RunRecord => ({
   title: over.id, status: 'done', archived: false, workflow: 'quick-task', createdAt: '2026-10-31T10:00:00.000Z', steps: [], ...over,
 } as unknown as RunRecord);
@@ -75,6 +76,43 @@ describe('snapshotTasks', () => {
   });
 });
 
+describe('task rows (spec 2026-10-31-managers, Addendum 2026-11-12)', () => {
+  it("lists the user's own tasks beside a manager's, and says which is which", () => {
+    const rows = snapshotTasks([
+      run({ id: 'mine', startedByManager: { id: 'm1', name: 'Coding Manager' } }),
+      run({ id: 'users', status: 'failed', finishedAt: '2026-10-31T11:00:00.000Z' }),
+    ]);
+    expect(rows.map((row) => [row.runId, row.startedBy, row.startedByManager]).sort()).toEqual([
+      ['mine', 'manager', 'Coding Manager'],
+      ['users', 'user', undefined],
+    ]);
+    expect(taskAttention('p', [run({ id: 'users', status: 'failed', finishedAt: '2026-10-31T11:00:00.000Z' })], NOW).map((item) => item.runId)).toEqual(['users']);
+  });
+
+  it('carries the runner, the resolved model, the effort and the cancel reason', () => {
+    const [row] = snapshotTasks([run({ id: 'r', runner: 'claude', model: 'opus', modelIdentity: 'anthropic/claude-opus-5', reasoningEffort: 'max', status: 'cancelled', cancelReason: 'review only', cancelledBy: 'Coding Manager' })]);
+    expect(row).toMatchObject({ runner: 'claude', model: 'anthropic/claude-opus-5', effort: 'max', cancelReason: 'review only', cancelledBy: 'Coding Manager' });
+    expect(snapshotTasks([run({ id: 'r', model: 'opus' })])[0]?.model).toBe('opus');
+  });
+
+  it('names the pull request a task opened, else the one it declared', () => {
+    const url = 'https://github.com/o/r/pull/42';
+    expect(snapshotTasks([run({ id: 'a', pullRequestUrl: url })])[0]).toMatchObject({ prNumber: 42, prUrl: url });
+    expect(snapshotTasks([run({ id: 'b', prRefs: [{ number: 7, origin: 'derived', at: NOW_ISO }, { number: 9, url: 'https://github.com/o/r/pull/9', origin: 'created', at: NOW_ISO }] })])[0]).toMatchObject({ prNumber: 9 });
+    expect(snapshotTasks([run({ id: 'c', markerRefs: { pr: 12 } })])[0]).toMatchObject({ prNumber: 12 });
+    const none = snapshotTasks([run({ id: 'd' })])[0];
+    expect(none && 'prNumber' in none).toBe(false);
+  });
+
+  it('finds a task by an unambiguous prefix of eight or more characters', () => {
+    const runs = [run({ id: '0123abcd-1' }), run({ id: '0123abcd-2' }), run({ id: 'feedbeef-1' })];
+    expect(findRun(runs, 'feedbeef')?.id).toBe('feedbeef-1');
+    expect(findRun(runs, '0123abcd')).toBeUndefined();
+    expect(findRun(runs, 'feed')).toBeUndefined();
+    expect(taskDetailRows(runs, 'feedbeef')?.task.runId).toBe('feedbeef-1');
+  });
+});
+
 describe('taskAttention', () => {
   it('reports a finished task once it is unseen, so a promise to report it can be kept', () => {
     const now = Date.parse('2026-10-31T12:00:00.000Z');
@@ -116,6 +154,21 @@ describe('task-needs-you', () => {
     const closed = run({ id: 'r', status: 'failed', finishedAt: '2026-10-31T11:30:00.000Z', awaitingAnswerSince: '2026-10-31T11:30:00.000Z', waitingSince: at });
     expect(needsYou(closed)[0]?.key).toBe(key);
     expect(needsYou({ ...live, waitingSince: '2026-10-31T11:45:00.000Z' })[0]?.key).not.toBe(key);
+  });
+
+  // spec 2026-11-04-idle-closed-attention-state § Revision: an idle close is not news.
+  it('an idle close neither adds attention nor changes the wait it already reported', () => {
+    const live = run({ id: 'r', status: 'waiting', waitingSince: at, askParked: true });
+    const parked = { ...live, idleClosedAt: '2026-10-31T11:30:00.000Z' };
+    expect(taskAttention('p', [parked], NOW)).toEqual(taskAttention('p', [live], NOW));
+    expect(taskEventOf('p', parked)).toEqual(taskEventOf('p', live));
+  });
+
+  it('an idle close settled `failed` (older records, dispatched children) is never a failure to report', () => {
+    const legacy = run({ id: 'r', status: 'failed', finishedAt: at, idleClosedAt: at, error: 'the session closed after inactivity' });
+    expect(taskAttention('p', [legacy], NOW)).toEqual([]);
+    expect(taskEventOf('p', legacy)).toBeUndefined();
+    expect(taskEventOf('p', { ...legacy, idleClosedAt: undefined })?.state).toBe('failed');
   });
 
   it('a record with no stamp still has a stable key', () => {
@@ -243,5 +296,15 @@ describe('buildSnapshot', () => {
     const github = { list: async () => empty, refStatus: async () => { throw new Error('not reached'); } };
     const snapshot = await buildSnapshot([source({ automationFailures: () => [{ id: 'a', name: 'nightly', at: 't1', reason: 'x' }] })], github, NOW);
     expect(snapshot.attention[0]).toMatchObject({ key: 'automation-failing:p:a:t1', kind: 'automation-failing', detail: 'x' });
+  });
+});
+
+describe('openTaskAskId (Questions inbox spec)', () => {
+  const ask = (requestId: string, over: Record<string, unknown> = {}) => ({ requestId, askedAt: NOW_ISO, questions: [], ...over });
+  it("names a waiting task's newest open question: its card id, else its requestId, else the Guard's", () => {
+    expect(openTaskAskId(run({ id: 'a', asks: [ask('r1', { cardId: 'base' }), ask('r2', { closed: { reason: 'answered', at: NOW_ISO } })] } as never))).toBe('base');
+    expect(openTaskAskId(run({ id: 'b', asks: [ask('r1')] } as never))).toBe('r1');
+    expect(openTaskAskId(run({ id: 'c', asks: [{ bogus: true }], dispatch: { pendingAsk: { requestId: 'guard', questions: [], askedAt: NOW_ISO } } } as never))).toBe('guard');
+    expect(openTaskAskId(run({ id: 'd' }))).toBeUndefined();
   });
 });

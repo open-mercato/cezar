@@ -15,6 +15,7 @@ import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled
 import { CEZAR_REPO, fetchOpenPulls, OpenPullsCache, type OpenPulls } from './pulls.ts';
 import { distTagFor, RegistryCache, type PackageDocument } from './registry.ts';
 import { classifyVersion, isNewer } from './semver.ts';
+import { autoPruneVersions, startVersionPruning } from './versions-prune.ts';
 
 const LOG_CAP = 200;
 /** How often a scheduled "update when idle" re-checks the workspace. */
@@ -60,6 +61,8 @@ export class SelfUpdateService {
   private readonly env: NodeJS.ProcessEnv;
   private job: SelfUpdateJob | null = null;
   private scheduled: SelfUpdateScheduled | null = null;
+  /** Whether the "when idle" request came from a hosted caller, read then: the timer has no scope. */
+  private scheduledTrim = false;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private readonly pulls: OpenPullsCache;
 
@@ -73,6 +76,11 @@ export class SelfUpdateService {
   /** The raw running version — what update checks compare, never the shown `-dev` one. */
   get runningVersion(): string {
     return this.deps.version;
+  }
+
+  /** The running entry file — what decides which installed version is "running". */
+  get entry(): string {
+    return this.deps.entry;
   }
 
   /** The configured channel: workspace config wins, then `CEZ_UPDATE_CHANNEL`, then stable. */
@@ -261,7 +269,7 @@ export class SelfUpdateService {
    * id of a built cezar checkout `status()` lists — linked on the spot), activate it and restart.
    * Returns as soon as the job is started; progress is on `status()`.
    */
-  apply(target: string): SelfUpdateJob {
+  apply(target: string, trimPaths: boolean = this.deps.trimPaths?.() ?? false): SelfUpdateJob {
     if (this.job?.status === 'running' || this.job?.status === 'restarting') throw new SelfUpdateBusyError();
     const { canSelfUpdate, reason } = this.capability();
     if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
@@ -277,11 +285,14 @@ export class SelfUpdateService {
       try {
         const installed = findInstalled(target, this.env);
         // A linked checkout goes through discovery too: it may need a rebuild before it runs.
-        const linked = !installed || installed.source === 'link' ? await this.linkDiscovered(target, log) : null;
+        const linked = !installed || installed.source === 'link' ? await this.linkDiscovered(target, log, trimPaths) : null;
         const id = linked ?? installed?.id ?? (await installFromRegistry(target, { onLog: log, env: this.env })).id;
         if (installed && !linked) log(`${id} is already installed`);
         activate(id, this.env);
         log(`activated ${id}`);
+        // Keep this (still running) version and the new one; a restart that cuts the delete
+        // short leaves `.trash-*` for the next prune.
+        void autoPruneVersions({ entry: this.deps.entry, env: this.env, onLog: log });
         job.status = 'restarting';
         job.finishedAt = new Date().toISOString();
         log('restarting…');
@@ -307,6 +318,7 @@ export class SelfUpdateService {
     const { canSelfUpdate, reason } = this.capability();
     if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
     this.scheduled = { target, requestedAt: new Date().toISOString() };
+    this.scheduledTrim = this.deps.trimPaths?.() ?? false;
     if (!this.idleTimer) {
       this.idleTimer = setInterval(() => this.applyIfIdle(), this.deps.idlePollMs ?? IDLE_POLL_MS);
       this.idleTimer.unref?.();
@@ -325,7 +337,7 @@ export class SelfUpdateService {
     if (!scheduled) return;
     if (this.deps.runs && !this.deps.runs.idle()) return;
     try {
-      this.apply(scheduled.target);
+      this.apply(scheduled.target, this.scheduledTrim);
     } catch (error) {
       // Nobody is watching a deferred apply — leave the refusal where the dialog shows a failure.
       this.cancelScheduled();
@@ -340,8 +352,8 @@ export class SelfUpdateService {
    *  target is then an installed entry or a registry version. A hosted cockpit never builds or
    *  links here (`trimPaths`); at most it activates a link the host itself created, and only one
    *  `forwardOnlyRefusal` lets through. */
-  private async linkDiscovered(target: string, log: (line: string) => void): Promise<string | null> {
-    if (this.deps.trimPaths?.()) return null;
+  private async linkDiscovered(target: string, log: (line: string) => void, trimPaths: boolean): Promise<string | null> {
+    if (trimPaths) return null;
     const checkout = (await discoverCheckouts(this.env)).find((entry) => entry.id === target);
     if (!checkout) return null;
     if (!checkout.built || checkout.stale) {
@@ -350,6 +362,12 @@ export class SelfUpdateService {
     }
     log(`linking ${checkout.packageRoot} (${checkout.branch})`);
     return linkCheckout(checkout.packageRoot, checkout.branch, this.env, checkout.id).id;
+  }
+
+  /** At boot: lease the running version and prune old installs in the background. */
+  startVersionPruning(onLog?: (line: string) => void): void {
+    if (this.deps.readOnly) return;
+    startVersionPruning({ entry: this.deps.entry, env: this.env, onLog });
   }
 
   /** `cezar install` from a checkout or the npx cache: pack the running package into the managed

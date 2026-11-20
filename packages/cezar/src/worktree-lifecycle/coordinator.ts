@@ -638,7 +638,8 @@ export class WorktreeLifecycleCoordinator {
       if (current.revision !== input.expectedRevision) throw new LifecycleConflict('Operation changed; refresh and try again');
       const view = await this.view(current, record);
       if (!view.allowedActions.includes(input.action)) throw new LifecycleConflict('Action is not available for this operation');
-      if (!await this.processQuiescent(current)) throw new LifecycleConflict('Previous script may still be running; stop that process before retrying');
+      // #2165: cancel-task runs no script and removes nothing, so an unverified process may not block it.
+      if (input.action !== 'cancel-task' && !await this.processQuiescent(current)) throw new LifecycleConflict('Previous script may still be running; stop that process before retrying');
       current.requests.push({requestId: input.requestId, bodyHash: hash});
       current.decision = {action: input.action, actor: 'local-user', at: now()};
       if (input.action === 'stop') {
@@ -686,6 +687,8 @@ export class WorktreeLifecycleCoordinator {
     if (operation.state === 'queued' || operation.state === 'running') allowedActions = ['stop'];
     if (attention.has(operation.state) && await this.processQuiescent(operation)) allowedActions = operation.phase === 'setup'
       ? ['retry', 'start-anyway', 'cancel-task'] : ['retry', 'keep-worktree', 'force-delete'];
+    // #2165: an unverifiable setup process must still leave an exit, or the task can never be stopped.
+    else if (attention.has(operation.state) && operation.phase === 'setup' && !operation.agentQuiescencePending) allowedActions = ['cancel-task'];
     if (!existsSync(record.worktreePath)) allowedActions = allowedActions.filter(action => action !== 'start-anyway');
     return lifecycleOperationViewSchema.parse({...operation, history: operation.executions, entries, allowedActions});
   }

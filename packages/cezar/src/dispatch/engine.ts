@@ -118,7 +118,7 @@ export function childTaskEnvelope(
   }
   if (child.review_of?.length) lines.push(`- Review of: ${child.review_of.join(', ')}`);
   if (child.scope) lines.push(`- Scope: ${child.scope}`);
-  if (child.allowed_tools?.length) lines.push(`- Allowed tools: ${child.allowed_tools.join(', ')}`);
+  if (child.allowed_tools !== undefined) lines.push(`- Allowed tools: ${child.allowed_tools.join(', ') || '(none)'}`);
   if (child.max_cost !== undefined) lines.push(`- Max cost: ${usd(child.max_cost)}`);
   if (child.success_criteria) lines.push(`- Success criteria: ${child.success_criteria}`);
   if (child.required_evidence) lines.push(`- Required evidence: ${child.required_evidence}`);

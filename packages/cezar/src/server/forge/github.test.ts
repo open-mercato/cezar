@@ -62,6 +62,7 @@ import {
   TIMELINE_EVENT_KINDS,
 } from './github.ts';
 import type { ForgeComment } from './types.ts';
+import { onPrClosed } from './pr-closed.ts';
 
 /** `rollupToChecks` collapses a `gh … --json statusCheckRollup` array — already zod-validated
  *  via `ghCheckRunSchema` at the call site — down to the single enum the GitHub tab renders,
@@ -2863,6 +2864,23 @@ describe('fetchGithubRefStatus', () => {
     expect(execFileMock.mock.calls.length).toBe(calls); // nothing spawned the second time
   });
 
+  it('reports a fresh merged or closed PR to the closed-PR bus, never an open one or a cached read', async () => {
+    const heard: Array<[string, number, string]> = [];
+    const stop = onPrClosed((root, number, state) => heard.push([root, number, state]));
+    try {
+      stubGh(JSON.stringify({ data: { repository: {
+        r0: { __typename: 'PullRequest', state: 'MERGED', isDraft: false, reviewDecision: null, commits: { nodes: [] } },
+        r1: { __typename: 'PullRequest', state: 'CLOSED', isDraft: false, reviewDecision: null, commits: { nodes: [] } },
+        r2: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, commits: { nodes: [] } },
+      } } }));
+      await fetchGithubRefStatus('/repo/ref-status-bus', { prs: [7, 8, 9] });
+      await fetchGithubRefStatus('/repo/ref-status-bus', { prs: [7, 8, 9] });
+      expect(heard).toEqual([['/repo/ref-status-bus', 7, 'merged'], ['/repo/ref-status-bus', 8, 'closed']]);
+    } finally {
+      stop();
+    }
+  });
+
   it('names the conflicting pull requests beside the statuses, and only those', async () => {
     // Both axes in one answer: #7 is `ready` AND unmergeable, #8 is merely ready. `conflicts` is
     // a list rather than a map because the empty case is the normal one.
@@ -3280,6 +3298,15 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
       stderr: `gh: ${message} (HTTP 404)`,
     });
 
+  /** A 403 body as `gh api` reports it: the JSON on stdout, the message on stderr. */
+  const forbiddenWith = (message: string) =>
+    Object.assign(new Error(`Command failed: gh api …\ngh: ${message} (HTTP 403)`), {
+      code: 1,
+      stdout: JSON.stringify({ message, documentation_url: 'https://docs.github.com/rest', status: '403' }),
+      stderr: `gh: ${message} (HTTP 403)`,
+    });
+  const planGated = () => forbiddenWith('Upgrade to GitHub Pro or make this repository public to enable this feature.');
+
   const aggregate = (state: string | null) => ({
     data: { repository: { p0: { commits: { nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }] } } } },
   });
@@ -3293,6 +3320,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
     protection?: () => unknown;
     reviews?: () => unknown;
     rules?: () => unknown;
+    branch?: () => unknown;
   }) {
     const calls: string[] = [];
     execFileMock.mockImplementation((...args: unknown[]) => {
@@ -3326,6 +3354,9 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
       }
       if (argv[0] === 'api' && (argv[1] ?? '').includes('/rules/branches/')) {
         return answer(routes.rules ?? (() => []));
+      }
+      if (argv[0] === 'api' && /\/branches\/[^/]+$/.test(argv[1] ?? '')) {
+        return answer(routes.branch ?? (() => { throw notAccessible('gh api …/branches/main'); }));
       }
       if (argv[0] === 'api') return answer(() => policy);
       return cb(new Error(`unexpected gh ${argv.join(' ')}`), null);
@@ -3545,6 +3576,134 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
       if (!out.available) throw new Error('expected the merge state to survive');
       expect(out.mergeState.reviewDecision).toBe('approved');
       expect(out.mergeState.canMerge).toBe(true);
+    });
+
+    describe('on a plan without branch protection (#2173)', () => {
+      const gated = { protection: () => { throw planGated(); }, reviews: () => { throw planGated(); }, rules: () => { throw planGated(); } };
+
+      it('reads an unprotected base branch as no policy', async () => {
+        const calls = routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, branch: () => ({ name: 'main', protected: false }) });
+
+        const out = await fetchPrMergeState('/repo/free-private', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(calls).toContain('api repos/acme/demo/branches/main');
+        expect(out.mergeState.reviewDecision).toBe('not-required');
+        expect(out.mergeState.checks).toEqual([{ name: 'ci', state: 'passing', required: false }]);
+        expect(out.mergeState.blockers).toEqual([]);
+        expect(out.mergeState.canMerge).toBe(true);
+      });
+
+      it('reads a body without `status` by the HTTP code gh reports', async () => {
+        const message = 'Upgrade to GitHub Pro or make this repository public to enable this feature.';
+        const noStatus = (stderr: string) => () => {
+          throw Object.assign(new Error(`Command failed: gh api …\n${stderr}`), { code: 1, stdout: JSON.stringify({ message }), stderr });
+        };
+        const cases = [
+          { stderr: `gh: ${message} (HTTP 403)`, canMerge: true },
+          { stderr: `gh: ${message} (HTTP 404)`, canMerge: false },
+        ];
+        for (const [i, { stderr, canMerge }] of cases.entries()) {
+          __clearMergeStateCacheForTests();
+          const gate = noStatus(stderr);
+          routeGh({ core: () => noReviewPolicy, detail: passingDetail, protection: gate, reviews: gate, rules: gate, branch: () => ({ name: 'main', protected: false }) });
+
+          const out = await fetchPrMergeState(`/repo/ghes-no-status-${i}`, repoRef, 353);
+
+          if (!out.available) throw new Error('expected the merge state to survive');
+          expect(out.mergeState.canMerge).toBe(canMerge);
+        }
+      });
+
+      it('keeps the CI and mergeable gates', async () => {
+        routeGh({
+          core: () => ({ ...noReviewPolicy, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }),
+          detail: () => ({ statusCheckRollup: [{ name: 'ci', conclusion: 'FAILURE' }] }),
+          ...gated,
+          branch: () => ({ name: 'main', protected: false }),
+        });
+
+        const out = await fetchPrMergeState('/repo/free-private-red', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers.map((b) => b.code)).not.toContain('rules-unknown');
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('fails closed on a 403 with any other message', async () => {
+        const other = () => { throw forbiddenWith('Resource not accessible by integration'); };
+        routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, rules: other, branch: () => ({ name: 'main', protected: false }) });
+
+        const out = await fetchPrMergeState('/repo/other-403', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('fails closed when the branch says it is protected', async () => {
+        routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, branch: () => ({ name: 'main', protected: true }) });
+
+        const out = await fetchPrMergeState('/repo/protected-403', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.reviewDecision).toBe('unknown');
+        expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('fails closed when the branch cannot be read or does not match', async () => {
+        const answers: Array<() => unknown> = [
+          () => { throw forbiddenWith('Bad credentials'); },
+          () => 'not json',
+          () => ({ name: 'main' }),
+          () => ({ name: 'main', protected: 'false' }),
+          () => ({ name: 'develop', protected: false }),
+        ];
+        for (const [i, branch] of answers.entries()) {
+          __clearMergeStateCacheForTests();
+          routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, branch });
+
+          const out = await fetchPrMergeState(`/repo/branch-unreadable-${i}`, repoRef, 353);
+
+          if (!out.available) throw new Error('expected the merge state to survive');
+          expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+          expect(out.mergeState.canMerge).toBe(false);
+        }
+      });
+
+      it('fails closed when a readable source contradicts "unprotected"', async () => {
+        routeGh({
+          core: () => noReviewPolicy,
+          detail: passingDetail,
+          ...gated,
+          rules: () => [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci' }] } }],
+          branch: () => ({ name: 'main', protected: false }),
+        });
+
+        const out = await fetchPrMergeState('/repo/contradicted', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('accepts a mix of plan-gated, "not configured" and empty rulesets', async () => {
+        routeGh({
+          core: () => noReviewPolicy,
+          detail: passingDetail,
+          protection: () => { throw planGated(); },
+          reviews: () => { throw notProtected('Branch not protected'); },
+          rules: () => [],
+          branch: () => ({ name: 'main', protected: false }),
+        });
+
+        const out = await fetchPrMergeState('/repo/free-mixed', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers).toEqual([]);
+        expect(out.mergeState.canMerge).toBe(true);
+      });
     });
 
     it('fails closed when protection answers 403', async () => {

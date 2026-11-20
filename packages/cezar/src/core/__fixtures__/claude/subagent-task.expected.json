@@ -136,7 +136,11 @@
       "total": 37595,
       "cacheRead": 36000
     },
-    "costUsd": 0.0455
+    "costUsd": 0.0455,
+    "models": [
+      { "model": "claude-fable-5", "inputTokens": 1310, "outputTokens": 180, "costUsd": 0.0441 },
+      { "model": "claude-haiku-5-5", "inputTokens": 80, "outputTokens": 25, "costUsd": 0.0014 }
+    ]
   },
   {
     "type": "usage.updated",

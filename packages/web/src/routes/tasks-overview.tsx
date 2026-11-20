@@ -1,5 +1,6 @@
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
+import { runModelLine, titleWithModel } from '@/lib/actual-model'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
@@ -32,6 +33,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
 import { CacheStatusChip } from '@/components/cache-status'
+import { isCezarShell } from '@/lib/phone-app'
 import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -51,6 +53,7 @@ import { Segmented } from '@/components/segmented'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -66,8 +69,11 @@ import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention, isIdleClosed, type Attention } from '@/lib/attention'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import {
+  CONTROLS_COLUMN_WIDTH_PX,
+  FOLDED_COLUMN_WIDTH_PX,
   isColumnExpanded,
   normalizeExpandedColumns,
+  tableMinWidth,
   taskColumnsForCapabilities,
   type NormalizedExpandedColumns,
   type TaskColumnDefinition,
@@ -167,7 +173,10 @@ export function TasksOverview({
   firstRun,
   initialQuery = '',
   cacheStatus,
+  managersAvailable = false,
 }: {
+  /** Manager owns task creation on mobile/app navigation when available. */
+  managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
   runs: RunRecord[] | undefined
@@ -347,17 +356,19 @@ export function TasksOverview({
         ) : null}
         {/* Only when there is something to sweep, like the legacy header's count-gated broom. */}
         {view === 'active' && finished > 0 ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-slot="archive-finished"
-            className="hidden md:inline-flex"
-            onClick={onArchiveFinished}
-          >
-            <ArchiveIcon className="size-3.5" aria-hidden="true" />
-            Archive finished
-          </Button>
+          <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-slot="archive-finished"
+              className="hidden md:inline-flex"
+              onClick={onArchiveFinished}
+            >
+              <ArchiveIcon className="size-3.5" aria-hidden="true" />
+              Archive finished
+            </Button>
+          </IconTooltip>
         ) : null}
         <div className="relative hidden w-60 md:block">
           <SearchIcon
@@ -414,6 +425,7 @@ export function TasksOverview({
         ) : null}
         {runs === undefined ? null : hasScheduledTasks && all.length === 0 ? <p className="text-sm text-muted-foreground">No tasks have started yet.</p> : visible.length === 0 ? (
           <TasksEmptyState
+            managersAvailable={managersAvailable}
             view={view}
             query={query}
             filtered={activeTaskFacetCount(filters) > 0}
@@ -437,11 +449,17 @@ export function TasksOverview({
                 {/* Fixed layout: the Task column takes whatever the fixed-width columns leave,
                     so a title stops truncating at thirty characters while Branch, Ref and Mem keep
                     their room (spec: attention-first cockpit (2026-11-11), Finding 1). */}
-                <table className="w-full table-fixed border-collapse" aria-rowcount={tableWindow.ariaRowCount}>
+                {/* A fixed table ignores the Task cell's own floor: below the columns' sum it gave the
+                    title 0px (iPad portrait), so the table keeps that floor and scrolls instead. */}
+                <table
+                  className="w-full table-fixed border-collapse"
+                  style={{ minWidth: `${tableMinWidth(columns, expandedColumns, Boolean(onTaskAction))}px` }}
+                  aria-rowcount={tableWindow.ariaRowCount}
+                >
                   <colgroup>
                     {/* The checkbox is all the controls column reserves; the quick actions float over
                         the row on hover (owner review, 2026-11-12: "the left side fell apart"). */}
-                    {onTaskAction ? <col data-column-id="controls" style={{ width: '36px' }} /> : null}
+                    {onTaskAction ? <col data-column-id="controls" style={{ width: `${CONTROLS_COLUMN_WIDTH_PX}px` }} /> : null}
                     {columns.map((column) => {
                       const expanded = isColumnExpanded(column.id, expandedColumns)
                       return (
@@ -449,7 +467,7 @@ export function TasksOverview({
                           key={column.id}
                           data-column-id={column.id}
                           data-expanded={expanded}
-                          style={{ width: expanded ? column.width : '42px' }}
+                          style={{ width: expanded ? column.width : `${FOLDED_COLUMN_WIDTH_PX}px` }}
                         />
                       )
                     })}
@@ -581,19 +599,18 @@ export function TasksOverview({
         ))}
       </div>
 
-      {/* The mobile New-task FAB. The desktop CTA lives in the sidebar. A router Link since
-          R4 step 1.3 re-pointed /new at the React composer — no full page load needed. */}
-      <Link
-        to="/new"
-        data-slot="new-task-fab"
-        aria-label="New task"
-        className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
-      >
-        <PlusIcon className="size-[22px]" aria-hidden="true" />
-      </Link>
+      {!managersAvailable ? <ManualTaskFab /> : null}
     </div>
     </LiveNowProvider>
   )
+}
+
+/** The capability fallback stays available when Manager cannot create tasks. */
+function ManualTaskFab() {
+  return <Link to="/new" data-slot="new-task-fab" aria-label="New task"
+    className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden">
+    <PlusIcon className="size-[22px]" aria-hidden="true" />
+  </Link>
 }
 
 /**
@@ -655,6 +672,7 @@ function TaskCardList({ cards }: { cards: React.ReactElement[] }) {
  * a fact, so those stay flat. `heading="h2"` because the page's h1 is the header's "Tasks".
  */
 function TasksEmptyState({
+  managersAvailable = false,
   view,
   query,
   filtered = false,
@@ -664,6 +682,7 @@ function TasksEmptyState({
   onShowAll = () => undefined,
   firstRun,
 }: {
+  managersAvailable?: boolean
   view: ListView
   query: string
   /** A status/workflow/automation facet is narrowing the list. */
@@ -733,7 +752,10 @@ function TasksEmptyState({
           subtitle="Finished tasks you archive land here."
         />
       ) : firstRun ? (
-        firstRun
+        managersAvailable ? <>
+          <div className={isCezarShell() ? 'p-4' : 'p-4 md:hidden'}><Button asChild><Link to="/manager">Ask a manager to start a task</Link></Button></div>
+          <div className={isCezarShell() ? 'hidden' : 'hidden md:block'}>{firstRun}</div>
+        </> : firstRun
       ) : (
         <CenteredState
           heading="h2"
@@ -743,12 +765,12 @@ function TasksEmptyState({
           title="No tasks yet"
           subtitle="Describe a task to get started."
           actions={
-            <Button asChild>
-              <Link to="/new">
-                <PlusIcon aria-hidden="true" />
-                New task
-              </Link>
-            </Button>
+            <>
+              {managersAvailable ? <Button asChild className={isCezarShell() ? undefined : "md:hidden"}><Link to="/manager">Ask a manager</Link></Button> : null}
+              <Button asChild className={managersAvailable ? (isCezarShell() ? 'hidden' : 'hidden md:inline-flex') : undefined}>
+                <Link to="/new"><PlusIcon aria-hidden="true" />New task</Link>
+              </Button>
+            </>
           }
         />
       )}
@@ -1038,7 +1060,7 @@ const TD_BASE = 'h-11 overflow-hidden border-b border-border px-2.5 whitespace-n
 /**
  * The status grammar (spec: attention-first cockpit (2026-11-11), Proposal 7): a word only where
  * the state is still open. A finished, cancelled, idle-closed or archived row shows its mark and no
- * pill — the mark keeps the state's colour (green done, grey queued/cancelled, orange idle: owner
+ * pill — the mark keeps the state's colour (green done, grey queued/cancelled/idle: owner
  * review, 2026-11-12), the news is elsewhere.
  */
 function isQuietStatus(run: RunRecord): boolean {
@@ -1369,6 +1391,7 @@ function TaskTableCell({
       return (
         <td
           data-column-id={column.id}
+          title={runModelLine(run)}
           className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}
         >
           {cost || <Dash />}
@@ -1461,7 +1484,7 @@ function TitleCell({
       ) : null}
       <Link
         to={to}
-        title={title}
+        title={titleWithModel(title, run)}
         aria-describedby={quiet ? statusId : undefined}
         className={cn(
           'min-w-0 truncate text-ui',
@@ -1624,6 +1647,25 @@ const TaskCard = React.memo(function TaskCard({
   const statusId = React.useId()
   const quiet = isQuietStatus(run)
 
+  // Open cards put the title on its own line after the status, age and pin: rendered there in the
+  // DOM too, so reading and focus order follow what the eye sees.
+  const title = (
+    <Link
+      to={to}
+      aria-describedby={quiet ? statusId : undefined}
+      data-slot="task-card-title"
+      className={cn(
+        'min-w-0 flex-1 text-ui leading-[1.35] [overflow-wrap:anywhere]',
+        !quiet && 'basis-full',
+        unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+      )}
+    >
+      {runTitle(run)}
+      {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
+      {unread ? <UnreadMarker /> : null}
+    </Link>
+  )
+
   return (
     <div
       data-slot="task-card"
@@ -1641,7 +1683,9 @@ const TaskCard = React.memo(function TaskCard({
       }}
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
-      <div className="flex items-start gap-2.5">
+      {/* A status pill beside the title left a phone title one word wide, overlapping the age at
+          large text: the title gets its own full-width line below the pill and age. */}
+      <div data-slot="task-card-head" className={cn('flex items-start gap-2.5', !quiet && 'flex-wrap gap-y-1.5')}>
         {selectable ? <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected}
           disabled={actionsBusy} onChange={() => onSelect(run.id)} /> : null}
         {quiet ? (
@@ -1652,18 +1696,7 @@ const TaskCard = React.memo(function TaskCard({
             {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
           </Pill>
         )}
-        <Link
-          to={to}
-          aria-describedby={quiet ? statusId : undefined}
-          className={cn(
-            'min-w-0 flex-1 text-ui leading-[1.35]',
-            unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
-          )}
-        >
-          {runTitle(run)}
-          {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
-          {unread ? <UnreadMarker /> : null}
-        </Link>
+        {quiet ? title : null}
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
         {dispatchKindLabel(run) ? (
           <span
@@ -1683,7 +1716,7 @@ const TaskCard = React.memo(function TaskCard({
             className="mt-px"
           />
         ) : null}
-        <span className="mt-0.5 shrink-0 text-meta text-soft-foreground tabular-nums">
+        <span className={cn('mt-0.5 shrink-0 text-meta text-soft-foreground tabular-nums', !quiet && 'ml-auto')}>
           <RelativeAge at={sortTimestamp(run, sortBy)} />
         </span>
         {/* Always visible here, not hover-revealed: a card has no hover to speak of on the
@@ -1695,6 +1728,7 @@ const TaskCard = React.memo(function TaskCard({
             className="-mr-1 mt-px"
           />
         ) : null}
+        {quiet ? null : title}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-meta font-medium text-muted-foreground tabular-nums">
         <span>{workflowLabel(run)}</span>
@@ -1893,6 +1927,7 @@ export function TasksOverviewRoute() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TasksOverview
+        managersAvailable={health.data?.capabilities?.managers === true}
         scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
         hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}
         runs={runs.data}
