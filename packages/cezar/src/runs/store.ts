@@ -19,7 +19,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
@@ -2561,7 +2561,7 @@ export class RunStore extends EventEmitter {
     // including reclaimed/archived tasks with no directory, and salvaged newer-version records.
     const health = this.getIndexReadHealth();
     if (health.state !== 'complete' || health.omittedRuns > 0) return;
-    pruneRestrictedCodexHomes(join(this.dataDir, '..', '..'), known);
+    pruneRestrictedCodexHomes(resolve(this.dataDir, '../..'), known);
   }
 
   /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
