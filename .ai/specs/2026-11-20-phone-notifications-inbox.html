@@ -109,8 +109,68 @@
 <div class="row">
   <div class="variant"><h3>A · Web inbox per cezar</h3><p>The inbox above, in the cockpit. One implementation serves the phone, the desktop and the notch. Shows one computer at a time.</p><p class="mut">Cost: web + server. Low.</p></div>
   <div class="variant"><h3>B · Native cross-cezar inbox</h3><p>An inbox in the app shell listing every computer's items together. Needs a new tunnel read per cezar on each open, written twice (Swift, Java), and every inline action re-implemented natively.</p><p class="mut">Cost: high; offline computers show stale rows.</p></div>
-  <div class="variant rec-b"><h3>C · A + native glue <span class="tag rec">recommended</span></h3><p>The web inbox of A, plus count chips on <i>Your cezars</i> that open each computer's inbox, and the push tap landing there. Cross-computer at a glance; one inbox.</p><p class="mut">Cost: A + small native change on both platforms.</p></div>
+  <div class="variant"><h3>C · A + native glue</h3><p>The web inbox of A, plus count chips on <i>Your cezars</i> that open each computer's inbox, and the push tap landing there. Cross-computer at a glance; one inbox.</p><p class="mut">Cost: A + small native change on both platforms.</p></div>
+  <div class="variant rec-b"><h3>D · Now is the list <span class="tag rec">recommended</span></h3><p>No new tab. Now's existing <i>Needs you</i> section becomes the server list, with a From-managers group and a This project · All switch. Keep C's native chips for several computers.</p><p class="mut">Cost: about A's, with less new UI. See § 4b.</p></div>
 </div>
+
+<h2>4b · Variant D — the Now tab as the one list</h2>
+<p><b>Today:</b> Now is the project home and the first bottom-bar tab. It has Sign-in needed, <b>Needs you</b>, Running and Finished today. Its Needs you is built in the browser from <i>this project's</i> tasks only (question, review, budget, waiting, lifecycle, failed — <code>now-model.ts</code>) and shows no manager items. The Now tab has no count.</p>
+<div class="row">
+  <div class="phone"><div class="screen">
+    <div class="sb"><span>9:41</span><span>●●● 5G</span></div>
+    <div class="hd"><h4>Now</h4><span style="color:#6aa8ff;font-size:12px">Mark all read</span></div>
+    <div class="seg"><i>This project 2</i><i class="on">All 5</i></div>
+    <div class="list">
+      <div class="grp">Needs you · From managers</div>
+      <div class="it"><div class="t">Which store API should the sync use?</div><div class="m">Shopware Manager · 12 min</div><div class="inp">Answer…</div><div class="acts"><u class="p">Send</u><u>Open chat</u><u class="d">Dismiss</u></div></div>
+      <div class="it"><div class="t">Merge PR #2353</div><div class="m">Notes Manager · approval · 3 h</div><div class="acts"><u class="p">Approve</u><u>Reject</u></div></div>
+      <div class="grp">Needs you · cezar</div>
+      <div class="it"><div class="t">Fix flaky relay test</div><div class="m">Failed · 5 h</div><div class="acts"><u class="p">Retry</u><u>Open</u><u class="d">Mark seen</u></div></div>
+      <div class="grp">Needs you · homebrew-tap</div>
+      <div class="it"><div class="t">Bump formula to 0.21</div><div class="m">Ready for review · 1 h</div><div class="acts"><u class="p">Review changes</u></div></div>
+      <div class="grp">Running · 2</div>
+    </div>
+    <div class="bb"><div class="on"><span class="ic"></span>Now<span class="bdg">5</span></div><div><span class="ic"></span>Tasks</div><div><span class="ic"></span>Manager</div><div><span class="ic"></span>More</div></div>
+  </div></div>
+  <div style="flex:1;min-width:300px">
+    <h3>How it fits</h3>
+    <ul>
+      <li><b>Same page, same tab.</b> Needs you stays on top of Now; Running and Finished today stay below. The Now tab (and Now in the desktop sidebar) gets the badge. No new navigation.</li>
+      <li><b>Task rows keep today's reasons and one action</b> (Answer, Review changes, Resume, Reply, Retry), now read from the server list, so a row on Now is exactly a unit of the badge.</li>
+      <li><b>Manager items</b> (questions, approvals, important messages) get a <i>From managers</i> group with inline Answer, Approve/Reject, Open chat and Mark read. It collapses after 3 rows.</li>
+    </ul>
+    <h3>Project scope vs managers</h3>
+    <ul>
+      <li><b>This project</b>: this project's tasks, plus items from managers connected to it (<code>connectedProjectIds</code>).</li>
+      <li><b>All</b>: every project's tasks grouped by project, plus every manager item, including managers with no project. Its count equals the icon's number for this cezar.</li>
+      <li>A push tap and the badge land on <b>All</b>; the switch remembers the last choice.</li>
+    </ul>
+    <h3>Several cezars</h3>
+    <p>Each computer serves its own Now. The cross-computer view stays native: <i>Your cezars</i> count chips (from C) open that computer's Now on All. The icon is still the sum.</p>
+    <h3>New tab?</h3>
+    <p><b>Not needed.</b> D drops the Needs-you tab and the desktop third entry. Questions and Approvals keep their pages as filtered views of the same list.</p>
+  </div>
+</div>
+<div class="desk" style="margin-top:18px">
+  <div class="side">
+    <div class="h">cezar</div>
+    <div class="n on">Now <em>5</em></div>
+    <div class="n">Tasks</div>
+    <div class="h">Workspace</div>
+    <div class="n">Questions <em class="r">3</em></div>
+    <div class="n">Approvals <em class="r">1</em></div>
+  </div>
+  <div class="dm">
+    <div class="bar"><div><h4>Now</h4><span style="color:#8b93a7">This project · <b style="color:#fff">All</b></span></div><span style="color:#6aa8ff">Mark all read</span></div>
+    <div class="grp" style="margin-left:0">Needs you · From managers · 3</div>
+    <div class="it"><div><div class="t">Which store API should the sync use?</div><div class="m">Shopware Manager · question · 12 min</div></div><div class="acts"><u class="p">Answer</u><u>Open chat</u></div></div>
+    <div class="it"><div><div class="t">Merge PR #2353</div><div class="m">Notes Manager · approval · 3 h</div></div><div class="acts"><u class="p">Approve</u><u>Reject</u></div></div>
+    <div class="grp" style="margin-left:0">Needs you · cezar · 1</div>
+    <div class="it"><div><div class="t">Fix flaky relay test</div><div class="m">Failed · 5 h</div></div><div class="acts"><u class="p">Retry</u><u class="d">Mark seen</u></div></div>
+    <div class="grp" style="margin-left:0">Running · 2 &nbsp;·&nbsp; Finished today · 4</div>
+  </div>
+</div>
+<p class="mut">Risks: the server list replaces Now's browser-side derivation, so <code>deriveAttention</code> moves server-side or is kept in sync by a parity test. Review-gate tasks join the counted kinds, as their own switch ("Tasks ready for review").</p>
 <div class="row" style="margin-top:20px">
   <div class="phone"><div class="screen">
     <div class="sb"><span>9:41</span><span>●●● 5G</span></div>
@@ -190,7 +250,7 @@
 </table>
 
 <h2>Decide</h2>
-<ol><li>Variant <b>A</b>, <b>B</b> or <b>C</b> (recommended).</li><li>Ship the <i>Fix first</i> PR now?</li><li>Failed tasks on the icon by default?</li><li>Quiet hours in the first cut?</li></ol>
+<ol><li>Variant <b>A</b>, <b>B</b>, <b>C</b> or <b>D</b> (recommended: D with C's native chips).</li><li>Ship the <i>Fix first</i> PR now?</li><li>Failed tasks on the icon by default?</li><li>Quiet hours in the first cut?</li></ol>
 </main>
 </body>
 </html>

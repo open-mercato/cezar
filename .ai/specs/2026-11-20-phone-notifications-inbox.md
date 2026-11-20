@@ -107,9 +107,59 @@ Variants (detail and mocks on the design page):
   computer only.
 - **B. Native cross-cezar inbox** in the app shell, all computers in one list. Needs each cezar's items over the
   relay on every open, two native implementations, and a new tunnel read.
-- **C. A + native glue (recommended).** The web inbox of A; *Your cezars* rows show each computer's count as a
+- **C. A + native glue.** The web inbox of A; *Your cezars* rows show each computer's count as a
   chip that opens that cezar's inbox; a tap on the icon-badge push lands there. Cross-computer at a glance,
   one inbox implementation.
+
+- **D. Now *is* the list (recommended, owner's suggestion 2026-11-20).** No new tab or page: Now's
+  *Needs you* section becomes the server's attention list, and every count is a filter of it. Details below.
+
+### Variant D: the Now tab as the one list
+
+**Today.** Now (`routes/now/now.tsx`, spec attention-first cockpit 2026-11-11) is the project home and the
+first item on the phone bottom bar (`phone-bottom-bar.tsx`, `item('', 'Now', …)`). It has four sections:
+Sign-in needed, **Needs you**, Running and Finished today. Needs you is derived **in the browser** from
+**this project's runs** (`now-model.ts` `needsYouRows`). Its reasons are question, review, budget, waiting,
+lifecycle and failed, each with one action. It shows no manager items. The Now tab carries no count; the
+Manager tab has only a dot.
+
+**What D changes.**
+- Needs you reads the server attention list instead of deriving its own. The task rows keep today's reasons
+  and their single action, and the list now also holds the task kinds the badge counts. Answering inline
+  uses the Questions inbox's answer route.
+- A **From managers** group sits at the top of Needs you: manager questions, approvals and unread important
+  messages, each naming its manager, with Answer, Approve/Reject, Open chat and Mark read.
+- The Now tab on the bottom bar (and Now in the desktop sidebar) gets the count badge. The Manager tab keeps
+  its dot.
+- Running and Finished today stay below, unchanged, so Now remains the project home.
+
+**Projects versus manager items.** Now is project-scoped (`/p/:projectId/`), but the badge counts the whole
+cezar, and a manager's messages belong to no project. So Now gets a scope switch, **This project · All**:
+- *This project* shows that project's task rows, plus the manager items of managers connected to that project
+  (`connectedProjectIds`). A manager connected to no project shows only under *All*.
+- *All* shows every project's task rows, grouped by project, plus every manager item. Its count is exactly the
+  icon's number for this cezar.
+- A push tap and the badge both land on *All*. The switch remembers the last choice per device.
+
+**Several cezars.** Now lists one cezar's items, because each computer serves its own cockpit. The cross-computer
+view stays native: C's per-computer count chips on *Your cezars*, where a tap opens that cezar's Now on *All*.
+The icon remains the sum over computers.
+
+**Is a new tab still needed?** No. D removes the Needs-you tab of A and C, and the desktop third entry. The
+desktop Questions and Approvals pages stay as they are, as filtered views of the same list: their badges equal
+the counts of Now's matching rows.
+
+**Costs and risks.**
+- The server list from *One list* is still the main work, and it is shared with A.
+- Now's client-side derivation becomes a projection of the server list. `deriveAttention` stays the source of
+  task reasons, moved server-side or kept in sync by a parity test.
+- Review-gate tasks are already in Now's Needs you, so they join the list as `task` and show as their own
+  push/count switch ("Tasks ready for review").
+- On the desktop, Now becomes busier for someone with many managers. The From-managers group collapses after
+  three rows.
+
+**Recommendation: D, plus C's native chips.** This is one list in a place the user already opens first, adds
+no new navigation, and closes the gap that Now's "Needs you" counts different things from the badge.
 
 ### Settings
 
@@ -126,7 +176,7 @@ Per-manager "Notify me when important" stays as it is and still gates `message`.
 
 ## Open questions for the owner
 
-1. Variant A, B or C.
+1. Variant A, B, C or D (recommended: D with C's native chips).
 2. Ship the *Fix first* PR now, ahead of the rest?
 3. Do failed tasks count on the icon by default?
 4. Quiet hours in the first cut, or later?
