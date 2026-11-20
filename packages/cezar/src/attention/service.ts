@@ -5,7 +5,7 @@ export const ATTENTION_SETTLE_MS = 2_000;
 /**
  * How long a read is reused with no poke in between. Health is polled and every phone's push counts,
  * and a read parses each cold project's `runs.json`; only another process changes those, so a short
- * age bounds how late they show.
+ * age bounds how late they show. Such unpoked changes reach a phone's icon only with the next poke.
  */
 export const ATTENTION_MAX_AGE_MS = 10_000;
 

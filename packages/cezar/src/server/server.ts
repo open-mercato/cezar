@@ -9295,8 +9295,12 @@ export function createApp(deps: ServerDeps) {
       const checked = managerEngine.check(c.req.valid('param').id);
       return 'error' in checked ? c.json({ error: checked.error }, checked.status) : c.json({ ok: true as const });
     })
-    .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) =>
-      managerEngine.read(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) => {
+      if (!managerEngine.read(c.req.valid('param').id)) return c.json(MANAGER_NOT_FOUND, 404);
+      // Its manager-change lands after the summary; the caller re-reads Now right away.
+      attention.poke();
+      return c.json({ ok: true as const });
+    })
     // Connectors (spec 2026-11-12-manager-connectors): the last observed servers, judged by the grants.
     .get('/workspace/managers/:id/connectors', paramZodValidator(managerIdParamSchema), async (c) => {
       const connectors = await managerEngine.connectors(c.req.valid('param').id);
