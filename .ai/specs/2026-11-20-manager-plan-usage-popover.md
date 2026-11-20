@@ -26,6 +26,13 @@ Mock: the task's Assets page `manager-plan-usage-design.html`.
   and `ranTogetherWith`, computed in `usage-ledger/compute.ts` from the same shares. Weekly entries
   already carry `messages`, so a reply's week share needs nothing new. Per-manager figures already exist.
 
+## Part 1b — manager + the tasks it started (owner feedback, 2026-11-20)
+
+The headline becomes manager + its tasks. The popover splits it into "The manager itself" (chat / watch / jobs)
+and "Tasks it started (N)", listing the tasks. Each task still counts once: its share stays on the task
+everywhere else. Optional: a reply that started a task shows "This reply ≈ 0.8% · its task ≈ 12% of 5h".
+No API change, because `managerStartedTasks` and the consumers response already cover it.
+
 ## Part 2 — current session in the manager view (pick one)
 
 - **A. Account meter in the manager chip (recommended).** Chip reads `63% · 5h` with a thin bar,
