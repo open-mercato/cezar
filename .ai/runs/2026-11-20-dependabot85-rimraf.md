@@ -33,7 +33,7 @@ PR: #2365
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Complete mobile and ordered root validation with removal proof
+- [x] 2.1 Complete mobile and ordered root validation with removal proof — 8c13a55ef
 
 ### Phase 3: Review and publication
 
@@ -43,3 +43,5 @@ PR: #2365
 Installed pre-upgrade path is CLI8.6.0→rimraf6.1.3→glob13.0.6→minimatch10.2.6. After parent patch: CLIunchanged→rimraf6.1.4→glob14.0.6→minimatch11.0.9; incoming ranges accept every step. Only required six transitive lock entries change, no override/direct manifest change. Mobile checkPASS;149testsPASS including2real parent cleanup-glob controls;CLIversion/helpPASS;npmlsPASS;audit0vulnerabilities. Independent npm-semver comparison proves old version in alert85 range and installed/alllocked new copies outside it. No native iOS/Android build claim.
 
 Shared root workspace source/config inputs are identical to the Next group and main; full gate first attempt in order:typecheckPASS,npmtesttimeout900s with known pre-existing automationrace(PR2193),coreunit54PASS,build/checkpackPASS,packagePASS. No full gate pass claimed; Phase2 stays unchecked pending bounded full revalidation by final reviewer. No source change or gate/audit bypass for the unrelated defect.
+
+Final proof: all5ordered independentrootgatesPASS;149mobiletests/check/CLI/resolution/audit0PASS. Prior Mermaid CI failure resolved by unchanged-source attempt2. Independent approve follow-up5998419564; native author approval not eligible. Full evidence in .ai/runs/2026-11-20-dependabot85-rimraf-verification.md. No backport:release/v0.20.x lacks mobilelock.
