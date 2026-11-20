@@ -1,14 +1,14 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { DEFAULT_PHONE_NOTIFICATION_PREFS, type PhoneNotificationPrefs } from '@open-mercato/cezar-api-client'
+import { DEFAULT_PHONE_PUSH_PREFS, type PhonePushPrefs } from '@open-mercato/cezar-api-client'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { PhoneNotificationsForm } from './phone-notifications'
 
 /** Spec 2026-11-20-phone-notifications-inbox: which kinds push, which count on the icon, quiet hours. */
-function Harness({ onChange }: { onChange: (next: PhoneNotificationPrefs) => void }) {
-  const [value, setValue] = useState(DEFAULT_PHONE_NOTIFICATION_PREFS)
-  return <PhoneNotificationsForm idPrefix="t" value={value} onChange={(next) => { setValue(next); onChange(next) }} />
+function Harness({ onChange }: { onChange: (next: PhonePushPrefs) => void }) {
+  const [value, setValue] = useState(DEFAULT_PHONE_PUSH_PREFS)
+  return <PhoneNotificationsForm idPrefix="t" timeZone="Europe/Warsaw" value={value} onChange={(next) => { setValue(next); onChange(next) }} />
 }
 
 afterEach(cleanup)
@@ -26,17 +26,21 @@ describe('PhoneNotificationsForm', () => {
     const onChange = vi.fn()
     render(<Harness onChange={onChange} />)
     fireEvent.click(document.querySelector('[data-slot="phone-push-kind"][data-kind="approval"]')!)
-    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_PHONE_NOTIFICATION_PREFS, push: ['question', 'task', 'review', 'failed', 'message'] })
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_PHONE_PUSH_PREFS, push: ['question', 'task', 'review', 'failed', 'message'] })
     fireEvent.click(document.querySelector('[data-slot="phone-badge-kind"][data-kind="failed"]')!)
-    expect(onChange.mock.lastCall?.[0].badge).toEqual(['question', 'approval', 'task', 'review', 'failed', 'message'])
+    expect(onChange.mock.lastCall?.[0].icon).toEqual(['question', 'approval', 'task', 'review', 'failed', 'message'])
   })
 
-  it('sets quiet hours from 22:00 to 07:00, then edits either end', () => {
+  it('sets quiet hours from 22:00 to 07:00 in the phone’s zone, edits either end, and removes them', () => {
     const onChange = vi.fn()
     render(<Harness onChange={onChange} />)
     fireEvent.click(document.querySelector('[data-slot="phone-quiet-hours"]')!)
-    expect(onChange.mock.lastCall?.[0].quietHours).toEqual({ start: '22:00', end: '07:00' })
+    expect(onChange.mock.lastCall?.[0].quiet).toEqual({ from: '22:00', to: '07:00', timeZone: 'Europe/Warsaw' })
     fireEvent.change(screen.getByLabelText('Quiet until'), { target: { value: '06:30' } })
-    expect(onChange.mock.lastCall?.[0].quietHours).toEqual({ start: '22:00', end: '06:30' })
+    expect(onChange.mock.lastCall?.[0].quiet).toEqual({ from: '22:00', to: '06:30', timeZone: 'Europe/Warsaw' })
+    fireEvent.click(document.querySelector('[data-slot="phone-quiet-hours"]')!)
+    expect(onChange.mock.lastCall?.[0]).not.toHaveProperty('quiet')
+    // What the app understands is never the form's to change.
+    expect(onChange.mock.lastCall?.[0].kinds).toEqual(['attention'])
   })
 })

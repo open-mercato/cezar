@@ -225,49 +225,44 @@ describe('/workspace/phone/signals (spec R5, stage 1)', () => {
     expect((await open(makeApp())).status).toBe(409);
   });
 
-  describe('notification settings (spec 2026-11-20-phone-notifications-inbox)', () => {
-    const PREFS = { push: ['question', 'approval'], badge: ['question'], quietHours: { start: '22:00', end: '07:00' } };
+  describe('push prefs (spec 2026-11-20-phone-notifications-inbox)', () => {
+    const PREFS = { push: ['question', 'approval'], icon: ['question'], quiet: { from: '22:00', to: '07:00', timeZone: 'Europe/Warsaw' }, kinds: ['attention', 'count'] };
     const put = (body: unknown): RequestInit => ({ method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(body) });
     const phoneCall = (app: ReturnType<typeof makeApp>, init?: RequestInit, deviceId = DEVICE) =>
-      Promise.resolve(runInRelayScope({ deviceId }, () => app.request('/api/v1/workspace/phone/notifications', init)));
+      Promise.resolve(runInRelayScope({ deviceId }, () => app.request('/api/v1/workspace/phone/push/prefs', init)));
+    const local = (path: string, init?: RequestInit) => app().request(path, { ...init, headers: { ...JSON_HEADERS, host: '127.0.0.1' } });
+    let built: ReturnType<typeof makeApp> | undefined;
+    const app = () => (built ??= makeApp());
+    afterEach(() => { built = undefined; });
 
-    it('gives a phone the defaults, then keeps what it chose on the computer', async () => {
-      const app = makeApp();
-      expect(await (await phoneCall(app)).json()).toEqual({
-        notifications: { push: ['question', 'approval', 'task', 'review', 'failed', 'message'], badge: ['question', 'approval', 'task', 'review', 'message'], quietHours: null },
+    it('answers the defaults until the phone saves, never a 404 for a paired phone, then keeps what it chose', async () => {
+      expect(await (await phoneCall(app())).json()).toEqual({
+        push: ['question', 'approval', 'task', 'review', 'failed', 'message'],
+        icon: ['question', 'approval', 'task', 'review', 'message'],
+        kinds: ['attention'],
       });
-      const saved = await phoneCall(app, put(PREFS));
-      expect(saved.status).toBe(200);
-      expect(await (await phoneCall(app)).json()).toEqual({ notifications: PREFS });
-      // An unpaired id has none.
-      expect((await phoneCall(app, undefined, OTHER)).status).toBe(404);
+      expect((await phoneCall(app(), put(PREFS))).status).toBe(200);
+      expect(await (await phoneCall(app())).json()).toEqual(PREFS);
+      expect((await phoneCall(app(), undefined, OTHER)).status).toBe(404);
     });
 
-    it('refuses a kind it does not know and is unreachable from the desktop', async () => {
-      const app = makeApp();
-      expect((await phoneCall(app, put({ ...PREFS, push: ['everything'] }))).status).toBe(400);
-      expect((await app.request('/api/v1/workspace/phone/notifications', { headers: { host: '127.0.0.1' } })).status).toBe(403);
+    it('refuses an unknown kind or time zone, keeping the saved prefs, and is unreachable from the desktop', async () => {
+      await phoneCall(app(), put(PREFS));
+      expect((await phoneCall(app(), put({ ...PREFS, push: ['everything'] }))).status).toBe(400);
+      expect((await phoneCall(app(), put({ ...PREFS, quiet: { ...PREFS.quiet, timeZone: 'Mars/Olympus' } }))).status).toBe(400);
+      expect(await (await phoneCall(app())).json()).toEqual(PREFS);
+      expect((await local('/api/v1/workspace/phone/push/prefs')).status).toBe(403);
     });
 
-    it('lets the computer set a paired phone’s settings, and lists them', async () => {
-      const app = makeApp();
-      const response = await app.request(`/api/v1/workspace/phones/${DEVICE}/notifications`, { ...put(PREFS), headers: { ...JSON_HEADERS, host: '127.0.0.1' } });
-      expect(response.status).toBe(200);
-      const list = await (await app.request('/api/v1/workspace/phones', { headers: { host: '127.0.0.1' } })).json() as { phones: Array<{ deviceId: string; notifications: unknown }> };
-      expect(list.phones.find((phone) => phone.deviceId === DEVICE)?.notifications).toEqual(PREFS);
-      expect((await app.request('/api/v1/workspace/phones/CCCCCCCCCCCCCCCCCCCCCC/notifications', { ...put(PREFS), headers: { ...JSON_HEADERS, host: '127.0.0.1' } })).status).toBe(404);
+    it('lets the computer edit a phone’s settings but not what its app understands, and lists them', async () => {
+      await phoneCall(app(), put(PREFS));
+      const { kinds: _kinds, ...settings } = PREFS;
+      const edited = await local(`/api/v1/workspace/phones/${DEVICE}/prefs`, put({ ...settings, push: ['message'] }));
+      expect(edited.status).toBe(200);
+      expect(await edited.json()).toEqual({ ...PREFS, push: ['message'] });
+      expect((await local(`/api/v1/workspace/phones/${DEVICE}/prefs`, put(PREFS))).status).toBe(400);
+      const list = await (await local('/api/v1/workspace/phones')).json() as { phones: Array<{ deviceId: string; prefs: unknown }> };
+      expect(list.phones.find((phone) => phone.deviceId === DEVICE)?.prefs).toEqual({ ...PREFS, push: ['message'] });
     });
-  });
-
-  it('remembers whether the app reads count pushes, from the query it opens with', async () => {
-    const app = makeApp();
-    const open = (query: string) => Promise.resolve(runInRelayScope({ deviceId: DEVICE }, () => app.request(`/api/v1/workspace/phone/push${query}`)));
-    const stored = () => (JSON.parse(readFileSync(join(home, 'relay', 'devices.json'), 'utf8')) as { devices: Array<{ deviceId: string; acceptsCount?: boolean }> })
-      .devices.find((row) => row.deviceId === DEVICE)?.acceptsCount;
-    expect((await open('?accepts=count')).status).toBe(200);
-    expect(stored()).toBe(true);
-    // An older app says nothing, and loses them again.
-    expect((await open('')).status).toBe(200);
-    expect(stored()).toBeUndefined();
   });
 });

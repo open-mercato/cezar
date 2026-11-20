@@ -1,7 +1,7 @@
 import { randomBytes, verify, createPublicKey } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { b64u, edPublic, postProof } from '../relay/wire.ts';
-import type { AttentionKind } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, type AttentionKind } from '@open-mercato/cezar-contract';
 import { COUNT_DEBOUNCE_MS, COUNT_MIN_INTERVAL_MS, PUSH_DEBOUNCE_MS, PUSH_MIN_INTERVAL_MS, RelayPushSink, badgeCount, pushBody, quietUntil, type PushGrantRow } from './relay-sink.ts';
 
 const ORIGIN = 'https://relay.example.test';
@@ -12,17 +12,23 @@ const NOW = 1_793_491_200_000;
 
 interface Sent { url: string; headers: Record<string, string>; body: string }
 
+/** An app that declared it reads count pushes (spec 2026-11-20-phone-notifications-inbox). */
+const COUNTING = { ...DEFAULT_PHONE_PUSH_PREFS, kinds: ['attention', 'count'] as Array<'attention' | 'count'> };
+
 function setup(over: {
   devices?: PushGrantRow[]; live?: string[]; streams?: string[]; status?: number; enabled?: boolean;
   count?: (kinds: readonly AttentionKind[]) => Promise<number>;
   answer?: (body: Record<string, unknown>) => { status: number; retryAfter?: number };
   warn?: (line: string) => void;
+  /** The count the phone was last pushed, as stored before a restart. */
+  told?: number;
 } = {}) {
   let now = NOW;
   const sent: Sent[] = [];
   const dropped: string[] = [];
   const delivered: Array<[string, string | undefined]> = [];
-  const devices: PushGrantRow[] = over.devices ?? [{ deviceId: 'phone-a', push: { grant: GRANT, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, acceptsCount: true }];
+  const devices: PushGrantRow[] = over.devices ?? [{ deviceId: 'phone-a', push: { grant: GRANT, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, prefs: COUNTING, ...(over.told !== undefined ? { countTold: over.told } : {}) }];
+  const told: Array<[string, number]> = [];
   const sink = new RelayPushSink({
     enabled: () => over.enabled ?? true,
     origin: () => ORIGIN,
@@ -36,6 +42,7 @@ function setup(over: {
     },
     hasStreams: () => (over.streams ?? []).length > 0,
     dropGrant: (id, grantId) => { dropped.push(`${id}:${grantId}`); },
+    setCountTold: (id, count) => { told.push([id, count]); },
     count: over.count ?? (async () => 3),
     post: async (url, { headers, body }) => {
       const text = Buffer.from(body).toString('utf8');
@@ -50,7 +57,7 @@ function setup(over: {
     await vi.advanceTimersByTimeAsync(ms);
     await sink.idle();
   };
-  return { sink, sent, dropped, delivered, advance };
+  return { sink, sent, dropped, delivered, advance, told };
 }
 
 describe('RelayPushSink', () => {
@@ -183,18 +190,17 @@ describe('RelayPushSink', () => {
   });
 
   describe('per-phone settings (spec 2026-11-20-phone-notifications-inbox)', () => {
-    const grant = (deviceId: string, notifications?: PushGrantRow['notifications']): PushGrantRow => ({
+    const grant = (deviceId: string, prefs?: Partial<NonNullable<PushGrantRow['prefs']>>): PushGrantRow => ({
       deviceId,
       push: { grant: `${GRANT}-${deviceId}`, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 },
-      acceptsCount: true,
-      ...(notifications ? { notifications } : {}),
+      prefs: { ...COUNTING, ...prefs },
     });
     const kinds = (sent: Sent[]) => sent.map((one) => (JSON.parse(one.body) as { kind: string }).kind);
 
     it('pushes only to a phone that chose the kind, each with its own count', async () => {
       vi.useFakeTimers();
       const { sink, sent, advance } = setup({
-        devices: [grant('all'), grant('approvals', { push: ['approval'], badge: ['approval'], quietHours: null })],
+        devices: [grant('all'), grant('approvals', { push: ['approval'], icon: ['approval'] })],
         count: async (badge) => (badge.length === 1 ? 1 : 4),
       });
       sink.signal('m', 'message');
@@ -204,7 +210,6 @@ describe('RelayPushSink', () => {
       await advance(PUSH_MIN_INTERVAL_MS);
       sink.signal('m', 'approval');
       await advance(PUSH_DEBOUNCE_MS);
-      // Between the two, the approvals-only phone learned its count by a silent count push.
       const alerts = sent.slice(1).map((one) => JSON.parse(one.body) as { kind: string; count: number }).filter((body) => body.kind === 'attention');
       expect(alerts.map((body) => body.count).sort()).toEqual([1, 4]);
     });
@@ -213,9 +218,9 @@ describe('RelayPushSink', () => {
       vi.useFakeTimers();
       const start = new Date(NOW);
       const clock = (minutes: number) => `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-      const minute = start.getHours() * 60 + start.getMinutes();
-      const quietHours = { start: clock(minute), end: clock(minute + 60) };
-      const { sink, sent, advance } = setup({ devices: [grant('quiet', { push: ['message'], badge: ['message'], quietHours })] });
+      const minute = start.getUTCHours() * 60 + start.getUTCMinutes();
+      const quiet = { from: clock(minute), to: clock(minute + 60), timeZone: 'UTC' };
+      const { sink, sent, advance } = setup({ devices: [grant('quiet', { push: ['message'], icon: ['message'], quiet })] });
       sink.signal('m', 'message');
       await advance(PUSH_DEBOUNCE_MS);
       expect(sent).toHaveLength(0);
@@ -223,22 +228,25 @@ describe('RelayPushSink', () => {
       expect(kinds(sent)).toEqual(['attention']);
     });
 
-    it('reads quiet hours that span midnight', () => {
-      const at = (h: number, m = 0) => new Date(2026, 10, 20, h, m).getTime();
-      const night = { start: '22:00', end: '07:00' };
-      expect(quietUntil(night, at(23))).toBe(new Date(2026, 10, 21, 7).getTime());
+    it('reads quiet hours in the phone’s own time zone, across midnight', () => {
+      const at = (h: number, m = 0) => Date.UTC(2026, 10, 20, h, m);
+      const night = { from: '22:00', to: '07:00', timeZone: 'UTC' };
+      expect(quietUntil(night, at(23))).toBe(Date.UTC(2026, 10, 21, 7));
       expect(quietUntil(night, at(6, 59))).toBe(at(7));
       expect(quietUntil(night, at(12))).toBeNull();
-      expect(quietUntil({ start: '08:00', end: '08:00' }, at(8))).toBeNull();
-      expect(quietUntil(null, at(8))).toBeNull();
+      expect(quietUntil({ ...night, from: '08:00', to: '08:00' }, at(8))).toBeNull();
+      expect(quietUntil(undefined, at(8))).toBeNull();
+      // 23:00 UTC is 08:00 in Tokyo: outside a Tokyo night, though inside a UTC one.
+      expect(quietUntil({ ...night, timeZone: 'Asia/Tokyo' }, at(23))).toBeNull();
+      expect(quietUntil({ ...night, timeZone: 'Asia/Tokyo' }, at(14))).toBe(at(22));
     });
   });
 
   describe('count pushes (RELAY_PROTOCOL.md § 7)', () => {
-    it('tells a closed phone its new count silently, with a fresh id, and nothing when it is unchanged', async () => {
+    it('tells a closed phone its lower count silently, with a fresh id, and keeps the count it told', async () => {
       vi.useFakeTimers();
       let count = 3;
-      const { sink, sent, advance } = setup({ count: async () => count });
+      const { sink, sent, advance, told } = setup({ count: async () => count });
       sink.signal('m', 'question');
       await advance(PUSH_DEBOUNCE_MS);
       count = 1;
@@ -252,22 +260,37 @@ describe('RelayPushSink', () => {
       sink.noteChange();
       await advance(COUNT_MIN_INTERVAL_MS);
       expect(sent).toHaveLength(2);
+      expect(told).toEqual([['phone-a', 3], ['phone-a', 1]]);
+    });
+
+    it('owes nothing before an alert told a number, and never a higher one', async () => {
+      vi.useFakeTimers();
+      let count = 2;
+      const { sink, sent, advance } = setup({ count: async () => count });
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      expect(sent).toHaveLength(0);
+      const after = setup({ count: async () => count, told: 1 });
+      count = 4;
+      after.sink.noteChange();
+      await after.advance(COUNT_DEBOUNCE_MS);
+      expect(after.sent).toHaveLength(0);
     });
 
     it('sends 0 when everything was handled, never to a phone whose app is open, nor to an app that cannot read it', async () => {
       vi.useFakeTimers();
-      let count = 2;
+      // Each was told 2 before a restart, kept on its device row.
+      const row = (deviceId: string, prefs = COUNTING): PushGrantRow => ({ deviceId, push: { grant: `g-${deviceId}`, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, prefs, countTold: 2 });
       const { sink, sent, advance } = setup({
         devices: [
-          { deviceId: 'closed', push: { grant: 'g-closed', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, acceptsCount: true },
-          { deviceId: 'open', push: { grant: 'g-open', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, acceptsCount: true },
-          // An app that never said it reads count pushes would show one as an alert.
-          { deviceId: 'older-app', push: { grant: 'g-older', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 } },
+          row('closed'),
+          row('open'),
+          // A released app never declared `count`: it would show one as an alert.
+          row('older-app', DEFAULT_PHONE_PUSH_PREFS),
         ],
         live: ['open'],
-        count: async () => count,
+        count: async () => 0,
       });
-      count = 0;
       sink.noteChange();
       await advance(COUNT_DEBOUNCE_MS);
       expect(sent.map((one) => JSON.parse(one.body) as { grant: string; kind: string; count: number }).map(({ grant, kind, count: n }) => [grant, kind, n]))
@@ -277,7 +300,7 @@ describe('RelayPushSink', () => {
     it('keeps one count push per phone per 10 minutes, sending only the latest', async () => {
       vi.useFakeTimers();
       let count = 5;
-      const { sink, sent, advance } = setup({ count: async () => count });
+      const { sink, sent, advance } = setup({ count: async () => count, told: 6 });
       sink.noteChange();
       await advance(COUNT_DEBOUNCE_MS);
       count = 4;
@@ -295,6 +318,7 @@ describe('RelayPushSink', () => {
       let refuse = true;
       const { sink, sent, advance } = setup({
         count: async () => count,
+        told: 3,
         answer: () => (refuse ? { status: 429, retryAfter: 120 } : { status: 202 }),
       });
       sink.noteChange();
@@ -311,7 +335,7 @@ describe('RelayPushSink', () => {
       vi.useFakeTimers();
       let count = 2;
       const warnings: string[] = [];
-      const { sink, sent, advance } = setup({ count: async () => count, answer: () => ({ status: 400 }), warn: (line) => warnings.push(line) });
+      const { sink, sent, advance } = setup({ count: async () => count, told: 3, answer: () => ({ status: 400 }), warn: (line) => warnings.push(line) });
       sink.noteChange();
       await advance(COUNT_DEBOUNCE_MS);
       count = 1;

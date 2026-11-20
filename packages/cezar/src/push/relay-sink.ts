@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { DEFAULT_PHONE_NOTIFICATION_PREFS, type AttentionKind, type PhoneNotificationPrefs } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, type AttentionKind, type PhonePushPrefs } from '@open-mercato/cezar-contract';
 import { outsideRelayScope } from '../relay/scope.ts';
 import { b64u, proofHeaders, postProof } from '../relay/wire.ts';
 
@@ -19,9 +19,9 @@ export interface PushGrantRow {
   deviceId: string;
   push?: { grant: string; grantId: string; expiresAt: number } | undefined;
   /** Absent means the defaults (spec 2026-11-20-phone-notifications-inbox). */
-  notifications?: PhoneNotificationPrefs | undefined;
-  /** The app reads `kind: "count"`; an older one would show it as an alert, so it gets none. */
-  acceptsCount?: boolean | undefined;
+  prefs?: PhonePushPrefs | undefined;
+  /** The count this phone was last pushed, kept across restarts. */
+  countTold?: number | undefined;
 }
 
 export type PushPost = (url: string, init: { headers: Record<string, string>; body: Uint8Array }) => Promise<{ status: number; retryAfter?: number }>;
@@ -49,6 +49,8 @@ export interface RelayPushSinkDeps {
   hasStreams?: () => boolean;
   /** 403 and 410 only, § 7. */
   dropGrant: (deviceId: string, grantId: string) => void;
+  /** Keeps the count a phone was last pushed, so a restart still owes it a lower one. */
+  setCountTold?: (deviceId: string, count: number) => void;
   /** The badge for one phone: what its counted kinds add up to. Read at send time, never from the signal. */
   count: (badgeKinds: readonly AttentionKind[]) => Promise<number>;
   post?: PushPost;
@@ -78,26 +80,37 @@ export const badgeCount = (count: number): number => Math.min(99, Math.max(0, Ma
 
 const minutesOf = (clock: string): number => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3, 5));
 
-/**
- * When quiet hours that cover `now` end, in epoch ms, or null outside them. Local time of this
- * computer; a window whose start follows its end spans midnight, and equal ends mean off.
- */
-export function quietUntil(quiet: PhoneNotificationPrefs['quietHours'], now: number): number | null {
-  if (!quiet) return null;
-  const start = minutesOf(quiet.start);
-  const end = minutesOf(quiet.end);
-  if (start === end) return null;
-  const at = new Date(now);
-  const minute = at.getHours() * 60 + at.getMinutes();
-  const inside = start < end ? minute >= start && minute < end : minute >= start || minute < end;
-  if (!inside) return null;
-  const until = new Date(now);
-  until.setHours(Math.floor(end / 60), end % 60, 0, 0);
-  if (until.getTime() <= now) until.setDate(until.getDate() + 1);
-  return until.getTime();
+/** Minutes past midnight in `timeZone`, and the seconds into that minute. */
+function zonedClock(now: number, timeZone: string): { minute: number; second: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(now);
+    const part = (type: string) => Number(parts.find((each) => each.type === type)?.value);
+    const minute = part('hour') * 60 + part('minute');
+    return Number.isFinite(minute) ? { minute, second: part('second') || 0 } : null;
+  } catch {
+    return null;
+  }
 }
 
-const prefsOf = (device: PushGrantRow): PhoneNotificationPrefs => device.notifications ?? DEFAULT_PHONE_NOTIFICATION_PREFS;
+/**
+ * When quiet hours that cover `now` end, in epoch ms, or null outside them. Read in the phone's own
+ * time zone; a window whose start follows its end spans midnight, and equal ends mean off.
+ */
+export function quietUntil(quiet: PhonePushPrefs['quiet'], now: number): number | null {
+  if (!quiet) return null;
+  const start = minutesOf(quiet.from);
+  const end = minutesOf(quiet.to);
+  if (start === end) return null;
+  const clock = zonedClock(now, quiet.timeZone);
+  if (!clock) return null;
+  const { minute } = clock;
+  const inside = start < end ? minute >= start && minute < end : minute >= start || minute < end;
+  if (!inside) return null;
+  const left = (end - minute + 1440) % 1440;
+  return now + left * 60_000 - clock.second * 1000 - (now % 1000);
+}
+
+const prefsOf = (device: PushGrantRow): PhonePushPrefs => device.prefs ?? DEFAULT_PHONE_PUSH_PREFS;
 const wants = (device: PushGrantRow, kinds: ReadonlySet<AttentionKind>): boolean => prefsOf(device).push.some((kind) => kinds.has(kind));
 
 export class RelayPushSink {
@@ -173,9 +186,14 @@ export class RelayPushSink {
     const due: Array<{ device: PushGrantRow; count: number }> = [];
     for (const device of this.deps.devices()) {
       // An open app reads its counts itself; an expired grant would only earn a 410.
-      if (!device.acceptsCount || !device.push || device.push.expiresAt <= now / 1000 || this.deps.live(device.deviceId)) continue;
-      const count = badgeCount(await this.deps.count(prefsOf(device).badge).catch(() => NaN));
-      if (Number.isNaN(count) || this.told.get(device.deviceId) === count) continue;
+      // Only an app that declared it: a released one shows every data push as an alert.
+      if (!prefsOf(device).kinds.includes('count')) continue;
+      if (!device.push || device.push.expiresAt <= now / 1000 || this.deps.live(device.deviceId)) continue;
+      // Owed only after an alert told it a number, and only a lower one: a rise comes with its own alert.
+      const told = this.told.get(device.deviceId) ?? device.countTold;
+      if (told === undefined) continue;
+      const count = badgeCount(await this.deps.count(prefsOf(device).icon).catch(() => NaN));
+      if (Number.isNaN(count) || count >= told) continue;
       const notBefore = this.countNotBefore.get(device.deviceId) ?? 0;
       if (notBefore > now) {
         later = Math.min(later ?? notBefore, notBefore);
@@ -228,7 +246,7 @@ export class RelayPushSink {
     let delivered = false;
     for (const device of this.deps.devices()) {
       if (!wants(device, kinds)) continue;
-      const quiet = quietUntil(prefsOf(device).quietHours, now);
+      const quiet = quietUntil(prefsOf(device).quiet, now);
       if (quiet !== null) {
         this.hold(device.deviceId, quiet);
         continue;
@@ -256,7 +274,7 @@ export class RelayPushSink {
         continue;
       }
       // Read before the send: a push for what this phone does not count would leave a badge nothing clears.
-      const count = badgeCount(await this.deps.count(prefsOf(device).badge).catch(() => 0));
+      const count = badgeCount(await this.deps.count(prefsOf(device).icon).catch(() => 0));
       if (count > 0) targets.push({ device, count });
     }
     if (targets.length === 0 || !origin) return;
@@ -287,7 +305,7 @@ export class RelayPushSink {
     const due: PushGrantRow[] = [];
     for (const device of this.deps.devices()) {
       if (!held.has(device.deviceId)) continue;
-      const quiet = quietUntil(prefsOf(device).quietHours, now);
+      const quiet = quietUntil(prefsOf(device).quiet, now);
       if (quiet !== null) this.hold(device.deviceId, quiet);
       else if (!this.deps.live(device.deviceId)) due.push(device);
     }
@@ -312,7 +330,10 @@ export class RelayPushSink {
       return undefined; // Best effort, § 7: the card waits in the chat.
     }
     const { status } = answer;
-    if (status === 202) this.told.set(deviceId, count);
+    if (status === 202) {
+      this.told.set(deviceId, count);
+      this.deps.setCountTold?.(deviceId, count);
+    }
     if (status === 403 || status === 410) {
       this.deps.dropGrant(deviceId, push.grantId);
       return answer;

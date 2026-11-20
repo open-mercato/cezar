@@ -1,10 +1,10 @@
-import { DEFAULT_PHONE_NOTIFICATION_PREFS } from '@open-mercato/cezar-api-client'
+import { DEFAULT_PHONE_PUSH_PREFS } from '@open-mercato/cezar-api-client'
 import type { PhonesResponse, RelayStatus } from '@open-mercato/cezar-api-client'
 import { describe, expect, it } from 'vitest'
 
 import { phoneIconState } from './relay-status'
 
-const PHONE: PhonesResponse['phones'][number] = { deviceId: 'd'.repeat(22), label: 'Pixel', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'android', addedAt: '', connected: true }
+const PHONE: PhonesResponse['phones'][number] = { deviceId: 'd'.repeat(22), label: 'Pixel', prefs: DEFAULT_PHONE_PUSH_PREFS, platform: 'android', addedAt: '', connected: true }
 const data = (relay: PhonesResponse['relay'], paired = true): PhonesResponse =>
   ({ relayOrigin: 'https://rome.cezar.run', relay, pairing: null, account: { attached: true, computerName: 'Mac' }, keepAwake: { enabled: true, active: true }, phones: paired ? [PHONE] : [] }) as PhonesResponse
 const look = (relay: PhonesResponse['relay'], paired = true) => {

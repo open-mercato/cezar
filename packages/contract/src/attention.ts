@@ -56,23 +56,49 @@ export const attentionResponseSchema = z.object({
 export type AttentionResponse = z.infer<typeof attentionResponseSchema>;
 
 const clockTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
-/** In the computer's local time. `start` after `end` spans midnight; equal means off. */
-export const quietHoursSchema = z.object({ start: clockTimeSchema, end: clockTimeSchema }).strict();
+const knownTimeZone = (zone: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+/** In the phone's own time zone, sent with each `PUT`: the computer's clock is wrong for a travelling phone.
+ *  `from` after `to` spans midnight; equal means off. */
+export const quietHoursSchema = z.object({
+  from: clockTimeSchema,
+  to: clockTimeSchema,
+  timeZone: z.string().min(1).max(64).refine(knownTimeZone, 'unknown time zone'),
+}).strict();
 export type QuietHours = z.infer<typeof quietHoursSchema>;
 
-/** One phone's notification settings, kept on the computer: the relay never learns a kind. */
-export const phoneNotificationPrefsSchema = z.object({
+/** The push kinds a phone's app understands. Released apps know only `attention`. */
+export const pushKindSchema = z.enum(['attention', 'count']);
+export type PushKind = z.infer<typeof pushKindSchema>;
+
+/**
+ * `GET`/`PUT /workspace/phone/push/prefs`: one phone's notification settings, kept on the computer
+ * because the relay never learns a kind (spec 2026-11-20-phone-notifications-inbox).
+ */
+export const phonePushPrefsSchema = z.object({
   /** Kinds that raise a push. */
   push: z.array(attentionKindSchema),
-  /** Kinds counted on the icon badge. */
-  badge: z.array(attentionKindSchema),
-  quietHours: quietHoursSchema.nullable(),
+  /** Kinds counted on the app icon. */
+  icon: z.array(attentionKindSchema),
+  quiet: quietHoursSchema.optional(),
+  /** What the app understands; cezar sends `count` only to a phone that declared it. */
+  kinds: z.array(pushKindSchema),
 }).strict();
-export type PhoneNotificationPrefs = z.infer<typeof phoneNotificationPrefsSchema>;
+export type PhonePushPrefs = z.infer<typeof phonePushPrefsSchema>;
+
+/** `PUT /workspace/phones/:deviceId/prefs`: the computer edits the settings, never what the app understands. */
+export const phonePushSettingsSchema = phonePushPrefsSchema.omit({ kinds: true });
+export type PhonePushSettings = z.infer<typeof phonePushSettingsSchema>;
 
 /** Owner decision 2026-11-20: everything pushes; failed tasks do not count on the icon. */
-export const DEFAULT_PHONE_NOTIFICATION_PREFS: PhoneNotificationPrefs = {
+export const DEFAULT_PHONE_PUSH_PREFS: PhonePushPrefs = {
   push: [...ATTENTION_KINDS],
-  badge: ATTENTION_KINDS.filter((kind) => kind !== 'failed'),
-  quietHours: null,
+  icon: ATTENTION_KINDS.filter((kind) => kind !== 'failed'),
+  kinds: ['attention'],
 };

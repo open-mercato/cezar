@@ -1,8 +1,8 @@
 import {
   attentionResponseSchema,
-  phoneNotificationsResponseSchema,
+  phonePushPrefsSchema,
   type AttentionResponse,
-  type PhoneNotificationPrefs,
+  type PhonePushPrefs,
 } from '@open-mercato/cezar-api-client'
 import { useQuery, type QueryClient } from '@tanstack/react-query'
 
@@ -45,19 +45,19 @@ export function noteAttentionMaybeChanged(queryClient: QueryClient): void {
   }, SETTLE_MS)
 }
 
-/** The calling phone's own settings: answers only inside its relay session. */
-export async function getMyPhoneNotifications(signal?: AbortSignal): Promise<PhoneNotificationPrefs> {
-  const path = '/workspace/phone/notifications'
-  return checked(phoneNotificationsResponseSchema, path, await unwrap(await cez.api.v1.workspace.phone.notifications.$get({}, signal ? { init: { signal } } : undefined), path)).notifications
+/** The calling phone's own prefs: answers only inside its relay session. */
+export async function getMyPushPrefs(signal?: AbortSignal): Promise<PhonePushPrefs> {
+  const path = '/workspace/phone/push/prefs'
+  return checked(phonePushPrefsSchema, path, await unwrap(await cez.api.v1.workspace.phone.push.prefs.$get({}, signal ? { init: { signal } } : undefined), path))
 }
 
-export async function setMyPhoneNotifications(notifications: PhoneNotificationPrefs): Promise<PhoneNotificationPrefs> {
-  const path = '/workspace/phone/notifications'
-  return checked(phoneNotificationsResponseSchema, path, await unwrap(await cez.api.v1.workspace.phone.notifications.$put({ json: notifications }), path)).notifications
+export async function setMyPushPrefs(prefs: PhonePushPrefs): Promise<PhonePushPrefs> {
+  const path = '/workspace/phone/push/prefs'
+  return checked(phonePushPrefsSchema, path, await unwrap(await cez.api.v1.workspace.phone.push.prefs.$put({ json: prefs }), path))
 }
 
-/** From the computer: a paired phone's settings. */
-export async function setPhoneNotifications(deviceId: string, notifications: PhoneNotificationPrefs): Promise<PhoneNotificationPrefs> {
-  const path = '/workspace/phones/:deviceId/notifications'
-  return checked(phoneNotificationsResponseSchema, path, await unwrap(await cez.api.v1.workspace.phones[':deviceId'].notifications.$put({ param: { deviceId }, json: notifications }), path)).notifications
+/** From the computer: a paired phone's settings. What its app understands stays the phone's to say. */
+export async function setPhoneSettings(deviceId: string, { kinds: _kinds, ...settings }: PhonePushPrefs): Promise<PhonePushPrefs> {
+  const path = '/workspace/phones/:deviceId/prefs'
+  return checked(phonePushPrefsSchema, path, await unwrap(await cez.api.v1.workspace.phones[':deviceId'].prefs.$put({ param: { deviceId }, json: settings }), path))
 }

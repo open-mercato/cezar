@@ -4,7 +4,7 @@ import type {
   PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayAccountLocal, RelayAccountResendResponse, RelayAccountResponse, RelayAccountStatus,
   RelayKeepAwake, RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse, TestRelayAddressResponse,
 } from '@open-mercato/cezar-contract';
-import { DEFAULT_PHONE_NOTIFICATION_PREFS, type AttentionKind, type PhoneNotificationPrefs } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, type AttentionKind, type PhonePushPrefs, type PhonePushSettings } from '@open-mercato/cezar-contract';
 import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
 import { loadWorkspaceConfigOrThrow, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
@@ -187,6 +187,13 @@ export class RelayService {
         }
       },
       count: (kinds) => this.pushCount(kinds),
+      setCountTold: (deviceId, count) => {
+        try {
+          this.devices.setCountTold(deviceId, count);
+        } catch {
+          // A read-only home forgets it on restart, and owes that phone nothing until its next alert.
+        }
+      },
       ...(options.pushPost ? { post: options.pushPost } : {}),
       now: this.now,
       warn: (line) => console.warn(line),
@@ -208,18 +215,26 @@ export class RelayService {
     this.push.noteChange();
   }
 
-  /** `null` for a device with no row. */
-  phoneNotifications(deviceId: string): PhoneNotificationPrefs | null {
+  /** `null` for a device with no row; the defaults until the phone first saves. */
+  phonePrefs(deviceId: string): PhonePushPrefs | null {
     const device = this.devices.get(deviceId);
-    return device ? device.notifications ?? DEFAULT_PHONE_NOTIFICATION_PREFS : null;
+    return device ? device.prefs ?? DEFAULT_PHONE_PUSH_PREFS : null;
   }
 
-  setPhoneNotifications(deviceId: string, prefs: PhoneNotificationPrefs): PhoneNotificationPrefs | null {
-    if (!this.devices.setNotifications(deviceId, prefs)) return null;
+  /** The phone's own save, including what its app understands. */
+  setPhonePrefs(deviceId: string, prefs: PhonePushPrefs): PhonePushPrefs | null {
+    if (!this.devices.setPrefs(deviceId, prefs)) return null;
     this.onChange();
-    // A phone that now counts other kinds is owed its new number.
+    // A phone that now counts fewer kinds is owed its lower number.
     this.push.noteChange();
     return prefs;
+  }
+
+  /** The computer's edit: the settings only, never what the phone's app understands. */
+  setPhoneSettings(deviceId: string, settings: PhonePushSettings): PhonePushPrefs | null {
+    const current = this.phonePrefs(deviceId);
+    if (!current) return null;
+    return this.setPhonePrefs(deviceId, { ...settings, kinds: current.kinds });
   }
 
   /**
@@ -637,7 +652,7 @@ export class RelayService {
         ...(device.lastSeenAt ? { lastSeenAt: device.lastSeenAt } : {}),
         connected: this.sessions.get(device.deviceId)?.proven === true,
         ...(device.push ? { push: true as const } : {}),
-        notifications: device.notifications ?? DEFAULT_PHONE_NOTIFICATION_PREFS,
+        prefs: device.prefs ?? DEFAULT_PHONE_PUSH_PREFS,
       })),
       pairing: this.pairing?.view() ?? null,
       ...(undenied > 0 ? { undeniedGrants: undenied } : {}),
@@ -959,16 +974,9 @@ export class RelayService {
   // ---- the calling phone's push grant (spec R5) --------------------------------------------------
 
   /** `null` for a device with no row. `managerId` is checked by the caller, which knows the managers. */
-  async phonePush(deviceId: string, acceptsCount?: boolean): Promise<PhonePushState | null> {
+  async phonePush(deviceId: string): Promise<PhonePushState | null> {
     const device = this.devices.get(deviceId);
     if (!device) return null;
-    if (acceptsCount !== undefined) {
-      try {
-        this.devices.setAcceptsCount(deviceId, acceptsCount);
-      } catch {
-        // A read-only home sends no count pushes: the badge still refreshes when the app opens.
-      }
-    }
     const identity = pushBlocked(this.env) ? null : this.identity ?? (await this.identityStore.load().catch(() => null));
     if (!identity) return { available: false };
     const target = this.push.latestManager();

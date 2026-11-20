@@ -7,7 +7,7 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
-import { DEFAULT_PHONE_NOTIFICATION_PREFS, phonePushQuerySchema, setPhoneNotificationsInputSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
 import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
 import { createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
@@ -9165,8 +9165,8 @@ export function createApp(deps: ServerDeps) {
   waitingOnUser = async () => {
     const { items } = await attention.list();
     const deviceId = relayDeviceId();
-    const prefs = (deviceId ? phonePairing.phoneNotifications(deviceId) : null) ?? DEFAULT_PHONE_NOTIFICATION_PREFS;
-    return phoneBadgeCount(items, prefs.badge);
+    const prefs = (deviceId ? phonePairing.phonePrefs(deviceId) : null) ?? DEFAULT_PHONE_PUSH_PREFS;
+    return phoneBadgeCount(items, prefs.icon);
   };
   phonePairing.attachPush(async (kinds) => phoneBadgeCount((await attention.list()).items, kinds));
 
@@ -9423,9 +9423,9 @@ export function createApp(deps: ServerDeps) {
       phonePairing.denyPairing(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(PAIRING_NOT_FOUND, 409))
     .patch('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(renamePhoneInputSchema), (c) =>
       phonePairing.rename(c.req.valid('param').deviceId, c.req.valid('json').label) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
-    .put('/workspace/phones/:deviceId/notifications', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(setPhoneNotificationsInputSchema), (c) => {
-      const notifications = phonePairing.setPhoneNotifications(c.req.valid('param').deviceId, c.req.valid('json'));
-      return notifications ? c.json({ notifications }) : c.json(PHONE_NOT_FOUND, 404);
+    .put('/workspace/phones/:deviceId/prefs', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(phonePushSettingsSchema), (c) => {
+      const prefs = phonePairing.setPhoneSettings(c.req.valid('param').deviceId, c.req.valid('json'));
+      return prefs ? c.json(prefs) : c.json(PHONE_NOT_FOUND, 404);
     })
     .delete('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), (c) =>
       phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
@@ -9488,24 +9488,24 @@ export function createApp(deps: ServerDeps) {
     return rest;
   };
   const phonePushRoutes = new Hono()
-    // The calling phone's own notification settings (spec 2026-11-20-phone-notifications-inbox).
-    .get('/workspace/phone/notifications', (c) => {
+    // The calling phone's own settings (spec 2026-11-20-phone-notifications-inbox). Never a 404 for a paired
+    // phone: the defaults until it first saves, so a 404 can only mean an older cezar.
+    .get('/workspace/phone/push/prefs', (c) => {
       const deviceId = relayDeviceId();
       if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
-      const notifications = phonePairing.phoneNotifications(deviceId);
-      return notifications ? c.json({ notifications }) : c.json(PHONE_NOT_FOUND, 404);
+      const prefs = phonePairing.phonePrefs(deviceId);
+      return prefs ? c.json(prefs) : c.json(PHONE_NOT_FOUND, 404);
     })
-    .put('/workspace/phone/notifications', jsonZodValidator(setPhoneNotificationsInputSchema), (c) => {
+    .put('/workspace/phone/push/prefs', jsonZodValidator(phonePushPrefsSchema), (c) => {
       const deviceId = relayDeviceId();
       if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
-      const notifications = phonePairing.setPhoneNotifications(deviceId, c.req.valid('json'));
-      return notifications ? c.json({ notifications }) : c.json(PHONE_NOT_FOUND, 404);
+      const prefs = phonePairing.setPhonePrefs(deviceId, c.req.valid('json'));
+      return prefs ? c.json(prefs) : c.json(PHONE_NOT_FOUND, 404);
     })
-    .get('/workspace/phone/push', queryZodValidator(phonePushQuerySchema), async (c) => {
+    .get('/workspace/phone/push', async (c) => {
       const deviceId = relayDeviceId();
       if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
-      const accepts = c.req.valid('query').accepts?.split(',') ?? [];
-      const state = await phonePairing.phonePush(deviceId, accepts.includes('count'));
+      const state = await phonePairing.phonePush(deviceId);
       return state ? c.json(withLiveManager(state)) : c.json(PHONE_NOT_FOUND, 404);
     })
     .put('/workspace/phone/push', jsonZodValidator(setPhonePushGrantInputSchema), async (c) => {

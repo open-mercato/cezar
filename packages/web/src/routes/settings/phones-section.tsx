@@ -22,7 +22,7 @@ import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
 import { QrSvg } from '@/components/qr-svg'
 import { GetTheApp } from './get-the-app'
-import { setPhoneNotifications } from '@/api/attention'
+import { setPhoneSettings } from '@/api/attention'
 import { PhoneNotificationsForm, usePhoneNotificationsEditor } from './phone-notifications'
 import { AccountStep, ComputerNameField, RelayAccountPanel } from './relay-account'
 import { RelayAddressForm } from './relay-address'
@@ -94,7 +94,7 @@ function PhoneRow({ phone, onRemove }: { phone: Phone; onRemove: () => void }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(phone.label)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
-  const editor = usePhoneNotificationsEditor(phone.notifications, (next) => setPhoneNotifications(phone.deviceId, next), () => {
+  const editor = usePhoneNotificationsEditor(phone.prefs, (next) => setPhoneSettings(phone.deviceId, next), () => {
     void queryClient.invalidateQueries({ queryKey: phoneKeys.list })
   })
   const rename = useMutation({
@@ -133,7 +133,7 @@ function PhoneRow({ phone, onRemove }: { phone: Phone; onRemove: () => void }) {
       <CollapsibleContent>
           {editor.value ? (
             <div className="mt-2 rounded-lg border border-border">
-              <PhoneNotificationsForm value={editor.value} onChange={editor.change} saved={editor.saved} idPrefix={`phone-${phone.deviceId}`} />
+              <PhoneNotificationsForm value={editor.value} onChange={editor.change} saved={editor.saved} idPrefix={`phone-${phone.deviceId}`} timeZone={phone.prefs.quiet?.timeZone} />
             </div>
           ) : null}
         </CollapsibleContent>

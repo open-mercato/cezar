@@ -1,8 +1,8 @@
-import { ATTENTION_KINDS, type AttentionKind, type PhoneNotificationPrefs } from '@open-mercato/cezar-api-client'
+import { ATTENTION_KINDS, type AttentionKind, type PhonePushPrefs } from '@open-mercato/cezar-api-client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as React from 'react'
 
-import { attentionKeys, getMyPhoneNotifications, setMyPhoneNotifications } from '@/api/attention'
+import { attentionKeys, getMyPushPrefs, setMyPushPrefs } from '@/api/attention'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
@@ -25,19 +25,30 @@ export const KIND_TITLE: Record<AttentionKind, string> = {
 const toggle = (kinds: readonly AttentionKind[], kind: AttentionKind, on: boolean): AttentionKind[] =>
   ATTENTION_KINDS.filter((each) => (each === kind ? on : kinds.includes(each)))
 
+const localTimeZone = (): string => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
 /** The form alone: the phone's own page and the computer's per-phone row both render it. */
 export function PhoneNotificationsForm({
   value,
   onChange,
   saved = false,
   idPrefix,
+  timeZone = localTimeZone(),
 }: {
-  value: PhoneNotificationPrefs
-  onChange: (next: PhoneNotificationPrefs) => void
+  value: PhonePushPrefs
+  onChange: (next: PhonePushPrefs) => void
   saved?: boolean
   idPrefix: string
+  /** Where quiet hours start out: this browser's zone, which on the phone is the phone's own. */
+  timeZone?: string | undefined
 }) {
-  const quiet = value.quietHours
+  const quiet = value.quiet
   return (
     <div data-slot="phone-notifications-form" className="flex flex-col">
       <p className="px-4 pt-3 pb-1 text-label font-medium text-muted-foreground">Push me for</p>
@@ -59,21 +70,24 @@ export function PhoneNotificationsForm({
             id={`${idPrefix}-badge-${kind}`}
             data-slot="phone-badge-kind"
             data-kind={kind}
-            checked={value.badge.includes(kind)}
-            onCheckedChange={(on) => onChange({ ...value, badge: toggle(value.badge, kind, on) })}
+            checked={value.icon.includes(kind)}
+            onCheckedChange={(on) => onChange({ ...value, icon: toggle(value.icon, kind, on) })}
           />
         </FormRow>
       ))}
       <FormRow
         label="Quiet hours"
-        description="No alerts in this window, in this computer's time. One comes when it ends if something still waits; the icon count still updates."
+        description={`No alerts in this window, in ${quiet?.timeZone ?? timeZone}. One comes when it ends if something still waits; the icon count still updates.`}
         htmlFor={`${idPrefix}-quiet`}
       >
         <Switch
           id={`${idPrefix}-quiet`}
           data-slot="phone-quiet-hours"
-          checked={quiet !== null}
-          onCheckedChange={(on) => onChange({ ...value, quietHours: on ? { start: '22:00', end: '07:00' } : null })}
+          checked={quiet !== undefined}
+          onCheckedChange={(on) => {
+            const { quiet: _off, ...rest } = value
+            onChange(on ? { ...rest, quiet: { from: '22:00', to: '07:00', timeZone } } : rest)
+          }}
         />
       </FormRow>
       {quiet ? (
@@ -82,16 +96,16 @@ export function PhoneNotificationsForm({
             type="time"
             aria-label="Quiet from"
             className="w-32"
-            value={quiet.start}
-            onChange={(event) => event.target.value && onChange({ ...value, quietHours: { ...quiet, start: event.target.value } })}
+            value={quiet.from}
+            onChange={(event) => event.target.value && onChange({ ...value, quiet: { ...quiet, from: event.target.value } })}
           />
           <span className="text-label text-muted-foreground">to</span>
           <Input
             type="time"
             aria-label="Quiet until"
             className="w-32"
-            value={quiet.end}
-            onChange={(event) => event.target.value && onChange({ ...value, quietHours: { ...quiet, end: event.target.value } })}
+            value={quiet.to}
+            onChange={(event) => event.target.value && onChange({ ...value, quiet: { ...quiet, to: event.target.value } })}
           />
         </div>
       ) : null}
@@ -101,8 +115,8 @@ export function PhoneNotificationsForm({
 
 /** Saves on every change, keeps what the server answered, and falls back to it on a failed write. */
 export function usePhoneNotificationsEditor(
-  initial: PhoneNotificationPrefs | undefined,
-  save: (next: PhoneNotificationPrefs) => Promise<PhoneNotificationPrefs>,
+  initial: PhonePushPrefs | undefined,
+  save: (next: PhonePushPrefs) => Promise<PhonePushPrefs>,
   onSaved?: () => void,
 ) {
   const [value, setValue] = React.useState(initial)
@@ -113,7 +127,7 @@ export function usePhoneNotificationsEditor(
     onSuccess: (next) => { setValue(next); flash(); onSaved?.() },
     onError: (error: Error) => { setValue(initial); toast(error.message, { tone: 'danger' }) },
   })
-  const change = (next: PhoneNotificationPrefs) => {
+  const change = (next: PhonePushPrefs) => {
     setValue(next)
     mutation.mutate(next)
   }
@@ -123,8 +137,9 @@ export function usePhoneNotificationsEditor(
 /** Settings → Notifications inside the CezarBot app: this phone's own settings. */
 export function ThisPhoneNotificationsCard() {
   const queryClient = useQueryClient()
-  const query = useQuery({ queryKey: attentionKeys.phone, queryFn: ({ signal }) => getMyPhoneNotifications(signal), retry: false })
-  const editor = usePhoneNotificationsEditor(query.data, setMyPhoneNotifications, () => {
+  const query = useQuery({ queryKey: attentionKeys.phone, queryFn: ({ signal }) => getMyPushPrefs(signal), retry: false })
+  // The page saves the settings; `kinds` is what the app declared and passes through untouched.
+  const editor = usePhoneNotificationsEditor(query.data, setMyPushPrefs, () => {
     void queryClient.invalidateQueries({ queryKey: attentionKeys.phone })
   })
   return (
@@ -137,7 +152,7 @@ export function ThisPhoneNotificationsCard() {
       {editor.value ? (
         <PhoneNotificationsForm value={editor.value} onChange={editor.change} saved={editor.saved} idPrefix="this-phone" />
       ) : (
-        <CardNote>{query.isError ? 'Pair this phone and turn on Notify me to choose what it hears.' : 'Loading…'}</CardNote>
+        <CardNote>{query.isError ? 'This computer runs an older cezar: update it to choose what this phone hears.' : 'Loading…'}</CardNote>
       )}
     </SettingsCard>
   )
