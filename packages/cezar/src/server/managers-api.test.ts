@@ -289,6 +289,93 @@ describe('the managers routes', () => {
     expect(again.status).toBe(409);
   });
 
+  describe('phase 0 of manager admin actions (spec 2026-11-20-manager-admin-actions)', () => {
+    const AUDIT = '/api/v1/workspace/admin-audit';
+    const changes = async (query = '') => ((await (await request(`${AUDIT}${query}`)).json()) as { changes: Array<Record<string, unknown>> }).changes;
+    const schedule = { name: 'Nightly deps', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump deps', workflow: 'quick-task' } };
+
+    it('logs every decided proposal with who decided it and the manager\'s own reason', async () => {
+      const { id, connectedProjectIds } = await createManager();
+      const [projectId] = connectedProjectIds;
+      const propose = async (number: number) => ((await (await request(`${BASE}/${id}/actions`, { method: 'POST', body: { action: { type: 'merge-pr', projectId, number }, reason: 'green' } })).json()) as { actionId: string }).actionId;
+      const merged = await propose(128);
+      await request(`${BASE}/${id}/actions/${merged}/decision`, { method: 'POST', body: { decision: 'approve' } });
+      const rejected = await propose(129);
+      await request(`${BASE}/${id}/actions/${rejected}/decision`, { method: 'POST', body: { decision: 'reject' } });
+      expect(await changes()).toEqual([
+        expect.objectContaining({ type: 'merge-pr', kind: 'proposal', actionId: rejected, projectId, outcome: 'rejected', by: 'user', reason: 'green', summary: `Merge of ${projectId}#129` }),
+        expect.objectContaining({ type: 'merge-pr', kind: 'proposal', actionId: merged, projectId, outcome: 'done', by: 'user', result: 'Merged #128', managerId: id }),
+      ]);
+      // A proposal still waiting is not a change yet.
+      await propose(130);
+      expect(await changes()).toHaveLength(2);
+      expect(await changes('?managerId=someone-else')).toEqual([]);
+    });
+
+    it('lists what a manager may propose, and why not', async () => {
+      const { id } = await createManager();
+      const response = await request(`${BASE}/${id}/action-ops`);
+      expect(response.status).toBe(200);
+      const { ops } = (await response.json()) as { ops: Array<{ type: string; available: boolean; reason?: string; pinnedAsk: boolean }> };
+      expect(ops.map((op) => op.type)).toEqual(['merge-pr', 'enable-automation', 'add-job', 'connector-call']);
+      expect(ops.every((op) => op.pinnedAsk)).toBe(true);
+      expect(ops.find((op) => op.type === 'connector-call')).toMatchObject({ available: false, reason: expect.any(String) });
+      expect((await request(`${BASE}/missing/action-ops`)).status).toBe(404);
+    });
+
+    it('refuses to store an auto-approval policy: every proposal asks', async () => {
+      const { id } = await createManager();
+      const patched = await request(`${BASE}/${id}`, { method: 'PATCH', body: { autoApprove: { rules: [] } } });
+      expect(patched.status).toBe(400);
+      expect(new ManagerStore().get(id)).not.toHaveProperty('autoApprove');
+    });
+
+    it('renames through its own route, name only, and logs it', async () => {
+      const { id } = await createManager();
+      expect((await request(`${BASE}/${id}/rename`, { method: 'POST', body: { name: 'Release Manager', access: 'write' } })).status).toBe(400);
+      const renamed = await request(`${BASE}/${id}/rename`, { method: 'POST', body: { name: 'Release Manager' } });
+      expect(await renamed.json()).toEqual({ ok: true });
+      expect(new ManagerStore().get(id)?.name).toBe('Release Manager');
+      expect(await changes()).toEqual([expect.objectContaining({ type: 'rename', kind: 'direct', by: 'manager', outcome: 'done' })]);
+    });
+
+    it('creates and edits automations paused, linked only to itself, and logs both', async () => {
+      const { id, connectedProjectIds } = await createManager();
+      const [projectId] = connectedProjectIds;
+      const created = await request(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId, definition: { ...schedule, enable: true, enabled: true } } });
+      expect(created.status).toBe(201);
+      const { automation } = (await created.json()) as { automation: { id: string; enabled: boolean; revision: number } };
+      expect(automation.enabled).toBe(false);
+      // Enable it the user's way, then a manager's edit pauses it again.
+      expect((await request(`/api/v1/p/${projectId}/automations/${automation.id}/enable`, { method: 'POST' })).status).toBe(200);
+      const current = ((await (await request(`/api/v1/p/${projectId}/automations/${automation.id}`)).json()) as { automation: { revision: number } }).automation;
+      const updated = await request(`${BASE}/${id}/automations/${automation.id}`, { method: 'PUT', body: { projectId, definition: { ...schedule, name: 'Nightly', enabled: true, expectedRevision: current.revision } } });
+      expect(updated.status).toBe(200);
+      expect(((await updated.json()) as { automation: { enabled: boolean; name: string } }).automation).toMatchObject({ enabled: false, name: 'Nightly' });
+
+      const foreign = await request(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId, definition: { ...schedule, report: { managerId: 'someone-else', mode: 'post-result' } } } });
+      expect(foreign.status).toBe(403);
+      const foreignLink = await request(`${BASE}/${id}/automations/${automation.id}/report`, { method: 'PUT', body: { projectId, report: { managerId: 'someone-else', mode: 'none' } } });
+      expect(foreignLink.status).toBe(403);
+      const ownLink = await request(`${BASE}/${id}/automations/${automation.id}/report`, { method: 'PUT', body: { projectId, report: { managerId: id, mode: 'none' } } });
+      expect(ownLink.status).toBe(200);
+      expect((await changes()).map((change) => change.type)).toEqual(['automation-report', 'automation-update', 'automation-create']);
+    });
+
+    it('refuses automation writes on a read-only project or one it is not connected to, and still previews', async () => {
+      const { id, connectedProjectIds } = await createManager({ instructions: 'Watch', projects: 'all', access: 'read' });
+      const [projectId] = connectedProjectIds;
+      const refused = await request(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId, definition: schedule } });
+      expect(refused.status).toBe(403);
+      expect(((await refused.json()) as { error: string }).error).toContain('read-only');
+      expect((await request(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId: 'elsewhere', definition: schedule } })).status).toBe(403);
+      // Reading is allowed: the preview reaches the automation route (which has nothing to preview here).
+      const preview = await request(`${BASE}/${id}/automations/missing/check`, { method: 'POST', body: { projectId } });
+      expect(preview.status).toBe(404);
+      expect(await changes()).toEqual([]);
+    });
+  });
+
   it('a forged decision from another origin never reaches the engine', async () => {
     const { id } = await createManager();
     const response = await app.request(`${BASE}/${id}/actions/a/decision`, {

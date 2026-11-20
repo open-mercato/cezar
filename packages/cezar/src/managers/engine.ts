@@ -5,7 +5,6 @@ import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
   managerAccessOf,
-  managerConnectorToolMode,
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENTS_TOTAL_BASE64,
   runnerSupportsReasoningEffort,
@@ -15,7 +14,13 @@ import {
   type CreateManagerInput,
   type Manager,
   type AttachmentInput,
+  type ManagerActionOp,
   type ManagerActionRequest,
+  type ManagerAutomationCheckInput,
+  type ManagerAutomationCreateInput,
+  type ManagerAutomationReportInput,
+  type ManagerAutomationUpdateInput,
+  type ManagerChange,
   type ManagerAsk,
   type ManagerActionStatus,
   type ManagerActivityNotice,
@@ -47,6 +52,9 @@ import {
   questionCardSharedHeaders,
 } from '@open-mercato/cezar-contract';
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
+import { actionOp, actionOpsFor, actionProject, actionKey, actionReplacedBy, actionSubject, CONNECTORS_CLAUDE_ONLY, describeAction, type ActionContext } from './actions.ts';
+import { evaluateAutoApproval } from './auto-approve.ts';
+import { ManagerChangeLog } from './change-log.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
@@ -164,6 +172,8 @@ export interface ManagerEngineDeps {
   retryDelayMs?: number;
   /** A manager was deactivated or reactivated: the Questions count leaves its cards out while inactive. */
   onActivityChange?: (managerId: string) => void;
+  /** The change log (spec 2026-11-20 § 3.3); absent = `~/.cezar/admin-audit.ndjson`. */
+  changeLog?: ManagerChangeLog;
 }
 
 /** What `check`, a connector probe and the chat routes answer for a deactivated manager (spec 2026-11-19-manager-deactivate). */
@@ -380,7 +390,6 @@ interface Forward {
 
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
 
-const CONNECTORS_CLAUDE_ONLY = 'Only a Claude Code manager can use connectors: Codex, OpenCode and the others keep their own MCP configuration.';
 /** A probe needs only Claude's `system/init`; an approved call gets one tool call's worth of time. */
 const CONNECTOR_PROBE_LIMIT_MS = 60_000;
 const CONNECTOR_CALL_LIMIT_MS = 5 * 60_000;
@@ -539,7 +548,11 @@ export class ManagerEngine {
   /** The Questions inbox provider's listeners: every card opened, closed or flagged. */
   private readonly askListeners = new Set<(change: ManagerAskChange) => void>();
 
-  constructor(private readonly deps: ManagerEngineDeps) {}
+  private readonly changeLog: ManagerChangeLog;
+
+  constructor(private readonly deps: ManagerEngineDeps) {
+    this.changeLog = deps.changeLog ?? new ManagerChangeLog();
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -2863,52 +2876,51 @@ export class ManagerEngine {
     return created;
   }
 
-  /** Checked against the forge now, so a card never offers a merge that was already impossible. */
-  private async stampAction(id: string, action: ManagerActionRequest): Promise<ManagerActionRequest | ManagerRefusal> {
-    if (action.type === 'add-job') return action;
-    // Claude's server name, never the agent's: the card is what the user decides on.
-    if (action.type === 'connector-call') return { ...action, connectorName: connectorDisplayName(action.connector, this.deps.store.state(id).connectors).slice(0, 200) };
-    const prefix = `/p/${encodeURIComponent(action.projectId)}`;
-    if (action.type === 'merge-pr') {
-      const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state`);
-      if (!response.ok) return ManagerEngine.refusalOf(response);
-      const body = (await response.json()) as { available: boolean; reason?: string; mergeState?: { title: string; state: string; headSha: string } };
-      if (!body.available || !body.mergeState) return { error: body.reason ?? 'GitHub merge is unavailable', status: 409 };
-      if (body.mergeState.state !== 'open') return { error: `#${action.number} is already ${body.mergeState.state}`, status: 409 };
-      // The forge's title, never the agent's: the card is what the user decides on.
-      return { ...action, title: body.mergeState.title.slice(0, 1000), headSha: body.mergeState.headSha };
-    }
-    const response = await this.forward(`${prefix}/automations/${encodeURIComponent(action.automationId)}`);
-    if (!response.ok) return ManagerEngine.refusalOf(response);
-    const { automation } = (await response.json()) as { automation?: AutomationDefinition };
-    if (!automation) return { error: 'automation not found', status: 404 };
-    if (automation.enabled) return { error: 'that automation is already enabled', status: 409 };
-    const { id: _id, revision: _revision, enabled: _enabled, createdAt: _createdAt, updatedAt: _updatedAt, ...definition } = automation;
-    return { ...action, name: automation.name.slice(0, 1000), revision: automation.revision, summary: clipSummary(JSON.stringify(definition)) };
+  /** What an op may use of the engine (spec 2026-11-20 § 2.1): in-process routes and this manager's state. */
+  private actionContext(id: string): ActionContext {
+    return {
+      managerId: id,
+      forward: (path, init) => this.forward(path, init),
+      refusalOf: (response) => ManagerEngine.refusalOf(response),
+      connectorName: (connector) => connectorDisplayName(connector, this.deps.store.state(id).connectors),
+      prState: (projectId, number) => this.prStateOf(projectId, number),
+      runner: async () => {
+        const manager = this.deps.store.get(id);
+        return manager ? this.runnerOf(manager) : '';
+      },
+      addJob: (input) => this.addJob(id, input),
+      callConnector: (action) => this.callConnector(id, action),
+      iso: () => this.iso(),
+    };
+  }
+
+  /** What this manager may propose now (`cez manager propose --help`, spec 2026-11-20 § 5.3). */
+  async actionOps(id: string): Promise<ManagerActionOp[] | undefined> {
+    const manager = this.deps.store.get(id);
+    return manager ? actionOpsFor(manager, await this.runnerOf(manager)) : undefined;
   }
 
   async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus; replaced?: string[]; alsoWaitingIn?: string[] } | ManagerRefusal> {
-    const scope = await this.toolScope(id, actionProject(input.action), true);
+    const op = actionOp(input.action);
+    const scope = await this.toolScope(id, op.project(input.action), true);
     if ('error' in scope) return scope;
-    const refused = accessRefusal(scope.manager, input.action);
+    const refused = op.refusal(scope.manager, input.action);
     if (refused) return { error: refused, status: 403 };
-    if (input.action.type === 'connector-call') {
-      if (managerConnectorToolMode(scope.manager.connectors?.[input.action.connector], input.action.tool) === 'allow') {
-        return { error: `${connectorToolName(input.action.connector, input.action.tool)} is granted without asking: call it directly instead of proposing it`, status: 400 };
-      }
-      if ((await this.runnerOf(scope.manager)) !== 'claude') return { error: CONNECTORS_CLAUDE_ONLY, status: 409 };
-    }
-    const action = await this.stampAction(id, input.action);
+    const ctx = this.actionContext(id);
+    const prechecked = await op.precheck?.(ctx, scope.manager, input.action);
+    if (prechecked) return prechecked;
+    // The facts the card shows come from the server, never the agent.
+    const action = await op.stamp(ctx, input.action);
     if ('error' in action) return action;
     // From here to `publish` nothing awaits, so two racing proposals see each other's card.
-    const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action) && sameMethod(other, action);
+    const same = (other: ManagerActionRequest) => other.type === action.type && actionKey(other) === actionKey(action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
     if (pending) return { actionId: pending.id, status: 'pending' };
     // One waiting card per PR or automation: a new head, method or revision replaces the older card.
     const replaced: string[] = [];
     for (const older of this.deps.store.messages(id)) {
-      if (older.kind !== 'action' || older.status !== 'pending' || cardSubject(older.action) === undefined || cardSubject(older.action) !== cardSubject(action)) continue;
-      this.settleAction(id, older, 'dismissed', replacedBy(action));
+      if (older.kind !== 'action' || older.status !== 'pending' || actionSubject(older.action) === undefined || actionSubject(older.action) !== actionSubject(action)) continue;
+      this.settleAction(id, older, 'dismissed', actionReplacedBy(action), 'cezar');
       replaced.push(older.id);
     }
     const alsoWaitingIn = this.alsoWaitingIn(id, action);
@@ -2922,12 +2934,14 @@ export class ManagerEngine {
       ...(input.reason ? { reason: input.reason } : {}),
       status: 'pending',
     };
+    // The auto-approval seam (spec 2026-11-20 § 4). It answers `ask` until phase 4, which approves on `auto` here through `decide`.
+    evaluateAutoApproval(scope.manager, { type: action.type, risk: op.risk, pinnedAsk: op.pinnedAsk, turn: this.runtimes.get(id)?.active?.kind, fullUndo: false });
     this.publish(id, message, true);
     if (action.type === 'merge-pr') this.managerActed(id, { prs: [{ projectId: action.projectId, number: action.number }] }, `you proposed merging #${action.number} since`);
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
-    this.alert(id, message, `Needs your approval: ${describe(action)}`);
+    this.alert(id, message, `Needs your approval: ${describeAction(action)}`);
     return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
   }
 
@@ -2955,10 +2969,10 @@ export class ManagerEngine {
 
   /** Other managers' chats with a card waiting on the same PR or automation: allowed, but said. */
   private alsoWaitingIn(id: string, action: ManagerActionRequest): string[] {
-    const subject = cardSubject(action);
+    const subject = actionSubject(action);
     if (subject === undefined) return [];
     return this.deps.store.list()
-      .filter((manager) => manager.id !== id && this.deps.store.messages(manager.id).some((message) => message.kind === 'action' && message.status === 'pending' && cardSubject(message.action) === subject))
+      .filter((manager) => manager.id !== id && this.deps.store.messages(manager.id).some((message) => message.kind === 'action' && message.status === 'pending' && actionSubject(message.action) === subject))
       .map((manager) => manager.name);
   }
 
@@ -2967,15 +2981,15 @@ export class ManagerEngine {
     const newest = new Map<string, Extract<ManagerMessage, { kind: 'action' }>>();
     const cards = this.deps.store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'action' }> => message.kind === 'action' && message.status === 'pending');
     for (const card of cards) {
-      const subject = cardSubject(card.action);
+      const subject = actionSubject(card.action);
       if (subject === undefined) continue;
       const kept = newest.get(subject);
       if (!kept || card.seq > kept.seq) newest.set(subject, card);
     }
     for (const card of cards) {
-      const subject = cardSubject(card.action);
+      const subject = actionSubject(card.action);
       const kept = subject === undefined ? undefined : newest.get(subject);
-      if (kept && kept.id !== card.id) this.settleAction(id, card, 'dismissed', replacedBy(kept.action));
+      if (kept && kept.id !== card.id) this.settleAction(id, card, 'dismissed', actionReplacedBy(kept.action), 'cezar');
     }
   }
 
@@ -2993,9 +3007,7 @@ export class ManagerEngine {
     if (message?.kind !== 'action') return { error: 'action not found', status: 404 };
     if (message.status !== 'pending') return { error: `this action is already ${message.status}`, status: 409 };
     if (decision === 'dismiss') {
-      const stale = message.action.type === 'merge-pr'
-        ? await this.closedPr(message.action)
-        : message.action.type === 'enable-automation' ? await this.outdatedEnable(message.action) : undefined;
+      const stale = await this.staleReason(id, message.action);
       if (onlyIfStale && !stale) return { error: 'this proposal is still current', status: 409 };
       // Re-read after the forge call: another tab may have decided meanwhile.
       const current = this.deps.store.message(id, actionId);
@@ -3004,7 +3016,7 @@ export class ManagerEngine {
       if (current?.kind !== 'action' || current.status !== 'pending') return { error: 'this action was already decided', status: 409 };
       message = current;
       if (!onlyIfStale) this.deps.telemetry?.track('manager_action_decided', `${managerActionLabel(message.action)}:dismiss`, ctx);
-      this.settleAction(id, message, 'dismissed', stale ?? 'Dismissed');
+      this.settleAction(id, message, 'dismissed', stale ?? 'Dismissed', stale ? 'cezar' : 'user');
       return { ok: true as const };
     }
     // A connector call is a model session: it waits on the card until the manager is reactivated.
@@ -3013,23 +3025,24 @@ export class ManagerEngine {
     this.deps.telemetry?.track('manager_action_decided', `${type}:${decision}`, ctx);
     const proposedAt = Date.parse(message.at);
     if (Number.isFinite(proposedAt)) this.deps.telemetry?.timing('manager_action_decision', Math.max(0, this.now() - proposedAt), { operation: type, target: decision, outcome: 'ok' });
-    const settle = (status: ManagerActionStatus, result: string) => this.settleAction(id, message, status, result);
+    const settle = (status: ManagerActionStatus, result: string) => this.settleAction(id, message, status, result, outcomeBy(status));
     if (decision === 'reject') {
       settle('rejected', 'Rejected');
       return { ok: true as const };
     }
     this.publish(id, { ...message, status: 'running' }, true);
-    const projectId = actionProject(message.action);
+    const op = actionOp(message.action);
+    const projectId = op.project(message.action);
     let outcome: { ok: boolean; result: string; dismissed?: boolean };
     try {
       const connected = projectId === undefined || (await this.sources(manager)).some((source) => source.id === projectId);
       // Read fresh: access may have been lowered while the card waited.
-      const refused = accessRefusal(this.deps.store.get(id) ?? manager, message.action);
+      const refused = op.refusal(this.deps.store.get(id) ?? manager, message.action);
       outcome = !connected
         ? { ok: false, result: `This manager is no longer connected to ${projectId}.` }
         : refused
           ? { ok: false, result: refused }
-          : await this.perform(id, message.action);
+          : await op.perform(this.actionContext(id), message.action);
     } catch (cause) {
       // `running` has no other exit but a restart.
       outcome = { ok: false, result: cause instanceof Error ? cause.message : String(cause) };
@@ -3038,18 +3051,36 @@ export class ManagerEngine {
     return { ok: true as const };
   }
 
-  private settleAction(id: string, message: Extract<ManagerMessage, { kind: 'action' }>, status: ManagerActionStatus, result: string): void {
+  /** `by`: who closed it, for the change log: the user's decision, or cezar finding it moot or replaced. */
+  private settleAction(id: string, message: Extract<ManagerMessage, { kind: 'action' }>, status: ManagerActionStatus, result: string, by: 'user' | 'cezar'): void {
     // Deleted while the action ran: writing the result would recreate its directory.
-    if (!this.deps.store.get(id)) return;
+    const manager = this.deps.store.get(id);
+    if (!manager) return;
     this.publish(id, { ...message, status, result }, true);
-    this.addNote(id, `${describe(message.action)}: ${result}`);
+    this.addNote(id, `${describeAction(message.action)}: ${result}`);
+    if (status !== 'pending' && status !== 'running') {
+      this.changeLog.append({
+        id: randomUUID(),
+        at: this.iso(),
+        managerId: id,
+        managerName: manager.name,
+        type: message.action.type,
+        kind: 'proposal',
+        actionId: message.id,
+        ...withProject(actionProject(message.action)),
+        summary: describeAction(message.action),
+        ...(message.reason ? { reason: message.reason } : {}),
+        outcome: status,
+        result,
+        by,
+      });
+    }
     this.emitChange(id);
   }
 
-  /** Why a merge card is moot ("#12 was already merged"), or `undefined` while its PR is open or unknown. */
-  private async closedPr(action: Extract<ManagerActionRequest, { type: 'merge-pr' }>): Promise<string | undefined> {
-    const state = await this.prStateOf(action.projectId, action.number);
-    return state ? `#${action.number} was already ${state}` : undefined;
+  /** Why a card is moot now (its PR closed, its automation edited), or `undefined` while current or unknown. */
+  private staleReason(id: string, action: ManagerActionRequest): Promise<string | undefined> {
+    return actionOp(action).stale?.(this.actionContext(id), action) ?? Promise.resolve(undefined);
   }
 
   /** `merged`/`closed` as the forge says now, or `undefined` while open or unknown. */
@@ -3073,9 +3104,9 @@ export class ManagerEngine {
       open.get(message.action.projectId)?.has(message.action.number) === false);
     for (const message of suspects) {
       if (message.action.type !== 'merge-pr') continue;
-      const stale = await this.closedPr(message.action);
+      const stale = await this.staleReason(id, message.action);
       const current = this.deps.store.message(id, message.id);
-      if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale);
+      if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale, 'cezar');
     }
   }
 
@@ -3099,22 +3130,7 @@ export class ManagerEngine {
       const current = this.deps.store.message(id, message.id);
       if (current?.kind !== 'action' || current.status !== 'pending') continue;
       if (verify) await this.decide(id, current.id, 'dismiss', {}, true);
-      else this.settleAction(id, current, 'dismissed', `#${number} was already ${state}`);
-    }
-  }
-
-  /** Why an enable card is moot (edited, deleted, already on), or `undefined` while current or unknown. */
-  private async outdatedEnable(action: Extract<ManagerActionRequest, { type: 'enable-automation' }>): Promise<string | undefined> {
-    try {
-      const response = await this.forward(`/p/${encodeURIComponent(action.projectId)}/automations/${encodeURIComponent(action.automationId)}`);
-      if (response.status === 404) return 'Automation was deleted since the proposal';
-      if (!response.ok) return undefined;
-      const { automation } = (await response.json()) as { automation?: { revision?: number; enabled?: boolean } };
-      if (!automation) return undefined;
-      if (automation.enabled) return 'Automation is already enabled';
-      return automation.revision !== action.revision ? `Automation changed since the proposal (rev ${action.revision} -> ${automation.revision})` : undefined;
-    } catch {
-      return undefined;
+      else this.settleAction(id, current, 'dismissed', `#${number} was already ${state}`, 'cezar');
     }
   }
 
@@ -3125,43 +3141,10 @@ export class ManagerEngine {
       message.kind === 'action' && message.status === 'pending' && message.action.type === 'enable-automation' && available.has(message.action.projectId));
     for (const message of suspects) {
       if (message.action.type !== 'enable-automation') continue;
-      const stale = await this.outdatedEnable(message.action);
+      const stale = await this.staleReason(id, message.action);
       const current = this.deps.store.message(id, message.id);
-      if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale);
+      if (stale && current?.kind === 'action' && current.status === 'pending') this.settleAction(id, current, 'dismissed', stale, 'cezar');
     }
-  }
-
-  private async perform(id: string, action: ManagerActionRequest): Promise<{ ok: boolean; result: string; dismissed?: boolean }> {
-    if (action.type === 'connector-call') return this.callConnector(id, action);
-    if (action.type === 'add-job') {
-      // Counted from now: an approved job must not fire seconds after the click.
-      const added = this.addJob(id, { name: action.name, prompt: action.prompt, everyMinutes: action.everyMinutes, enabled: true, lastRunAt: this.iso() });
-      return 'error' in added ? { ok: false, result: added.error } : { ok: true, result: `Added job ${action.name}` };
-    }
-    const prefix = `/p/${encodeURIComponent(action.projectId)}`;
-    if (action.type === 'enable-automation') {
-      const current = await this.forward(`${prefix}/automations/${encodeURIComponent(action.automationId)}`);
-      if (!current.ok) return { ok: false, result: (await ManagerEngine.refusalOf(current)).error };
-      const { automation } = (await current.json()) as { automation?: { revision?: number } };
-      if (automation?.revision !== action.revision) return { ok: false, result: 'This automation changed after the proposal. Ask for a new one.' };
-      const response = await this.forward(`${prefix}/automations/${encodeURIComponent(action.automationId)}/enable`, { method: 'POST' });
-      if (response.ok) return { ok: true, result: `Enabled ${action.name ?? action.automationId}` };
-      return { ok: false, result: (await ManagerEngine.refusalOf(response)).error };
-    }
-    const state = await this.forward(`${prefix}/github/prs/${action.number}/merge-state?refresh=1`);
-    const body = (await state.json().catch(() => ({}))) as { available?: boolean; reason?: string; mergeState?: { state?: string; headSha: string; defaultMethod: 'merge' | 'squash' | 'rebase' | null; methods: Array<'merge' | 'squash' | 'rebase'> } };
-    if (!body.available || !body.mergeState) return { ok: false, result: body.reason ?? 'GitHub merge is unavailable' };
-    const prState = body.mergeState.state;
-    if (prState === 'merged' || prState === 'closed') return { ok: false, dismissed: true, result: `#${action.number} was already ${prState}` };
-    const method = action.method ?? body.mergeState.defaultMethod ?? body.mergeState.methods[0];
-    if (!method) return { ok: false, result: 'This repository allows no merge method.' };
-    // The head the user was shown: a push after the proposal refuses instead of merging unseen code.
-    const merged = await this.forward(`${prefix}/github/prs/${action.number}/merge`, {
-      method: 'POST',
-      body: { method, expectedHeadSha: action.headSha ?? body.mergeState.headSha },
-    });
-    if (merged.ok) return { ok: true, result: `Merged #${action.number}` };
-    return { ok: false, result: (await ManagerEngine.refusalOf(merged)).error };
   }
 
   /** Reached only from an approved `add-job`; the cockpit edits jobs through `update`. */
@@ -3179,11 +3162,120 @@ export class ManagerEngine {
   async removeJob(id: string, jobId: string): Promise<{ ok: true } | ManagerRefusal> {
     const scope = await this.toolScope(id, undefined, true);
     if ('error' in scope) return scope;
-    if (!scope.manager.jobs.some((job) => job.id === jobId)) return { error: 'job not found', status: 404 };
+    const removed = scope.manager.jobs.find((job) => job.id === jobId);
+    if (!removed) return { error: 'job not found', status: 404 };
     this.deps.store.update(id, (manager) => ({ ...manager, jobs: manager.jobs.filter((job) => job.id !== jobId), updatedAt: this.iso() }));
     this.reschedule();
     this.emitChange(id);
+    this.logDirect(scope.manager, 'job-remove', `Removed job ${removed.name}`);
     return { ok: true as const };
+  }
+
+  // ---- direct writes a manager may make without a card, checked here (spec 2026-11-20 § 3.6) ----
+
+  /** `cez manager rename`: its own name, nothing else of its definition. */
+  async rename(id: string, name: string): Promise<{ ok: true } | ManagerRefusal> {
+    const scope = await this.toolScope(id, undefined, true);
+    if ('error' in scope) return scope;
+    if (scope.manager.name === name) return { ok: true as const };
+    const renamed = await this.update(id, { name });
+    if ('error' in renamed) return renamed;
+    this.logDirect(scope.manager, 'rename', `Renamed ${scope.manager.name} to ${name}`);
+    return { ok: true as const };
+  }
+
+  /** A write project this manager may set automations up in, or the refusal the CLI used to give on its own. */
+  private async automationScope(id: string, projectId: string, write: boolean): Promise<{ manager: Manager } | ManagerRefusal> {
+    const scope = await this.toolScope(id, projectId, write);
+    if ('error' in scope) return scope;
+    if (write && managerAccessOf(scope.manager, projectId) === 'read') {
+      return { error: `${projectId} is read-only for this manager: it cannot set up automations there`, status: 403 };
+    }
+    return { manager: scope.manager };
+  }
+
+  /** What it creates or links reports to itself or to nobody, never to another manager. */
+  private static foreignReport(id: string, report: unknown): ManagerRefusal | undefined {
+    if (report === undefined || report === null) return undefined;
+    const managerId = typeof report === 'object' ? (report as { managerId?: unknown }).managerId : undefined;
+    return managerId === id ? undefined : { error: 'a manager links automations to itself only', status: 403 };
+  }
+
+  private async forwardAutomation(path: string, init: { method: string; body: unknown }): Promise<{ status: number; body: unknown } | ManagerRefusal> {
+    const response = await this.forward(path, init);
+    if (!response.ok) return ManagerEngine.refusalOf(response);
+    return { status: response.status, body: await response.json() };
+  }
+
+  /** Created paused, always: `enable` is dropped, and turning it on is a proposal. */
+  async createAutomation(id: string, input: ManagerAutomationCreateInput): Promise<{ automation: AutomationDefinition } | ManagerRefusal> {
+    const scope = await this.automationScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const { enable: _enable, enabled: _enabled, ...definition } = input.definition;
+    const foreign = ManagerEngine.foreignReport(id, definition.report);
+    if (foreign) return foreign;
+    const created = await this.forwardAutomation(`/p/${encodeURIComponent(input.projectId)}/automations`, { method: 'POST', body: definition });
+    if ('error' in created) return created;
+    const { automation } = created.body as { automation: AutomationDefinition };
+    this.logDirect(scope.manager, 'automation-create', `Created automation ${automation.name} (paused)`, input.projectId);
+    return { automation };
+  }
+
+  /** An edit pauses: what a manager changed runs only after the user enables it again. */
+  async updateAutomation(id: string, automationId: string, input: ManagerAutomationUpdateInput): Promise<{ automation: AutomationDefinition } | ManagerRefusal> {
+    const scope = await this.automationScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const foreign = ManagerEngine.foreignReport(id, input.definition.report);
+    if (foreign) return foreign;
+    const path = `/p/${encodeURIComponent(input.projectId)}/automations/${encodeURIComponent(automationId)}`;
+    const updated = await this.forwardAutomation(path, { method: 'PUT', body: { ...input.definition, enabled: false } });
+    if ('error' in updated) return updated;
+    const { automation } = updated.body as { automation: AutomationDefinition };
+    this.logDirect(scope.manager, 'automation-update', `Edited automation ${automation.name} (paused)`, input.projectId);
+    return { automation };
+  }
+
+  async setAutomationReport(id: string, automationId: string, input: ManagerAutomationReportInput): Promise<{ automation: AutomationDefinition } | ManagerRefusal> {
+    const scope = await this.automationScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const foreign = ManagerEngine.foreignReport(id, input.report);
+    if (foreign) return foreign;
+    const path = `/p/${encodeURIComponent(input.projectId)}/automations/${encodeURIComponent(automationId)}/report`;
+    const set = await this.forwardAutomation(path, { method: 'PUT', body: { report: input.report } });
+    if ('error' in set) return set;
+    const { automation } = set.body as { automation: AutomationDefinition };
+    this.logDirect(scope.manager, 'automation-report', `${input.report ? 'Linked' : 'Unlinked'} automation ${automation.name} ${input.report ? 'to' : 'from'} this chat`, input.projectId);
+    return { automation };
+  }
+
+  /** A preview of what the filter matches now; reading, so a watch turn and a read-only project may. */
+  async checkAutomation(id: string, automationId: string, input: ManagerAutomationCheckInput): Promise<{ checkId: string } | ManagerRefusal> {
+    const scope = await this.automationScope(id, input.projectId, false);
+    if ('error' in scope) return scope;
+    const path = `/p/${encodeURIComponent(input.projectId)}/automations/${encodeURIComponent(automationId)}/check`;
+    const queued = await this.forwardAutomation(path, { method: 'POST', body: { mode: 'preview' } });
+    if ('error' in queued) return queued;
+    return { checkId: (queued.body as { checkId: string }).checkId };
+  }
+
+  /** The change log, newest first (spec 2026-11-20 § 3.3). */
+  changeLogEntries(query: { managerId?: string; limit?: number }): ManagerChange[] {
+    return this.changeLog.list(query);
+  }
+
+  private logDirect(manager: Manager, type: string, summary: string, projectId?: string): void {
+    this.changeLog.append({
+      id: randomUUID(),
+      at: this.iso(),
+      managerId: manager.id,
+      managerName: manager.name,
+      type,
+      kind: 'direct',
+      ...withProject(projectId),
+      summary,
+      outcome: 'done',
+      by: 'manager',
+    });
   }
 }
 
@@ -3192,12 +3284,6 @@ const firstFreeAvatar = (managers: readonly Manager[]): number => {
   const free = Array.from({ length: 64 }, (_, index) => index).find((index) => !taken.has(index));
   return free ?? managers.length % 64;
 };
-
-const SUMMARY_LIMIT = 8_000;
-
-/** Long on purpose: the end of a definition is its prompt, and a card must not hide that. */
-const clipSummary = (text: string): string =>
-  text.length > SUMMARY_LIMIT ? `${text.slice(0, SUMMARY_LIMIT)}… (cut, open the automation to read it all)` : text;
 
 const pendingAction = (message: ManagerMessage): boolean => message.kind === 'action' && message.status === 'pending';
 
@@ -3220,53 +3306,10 @@ function descendantsOf(runs: RunRecord[], rootId: string): RunRecord[] {
 const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): string =>
   `Your ${message.turn} turn asked the user, who answers in their next message: ${(message.ask?.questions ?? []).map((question) => `${question.header}: ${question.question}`).join(' / ')}`.slice(0, 2_000);
 
-const actionProject = (action: ManagerActionRequest): string | undefined =>
-  action.type === 'add-job' || action.type === 'connector-call' ? undefined : action.projectId;
+const withProject = (projectId: string | undefined): { projectId?: string } => (projectId === undefined ? {} : { projectId });
 
-/** Also read at the decision: a grant revoked while the card waited fails it. */
-const accessRefusal = (manager: Manager, action: ManagerActionRequest): string | undefined => {
-  if (action.type === 'connector-call') {
-    return managerConnectorToolMode(manager.connectors?.[action.connector], action.tool) === 'deny'
-      ? `${action.tool} on ${action.connectorName ?? action.connector} is not granted to this manager: the user can grant it in its settings under Connectors.`
-      : undefined;
-  }
-  const projectId = actionProject(action);
-  return projectId !== undefined && managerAccessOf(manager, projectId) === 'read'
-    ? `${projectId} is read-only for this manager: it cannot merge or enable anything there.`
-    : undefined;
-};
-
-const actionKey = (action: ManagerActionRequest): string => {
-  // The stamped facts count: a stale card must not stand in for what changed since.
-  if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}:${action.headSha}`;
-  if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}:${action.revision}`;
-  if (action.type === 'connector-call') return `connector:${action.connector}:${action.tool}:${canonicalJson(action.args)}`;
-  return `job:${action.name}:${action.everyMinutes}:${action.prompt}`;
-};
-
-/** What one waiting card may exist for: a PR or an automation. Other kinds may repeat. */
-const cardSubject = (action: ManagerActionRequest): string | undefined => {
-  if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}`;
-  if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}`;
-  return undefined;
-};
-
-const sameMethod = (a: ManagerActionRequest, b: ManagerActionRequest): boolean =>
-  a.type !== 'merge-pr' || b.type !== 'merge-pr' || a.method === b.method;
-
-/** The closed card's line, in the dismissed wording of #2241/#2292. */
-const replacedBy = (action: ManagerActionRequest): string => {
-  if (action.type === 'merge-pr') return `Replaced by a newer proposal${action.headSha ? ` for head ${action.headSha.slice(0, 12)}` : ''}${action.method ? ` (${action.method})` : ''}`;
-  if (action.type === 'enable-automation') return `Replaced by a newer proposal (revision ${action.revision})`;
-  return 'Replaced by a newer proposal';
-};
-
-const describe = (action: ManagerActionRequest): string => {
-  if (action.type === 'merge-pr') return `Merge of ${action.projectId}#${action.number}`;
-  if (action.type === 'enable-automation') return `Enabling automation ${action.name ?? action.automationId}`;
-  if (action.type === 'connector-call') return `Calling ${action.tool} on ${action.connectorName ?? action.connector}`;
-  return `Adding job ${action.name}`;
-};
+/** Approve and reject are the user's; anything else that settles a card on that path is cezar's. */
+const outcomeBy = (status: ManagerActionStatus): 'user' | 'cezar' => (status === 'dismissed' ? 'cezar' : 'user');
 
 const RESULT_LIMIT = 4_000;
 

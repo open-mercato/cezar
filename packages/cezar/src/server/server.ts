@@ -45,6 +45,13 @@ import {
   managerFollowTaskInputSchema,
   managerCancelTaskInputSchema,
   managerRetryTaskInputSchema,
+  managerRenameInputSchema,
+  managerAutomationCreateInputSchema,
+  managerAutomationUpdateInputSchema,
+  managerAutomationReportInputSchema,
+  managerAutomationCheckInputSchema,
+  managerAutomationParamSchema,
+  managerChangesQuerySchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -9308,7 +9315,41 @@ export function createApp(deps: ServerDeps) {
       const { id, jobId } = c.req.valid('param');
       const removed = await managerEngine.removeJob(id, jobId);
       return 'error' in removed ? c.json({ error: removed.error }, removed.status) : c.json(removed);
-    });
+    })
+    // What this manager may propose (spec 2026-11-20-manager-admin-actions § 5.3): `cez manager propose --help`.
+    .get('/workspace/managers/:id/action-ops', paramZodValidator(managerIdParamSchema), async (c) => {
+      const ops = await managerEngine.actionOps(c.req.valid('param').id);
+      return ops ? c.json({ ops }) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    // `cez manager rename`: its name only. The general PATCH stays the cockpit's (spec 2026-11-20 § 3.1).
+    .post('/workspace/managers/:id/rename', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerRenameInputSchema), async (c) => {
+      const renamed = await managerEngine.rename(c.req.valid('param').id, c.req.valid('json').name);
+      return 'error' in renamed ? c.json({ error: renamed.error }, renamed.status) : c.json(renamed);
+    })
+    // `cez manager automation …` writes: scope, read-only and always-paused checked here, not in the CLI (spec 2026-11-20 § 3.6).
+    .post('/workspace/managers/:id/automations', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerAutomationCreateInputSchema), async (c) => {
+      const created = await managerEngine.createAutomation(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
+    })
+    .put('/workspace/managers/:id/automations/:automationId', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationUpdateInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const updated = await managerEngine.updateAutomation(id, automationId, c.req.valid('json'));
+      return 'error' in updated ? c.json({ error: updated.error }, updated.status) : c.json(updated);
+    })
+    .put('/workspace/managers/:id/automations/:automationId/report', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationReportInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const set = await managerEngine.setAutomationReport(id, automationId, c.req.valid('json'));
+      return 'error' in set ? c.json({ error: set.error }, set.status) : c.json(set);
+    })
+    .post('/workspace/managers/:id/automations/:automationId/check', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationCheckInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const queued = await managerEngine.checkAutomation(id, automationId, c.req.valid('json'));
+      return 'error' in queued ? c.json({ error: queued.error }, queued.status) : c.json(queued, 202);
+    })
+    // The change log (spec 2026-11-20 § 3.3): every decided proposal and every direct manager write, newest first.
+    .use('/workspace/admin-audit', requireManagers)
+    .get('/workspace/admin-audit', queryZodValidator(managerChangesQuerySchema), (c) =>
+      c.json({ changes: managerEngine.changeLogEntries(c.req.valid('query')) }));
 
   // ---- chained family: phones (workspace-level, spec 2026-11-01-relay-qr-pairing) ----
   // A phone never reaches this family, so it cannot pair another phone, remove one or move the
