@@ -21,7 +21,20 @@ brew trust --cask open-mercato/tap/cezar
 brew install --cask open-mercato/tap/cezar
 ```
 
-Or download the installer for your system from the [latest desktop release](https://github.com/open-mercato/cezar/releases/tag/desktop-latest).
+The app updates itself (`auto_updates`), so `brew upgrade` skips it unless you pass `--greedy`.
+
+Or download the installer for your system:
+
+| Platform | Download |
+| --- | --- |
+| macOS | [Apple silicon (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-aarch64.dmg) |
+| macOS | [Intel (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-x86_64.dmg) |
+| Windows | [x64 installer (.exe)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-windows-x86_64-setup.exe) |
+| Linux | [AppImage](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.AppImage) |
+| Debian, Ubuntu | [.deb package](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.deb) |
+| Arch, Omarchy, Manjaro | [.pkg.tar.zst](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.pkg.tar.zst) |
+
+All files are on the [latest desktop release](https://github.com/open-mercato/cezar/releases/tag/desktop-latest).
 
 ## The `cez` command
 

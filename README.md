@@ -122,7 +122,41 @@
 
 ## Quick start
 
-You need **Node 20+** and at least one agent CLI you're logged into:
+Two ways in: the **desktop app** for most people, or the **npm package** for servers and headless use.
+Either way you need **Node 20+** and at least one agent CLI you're logged into (listed under [npm / CLI](#npm--cli)).
+
+### Downloads
+
+The desktop app (beta) runs the same local cockpit in its own window. It installs cezar on first launch,
+keeps it up to date, and switches between stable and nightly from the menu.
+
+| Platform | Download | For |
+| --- | --- | --- |
+| macOS | [Apple silicon (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-aarch64.dmg) | Macs with an M-series chip |
+| macOS | [Intel (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-x86_64.dmg) | Macs with an Intel processor |
+| Windows | [x64 installer (.exe)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-windows-x86_64-setup.exe) | 64-bit Windows, signed setup installer |
+| Linux | [AppImage](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.AppImage) | Any 64-bit distribution, no install step |
+| Debian, Ubuntu | [.deb package](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.deb) | Debian, Ubuntu and derivatives (apt) |
+| Arch, Omarchy, Manjaro | [.pkg.tar.zst](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.pkg.tar.zst) | Arch and Arch-based distributions (pacman) |
+
+All files: [desktop-latest release](https://github.com/open-mercato/cezar/releases/tag/desktop-latest).
+Windows code signing is provided free by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+#### Homebrew (macOS)
+
+```sh
+brew trust --cask open-mercato/tap/cezar
+brew install --cask open-mercato/tap/cezar
+```
+
+From desktop 0.1.12 on, the cask also puts the `cez` and `cezar` commands on your `PATH`. The app
+updates itself (`auto_updates`), so `brew upgrade` skips it unless you pass `--greedy`. Installed from
+the DMG instead? Get the same commands from the menu: **Cezar → Install 'cez' command in PATH…**
+([details](docs/site/content/docs/03-features/setup-and-integrations/desktop-app.mdx)).
+
+### npm / CLI
+
+For servers, headless runs and anyone who lives in a terminal. You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
 [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai),
 [Cursor Agent](https://cursor.com/docs/cli/overview), [Google Antigravity CLI](https://antigravity.google/docs/cli), [Junie](https://junie.jetbrains.com/cli), [Kimi Code](https://moonshotai.github.io/kimi-code/), [OMP](https://omp.sh), [pi](https://github.com/badlogic/pi-mono) or
@@ -144,6 +178,8 @@ npx cezar-run run "add a --json flag to the export command"   # headless, no bro
 npx cezar-run init                                            # scaffold .ai/cezar/
 npx cezar-run@nightly                                         # try tonight's build
 ```
+
+To keep it installed, `npm i -g @open-mercato/cezar` puts `cez` and `cezar` on your `PATH`.
 
 > Just want to look around? Run `CEZ_DRY_RUN=1 npx cezar-run`. It uses a built-in mock agent, so you don't need to log in.
 
