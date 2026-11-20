@@ -193,4 +193,15 @@ describe.skipIf(process.platform === 'win32')('task deletion prunes restricted C
     f.store.flush();
   });
 
+  it("permanent deletion does not sweep another process's unindexed reclaimed task", () => {
+    const f = fixture();
+    const cwd = join(f.dataDir, 'worktrees', 'foreign-task'); mkdirSync(cwd);
+    const foreign = prepareRestrictedCodexHome({ cwd }, { CEZ_HOME: process.env.CEZ_HOME, CEZ_DRY_RUN: '1' });
+    rmSync(cwd, { recursive: true });
+    f.store.deleteRun(f.run.id);
+    expect(existsSync(f.home.path)).toBe(false);
+    expect(existsSync(foreign.path)).toBe(true);
+    f.store.flush();
+  });
+
 });

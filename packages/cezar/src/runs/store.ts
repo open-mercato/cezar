@@ -2556,17 +2556,18 @@ export class RunStore extends EventEmitter {
     return sweepOrphanTaskFiles(this.dataDir, known, roots);
   }
 
-  private pruneRestrictedHomes(known: ReadonlySet<string>): void {
+  private pruneRestrictedHomes(known: ReadonlySet<string>, deletedId?: string): void {
     // A partial index cannot prove a home is orphaned. All retained IDs protect native resumes,
     // including reclaimed/archived tasks with no directory, and salvaged newer-version records.
     const health = this.getIndexReadHealth();
     if (health.state !== 'complete' || health.omittedRuns > 0) return;
-    pruneRestrictedCodexHomes(resolve(this.dataDir, '../..'), known);
+    pruneRestrictedCodexHomes(resolve(this.dataDir, '../..'), known, process.env, deletedId);
   }
 
   /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
   private deleteRunFiles(id: string, root?: string): void {
-    this.pruneRestrictedHomes(new Set([...this.runs.keys(), ...this.salvaged.keys()]));
+    // A concurrent cockpit may own IDs absent from this in-memory index. Deletion cleans only its own task.
+    this.pruneRestrictedHomes(new Set([...this.runs.keys(), ...this.salvaged.keys()]), id);
     try {
       // A dispatch tree outlives its root while a member remains (they share CEZ_TREE_DIR).
       const tree = root ?? id;

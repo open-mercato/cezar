@@ -173,6 +173,7 @@ export function pruneRestrictedCodexHomes(
   repoRoot: string,
   retainedIds: ReadonlySet<string>,
   env: NodeJS.ProcessEnv = process.env,
+  deletedId?: string,
 ): string[] {
   const removed: string[] = [];
   try {
@@ -201,7 +202,7 @@ export function pruneRestrictedCodexHomes(
         const path = relative(worktrees, cwd);
         if (!path || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) continue;
         const taskId = path.split(sep)[0];
-        if (!taskId || retainedIds.has(taskId)) continue;
+        if (!taskId || retainedIds.has(taskId) || (deletedId !== undefined && taskId !== deletedId)) continue;
         // Only ENOENT establishes absence; EACCES and dangling symlinks are not orphan proof.
         try { lstatSync(join(worktrees, taskId)); continue; } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') continue;
