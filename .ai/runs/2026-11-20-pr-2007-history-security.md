@@ -53,3 +53,17 @@ Claim-Comment: 7025683891
 Claim-Lock-SHA: 895ddf2d7c0932d79b90649601c115a6822e6748
 
 Final scope review: keep only the atomic claim/reset/leased-release descriptor additions needed by the chain; remove unrelated inherited merge-policy and approval examples. Runtime source/test files are unchanged after the successful gate. Final CI still gates ready/merge; the author bot cannot supply formal approval.
+
+
+## Scheduled verification continuation (2026-11-20)
+
+Claim-Run: 97c0ede8-d979-466c-8a9d-f14b78f919a3
+Claim-Comment: 7040387503
+Claim-Lock-SHA: 9f6546d927ce79789801f18d90e83e47876271a2
+
+- [x] 3.1 Merge current main without changing the descriptor-bound reader behavior —42d09356b6fce49ec5a119aa43af8fabb3e312fa.
+- [x] 3.2 Repeat removal proof and focused coverage: current-main source fails7/10 dedicated cases; fixed new/existing suites pass41/41.
+- [x] 3.3 Run all five configured gates on the integrated product source: typecheck PASS;17773 Vitest tests/8 existing skips PASS (8 workers);54 core PASS;build/check:pack PASS;35 package PASS. The continuation shell stopped on a misspelled log-directory variable after Vitest; the three not-yet-started commands then ran in order with the correct log path. No source, assertions or product configuration changed for that correction.
+- [x] 3.4 Re-review the complete scope against repository/skill checklists and inherited feedback; no actionable findings. Publish the resumed PR and complete owned-claim cleanup; tracker completion/CI comments are authoritative for release and new-head CI results.
+
+No duplicate PR, API/transcript/startup/configuration/architecture/dependency or default changes. Existing automerge, skip-qa, risk-low and both backport requests retained. Draft is used while new-head remote verification is pending; ready follows when it passes. Formal GitHub approval remains independent of the author COMMENT. No merge.
