@@ -137,6 +137,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         launch.frame = view.bounds
         launch.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         if let banner { view.insertSubview(launch, belowSubview: banner) } else { view.addSubview(launch) }
+        // A cover put back by a restart must not hide a pending add's way out.
+        if let cancelButton { view.bringSubviewToFront(cancelButton) }
         launch.show(status: watchdog.decide(relayNowMs()).text)
         cover = launch
         startTicking()
@@ -179,8 +181,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
                 startLog.step("problem: \(decision.text ?? "")")
                 cover.show(problem: decision.text)
             }
-            // A page that draws after all (a reload when the session came back) still takes the panel's place.
-            if pageState == .painted {
+            // A page that draws after all (a reload when the session came back, a slow sign-in page) still takes the panel's place.
+            if PageCheck.healthy(pageState, expectsRoot: relayServer != nil) {
                 removeCover()
                 return
             }
@@ -827,7 +829,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         provisional = false
-        if Self.isPage(webView.url) { watchdog.firstByte(relayNowMs()) }
+        if Self.isPage(webView.url) { watchdog.committed(relayNowMs()) }
     }
 
     /// The server's page, not the about:blank a rebind or a fresh web view shows.

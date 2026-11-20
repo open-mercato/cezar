@@ -42,6 +42,24 @@ dead.start(0)
 dead.loaded(100)
 expect(dead.decide(100 + StartupWatchdog.blankMs).kind == .blank, "no answer is blank")
 
+// A page that reloads itself under the cover (the boot guard, a stale-build reload) gets its own deadlines:
+// the abandoned document's load event must not start the new one's blank clock.
+let reloaded = StartupWatchdog(serverLabel: nil, relay: true)
+reloaded.start(0)
+reloaded.relayStatus(.ready, computer: nil, now: 10)
+reloaded.committed(100)
+reloaded.loaded(200)
+reloaded.page(.blank)
+reloaded.committed(300)
+expect(reloaded.decide(200 + StartupWatchdog.blankMs).kind == .wait, "a new document is not blank on the old one's clock")
+expect(reloaded.decide(300 + StartupWatchdog.loadMs).text == "The cockpit started loading but did not finish.", "the new document has a load deadline")
+let reloadedTwice = StartupWatchdog(serverLabel: nil, relay: true)
+reloadedTwice.start(0)
+reloadedTwice.committed(100)
+reloadedTwice.committed(150)
+reloadedTwice.loaded(200)
+expect(reloadedTwice.decide(200 + StartupWatchdog.blankMs).kind == .blank, "the new document still goes blank on its own clock")
+
 // A sign-in page has no #root: it shows after the paint grace on a URL server only.
 let signIn = StartupWatchdog(serverLabel: nil, relay: false)
 signIn.start(0)

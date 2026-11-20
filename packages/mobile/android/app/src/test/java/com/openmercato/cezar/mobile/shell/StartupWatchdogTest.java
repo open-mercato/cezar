@@ -111,6 +111,26 @@ public class StartupWatchdogTest {
     }
 
     @Test
+    public void aPageThatReloadsItselfUnderTheCoverGetsItsOwnDeadlines() {
+        // The boot guard's reload, or the cockpit's stale-build reload: the old document's load event must not count.
+        relay.start(now);
+        status(RelayStatus.Kind.READY);
+        relay.committed(1100);
+        relay.loaded(1200);
+        relay.page(PageCheck.BLANK);
+        relay.committed(1300);
+        assertEquals(Kind.WAIT, at(200 + StartupWatchdog.BLANK_MS).kind);
+        assertEquals("The cockpit started loading but did not finish.", at(300 + StartupWatchdog.LOAD_MS).text);
+        // Two starts of the first document before it loads keep the first one's clock.
+        StartupWatchdog twice = new StartupWatchdog("lab", true);
+        twice.start(0);
+        twice.committed(100);
+        twice.committed(150);
+        twice.loaded(200);
+        assertEquals(Kind.BLANK, twice.decide(200 + StartupWatchdog.BLANK_MS).kind);
+    }
+
+    @Test
     public void aSignInPageWithNoRootShowsAfterTheGraceOnADirectServerOnly() {
         StartupWatchdog direct = new StartupWatchdog("lab", false);
         direct.start(0);

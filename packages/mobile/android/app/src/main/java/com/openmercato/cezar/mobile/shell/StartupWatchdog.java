@@ -84,6 +84,20 @@ public final class StartupWatchdog {
         if (firstByteAt < 0) firstByteAt = now;
     }
 
+    /**
+     * A new main-frame document started. One that replaces a page already loaded under the cover (the
+     * boot guard's reload, the cockpit's stale-build reload) gets its own load and blank deadlines.
+     */
+    public void committed(long now) {
+        if (loadedAt >= 0) {
+            firstByteAt = now;
+            loadedAt = -1;
+            page = null;
+        } else {
+            firstByte(now);
+        }
+    }
+
     public void loaded(long now) {
         firstByte(now);
         if (loadedAt < 0) loadedAt = now;

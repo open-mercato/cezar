@@ -72,6 +72,18 @@ final class StartupWatchdog {
         if firstByteAt < 0 { firstByteAt = now }
     }
 
+    /// A new main-frame document committed. One that replaces a page already loaded under the cover (the
+    /// boot guard's reload, the cockpit's stale-build reload) gets its own load and blank deadlines.
+    func committed(_ now: Int64) {
+        if loadedAt >= 0 {
+            firstByteAt = now
+            loadedAt = -1
+            state = nil
+        } else {
+            firstByte(now)
+        }
+    }
+
     func loaded(_ now: Int64) {
         firstByte(now)
         if loadedAt < 0 { loadedAt = now }

@@ -591,7 +591,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private void startUnlocked() {
         if (!started || isDestroyed() || leaving) return;
         if (!begun) begin();
-        else checkResumed();
+        else if (cover != null) {
+            // The cover's checks stop off screen (onStop); they pick up where they were.
+            main.removeCallbacks(startTick);
+            main.post(startTick);
+        } else checkResumed();
         if (com.openmercato.cezar.mobile.BuildConfig.DEBUG && getIntent().getBooleanExtra(EXTRA_DEBUG_SWITCHER, false)) {
             getIntent().removeExtra(EXTRA_DEBUG_SWITCHER);
             main.postDelayed(this::openSwitcher, 1500);
@@ -611,6 +615,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         started = false;
         if (resume != null) resume.stop();
         main.removeCallbacks(resumeTick);
+        main.removeCallbacks(startTick);
         // "Offline since" counts from the last moment this page was up and connected.
         if (!leaving && currentState().status == DeviceSwitch.Status.CONNECTED) sawCurrent();
         // Off screen, no link stays warm for a switch nobody can tap.
@@ -677,7 +682,9 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             if (link.status().kind != RelayStatus.Kind.READY) link.retryNow();
         }
         cover.status(watchdog.decide(now).text);
-        if (webView != null) webView.loadUrl(startUrl);
+        // The route the user was on, as iOS keeps it; the start URL when the page is not this server's.
+        String current = webView != null ? webView.getUrl() : null;
+        if (webView != null) webView.loadUrl(current != null && origin.sameOrigin(current) ? current : startUrl);
         else if (proxy == null) addWebView(startUrl);
         else setGateCookieThenLoad(startUrl);
         main.removeCallbacks(startTick);
@@ -735,8 +742,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
                     startLog.step("problem: " + decision.text);
                     cover.problem(decision.text);
                 }
-                // A page that draws after all still takes the panel's place.
-                if (PageCheck.PAINTED.equals(lastPage)) {
+                // A page that draws after all (or a slow sign-in page) still takes the panel's place.
+                if (PageCheck.healthy(lastPage, link != null)) {
                     removeCover();
                     return;
                 }
@@ -1022,7 +1029,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             mainFrameUrl = url;
             if (cover != null && url != null && url.startsWith("http")) {
                 startLog.step("first byte");
-                watchdog.firstByte(SystemClock.uptimeMillis());
+                watchdog.committed(SystemClock.uptimeMillis());
             }
         }
 
