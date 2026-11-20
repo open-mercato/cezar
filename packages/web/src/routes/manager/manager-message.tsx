@@ -50,6 +50,7 @@ import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
 import { ForgeReference, ManagerAskText, ManagerProjectsContext, TaskReference } from './manager-reference'
 import { SessionCard, taskPath } from './manager-session-card'
+import { ReplyUsageNote, type ReplyUsage } from './manager-plan-usage'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
@@ -318,8 +319,10 @@ function AssistantMessage({
   superseded = false,
   authLive = true,
   onRetry,
+  planUsage,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
+  planUsage?: ReplyUsage | undefined
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
@@ -396,6 +399,7 @@ function AssistantMessage({
           </span>
         </p>
       ) : null}
+      {planUsage && !message.streaming ? <ReplyUsageNote usage={planUsage} /> : null}
     </article>
   )
 }
@@ -522,9 +526,12 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   superseded = false,
   authLive = true,
   onRetry,
+  planUsage,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** This reply's plan-limit estimate; absent when the ledger has none (never shown as 0). */
+  planUsage?: ReplyUsage | undefined
   /** False for an older failure on an account whose newest failure draws the live card. */
   authLive?: boolean
   /** Sends the question again; only the newest failed chat reply has one. */
@@ -539,7 +546,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
 }) {
   return (
     <ManagerProjectsContext.Provider value={projects}>
-      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} />
+      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} planUsage={planUsage} />
     </ManagerProjectsContext.Provider>
   )
 })
@@ -553,10 +560,12 @@ function MessageBody({
   superseded,
   authLive,
   onRetry,
+  planUsage,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
   onRetry: (() => void) | undefined
+  planUsage: ReplyUsage | undefined
   answerOnCard: boolean
   superseded: boolean
   authLive: boolean
@@ -574,7 +583,7 @@ function MessageBody({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} planUsage={planUsage} />
     case 'action':
       return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':

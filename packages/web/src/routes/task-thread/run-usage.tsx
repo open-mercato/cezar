@@ -15,6 +15,7 @@ import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
+import { PlanUsageChip } from './plan-usage-chip'
 import { isRunActive } from './run-actions'
 import { useRunEngine } from './run-engine'
 
@@ -40,6 +41,7 @@ export function RunUsage({
   const visibility = usageMetricVisibility(useHealth().data)
   const showLiveUsage = useLiveUsageEnabled() && liveUsageParts(run.liveUsage).length > 0
   const account = accountPart(useRunClaudeAccount(run, showLiveUsage))
+  const { runner } = useRunEngine(run, reportedModel)
   // Shrinkable: a fixed-width strip in the right-aligned dock overflowed off the phone's left edge.
   return (
     <span
@@ -47,6 +49,7 @@ export function RunUsage({
       className={cn('flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-meta text-muted-foreground', className)}
     >
       {showLiveUsage ? <LiveUsage usage={run.liveUsage} account={account} /> : null}
+      <PlanUsageChip runId={run.id} runner={runner} startedAt={run.startedAt} />
       <UsageChip
         run={run}
         showTokens={visibility.tokens}

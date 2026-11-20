@@ -308,7 +308,7 @@ describe('TasksOverview — the table', () => {
       ],
     })
 
-    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | CPU | Mem | Started
+    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | Plan limit (folded) | CPU | Mem | Started
     expect(cellsOf('full')).toEqual([
       'needs review',
       'Structured changes endpoint',
@@ -318,6 +318,7 @@ describe('TasksOverview — the table', () => {
       '#402',
       '184.7k / 2.4k',
       '$0.31',
+      '', // Plan limit: optional, folded by default
       '—', // no live sample, CPU has no persisted peak
       '—',
       '12m',
@@ -325,7 +326,7 @@ describe('TasksOverview — the table', () => {
     // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
     // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
+    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '', '—', '—', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
@@ -371,7 +372,7 @@ describe('TasksOverview — the table', () => {
     const headers = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
       (cell) => cell.textContent,
     )
-    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Updated'])
+    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', '', 'CPU', 'Mem', 'Updated'])
     expect(cellsOf('hidden')).toEqual([
       '', // done: a mark, no word (Proposal 7)
       'Hidden metricsdone', // + the link's hidden aria-describedby state
@@ -379,13 +380,14 @@ describe('TasksOverview — the table', () => {
       '—',
       '—',
       '—',
+      '', // Plan limit, folded
       '—',
       '—',
       '1m',
     ])
 
     const queued = tableRow('queued-hidden') as HTMLElement
-    expect(queued.querySelectorAll('td')).toHaveLength(8)
+    expect(queued.querySelectorAll('td')).toHaveLength(9)
     expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
     expect(queued.textContent).not.toContain('12.0k')
     expect(queued.textContent).not.toContain('$0.02')
@@ -427,7 +429,7 @@ describe('TasksOverview — the table', () => {
     expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Fold Branch column', pressed: true })).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Fold CPU column', pressed: true })).not.toBeNull()
-    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(9)
+    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(10)
     expect(document.querySelector('th[data-column-id="status"]')?.textContent).toBe('Status')
     expect(document.querySelector('th[data-column-id="task"]')?.textContent).toBe('Task')
   })
