@@ -21,12 +21,29 @@ function resolveApiBase(): string {
   return meta?.trim() || import.meta.env.VITE_CEZ_API_BASE || ''
 }
 
+declare global {
+  interface Window {
+    /** index.html's boot guard: the page's way out when the app cannot run (src/boot-guard.test.ts). */
+    __cezBootFallback?: () => void
+    __cezBootDone?: () => void
+  }
+}
+
+// Every file the entry imports has loaded by now: chunk failures from here on are lazyRoute's.
+window.__cezBootDone?.()
+
 setApiBaseUrl(resolveApiBase())
 
 const container = document.getElementById('root')
 if (!container) throw new Error('cezar: #root container is missing from index.html')
 
-createRoot(container).render(
+createRoot(container, {
+  // React unmounts the whole tree on an uncaught error: say so, with Reload, instead of a black page.
+  onUncaughtError(error) {
+    reportError(error)
+    window.__cezBootFallback?.()
+  },
+}).render(
   <StrictMode>
     <App />
   </StrictMode>,
