@@ -20,6 +20,8 @@ import {
   createProject,
   getGithubOwners,
   connectProvider,
+  cancelLoginSession,
+  startLoginSession,
   continueRun,
   continueProjectRun,
   createAgentProfile,
@@ -73,6 +75,7 @@ import {
   getImportableSkillsWhenReady,
   getSkills,
   getSkillsWhenReady,
+  refreshSkills,
   getTodos,
   getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
   getTrackerCandidates,
@@ -148,6 +151,10 @@ import type {
   AgentSetupAction,
   AgentSetupProvider,
   AgentSetupState,
+  AgentProfilesResponse,
+  ProviderConnectInput,
+  LoginSession,
+  LoginSessionStartInput,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
@@ -499,6 +506,11 @@ export const workspaceQueryKeys = {
   /** One account's auth state — a child of `agentProfiles`, so removing an account drops it too. */
   agentAccountStatus: (routeId: string) =>
     ['workspace', 'agent-profiles', 'status', routeId] as const,
+  /** The newest inline login session per account (spec 2026-11-18-inline-account-reconnect), fed
+   *  by the start route and the `agent-login` SSE event. Never carries a pasted code or key. */
+  agentLogin: (provider: string, profileId: string) => ['workspace', 'agent-login', provider, profileId] as const,
+  /** The last `account-reconnected` news per account: what the card and quiet lines say after. */
+  accountReconnected: (provider: string, profileId: string) => ['workspace', 'account-reconnected', provider, profileId] as const,
   skillsUpdateAll: ['workspace', 'skills-update'] as const,
   skillsUpdate: (projectId: string) => ['workspace', 'skills-update', projectId] as const,
   /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
@@ -924,8 +936,8 @@ export function useAgentAccountStatus(routeId: string, enabled: boolean) {
 export function useConnectAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, profileId }: { provider: ProviderId; profileId?: string }) =>
-      connectProvider(provider, profileId),
+    mutationFn: ({ provider, profileId, reconnect }: ProviderConnectInput) =>
+      connectProvider(provider, profileId, reconnect),
     retry: false,
     onSuccess: async () => {
       await Promise.all([
@@ -933,6 +945,58 @@ export function useConnectAgentAccount() {
         queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus }),
       ])
     },
+  })
+}
+
+/**
+ * Start an inline sign-in for one account (spec 2026-11-18-inline-account-reconnect). The answer
+ * is written to the account's session cache, which the `agent-login` SSE event keeps current.
+ * A pasted code or key is never sent through a mutation: `variables` would sit in the mutation
+ * cache, so `sendLoginSessionInput` is called directly by the card.
+ */
+export function writeLoginSession(queryClient: QueryClient, session: LoginSession): void {
+  const key = workspaceQueryKeys.agentLogin(session.provider, session.profileId)
+  const current = queryClient.getQueryData<LoginSession | null>(key)
+  // A late frame from an older session never overwrites the one the user just started.
+  if (current && current.sessionId !== session.sessionId && isActiveLoginSession(current) && !isActiveLoginSession(session)) return
+  // The start route's answer can land after the SSE frame that moved the same session on.
+  if (current?.sessionId === session.sessionId && session.phase === 'starting' && current.phase !== 'starting') return
+  queryClient.setQueryData(key, session)
+  // A finished success must not greet the account's NEXT expiry; the quiet lines take over from here.
+  if (session.phase === 'connected' || session.phase === 'cancelled') {
+    setTimeout(() => {
+      if (queryClient.getQueryData<LoginSession | null>(key)?.sessionId === session.sessionId) queryClient.setQueryData(key, null)
+    }, session.phase === 'connected' ? LOGIN_SUCCESS_SHOWN_MS : 0)
+  }
+}
+
+/** How long the card's "signed in again" state stays before the surface's quiet line replaces it. */
+export const LOGIN_SUCCESS_SHOWN_MS = 30_000
+
+export function clearLoginSession(queryClient: QueryClient, provider: ProviderId, profileId: string): void {
+  queryClient.setQueryData(workspaceQueryKeys.agentLogin(provider, profileId), null)
+}
+
+export function isActiveLoginSession(session: Pick<LoginSession, 'phase'> | undefined | null): boolean {
+  return !!session && (session.phase === 'starting' || session.phase === 'waiting' || session.phase === 'needs-input' || session.phase === 'verifying')
+}
+
+export function useStartLoginSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: LoginSessionStartInput) => startLoginSession(input),
+    retry: false,
+    onSuccess: (session) => writeLoginSession(queryClient, session),
+  })
+}
+
+export function useCancelLoginSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (session: Pick<LoginSession, 'sessionId' | 'provider' | 'profileId'>) => cancelLoginSession(session.sessionId),
+    retry: false,
+    // Cancelled either way: a session the server already dropped is not one to keep showing.
+    onSettled: (_answer, _error, session) => clearLoginSession(queryClient, session.provider, session.profileId),
   })
 }
 
@@ -946,10 +1010,36 @@ export function useConnectAgentAccount() {
 export function useRecheckAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { recheck: true }),
+    mutationFn: async (routeId: string) => {
+      if (routeId === 'default:cursor') {
+        const cached = queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)
+        const profiles = queryClient.getQueryData<AgentProfilesResponse>(workspaceQueryKeys.agentProfiles)
+        const observed = cached?.providers.find((row) => row.provider === 'cursor')
+          ?? profiles?.profiles.find((row) => row.isDefault && row.provider === 'cursor')?.status
+        // Verify is explicit recovery; the retry endpoint refuses an incident newer than this click.
+        if (observed?.authFailureId) await retryProviderAuth('cursor', observed.authFailureId)
+      }
+      return getAgentAccountStatus(routeId, { recheck: true })
+    },
     retry: false,
-    onSuccess: (answer, routeId) => {
-      queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)
+    onMutate: () => queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus),
+    onSuccess: (answer, routeId, requestStart) => {
+      let verified = answer
+      const cached = queryClient.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)
+      if (routeId === `default:${answer.status.provider}` && cached) {
+        const response = { providers: cached.providers.map((row) => row.provider === answer.status.provider
+          ? { ...answer.status, enabled: answer.status.enabled ?? row.enabled }
+          : row) }
+        const merged = mergeProviderStatusResponse(requestStart, cached, response)
+        queryClient.setQueryData(workspaceQueryKeys.providerStatus, merged)
+        const status = merged.providers.find((row) => row.provider === answer.status.provider)
+        if (status) verified = { status }
+      }
+      queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), verified)
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentAccountDetails(routeId) })
+      if (answer.status.provider === 'cursor') {
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.models('cursor') })
+      }
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles })
     },
   })
@@ -1617,6 +1707,24 @@ export function useSkills(enabled = true) {
   }, [queryClient, ready.data, ready.dataUpdatedAt, skillsScope])
 
   return skills
+}
+
+export function useRefreshSkillCatalog() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      // Capture the requested project's keys before navigation can change the scope.
+      const { skills, skillsReady } = queryKeys
+      const catalog = await refreshSkills()
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: skills, exact: true }),
+        queryClient.cancelQueries({ queryKey: skillsReady, exact: true }),
+      ])
+      queryClient.setQueryData(skills, catalog)
+      queryClient.setQueryData(skillsReady, catalog)
+      return catalog
+    },
+  })
 }
 
 /** The opt-in catalog for the "Import skills" panel — the default (vendor) repo's full skill

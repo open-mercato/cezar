@@ -5,9 +5,9 @@ import { join } from 'node:path';
 let ghConfigDir: string | undefined;
 
 /**
- * The floor under every backend's own read-only mode (`AgentRunSpec.enforceReadOnly`): whatever the agent
- * runs, it has no way to publish. No `gh` login and no git credential, so no push and no pull
- * request. Public fetches over https keep working.
+ * Defense in depth under a backend's enforced read-only mode: remove inherited gh/git auth.
+ * This is not a tool fence: unrestricted tools could read credentials again, restore config,
+ * or publish through MCP. A backend must enforce the policy independently of these variables.
  */
 export function readOnlyEnv(): Record<string, string> {
   ghConfigDir ??= mkdtempSync(join(tmpdir(), 'cez-read-only-gh-'));

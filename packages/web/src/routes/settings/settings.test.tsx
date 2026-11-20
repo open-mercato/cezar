@@ -89,7 +89,7 @@ const AGENTS_CONFIG = {
   worktreeRetention: 10,
   liveTitleUpdates: null,
   reviewGate: null,
-  profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
+  profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,
 }
 
 /** Seeds the step-3.2 route gates — boot id (legacy redirect) + registry (known-check) — so a

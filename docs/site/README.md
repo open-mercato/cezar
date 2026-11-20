@@ -20,6 +20,17 @@ npm --prefix docs/site start   # serve the built out/ folder on port 4322
 `out/` is plain HTML, CSS, and JavaScript. Host it on any static file server; search runs in the
 browser from a prebuilt index.
 
+## Mobile privacy policy
+
+The mobile app, store listings and existing relay terms setup use
+**https://openmercatocloud.com/privacy**. That externally hosted Open Mercato policy is the public
+destination; this docs site does not need to deploy a mobile policy page or rewrite its legal text.
+
+`packages/mobile/store/privacy-policy.md` and its generated HTML are internal technical review
+drafts with explicitly unconfirmed facts. Do not stage them under `public/` or publish them as a
+replacement for the existing policy. See `RELEASING-MOBILE.md` for URL verification and the
+remaining store-submission requirements.
+
 ## Layout
 
 | Path | What it is |

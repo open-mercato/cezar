@@ -21,8 +21,6 @@ const statusDotVariants = cva("inline-block size-[7px] shrink-0 rounded-full", {
       // the running pulse (redesign 2026-11, Proposal 7).
       info: "bg-info",
       neutral: "bg-soft-foreground",
-      // Orange, not amber: an idle-closed run (spec 2026-11-04-idle-closed-attention-state).
-      idle: "bg-conflict",
     },
     pulse: {
       true: "animate-pulse motion-reduce:animate-none data-offscreen:[animation-play-state:paused]",

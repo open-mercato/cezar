@@ -1,8 +1,9 @@
+import type { StepToolPolicy } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
-import type { RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
@@ -12,14 +13,17 @@ import { spawn } from 'node:child_process';
 import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
-import { basename, dirname, join, resolve as resolvePath } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import {
+  parseAskCloseMarkers,
   parseAskMarker,
   parseAskMarkerResult,
+  stripAskCloseMarkers,
   stripAskMarker,
   type AskMarkerParseResult,
   type AskRequest,
 } from '../core/ask.ts';
+import { askSkippedMessage, asksNamedBy, QUESTION_ALREADY_CLOSED, hasCommitsSince, openAsksBlock, openTaskAsks } from '../runs/task-asks.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { interruptAfterGrace, MISSING_SESSION_NOTE, ResumeFallback, trackFallbackOutcome } from './resume-fallback.ts';
 import {
@@ -71,11 +75,12 @@ import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { pausedAutomationHold } from '../automations/paused-work.ts';
-import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
-import { provisionSkills } from '../skills-provision.ts';
+import { getTeamSkillsCached, materializeSkillDir, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
+import { mentionsSkill, PROVISION_SKILL_DIRS, provisionSkills, skillClosure } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
-import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { loadConfig, type CezConfig } from '../config.ts';
+import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
@@ -94,13 +99,14 @@ import {
   worktreeDiff,
   worktreeShortstat,
 } from '../git-worktree.ts';
-import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, updatePr } from '../server/forge/github.ts';
+import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
-import { createOrSwitchBranch } from '../server/git-changes.ts';
+import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
+import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
-import { artifactsDir } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -138,7 +144,8 @@ import {
   usd,
   withPendingReport,
 } from '../dispatch/engine.ts';
-import { isReclaimable, reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { enforceArchivedTaskRetention } from '../runs/archived-cleanup.ts';
+import { enforceWorktreeRetention, isReclaimable, reclaimSelectedWorktrees, rematerializeReclaimedWorktree, restoreReclaimedForPublish } from '../runs/retention.ts';
 import {
   AgentTempDirError,
   agentTmpEnv,
@@ -170,6 +177,7 @@ import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
 import { track } from '../telemetry.ts';
 import { skillLabel, taskOriginOf, workflowLabel, type TaskOrigin } from '../feature-telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
   chainStepNote,
@@ -205,6 +213,7 @@ import {
   type GraphTransition,
   type WorkflowGraph,
 } from './graph.ts';
+import { GATE_APPROVE, GATE_FULL_PR, GATE_REJECT, classifyGateReply, gateInstructionsPrompt, gateOpensPr } from './gate-reply.ts';
 import { resolveContinuationModel } from './run-continuation-model.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
@@ -445,6 +454,12 @@ interface DispatchTurnResult {
   rePrompted: boolean;
 }
 
+/** `CEZ:ASK-CLOSE` lines are protocol, not prose (Questions inbox spec). Only a chunk that holds
+ *  one is rewritten: the stripper trims, and an ordinary chunk must keep its whitespace. */
+function withoutAskCloseMarkers(text: string): string {
+  return text.includes('CEZ:ASK-CLOSE') ? stripAskCloseMarkers(text) : text;
+}
+
 /** Emit the v2 `ask.requested` event for a parsed marker (the cockpit renders
  *  it as an ask card, #473). Returns the minted request id. */
 function emitAskRequested(sink: UiEventSink, ask: AskRequest): string {
@@ -554,7 +569,18 @@ const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
 
 const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
 
+interface SendMessageOptions {
+  /** Sent from an ask card: answers that card (Questions inbox spec). */
+  askRequestId?: string;
+  /** The reply was already recorded when the message was accepted (a deferred flush). */
+  replyNoted?: boolean;
+  /** Typed by the user: a buffered message flags open cards replied-in-chat; an engine one never does. */
+  userReply?: boolean;
+}
+
 interface ContinueRunOptions {
+  /** The user's own Continue (the route): it answers `askRequestId`, or flags open cards as replied-in-chat. */
+  reply?: { askRequestId?: string };
   text?: string;
   images?: PastedContent[];
   runner?: RunnerId;
@@ -570,6 +596,8 @@ interface ActiveRun {
   /** Skills this session already counted as `skill_used` (telemetry); lazily created, so neither
    *  construction site (`execute`, `runContinuation`) has to know about it. */
   trackedSkills?: Set<string>;
+  /** Live user messages wait in order while a requested shared skill is prepared. */
+  skillMessageDelivery?: Promise<void>;
   /** Identity of this async owner; stale promises must not mutate a replacement owner. */
   ownerToken: symbol;
   cancelled: boolean;
@@ -723,6 +751,9 @@ interface ActiveRun {
   /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
    *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
   autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
+  /** The project's opt-in `bypassPermissions` (Claude skips every prompt). Set at BOTH
+   *  construction sites through `bypassPolicy`. */
+  bypassPermissions?: boolean;
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
   /** A manager's read-only task: the backend enforces it too (`AgentRunSpec.enforceReadOnly`). */
@@ -873,6 +904,12 @@ export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
  * in-memory checks), unref'd, and it only ever acts when idling has no justification left.
  */
 export const QUEUE_WATCHDOG_MS = 60_000;
+/** How often age retention re-checks idle worktrees. */
+const RETENTION_SWEEP_MS = 60 * 60_000;
+/** Archive stops the task's terminals first; give them a moment to release the tree. */
+export let ARCHIVE_RECLAIM_DELAY_MS = 1_000;
+/** Test seam. */
+export function setArchiveReclaimDelayForTests(ms: number): void { ARCHIVE_RECLAIM_DELAY_MS = ms; }
 /** Shared empty holds for the common "nothing is held" pump — avoids allocating per sweep. */
 const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
 
@@ -1002,6 +1039,7 @@ function deferredBindingActive(run: Pick<RunRecord, 'id' | 'deferredBinding' | '
 const AUTO_RESUME_PROMPT =
   'The provider usage limit that interrupted this task has reset. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 type AutoResumeReason = NonNullable<RunRecord['autoResumeReason']>;
+const AUTH_RECONNECTED_PROMPT = 'Your sign-in was renewed. Continue where you stopped.';
 const TRANSIENT_RETRY_PROMPT =
   'Your previous turn stopped on a temporary provider error (overloaded, unreachable or a login refresh race), not on anything in the task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 
@@ -1052,6 +1090,8 @@ export interface StartRunInput {
    *  Replaces the `config.json` default for this run — see
    *  `resolveExtraSystemPrompt` for the precedence contract. */
   systemPrompt?: string;
+  /** Manager provenance also carries the task's restrictions to descendants and continuations. */
+  startedByManager?: RunRecord['startedByManager'];
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -1110,8 +1150,8 @@ export interface StartRunInput {
  * `config.json` default — they are the same knob at two scopes, so the more
  * specific one wins outright; they never concatenate. The global instructions
  * (`~/.cezar/config.json` `systemPrompt`) are a different knob: they always
- * ride along, placed FIRST and labelled as yielding to the project's. Whichever
- * wins is ADDITIVE to the skill body and the handoff contract (see
+ * ride along, placed FIRST and take precedence over repository and workflow guidance.
+ * The result is ADDITIVE to the skill body and the handoff contract (see
  * `composeSystemPrompt`). Blank strings count as unset.
  */
 export function resolveExtraSystemPrompt(
@@ -1121,7 +1161,8 @@ export function resolveExtraSystemPrompt(
 ): string | undefined {
   const project = override?.trim() || configDefault?.trim() || undefined;
   const global = globalDefault?.trim() || undefined;
-  if (!global || !project) return project ?? global;
+  if (!global) return project;
+  if (!project) return `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}`;
   return [
     `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}`,
     `${PROJECT_INSTRUCTIONS_HEADING}\n\n${project}`,
@@ -1129,9 +1170,11 @@ export function resolveExtraSystemPrompt(
 }
 
 export const GLOBAL_INSTRUCTIONS_HEADING =
-  '## Global instructions\n\nThese apply to every project. Where they conflict with the project instructions below, the project instructions win.';
+  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict.';
 export const PROJECT_INSTRUCTIONS_HEADING =
-  '## Project instructions\n\nThese are specific to this project and take precedence over the global instructions above.';
+  '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
+
+const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -1152,10 +1195,8 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
  * BOTH session sites, so a task knows how to dispatch and report on its first step, on every
  * Continue, and after a restart.
  *
- * De-duplicated against the run's extra system prompt, and that is not a micro-optimisation:
- * `dispatch()` seeds a child's extra prompt with the very same text, so composing both would
- * hand the backend the same instructions twice. Containment, not equality: with global
- * instructions set, `resolveExtraSystemPrompt` wraps that seed under its own heading.
+ * Older dispatched runs stored this text in their extra prompt. Keep those snapshots from
+ * repeating it on Continue; new children receive it only from `prepareDispatchSession`.
  */
 export function dispatchPromptPart(prompt: string | undefined, extra: string | undefined): string | undefined {
   const part = prompt?.trim();
@@ -1426,7 +1467,16 @@ interface PreparedUserMessage {
   text: string;
   persisted: PersistedAttachment[];
   imageLibraryWrites: Array<() => void>;
+  skills?: TaskSkillPreparation;
 }
+
+interface TaskSkillPreparation {
+  installed: string[];
+  missingShared: string[];
+  guidance: string[];
+}
+
+const NO_TASK_SKILLS: TaskSkillPreparation = { installed: [], missingShared: [], guidance: [] };
 
 /**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
@@ -1563,6 +1613,8 @@ export class RunManager {
 
   /** The stalled-queue watchdog (see `rescueStalledQueue`). */
   private readonly queueWatchdog: ReturnType<typeof setInterval>;
+  /** Hourly retention sweep (age retention); cleared by dispose(). */
+  private readonly retentionTimer: ReturnType<typeof setInterval>;
 
   /** Set by the watchdog for exactly one sweep: ignore the usage-limit hold and make progress. */
   private forceNextPump = false;
@@ -1593,6 +1645,8 @@ export class RunManager {
 
   /** See the constructor option of the same name. */
   private readonly prWatchProbe: PrWatchProbe;
+  private readonly hosted: () => boolean;
+  private readonly parkOnAuth: boolean;
 
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
@@ -1623,9 +1677,16 @@ export class RunManager {
       branchNameWaitMs?: number;
       /** Reads a monitored PR's fingerprint (#2040); tests inject a fake forge. */
       prWatchProbe?: PrWatchProbe;
+      /** A hosted cockpit (`capabilities().localHandoff` false): `bypassPermissions` stays off. */
+      hosted?: () => boolean;
+      /** Park a rejected login for a reconnect (spec 2026-11-18-inline-account-reconnect). Off for a
+       *  headless `cezar run`: no reconnect can reach it, so it fails as before. */
+      parkOnAuth?: boolean;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.hosted = options.hosted ?? (() => false);
+    this.parkOnAuth = options.parkOnAuth ?? true;
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
     this.projectId = options.projectId;
@@ -1638,7 +1699,7 @@ export class RunManager {
       newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
-      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status)).length,
+      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -1693,6 +1754,9 @@ export class RunManager {
     };
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
     this.queueWatchdog.unref?.();
+    // Age retention has no terminal transition to ride: an idle `review` run ages on its own.
+    this.retentionTimer = setInterval(() => this.scheduleRetention(), RETENTION_SWEEP_MS);
+    this.retentionTimer.unref?.();
     // Preserve holds written by older versions before a source task can be deleted.
     for (const run of this.store.listRuns()) {
       for (const hold of run.usageLimitHolds ?? []) this.usageHolds.remember(hold);
@@ -1720,6 +1784,7 @@ export class RunManager {
     this.offStoreLifecycle();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
+    clearInterval(this.retentionTimer);
     for (const [runId, state] of this.active) {
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
@@ -2057,7 +2122,10 @@ export class RunManager {
     });
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
-    this.store.updateRun(run.id, { workflowDef: workflow });
+    this.store.updateRun(run.id, {
+      workflowDef: workflow,
+      ...(input.startedByManager ? { startedByManager: input.startedByManager } : {}),
+    });
     // On the record, not only the input: restart recovery rebuilds the run from it.
     if (run.worktree === false && input.newBranch) {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
@@ -2410,7 +2478,7 @@ export class RunManager {
           if (continuation) {
             const hydrated = this.hydrateQueuedContinuation(runId, continuation);
             const ownerToken = Symbol('run-owner');
-            void this.runContinuation(
+            void outsideRelayScope(() => this.runContinuation(
               runId,
               hydrated.stepId,
               hydrated.sessionId,
@@ -2420,7 +2488,7 @@ export class RunManager {
               hydrated.persistedImages,
               hydrated.persistedAttachments,
               ownerToken,
-            ).catch((err: unknown) => {
+            )).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
               // A cancel that landed before the throw still owes the parent its report.
@@ -2438,7 +2506,7 @@ export class RunManager {
           // it is now, exactly as a run started now would be.
           const workflow = catalog ? this.refreshQueuedWorkflow(runId, job.workflow, catalog) : job.workflow;
           const ownerToken = Symbol('run-owner');
-          void this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
+          void outsideRelayScope(() => this.execute(runId, workflow, input, ownerToken)).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
             if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -2560,7 +2628,8 @@ export class RunManager {
     this.noteDeferredLostInRestart();
     const live = this.store
       .listRuns()
-      .filter((r) => ['queued', 'waiting', 'running'].includes(r.status))
+      // An idle park has no process to recover: it rests as it is until a message reopens it.
+      .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     // A crash never reaches `dropActive`, so its temp directory (#785) outlived the run.
     // Startup is the one moment we know which runs are still live, so sweep every other
@@ -2601,7 +2670,9 @@ export class RunManager {
       const walkedGraph = run.workflowDef ? (run.workflowDef.graph ?? compileV1(run.workflowDef.steps)) : undefined;
       const cursorNode = walkedGraph?.nodes.find((n) => n.id === cursor);
       const parkedAgent = cursorNode?.type === 'agent' && (run.status === 'waiting' || run.activity === 'monitoring');
-      if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
+      const applyingGate = cursorNode?.type === 'gate.human' && Boolean(run.graphState?.outputs?.[cursorNode.id]?.instructions);
+      const graphWaiting = run.status === 'waiting' && (run.askParked || applyingGate);
+      if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || graphWaiting)) {
         for (const step of run.steps) {
           if (step.status === 'running' || step.status === 'waiting') {
             this.store.updateStep(run.id, step.id, { status: 'pending' });
@@ -3072,8 +3143,9 @@ export class RunManager {
    * gets no dispatch prompt and behaves exactly as it did before this feature existed.
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
-    if (!this.dispatchReachable()) return;
     const dispatch = this.store.getRun(runId)?.dispatch;
+    // A child keeps its reporting instructions even if transport disappears before it starts.
+    if (!dispatch?.parentRunId && !this.dispatchReachable()) return;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
   }
@@ -3261,6 +3333,20 @@ export class RunManager {
   private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): WebhookAttentionRequest {
     const requestId = emitAskRequested(sink, ask);
     const attention = this.recordAttention(requestId, ask.questions);
+    // The Questions inbox's copy (spec 2026-11-17-questions-inbox); a newer card replaces older ones.
+    this.store.recordTaskAsk(runId, {
+      requestId,
+      askedAt: attention.askedAt,
+      ...(ask.id ? { cardId: ask.id } : {}),
+      ...(ask.about ? { about: ask.about } : {}),
+      questions: ask.questions.map((question) => ({
+        ...(question.id ? { id: question.id } : {}),
+        header: question.header,
+        question: question.question,
+        ...(question.multiSelect ? { multiSelect: true } : {}),
+        options: question.options.map((option) => ({ label: option.label, ...(option.description ? { description: option.description } : {}) })),
+      })),
+    });
     const dispatch = this.dispatchOf(runId);
     if (!dispatch) return attention;
     const questions = ask.questions.map((question) => question.question.slice(0, 400));
@@ -3294,6 +3380,72 @@ export class RunManager {
       // best effort
     }
     return attention;
+  }
+
+  /**
+   * A task turn ended (Questions inbox spec), in BOTH turn-end handlers: `CEZ:ASK-CLOSE` lines
+   * withdraw the agent's own cards, and an earlier question still open without an answer is
+   * flagged "may be out of date" — `new-commits` when HEAD moved since it was asked, else
+   * `task-moved-on`. A compaction boundary is not a turn of its own, so it flags nothing.
+   */
+  private reviewTaskAsksAtTurnEnd(runId: string, state: ActiveRun, turnText: string, compacted: boolean): void {
+    const at = new Date().toISOString();
+    for (const marker of parseAskCloseMarkers(turnText)) {
+      const named = new Set(asksNamedBy(this.store.getRun(runId)?.asks, marker).map((ask) => ask.requestId));
+      if (named.size === 0) continue;
+      this.store.closeTaskAsks(runId, (ask) => named.has(ask.requestId), { reason: 'retracted', at, ...(marker.reason ? { detail: marker.reason } : {}) });
+    }
+    if (compacted) return;
+    const pending = openTaskAsks(this.store.getRun(runId)?.asks).filter((ask) => !ask.stale);
+    for (const ask of pending) {
+      void hasCommitsSince(state.cwd, ask.askedAt).then((moved) => {
+        this.store.flagTaskAsks(runId, (open) => open.requestId === ask.requestId, moved
+          ? { why: 'new-commits', detail: 'the task committed since it asked', since: at }
+          : { why: 'task-moved-on', detail: 'the task had another turn without an answer', since: at });
+      });
+    }
+  }
+
+  /**
+   * A user message reached the run (Questions inbox spec): sent from an ask card it answers that
+   * card; typed in the composer it closes nothing and flags every open card `replied-in-chat`.
+   * Public for the Continue route, which delivers through `continueRun`.
+   */
+  noteAskReply(runId: string, text: string, askRequestId?: string): void {
+    const at = new Date().toISOString();
+    if (askRequestId) {
+      const answer = text.trim();
+      this.store.closeTaskAsks(runId, (ask) => ask.requestId === askRequestId, { reason: 'answered', at, ...(answer ? { answer } : {}) });
+      return;
+    }
+    this.store.flagTaskAsks(runId, () => true, { why: 'replied-in-chat', detail: 'you replied in the chat after it was asked', since: at });
+  }
+
+  /**
+   * Dismiss a task's question from the inbox (spec § Telling the agent on dismiss). Parked on that
+   * question with its session open: the agent is told, which wakes it for one turn. Its session
+   * closed (idle or awaiting an answer): the note waits for the next Continue. Otherwise the
+   * question just closes.
+   */
+  dismissAsk(runId: string, requestId: string, options: { holdNote?: boolean } = {}): { ok: true; delivered: 'session' | 'next-continue' | 'none' } | { ok: false; status: 404 | 409; error: string } {
+    const run = this.store.getRun(runId);
+    const ask = run?.asks?.find((candidate) => candidate.requestId === requestId);
+    if (!run || !ask) return { ok: false, status: 404, error: 'question not found' };
+    if (ask.closed) return { ok: false, status: 409, error: QUESTION_ALREADY_CLOSED };
+    const parkedOnIt = run.status === 'waiting' && run.attentionRequest?.requestId === requestId;
+    const sessionClosed = isIdleParked(run) || run.awaitingAnswerSince !== undefined;
+    this.store.closeTaskAsks(runId, (candidate) => candidate.requestId === requestId, { reason: 'dismissed', at: new Date().toISOString() });
+    const note = askSkippedMessage(ask);
+    if (parkedOnIt && !sessionClosed && !options.holdNote && this.deliverMessage(runId, [{ type: 'text', text: note }], false)) {
+      this.store.appendEvent(runId, { type: 'note', message: 'question skipped in the Questions inbox — the agent was told' });
+      return { ok: true, delivered: 'session' };
+    }
+    // A parked session that refused the note (lifecycle blocked, provider unavailable) hears it on the next Continue.
+    if (sessionClosed || parkedOnIt) {
+      this.store.pushAskNote(runId, note);
+      return { ok: true, delivered: 'next-continue' };
+    }
+    return { ok: true, delivered: 'none' };
   }
 
   /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
@@ -3424,7 +3576,7 @@ export class RunManager {
           prompt: '{{task}}',
           // The order's own tool list when it names one (#430: `allowedTools` is the only tool
           // seam a step has), else the run-wide default.
-          ...(input.allowed_tools?.length ? { allowedTools: input.allowed_tools } : {}),
+          ...(input.allowed_tools !== undefined ? { allowedTools: input.allowed_tools } : {}),
         },
       ],
     };
@@ -3441,7 +3593,7 @@ export class RunManager {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
-      systemPrompt: composeDispatchPrompt(input.kind),
+      ...(parent.startedByManager ? { startedByManager: parent.startedByManager } : {}),
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
@@ -3634,7 +3786,8 @@ export class RunManager {
       if (this.deferMessage(parentId, blocks)) return;
       // `cancelled` is deliberately NOT continuable from a child's report: nothing a child says may
       // restart a task a human cancelled.
-      if (['done', 'failed', 'review'].includes(parent.status)) {
+      // An idle park has no session to deliver into; a report reopens it like a message would.
+      if (['done', 'failed', 'review'].includes(parent.status) || isIdleParked(parent)) {
         this.continueRun(parentId, { text }, true);
       }
     } catch {
@@ -3793,19 +3946,64 @@ export class RunManager {
     return { failed, successorFailedToStart };
   }
 
-  /** Publish one honest state: either a final failure, or a durable wait for agent selection.
-   * The successor starts only after dropActive releases the old session and worktree leases. */
-  private publishRunFailure(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): void {
+  /** Publish one honest state: a final failure, a durable wait for agent selection, or an auth
+   * park. The successor starts only after dropActive releases the old session and worktree leases.
+   * Returns true when the run parked on a rejected login instead of failing. */
+  private publishRunFailure(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): boolean {
     const run = this.store.getRun(runId);
-    if (!run) return;
+    if (!run) return false;
     if (!this.disposed && !run.archived && this.fallbackFailure({ ...run, ...patch })) {
       this.store.updateRun(runId, {
         ...patch, status: 'queued', finishedAt: undefined, currentStepId: undefined,
         fallbackEpisode: { ...run.fallbackEpisode, attempted: run.fallbackEpisode?.attempted ?? [], pending: true, done: undefined },
       });
-    } else {
-      this.store.updateRun(runId, patch);
+      return false;
     }
+    const parked = patch.status === 'failed' && patch.idleClosedAt === undefined ? this.authParkFor({ ...run, ...patch }) : undefined;
+    if (!parked) {
+      this.store.updateRun(runId, patch);
+      return false;
+    }
+    // Waiting with its session closed, exactly like an idle park: no slot, survives a restart, and
+    // Continue resumes the same session. Autonomous runs park too: a login is not a question the
+    // nudge could answer. A reconnect resumes it (`server/auth-resume.ts`).
+    this.store.updateRun(runId, {
+      ...(patch.error !== undefined ? { error: patch.error } : {}),
+      status: 'waiting', activity: undefined, finishedAt: undefined, currentStepId: undefined,
+      idleClosedAt: parked.at, parked,
+    });
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: 'agent sign-in expired — the task resumes once the account is reconnected',
+    });
+    return true;
+  }
+
+  /**
+   * The park for a failure that is a rejected login (spec 2026-11-18-inline-account-reconnect):
+   * the runtime-auth observer's `provider-auth-required` on the failed step, or an auth-shaped
+   * error. Undefined when there is no session a Continue could resume — that run fails as before.
+   */
+  private authParkFor(run: RunRecord): RunParked | undefined {
+    if (run.archived || this.disposed) return undefined;
+    // A dispatch parent waits on a settled child, never on a reconnect.
+    if (!this.parkOnAuth || run.dispatch?.parentRunId) return undefined;
+    const failed = [...run.steps].reverse().find((step) => step.status === 'failed');
+    if (!failed || failed.kind === 'check') return undefined;
+    if (!run.steps.some((step) => step.sessionId)) return undefined;
+    const provider = (failed.backend ?? run.runner ?? 'claude') as ProviderId;
+    const required = [...this.store.readEvents(run.id)].reverse().find((event) =>
+      event.type === 'provider-auth-required' && event.stepId === failed.id && event.provider === provider);
+    if (!required && classifyAgentFailure(run.error) !== 'auth') return undefined;
+    const authFailureId = typeof required?.authFailureId === 'string' ? required.authFailureId : undefined;
+    return {
+      kind: 'auth',
+      provider,
+      profileId: failed.profileId ?? recordedProfileFor(run, provider) ?? DEFAULT_AGENT_ACCOUNT_ID,
+      ...(authFailureId ? { authFailureId } : {}),
+      stepId: failed.id,
+      at: new Date().toISOString(),
+    };
   }
 
   private claimAgentFallback(run: RunRecord): boolean {
@@ -4412,6 +4610,37 @@ export class RunManager {
     return true;
   }
 
+  /**
+   * An agent account is signed in again (spec 2026-11-18-inline-account-reconnect): continue every
+   * run parked on that login, once — the park is cleared before the Continue, so a repeated
+   * reconnect finds nothing — on the same session, queued under `maxParallel`. A stopped or
+   * archived task is no longer blocked and stays put.
+   */
+  resumeAuthParked(provider: string, profileId: string, parkedBefore?: string): Array<{ runId: string; title: string }> {
+    const resumed: Array<{ runId: string; title: string }> = [];
+    if (this.disposed) return resumed;
+    for (const run of this.store.listRuns()) {
+      const parked = authParkForAccount(run, provider, profileId);
+      if (!parked) continue;
+      // A project opened after the reconnect: only what parked before it is still blocked on it.
+      if (parkedBefore !== undefined && parked.at >= parkedBefore) continue;
+      if (this.active.has(run.id) || this.starting.has(run.id)) continue;
+      this.store.updateRun(run.id, { parked: undefined });
+      this.store.appendEvent(run.id, { type: 'account-reconnected', provider, profileId });
+      const continued = this.continueRun(run.id, { text: AUTH_RECONNECTED_PROMPT }, true);
+      if (!continued.ok) {
+        // Still blocked on something else: the card stays, and a Continue says why.
+        this.store.updateRun(run.id, { parked });
+        this.store.appendEvent(run.id, { type: 'note', message: `automatic resume could not start — ${continued.error ?? 'unknown'}` });
+        continue;
+      }
+      resumed.push({ runId: run.id, title: run.title });
+    }
+    // A deferred continuation only enqueues itself; this is the pump for it (as `fireAutoResume`).
+    if (resumed.length > 0) void this.pump();
+    return resumed;
+  }
+
   /** Retire a pending resume — timer, deadline and counter. The counter goes too because every
    *  caller is a fresh epoch: a human Continue, or a resume that re-stamps its own count. */
   private clearAutoResume(runId: string): void {
@@ -4432,11 +4661,58 @@ export class RunManager {
   private retentionPass: Promise<void> = Promise.resolve();
   private async enforceRetention(): Promise<void> {
     try {
-      const keep = await resolveWorktreeRetention(this.repoRoot);
-      await reclaimWorktrees(this.repoRoot, this.store, keep, {lifecycle: this.lifecycle});
+      await enforceWorktreeRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+      const archived = await enforceArchivedTaskRetention(this.repoRoot, this.store, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+      // A deleted pull-request head run's `refs/cezar/pr/<n>` goes with it, as on `DELETE /runs/:id`.
+      if (archived.deleted.length > 0) await this.sweepPrHeadRefs();
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }
+  }
+
+  /**
+   * Reclaim these runs' worktrees now — archive frees disk (branch kept, Continue restores it).
+   * Queued behind the retention pass in flight, after a beat so the task's stopped terminals have
+   * exited; a tree still in use is retried by the hourly sweep (archived trees go regardless of age).
+   */
+  reclaimWorktreesOf(runIds: readonly string[]): Promise<string[]> {
+    if (this.disposed || runIds.length === 0) return Promise.resolve([]);
+    let out: string[] = [];
+    this.retentionPass = this.retentionPass.then(async () => {
+      if (this.disposed) return;
+      await new Promise((resolve) => setTimeout(resolve, ARCHIVE_RECLAIM_DELAY_MS));
+      // Re-read per run right before removal: an unarchive inside the delay keeps the tree.
+      const keep = (id: string) => this.isActive(id) || this.store.getRun(id)?.archived !== true;
+      out = await reclaimSelectedWorktrees(this.repoRoot, this.store, runIds, {lifecycle: this.lifecycle, isLive: keep});
+    }).catch(() => undefined);
+    return this.retentionPass.then(() => out);
+  }
+
+  private restoresInFlight = new Map<string, Promise<boolean>>();
+  /**
+   * Bring back a reclaimed task's worktree for the one surface that needs a checkout — publishing
+   * its PR (the PR route and the draft-PR gate) — from its kept branch (spec
+   * 2026-11-19-worktree-disk-usage). The note it appends is activity, so the next sweep leaves the
+   * restored tree alone. True when the tree exists afterwards.
+   */
+  restoreReclaimedWorktree(runId: string): Promise<boolean> {
+    const run = this.store.getRun(runId);
+    if (!run?.worktreePath) return Promise.resolve(false);
+    if (existsSync(run.worktreePath)) return Promise.resolve(true);
+    if (!run.worktreeReclaimedAt) return Promise.resolve(false);
+    let pending = this.restoresInFlight.get(runId);
+    if (!pending) {
+      pending = restoreReclaimedForPublish(this.repoRoot, this.store, runId)
+        .then((restored) => {
+          if (restored) this.store.appendEvent(runId, { type: 'note', message: 'worktree restored from its branch' });
+          const now = this.store.getRun(runId);
+          return !!now?.worktreePath && existsSync(now.worktreePath);
+        })
+        .catch(() => false)
+        .finally(() => this.restoresInFlight.delete(runId));
+      this.restoresInFlight.set(runId, pending);
+    }
+    return pending;
   }
 
   private retentionScheduled = false;
@@ -4657,6 +4933,15 @@ export class RunManager {
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while selecting a fallback agent' });
         this.reportSettledChildToParent(runId);
+        return true;
+      }
+      if (run && isIdleParked(run) && !this.starting.has(runId)) {
+        const finishedAt = new Date().toISOString();
+        for (const step of run.steps) {
+          if (step.status === 'running' || step.status === 'waiting') this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt });
+        }
+        this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
         return true;
       }
       // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
@@ -5034,7 +5319,7 @@ export class RunManager {
    * The buffer lives on the manager rather than the `ActiveRun` because the
    * `ActiveRun` does not exist yet for part of this window.
    */
-  deferMessage(runId: string, content: PastedContent[]): boolean {
+  deferMessage(runId: string, content: PastedContent[], options: SendMessageOptions = {}): boolean {
     // The window spans two sub-states: `starting` (no `ActiveRun` yet) and the
     // longer stretch where the `ActiveRun` exists but the backend is still being
     // spawned. `execute()` deletes the run from `starting` as soon as it builds
@@ -5053,6 +5338,8 @@ export class RunManager {
       && (!this.waiting.has(runId) || state.turnSettled === true) && !this.lifecycle.isBlocked(runId);
     if (!startingUp && !sessionGap) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
+    // Accepted is the reply's moment; the later flush must not count it twice.
+    if (!options.replyNoted && (options.userReply || options.askRequestId)) this.noteAskReply(runId, messageText(content), options.askRequestId);
     return true;
   }
 
@@ -5064,7 +5351,7 @@ export class RunManager {
     // answers false when the session is not open yet — and silently losing a message
     // here would be precisely the failure `deferMessage` exists to prevent. Anything
     // left over is retried by the next session that opens on this run.
-    const unsent = pending.filter((content) => !this.sendMessage(runId, content));
+    const unsent = pending.filter((content) => !this.sendMessage(runId, content, { replyNoted: true }));
     this.setDeferred(runId, unsent);
   }
 
@@ -5073,9 +5360,10 @@ export class RunManager {
    * while `waiting`). Returns false when there is no open session — the GUI
    * then offers "Continue" instead.
    */
-  sendMessage(runId: string, content: PastedContent[]): boolean {
-    const delivered = this.deliverMessage(runId, content, true);
+  sendMessage(runId: string, content: PastedContent[], options: SendMessageOptions = {}): boolean {
+    const delivered = this.deliverMessage(runId, content, true, undefined, options.askRequestId) || this.reopenIdleParked(runId, content, options.askRequestId);
     if (delivered) {
+      if (!options.replyNoted) this.noteAskReply(runId, messageText(content), options.askRequestId);
       const state = this.active.get(runId);
       if (state) {
         state.monitoringWakeups = 0;
@@ -5089,6 +5377,20 @@ export class RunManager {
     return delivered;
   }
 
+  /**
+   * A message to an idle park reopens its session exactly as Continue does: to the user the
+   * session never closed (spec 2026-11-04-idle-closed-attention-state § Revision).
+   */
+  private reopenIdleParked(runId: string, content: PastedContent[], askRequestId?: string): boolean {
+    const run = this.store.getRun(runId);
+    if (!run || !isIdleParked(run) || this.active.has(runId) || this.starting.has(runId)) return false;
+    const text = messageText(content);
+    if (continuePromptRefusal(text, content)) return false;
+    // Close the answered card BEFORE the continuation lists the open ones in its opening prompt.
+    if (askRequestId) this.noteAskReply(runId, text, askRequestId);
+    return this.continueRun(runId, { text, images: content.filter((block) => block.type !== 'text') }).ok;
+  }
+
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
    * bookkeeping without masquerading as user-authored transcript messages. */
   private deliverMessage(
@@ -5096,6 +5398,8 @@ export class RunManager {
     content: PastedContent[],
     userAuthored: boolean,
     preparedUserMessage?: PreparedUserMessage,
+    /** The ask this message answers: left out of the open-questions block it carries. */
+    answering?: string,
   ): boolean {
     if (this.lifecycle.isBlocked(runId)) return false;
     const state = this.active.get(runId);
@@ -5148,9 +5452,10 @@ export class RunManager {
         // be stale. Delivered as its own engine message, ahead of the one the run woke for, so a
         // user-authored wake-up stays verbatim in the transcript.
         this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
-        if (this.deliverMessage(runId, content, userAuthored, prepared)) return;
+        if (this.deliverMessage(runId, content, userAuthored, prepared, answering)) return;
         // The session closed while we waited: keep the message the way the ladder would.
-        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
+        // `sendMessage` already recorded the reply when this was accepted.
+        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content, { replyNoted: true });
       });
       return true;
     }
@@ -5170,18 +5475,51 @@ export class RunManager {
     // at all for a non-image attachment (#950), which is why `contentBlocksOf` drops file blocks
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
-    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined) : blocks;
-    if (expanded !== blocks) {
-      // Delivery is synchronous; the body already rides the message, so the install can trail it.
-      const first = blocks.find((block) => block.type === 'text');
-      void this.provisionTaskSkills(state, { slash: first?.type === 'text' ? leadingSlashSkillName(first.text) : undefined });
+    const text = prepared?.text ?? '';
+    const slash = leadingSlashSkillName(text);
+    const catalog = prepared ? [...(state.skills ?? []), ...getTeamSkillsCached(this.repoRoot)] : [];
+    const needsSkills = prepared !== undefined && (
+      requestedOpenMercatoSkills(slash ? [slash] : [], text).length > 0 ||
+      catalog.some((skill) => skill.name === slash || (skill.kind !== 'command' && mentionsSkill(text, skill.name)))
+    );
+    if (prepared && !prepared.skills && (needsSkills || state.skillMessageDelivery)) {
+      const message = prepared;
+      const delivery = (state.skillMessageDelivery ?? Promise.resolve()).then(async () => {
+        const stillLive = () => this.active.get(runId) === state && state.session?.open && !state.cancelled && !state.finishRequested;
+        if (stillLive() && !this.disposed) {
+          message.skills = needsSkills ? await this.provisionTaskSkills(state, { slash, text }) : NO_TASK_SKILLS;
+          if (stillLive() && !this.disposed && this.deliverMessage(runId, content, userAuthored, message, answering)) return;
+        }
+        if (this.disposed || !this.store.getRun(runId)) return;
+        // The message is already in the thread. A replacement session has a new owner and may
+        // have been closed by Finish, so retry only on an explicit user action.
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'the session closed while preparing skills for the message. Continue the task to retry it.' });
+      }).catch(() => {
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'a message could not be delivered after preparing its skills' });
+      });
+      state.skillMessageDelivery = delivery;
+      void delivery.then(() => {
+        if (state.skillMessageDelivery === delivery) state.skillMessageDelivery = undefined;
+      });
+      return true;
     }
-    const deliverable = persisted.length
-      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
+    const expanded = userAuthored ? expandRegistrySlashSkill(
+      blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined, prepared?.skills?.missingShared,
+    ) : blocks;
+    const skillNotes = taskSkillNotes(prepared?.skills ?? NO_TASK_SKILLS);
+    const withSkills = skillNotes.length ? [...expanded, { type: 'text' as const, text: skillNotes.join('\n\n') }] : expanded;
+    const withAttachments = persisted.length
+      ? [...withSkills, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
           (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
-      : expanded;
+      : withSkills;
+    // Every turn names the run's open questions so the agent can close stale ones (Questions inbox spec).
+    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks, answering);
+    const deliverable = asksBlock ? [...withAttachments, { type: 'text' as const, text: asksBlock }] : withAttachments;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
+      if (prepared?.skills?.missingShared.length) {
+        this.store.appendEvent(runId, missingSharedSkillsEvent(state.currentStepId, prepared.skills.missingShared));
+      }
       for (const write of imageLibraryWrites) write();
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
@@ -5274,6 +5612,16 @@ export class RunManager {
       if (!state.finishRequested) state.acceptReviewOnDrop = true;
       return true;
     }
+    if (run && isIdleParked(run) && !this.isActive(runId)) {
+      const at = new Date().toISOString();
+      for (const step of run.steps) {
+        if (step.status === 'waiting' || step.status === 'running') this.store.updateStep(runId, step.id, { status: 'done', finishedAt: at });
+      }
+      this.clearPendingAsk(runId);
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user' });
+      void this.settleSuccess(runId);
+      return true;
+    }
     if (run?.status === 'review' && !this.isActive(runId) && run.worktree === false && !run.readOnly) {
       void this.finishReview(runId);
       return true;
@@ -5293,6 +5641,19 @@ export class RunManager {
    * messages via sendMessage, closed by finish/idle/cancel.
    */
   continueRun(
+    runId: string,
+    opts: ContinueRunOptions = {},
+    deferForCapacity = false,
+    internal: { freshSessionAllowed?: boolean } = {},
+  ): { ok: boolean; error?: string } {
+    const result = this.startContinuation(runId, opts, deferForCapacity, internal);
+    // Recorded only once accepted (a refused Continue answers nothing), and still before the
+    // continuation's opening prompt lists the open cards: that prompt is built after its awaits.
+    if (result.ok && opts.reply) this.noteAskReply(runId, opts.text ?? '', opts.reply.askRequestId);
+    return result;
+  }
+
+  private startContinuation(
     runId: string,
     opts: ContinueRunOptions = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
@@ -5335,7 +5696,7 @@ export class RunManager {
     }
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!CONTINUABLE_STATUSES.includes(run.status)
+    if (!CONTINUABLE_STATUSES.includes(run.status) && !isIdleParked(run)
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
@@ -5439,6 +5800,14 @@ export class RunManager {
     // A human turn resets attempted candidates; the policy snapshot and account holds remain.
     if (!deferForCapacity && run.fallbackEpisode) this.store.updateRun(runId, { fallbackEpisode: undefined });
 
+    if (isIdleParked(run)) {
+      // The parked turn is over; the reopen is a new step, like any Continue.
+      const at = new Date().toISOString();
+      for (const step of run.steps) {
+        if (step.status === 'waiting' || step.status === 'running') this.store.updateStep(runId, step.id, { status: 'done', finishedAt: at });
+      }
+      this.clearPendingAsk(runId);
+    }
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
@@ -5482,7 +5851,7 @@ export class RunManager {
     // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
     // registers it in `active`.
     this.starting.add(runId);
-    void this.runContinuation(
+    void outsideRelayScope(() => this.runContinuation(
       runId,
       stepId,
       resume ? sessionStep?.sessionId : undefined,
@@ -5492,7 +5861,7 @@ export class RunManager {
       undefined,
       undefined,
       ownerToken,
-    ).catch(
+    )).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
@@ -5605,8 +5974,12 @@ export class RunManager {
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
     state.enforceReadOnly = state.readOnly && record?.enforceReadOnly === true;
+    const continueConfig = await loadConfig(this.repoRoot);
+    state.bypassPermissions = await this.bypassPolicy(state.readOnly, continueConfig, (message) =>
+      this.store.appendEvent(runId, { type: 'note', message }),
+    );
     if (state.cwd === this.repoRoot) {
-      state.autoLand = await this.landingPolicy(record, await loadConfig(this.repoRoot));
+      state.autoLand = await this.landingPolicy(record, continueConfig);
     }
     if (state.cwd === this.repoRoot && !state.readOnly) {
       if (repositoryRootLockDisabled()) {
@@ -5731,7 +6104,7 @@ export class RunManager {
         // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
-        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(withoutAskCloseMarkers(event.text)))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -5777,6 +6150,8 @@ export class RunManager {
         // working again, so the anti-spin budget is restored. Before the early returns below,
         // because a turn that finished or dispatched is progress too.
         if (!compacted) state.compactionContinues = 0;
+        // Before this turn's own `CEZ:ASK` is recorded: the twin of `runAgentStep`'s call.
+        this.reviewTaskAsksAtTurnEnd(runId, state, turnText, compacted);
         const done = sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
         // turn-end handlers call. Inert for a run with no `dispatch`.
@@ -6013,6 +6388,21 @@ export class RunManager {
         ? undefined
         : defSteps.find((s) => s.id === owningStep?.id)
           ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
+    const savedTools = owningStep?.toolPolicy ?? (!owningStep
+      ? [...(record?.steps ?? [])].reverse().find(s => s.kind === 'agent' && s.toolPolicy)?.toolPolicy : undefined);
+    if (continueBackend === 'codex' && record?.workflowDef?.graph && !savedTools &&
+      (!owningStep || (!owningStep.id.startsWith('continue-') && !defSteps?.some(s => s.id === owningStep.id)))) {
+      failBeforeSpawn('codex: cannot restore this legacy graph step’s tool policy safely; start a new restricted task');
+      return;
+    }
+    const continuationTools: StepToolPolicy = state.readOnly ? {
+      allowedTools: [...READ_ONLY_TOOLS], ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    } : savedTools ?? {
+      allowedTools: [...(toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
+      ...(toolsStep?.bashAllowlist !== undefined ? { bashAllowlist: [...toolsStep.bashAllowlist] } : {}),
+      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    };
+    this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
     // returns nothing is worse than a turn that refuses to start and says why.
@@ -6029,8 +6419,16 @@ export class RunManager {
     }
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
+    if (!state.enforceReadOnly) {
+      const refusal = readOnlyWorkflowRefusal(record?.workflowDef, continueBackend);
+      if (refusal) {
+        failBeforeSpawn(refusal);
+        return;
+      }
+    }
+    const continuePrivateMcp = !record?.workflowDef || !isReadOnlyWorkflow(record.workflowDef);
     const runner = createRunner(continueBackend);
-    const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
+    const continueMcp = continuePrivateMcp ? await this.privateMcpForLaunch(continueBackend, onEvent) : [];
     if (state.cancelled) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
@@ -6038,7 +6436,7 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt) });
+    const continueSkills = await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt), text: prompt });
     // Preparation awaits can outlive consent or this state's ownership. Revalidate after
     // the last await, before consuming inbox messages or opening a provider session.
     if (this.disposed || state.cancelled || this.active.get(runId) !== state) {
@@ -6054,13 +6452,21 @@ export class RunManager {
         return;
       }
     }
-    const expandedPrompt = [continueProfile.trackerContext, expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend)].filter(Boolean).join('\n\n');
+    if (continueSkills.missingShared.length) this.store.appendEvent(runId, missingSharedSkillsEvent(stepId, continueSkills.missingShared));
+    const expandedPrompt = [
+      continueProfile.trackerContext,
+      expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend, continueSkills.missingShared),
+      ...taskSkillNotes(continueSkills),
+    ].filter(Boolean).join('\n\n');
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
     const treeReports = this.flushPendingReports(runId);
     const treeInbox = this.flushInbox(runId);
-    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    // Questions the user skipped while the session was closed, then the ones still open (Questions inbox spec).
+    const askNotes = this.store.takeAskNotes(runId);
+    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
+    const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
     // blocks above, then the instruction that prompted this continuation.
@@ -6088,18 +6494,17 @@ export class RunManager {
             : contextualOpeningPrompt,
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
-          allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
-          bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
+          ...continuationTools,
+          ...(state.bypassPermissions && !continuationTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             continueProfile.env,
           ),
-          env: state.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
+          env: continuationTools.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
-          mcpServers: state.enforceReadOnly ? [] : continueMcp,
+          mcpServers: continuationTools.enforceReadOnly ? [] : continueMcp,
           model: continueModel,
           reasoningEffort: continuationReasoningEffort,
           sessionId: launchSessionId,
@@ -6164,6 +6569,9 @@ export class RunManager {
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=cancelled`);
+      } else if (this.active.get(runId) === state && this.idleParks(runId, state)) {
+        state.askPark = undefined;
+        this.parkIdleClosed(runId, finishedAt());
       } else if (state.askPark === 'waiting' && this.active.get(runId) === state) {
         state.askPark = undefined;
         this.settleUnansweredPark(runId, finishedAt(), state.monitorHandoff === true);
@@ -6197,7 +6605,7 @@ export class RunManager {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
         const failedAt = finishedAt();
-        this.publishRunFailure(runId, {
+        const parked = this.publishRunFailure(runId, {
           status: 'failed',
           error: `continue failed: ${message}`,
           finishedAt: failedAt,
@@ -6205,7 +6613,7 @@ export class RunManager {
           // A session that crashed while parked on a question leaves that question unanswered.
           ...(state.askPark === 'waiting' ? { awaitingAnswerSince: failedAt } : {}),
         });
-        this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
+        if (!parked) this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
     } finally {
       this.recordUsagePeaks(runId, state);
@@ -6294,6 +6702,9 @@ export class RunManager {
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
+    state.bypassPermissions = await this.bypassPolicy(state.readOnly, config, (message) =>
+      this.store.appendEvent(runId, { type: 'note', message }),
+    );
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
     // the record so the UI/API can show what the run actually used. The landing permission or the
     // read-only rule rides along, so a Continue (which reads the record) keeps it.
@@ -6303,6 +6714,7 @@ export class RunManager {
       ? original.systemPrompt
       : composeSystemPrompt(
         resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt),
+        this.store.getRun(runId)?.startedByManager ? MANAGER_TASK_SYSTEM_PROMPT : undefined,
         state.autoLand ? landingPromptPart(state.autoLand.baseLabel, state.autoLand.checks, state.autonomous === true) : undefined,
         state.readOnly ? READ_ONLY_PROMPT : undefined,
       ) || undefined;
@@ -6635,7 +7047,7 @@ export class RunManager {
       emit({ type: 'lifecycle', message: 'run cancelled' });
     } else if (runError) {
       const idleClosed = askPark !== 'waiting' && state.idleFailed === true;
-      this.publishRunFailure(runId, {
+      const parked = this.publishRunFailure(runId, {
         status: 'failed',
         error: runError,
         finishedAt,
@@ -6645,7 +7057,9 @@ export class RunManager {
         // Keyed on where the walk failed, never the message (spec 2026-11-04-idle-closed-attention-state).
         ...(idleClosed ? { idleClosedAt: finishedAt } : {}),
       });
-      emit({ type: 'lifecycle', message: idleClosed ? IDLE_CLOSED_LIFECYCLE : `run failed — ${runError}` });
+      if (!parked) emit({ type: 'lifecycle', message: idleClosed ? IDLE_CLOSED_LIFECYCLE : `run failed — ${runError}` });
+    } else if (this.idleParks(runId, state)) {
+      this.parkIdleClosed(runId, finishedAt);
     } else if (askPark === 'waiting') {
       this.settleUnansweredPark(runId, finishedAt, monitorHandoff);
     } else {
@@ -6835,7 +7249,57 @@ export class RunManager {
         port = 'failed';
       } else if (node.type !== 'agent' && node.type !== 'check') {
         // Nodes cezar runs itself: gates, questions, dispatch, git and GitHub (phase 1c).
-        const outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk, resuming);
+        const opensPr = node.type === 'gate.human' && gateOpensPr(graph, node.id);
+        const prGate = node.type === 'github.draft-pr'
+          ? graph.nodes.find((gate) => gate.type === 'gate.human' && taken.at(-1) === `${gate.id}.approve->${node.id}`)
+          : undefined;
+        const prApproval = prGate ? outputs.get(prGate.id) : undefined;
+        let gateNote: string | undefined;
+        if (resuming && node.type === 'gate.human' && outputs.get(node.id)?.instructions) {
+          gateNote = 'The workflow restarted while applying your instructions. Review the branch, then reply again or choose an option.';
+          outputs.delete(node.id);
+          persistWalk();
+        }
+        let resumeHere = resuming;
+        let outcome: string;
+        for (;;) {
+          outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk, resumeHere, {
+            opensPr, gateNote, readyPr: prApproval?.pr === 'ready', updateExistingPr: Boolean(prApproval?.instructions),
+          });
+          if (state.cancelled) return null;
+          if (outcome === 'unanswered') {
+            gateNote = 'Reply with instructions in text, or choose an option.';
+            resumeHere = false;
+            continue;
+          }
+          if (node.type !== 'gate.human' || outcome !== 'approve') break;
+          const instructions = outputs.get(node.id)?.instructions;
+          if (typeof instructions !== 'string' || !instructions) break;
+          // An approval with instructions (a typed reply at the gate): apply them, then go on.
+          persistWalk();
+          this.store.flush();
+          const applied = await this.applyGateInstructions(graph, runId, state, node, instructions, outputs, {
+            input, skills, emit, taskBackend, extraSystemPrompt,
+          });
+          if (state.cancelled) return null;
+          if (applied === 'finished') {
+            outcome = 'finished';
+            break;
+          }
+          if (applied === null) break;
+          if (applied === 'declined') {
+            // The agent read the reply as "do not go on": take the reject path, never publish.
+            emit({ type: 'note', stepId: node.id, message: 'your reply asked not to continue — rejected' });
+            outcome = 'reject';
+            break;
+          }
+          // Could not apply them: the gate waits again, saying why, instead of failing the run.
+          gateNote = `Your instructions could not be applied (${applied.failed}). Review the branch, then reply again or choose an option.`;
+          emit({ type: 'note', stepId: node.id, message: gateNote, tone: 'danger' });
+          outputs.delete(node.id);
+          persistWalk();
+          resumeHere = false;
+        }
         if (state.cancelled) return null;
         // Finish on a parked gate/question is "stop here and accept" — the same settlement a
         // Finish on a parked agent step gets (`askPark === 'abandoned'`).
@@ -6885,9 +7349,10 @@ export class RunManager {
           if (state.askPark === 'abandoned') this.finishStep(runId, node.id, 'done', undefined, emit);
           return null;
         }
-        // Preserve the v1 safety bound on an ordinary terminal wait: session closure caused by
-        // inactivity is not evidence that the task completed. The review-gate path remains a
-        // needs-you state with its changes available to the user.
+        // Inactivity is not evidence that the task completed: the park stays as it was, and
+        // `execute` settles it as an idle park. A dispatched child still settles below.
+        if (this.idleParks(runId, state)) return null;
+        // The review-gate path remains a needs-you state with its changes available to the user.
         if (await this.idleClosedFails(runId, state)) {
           const error = this.inactivityFailureMessage();
           // Flagged so the thread does not render the idle close as a red step failure.
@@ -7196,7 +7661,9 @@ export class RunManager {
      *  awaited, not sent again. False on every ordinary visit — a loop coming back through a
      *  dispatch is a new round, and its earlier child's result is not this round's. */
     resuming = false,
-  ): Promise<string | 'finished'> {
+    context?: { opensPr: boolean; gateNote?: string; readyPr: boolean; updateExistingPr: boolean },
+  ): Promise<string> {
+    const { opensPr = false, gateNote, readyPr = false, updateExistingPr = false } = context ?? {};
     const render = (text: string) => applyTemplate(renderNodeRefs(text, outputs), task);
     const note = (message: string, tone?: 'danger') =>
       emit({ type: 'note', stepId: node.id, message, ...(tone ? { tone } : {}) });
@@ -7212,14 +7679,25 @@ export class RunManager {
     switch (node.type) {
       case 'gate.human': {
         const header = node.name ?? 'Approval';
-        const outcome = await this.parkForUser(runId, state, node.id, [
-          { header, question: render(node.message), options: [{ label: 'Approve' }, { label: 'Reject' }] },
-        ], node.timeoutMs);
+        const options = [GATE_APPROVE, ...(opensPr ? [GATE_FULL_PR] : []), GATE_REJECT].map((label) => ({ label }));
+        const question = render(node.message) + (gateNote ? `\n\n${gateNote}` : '');
+        const outcome = await this.parkForUser(runId, state, node.id, [{ header, question, options }], node.timeoutMs);
         if (outcome.kind !== 'answer') return outcome.kind === 'timeout' ? 'timeout' : 'finished';
         const reply = cardReply(outcome.text, header);
-        const approved = /^\s*approve\b/i.test(reply);
-        outputs.set(node.id, { comment: reply });
-        return approved ? 'approve' : 'reject';
+        // A typed reply is the gate's answer too: anything but a clear reject approves, and its
+        // text is applied before the workflow goes on (the walk runs that turn).
+        const decided = classifyGateReply(reply, opensPr);
+        if (!decided) return 'unanswered';
+        outputs.set(node.id, {
+          comment: reply,
+          ...(decided.instructions ? { instructions: decided.instructions } : {}),
+          ...(decided.fullPr ? { pr: 'ready' } : {}),
+        });
+        note(
+          decided.decision === 'reject' ? 'rejected'
+            : `approved${decided.fullPr ? ' — open a full PR' : ''}${decided.instructions ? ', with instructions' : ''}`,
+        );
+        return decided.decision;
       }
       case 'ask-user': {
         const header = node.name ?? 'Question';
@@ -7284,31 +7762,65 @@ export class RunManager {
         return 'failed';
       }
       case 'github.draft-pr': {
+        // A review gate idle long enough for age retention lost its tree; the branch brings it back.
+        if (record()?.worktreeReclaimedAt) await this.restoreReclaimedWorktree(runId);
         const run = record();
         if (!run) return 'failed';
+        // A gate answered "open a full PR": ready for review instead of a draft.
+        const markReady = async (url: string): Promise<boolean> => {
+          // A stored URL can come from the agent's transcript. Confirm the PR belongs
+          // to this task branch before changing a PR we did not just find by branch.
+          if (url === run.pullRequestUrl && process.env.CEZ_DRY_RUN !== '1') {
+            const target = await resolvePrTarget(run);
+            const existing = target && run.worktreePath ? await findBranchPr(run.worktreePath, target) : null;
+            if (existing?.url !== url) {
+              note('could not confirm that the existing PR belongs to this task branch', 'danger');
+              return false;
+            }
+          }
+          const res = await updatePr(this.repoRoot, url, { ready: true });
+          note(res.ok ? `PR marked ready for review: ${url}` : `could not mark PR ready — ${res.error}`, res.ok ? undefined : 'danger');
+          return res.ok;
+        };
         // One PR per task: a PR this run already opened (a resumed walk, or a loop back through
         // this node) is reported, never opened twice.
-        if (run.pullRequestUrl) {
+        if (run.pullRequestUrl && !updateExistingPr) {
           const n = /\/pull\/(\d+)/.exec(run.pullRequestUrl)?.[1];
           outputs.set(node.id, { url: run.pullRequestUrl, number: n ? Number(n) : '' });
-          note(`draft PR already open: ${run.pullRequestUrl}`);
-          return 'created';
+          note(`PR already open: ${run.pullRequestUrl}`);
+          return !readyPr || await markReady(run.pullRequestUrl) ? 'created' : 'failed';
+        }
+        // Nothing to propose — a clean tree with no commits ahead of the base (a review-only
+        // run): succeed without pushing, rather than fail on gh's refusal.
+        if (
+          !run.pullRequestUrl &&
+          run.worktreePath &&
+          (await worktreeChangedPaths(run.worktreePath)).length === 0 &&
+          (await baseDivergence(run.worktreePath, run.baseBranch)).ahead === 0
+        ) {
+          outputs.set(node.id, { url: '', number: '' });
+          note('no commits ahead of the base branch — no PR opened');
+          return 'nothing';
         }
         const title = node.title ? render(node.title) : undefined;
         const outcome = await createDraftPr({
           repoRoot: this.repoRoot,
           run: title ? { ...run, title } : run,
           handoffText: readHandoff(this.dataDir, runId),
+          ...(readyPr ? { draft: false } : {}),
+          ...(run.pullRequestUrl && updateExistingPr ? { updateExisting: true } : {}),
         });
         if (!outcome.ok) {
-          note(`draft PR failed — ${outcome.error}`, 'danger');
+          note(`${readyPr ? 'PR' : 'draft PR'} failed — ${outcome.error}`, 'danger');
           return 'failed';
         }
         this.store.updateRun(runId, { pullRequestUrl: outcome.url });
         const number = /\/pull\/(\d+)/.exec(outcome.url)?.[1];
         if (number) this.store.recordPrRef(runId, { number: Number(number), url: outcome.url, origin: 'created' });
         outputs.set(node.id, { url: outcome.url, number: number ? Number(number) : '' });
-        note(`draft PR opened: ${outcome.url}`);
+        // An adopted PR (the agent opened one already) keeps its own draft state until told.
+        if (readyPr && outcome.updated && !await markReady(outcome.url)) return 'failed';
+        note(`${readyPr ? 'PR (ready for review)' : 'PR'} ${outcome.updated ? 'already open' : 'opened'}: ${outcome.url}`);
         return 'created';
       }
       case 'github.pr-comment': {
@@ -7640,6 +8152,7 @@ export class RunManager {
     questions: { header: string; question: string; options: { label: string }[] }[],
     timeoutMs?: number,
   ): Promise<GraphParkOutcome> {
+    state.currentStepId = nodeId;
     const requestId = randomUUID();
     this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId, questions, source: 'workflow' });
     const attentionRequest = this.recordAttention(requestId, questions);
@@ -7743,17 +8256,97 @@ export class RunManager {
   }
 
   /**
-   * Install the named skills and every companion they name into the run's cwd (skills-provision.ts).
-   * Once a named skill is known, waits (bounded) for the team-skill load before collecting companions.
-   * Refreshes `state.skills` so expansion sees the same catalog. Never throws.
+   * The turn that applies a gate's typed instructions before the walk goes on, on the gate's own
+   * rail row. Reuse the implementer's session when available. A failed or unconfirmed turn
+   * returns to the same gate so the graph can still continue after the next answer.
+   */
+  private async applyGateInstructions(
+    graph: WorkflowGraph,
+    runId: string,
+    state: ActiveRun,
+    gate: Extract<GraphNode, { type: 'gate.human' }>,
+    instructions: string,
+    outputs: ReadonlyMap<string, Record<string, string | number>>,
+    ctx: {
+      input: StartRunInput;
+      skills: Skill[];
+      emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void;
+      taskBackend: RunnerId;
+      extraSystemPrompt: string | undefined;
+    },
+  ): Promise<null | 'finished' | 'declined' | { failed: string }> {
+    const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
+    const steps = this.store.getRun(runId)?.steps ?? [];
+    const worker = graph.nodes.find(
+      (n): n is Extract<GraphNode, { type: 'agent' }> =>
+        n.type === 'agent' && !n.review && !n.verdicts?.length && Boolean(steps.find((s) => s.id === n.id)?.sessionId),
+    );
+    const nextId = edgeFrom(graph, gate.id, 'approve')?.to;
+    const next = nextId ? graph.nodes.find((n) => n.id === nextId) : undefined;
+    const prompt = gateInstructionsPrompt(
+      gate.name ?? gate.id,
+      instructions,
+      next && next.type !== 'end'
+        ? { name: next.name ?? next.id, opensPr: next.type === 'github.draft-pr', fullPr: outputs.get(gate.id)?.pr === 'ready' }
+        : undefined,
+    );
+    const step: WorkflowStepDef = {
+      // Codex enforces only the exact default or a read-only grant; a write subset would refuse (#2330).
+      ...(worker ? nodeToStep(worker) : { allowedTools: taskBackend === 'codex' ? [...DEFAULT_ALLOWED_TOOLS] : ['Read', 'Grep', 'Glob', 'Edit', 'Write'] }),
+      id: gate.id, name: gate.name ?? gate.id, prompt,
+    };
+    const backend = step.runner ?? taskBackend;
+    const resumeSessionId = worker
+      ? this.graphResumeSession(runId, { ...worker, id: gate.id, session: { continue: worker.id } }, backend, emit)
+      : undefined;
+    emit({ type: 'note', stepId: gate.id, message: 'applying your instructions before the workflow goes on' });
+    const lastTurn = { text: '' };
+    const failure = await this.runAgentStep(
+      runId, state, step, input, skills, null, false, emit, undefined, taskBackend, extraSystemPrompt, undefined, [],
+      { resumeSessionId, lastTurn },
+    );
+    if (state.cancelled || state.finishRequested || state.askPark === 'abandoned') return 'finished';
+    if (state.askPark === 'waiting' || state.idleClosed) {
+      state.askPark = undefined;
+      state.idleClosed = undefined;
+      state.monitorHandoff = undefined;
+      this.clearPendingAsk(runId);
+      return { failed: 'the agent session closed while waiting for a reply' };
+    }
+    if (failure) return { failed: failure };
+    const verdict = parseVerdict(lastTurn.text, ['applied', 'blocked', 'declined']);
+    if (verdict === 'applied') return null;
+    if (verdict === 'declined') return 'declined';
+    return { failed: verdict === 'blocked' ? 'the agent reported a blocker' : 'the agent did not confirm completion' };
+  }
+
+  /**
+   * Install the named skills — a step skill, a leading `/name`, and every catalog skill the
+   * prompt names in prose — plus their companions into the run's cwd (skills-provision.ts).
+   * Once a named skill is known, waits (bounded) for the team-skill load before collecting
+   * companions; a repo extension whose shared skill is missing triggers one bounded team-skill
+   * refresh. Refreshes `state.skills` so expansion sees the same catalog. Never throws.
    */
   private async provisionTaskSkills(
     state: ActiveRun,
-    wantedSkills: { stepSkill?: string; slash?: string },
-  ): Promise<string[]> {
+    wantedSkills: { stepSkill?: string; slash?: string; text?: string },
+  ): Promise<TaskSkillPreparation> {
+    const none = NO_TASK_SKILLS;
     const stepSkill = wantedSkills.stepSkill?.trim() || undefined;
-    const wanted = [stepSkill, wantedSkills.slash].filter((name): name is string => Boolean(name));
-    if (!wanted.length) return [];
+    const named = [stepSkill, wantedSkills.slash].filter((name): name is string => Boolean(name));
+    const text = wantedSkills.text?.trim() || undefined;
+    if (!named.length && !text) return none;
+    const requested = requestedOpenMercatoSkills(named, text);
+    const missingFrom = (roots: readonly Skill[], catalog: readonly Skill[]): string[] => {
+      const available = new Set(catalog.filter((skill) => !skill.missingShared && !skill.kind).map((skill) => skill.name));
+      const dependencies = skillClosure(roots.filter((skill) => !skill.kind && !skill.missingShared), catalog)
+        .flatMap((skill) => openMercatoCompanions(skill.body));
+      return [...new Set([
+        ...roots.filter((skill) => skill.missingShared).map((skill) => skill.name),
+        ...requested.filter((name) => !roots.some((skill) => skill.name === name)),
+        ...dependencies.filter((name) => !available.has(name)),
+      ])];
+    };
     try {
       // Companions resolve against the ungated team list too: curating a skill out of the
       // picker must not break a skill that runs it.
@@ -7763,62 +8356,115 @@ export class RunManager {
         for (const skill of getTeamSkillsCached(this.repoRoot)) if (!seen.has(skill.name)) catalog.push(skill);
         return catalog;
       };
-      const rootsIn = (catalog: readonly Skill[]) => wanted.flatMap((name) => catalog.filter((s) => s.name === name));
-      state.skills = await discoverSkills(this.repoRoot);
-      let catalog = catalogOf(state.skills);
-      let roots = rootsIn(catalog);
-      // An unknown `/name` is most likely a backend's own command (`/compact`): never stall it.
-      // A selected step skill may still arrive with the team load, so that one waits.
-      if (!roots.length && !stepSkill) return [];
-      const inPlace = resolvePath(state.cwd) === resolvePath(this.repoRoot);
-      if (!inPlace || !roots.length) {
-        // A companion (or the step skill itself) often lives only in the team repo: wait, bounded.
+      // A skill the prompt names in prose ("run om-auto-review-pr on #12") is as wanted as a
+      // `/name`: the agent goes looking for it either way.
+      const rootsIn = (catalog: readonly Skill[]) => {
+        const roots = named.flatMap((name) => catalog.filter((s) => s.name === name));
+        if (text) {
+          for (const skill of catalog) {
+            if (skill.kind !== 'command' && !roots.includes(skill) && mentionsSkill(text, skill.name)) roots.push(skill);
+          }
+        }
+        return roots;
+      };
+      const waitBounded = async (work: Promise<unknown>, ms: number) => {
         let timer: NodeJS.Timeout | undefined;
         await Promise.race([
-          waitForTeamSkills(this.repoRoot).catch(() => []),
+          work.catch(() => []),
           new Promise((resolve) => {
-            timer = setTimeout(resolve, TEAM_SKILLS_WAIT_MS);
+            timer = setTimeout(resolve, ms);
             timer.unref?.();
           }),
         ]);
         clearTimeout(timer);
+      };
+      state.skills = await discoverSkills(this.repoRoot);
+      let catalog = catalogOf(state.skills);
+      let roots = rootsIn(catalog);
+      // An unknown `/name` may be a backend command (`/compact`). An explicitly requested
+      // Open Mercato skill is recognizable before its team catalog has loaded.
+      if (!roots.length && !stepSkill && !requested.length) return none;
+      const inPlace = resolvePath(state.cwd) === resolvePath(this.repoRoot);
+      if (!inPlace || !roots.length) {
+        // A companion (or the step skill itself) often lives only in the team repo: wait, bounded.
+        await waitBounded(waitForTeamSkills(this.repoRoot), TEAM_SKILLS_WAIT_MS);
         state.skills = await discoverSkills(this.repoRoot);
         catalog = catalogOf(state.skills);
         roots = rootsIn(catalog);
       }
+      if (missingFrom(roots, catalog).length) {
+        // Retry once even if there is no project extension, such as a fresh VPS with an empty cache.
+        await waitBounded(refreshTeamSkills(this.repoRoot), TEAM_SKILLS_REPAIR_MS);
+        state.skills = await discoverSkills(this.repoRoot);
+        catalog = catalogOf(state.skills);
+        roots = rootsIn(catalog);
+      }
+      const missingShared = missingFrom(roots, catalog);
       // Only a selected step skill can be missing: a leading `/name` that is no skill is a
       // backend's own command (`/compact`), not a miss.
       const stepSkillMissing = Boolean(stepSkill) && !catalog.some((s) => s.name === stepSkill);
       if (!roots.length) {
-        if (stepSkillMissing) track('skills_provisioned', { label: 'root_not_found', value: 0 });
-        return [];
+        if (stepSkillMissing || missingShared.length) track('skills_provisioned', { label: 'root_not_found', value: 0 });
+        return { ...none, missingShared };
       }
+      // Explicit selection still works for a team skill curated out of the cockpit's pickers.
+      const activeNames = new Set(state.skills.map((skill) => skill.name));
+      state.skills.push(...roots.filter((root) => named.includes(root.name) && !activeNames.has(root.name)));
       state.trackedSkills ??= new Set();
       for (const skill of roots) {
-        if (state.trackedSkills.has(skill.name)) continue;
+        if (!named.includes(skill.name) || state.trackedSkills.has(skill.name)) continue;
         state.trackedSkills.add(skill.name);
         track('skill_used', { label: skillLabel(skill) });
       }
+      // An extension without its shared skill is not installed as the skill: it would pose as it.
+      const installable = roots.filter((skill) => !skill.missingShared);
+      const sharedClosure = skillClosure(installable.filter((skill) => isOpenMercatoSkillName(skill.name)), catalog);
       let installed: string[];
       if (inPlace) {
         // In place, the cwd is the user's checkout: its skill dirs are what `discoverSkills` reads
         // first, so a written-out copy would shadow the real skill for good. Keep the pre-provision
         // behavior there — only the selected team skill, refreshed on every run.
         installed = [];
-        for (const skill of roots) {
+        for (const skill of new Set([...installable, ...sharedClosure])) {
           if (skill.source !== 'team' || !skill.team?.dir) continue;
           if (await materializeSkillDir(state.cwd, skill).catch(() => false)) installed.push(skill.name);
         }
       } else {
-        installed = await provisionSkills(state.cwd, roots, catalog);
+        installed = await provisionSkills(state.cwd, installable, catalog.filter((skill) => !skill.missingShared));
+      }
+      // Runners can read the entrypoints directly, including a live session that enumerated
+      // its skills at launch or a backend which uses a different skill lookup directory.
+      const entrypoints: string[] = [];
+      for (const skill of sharedClosure) {
+        if (skill.kind === 'command' || !isOpenMercatoSkillName(skill.name)) continue;
+        // Selected standalone repo skills already get their local path in the system prompt.
+        if (named.includes(skill.name) && !skill.missingShared && (skill.source === 'ai' || skill.source === 'cezar')) continue;
+        const paths = PROVISION_SKILL_DIRS.map((dir) => `${dir}/${skill.name}/SKILL.md`);
+        const relative = paths.find((path) => {
+          const file = join(state.cwd, path);
+          if (!skill.extension && skill.source !== 'team') return existsSync(file);
+          try {
+            return parseFrontmatter(readFileSync(file, 'utf8')).body.trim() === skill.body.trim();
+          } catch {
+            return false;
+          }
+        });
+        const entrypoint = relative ?? (skill.source !== 'team' && isAbsolute(skill.path) && existsSync(skill.path) ? skill.path : undefined);
+        if (skill.missingShared || !entrypoint) missingShared.push(skill.name);
+        else entrypoints.push(`- \`${skill.name}\` at \`${entrypoint}\``);
       }
       track('skills_provisioned', {
-        label: stepSkillMissing ? 'root_not_found' : installed.length ? 'installed' : 'already_present',
+        label: stepSkillMissing || missingShared.length ? 'root_not_found' : installed.length ? 'installed' : 'already_present',
         value: installed.length,
       });
-      return installed;
+      // A skill named only in prose gets no system prompt naming its repo extension: say it here.
+      const guidance = roots
+        .filter((skill) => skill.extension && !named.includes(skill.name))
+        .map((skill) => repoExtensionNote(skill.name, skill.extension!.path));
+      if (entrypoints.length) guidance.push(`Skill files available to read directly from your working directory:\n${entrypoints.join('\n')}`);
+      return { installed, missingShared: [...new Set(missingShared)], guidance };
     } catch {
-      return [];
+      return { ...none, missingShared: requested };
     }
   }
 
@@ -7854,10 +8500,16 @@ export class RunManager {
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
-    const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
+    const provision = await this.provisionTaskSkills(state, {
+      stepSkill: step.skill,
+      slash: leadingSlashSkillName(rawPrompt),
+      text: rawPrompt,
+    });
+    const { installed, missingShared } = provision;
     if (installed.length) {
       emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
     }
+    if (missingShared.length) emit(missingSharedSkillsEvent(step.id, missingShared));
     if (step.skill) {
       const skill = (state.skills ?? skills).find((s) => s.name === step.skill);
       if (skill) {
@@ -7866,7 +8518,7 @@ export class RunManager {
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
         systemPrompt = skillSystemPrompt(skill, { runner: step.runner ?? taskBackend, args: taskText });
-      } else {
+      } else if (!missingShared.includes(step.skill)) {
         emit({
           type: 'note',
           stepId: step.id,
@@ -7883,7 +8535,9 @@ export class RunManager {
     // Cezar lists the skill (#278). `state.skills` was populated by `discoverSkills` earlier in
     // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
-    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], step.runner ?? taskBackend);
+    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], step.runner ?? taskBackend, missingShared);
+    // The agent must stop and say so rather than improvise the skill from its extension.
+    userPrompt = [userPrompt, ...taskSkillNotes(provision)].join('\n\n');
     if (resumeStep) {
       const resumePrompt = autoResumeReasonFor(resumeStep.error) === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT;
       userPrompt = `${resumePrompt}\n\nCurrent task and queued updates:\n\n${userPrompt}`;
@@ -7894,7 +8548,10 @@ export class RunManager {
     // so a leading `/skill` still matched, and before the failure/attachment suffixes.
     const treeReports = this.flushPendingReports(runId);
     const treeInbox = this.flushInbox(runId);
-    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    // Questions the user skipped while the session was closed, then the ones still open (Questions inbox spec).
+    const askNotes = this.store.takeAskNotes(runId);
+    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
+    const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
     if (treeBlocks.length) userPrompt = `${treeBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
       userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
@@ -7972,7 +8629,7 @@ export class RunManager {
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
         const text = stripVerdictMarker(
-          stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text)))),
+          stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(withoutAskCloseMarkers(event.text))))),
         );
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
@@ -8012,6 +8669,8 @@ export class RunManager {
         const compacted = event.reason === 'context-compaction';
         const markerless = compacted && markerlessTurn(turnText);
         if (!compacted) state.compactionContinues = 0;
+        // Before this turn's own `CEZ:ASK` is recorded: the twin of `runContinuation`'s call.
+        this.reviewTaskAsksAtTurnEnd(runId, state, turnText, compacted);
         const done = interactive && sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
@@ -8266,8 +8925,21 @@ export class RunManager {
     }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
+    // A read-only workflow is only as read-only as the backend holding its tool limits.
+    const stepDef = this.store.getRun(runId)?.workflowDef;
+    if (!state.enforceReadOnly) {
+      const refusal = readOnlyWorkflowRefusal(stepDef, stepBackend);
+      if (refusal) return refusal;
+    }
+    const stepTools: StepToolPolicy = {
+      allowedTools: [...(state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
+      ...(!state.readOnly && step.bashAllowlist !== undefined ? { bashAllowlist: [...step.bashAllowlist] } : {}),
+      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    };
+    this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
+    const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
-    const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
+    const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -8293,9 +8965,8 @@ export class RunManager {
           userPrompt: [stepProfile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
-          allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
-          bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
+          ...stepTools,
+          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
@@ -8578,7 +9249,8 @@ export class RunManager {
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
         execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows };
       }
-      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
+      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,
+        (reason) => this.store.appendEvent(runId, { type: 'note', message: `model naming unavailable — ${reason}` }));
       if (!result) return undefined;
       const run = this.store.getRun(runId);
       // Marker-owned state outranks the namer (spec 2026-07-18-task-ref-markers):
@@ -8874,6 +9546,15 @@ export class RunManager {
       return undefined;
     }
     return { checks: config.requiredChecks ?? [], baseBranch: config.baseBranch, baseLabel: config.baseBranch ?? repo.branch, attempts: 0 };
+  }
+
+  /** Whether Claude skips permission prompts for this run. Like auto-land, only local
+   *  configuration can grant it: a cloned repository must not turn approvals off. */
+  private async bypassPolicy(readOnly: boolean | undefined, config: CezConfig, note?: (message: string) => void): Promise<boolean> {
+    if (readOnly || config.bypassPermissions !== true) return false;
+    const blocked = await bypassPermissionsBlocked(this.repoRoot, config, { hosted: this.hosted() });
+    if (blocked) note?.(blocked);
+    return blocked === null;
   }
 
   /** The most recent thing the user asked this task for — context for a commit message. */
@@ -9182,6 +9863,20 @@ export class RunManager {
     const reviewGate = await this.reviewGateApplies(runId);
     // A Finish may land during that git await and clear the inactivity evidence (6a3cecee).
     return state.idleClosed === true && !reviewGate;
+  }
+
+  /**
+   * Whether an idle close leaves the run parked as it was (spec 2026-11-04-idle-closed-attention-state
+   * § Revision): housekeeping, not a state change. A dispatched child still settles, because its
+   * parent waits for a report that only a settled child sends.
+   */
+  private idleParks(runId: string, state: ActiveRun): boolean {
+    return state.idleClosed === true && !state.cancelled && this.store.getRun(runId)?.dispatch?.parentRunId === undefined;
+  }
+
+  /** The record keeps its status, steps and question; only the "no process" fact is stamped. */
+  private parkIdleClosed(runId: string, at: string): void {
+    this.store.updateRun(runId, { idleClosedAt: at });
   }
 
   /**
@@ -9594,11 +10289,19 @@ export class RunManager {
     const timeoutMs = timeoutMinutes * 60_000;
     state.idleTimer = setTimeout(() => {
       if (state.session?.open && !state.cancelled) {
+        if (state.skillMessageDelivery) {
+          this.armIdleTimer(runId, state);
+          return;
+        }
         state.idleClosed = true;
-        this.store.appendEvent(runId, {
-          type: 'lifecycle',
-          message: `session closed after ${Math.round(timeoutMs / 60_000)}m of inactivity`,
-        });
+        // No transcript notice: the thread ends on its last real message (idle park). A child's
+        // settle still records why it stopped.
+        if (this.store.getRun(runId)?.dispatch?.parentRunId !== undefined) {
+          this.store.appendEvent(runId, {
+            type: 'lifecycle',
+            message: `session closed after ${Math.round(timeoutMs / 60_000)}m of inactivity`,
+          });
+        }
         state.session.end();
       }
     }, timeoutMs);
@@ -9830,7 +10533,7 @@ export class RunManager {
   /**
    * Turn a monitoring park into a `waiting` park: attention raised, idle timer armed if enabled,
    * session left open so a reply still lands in it. Parked like a `CEZ:ASK` (`askPark`), so a
-   * hand-off nobody answers settles `failed` with Continue when the idle timer closes it.
+   * hand-off nobody answers stays an idle park when the idle timer closes it (spec 2026-11-04 § Revision).
    */
   private parkMonitorAsWaiting(runId: string, state: ActiveRun, message: string): void {
     if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
@@ -10166,9 +10869,10 @@ export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCoun
  * they are materialized into the worktree separately (see the call site).
  */
 export function skillSystemPrompt(
-  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source' | 'kind' | 'variants'>>,
+  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source' | 'kind' | 'variants' | 'extension' | 'missingShared'>>,
   options: { runner?: RunnerId; args?: string } = {},
 ): string {
+  if (skill.missingShared) return missingSharedSkillsNote([skill.name]);
   const lines = [
     `Selected skill: /${skill.name}`,
     ...(skill.description ? [`Description: ${skill.description}`] : []),
@@ -10186,6 +10890,7 @@ export function skillSystemPrompt(
         `It is the current installed copy — use it even though your working directory is a separate worktree that does not contain the skill.`,
     );
   }
+  if (skill.extension) lines.push('', repoExtensionNote(skill.name, skill.extension.path));
   const body = command ? commandBody(skill, options.runner) : skill.body;
   lines.push('', command ? 'Command instructions:' : 'Skill instructions:', command ? substituteArguments(body, options.args) : body.trim());
   return lines.join('\n');
@@ -10221,6 +10926,60 @@ export function isUnknownSkillFailure(event: UiEvent): boolean {
 
 /** Bound on waiting for the first team-skill load before installing a task's skills. */
 const TEAM_SKILLS_WAIT_MS = 10_000;
+/** Bound on the clone/fetch a missing shared skill triggers before its agent starts. */
+const TEAM_SKILLS_REPAIR_MS = 30_000;
+
+/** How the agent learns a repo extends a skill it runs. */
+export function repoExtensionNote(name: string, path: string): string {
+  return `This repository extends the \`${name}\` skill: apply ${path} (also at the same repo-relative path in your working directory) on top of the skill's instructions.`;
+}
+
+/** Recognize an invocation with a cold catalog, without blocking unrelated prompts on a clone. */
+function requestedOpenMercatoSkills(named: readonly string[], text?: string): string[] {
+  const names = new Set(named.filter(isOpenMercatoSkillName));
+  const invocation = /(?:^\s*|\b(?:run|use|apply|load|invoke)\s+(?:the\s+)?)`?\/?(om-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w/-]|\.[\w-])/gim;
+  for (const match of (text ?? '').matchAll(invocation)) names.add(match[1]!.toLowerCase());
+  return [...names];
+}
+
+function openMercatoCompanions(body: string): string[] {
+  const names = new Set(requestedOpenMercatoSkills([], body));
+  const declared = /\bcompanion skills\b[^:\n]*:\s*([^\n]+)/gi;
+  for (const declaration of body.matchAll(declared)) {
+    for (const match of declaration[1]!.matchAll(/`\/?(om-[a-z0-9]+(?:-[a-z0-9]+)*)`/g)) names.add(match[1]!);
+  }
+  return [...names];
+}
+
+function isOpenMercatoSkillName(name: string): boolean {
+  return /^om-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name);
+}
+
+function taskSkillNotes(provision: TaskSkillPreparation): string[] {
+  return provision.missingShared.length ? [missingSharedSkillsNote(provision.missingShared)] : provision.guidance;
+}
+
+function missingSharedSkillsEvent(stepId: string | undefined, names: readonly string[]) {
+  return {
+    type: 'note' as const,
+    stepId,
+    tone: 'danger' as const,
+    action: 'install-skills',
+    skillNames: names,
+    message: names.length === 1
+      ? `The shared skill ${names[0]} is unavailable for this task. Install skills to refresh the catalog.`
+      : `The shared skills ${names.join(', ')} are unavailable for this task. Install skills to refresh the catalog.`,
+  };
+}
+
+/** Instructions for the agent when a requested shared skill could not be loaded. */
+export function missingSharedSkillsNote(names: readonly string[]): string {
+  const list = names.map((name) => `\`${name}\``).join(', ');
+  return (
+    `cezar: the shared skill ${list} is not installed. Stop the requested skill workflow and ask the user to select Install skills in the task transcript. ` +
+    `Wait for the skill to become available before proceeding, even if the repository has an extension for it.`
+  );
+}
 
 /** The `name` of a prompt's leading `/name` slash command, else undefined. */
 export function leadingSlashSkillName(text: string): string | undefined {
@@ -10241,9 +11000,11 @@ export function leadingSlashSkillName(text: string): string | undefined {
  * the session's `userPrompt` and never passes through `deliverMessage` at all
  * (#811).
  */
-export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[], runner?: RunnerId): string {
+export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[], runner?: RunnerId, missingShared?: readonly string[]): string {
   const name = leadingSlashSkillName(text);
   if (!name) return text;
+  // The caller adds the repair instructions. Keep a native CLI from consuming this as an unknown command.
+  if (missingShared?.includes(name)) return `User request:\n${text}`;
   const skill = skills.find((candidate) => candidate.name === name);
   if (!skill) return text;
 
@@ -10266,12 +11027,13 @@ export function expandRegistrySlashSkill(
   content: ContentBlock[],
   skills: readonly Skill[],
   runner?: RunnerId,
+  missingShared?: readonly string[],
 ): ContentBlock[] {
   const textIndex = content.findIndex((block) => block.type === 'text');
   if (textIndex < 0) return content;
   const block = content[textIndex];
   if (!block || block.type !== 'text') return content;
-  const text = expandRegistrySlashSkillText(block.text, skills, runner);
+  const text = expandRegistrySlashSkillText(block.text, skills, runner, missingShared);
   if (text === block.text) return content;
 
   const expanded = [...content];

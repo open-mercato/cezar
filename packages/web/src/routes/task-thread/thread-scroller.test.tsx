@@ -479,8 +479,8 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
 })
 
 describe('useThreadScroll — route arrival (#761)', () => {
-  function ArrivalHarness({ viewKey }: { viewKey: string }) {
-    const controls = useThreadScroll(viewKey)
+  function ArrivalHarness({ viewKey, startAtLatest }: { viewKey: string; startAtLatest?: boolean }) {
+    const controls = useThreadScroll(viewKey, { startAtLatest })
     return (
       <main
         ref={(element) => {
@@ -505,6 +505,12 @@ describe('useThreadScroll — route arrival (#761)', () => {
     render(<ArrivalHarness viewKey="run-a:main" />)
 
     expect((document.querySelector('[data-slot="main"]') as HTMLElement).scrollTop).toBe(640)
+  })
+
+  it('opens an explicit latest-status link at the tail despite a saved reading position', () => {
+    saveThreadScroll('manager-source:main', { top: 640, atBottom: false })
+    render(<ArrivalHarness viewKey="manager-source:main" startAtLatest />)
+    expect((document.querySelector('[data-slot="main"]') as HTMLElement).scrollTop).toBe(1_500)
   })
 
   it('lands a live-tail destination at the bottom before passive effects observe it', () => {

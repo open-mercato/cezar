@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import {
+  liveAuthFailures,
   managerReplyAnnouncement,
   accessLabel,
   managerAttention,
@@ -31,6 +33,8 @@ import {
   streamingReply,
   turnKindLabel,
   watchingLine,
+  inlineReferenceText,
+  parseInlineReferences,
 } from './managers'
 import { assistantMessage, managerFixture, userMessage } from '@/routes/manager/manager-fixtures'
 
@@ -88,6 +92,20 @@ describe('managerAttention', () => {
 })
 
 describe('parseManagerText', () => {
+  it('links project/N for a connected project, leaving markers, unknown projects and bare numbers alone', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }]
+    expect(parseManagerText('Assess frontends/2902 vs 2894, other/5 and [[pr:fe-1/3]]', [], named)).toEqual([
+      { kind: 'markdown', text: 'Assess [#2902](#cez-issue/fe-1/2902) vs 2894, other/5 and [#3](#cez-pr/fe-1/3)' },
+    ])
+  })
+
+  it('keeps a markdown link target intact, but links a parenthesised project/N', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }]
+    expect(parseManagerText('[see](frontends/12) or (frontends/2902)', [], named)).toEqual([
+      { kind: 'markdown', text: '[see](frontends/12) or ([#2902](#cez-issue/fe-1/2902))' },
+    ])
+  })
+
   it('makes a task alone on its line a card, and keeps the text around it', () => {
     expect(parseManagerText('Before\n\n[[task:alpha/run-1]]\n\nAfter')).toEqual([
       { kind: 'markdown', text: 'Before' },
@@ -399,5 +417,88 @@ describe('the screen around the chat', () => {
     expect(lastCheckResult([assistantMessage(2, { at: '2026-10-31T09:19:00.000Z' })], at, false)).toBeUndefined()
     expect(lastCheckResult([], at, false)).toBeUndefined()
     expect(lastCheckResult([], undefined, true)).toBeUndefined()
+  })
+})
+
+describe('parseInlineReferences', () => {
+  const projects = [{ id: 'alpha', repoUrl: 'https://github.com/o/alpha' }, { id: 'beta' }]
+
+  it('splits markers out of plain text', () => {
+    expect(parseInlineReferences('Assess [[pr:alpha/2897]] for [[task:beta/run-1]].', projects)).toEqual([
+      { kind: 'text', text: 'Assess ' },
+      { kind: 'pr', projectId: 'alpha', number: 2897 },
+      { kind: 'text', text: ' for ' },
+      { kind: 'task', projectId: 'beta', runId: 'run-1' },
+      { kind: 'text', text: '.' },
+    ])
+  })
+
+  it('resolves a bare #N against the project the text names, and leaves plain numbers alone', () => {
+    expect(parseInlineReferences('[[issue:beta/3]] then PR #12, not 2896', projects)).toEqual([
+      { kind: 'issue', projectId: 'beta', number: 3 },
+      { kind: 'text', text: ' then PR ' },
+      { kind: 'pr', projectId: 'beta', number: 12 },
+      { kind: 'text', text: ', not 2896' },
+    ])
+  })
+
+  it('keeps a bare #N as words when no single project owns it', () => {
+    expect(parseInlineReferences('Merge #12?', projects)).toEqual([{ kind: 'text', text: 'Merge #12?' }])
+  })
+
+  it('turns a connected GitHub URL into a chip', () => {
+    expect(parseInlineReferences('See https://github.com/o/alpha/pull/7', projects)).toEqual([
+      { kind: 'text', text: 'See ' },
+      { kind: 'pr', projectId: 'alpha', number: 7 },
+    ])
+  })
+
+  it('falls back to the words for an unknown project or a malformed number', () => {
+    expect(parseInlineReferences('[[pr:gone/12]] [[issue:alpha/x1]] [[task:gone/abcdef1234]]', projects)).toEqual([
+      { kind: 'text', text: '#12 issue x1 task abcdef12' },
+    ])
+    expect(inlineReferenceText('Assess [[pr:gone/12]]')).toBe('Assess #12')
+  })
+
+  it('resolves project/N and project#N for a connected project, by id or name, and nothing else', () => {
+    const named = [{ id: 'fe-1', name: 'frontends' }, { id: 'beta' }]
+    expect(parseInlineReferences('Should I assess frontends/2902 and check whether it makes 2894 unnecessary?', named)).toEqual([
+      { kind: 'text', text: 'Should I assess ' },
+      { kind: 'issue', projectId: 'fe-1', number: 2902 },
+      { kind: 'text', text: ' and check whether it makes 2894 unnecessary?' },
+    ])
+    expect(parseInlineReferences('PR Beta#7', named)).toEqual([{ kind: 'text', text: 'PR ' }, { kind: 'pr', projectId: 'beta', number: 7 }])
+    // Unknown projects, paths, URLs and dates stay words.
+    for (const text of ['Assess other/2902', 'see src/frontends/2902', 'https://x.dev/frontends/12', 'on 2026/11', 'frontends/2902/files']) {
+      expect(parseInlineReferences(text, named)).toEqual([{ kind: 'text', text }])
+    }
+  })
+
+  it('leaves a name two connected projects share as words, unless an id says which', () => {
+    const clones = [{ id: 'fe-1', name: 'frontends' }, { id: 'fe-2', name: 'frontends' }]
+    expect(parseInlineReferences('Assess frontends/2902', clones)).toEqual([{ kind: 'text', text: 'Assess frontends/2902' }])
+    expect(parseManagerText('Assess frontends/2902', [], clones)).toEqual([{ kind: 'markdown', text: 'Assess frontends/2902' }])
+    expect(parseInlineReferences('Assess fe-2/2902', clones)).toEqual([
+      { kind: 'text', text: 'Assess ' },
+      { kind: 'issue', projectId: 'fe-2', number: 2902 },
+    ])
+  })
+})
+
+describe('liveAuthFailures (spec 2026-11-18-inline-account-reconnect)', () => {
+  it('keeps the newest failure per account', () => {
+    const failed = (id: string, provider: 'claude' | 'codex', profileId: string): ManagerMessage =>
+      ({ id, seq: 0, at: '', kind: 'assistant', text: '', turn: 'chat', streaming: false, commands: [], error: 'x', authFailure: { provider, profileId } })
+    const live = liveAuthFailures([failed('a', 'claude', 'work'), failed('b', 'codex', 'default'), failed('c', 'claude', 'work')])
+    expect([...live].sort()).toEqual(['b', 'c'])
+  })
+
+  it('a reconnect retires the older failures of that account; watch and job turns never go live', () => {
+    const failed = (id: string, turn: 'chat' | 'watch' = 'chat'): ManagerMessage =>
+      ({ id, seq: 0, at: '', kind: 'assistant', text: '', turn, streaming: false, commands: [], error: 'x', authFailure: { provider: 'claude', profileId: 'work' } })
+    const reconnected: ManagerMessage = { id: 'r', seq: 0, at: '', kind: 'assistant', text: '', turn: 'chat', streaming: false, commands: [], reconnectedAt: 't', reconnectedFrom: { provider: 'claude', profileId: 'work' } }
+    expect([...liveAuthFailures([failed('a'), reconnected])]).toEqual([])
+    expect([...liveAuthFailures([failed('a'), reconnected, failed('b')])]).toEqual(['b'])
+    expect([...liveAuthFailures([failed('w', 'watch')])]).toEqual([])
   })
 })

@@ -50,6 +50,8 @@ describe('cockpit project handoff', () => {
     });
     expect(open).toHaveBeenCalledWith(result.url);
     expect(log).toHaveBeenCalledWith(expect.stringContaining(word));
+    // The desktop shell attaches to this exact line (telemetry f3893dd3).
+    expect(log).toHaveBeenLastCalledWith(`cezar-handoff: ${result.url}`);
   });
 
   it('does not open a browser under --no-open and fails closed on malformed errors', async () => {

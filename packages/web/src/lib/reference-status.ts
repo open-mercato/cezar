@@ -8,10 +8,10 @@ import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
  * status whose color says "fine" while its sentence says "blocked" is the exact defect a shared
  * table prevents.
  *
- * `tone` names a role, never a color — `danger` is what the token sheet paints red today. The
- * roles follow the attention grammar (`deriveAttention`, one meaning per hue): blue = waiting on
- * a person, green = the outcome, red = failed, amber = still moving, neutral = parked. Violet is
- * deliberately absent — it is the accent and the running pulse, never a chip at rest.
+ * `tone` names a role, never a color: blue = waiting on a reviewer, green = ready to act on,
+ * purple (`merged`) = landed (a merged PR, a completed issue), red = something to fix (checks, requested changes),
+ * grey = a draft, dark grey (`closed`) = finished without landing, amber = checks running, orange = conflicts. The
+ * accent violet stays absent — it is the running pulse, never a chip at rest.
  */
 export interface ReferenceStatusPresentation {
   /** The two or three words the tooltip leads with. Sentence case, never shouted. */
@@ -24,6 +24,8 @@ export interface ReferenceStatusPresentation {
 export type ReferenceStatusTone =
   | 'success'
   | 'danger'
+  | 'merged'
+  | 'closed'
   | 'neutral'
   | 'pending'
   | 'info'
@@ -40,8 +42,7 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   'review-required': {
     label: 'Waiting for review',
     hint: 'checks are fine, no one has reviewed it yet',
-    // Waiting on a person — the attention model paints that blue (`deriveAttention`), never
-    // violet, which is the running pulse.
+    // Waiting on a person — blue, so it never reads as `ready`'s green.
     tone: 'info',
   },
   'changes-requested': {
@@ -62,36 +63,40 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   ready: {
     label: 'Ready to merge',
     hint: 'open, checks pass, nothing is waiting on a reviewer — your move',
-    // Blue, not green: green is the outcome, and this one still waits on a person (you).
-    tone: 'info',
+    // Green: nothing left but the merge. Blue `review-required` is the state it graduates from.
+    tone: 'success',
   },
   merged: {
     label: 'Merged',
-    hint: 'this landed on its base branch',
-    // The outcome tone, same as a `done` task.
-    tone: 'success',
+    hint: 'merged into its base branch — the work landed',
+    // GitHub's merge purple, so a merged PR never reads as a `ready` one (#2171).
+    tone: 'merged',
   },
   closed: {
     label: 'Closed',
     hint: 'closed without merging — the work did not land',
-    tone: 'danger',
+    // Not red: red is "something to fix" (checks, requested changes), and a closed PR is nobody's
+    // move. A darker grey than the draft's, plus its closed glyph, keeps the two apart.
+    tone: 'closed',
   },
   // ---- issues ---------------------------------------------------------------------------
   open: {
     label: 'Open',
     hint: 'still open on the tracker',
-    // An open issue is a fact, not an outcome: quiet.
-    tone: 'neutral',
+    // Blue like `review-required`: waiting on someone, not green's "act on it now".
+    tone: 'info',
   },
   completed: {
     label: 'Closed as completed',
     hint: 'the issue was resolved',
-    tone: 'success',
+    // Purple like a merged PR: the work landed. Green would read as "ready — act on it".
+    tone: 'merged',
   },
   'not-planned': {
     label: 'Closed as not planned',
     hint: 'the issue was declined — nothing shipped for it',
-    tone: 'neutral',
+    // The closed PR's dark grey: finished without landing.
+    tone: 'closed',
   },
 }
 

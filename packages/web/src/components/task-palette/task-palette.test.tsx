@@ -92,7 +92,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** A second project's task, known to the palettes through the cross-project index. */
@@ -284,6 +284,7 @@ describe('shortcuts', () => {
       splitView: null,
       terminal: { allowed: true, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
       focusComposer: null,
+      focusQuestion: null,
       openFile: vi.fn(),
       markedUnread: vi.fn(),
       ...overrides,

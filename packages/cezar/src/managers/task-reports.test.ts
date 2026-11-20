@@ -48,4 +48,26 @@ describe('followed-task events', () => {
     off();
     expect(store.listenerCount('run')).toBe(0);
   });
+
+  it('tells the engine when a run ends for its question cards: archived, deleted, done; never failed', async () => {
+    const store = Object.assign(new EventEmitter(), { listRuns: () => [run({ id: 'a', status: 'done', finishedAt: '2026-11-13T07:00:00.000Z' })], getRun: () => undefined }) as unknown as RunStore;
+    const ended: string[] = [];
+    const off = watchTaskReports({
+      projectId: () => 'alpha',
+      dataDir: '/data',
+      store,
+      engine: { taskChanged: () => undefined, reconcileProject: () => undefined, taskEnded: (_project, runId, ended_) => ended.push(`${runId}:${ended_ ? (ended_.archived ? 'archived' : ended_.status) : 'deleted'}`) },
+      enabled: () => true,
+    });
+    const emit = (over: Partial<RunRecord> & { id: string }) => store.emit('run', run(over));
+    // Already done at attach: no repeat.
+    emit({ id: 'a', status: 'done', finishedAt: '2026-11-13T07:00:00.000Z' });
+    emit({ id: 'a', status: 'done', finishedAt: '2026-11-13T07:00:00.000Z', archived: true });
+    emit({ id: 'b', status: 'failed', finishedAt: '2026-11-13T08:00:00.000Z' });
+    emit({ id: 'c', status: 'review', finishedAt: '2026-11-13T08:00:00.000Z' });
+    store.emit('deleted', 'c');
+    await vi.waitFor(() => expect(ended).toEqual(['a:archived', 'c:review', 'c:deleted']));
+    off();
+    expect(store.listenerCount('deleted')).toBe(0);
+  });
 });

@@ -70,7 +70,13 @@ function formatFree(bytes: number): string {
  */
 export function diskNote(health: HealthResponse): string | null {
   const disk = health.disk
-  if (!disk || disk.level === 'ok') return null
+  if (!disk) return null
+  // The disk guard already reclaimed every idle tree it could (spec 2026-11-19-worktree-disk-usage).
+  if (disk.guardWarning) {
+    const effect = disk.level === 'critical' ? ' New agents will not start until space is freed.' : ''
+    return `${disk.guardWarning}. Every idle task worktree that could go was reclaimed (branches are kept).${effect} Delete old tasks, free space elsewhere or raise the disk guard's limits.`
+  }
+  if (disk.level === 'ok') return null
   const used = disk.worktreesBytes ? ` Task worktrees use ${formatMem(disk.worktreesBytes)}.` : ''
   const effect = disk.level === 'critical' ? ' New agents will not start until space is freed.' : ''
   return `Only ${formatFree(disk.freeBytes)} free on the disk holding task worktrees.${used}${effect} Reclaim finished tasks' worktrees (branches are kept) or delete old tasks.`
@@ -82,7 +88,9 @@ export function toolsTooltip(health: HealthResponse): string {
   const base = `cezar v${health.version}`
   const blocker = toolsBlocker(health)
   if (blocker) return `${base} · ${blocker}`
-  const low = health.disk?.level === 'low' ? ` · low disk space (${formatFree(health.disk.freeBytes)} free)` : ''
+  const low = health.disk?.guardWarning
+    ? ` · ${health.disk.guardWarning}`
+    : health.disk?.level === 'low' ? ` · low disk space (${formatFree(health.disk.freeBytes)} free)` : ''
   const missing = health.checks.filter((check) => !check.available).map((check) => check.name)
   if (low) return `${base}${low}`
   return missing.length ? `${base} · optional: ${missing.join(', ')} not installed` : base

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon, PanelRightIcon, RefreshCwIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowLeftIcon, BotIcon, ListChecksIcon, LoaderCircleIcon, PanelRightIcon, RefreshCwIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
 
@@ -20,7 +20,8 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
-import { useShellManagerMode } from '@/components/app-shell'
+import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
+import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
 import { CacheStatusChip } from '@/components/cache-status'
 import { CenteredState } from '@/components/centered-state'
@@ -36,26 +37,31 @@ import {
   needsYouCount,
   needsYouLabel,
   parseManagerCommand,
+  liveAuthFailures,
   retryOf,
   streamingReply,
   turnKindLabel,
   watchingLine,
 } from '@/lib/managers'
-import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
+import { useMediaQuery } from '@/lib/use-media-query'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
-import { managerAccessOf, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
+import { managerAccessOf, supersededAskIds, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
+import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
-import { ModelPicker, type ManagerPatch } from './manager-pickers'
-import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
+import { useManagerMyMessages } from './use-manager-my-messages'
+import type { ManagerPatch } from './manager-pickers'
+import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
-import { WatchingPanel } from './manager-watching'
+import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
 
 /** Older history loads this far before the reader reaches the top. */
 const HISTORY_SLACK_PX = 400
@@ -75,6 +81,12 @@ const OPEN_QUESTION = '[data-slot="manager-ask"][data-resolved="false"]'
 /** A per-viewer convenience: the Watching panel folded stays folded on this browser. */
 const WATCHING_KEY = 'cez.manager.watching'
 
+/** Below `lg` the panel is a sheet, open while the URL says so: Back and the edge swipe close it. */
+const WATCHING_PARAM = 'watching'
+const WATCHING_PUSHED = 'managerWatchingPushed'
+/** Tailwind's `lg`: the column shows, so a `?watching=1` there must not mount the sheet's modal overlay. */
+const WIDE_QUERY = '(min-width: 64rem)'
+
 /**
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
  * pages land above it, and report whether the jump button should show.
@@ -93,9 +105,17 @@ function rowAtTop(box: HTMLElement): { row: Element; offset: number } | null {
   return null
 }
 
-function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void) {
+/** A reader's place in each chat they left scrolled up, so a task opened from it comes back to it. */
+const leftAt = new Map<string, number>()
+
+export function forgetChatPlaces(): void {
+  leftAt.clear()
+}
+
+function useChatScroll(id: string, messages: readonly ManagerMessage[], onNearTop: () => void) {
   const ref = useRef<HTMLElement>(null)
   const pinned = useRef(true)
+  const restored = useRef(false)
   const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
   const [away, setAway] = useState(false)
   // A reader away from the tail keeps this row where it was. Older pages land above it and rows
@@ -118,10 +138,23 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (!box) return
     const first = messages[0]?.id
     const { first: lastFirst, height } = previous.current
+    const saved = leftAt.get(id)
+    if (!restored.current && messages.length > 0) {
+      restored.current = true
+      if (saved !== undefined) {
+        pinned.current = false
+        box.scrollTop = saved
+        lastTop.current = box.scrollTop
+        anchor.current = rowAtTop(box)
+        setAway(true)
+        previous.current = { first, height: box.scrollHeight }
+        return
+      }
+    }
     if (pinned.current) box.scrollTop = box.scrollHeight
     else if (!keepPlace(box) && lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
     previous.current = { first, height: box.scrollHeight }
-  }, [messages, keepPlace])
+  }, [id, messages, keepPlace])
 
   // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the
   // tail, any other keeps its row.
@@ -172,18 +205,21 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     lastTop.current = box.scrollTop
     pinned.current = isNearBottom(box, 80)
     anchor.current = pinned.current ? null : rowAtTop(box)
+    if (pinned.current) leftAt.delete(id)
+    else leftAt.set(id, box.scrollTop)
     setAway(!pinned.current)
     if (box.scrollTop < HISTORY_SLACK_PX) onNearTop()
-  }, [onNearTop])
+  }, [id, onNearTop])
 
   const jump = useCallback(() => {
     const box = ref.current
     if (!box) return
     pinned.current = true
     anchor.current = null
+    leftAt.delete(id)
     setAway(false)
     box.scrollTop = box.scrollHeight
-  }, [])
+  }, [id])
 
   // The keyboard shrinks the box, which the content's ResizeObserver cannot see.
   const restick = useCallback(() => {
@@ -204,7 +240,20 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     return true
   }, [])
 
-  return { ref, onScroll, jump, restick, reveal, away }
+  /** Unpin and park one row `inset` px below the top — a "your messages" jump. */
+  const revealAt = useCallback((row: HTMLElement, inset: number) => {
+    const box = ref.current
+    if (!box) return
+    pinned.current = false
+    box.scrollTop += row.getBoundingClientRect().top - box.getBoundingClientRect().top - inset
+    lastTop.current = box.scrollTop
+    // Before its scroll event: a row growing meanwhile must not pull the reader back.
+    anchor.current = rowAtTop(box)
+    leftAt.set(id, box.scrollTop)
+    setAway(true)
+  }, [id])
+
+  return { ref, onScroll, jump, restick, reveal, revealAt, away }
 }
 
 /**
@@ -348,6 +397,35 @@ function useChatRecovery(chat: ReturnType<typeof useManagerChat>, id: string) {
   }, [failed, refetch])
 }
 
+/**
+ * The phone sheet's open state lives in history: opening pushes `?watching=1`, so the system Back
+ * (Android, the iOS edge swipe) pops it shut instead of leaving the chat. Closing from the sheet
+ * pops our own entry, or drops the param in place when the URL arrived with it.
+ */
+function useWatchingSheet(): [boolean, (open: boolean) => void] {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const open = new URLSearchParams(location.search).get(WATCHING_PARAM) === '1'
+  const pushed = (location.state as Record<string, unknown> | null)?.[WATCHING_PUSHED] === true
+  const set = useCallback((next: boolean) => {
+    const params = new URLSearchParams(location.search)
+    if (next === open) return
+    if (next) {
+      if (document.activeElement instanceof HTMLElement && document.activeElement.matches('input, textarea, [contenteditable=true]')) document.activeElement.blur()
+      params.set(WATCHING_PARAM, '1')
+      const state = { ...(location.state as Record<string, unknown> | null), [WATCHING_PUSHED]: true }
+      void navigate({ pathname: location.pathname, search: `?${params}` }, { state })
+    } else if (pushed) {
+      void navigate(-1)
+    } else {
+      params.delete(WATCHING_PARAM)
+      const search = params.toString()
+      void navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true, state: location.state })
+    }
+  }, [location.pathname, location.search, location.state, navigate, open, pushed])
+  return [open, set]
+}
+
 const watchingListeners = new Set<() => void>()
 
 function readWatchingPref(): boolean {
@@ -403,9 +481,9 @@ function BackToList() {
   )
 }
 
-function WorkingSpinner({ className }: { className?: string }) {
+function WorkingSpinner({ label }: { label: string }) {
   return (
-    <span role="status" aria-label="Working" data-slot="manager-working" className={cn('flex shrink-0', className)}>
+    <span role="status" aria-label="Working" title={label ? `Working on ${label}` : undefined} data-slot="manager-working" className="flex shrink-0">
       <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />
     </span>
   )
@@ -425,9 +503,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   useHideShellTopBar()
   useManagerChatOpened(id)
   const queryClient = useQueryClient()
-  // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll.
-  useEffect(() => () => trimManagerChat(queryClient, id), [id, queryClient])
-  const keyboardOpen = useKeyboardOpen()
+  // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll. A
+  // reader left scrolled up keeps them, or their place would not be there to come back to.
+  useEffect(() => () => { if (!leftAt.has(id)) trimManagerChat(queryClient, id) }, [id, queryClient])
   const location = useLocation()
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
   const [focusComposer] = useState(() => shouldFocusComposer(location.state))
@@ -436,7 +514,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const loadOlder = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
-  const scroll = useChatScroll(chat.messages, loadOlder)
+  const scroll = useChatScroll(id, chat.messages, loadOlder)
+  const returnedDecision = useRef('')
+  useEffect(() => {
+    if (!location.hash.startsWith('#decision-') || returnedDecision.current === location.key) return
+    let target: string
+    try { target = decodeURIComponent(location.hash.slice(1)) } catch { return }
+    if (scroll.reveal((box) => Array.from(box.querySelectorAll<HTMLElement>('[id]')).find((node) => node.id === target))) {
+      returnedDecision.current = location.key
+    } else if (hasNextPage) loadOlder()
+  }, [location.hash, location.key, chat.messages, hasNextPage, loadOlder, scroll.reveal])
   useKeyboardInsetVar(scroll.restick)
   // Recovery unmounts Retry: a keyboard user who was on it lands in the transcript, not on <body>.
   const retryFocused = useRef(false)
@@ -449,8 +536,20 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  const superseded = useMemo(() => supersededAskIds(chat.messages), [chat.messages])
+  // "Your messages" (spec 2026-11-17-my-message-navigation): the ↓ button grows into ▲ · 💬 · ▼ | ↓.
+  const myMessages = useManagerMyMessages({
+    id,
+    messages: chat.messages,
+    onCard,
+    hasNextPage: Boolean(hasNextPage),
+    fetchNextPage,
+    scrollRef: scroll.ref,
+    away: scroll.away,
+    revealAt: scroll.revealAt,
+  })
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
-  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
+  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && message.askClosed === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
   const subline = watchingLine({
@@ -460,17 +559,31 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     nextCheckAt: manager.nextCheckAt,
     now: new Date(now),
   })
-  const turnLabel = turnKindLabel(streamingReply(chat.messages))
   const checkNow = useCheckNow(id)
   const settings = useRef<ManagerSettingsHandle>(null)
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
   const watchingId = `manager-watching-${id}`
+  const [sheetParam, setSheetOpen] = useWatchingSheet()
+  // The bottom bar's Tasks is the one way in: no column, and the sheet at every width (a tablet).
+  const tasksTab = useShellTasksTab()
+  // CezarBot's bar is there at every width; a phone PWA's only below `md`.
+  const barEverywhere = tasksTab?.everyWidth === true
+  const wide = useMediaQuery(WIDE_QUERY) && !barEverywhere
+  const sheetOpen = sheetParam && !wide
+  const startedCount = useMemo(() => startedTaskCount(chat.messages), [chat.messages])
+  const openSheet = useRef(setSheetOpen)
+  openSheet.current = setSheetOpen
+  useEffect(() => {
+    tasksTab?.publish({ count: startedCount, expanded: sheetOpen, open: () => openSheet.current(true) })
+  }, [tasksTab, startedCount, sheetOpen])
+  useEffect(() => () => tasksTab?.publish(null), [tasksTab])
 
   const onPatch = useCallback((patch: ManagerPatch) => {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
   }, [update])
 
-  const onDecide = useCallback((actionId: string, decision: 'approve' | 'reject') => decideManagerAction(id, actionId, decision), [id])
+  const onDecide = useCallback<DecideAction>((actionId, decision, opts) => decideManagerAction(id, actionId, decision, opts), [id])
+  useDismissStaleMerges(chat.messages, onDecide)
   const needsYou = useNeedsYouJump(manager, chat, scroll)
   const floating = useFloatingOverlap()
   const waiting = needsYouCount(manager)
@@ -485,6 +598,19 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
 
   // What a card can ask of the chat: the gear, opened on the account picker.
   const chatActions = useMemo<ManagerChatActions>(() => ({ switchAccount: () => settings.current?.openAccount() }), [])
+  const authLive = useMemo(() => liveAuthFailures(chat.messages), [chat.messages])
+  // "Use <other> instead" on a reconnect card: the manager's own account, then the failed turn again.
+  const latestMessages = useRef(chat.messages)
+  latestMessages.current = chat.messages
+  const reconnectSurface = useMemo<ReconnectSurface>(() => ({
+    kind: 'manager',
+    ownId: id,
+    switchTo: async (agentProfile: string) => {
+      await update.mutateAsync({ agentProfile })
+      const failed = retryOf(latestMessages.current)
+      if (failed) await sendManagerMessage(id, failed.text, [])
+    },
+  }), [id, update])
 
   const lastSent = useRef(0)
   const stop = useCallback(() => {
@@ -534,7 +660,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h1 className="truncate text-body font-semibold md:text-base">{manager.name}</h1>
-            {working ? <WorkingSpinner className="md:hidden" /> : null}
+            {working ? <WorkingSpinner label={turnKindLabel(streamingReply(chat.messages))} /> : null}
           </div>
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
@@ -543,7 +669,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now
         </Button>
-        <Button
+        {barEverywhere ? null : <Button
           variant="ghost"
           size="icon-sm"
           className="max-lg:hidden"
@@ -554,7 +680,24 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           onClick={() => setWatchingOpen(!watchingOpen)}
         >
           <PanelRightIcon aria-hidden="true" />
-        </Button>
+        </Button>}
+        {barEverywhere ? null : <Button
+          variant="ghost"
+          size="icon"
+          className={cn('relative shrink-0 max-md:size-11 lg:hidden', tasksTab && 'max-md:hidden')}
+          aria-label={startedCount > 0 ? `Tasks and watching, ${startedCount} tasks` : 'Tasks and watching'}
+          aria-haspopup="dialog"
+          aria-expanded={sheetOpen}
+          data-slot="manager-watching-sheet-toggle"
+          onClick={() => setSheetOpen(true)}
+        >
+          <ListChecksIcon aria-hidden="true" />
+          {startedCount > 0 ? (
+            <span aria-hidden="true" className="absolute top-1.5 right-1.5 flex size-4 items-center justify-center rounded-full bg-primary text-micro font-semibold text-primary-foreground tabular-nums">
+              {startedCount}
+            </span>
+          ) : null}
+        </Button>}
         <ManagerSettings ref={settings} manager={manager} onPatch={onPatch} />
       </header>
 
@@ -577,14 +720,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         </div>
       ) : null}
 
-      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame. */}
+      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame.
+          `relative`: a row's `sr-only` text is positioned in here, or it stretches the shell's
+          scroller below the composer. */}
       <section
         ref={scroll.ref}
         data-slot="manager-transcript"
         aria-label={`Conversation with ${manager.name}`}
         tabIndex={0}
         onScroll={scroll.onScroll}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
         {/* The floating jump button sits over the tail: room for exactly it, at any width. */}
         <div
@@ -630,6 +775,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </p>
           ) : null}
           <ManagerChatActionsContext.Provider value={chatActions}>
+            <ReconnectSurfaceContext.Provider value={reconnectSurface}>
             <PrTitlesContext.Provider value={prTitles}>
               {chat.messages.map((message, index) => (onCard.has(message.id) ? null : (
                 <ManagerMessageRow
@@ -638,11 +784,14 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   origin={origin}
                   onDecide={onDecide}
                   projects={connected}
+                  superseded={superseded.has(message.id)}
+                  authLive={authLive.has(message.id)}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
                 />
               )))}
             </PrTitlesContext.Provider>
+            </ReconnectSurfaceContext.Provider>
           </ManagerChatActionsContext.Provider>
         </div>
       </section>
@@ -650,7 +799,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
 
       <div className="relative mx-auto w-full max-w-[860px] px-3 pb-2 md:px-6">
         <div ref={floating.ref} data-slot="manager-floating" className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2 *:pointer-events-auto empty:hidden">
-          {scroll.away ? (
+          {scroll.away && myMessages.items.length > 0 ? <MyMessagesPill nav={myMessages} onLatest={scroll.jump} latestLabel="Scroll to bottom" latestSlot="manager-scroll-bottom" /> : null}
+          {scroll.away && myMessages.items.length === 0 ? (
             <button
               type="button"
               aria-label="Scroll to bottom"
@@ -662,9 +812,25 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </button>
           ) : null}
         </div>
-        {/* Only the user's own prompts (gear → Prompt buttons); none, no row and no room kept. */}
-        {quickPrompts.length > 0 && draft.trim() === '' && !asking ? (
-          <div data-slot="manager-chips" className="flex gap-1.5 overflow-x-auto pt-1 pb-2.5">
+        {/* The user's own prompts (gear → Prompt buttons), plus the phone's Tasks chip; neither, no row and no room kept. */}
+        {(quickPrompts.length > 0 || (startedCount > 0 && !tasksTab)) && draft.trim() === '' && !asking ? (
+          // Scrolls sideways rather than wrapping: a narrow phone keeps one row above the composer.
+          <div data-slot="manager-chips" className={cn('flex gap-1.5 overflow-x-auto pt-1 pb-2.5 [scrollbar-width:none]', quickPrompts.length === 0 && 'md:hidden')}>
+            {startedCount > 0 && !tasksTab ? (
+              // The thumb's way to the tasks: the header button sits out of reach (design: one thumb).
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-haspopup="dialog"
+                data-slot="manager-chip-tasks"
+                className="shrink-0 rounded-full pointer-coarse:h-11 pointer-coarse:px-4 md:hidden"
+                onClick={() => setSheetOpen(true)}
+              >
+                <ListChecksIcon aria-hidden="true" />
+                Tasks · {startedCount}
+              </Button>
+            ) : null}
             {quickPrompts.map(({ label, prompt }, index) => (
               <Button
                 key={`${index}-${label}`}
@@ -682,9 +848,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         ) : null}
         <Composer
           key={id}
-          compact
+          dictation={false}
           autoFocus={focusComposer}
-          footerEnd={<div className="flex min-w-0 pointer-coarse:max-md:[&>button]:h-11"><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -694,29 +859,13 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           slashCommands={MANAGER_COMMANDS}
           placeholder={`Message ${manager.name}, or / for commands`}
           ariaLabel={`Message ${manager.name}`}
+          textareaClassName="max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)]"
           sendShortcut="↵"
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
-        {keyboardOpen ? null : (
-          // One status line (design, Proposal 10): the model chip, then what the turn is doing.
-          // Phones: the interval lives in the gear and the spinner beside the name.
-          <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center gap-2 text-xs text-muted-foreground max-md:hidden">
-            <ModelPicker {...pickModel(manager)} onChange={onPatch} chip />
-            {working ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <span role="status" aria-label="Working" data-slot="manager-working" className="flex min-w-0 items-center gap-1.5">
-                  <StatusDot tone="violet" pulse />
-                  <span className="truncate">Working{turnLabel ? ` on ${turnLabel}` : '…'}</span>
-                </span>
-                <Button variant="ghost" size="xs" data-slot="manager-footer-stop" onClick={stop}>Stop</Button>
-              </>
-            ) : null}
-          </div>
-        )}
       </div>
     </div>
-    {watchingOpen ? (
+    {watchingOpen && !barEverywhere ? (
       <WatchingPanel
         id={watchingId}
         manager={manager}
@@ -726,6 +875,19 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         onAddJob={() => settings.current?.openJobs()}
       />
     ) : null}
+    <WatchingSheet
+      open={sheetOpen}
+      everyWidth={barEverywhere}
+      onOpenChange={setSheetOpen}
+      manager={manager}
+      messages={chat.messages}
+      loadedAll={chat.data !== undefined && !hasNextPage}
+      onPatch={onPatch}
+      onAddJob={() => {
+        setSheetOpen(false)
+        settings.current?.openJobs()
+      }}
+    />
     </div>
   )
 }

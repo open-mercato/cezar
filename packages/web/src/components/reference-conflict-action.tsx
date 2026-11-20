@@ -138,15 +138,25 @@ export function prOwnerRun<Run extends TaskReferenceInput & { projectId: string;
   number: number,
   repoBase?: string,
 ): Run | undefined {
-  let best: { run: Run; rank: number } | undefined
+  return prTaskRuns(runs, projectId, number, repoBase)[0]
+}
+
+/** Every task carrying pull request `#number`, in `prOwnerRun`'s order: the owner first. */
+export function prTaskRuns<Run extends TaskReferenceInput & { projectId: string; archived: boolean; createdAt: string }>(
+  runs: readonly Run[],
+  projectId: string,
+  number: number,
+  repoBase?: string,
+): Run[] {
+  const ranked: Array<{ run: Run; rank: number }> = []
   for (const run of runs) {
     if (run.projectId !== projectId) continue
     const tier = ownershipTier(run, number, repoBase)
     if (tier === undefined) continue
-    const rank = tier * 2 + (run.archived ? 1 : 0)
-    if (!best || rank < best.rank || (rank === best.rank && run.createdAt > best.run.createdAt)) best = { run, rank }
+    ranked.push({ run, rank: tier * 2 + (run.archived ? 1 : 0) })
   }
-  return best?.run
+  ranked.sort((a, b) => a.rank - b.rank || (a.run.createdAt > b.run.createdAt ? -1 : a.run.createdAt < b.run.createdAt ? 1 : 0))
+  return ranked.map((entry) => entry.run)
 }
 
 /** 0 created, 1 declared, 2 shown only; `undefined` when the run does not carry the PR at all. */

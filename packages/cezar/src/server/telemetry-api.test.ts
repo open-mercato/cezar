@@ -48,7 +48,7 @@ describe('telemetry routes', () => {
   });
 
   const post = (path: string, body: unknown, over: Partial<ServerDeps> = {}) =>
-    apiRequest(createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over }), path, {
+    apiRequest(createApp({ repoRoot, store, manager: { reclaimWorktreesOf: async () => [] } as unknown as RunManager, version: '0.0.0-test', ...over }), path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -183,7 +183,7 @@ describe('telemetry routes', () => {
   });
 
   describe('consent', () => {
-    const app = () => createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+    const app = () => createApp({ repoRoot, store, manager: { reclaimWorktreesOf: async () => [] } as unknown as RunManager, version: '0.0.0-test' });
     const consentOf = async (res: Response) => telemetryConsentSchema.parse(await res.json());
     const put = (body: unknown) =>
       apiRequest(app(), '/api/v1/telemetry/consent', {

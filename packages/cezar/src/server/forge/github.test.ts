@@ -62,6 +62,7 @@ import {
   TIMELINE_EVENT_KINDS,
 } from './github.ts';
 import type { ForgeComment } from './types.ts';
+import { onPrClosed } from './pr-closed.ts';
 
 /** `rollupToChecks` collapses a `gh … --json statusCheckRollup` array — already zod-validated
  *  via `ghCheckRunSchema` at the call site — down to the single enum the GitHub tab renders,
@@ -2861,6 +2862,23 @@ describe('fetchGithubRefStatus', () => {
     const second = await fetchGithubRefStatus('/repo/ref-status-cache', { prs: [7] });
     expect(second.available && second.prs[7]).toBe('merged');
     expect(execFileMock.mock.calls.length).toBe(calls); // nothing spawned the second time
+  });
+
+  it('reports a fresh merged or closed PR to the closed-PR bus, never an open one or a cached read', async () => {
+    const heard: Array<[string, number, string]> = [];
+    const stop = onPrClosed((root, number, state) => heard.push([root, number, state]));
+    try {
+      stubGh(JSON.stringify({ data: { repository: {
+        r0: { __typename: 'PullRequest', state: 'MERGED', isDraft: false, reviewDecision: null, commits: { nodes: [] } },
+        r1: { __typename: 'PullRequest', state: 'CLOSED', isDraft: false, reviewDecision: null, commits: { nodes: [] } },
+        r2: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, commits: { nodes: [] } },
+      } } }));
+      await fetchGithubRefStatus('/repo/ref-status-bus', { prs: [7, 8, 9] });
+      await fetchGithubRefStatus('/repo/ref-status-bus', { prs: [7, 8, 9] });
+      expect(heard).toEqual([['/repo/ref-status-bus', 7, 'merged'], ['/repo/ref-status-bus', 8, 'closed']]);
+    } finally {
+      stop();
+    }
   });
 
   it('names the conflicting pull requests beside the statuses, and only those', async () => {

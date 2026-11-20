@@ -1,0 +1,67 @@
+{
+  "description": "Ed25519 relay proofs. A randomized signer verifies `sig`; a deterministic one must reproduce it.",
+  "sockets": [
+    {
+      "name": "cezar socket, the spec vector",
+      "seed": "0101010101010101010101010101010101010101010101010101010101010101",
+      "key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
+      "id": "JG0cluinRjn-lvNKCdLU5w",
+      "time": 1793491200,
+      "proofString": "cezar-relay-v1\ncezar\nJG0cluinRjn-lvNKCdLU5w\n-\n1793491200",
+      "sig": "V68ncyA98yXD5r524pXn17WZs8PNJKCytyw41XCAcEceSEkQJyYg99SHobPMZKg_qtS2VVmoblfOyvCV9eY4Dg"
+    },
+    {
+      "name": "phone socket",
+      "seed": "d687133e9dd87fc9605908ee9d6b92bab92d3cecc624302bad9861d4f091012d",
+      "key": "PGCbOdpFLpZ9B_sUgEosPNfGaN2BCQQ3jXNdPOAoog4",
+      "id": "OQrobII5P4CvRN5m6Y7fDA",
+      "time": 1793491200,
+      "proofString": "cezar-relay-v1\nphone\nqFATNoaI_4KB2lyOPFPoXg\nOQrobII5P4CvRN5m6Y7fDA\n1793491200",
+      "sig": "lu0MJYEoy2jeNX8PQb3JhP2Tq4HJ1Lrv_NzwcKPeC8vuSzhjnoqj8aTbxDhz301NsnsN0t53rZxbFTVVLGMUBA"
+    },
+    {
+      "name": "rendezvous, cezar side",
+      "seed": "4226510a75a9bd4ded0be95d539d3d4b31229139d6f269cb5e08d7b1e7450790",
+      "key": "-3t7tF6F3PdgAgSdOSY8MGTHvjKJFGjIM94j-0yL_OE",
+      "id": "qFATNoaI_4KB2lyOPFPoXg",
+      "time": 1793491200,
+      "proofString": "cezar-relay-v1\npair\nkdex4F9AEAix6sRGykR5-pX0wGKLrMCwkPXxwgkwEGU\n-\n1793491200",
+      "sig": "MurUXBNDuG7U_HcaGS5xvrQm-s_wXY83WdnTk1-8xA5r9lXlkMVbH-t-_5SlAm7xkQN_gQIPsRBAzY3oYEZVAg"
+    }
+  ],
+  "posts": [
+    {
+      "name": "POST /v1/push-grants",
+      "seed": "d687133e9dd87fc9605908ee9d6b92bab92d3cecc624302bad9861d4f091012d",
+      "key": "PGCbOdpFLpZ9B_sUgEosPNfGaN2BCQQ3jXNdPOAoog4",
+      "id": "OQrobII5P4CvRN5m6Y7fDA",
+      "time": 1793491200,
+      "proofString": "cezar-relay-post-v1\n/v1/push-grants\nf1bdc2e6dd7fad227de39c199c1b57dc32c1aece746891e393cc460be94945ab\n-\n1793491200",
+      "sig": "RnB_JjlTB7-6GNk52a3eoOGJruXGeu8io5-XCh8h_zjEk0Gmq_tWxFp6tartd8uwhx2f-hpoNuSIj6udBsnGDw",
+      "path": "/v1/push-grants",
+      "body": "{\"platform\":\"android\",\"token\":\"fcm-token\",\"cezarKey\":\"-3t7tF6F3PdgAgSdOSY8MGTHvjKJFGjIM94j-0yL_OE\"}"
+    },
+    {
+      "name": "POST /v1/push-grants/revoke",
+      "seed": "d687133e9dd87fc9605908ee9d6b92bab92d3cecc624302bad9861d4f091012d",
+      "key": "PGCbOdpFLpZ9B_sUgEosPNfGaN2BCQQ3jXNdPOAoog4",
+      "id": "OQrobII5P4CvRN5m6Y7fDA",
+      "time": 1793491200,
+      "proofString": "cezar-relay-post-v1\n/v1/push-grants/revoke\nc223db27bdcb16d5af6e4f7a68f458d1241f168eb0ba61578c3a2639fb080fb6\n-\n1793491200",
+      "sig": "v1_Y93tSECr62M9fMY0QHL_JpksT_PnqFOw_IjHgC5URN5IjhIJcBBlNHTegbsvFSpDOTa73nDefFJJYF3KmBw",
+      "path": "/v1/push-grants/revoke",
+      "body": "{\"grant\":\"opaque-grant\"}"
+    },
+    {
+      "name": "POST /v1/push",
+      "seed": "4226510a75a9bd4ded0be95d539d3d4b31229139d6f269cb5e08d7b1e7450790",
+      "key": "-3t7tF6F3PdgAgSdOSY8MGTHvjKJFGjIM94j-0yL_OE",
+      "id": "qFATNoaI_4KB2lyOPFPoXg",
+      "time": 1793491200,
+      "proofString": "cezar-relay-post-v1\n/v1/push\ndd0769423de3da032e835b1f196f09a28ac4cde90ba4c49b6e38d03b966e444b\n-\n1793491200",
+      "sig": "i7LnxKzBEsTFUfR8Gp4puaWPdXoV-HQM0DDVIHV1RzqW6psw-DNTkeO4vaVUOjHtB0sp5cSxYd3z6GO1D1drAg",
+      "path": "/v1/push",
+      "body": "{\"v\":1,\"grant\":\"opaque-grant\",\"kind\":\"attention\",\"count\":3,\"id\":\"jIV5T8SyKxbmMunI6j6XWA\",\"ts\":1793491200}"
+    }
+  ]
+}

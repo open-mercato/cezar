@@ -17,13 +17,14 @@ import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, type ManagerAttention } from '@/lib/managers'
 import { rememberTasksLocation, tasksHref } from '@/lib/manager-location'
-import { showsBottomBar } from '@/lib/phone-app'
+import { isCezarShell } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { QueryClientContext } from '@tanstack/react-query'
 import { AccountUsageWidget } from '@/components/account-usage-widget'
 import { AddProjectMenu } from '@/components/add-project-menu'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
+import { DeviceAvatarLink, DeviceChip } from '@/components/device-avatar'
 import { ModeRailSwitch, ModeSwitch, type ModeSwitchProps } from '@/components/mode-switch'
 import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
@@ -44,10 +45,7 @@ import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
-/** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
- *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
- *  for CSS and once for the state machine. */
-const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
+import { useCompactNavigation } from '@/lib/use-compact-navigation'
 
 export type RepoChip = {
   name: string
@@ -93,6 +91,8 @@ export type AppShellProps = {
   starCount?: number | null
   /** The active project's "Current tasks" (`CurrentTasksContainer`). */
   currentTasks?: ReactNode
+  /** The Workspace group's Questions row when managers are off (spec 2026-11-17-questions-inbox). */
+  workspaceQuestions?: ReactNode
   /** The project switcher control under the brand (`ProjectSwitcher`). Absent — the registry
    *  still loading, or a bare shell — the plain repo chip stands in. */
   switcher?: ReactNode
@@ -114,6 +114,12 @@ export type AppShellProps = {
   offerAddProject?: boolean
   /** The Tools submenu's body (`ToolsMenuItems`). */
   toolsMenu?: ReactNode
+  /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
+  connectPhone?: ReactNode
+  /** Footer controls: the Phones icon beside the version chip, once a phone is paired. Gates itself. */
+  phonesLink?: ReactNode
+  /** The folded rail's Phones icon, above the expand button. Gates itself. */
+  phonesRail?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
@@ -141,6 +147,8 @@ export type AppShellProps = {
   footerBanner?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
+  /** This computer's name (`workspace/config`): CezarBot's header avatar and sidebar chip. */
+  computerName?: string
   /** Managers gating (spec 2026-10-31-managers): the Projects | Manager switch exists only when
    *  health says so. Defaults off, unlike the nav gates: it is new chrome, not a nav item. */
   managersAvailable?: boolean
@@ -173,6 +181,20 @@ const ShellManagerModeContext = React.createContext(false)
 
 export function useShellManagerMode(): boolean {
   return React.useContext(ShellManagerModeContext)
+}
+
+/** What a manager chat hands the bottom bar's Tasks tab: the tasks it started, and their sheet. */
+export type ManagerTasksTab = { count: number; open: () => void; expanded: boolean }
+
+/** Set while the phone bottom bar is mounted: a chat publishes its tasks there, `null` on leave.
+ *  `everyWidth`: the bar is the shell's only navigation (compact width or CezarBot), not only below `md`. */
+export type ShellTasksTab = { publish: (tab: ManagerTasksTab | null) => void; everyWidth: boolean }
+
+const ShellTasksTabContext = React.createContext<ShellTasksTab | null>(null)
+
+/** The bottom bar's Tasks tab, when there is one: the chat drops its own ways to the tasks then. */
+export function useShellTasksTab(): ShellTasksTab | null {
+  return React.useContext(ShellTasksTabContext)
 }
 
 const AppShellMain = React.memo(function AppShellMain({
@@ -239,6 +261,7 @@ export const AppShell = React.memo(function AppShell({
   latestVersion = null,
   starCount = null,
   currentTasks,
+  workspaceQuestions,
   switcher,
   hostWidget,
   whatsNew,
@@ -247,6 +270,9 @@ export const AppShell = React.memo(function AppShell({
   linkProjectId = null,
   offerAddProject = false,
   toolsMenu,
+  connectPhone,
+  phonesLink,
+  phonesRail,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
@@ -257,6 +283,7 @@ export const AppShell = React.memo(function AppShell({
   footerBanner,
   brandName = 'cezar',
   brandLogoUrl = null,
+  computerName,
   managersAvailable = false,
   managerAttention = null,
   managerTo = '/manager',
@@ -283,13 +310,19 @@ export const AppShell = React.memo(function AppShell({
   // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
   const chromeless = isSettingsPathname(pathname)
   const managerMode = managersAvailable && isManagerPathname(pathname)
-  // The Back to manager link is the way home from here (spec 2026-10-31-managers, Phones).
   const inTaskThread = matchPath({ path: '/tasks/:id/*', end: true }, areaPathname) !== null
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const openMenu = React.useCallback(() => setMenuOpen(true), [])
-  const [phoneApp] = React.useState(showsBottomBar)
-  const bottomBar = phoneApp && managersAvailable && !chromeless && !inTaskThread
+  const shellRef = React.useRef<HTMLDivElement>(null)
+  const compact = useCompactNavigation(shellRef)
+  const [shellApp] = React.useState(isCezarShell)
+  const phoneNav = compact || (shellApp && managersAvailable)
+  const bottomBar = phoneNav && managersAvailable && !chromeless
+  // A thread keeps the bar, as a manager chat does, and its own header is the top row.
+  const threadBar = bottomBar && inTaskThread
+  const [managerTasks, setManagerTasks] = React.useState<ManagerTasksTab | null>(null)
+  const tasksTab = React.useMemo(() => (bottomBar ? { publish: setManagerTasks, everyWidth: phoneNav } : null), [bottomBar, phoneNav])
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
@@ -319,18 +352,10 @@ export const AppShell = React.memo(function AppShell({
     setMenuOpen(false)
   }, [pathname])
 
-  // The drawer must not outlive its breakpoint: widening past `md` reveals the real sidebar, and
-  // an open drawer would leave a focus-trapping modal over an already-visible nav.
+  // A wider shell reveals the sidebar: close its modal drawer and release the focus trap.
   React.useEffect(() => {
-    const query = window.matchMedia?.(DESKTOP_MEDIA_QUERY)
-    if (!query) return
-    if (query.matches) setMenuOpen(false)
-    const onChange = (event: MediaQueryListEvent) => {
-      if (event.matches) setMenuOpen(false)
-    }
-    query.addEventListener('change', onChange)
-    return () => query.removeEventListener('change', onChange)
-  }, [])
+    if (!phoneNav) setMenuOpen(false)
+  }, [phoneNav])
 
   const items = React.useMemo(
     () => visibleNavItems({
@@ -360,6 +385,7 @@ export const AppShell = React.memo(function AppShell({
     latestVersion,
     starCount,
     currentTasks,
+    workspaceQuestions,
     switcher,
     hostWidget,
     whatsNew,
@@ -367,9 +393,13 @@ export const AppShell = React.memo(function AppShell({
     healthReason,
     offerAddProject: offerAddProject && !singleProject,
     toolsMenu,
+    connectPhone,
+    phonesLink,
+    phonesRail,
     singleProject,
     brandName,
     brandLogoUrl,
+    computerName,
     managersAvailable,
     managerMode,
     managerAttention,
@@ -387,15 +417,17 @@ export const AppShell = React.memo(function AppShell({
   const [folded] = useSidebarFolded()
   // Folded by the user or held by a Focus view: either way the sidebar is the icon rail, and the
   // project it is about moves into the main column's header.
-  const rail = !chromeless && (railed || folded)
+  const rail = !chromeless && !phoneNav && (railed || folded)
   // Off-project pages keep the sidebar inside the project the user came from (parity with main).
   const linkScope = pathnameProjectId(pathname) === null ? linkProjectId : null
 
   return (
     <div
+      ref={shellRef}
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
       data-chromeless={chromeless ? '' : undefined}
+      data-phone-nav={phoneNav ? '' : undefined}
       // The New-task FAB is fixed to the viewport: this lifts it off the bar's More item.
       style={bottomBar ? ({ '--phone-bar': '3.5rem' } as React.CSSProperties) : undefined}
       className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
@@ -419,7 +451,7 @@ export const AppShell = React.memo(function AppShell({
         </div>
       ) : null}
       <LinkScope projectId={linkScope}>
-        {chromeless ? null : railed ? (
+        {chromeless || phoneNav ? null : railed ? (
           <FocusSidebarRail {...nav} desktop={desktop} />
         ) : (
           <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
@@ -430,6 +462,12 @@ export const AppShell = React.memo(function AppShell({
         className={cn(
           'relative grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
           desktop === 'macos' && 'pt-[28px]',
+          // At `md+` the column pads the status bar unless the shell's top bar does (phoneNav). A
+          // manager chat hides that bar but pads only below `md`, so the column takes over. Settings
+          // pads its own. A thread on the bar has no shell header at any width.
+          desktop !== 'macos' && !chromeless && (threadBar
+            ? 'pt-[env(safe-area-inset-top)]'
+            : phoneNav ? 'md:has-[>[data-slot=mobile-top-bar][hidden]]:pt-[env(safe-area-inset-top)]' : 'md:pt-[env(safe-area-inset-top)]'),
         )}
       >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
@@ -438,14 +476,19 @@ export const AppShell = React.memo(function AppShell({
             keeps the scroller in row 3 either way. */}
         {chromeless ? null : (
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <MobileTopBar
-              title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
-              attention={managersAvailable && !managerMode ? managerAttention : null}
-            />
+            {threadBar ? null : (
+              <MobileTopBar
+                title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
+                attention={managersAvailable && !managerMode ? managerAttention : null}
+                // The compact navigation keeps this bar at every width; the sidebar replaces it otherwise.
+                everyWidth={phoneNav}
+                computerName={computerName}
+              />
+            )}
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
             <LinkScope projectId={linkScope}>
-              <MobileNavDrawer {...nav} onNavigate={closeMenu} />
+              <MobileNavDrawer {...nav} onNavigate={closeMenu} everyWidth={phoneNav} />
             </LinkScope>
           </Sheet>
         )}
@@ -464,7 +507,9 @@ export const AppShell = React.memo(function AppShell({
         ) : null}
 
         <ShellManagerModeContext.Provider value={managerMode}>
-          <AppShellMain mainRef={mainRef}>{children}</AppShellMain>
+          <ShellTasksTabContext.Provider value={tasksTab}>
+            <AppShellMain mainRef={mainRef}>{children}</AppShellMain>
+          </ShellTasksTabContext.Provider>
         </ShellManagerModeContext.Provider>
         {/* Out of flow (it positions itself against this column); never in manager mode. */}
         {managersAvailable && !managerMode ? managerHeads : null}
@@ -483,6 +528,8 @@ export const AppShell = React.memo(function AppShell({
               manager={managerMode}
               attention={managerAttention}
               managerTo={managerTo}
+              managerTasks={managerMode ? managerTasks : null}
+              everyWidth={phoneNav}
             />
           ) : null}
         </div>
@@ -535,6 +582,7 @@ type NavProps = {
   latestVersion: string | null
   starCount: number | null
   currentTasks?: ReactNode
+  workspaceQuestions?: ReactNode
   switcher?: ReactNode
   hostWidget?: ReactNode
   whatsNew?: ReactNode
@@ -542,8 +590,15 @@ type NavProps = {
   healthReason: string | null
   offerAddProject: boolean
   toolsMenu?: ReactNode
+  /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
+  connectPhone?: ReactNode
+  /** Footer controls: the Phones icon beside the version chip, once a phone is paired. Gates itself. */
+  phonesLink?: ReactNode
+  /** The folded rail's Phones icon, above the expand button. Gates itself. */
+  phonesRail?: ReactNode
   brandName: string
   brandLogoUrl: string | null
+  computerName?: string
   singleProject: boolean
   managersAvailable: boolean
   managerMode: boolean
@@ -562,7 +617,6 @@ function modeSwitchProps(props: NavProps, onNavigate?: () => void): ModeSwitchPr
     managerMode: props.managerMode,
     projectsTo: props.projectsTo,
     managerTo: props.managerSwitchTo,
-    projectsAttention: Boolean(props.nowCount),
     managerAttention: props.managerAttention,
     onNavigate,
   }
@@ -678,10 +732,14 @@ function SidebarIconRail({
         desktop === 'macos' && 'pt-[36px]',
       )}
     >
-      <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
-        {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
-      </span>
-      {/* The folded Projects | Manager switch: two stacked icons above the nav, each with its dot. */}
+      {isCezarShell() ? (
+        <DeviceAvatarLink name={props.computerName} size={28} slot="rail-device-avatar" className="my-0.5" />
+      ) : (
+        <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
+          {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
+        </span>
+      )}
+      {/* The folded Projects | Manager switch: two stacked icons above the nav, Manager with its dot. */}
       {managersAvailable ? <ModeRailSwitch {...modeSwitchProps(props)} /> : null}
       {managerMode ? (
         // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
@@ -754,6 +812,7 @@ function SidebarIconRail({
           </nav>
         </>
       )}
+      {props.phonesRail ? <div className="mt-auto flex shrink-0 flex-col items-center">{props.phonesRail}</div> : null}
       <Button
         type="button"
         variant="ghost"
@@ -765,7 +824,8 @@ function SidebarIconRail({
         title={expandTitle}
         autoFocus={autoFocus}
         onClick={onExpand}
-        className="mt-auto shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground"
+        // With a phones slot, its wrapper takes the push to the foot; the button sits under it.
+        className={cn('shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground', props.phonesRail ? 'mt-1' : 'mt-auto')}
       >
         <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
       </Button>
@@ -859,10 +919,10 @@ export function managerReturn(
 }
 
 /** The `<md` drawer: the shared `SidebarDrawer` around the SAME content the column renders. */
-const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () => void }) {
+const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, everyWidth, ...props }: NavProps & { onNavigate: () => void; everyWidth: boolean }) {
   return (
-    <SidebarDrawer slot="mobile-nav-drawer" title="Navigation">
-      {(closeButton) => <SidebarContent {...props} onNavigate={onNavigate} headerAction={closeButton} />}
+    <SidebarDrawer slot="mobile-nav-drawer" title="Navigation" everyWidth={everyWidth}>
+      {(closeButton) => <SidebarContent {...props} mobile onNavigate={onNavigate} headerAction={closeButton} />}
     </SidebarDrawer>
   )
 })
@@ -880,6 +940,7 @@ function SidebarContent({
   onNavigate,
   headerAction,
   compactHeader = false,
+  mobile = false,
   ...props
 }: NavProps & {
   brandName: string
@@ -892,11 +953,13 @@ function SidebarContent({
   headerAction?: ReactNode
   /** Under the desktop shell's title strip the brand row already has 28px above it. */
   compactHeader?: boolean
+  mobile?: boolean
 }) {
   const {
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
-    newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
-    offerAddProject, toolsMenu, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
+    newNavItems, version, latestVersion, starCount, currentTasks, workspaceQuestions, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
+    offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
+    computerName,
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
   const workspace = items.filter((item) => item.group === 'workspace')
@@ -907,7 +970,8 @@ function SidebarContent({
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className={cn('flex items-center gap-[9px] px-3.5 pb-2', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
-        <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
+        {/* In CezarBot the computer's chip takes the brand's place (switcher spec, p1Ipad). */}
+        {isCezarShell() ? <DeviceChip name={computerName} onNavigate={onNavigate} /> : <BrandLockup name={brandName} logoUrl={brandLogoUrl} />}
         {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
       </div>
 
@@ -934,7 +998,7 @@ function SidebarContent({
             </div>
           ) : null}
 
-          <div className="px-3 pb-2">
+          {!(managersAvailable && (mobile || isCezarShell())) ? <div className="px-3 pb-2">
             <Button asChild variant="primary" className="relative w-full justify-center">
               {/* A Router Link since R4 Step 1.1: the React /new composer is real. */}
               <Link to="/new" onClick={onNavigate}>
@@ -949,7 +1013,7 @@ function SidebarContent({
                 </kbd>
               </Link>
             </Button>
-          </div>
+          </div> : null}
 
           <div data-slot="sidebar-scroll" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
             <nav aria-label="Main" className="px-2.5">
@@ -976,6 +1040,7 @@ function SidebarContent({
               <h2 className="px-3 pt-3 pb-1 eyebrow text-soft-foreground">Workspace</h2>
               <DashboardLink onNavigate={onNavigate} />
               <AllTasksLink active={globalTasks} onNavigate={onNavigate} />
+              {workspaceQuestions ? <SidebarNavigateContext.Provider value={onNavigate}>{workspaceQuestions}</SidebarNavigateContext.Provider> : null}
               {workspace.map((item) => (
                 <SidebarNavRow
                   key={item.to}
@@ -1003,6 +1068,8 @@ function SidebarContent({
         starCount={starCount}
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}
+        connectPhone={connectPhone}
+        phonesLink={phonesLink}
         whatsNew={whatsNew}
         whatsNewUnseen={whatsNewUnseen}
         healthReason={healthReason}
@@ -1185,11 +1252,11 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title, attention = null }: { title: string; attention?: ManagerAttention | null }) {
+function MobileTopBar({ title, attention = null, everyWidth = false, computerName }: { title: string; attention?: ManagerAttention | null; everyWidth?: boolean; computerName?: string }) {
   return (
     <header
       data-slot="mobile-top-bar"
-      className="row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)] md:hidden"
+      className={cn('row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)]', !everyWidth && 'md:hidden')}
     >
       <div className="flex h-11 items-center gap-2.5 px-3">
         {/* A real SheetTrigger rather than an onClick that flips our state: it is what registers
@@ -1215,7 +1282,10 @@ function MobileTopBar({ title, attention = null }: { title: string; attention?: 
         </SheetTrigger>
         <span className="truncate text-body font-semibold">{title}</span>
         {/* SLOT — the run status dot / kebab land with the thread view (Step R3). */}
-        <div data-slot="mobile-status" className="ml-auto flex items-center gap-2" />
+        <div data-slot="mobile-status" className="ml-auto flex items-center gap-2">
+          {/* CezarBot's account switcher: this computer's avatar opens the native list. */}
+          {isCezarShell() ? <DeviceAvatarLink name={computerName} size={32} slot="mobile-device-avatar" /> : null}
+        </div>
       </div>
     </header>
   )

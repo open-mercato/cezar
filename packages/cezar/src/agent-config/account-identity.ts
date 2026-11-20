@@ -61,6 +61,11 @@ const UNSUPPORTED_IDENTITY_REASON: Record<Exclude<ProviderId, 'claude' | 'codex'
   kimi: 'cezar does not yet read Kimi Code account details from its config folder.',
 };
 
+/** The runners whose identity `readAccountIdentity` can read: the complement of the table above. */
+export function readsAccountIdentity(provider: ProviderId): boolean {
+  return !Object.hasOwn(UNSUPPORTED_IDENTITY_REASON, provider);
+}
+
 /** Read a JSON file under the cap. `null` for absent, unreadable, oversized or malformed. */
 async function readJsonCapped(path: string): Promise<Record<string, unknown> | null> {
   try {
@@ -279,6 +284,9 @@ async function readCursorIdentity(
   }
   if (!authenticated) {
     return { available: false, reason: NOT_SIGNED_IN, fields: [] };
+  }
+  if (fields.length === 0) {
+    return { available: false, reason: 'Cursor CLI reports a login but does not expose account details. Verify connection or sign in again to check the account.', fields: [] };
   }
   return { available: true, fields };
 }

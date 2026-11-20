@@ -94,7 +94,9 @@ describe('recover() contains backend session failures (#562)', () => {
     store.updateRun(record.id, { status: 'running', currentStepId: 'work' });
     const manager = new RunManager(store, repoRoot);
     await manager.recover();
-    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 5_000 }).toBe('failed');
+    // A genuine auth failure parks on its login (spec 2026-11-18-inline-account-reconnect), never retried.
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 5_000 }).toBe('waiting');
+    expect(store.getRun(record.id)?.parked).toMatchObject({ kind: 'auth', provider: 'codex' });
     expect(store.getRun(record.id)?.error).toContain('authentication failed: session token missing');
     expect(store.getRun(record.id)?.steps.filter((step) => step.id.startsWith('continue-'))).toHaveLength(1);
     manager.dispose();
