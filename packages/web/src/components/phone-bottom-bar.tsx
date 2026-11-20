@@ -35,6 +35,7 @@ export function PhoneBottomBar({
   onMore,
   manager = false,
   attention = null,
+  nowCount = null,
   managerTo = '/manager',
   managerTasks = null,
   everyWidth = false,
@@ -44,6 +45,8 @@ export function PhoneBottomBar({
   /** On a manager page: the Manager tab is current. */
   manager?: boolean
   attention?: ManagerAttention | null
+  /** What needs you on this computer: the attention list's total (spec 2026-11-20-phone-notifications-inbox). */
+  nowCount?: number | null
   /** Where Manager leads from a project; inside Manager it goes back to the list, like a tab bar. */
   managerTo?: string
   /** In a manager chat: Tasks opens the tasks it started, not the project's. */
@@ -70,15 +73,29 @@ export function PhoneBottomBar({
   const managerHref = origin
     ? `/manager/${encodeURIComponent(origin.id)}`
     : !manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'
-  const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string) => (
-    <Link to={`${index}${to}`} aria-current={active === area ? 'page' : undefined} className={cn(ITEM, active === area && CURRENT)}>
+  const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string, count: number | null = null) => (
+    <Link
+      to={`${index}${to}`}
+      aria-current={active === area ? 'page' : undefined}
+      aria-label={count ? `${label}, ${count} ${count === 1 ? 'thing needs' : 'things need'} you` : undefined}
+      className={cn(ITEM, active === area && CURRENT)}
+    >
       <Icon className="size-5" aria-hidden="true" />
       {label}
+      {count ? (
+        <span
+          aria-hidden="true"
+          data-slot="bottom-bar-now-count"
+          className="absolute top-1.5 left-[calc(50%+6px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-micro font-semibold text-white tabular-nums"
+        >
+          {count > 99 ? '99+' : count}
+        </span>
+      ) : null}
     </Link>
   )
   return (
     <nav aria-label="App" data-slot="phone-bottom-bar" className={cn('flex border-t border-border bg-background', !everyWidth && 'md:hidden')}>
-      {item('', 'Now', CircleDotIcon, '/')}
+      {item('', 'Now', CircleDotIcon, '/', nowCount)}
       {managerTasks ? (
         <button
           type="button"

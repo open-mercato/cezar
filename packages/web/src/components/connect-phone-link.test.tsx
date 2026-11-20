@@ -1,3 +1,4 @@
+import { DEFAULT_PHONE_NOTIFICATION_PREFS } from '@open-mercato/cezar-api-client'
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -33,7 +34,7 @@ vi.mock('@/api/phones', async (original) => {
 
 const list = (phones: PhonesResponse['phones'], relay: PhonesResponse['relay'] = { status: 'off' }): PhonesResponse =>
   ({ relayOrigin: 'https://rome.cezar.run', relay, pairing: null, account: { attached: false }, keepAwake: { enabled: true, active: false }, phones }) as PhonesResponse
-const IPAD: PhonesResponse['phones'] = [{ deviceId: 'd'.repeat(22), label: 'iPad', platform: 'ios', addedAt: '', connected: false }]
+const IPAD: PhonesResponse['phones'] = [{ deviceId: 'd'.repeat(22), label: 'iPad', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'ios', addedAt: '', connected: false }]
 const dot = () => document.querySelector<HTMLElement>('[data-slot="relay-dot"]')
 const glyph = () => document.querySelector<HTMLElement>('[data-slot="phones-icon"]')
 /** Radix opens a menu on pointerdown, not click. */
@@ -54,7 +55,7 @@ describe('ConnectPhoneLink', () => {
   })
 
   it('is gone once a phone is paired, and with pairing off', async () => {
-    api.getPhones.mockResolvedValue(list([{ deviceId: 'd'.repeat(22), label: 'Pixel', platform: 'android', addedAt: '', connected: true }]))
+    api.getPhones.mockResolvedValue(list([{ deviceId: 'd'.repeat(22), label: 'Pixel', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'android', addedAt: '', connected: true }]))
     show()
     await waitFor(() => expect(api.getPhones).toHaveBeenCalled())
     expect(screen.queryByRole('link', { name: 'Connect your phone' })).toBeNull()
@@ -67,7 +68,7 @@ describe('ConnectPhoneLink', () => {
   })
 
   it('once a phone is paired, the row gives way to a Phones icon that opens a summary leading to the same page', async () => {
-    api.getPhones.mockResolvedValue(list([{ deviceId: 'd'.repeat(22), label: 'Pixel', platform: 'android', addedAt: '', connected: true }]))
+    api.getPhones.mockResolvedValue(list([{ deviceId: 'd'.repeat(22), label: 'Pixel', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'android', addedAt: '', connected: true }]))
     show()
     const icon = await screen.findByRole('button', { name: /^Phones/ })
     expect(icon.getAttribute('title')).toBe('Phones · Not connected')
@@ -156,10 +157,10 @@ describe('the Phones summary popover', () => {
   afterEach(cleanup)
   const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString()
   const PHONES: PhonesResponse['phones'] = [
-    { deviceId: 'a'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true, push: true },
-    { deviceId: 'b'.repeat(22), label: 'iPad', platform: 'ios', addedAt: '', connected: false, lastSeenAt: at(180) },
-    { deviceId: 'c'.repeat(22), label: 'iPhone', platform: 'ios', addedAt: '', connected: false },
-    { deviceId: 'e'.repeat(22), label: 'Old phone', platform: 'android', addedAt: '', connected: false },
+    { deviceId: 'a'.repeat(22), label: 'Pixel 9', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'android', addedAt: '', connected: true, push: true },
+    { deviceId: 'b'.repeat(22), label: 'iPad', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'ios', addedAt: '', connected: false, lastSeenAt: at(180) },
+    { deviceId: 'c'.repeat(22), label: 'iPhone', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'ios', addedAt: '', connected: false },
+    { deviceId: 'e'.repeat(22), label: 'Old phone', notifications: DEFAULT_PHONE_NOTIFICATION_PREFS, platform: 'android', addedAt: '', connected: false },
   ]
   const opened = async (data: PhonesResponse) => {
     api.getPhones.mockResolvedValue(data)

@@ -22,6 +22,8 @@ import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
 import { QrSvg } from '@/components/qr-svg'
 import { GetTheApp } from './get-the-app'
+import { setPhoneNotifications } from '@/api/attention'
+import { PhoneNotificationsForm, usePhoneNotificationsEditor } from './phone-notifications'
 import { AccountStep, ComputerNameField, RelayAccountPanel } from './relay-account'
 import { RelayAddressForm } from './relay-address'
 import { RelayStatusPanel } from './relay-status-panel'
@@ -91,30 +93,51 @@ function PhoneRow({ phone, onRemove }: { phone: Phone; onRemove: () => void }) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(phone.label)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const editor = usePhoneNotificationsEditor(phone.notifications, (next) => setPhoneNotifications(phone.deviceId, next), () => {
+    void queryClient.invalidateQueries({ queryKey: phoneKeys.list })
+  })
   const rename = useMutation({
     mutationFn: () => renamePhone(phone.deviceId, label.trim()),
     onSuccess: async () => { setEditing(false); await queryClient.invalidateQueries({ queryKey: phoneKeys.list }) },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
   return (
-    <li className="flex items-center gap-3 py-2">
-      <SmartphoneIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <div className="min-w-0 flex-1">
-        {editing ? (
-          <form onSubmit={(event) => { event.preventDefault(); if (label.trim()) rename.mutate() }}>
-            <Input aria-label="Phone name" value={label} maxLength={64} autoFocus onChange={(event) => setLabel(event.target.value)} onBlur={() => setEditing(false)} />
-          </form>
-        ) : (
-          <p className="truncate text-sm">{phone.label}</p>
-        )}
-        <p className="text-xs text-muted-foreground">{lastSeen(phone)}{phone.push ? ' · Notifications on' : ''}</p>
-      </div>
-      <Button variant="ghost" size="icon" aria-label={`Rename ${phone.label}`} onClick={() => { setLabel(phone.label); setEditing(true) }}>
-        <PencilIcon className="size-4" aria-hidden />
-      </Button>
-      <Button variant="ghost" size="icon" aria-label={`Remove ${phone.label}`} onClick={onRemove}>
-        <Trash2Icon className="size-4" aria-hidden />
-      </Button>
+    <li className="py-2">
+      <Collapsible open={notificationsOpen} onOpenChange={setNotificationsOpen}>
+        <div className="flex items-center gap-3">
+          <SmartphoneIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <div className="min-w-0 flex-1">
+            {editing ? (
+              <form onSubmit={(event) => { event.preventDefault(); if (label.trim()) rename.mutate() }}>
+                <Input aria-label="Phone name" value={label} maxLength={64} autoFocus onChange={(event) => setLabel(event.target.value)} onBlur={() => setEditing(false)} />
+              </form>
+            ) : (
+              <p className="truncate text-sm">{phone.label}</p>
+            )}
+            <p className="text-xs text-muted-foreground">{lastSeen(phone)}{phone.push ? ' · Notifications on' : ''}</p>
+          </div>
+          <Button variant="ghost" size="icon" aria-label={`Rename ${phone.label}`} onClick={() => { setLabel(phone.label); setEditing(true) }}>
+            <PencilIcon className="size-4" aria-hidden />
+          </Button>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" data-slot="phone-notifications-toggle" aria-label={`Notifications for ${phone.label}`}>
+              Notifications
+              <ChevronRightIcon className={notificationsOpen ? 'size-3.5 rotate-90 transition-transform' : 'size-3.5 transition-transform'} aria-hidden />
+            </Button>
+          </CollapsibleTrigger>
+          <Button variant="ghost" size="icon" aria-label={`Remove ${phone.label}`} onClick={onRemove}>
+            <Trash2Icon className="size-4" aria-hidden />
+          </Button>
+        </div>
+      <CollapsibleContent>
+          {editor.value ? (
+            <div className="mt-2 rounded-lg border border-border">
+              <PhoneNotificationsForm value={editor.value} onChange={editor.change} saved={editor.saved} idPrefix={`phone-${phone.deviceId}`} />
+            </div>
+          ) : null}
+        </CollapsibleContent>
+      </Collapsible>
     </li>
   )
 }

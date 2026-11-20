@@ -115,6 +115,17 @@ describe('PhoneBottomBar', () => {
     expect(within(bar()!).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
   })
 
+  // Spec 2026-11-20-phone-notifications-inbox: Now is the one list, and its tab carries the count.
+  it('badges Now with what needs you on this computer, and names it for screen readers', () => {
+    device()
+    renderShell('/p/boot/tasks', { nowCount: 3 })
+    const now = within(bar()!).getByRole('link', { name: 'Now, 3 things need you' })
+    expect(now.querySelector('[data-slot="bottom-bar-now-count"]')?.textContent).toBe('3')
+    cleanup()
+    renderShell('/p/boot/tasks', { nowCount: 0 })
+    expect(within(bar()!).getByRole('link', { name: 'Now' }).querySelector('[data-slot="bottom-bar-now-count"]')).toBeNull()
+  })
+
   it('has four destinations without manual task creation', () => {
     device()
     renderShell('/p/boot/')

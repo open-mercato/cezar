@@ -4,7 +4,12 @@ import * as React from 'react'
 
 import { archiveFinished, continueRun } from '@/api/client'
 import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@/api/queries'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { AttentionItem, RunRecord } from '@open-mercato/cezar-api-client'
+import { answerQuestion } from '@/api/questions'
+import { attentionKeys, useAttention } from '@/api/attention'
+import { decideManagerAction, managerKeys, markManagerRead, useManagers } from '@/api/managers'
+import { setProjectRunRead } from '@/api/client'
+import { Segmented } from '@/components/segmented'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { FirstRun, SetupPill, WelcomeBack } from '@/components/first-run'
@@ -43,6 +48,15 @@ import {
   type NeedsYouRow,
   type RunningRow,
 } from './now-model'
+import { AttentionRow, type AttentionActions } from './now-attention'
+import {
+  READABLE,
+  attentionGroups,
+  projectManagerItems,
+  readNowScope,
+  saveNowScope,
+  type NowScope,
+} from './now-attention-model'
 
 const NO_RUNS: RunRecord[] = []
 const AGE_TICK_MS = 30_000
@@ -67,7 +81,24 @@ export function NowView({
   setupPill,
   welcomeBack,
   managersAvailable = false,
+  attention,
+  scope = 'project',
+  onScope,
+  managerConnected,
+  projectLabel,
+  attentionActions,
+  onMarkAllRead,
 }: {
+  /** The attention list (spec 2026-11-20-phone-notifications-inbox); absent keeps Now's own rows only. */
+  attention?: { items: AttentionItem[]; total: number } | undefined
+  scope?: NowScope
+  onScope?: (scope: NowScope) => void
+  /** This project's view takes the items of the managers connected to it. */
+  managerConnected?: (managerId: string) => boolean
+  projectLabel?: (projectId: string) => string
+  attentionActions?: AttentionActions
+  /** Marks every message, review and failure shown read; decisions stay. */
+  onMarkAllRead?: (items: AttentionItem[]) => void
   /** Manager owns task creation on mobile when available, as on the Tasks page (#2272). */
   managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body waits. */
@@ -101,6 +132,17 @@ export function NowView({
   const hasTasks = React.useMemo(() => all.some((run) => !run.archived), [all])
   const navigate = useNavigate()
   const [query, setQuery] = React.useState('')
+  const managerRows = React.useMemo(
+    () => (attention ? projectManagerItems(attention.items, managerConnected ?? (() => false)) : []),
+    [attention, managerConnected],
+  )
+  const groups = React.useMemo(
+    () => (attention && scope === 'all' ? attentionGroups(attention.items, projectLabel ?? ((id) => id)) : []),
+    [attention, scope, projectLabel],
+  )
+  const showAll = attention !== undefined && scope === 'all'
+  const needsCount = showAll ? attention.items.length : needsYou.length + managerRows.length
+  const readable = showAll ? attention.items.filter((item) => READABLE.has(item.kind)) : []
 
   return (
     <LiveNowProvider intervalMs={AGE_TICK_MS} now={now}>
@@ -177,10 +219,46 @@ export function NowView({
                   </ul>
                 </Section>
               ) : null}
-              <Section slot="needs-you" title="Needs you" count={needsYou.length} empty="Nothing needs you right now.">
-                {needsYou.map((row) => (
-                  <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} />
-                ))}
+              <Section
+                slot="needs-you"
+                title="Needs you"
+                count={needsCount}
+                empty={showAll ? 'Nothing needs you on this computer.' : 'Nothing needs you right now.'}
+                actions={attention && onScope ? (
+                  <div className="flex items-center gap-2">
+                    {readable.length > 0 && onMarkAllRead ? (
+                      <Button type="button" variant="ghost" size="sm" data-slot="now-mark-all-read" onClick={() => onMarkAllRead(readable)}>
+                        Mark all read
+                      </Button>
+                    ) : null}
+                    <Segmented
+                      slot="now-scope"
+                      label="Show what needs you in"
+                      value={scope}
+                      onChange={onScope}
+                      options={[
+                        { value: 'project', label: 'This project' },
+                        { value: 'all', label: `All ${attention.total}` },
+                      ]}
+                    />
+                  </div>
+                ) : undefined}
+              >
+                {showAll && attentionActions ? (
+                  groups.map((group) => (
+                    <div key={group.key} data-slot="now-attention-group" className="flex flex-col gap-1.5">
+                      <h3 className="px-1 pt-1 text-label font-medium text-muted-foreground">{group.label}</h3>
+                      {group.items.map((item) => <AttentionRow key={item.key} item={item} actions={attentionActions} />)}
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    {attentionActions ? managerRows.map((item) => <AttentionRow key={item.key} item={item} actions={attentionActions} />) : null}
+                    {needsYou.map((row) => (
+                      <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} />
+                    ))}
+                  </>
+                )}
               </Section>
               <Section slot="running" title="Running" count={running.length} empty="Nothing is running.">
                 {running.map((row) => (
@@ -535,9 +613,56 @@ export function NowRoute() {
           ),
     [runs.data, projectId],
   )
+  // Variant D (spec 2026-11-20-phone-notifications-inbox): Needs you reads the attention list.
+  const attention = useAttention()
+  const managersOn = health.data?.capabilities?.managers === true
+  const managers = useManagers(managersOn)
+  const [scope, setScope] = React.useState<NowScope>(readNowScope)
+  const here = activeProjectId ?? health.data?.bootProject
+  const managerConnected = React.useCallback(
+    (managerId: string) => here !== undefined && (managers.data?.managers.find((manager) => manager.id === managerId)?.connectedProjectIds.includes(here) ?? false),
+    [managers.data, here],
+  )
+  const projectLabel = React.useCallback(
+    (id: string) => health.data?.projects?.find((project) => project.id === id)?.name ?? id,
+    [health.data],
+  )
+  const settle = React.useCallback(() => Promise.all([
+    queryClient.invalidateQueries({ queryKey: attentionKeys.all }),
+    queryClient.invalidateQueries({ queryKey: managerKeys.list }),
+  ]), [queryClient])
+  const attentionActions = React.useMemo<AttentionActions>(() => ({
+    answer: async (item, text) => {
+      if (!item.questionKey) return
+      await answerQuestion(item.questionKey, text)
+      await settle()
+    },
+    decide: async (item, decision) => {
+      if (!item.managerId || !item.actionId) return
+      await decideManagerAction(item.managerId, item.actionId, decision)
+      await settle()
+    },
+    markRead: async (item) => {
+      if (item.kind === 'message' && item.managerId) await markManagerRead(item.managerId)
+      else if (item.projectId && item.runId) await setProjectRunRead(item.projectId, item.runId, true)
+      await settle()
+    },
+  }), [settle])
+  const onMarkAllRead = React.useCallback((items: AttentionItem[]) => {
+    void Promise.allSettled(items.map((item) => attentionActions.markRead(item))).then((results) => {
+      if (results.some((result) => result.status === 'rejected')) toast('Some items could not be marked read', { tone: 'danger' })
+    })
+  }, [attentionActions])
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <NowView
+        attention={attention.data ? { items: attention.data.items, total: attention.data.counts.total } : undefined}
+        scope={scope}
+        onScope={(next) => { setScope(next); saveNowScope(next) }}
+        managerConnected={managerConnected}
+        projectLabel={projectLabel}
+        attentionActions={attentionActions}
+        onMarkAllRead={onMarkAllRead}
         runs={runs.data}
         projectName={projectName}
         onArchiveFinished={() => archive.mutate()}

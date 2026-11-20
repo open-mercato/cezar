@@ -1,0 +1,144 @@
+import { ATTENTION_KINDS, type AttentionKind, type PhoneNotificationPrefs } from '@open-mercato/cezar-api-client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import * as React from 'react'
+
+import { attentionKeys, getMyPhoneNotifications, setMyPhoneNotifications } from '@/api/attention'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
+import { toast } from '@/components/ui/toaster'
+import { CardNote, FormRow, SettingsCard, useSavedFlash } from './form-row'
+
+/**
+ * One phone's notification settings (spec 2026-11-20-phone-notifications-inbox): which kinds push,
+ * which count on the icon, quiet hours. Kept on the computer, because the relay never learns a kind.
+ */
+
+export const KIND_TITLE: Record<AttentionKind, string> = {
+  question: 'Questions',
+  approval: 'Approvals',
+  task: 'Tasks that need me',
+  review: 'Tasks ready for review',
+  failed: 'Failed tasks',
+  message: 'Important manager messages',
+}
+
+const toggle = (kinds: readonly AttentionKind[], kind: AttentionKind, on: boolean): AttentionKind[] =>
+  ATTENTION_KINDS.filter((each) => (each === kind ? on : kinds.includes(each)))
+
+/** The form alone: the phone's own page and the computer's per-phone row both render it. */
+export function PhoneNotificationsForm({
+  value,
+  onChange,
+  saved = false,
+  idPrefix,
+}: {
+  value: PhoneNotificationPrefs
+  onChange: (next: PhoneNotificationPrefs) => void
+  saved?: boolean
+  idPrefix: string
+}) {
+  const quiet = value.quietHours
+  return (
+    <div data-slot="phone-notifications-form" className="flex flex-col">
+      <p className="px-4 pt-3 pb-1 text-label font-medium text-muted-foreground">Push me for</p>
+      {ATTENTION_KINDS.map((kind) => (
+        <FormRow key={`push-${kind}`} label={KIND_TITLE[kind]} htmlFor={`${idPrefix}-push-${kind}`} saved={saved && kind === ATTENTION_KINDS[0]}>
+          <Switch
+            id={`${idPrefix}-push-${kind}`}
+            data-slot="phone-push-kind"
+            data-kind={kind}
+            checked={value.push.includes(kind)}
+            onCheckedChange={(on) => onChange({ ...value, push: toggle(value.push, kind, on) })}
+          />
+        </FormRow>
+      ))}
+      <p className="px-4 pt-4 pb-1 text-label font-medium text-muted-foreground">Count on the app icon</p>
+      {ATTENTION_KINDS.map((kind) => (
+        <FormRow key={`badge-${kind}`} label={KIND_TITLE[kind]} htmlFor={`${idPrefix}-badge-${kind}`}>
+          <Switch
+            id={`${idPrefix}-badge-${kind}`}
+            data-slot="phone-badge-kind"
+            data-kind={kind}
+            checked={value.badge.includes(kind)}
+            onCheckedChange={(on) => onChange({ ...value, badge: toggle(value.badge, kind, on) })}
+          />
+        </FormRow>
+      ))}
+      <FormRow
+        label="Quiet hours"
+        description="No alerts in this window, in this computer's time. One comes when it ends if something still waits; the icon count still updates."
+        htmlFor={`${idPrefix}-quiet`}
+      >
+        <Switch
+          id={`${idPrefix}-quiet`}
+          data-slot="phone-quiet-hours"
+          checked={quiet !== null}
+          onCheckedChange={(on) => onChange({ ...value, quietHours: on ? { start: '22:00', end: '07:00' } : null })}
+        />
+      </FormRow>
+      {quiet ? (
+        <div className="flex items-center gap-2 px-4 pb-3">
+          <Input
+            type="time"
+            aria-label="Quiet from"
+            className="w-32"
+            value={quiet.start}
+            onChange={(event) => event.target.value && onChange({ ...value, quietHours: { ...quiet, start: event.target.value } })}
+          />
+          <span className="text-label text-muted-foreground">to</span>
+          <Input
+            type="time"
+            aria-label="Quiet until"
+            className="w-32"
+            value={quiet.end}
+            onChange={(event) => event.target.value && onChange({ ...value, quietHours: { ...quiet, end: event.target.value } })}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** Saves on every change, keeps what the server answered, and falls back to it on a failed write. */
+export function usePhoneNotificationsEditor(
+  initial: PhoneNotificationPrefs | undefined,
+  save: (next: PhoneNotificationPrefs) => Promise<PhoneNotificationPrefs>,
+  onSaved?: () => void,
+) {
+  const [value, setValue] = React.useState(initial)
+  const [saved, flash] = useSavedFlash()
+  React.useEffect(() => { if (initial) setValue((current) => current ?? initial) }, [initial])
+  const mutation = useMutation({
+    mutationFn: save,
+    onSuccess: (next) => { setValue(next); flash(); onSaved?.() },
+    onError: (error: Error) => { setValue(initial); toast(error.message, { tone: 'danger' }) },
+  })
+  const change = (next: PhoneNotificationPrefs) => {
+    setValue(next)
+    mutation.mutate(next)
+  }
+  return { value, change, saved }
+}
+
+/** Settings → Notifications inside the CezarBot app: this phone's own settings. */
+export function ThisPhoneNotificationsCard() {
+  const queryClient = useQueryClient()
+  const query = useQuery({ queryKey: attentionKeys.phone, queryFn: ({ signal }) => getMyPhoneNotifications(signal), retry: false })
+  const editor = usePhoneNotificationsEditor(query.data, setMyPhoneNotifications, () => {
+    void queryClient.invalidateQueries({ queryKey: attentionKeys.phone })
+  })
+  return (
+    <SettingsCard
+      id="this-phone"
+      slot="this-phone-notifications"
+      title="This phone"
+      description="What this phone hears from this computer. Kept on the computer: the relay never learns what a push is about."
+    >
+      {editor.value ? (
+        <PhoneNotificationsForm value={editor.value} onChange={editor.change} saved={editor.saved} idPrefix="this-phone" />
+      ) : (
+        <CardNote>{query.isError ? 'Pair this phone and turn on Notify me to choose what it hears.' : 'Loading…'}</CardNote>
+      )}
+    </SettingsCard>
+  )
+}
