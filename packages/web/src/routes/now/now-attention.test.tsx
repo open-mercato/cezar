@@ -76,7 +76,8 @@ describe('Now as the one list', () => {
     const groups = [...needsYou().querySelectorAll('[data-slot="now-attention-group"]')].map((group) => group.querySelector('h3')?.textContent)
     expect(groups).toEqual(['From managers', 'homebrew-tap', 'cezar'])
     expect(attentionKeysShown()).toEqual(['q', 'a', 'm', 't', 'f'])
-    expect(needsYou().getAttribute('data-count')).toBe('5')
+    // The count is the badge's: the failed task shows, uncounted.
+    expect(needsYou().getAttribute('data-count')).toBe('4')
     const scope = within(document.querySelector('[data-slot="now-scope"]') as HTMLElement)
     expect(scope.getByRole('button', { name: 'All 4' })).toBeTruthy()
     fireEvent.click(scope.getByRole('button', { name: 'This project' }))
@@ -124,4 +125,9 @@ describe('the attention model', () => {
     expect(projectManagerItems(ITEMS, () => false)).toEqual([])
     expect(optionAnswer(ITEMS[0]!, 'REST')).toBe('API: REST')
   })
-})
+  it('All still lists a failed task when nothing else waits', () => {
+    const failed = ITEMS.filter((row) => row.kind === 'failed')
+    renderNow({ attention: { items: failed, total: 0 }, scope: 'all', onScope: vi.fn(), attentionActions: actions() })
+    expect(attentionKeysShown()).toEqual(['f'])
+  })
+});

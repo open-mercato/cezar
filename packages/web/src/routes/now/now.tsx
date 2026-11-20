@@ -141,7 +141,8 @@ export function NowView({
     [attention, scope, projectLabel],
   )
   const showAll = attention !== undefined && scope === 'all'
-  const needsCount = showAll ? attention.items.length : needsYou.length + managerRows.length
+  // All counts what the Now badge and the phone's icon count: a failed task shows, uncounted.
+  const needsCount = showAll ? attention.total : needsYou.length + managerRows.length
   const readable = showAll ? attention.items.filter((item) => READABLE.has(item.kind)) : []
 
   return (
@@ -223,6 +224,7 @@ export function NowView({
                 slot="needs-you"
                 title="Needs you"
                 count={needsCount}
+                shown={showAll ? attention.items.length : needsCount}
                 empty={showAll ? 'Nothing needs you on this computer.' : 'Nothing needs you right now.'}
                 actions={attention && onScope ? (
                   <div className="flex items-center gap-2">
@@ -316,6 +318,7 @@ function Section({
   slot,
   title,
   count,
+  shown = count,
   empty,
   actions,
   children,
@@ -323,14 +326,16 @@ function Section({
   slot: string
   title: string
   count: number
+  /** Rows on screen, when the count leaves some out (an uncounted failed task). */
+  shown?: number
   empty: string
   actions?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <section data-slot={`now-${slot}`} data-count={count} aria-labelledby={`now-${slot}-heading`} className="flex flex-col">
-      <div className="mb-2 flex items-center gap-2">
-        <h2 id={`now-${slot}-heading`} className="eyebrow flex items-center gap-2 text-soft-foreground">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h2 id={`now-${slot}-heading`} className="eyebrow flex items-center gap-2 whitespace-nowrap text-soft-foreground">
           {title}
           <span className="rounded-full bg-muted px-1.5 font-mono text-micro font-medium tracking-normal text-foreground tabular-nums normal-case">
             {count}
@@ -339,7 +344,7 @@ function Section({
         <div className="flex-1" />
         {actions}
       </div>
-      {count === 0 ? (
+      {shown === 0 ? (
         <p data-slot="now-empty" className="px-1 py-2 text-label text-soft-foreground">
           {empty}
         </p>
