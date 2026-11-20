@@ -563,3 +563,80 @@ jobs:
             [ "$HAS_SIGNPATH" = "true" ] || echo "⚠️ The Windows installer is UNSIGNED (no SIGNPATH_* secrets) — SmartScreen will warn on install."
             [ "$HAS_UPDATER_KEY" = "true" ] || echo "⚠️ No updater manifest (no TAURI_SIGNING_PRIVATE_KEY) — installed shells will not auto-update to this version."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # `brew install --cask open-mercato/tap/cezar` (packages/desktop/homebrew/). Points the tap's
+  # cask at this release; the tap's first commit is made by hand, so this job only ever bumps it.
+  homebrew-tap:
+    name: Update Homebrew tap
+    needs: [prepare, publish]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # only downloads release assets; the tap push uses the tap-scoped app token
+    steps:
+      # The release GitHub App (as in release.yml and backport.yml), scoped to the tap alone.
+      # Minting fails when the app is not installed on the tap or lacks Contents write there.
+      - name: Mint the tap token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: open-mercato
+          repositories: homebrew-tap
+          permission-contents: write
+
+      - name: Homebrew tap status
+        id: tap
+        env:
+          MINTED: ${{ steps.app-token.outputs.token != '' }}
+        run: |
+          echo "token=$MINTED" >> "$GITHUB_OUTPUT"
+          if [ "$MINTED" != "true" ]; then
+            echo "::warning::Could not mint a token for open-mercato/homebrew-tap — install the release app on open-mercato/homebrew-tap (Contents: read and write). The tap was NOT updated; brew users stay on the previous version until Casks/cezar.rb is bumped."
+            echo "⚠️ Homebrew tap not updated: install the release app on open-mercato/homebrew-tap." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check out repository
+        if: steps.tap.outputs.token == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            packages/desktop/scripts
+            packages/desktop/src-tauri/resources/bin
+
+      - name: Bump Casks/cezar.rb
+        if: steps.tap.outputs.token == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir sums
+          gh release download "$TAG" --repo "$REPO" --dir sums \
+            --pattern cezar-macos-aarch64.dmg.sha256 --pattern cezar-macos-x86_64.dmg.sha256
+          ARM=$(cut -d' ' -f1 sums/cezar-macos-aarch64.dmg.sha256)
+          INTEL=$(cut -d' ' -f1 sums/cezar-macos-x86_64.dmg.sha256)
+          git clone --depth 1 --branch main "https://x-access-token:${TAP_TOKEN}@github.com/open-mercato/homebrew-tap.git" tap
+          if [ ! -f tap/Casks/cezar.rb ]; then
+            echo "::warning::open-mercato/homebrew-tap has no Casks/cezar.rb on main — push the initial cask (packages/desktop/homebrew/) first."
+            exit 0
+          fi
+          # The commit this release was built from decides whether Cezar.app carries the `cez`
+          # shim; the cask gains its `binary` stanzas with the first release that does.
+          BINARIES=""
+          [ -x packages/desktop/src-tauri/resources/bin/cez ] && BINARIES="--binaries"
+          node packages/desktop/scripts/bump-homebrew-cask.mjs tap/Casks/cezar.rb "$VERSION" "$ARM" "$INTEL" $BINARIES
+          cd tap
+          if git diff --quiet; then
+            echo "Casks/cezar.rb already at $VERSION"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -qam "cezar $VERSION"
+          git push origin HEAD:main
+          echo "🍺 Homebrew tap: cezar $VERSION" >> "$GITHUB_STEP_SUMMARY"
