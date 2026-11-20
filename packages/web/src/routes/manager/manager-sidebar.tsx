@@ -1,4 +1,4 @@
-import { CheckCheckIcon, ClockIcon, EllipsisIcon, MessageCircleQuestionIcon, MessageSquareIcon, PlayIcon, PlusIcon, PowerIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
+import { CheckCheckIcon, CircleDotIcon, ClockIcon, EllipsisIcon, MessageCircleQuestionIcon, MessageSquareIcon, PlayIcon, PlusIcon, PowerIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
 import { Fragment, lazy, memo, Suspense, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 
@@ -19,7 +19,9 @@ import {
 } from '@/components/ui/alert-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toaster'
-import { NAV_ROW_CLASS, useSidebarNavigate } from '@/components/app-shell'
+import { NAV_BADGE_CLASS, NAV_ROW_ACTIVE_CLASS, NAV_ROW_CLASS, useSidebarNavigate } from '@/components/app-shell'
+import { activeNavPath } from '@/components/nav-items'
+import { stripProjectPrefix } from '@/lib/project-router'
 import { shortAge } from '@/lib/format'
 import { ListSkeleton, LoadingState } from '@/components/loading-state'
 import {
@@ -453,12 +455,41 @@ export function ProjectQuestionsLink() {
   return <QuestionsNavLink to="/questions" onNavigate={useSidebarNavigate()} />
 }
 
+/** The Workspace group's Now: the project nav's Now row, with its needs-you badge, the way the
+ *  phone bottom bar offers it from Manager. */
+function NowNavLink({ to, count, onNavigate }: { to: string; count: number | null; onNavigate?: (() => void) | undefined }) {
+  const { pathname } = useLocation()
+  const active = activeNavPath(stripProjectPrefix(pathname)) === '/'
+  return (
+    <Link
+      to={to}
+      data-slot="manager-sidebar-now"
+      aria-current={active ? 'page' : undefined}
+      onClick={onNavigate}
+      className={cn(NAV_ROW_CLASS, active && NAV_ROW_ACTIVE_CLASS)}
+    >
+      <CircleDotIcon className="size-4 shrink-0" aria-hidden="true" />
+      Now
+      {count ? (
+        <span data-slot="nav-needs-you-badge" title={`${count} ${count === 1 ? 'task needs' : 'tasks need'} you`} className={NAV_BADGE_CLASS}>
+          {count}
+        </span>
+      ) : null}
+    </Link>
+  )
+}
+
 /**
  * Manager mode's sidebar body, between the switch and the footer (design 2026-11 "Manager mode"):
- * New manager, the managers with their latest line, and a small Workspace group — workspace
+ * New manager, the managers with their latest line, and a small Workspace group — Now, workspace
  * Approvals and Questions, the active chat's Jobs, and the global Manager settings.
  */
-export function ManagerSidebar() {
+export function ManagerSidebar({ nowTo = '/', nowCount = null }: {
+  /** The project nav's Now in the project the sidebar counts for. */
+  nowTo?: string
+  /** That project's needs-you count; null while unknown. */
+  nowCount?: number | null
+} = {}) {
   const { pathname } = useLocation()
   const onNavigate = useSidebarNavigate()
   const { ordered, loading, hasData, isFetching, isError } = useOrderedManagers()
@@ -497,6 +528,7 @@ export function ManagerSidebar() {
         </nav>
         <nav aria-label="Workspace" data-slot="manager-sidebar-workspace" className="px-2.5">
           <h2 className="px-3 pt-3 pb-1 eyebrow text-muted-foreground">Workspace</h2>
+          <NowNavLink to={nowTo} count={nowCount} onNavigate={onNavigate} />
           <Link
             to="/manager/approvals"
             data-slot="manager-sidebar-approvals"

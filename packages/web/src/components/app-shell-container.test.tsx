@@ -445,6 +445,23 @@ describe('sidebar wiring', () => {
       expect(tasksRow().getAttribute('href')).toBe('/p/cezar/tasks')
     })
 
+    it('leads the manager sidebar\'s Now into the last project, with its needs-you count', async () => {
+      rememberLastProject('shop')
+      serve({
+        ...routes,
+        '/api/v1/health': { ...HEALTH, bootProject: 'cezar', capabilities: { ...HEALTH.capabilities, managers: true } },
+        '/api/v1/workspace/managers': { managers: [] },
+        '/api/v1/p/shop/runs': [run({ status: 'waiting' })],
+      })
+      renderShell('/manager')
+      // Manager mode waits for health to confirm the capability.
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-sidebar-now"]')).not.toBeNull())
+      const now = document.querySelector('[data-slot="manager-sidebar-now"]')!
+      expect(now.closest('nav')?.getAttribute('aria-label')).toBe('Workspace')
+      expect(now.getAttribute('href')).toBe('/p/shop/')
+      await waitFor(() => expect(now.querySelector('[data-slot="nav-needs-you-badge"]')?.textContent).toBe('1'))
+    })
+
     it('remembers the project on screen', async () => {
       serve(routes)
       renderShell('/p/shop/git')

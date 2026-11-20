@@ -258,7 +258,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     now,
   )
   // Slots, because AppShell stays QueryClient-free: each reads the managers cache itself.
-  const managerSidebar = useMemo(() => <ManagerSidebar />, [])
+  // Now leads where the project nav's Now does: the project the sidebar counts for.
+  const nowTo = navProjectId === null ? '/' : `/p/${encodeURIComponent(navProjectId)}/`
+  const nowCount = runs.data?.needsYou ?? null
+  const managerSidebar = useMemo(() => <ManagerSidebar nowTo={nowTo} nowCount={nowCount} />, [nowTo, nowCount])
   const managerRail = useMemo(() => <ManagerRail />, [])
   const managerHeads = useMemo(() => <ManagerHeads />, [])
   const connectPhone = useMemo(() => <ConnectPhoneLink />, [])
@@ -287,7 +290,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         // Same `?? null` honesty: no badge while the list is unknown; a loaded list with none
         // unread is 0, which AppShell also renders as no badge.
         unreadCount={runs.data?.unread ?? null}
-        nowCount={runs.data?.needsYou ?? null}
+        nowCount={nowCount}
         runningCount={runs.data?.running ?? null}
         healthStatus={healthStatus}
         skillsUpdateAvailable={skillsUpdateAvailable}
