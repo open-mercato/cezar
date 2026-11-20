@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import com.openmercato.cezar.mobile.BuildConfig;
+import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
 import com.openmercato.cezar.mobile.shell.push.CezarPush;
 import com.openmercato.cezar.mobile.shell.push.GrantClient;
 import com.openmercato.cezar.mobile.shell.push.OkHttpPushRelay;
@@ -40,6 +41,7 @@ public final class ShellServices {
     private static TokenSource tokens = TokenSource.NONE;
     private static PushCoordinator push;
     private static StartupLog startupLog;
+    private static BadgeRefresh badges;
 
     private ShellServices() {}
 
@@ -70,6 +72,16 @@ public final class ShellServices {
         }, "cezar-prewarm");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    /** Set by the application, which owns the notifications the rounds clear. */
+    public static synchronized void setBadges(BadgeRefresh refresh) {
+        badges = refresh;
+    }
+
+    /** Null before the application set it. */
+    public static synchronized BadgeRefresh badges() {
+        return badges;
     }
 
     public static synchronized RelayConnections relay(Context context) {

@@ -1,13 +1,28 @@
 package com.openmercato.cezar.mobile;
 
+import android.app.Activity;
 import android.app.Application;
+import android.os.Bundle;
+import android.webkit.CookieManager;
 import com.openmercato.cezar.mobile.push.FcmTokenSource;
 import com.openmercato.cezar.mobile.push.PushNotifier;
 import com.openmercato.cezar.mobile.shell.AppLock;
+import com.openmercato.cezar.mobile.shell.DeviceProbes;
+import com.openmercato.cezar.mobile.shell.ShellConnector;
 import com.openmercato.cezar.mobile.shell.ShellServices;
+import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
+import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /** Exists so the lock watches every activity, including one restored first after process death (spec QR3). */
 public final class CezarApplication extends Application {
+    private final ExecutorService work = Executors.newCachedThreadPool();
+    private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
+    private int started;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -15,5 +30,65 @@ public final class CezarApplication extends Application {
         // Before any activity, so the shell sees push as it is; the shell itself never names Firebase.
         ShellServices.setTokenSource(new FcmTokenSource(this));
         PushNotifier.createChannel(this);
+        // Every computer's count on resume and while a page is open, not only on Your cezars (B1).
+        BadgeRefresh badges = new BadgeRefresh(this::probeRound, (ms, run) -> timer.schedule(run, ms, TimeUnit.MILLISECONDS),
+                System::currentTimeMillis, () -> PushNotifier.settle(this));
+        ShellServices.setBadges(badges);
+        registerActivityLifecycleCallbacks(new Foreground(badges));
+    }
+
+    /** The Your cezars probe, over every saved cezar; the page's own link is read, never let go. */
+    private void probeRound(Runnable done) {
+        work.execute(() -> {
+            try {
+                ShellConnector connector = ShellServices.connector(this);
+                RelayConnections relay = ShellServices.relay(this);
+                DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, work),
+                        DeviceProbes.directProbe(connector, server -> server.url == null ? null : CookieManager.getInstance().getCookie(server.url), work),
+                        relay::cool, (ms, run) -> timer.schedule(run, ms, TimeUnit.MILLISECONDS),
+                        (id, answer) -> connector.sawHealth(id, answer, System.currentTimeMillis()), (id, reading) -> {});
+                probes.whenSettled(() -> {
+                    probes.stop(null);
+                    done.run();
+                });
+                probes.start(connector.list());
+            } catch (RuntimeException e) {
+                done.run();
+            }
+        });
+    }
+
+    /** The app came to the front: its first activity started. */
+    private final class Foreground implements ActivityLifecycleCallbacks {
+        private final BadgeRefresh badges;
+
+        Foreground(BadgeRefresh badges) {
+            this.badges = badges;
+        }
+
+        @Override
+        public void onActivityStarted(Activity activity) {
+            if (started++ == 0) badges.resumed();
+        }
+
+        @Override
+        public void onActivityStopped(Activity activity) {
+            started = Math.max(0, started - 1);
+        }
+
+        @Override
+        public void onActivityCreated(Activity activity, Bundle saved) {}
+
+        @Override
+        public void onActivityResumed(Activity activity) {}
+
+        @Override
+        public void onActivityPaused(Activity activity) {}
+
+        @Override
+        public void onActivitySaveInstanceState(Activity activity, Bundle out) {}
+
+        @Override
+        public void onActivityDestroyed(Activity activity) {}
     }
 }

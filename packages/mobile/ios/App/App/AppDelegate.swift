@@ -38,7 +38,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         ShellServices.notifier.refresh()
-        DispatchQueue.global(qos: .utility).async { ShellServices.notifier.refreshBadge() }
+        DispatchQueue.global(qos: .utility).async {
+            ShellServices.notifier.refreshBadge()
+            ShellServices.badges.resumed()
+        }
     }
 
     func application(_ application: UIApplication,

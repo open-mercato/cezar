@@ -276,6 +276,7 @@ public class ConnectionPlugin extends Plugin {
                     (id, answer) -> connector.sawHealth(id, answer, System.currentTimeMillis()), readings::put);
             probes.whenSettled(() -> {
                 probes.stop(null);
+                PushNotifier.settle(getContext());
                 answerProbe(calls -> {
                     JSObject result = list(connector);
                     for (PluginCall each : calls) each.resolve(result);
