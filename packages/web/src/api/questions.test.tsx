@@ -237,17 +237,24 @@ describe('the badge while a dismissal is pending', () => {
     expect(lowest(renders)).toBe(1)
   })
 
-  it('never reads below the true count when a frame lands inside the undo window', async () => {
+  it('a card closing elsewhere during the undo window is not mistaken for the dismissed one', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let list!: () => void
     const listHeld = new Promise<void>((resolve) => { list = resolve })
-    fetchMock.mockImplementation(async () => { await listHeld; return Response.json(response([b])) })
+    // The server: B closed elsewhere; A is still open, since its dismissal was never sent.
+    fetchMock.mockImplementation(async () => { await listHeld; return Response.json(response([a])) })
     const renders = renderBadge()
     act(() => scheduleDismiss(client, a.key, 'Design'))
-    // Something else counted the card off while Undo was still offered.
+    expect(renders.at(-1)).toBe(1)
     await act(async () => { applyQuestionCounts(client, { live: 1, older: 0 }); await vi.advanceTimersByTimeAsync(20) })
+    // A keeps its place (and its Undo); the drop is B's, so the badge reads 0, not 1.
+    expect(client.getQueryData<QuestionsResponse>(questionKeys.all)?.open.map((row) => row.key)).toContain(a.key)
+    expect(renders.at(-1)).toBe(0)
+    act(() => undoDismiss(a.key))
+    expect(renders.at(-1)).toBe(1)
     await act(async () => { list(); await vi.advanceTimersByTimeAsync(50) })
-    expect(lowest(renders)).toBe(1)
+    expect(renders.at(-1)).toBe(1)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/dismiss'))).toBe(false)
   })
 
   it('Undo puts the card back on the badge, never below the true count on the way', async () => {

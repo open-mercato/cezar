@@ -116,13 +116,12 @@ export function applyQuestionCounts(queryClient: QueryClient, counts: QuestionCo
   if (!listChanged && before && before.counts.live === counts.live && before.counts.older === counts.older) return
   queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => {
     if (!data) return data
-    // The server stopped counting cards the badge already subtracts (an answer in flight, a
-    // dismissal pending or sent): they leave the list in the same write, or the badge would
-    // subtract them twice for a frame (and settleQuestion again after). Sent ones first.
+    // The server stopped counting cards the badge already subtracts and has been told about (an
+    // answer in flight, a dismissal sent): they leave the list in the same write, or the badge
+    // would subtract them twice for a frame (and settleQuestion again after). A dismissal still in
+    // its undo window was never sent, so a drop then is another card's: it keeps its place.
     let dropped = Math.max(0, data.counts.live - counts.live)
-    const subtracted = data.open.filter((row) => !row.older && (answering.has(row.key) || isDismissing(row.key)))
-    const rank = (key: string) => (answering.has(key) || dismissals.get(key)?.timer === undefined ? 0 : 1)
-    const gone = new Set(subtracted.sort((x, y) => rank(x.key) - rank(y.key)).filter(() => dropped-- > 0).map((row) => row.key))
+    const gone = new Set(data.open.filter((row) => !row.older && (answering.has(row.key) || isDismissalSent(row.key)) && dropped-- > 0).map((row) => row.key))
     return { ...data, counts, ...(gone.size > 0 ? { open: data.open.filter((row) => !gone.has(row.key)) } : {}) }
   })
   void queryClient.invalidateQueries({ queryKey: questionKeys.all })
@@ -217,10 +216,10 @@ async function commit(key: string): Promise<void> {
   }
 }
 
-/** Inside its undo window or on its way: the badge already counts it off. */
-function isDismissing(key: string): boolean {
+/** Past its undo window, request on its way: the server may already count it off. */
+function isDismissalSent(key: string): boolean {
   const entry = dismissals.get(key)
-  return entry !== undefined && !entry.error
+  return entry !== undefined && !entry.error && !entry.paused && entry.timer === undefined
 }
 
 export function scheduleDismiss(queryClient: QueryClient, key: string, label: string): void {
