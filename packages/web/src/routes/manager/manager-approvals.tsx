@@ -15,7 +15,7 @@ import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-
 
 import { QuestionsCrossLink } from '@/routes/questions/questions-route'
 
-import { isFinished, useLinger, useStableOrder } from './approvals-linger'
+import { isFinished, useLinger, useStableOrder, type LeaveMode } from './approvals-linger'
 import { LingerCollapse } from './linger-collapse'
 import { ActionCard, useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerAvatar } from './manager-avatar'
@@ -32,7 +32,7 @@ function ManagerApprovals({ manager, heading, results, saveResult, leaving }: {
   results: DecisionResult[]
   saveResult: SaveResult
   /** Lingering cards collapsing now (useLinger), keyed `manager/action`. */
-  leaving: ReadonlySet<string>
+  leaving: ReadonlyMap<string, LeaveMode>
 }) {
   const client = useQueryClient()
   // The chat's connected projects, so an action reason's references paint as chips here too.
@@ -110,7 +110,7 @@ function ManagerApprovals({ manager, heading, results, saveResult, leaving }: {
   if (manager.pendingActions === 0 && results.length === 0) return null
   const inactive = manager.inactive !== undefined
   // The last card of a manager with nothing pending takes its heading along as it collapses.
-  const sectionLeaving = manager.pendingActions === 0 && results.length > 0 && results.every((row) => leaving.has(lingerKey(row)))
+  const sectionLeaving = manager.pendingActions === 0 && results.length > 0 && results.every((row) => leaving.has(lingerKey(row))) ? leaving.get(lingerKey(results[0]!)) : undefined
   return (
     <ManagerProjectsContext.Provider value={connected}>
       <LingerCollapse leaving={sectionLeaving}>
@@ -149,7 +149,7 @@ function ManagerApprovals({ manager, heading, results, saveResult, leaving }: {
               <LingerCollapse
                 key={message.id}
                 lingerKey={key}
-                leaving={leaving.has(key)}
+                leaving={leaving.get(key)}
                 data-slot="approval-slot"
                 data-approval-id={message.id}
                 data-lingering={row?.finishedAt === undefined ? undefined : leaving.has(key) ? 'leaving' : 'shown'}
