@@ -999,7 +999,7 @@ describe('ManagerEngine', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       try {
         backend.scripts.push(say(MANAGER_QUIET));
-        expect(engine.check(id)).toBe(true);
+        expect(engine.check(id)).toEqual({ ok: true });
         release();
         vi.advanceTimersByTime(5_000);
         await settled(engine);
@@ -2232,6 +2232,7 @@ describe('ManagerEngine', () => {
       const id = await create(engine, 0);
       backend.scripts.push({ play: init(), hold: true });
       const refreshed = await engine.refreshConnectors(id);
+      if (refreshed && 'error' in refreshed) throw new Error(refreshed.error);
       const probe = backend.specs.at(-1)!;
       expect(probe.allowedTools).toEqual([]);
       expect(probe.systemPrompt).toBeUndefined();
@@ -4056,6 +4057,21 @@ describe('ManagerEngine', () => {
       await engine.shutdown();
     });
 
+    it('an inactive manager still gets the card and the note, but no follow-up turn and no alert (spec 2026-11-19-manager-deactivate)', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      await engine.update(id, { active: false });
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'failed', error: 'Not logged in', finishedAt: later(1) }), () => undefined);
+      expect(cards(id).map((message) => [message.taskReport?.state, message.important])).toEqual([['failed', true]]);
+      expect(store.state(id).followups).toEqual([]);
+      expect(store.state(id).notes.at(-1)).toContain('Task update, posted to the chat by cezar: [[task:alpha/new-run]]');
+      // Past the follow-up's coalescing window and the notification's delay.
+      await new Promise((resolve) => setTimeout(resolve, 3_300));
+      await settled(engine);
+      expect(backend.specs).toEqual([]);
+      expect(raised).toEqual([]);
+    });
+
     it('hears all of a dispatched child it follows directly', async () => {
       const engine = followedEngine();
       const id = await create(engine, 0);
@@ -4065,6 +4081,136 @@ describe('ManagerEngine', () => {
       await engine.followTask(id, { projectId: 'alpha', runId: 'child' });
       engine.taskChanged('alpha', dataDir(), { ...child, status: 'done', finishedAt: later(1) }, () => undefined);
       expect(cards(id).map((message) => message.taskReport)).toEqual([{ projectId: 'alpha', runId: 'child', state: 'done', rootRunId: 'root' }]);
+    });
+  });
+
+  describe('deactivation (spec 2026-11-19-manager-deactivate)', () => {
+    const notices = (id: string) => store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'notice' }> => message.kind === 'notice' && message.activity !== undefined);
+    const T0 = Date.parse('2026-11-19T12:00:00.000Z');
+
+    it('an inactive manager with a cadence and two jobs makes no model call when every due time passes', async () => {
+      let now = T0;
+      const engine = makeEngine({ now: () => now, github: readyPrGithub });
+      const id = await create(engine, 15);
+      await engine.update(id, { jobs: [{ name: 'Digest', prompt: 'x', everyMinutes: 60, enabled: true }, { name: 'Sweep', prompt: 'y', everyMinutes: 30, enabled: true }] });
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+      await engine.update(id, { active: false });
+      backend.scripts.push(say('one'), say('two'), say('three'));
+      now += 10 * 60 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(0);
+      expect(store.state(id).lastCheckAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(engine.check(id)).toEqual({ error: 'manager inactive', status: 409 });
+      expect(await engine.refreshConnectors(id)).toEqual({ error: 'manager inactive', status: 409 });
+      expect((await engine.summary(id))?.nextCheckAt).toBeUndefined();
+      expect(backend.specs).toHaveLength(0);
+    });
+
+    it('deactivating stops the turn in flight, drops what was queued, and posts one notice', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ ...say('working'), hold: true });
+      engine.send(id, 'first');
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(1));
+      engine.send(id, 'second');
+      await engine.update(id, { active: false });
+      await engine.update(id, { active: false });
+      expect(backend.open[0]?.interrupted).toBe(true);
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(store.get(id)?.inactive?.since).toBeDefined();
+      expect(notices(id).map((message) => [message.text, message.activity])).toEqual([['Deactivated by you', { change: 'deactivated' }]]);
+    });
+
+    it('reactivating is quiet: a summary notice, no turn, and the next job counts from the reactivation', async () => {
+      let now = T0;
+      const engine = makeEngine({ now: () => now });
+      const id = await create(engine, 15);
+      await engine.update(id, { jobs: [{ name: 'Digest', prompt: 'Summarize', everyMinutes: 60, enabled: true }] });
+      await engine.update(id, { active: false });
+      now += 5 * 60 * 60_000;
+      expect(engine.reportAutomationRun({
+        managerId: id, mode: 'post-result', projectId: 'alpha', automationId: 'a1', automationName: 'Nightly', runId: 'r1', outcome: 'success', text: 'done', attentionKeys: [],
+      })).toBe('posted');
+      const since = store.get(id)!.inactive!.since;
+      await engine.update(id, { active: true });
+      expect(store.get(id)?.inactive).toBeUndefined();
+      expect(store.get(id)?.activeSince).toBe(new Date(now).toISOString());
+      // No check ran: the activeSince floor holds the next one back, so Watching must not claim a fresh check.
+      expect(store.state(id).lastCheckAt).toBeUndefined();
+      expect(notices(id).at(-1)).toMatchObject({
+        text: 'Reactivated by you. While inactive: 1 automation report; 20 checks and 5 job runs skipped.',
+        activity: { change: 'reactivated', since, taskUpdates: 0, automationReports: 1, checksSkipped: 20, jobRunsSkipped: 5, catchUp: false },
+      });
+      backend.scripts.push(say('Digest done'));
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(0);
+      now += 59 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(0);
+      now += 2 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['job']);
+    });
+
+    it('Catch me up runs exactly one forced check', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 15);
+      await engine.update(id, { active: false });
+      backend.scripts.push(say('Nothing new.'));
+      await engine.update(id, { active: true, catchUp: true });
+      await settled(engine);
+      expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['watch']);
+      expect(notices(id).at(-1)?.activity).toMatchObject({ change: 'reactivated', catchUp: true });
+    });
+
+    it('an answer to its question needs reactivate; a dismissal closes it with no turn and leaves it inactive', async () => {
+      const ask = (header: string) => `CEZ:ASK ${JSON.stringify({ questions: [{ header, question: 'Which?', options: [{ label: 'A' }, { label: 'B' }] }] })}`;
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say(ask('Shell')), say(ask('Editor')));
+      engine.send(id, 'hi');
+      await settled(engine);
+      engine.send(id, 'again');
+      await settled(engine);
+      const [first, second] = assistants(id);
+      await engine.update(id, { active: false });
+      expect(engine.answerAsk(id, first!.id, 'Shell: A')).toEqual({ ok: false, status: 409, error: 'manager inactive' });
+      expect(engine.dismissAsk(id, first!.id)).toMatchObject({ ok: true });
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(store.get(id)?.inactive).toBeDefined();
+      backend.scripts.push(say('Thanks'));
+      expect(engine.answerAsk(id, second!.id, 'Editor: B', true)).toMatchObject({ ok: true });
+      await settled(engine);
+      expect(backend.specs).toHaveLength(3);
+      expect(store.get(id)?.inactive).toBeUndefined();
+    });
+
+    it('a connector approval waits while inactive; other approvals still decide', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const proposed = await engine.propose(id, { action: { type: 'add-job', name: 'Digest', prompt: 'x', everyMinutes: 60 } });
+      if ('error' in proposed) throw new Error(proposed.error);
+      await engine.update(id, { active: false });
+      expect(await engine.decide(id, proposed.actionId, 'approve')).toEqual({ ok: true });
+      expect(store.get(id)?.jobs.map((job) => job.name)).toEqual(['Digest']);
+      expect(backend.specs).toHaveLength(0);
+    });
+
+    it('the bulk toggle changes only the managers not already in that state', async () => {
+      const engine = makeEngine();
+      const one = await create(engine, 0);
+      const two = await create(engine, 0);
+      await engine.update(two, { active: false });
+      expect(await engine.setActivity(false)).toEqual([one]);
+      expect(await engine.setActivity(false)).toEqual([]);
+      expect((await engine.setActivity(true)).sort()).toEqual([one, two].sort());
+      expect(notices(two).map((message) => message.activity?.change)).toEqual(['deactivated', 'reactivated']);
     });
   });
 });

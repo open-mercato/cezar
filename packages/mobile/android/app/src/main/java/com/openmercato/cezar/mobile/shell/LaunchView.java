@@ -59,7 +59,7 @@ final class LaunchView extends FrameLayout {
         again.setOnClickListener(view -> retry.run());
         buttons.addView(again);
         Button list = new Button(context);
-        list.setText("Devices");
+        list.setText("Your cezars");
         list.setOnClickListener(view -> servers.run());
         buttons.addView(list);
         problem.addView(buttons);

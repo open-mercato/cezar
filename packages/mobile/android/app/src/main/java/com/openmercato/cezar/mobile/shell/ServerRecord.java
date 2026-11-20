@@ -36,6 +36,10 @@ public final class ServerRecord {
         return new ServerRecord(id, label, url, username, realm, note, relay);
     }
 
+    public ServerRecord withLabel(String name) {
+        return new ServerRecord(id, name, url, username, realm, noteShown, relay);
+    }
+
     public ServerRecord withPort(int port) {
         return new ServerRecord(id, label, relay.withPort(port), noteShown);
     }

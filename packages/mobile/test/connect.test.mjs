@@ -4,6 +4,7 @@ import test from 'node:test';
 // Just enough DOM to run connect.js itself: its wiring is what a stale lock row got wrong.
 class Node {
   children = [];
+  style = {};
   attributes = {};
   setAttribute(name, value) {
     this.attributes[name] = value;
@@ -20,6 +21,8 @@ class Node {
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+// The next boot's window width: true is an iPad's split (spec 2026-11-19-mobile-devices-screen).
+let wideNext = false;
 const saved = { id: 'a', url: 'https://cezar.example.com', label: 'Work' };
 
 async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, lock }, more = {}) {
@@ -39,7 +42,10 @@ async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, l
     list: () => ({ servers: [saved], pairing: true, lock: lockNow() }),
     ...more,
   };
+  const wide = wideNext;
+  wideNext = false;
   globalThis.window = {
+    matchMedia: () => ({ matches: wide, addEventListener() {} }),
     Capacitor: {
       nativePromise: async (plugin, method, options) => {
         calls.push(method);
@@ -60,14 +66,22 @@ async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, l
   return { app, calls, sent, returned };
 }
 
+const labelledBy = (app, label) => find(app, (node) => node.attributes?.['aria-label'] === label);
+const lockSwitch = (app) => labelledBy(app, 'App lock');
+const settingsFor = async (app, label) => {
+  labelledBy(app, `Settings for ${label}`).onclick();
+  await settle();
+};
 const none = { enabled: false, available: false };
 const ready = { enabled: false, available: true };
 
 test('a screen lock set while the page was away enables the row on return', async () => {
   const { app, returned } = await boot(none, () => ready);
   assert.match(app.text, /Set a screen lock/);
+  assert.equal(lockSwitch(app).disabled, true);
   await returned();
-  assert.match(app.text, /Turn on app lock/);
+  assert.equal(lockSwitch(app).disabled, false);
+  assert.equal(lockSwitch(app).checked, false);
 });
 
 test('coming back to a hidden page asks native nothing', async () => {
@@ -85,10 +99,10 @@ test('returning never reruns launch, which would open a server', async () => {
 
 test('a form on screen is not replaced by the refresh', async () => {
   const { app, returned } = await boot(none, () => ready);
-  const add = app.children.find((node) => node.textContent === 'Add a device');
+  const add = app.children.find((node) => node.textContent === 'Connect another cezar');
   add.onclick();
   await returned();
-  assert.match(app.text, /Connect to cezar/);
+  assert.match(app.text, /Connect another cezar/);
   assert.doesNotMatch(app.text, /app lock/i);
 });
 
@@ -144,30 +158,37 @@ test('a pairing poll that is still waiting keeps the same mark on screen instead
 
 const paired = { id: 'r', url: 'https://relay.example.test', label: 'Laptop', relay: true, push: false };
 const isSwitch = (node) => node.attributes?.role === 'switch';
+const notify = (app) => find(app, (node) => isSwitch(node) && node.attributes['aria-label'].startsWith('Notify me'));
 
 test('a relay server with push gets a Notifications switch that asks native to turn it on', async () => {
   const { app, sent } = await boot(none, () => none, { servers: [paired], pairing: true, lock: none }, {
     pushSet: ({ enabled }) => ({ servers: [{ ...paired, push: enabled }], pairing: true, lock: none }),
   });
-  const input = find(app, isSwitch);
-  assert.equal(input.checked, false);
-  assert.match(app.text, /Notifications/);
-  await input.onchange();
+  // On the cezar's own page, not loose on the list.
+  assert.equal(notify(app), null);
+  await settingsFor(app, 'Laptop');
+  assert.equal(notify(app).checked, false);
+  assert.match(app.text, /When Laptop needs you/);
+  await notify(app).onchange();
   assert.deepEqual(sent.at(-1), ['pushSet', { id: 'r', enabled: true }]);
-  assert.equal(find(app, isSwitch).checked, true);
+  assert.equal(title(app), 'Laptop');
+  assert.equal(notify(app).checked, true);
 });
 
 test('a refused permission comes back as a notice on the list', async () => {
   const { app } = await boot(none, () => none, { servers: [paired], pairing: true, lock: none }, {
     pushSet: () => ({ servers: [paired], pairing: true, lock: none, pushError: 'Allow notifications for CezarBot in Android settings to turn this on.' }),
   });
-  await find(app, isSwitch).onchange();
+  await settingsFor(app, 'Laptop');
+  await notify(app).onchange();
   assert.match(app.text, /Allow notifications/);
 });
 
 test('no switch where native sent no push, and a server still being removed is named', async () => {
   const { app } = await boot(none, () => none, { servers: [saved], pairing: true, lock: none, removing: ['Old laptop'] });
-  assert.equal(find(app, isSwitch), null);
+  await settingsFor(app, 'Work');
+  assert.equal(notify(app), null);
+  await systemBack();
   assert.match(app.text, /Still removing Old laptop/);
 });
 
@@ -184,14 +205,14 @@ test('the Devices link from a server shows a Back arrow that reopens it', async 
 
 test("the switcher's Add a device opens the form above the Devices list", async () => {
   const { app } = await boot(null, () => null, { screen: 'add', servers: [saved], pairing: true });
-  assert.equal(title(app), 'Connect to cezar');
+  assert.equal(title(app), 'Connect another cezar');
   assert.equal(window.cezarBack(), true);
   await settle();
-  assert.equal(title(app), 'Devices');
+  assert.equal(title(app), 'Your cezars');
   const direct = await boot(null, () => null, { screen: 'add', servers: [saved], pairing: false });
-  assert.equal(title(direct.app), 'Connect to cezar');
+  assert.equal(title(direct.app), 'Connect another cezar');
   const first = await boot(null, () => null, { screen: 'add', servers: [], pairing: true });
-  assert.equal(title(first.app), 'Connect to cezar');
+  assert.equal(title(first.app), 'Connect your cezar');
   assert.equal(window.cezarBack(), false);
 });
 
@@ -249,24 +270,24 @@ const listed = (servers = [saved]) => ({ servers, pairing: true, lock: none });
 for (const [how, back] of [['arrow', arrow], ['system Back', async () => assert.equal(await systemBack(), true)]]) {
   test(`${how}: Devices → Connect to cezar → Enter code, then back one level at a time`, async () => {
     const { app } = await boot(none, () => none, listed());
-    await tap(app, 'Add a device');
-    assert.equal(title(app), 'Connect to cezar');
+    await tap(app, 'Connect another cezar');
+    assert.equal(title(app), 'Connect another cezar');
     assert.ok(backArrow(app));
     await tap(app, 'Enter code');
     assert.equal(title(app), 'Enter code');
     await back(app);
-    assert.equal(title(app), 'Connect to cezar');
+    assert.equal(title(app), 'Connect another cezar');
     await back(app);
-    assert.equal(title(app), 'Devices');
+    assert.equal(title(app), 'Your cezars');
     assert.equal(backArrow(app), null);
     assert.equal(window.cezarBack(), false);
   });
 
   test(`${how}: the cockpit's Devices link, Add a device and back again, then back into the server`, async () => {
     const { app, sent } = await boot(none, () => none, { ...listed([saved, two]), screen: 'list', serverId: 'a' });
-    await tap(app, 'Add a device');
+    await tap(app, 'Connect another cezar');
     await back(app);
-    assert.equal(title(app), 'Devices');
+    assert.equal(title(app), 'Your cezars');
     assert.equal(backArrow(app).attributes['aria-label'], 'Back to Work');
     await back(app);
     assert.deepEqual(sent.at(-1), ['open', { id: 'a', quick: true }]);
@@ -274,11 +295,11 @@ for (const [how, back] of [['arrow', arrow], ['system Back', async () => assert.
 
   test(`${how}: with nothing paired, Connect to cezar is the root and Enter code comes back to it`, async () => {
     const { app } = await boot(none, () => none, listed([]));
-    assert.equal(title(app), 'Connect to cezar');
+    assert.equal(title(app), 'Connect your cezar');
     assert.equal(backArrow(app), null);
     await tap(app, 'Enter code');
     await back(app);
-    assert.equal(title(app), 'Connect to cezar');
+    assert.equal(title(app), 'Connect your cezar');
     assert.equal(backArrow(app), null);
     assert.equal(window.cezarBack(), false);
   });
@@ -289,41 +310,41 @@ for (const [how, back] of [['arrow', arrow], ['system Back', async () => assert.
     await settle();
     assert.equal(title(app), 'Connection problem');
     await back(app);
-    assert.equal(title(app), 'Devices');
+    assert.equal(title(app), 'Your cezars');
   });
 }
 
 test('Advanced unfolds in place: Back leaves Connect to cezar folded or not', async () => {
   const { app } = await boot(none, () => none, listed());
-  await tap(app, 'Add a device');
+  await tap(app, 'Connect another cezar');
   const details = find(app, (node) => node.tag === 'details');
   details.open = true;
   details.ontoggle();
   assert.equal(await systemBack(), true);
-  assert.equal(title(app), 'Devices');
+  assert.equal(title(app), 'Your cezars');
 });
 
 test('Advanced → Sign in → Back returns to Connect to cezar with Advanced open and the address kept', async () => {
   const { app } = await boot(none, () => none, listed(), { add: ({ url }) => ({ ...listed(), screen: 'ask-credentials', url }) });
-  await tap(app, 'Add a device');
+  await tap(app, 'Connect another cezar');
   const details = find(app, (node) => node.tag === 'details');
   details.open = true;
   details.ontoggle();
   await submit(app, { url: 'https://new.example.com' });
   assert.equal(title(app), 'Sign in');
   await arrow(app);
-  assert.equal(title(app), 'Connect to cezar');
+  assert.equal(title(app), 'Connect another cezar');
   assert.equal(find(app, (node) => node.tag === 'details').open, true);
   assert.equal(input(app, 'url').value, 'https://new.example.com');
 });
 
 test('a cancelled scan leaves Connect to cezar on screen', async () => {
   const { app } = await boot(none, () => none, listed(), { scan: () => listed() });
-  await tap(app, 'Add a device');
+  await tap(app, 'Connect another cezar');
   await tap(app, 'Scan QR code');
-  assert.equal(title(app), 'Connect to cezar');
+  assert.equal(title(app), 'Connect another cezar');
   assert.equal(await systemBack(), true);
-  assert.equal(title(app), 'Devices');
+  assert.equal(title(app), 'Your cezars');
 });
 
 test('Back while connecting to the computer cancels the pairing and returns to Enter code, code kept', async () => {
@@ -331,7 +352,7 @@ test('Back while connecting to the computer cancels the pairing and returns to E
     pairCode: { ...listed(), screen: 'pair', phase: 'waiting', seq: 0 },
     pairCancel: () => listed(),
   });
-  await tap(app, 'Add a device');
+  await tap(app, 'Connect another cezar');
   await tap(app, 'Enter code');
   await submit(app, { code: 'ABCD-EFGH-JKLM' });
   assert.ok(find(app, (node) => node.className === 'loading'));
@@ -362,7 +383,7 @@ test('Back over the six digits asks first; Back again keeps pairing; Stop pairin
   await tap(app, 'Stop pairing');
   await settle();
   assert.ok(calls.includes('pairCancel'));
-  assert.equal(title(app), 'Connect to cezar');
+  assert.equal(title(app), 'Connect your cezar');
   assert.equal(window.cezarBack(), false);
 });
 
@@ -373,7 +394,7 @@ test('a late poll answer after Back is dropped, not drawn', async () => {
     pairPoll: () => new Promise((resolve) => (answer = resolve)),
     pairCancel: () => listed(),
   });
-  await tap(app, 'Add a device');
+  await tap(app, 'Connect another cezar');
   await tap(app, 'Enter code');
   await submit(app, { code: 'ABCD-EFGH-JKLM' });
   await systemBack();
@@ -385,7 +406,7 @@ test('a late poll answer after Back is dropped, not drawn', async () => {
 
 test('a failed pairing: Try again and Back both return to the screen that started it', async () => {
   const { app } = await boot(none, () => none, listed(), { pairCode: { ...listed(), screen: 'pair', phase: 'failed', reason: 'expired' } });
-  await tap(app, 'Add a device');
+  await tap(app, 'Connect another cezar');
   await tap(app, 'Enter code');
   await submit(app, { code: 'ABCD-EFGH-JKLM' });
   assert.equal(title(app), 'Not paired');
@@ -402,37 +423,42 @@ test('Back from a request still running abandons it and shows the screen below',
   await settle();
   assert.ok(find(app, (node) => node.className === 'loading'));
   assert.equal(await systemBack(), true);
-  assert.equal(title(app), 'Devices');
+  assert.equal(title(app), 'Your cezars');
 });
 
 test('Forget of the last server lands on Connect to cezar as the root', async () => {
   const { app, sent } = await boot(none, () => none, listed(), { forget: () => listed([]) });
-  await tap(app, 'Forget');
-  assert.equal(title(app), 'Forget Work?');
+  await settingsFor(app, 'Work');
+  await tap(app, 'Forget this cezar');
+  assert.equal(find(app, (node) => node.id === 'forget-title').textContent, 'Forget Work?');
   assert.ok(backArrow(app));
-  await tap(app, 'Forget this device');
+  await tap(app, 'Forget Work');
   assert.deepEqual(sent.at(-1), ['forget', { id: 'a', from: null }]);
-  assert.equal(title(app), 'Connect to cezar');
+  assert.equal(title(app), 'Connect your cezar');
   assert.equal(backArrow(app), null);
   assert.equal(window.cezarBack(), false);
 });
 
 test('Forget of one of several stays on the list, still going back to the server it came from', async () => {
   const { app, sent } = await boot(none, () => none, { ...listed([saved, two]), screen: 'list', serverId: 'a' }, { forget: () => listed([saved]) });
-  find(app, (node) => node.tag === 'li' && node.text.includes('Home')).children.find((node) => node.textContent === 'Forget').onclick();
-  await settle();
-  await tap(app, 'Forget this device');
+  await settingsFor(app, 'Home');
+  await tap(app, 'Forget this cezar');
+  await tap(app, 'Forget Home');
   // Android restarts the app to drop the auth cache; `from` carries the way back through it.
   assert.deepEqual(sent.at(-1), ['forget', { id: 'b', from: 'a' }]);
-  assert.equal(title(app), 'Devices');
+  assert.equal(title(app), 'Your cezars');
   assert.equal(backArrow(app).attributes['aria-label'], 'Back to Work');
 });
 
-test('Cancel on Forget is one level back', async () => {
+test('Cancel on Forget is one level back, to the cezar it was asked from', async () => {
   const { app } = await boot(none, () => none, listed());
-  await tap(app, 'Forget');
+  await settingsFor(app, 'Work');
+  await tap(app, 'Forget this cezar');
   await tap(app, 'Cancel');
-  assert.equal(title(app), 'Devices');
+  assert.equal(title(app), 'Work');
+  assert.equal(find(app, (node) => node.id === 'forget-title'), null);
+  await systemBack();
+  assert.equal(title(app), 'Your cezars');
 });
 
 test('a removed phone: Pair again and back, then back to the list', async () => {
@@ -440,11 +466,11 @@ test('a removed phone: Pair again and back, then back to the list', async () => 
   await find(app, (node) => node.className === 'open').onclick();
   await settle();
   await tap(app, 'Pair again');
-  assert.equal(title(app), 'Connect to cezar');
+  assert.equal(title(app), 'Connect another cezar');
   await systemBack();
   assert.equal(title(app), 'This phone was removed from cezar.');
   await systemBack();
-  assert.equal(title(app), 'Devices');
+  assert.equal(title(app), 'Your cezars');
 });
 
 const copyLog = (app) => find(app, (node) => node.tag === 'button' && node.textContent === 'Copy startup log');
@@ -606,4 +632,154 @@ test('a new link answered after Back writes nothing on the screen below', async 
   await settle();
   assert.equal(app.text, below);
   assert.doesNotMatch(app.text, /on its way/);
+});
+
+// Your cezars (spec 2026-11-19-mobile-devices-screen).
+const live = { id: 'l', label: 'Laptop', url: 'https://relay.example.test', relay: true, push: true, initials: 'L', color: '#2a9fd8', status: 'checking', words: 'Checking…', need: 2 };
+const blocked = { id: 'b', label: 'build box', url: 'https://ci.example.com', username: 'patryk', initials: 'BB', color: '#e0912a', status: 'other', reason: 'sign-in', words: 'Sign in needed' };
+
+test('one cezar: its card and the one button that opens its Manager', async () => {
+  const { app, sent } = await boot(none, () => none, { ...listed([{ ...live, status: 'online', words: 'Online' }]) });
+  assert.equal(title(app), 'Your cezars');
+  assert.match(app.text, /The cezar this phone is connected to/);
+  assert.match(app.text, /Paired with this phone/);
+  assert.match(app.text, /2 need you in the Manager/);
+  await tap(app, 'Open Manager');
+  assert.deepEqual(sent.at(-1), ['open', { id: 'l' }]);
+});
+
+test('the card a cezar was opened from is current, and opening it goes straight back', async () => {
+  const { app, sent } = await boot(none, () => none, { ...listed([saved, { ...live, status: 'online', words: 'Online' }]), screen: 'list', serverId: 'l' });
+  const current = find(app, (node) => node.tag === 'li' && node.className.includes('current'));
+  assert.match(current.text, /Laptop/);
+  assert.match(current.text, /Current/);
+  find(current, (node) => node.className === 'open').onclick();
+  await settle();
+  assert.deepEqual(sent.at(-1), ['open', { id: 'l', quick: true }]);
+});
+
+test('a cezar that needs sign-in shows why, and its fix opens the matching screen', async () => {
+  const { app, sent } = await boot(none, () => none, listed([saved, blocked]));
+  assert.match(app.text, /Sign in needed/);
+  await tap(app, 'Sign in');
+  assert.deepEqual(sent.at(-1), ['open', { id: 'b' }]);
+});
+
+test('a phone removed from its cezar offers Pair again, which starts a pairing', async () => {
+  const { app } = await boot(none, () => none, listed([saved, { ...blocked, reason: 'removed', words: 'This phone was removed' }]));
+  await tap(app, 'Pair again');
+  assert.equal(title(app), 'Connect another cezar');
+});
+
+test('statuses come from one probe round once the list shows, and redraw it', async () => {
+  // The round answers only when the test says so: a probe started on the first draw cannot win the race.
+  let answer;
+  const answered = new Promise((resolve) => { answer = resolve; });
+  const { app, sent } = await boot(none, () => none, listed([live, saved]), {
+    probe: () => answered,
+  });
+  assert.match(app.text, /Checking…/);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.match(app.text, /Checking…/);
+  answer(listed([{ ...live, status: 'offline', words: 'Offline since 09:41' }, saved]));
+  await settle();
+  assert.deepEqual(sent.find(([method]) => method === 'probe'), ['probe', { current: '' }]);
+  assert.match(app.text, /Offline since 09:41/);
+});
+
+test('an older app sends no status, so nothing probes and the card has no status line', async () => {
+  const { app, calls } = await boot(none, () => none, listed());
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(!calls.includes('probe'));
+  assert.doesNotMatch(app.text, /Checking|Online/);
+});
+
+test('rename: Name opens a field, Save sends it trimmed, and the page shows the new name', async () => {
+  const { app, sent } = await boot(none, () => none, listed([saved, two]), {
+    rename: ({ id, label }) => listed([{ ...saved, label }, two]).servers && { ...listed([{ ...saved, label }, two]) },
+  });
+  await settingsFor(app, 'Work');
+  await tap(app, 'Name');
+  await submit(app, { label: '  Office  ' });
+  assert.deepEqual(sent.at(-1), ['rename', { id: 'a', label: 'Office' }]);
+  assert.equal(form(app), null);
+  assert.match(app.text, /Office/);
+});
+
+test('rename refuses an empty name here, and shows the reason native gives', async () => {
+  const { app, sent } = await boot(none, () => none, listed([saved, two]), {
+    rename: () => ({ ...listed([saved, two]), renameError: 'That name is taken.' }),
+  });
+  await settingsFor(app, 'Work');
+  await tap(app, 'Name');
+  await submit(app, { label: '   ' });
+  assert.match(app.text, /Enter a name/);
+  assert.ok(!sent.some(([method]) => method === 'rename'));
+  await submit(app, { label: 'Home' });
+  assert.match(app.text, /That name is taken/);
+  assert.ok(form(app));
+});
+
+test('a direct cezar page says how it is reached and who is signed in', async () => {
+  const { app } = await boot(none, () => none, listed([saved, blocked]));
+  await settingsFor(app, 'build box');
+  assert.equal(title(app), 'build box');
+  assert.match(app.text, /Directly, at ci.example.com/);
+  assert.match(app.text, /Signed in as patryk/);
+  assert.match(app.text, /Available for cezars paired with a code/);
+});
+
+test('the App section: notification permission opens the phone settings, and the version shows', async () => {
+  const { app, sent } = await boot(none, () => none, { ...listed(), notifications: 'denied', version: '0.1.1 (87)' }, { notificationSettings: {} });
+  assert.match(app.text, /Version 0.1.1 \(87\)/);
+  assert.match(app.text, /Turned off for CezarBot/);
+  await tap(app, 'Notifications');
+  assert.deepEqual(sent.at(-1), ['notificationSettings', {}]);
+});
+
+test('an iPad shows the list and the chosen cezar side by side, and ⋯ picks without leaving', async () => {
+  wideNext = true;
+  const { app } = await boot(none, () => none, listed([saved, two]));
+  assert.ok(find(app, (node) => node.className === 'split'));
+  const pane = () => find(app, (node) => node.className === 'pane detail');
+  assert.equal(find(pane(), (node) => node.tag === 'h2' && node.className === 'title-name').textContent, 'Work');
+  await settingsFor(app, 'Home');
+  assert.equal(find(pane(), (node) => node.tag === 'h2' && node.className === 'title-name').textContent, 'Home');
+  assert.equal(window.cezarBack(), false);
+});
+
+// PR #2340 smoke findings.
+test('the App section shows Notifications before the phone was ever asked, without a dead link', async () => {
+  const { app } = await boot(none, () => none, { ...listed(), notifications: 'unknown' });
+  assert.match(app.text, /Notifications/);
+  assert.match(app.text, /Not set/);
+  assert.equal(byText(app, 'Notifications'), null);
+});
+
+test('the Notify me switch says its state outright, and keeps saying it as it flips', async () => {
+  const { app } = await boot(none, () => none, { servers: [paired], pairing: true, lock: none }, {
+    pushSet: ({ enabled }) => ({ servers: [{ ...paired, push: enabled }], pairing: true, lock: none }),
+  });
+  await settingsFor(app, 'Laptop');
+  assert.equal(notify(app).attributes['aria-checked'], 'false');
+  const input = notify(app);
+  input.checked = true;
+  const flipping = input.onchange();
+  assert.equal(input.attributes['aria-checked'], 'true');
+  await flipping;
+  assert.equal(notify(app).attributes['aria-checked'], 'true');
+  await systemBack();
+  assert.equal(lockSwitch(app).attributes['aria-checked'], 'false');
+});
+
+test('Connect another cezar is named without its decorative plus', async () => {
+  const { app } = await boot(none, () => none, listed());
+  assert.equal(byText(app, 'Connect another cezar').attributes['aria-label'], 'Connect another cezar');
+});
+
+test('a dead current cezar reads offline on the list once its probe answers', async () => {
+  const { app } = await boot(none, () => none, { ...listed([{ ...live, status: 'offline', words: 'Offline since 09:41' }, saved]), screen: 'list', serverId: 'l' });
+  const current = find(app, (node) => node.tag === 'li' && node.className.includes('current'));
+  assert.match(current.text, /Offline since 09:41/);
+  assert.doesNotMatch(current.text, /Online/);
 });

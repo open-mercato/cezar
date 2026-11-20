@@ -1,13 +1,13 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
 import { backAction, dropPairing, hasArrow, rootScreen, settle } from './nav.js';
-import { ACCOUNT_WHY, RELAY_TERMS, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, termsLead, termsOutcome } from './screens.js';
+import { ACCOUNT_WHY, MAX_NAME, RELAY_TERMS, accountOpens, backTarget, cardFor, checkName, confirmLead, countLine, forgetLead, linkLine, lockRow, notificationsRow, orderServers, primaryFor, pushSwitch, relayField, removingNote, screenFor, startLockRow, termsLead, termsOutcome } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
 let removing = [];
 let context = {};
-// The server the cockpit's Devices link came from: the list's Back returns there.
+// The cezar the cockpit's Devices link came from: the list's Back returns there, and its card is the current one.
 let cameFrom = null;
 // The navigation stack (nav.js); its top is the screen drawn now, unless a request is in flight.
 let stack = [];
@@ -24,6 +24,16 @@ let lockScreen = null;
 let lockChanging = false;
 // Each poll answer redraws its screen; the waiting one stays put so its mark does not restart.
 let pairWaiting = false;
+// Native reports them (spec 2026-11-19-mobile-devices-screen); an older app sends neither.
+let notifications = null;
+let version = null;
+// The cezar whose name is being edited, and why the last try was refused.
+let renaming = null;
+let renameNotice = null;
+// Wide windows (an iPad) show the list and one cezar's page side by side.
+let selected = null;
+const wideQuery = window.matchMedia?.('(min-width: 900px)');
+const wide = () => Boolean(wideQuery?.matches);
 
 const call = (method, options = {}) => window.Capacitor.nativePromise('Connection', method, options);
 
@@ -140,7 +150,8 @@ function render(lockNotice) {
   else if (top.name === 'start') drawStart(top, lockNotice);
   else if (top.name === 'credentials') drawCredentials(top);
   else if (top.name === 'error') drawError(top);
-  else if (top.name === 'forget') drawForget(top);
+  else if (top.name === 'forget') drawForget(top, lockNotice);
+  else if (top.name === 'cezar') drawCezar(top, lockNotice);
   else if (top.name === 'code') drawCode(top);
   else if (top.name === 'add') drawAdd(top);
   else drawList(lockNotice);
@@ -188,6 +199,8 @@ function show(outcome, how = 'stay', method) {
   pairing = outcome.pairing ?? pairing;
   lock = outcome.lock ?? lock;
   relayDefault = outcome.relayDefault ?? relayDefault;
+  notifications = outcome.notifications ?? notifications;
+  version = outcome.version ?? version;
   // The switcher's Add a device: the form one level above the list, so Back lands on the devices.
   if (method === 'launch' && outcome.screen === 'add' && servers.length) {
     cameFrom = servers.some((row) => row.id === outcome.serverId) ? outcome.serverId : null;
@@ -205,10 +218,32 @@ function show(outcome, how = 'stay', method) {
   if (screen.name === 'pair-waiting' || screen.name === 'pair-confirm') poll(screen.seq);
 }
 
-function lockSection(row, text) {
+// A row of a grouped list: its label is the node's own text, so the whole row is one target and one name.
+function item(tag, label, props = {}, ...children) {
+  return element(tag, { textContent: label, ...props, className: `item ${props.className ?? ''}`.trim() }, ...children);
+}
+
+const small = (text) => (text ? element('small', { textContent: text }) : null);
+const group = (...rows) => element('div', { className: 'group' }, ...rows.filter(Boolean));
+const eyebrow = (text) => element('h2', { className: 'eyebrow', textContent: text });
+
+function switchInput(label, checked, onchange) {
+  const input = element('input', { type: 'checkbox', checked: Boolean(checked) });
+  input.setAttribute('role', 'switch');
+  input.setAttribute('aria-label', label);
+  // Said outright: WebView's TalkBack mapping missed the checkbox state behind role="switch" (PR #2340 smoke).
+  input.setAttribute('aria-checked', String(Boolean(checked)));
+  input.onchange = async () => {
+    input.setAttribute('aria-checked', String(Boolean(input.checked)));
+    input.disabled = true;
+    await onchange();
+  };
+  return input;
+}
+
+function lockItem(row) {
   if (!row) return null;
-  const toggle = button(row.label, async () => {
-    toggle.disabled = true;
+  const input = switchInput(row.label, row.checked, async () => {
     lockChanging = true;
     try {
       const outcome = await call('lockSet', { enabled: row.enable });
@@ -220,62 +255,203 @@ function lockSection(row, text) {
       lockChanging = false;
     }
   });
-  toggle.disabled = Boolean(row.disabled);
-  return element('section', { className: 'stack' }, notice(text), toggle, element('p', { className: 'muted', textContent: row.note }));
+  input.disabled = Boolean(row.disabled);
+  return item('label', row.label, { className: 'toggle' }, small(row.note), input);
 }
 
-// A switch per relay server. Turning it on may raise Android's permission prompt; the answer redraws the list.
-function notificationsSwitch(server) {
-  const row = pushSwitch(server);
-  if (!row) return null;
-  const input = element('input', { type: 'checkbox', checked: row.checked });
-  input.setAttribute('role', 'switch');
-  input.onchange = async () => {
-    input.disabled = true;
-    try {
-      const outcome = await call('pushSet', { id: server.id, enabled: row.enable });
-      show(outcome);
-      if (outcome.pushError) render(outcome.pushError);
-    } catch (error) {
-      render(String(error?.message ?? error));
-    }
-  };
-  return element('label', { className: 'switch' }, input, element('span', { textContent: row.label }));
-}
-
-function drawList(lockNotice) {
-  if (!servers.length) return pairing ? drawStart({}, lockNotice) : drawAdd({});
-  const rows = servers.map((server) =>
-    element(
-      'li',
-      {},
-      element(
-        'button',
-        { type: 'button', className: 'open', onclick: () => run('open', { id: server.id }, { serverId: server.id }) },
-        element('span', { textContent: server.label }),
-        element('span', { className: 'muted', textContent: server.url }),
-      ),
-      button('Forget', () => go({ name: 'forget', server })),
-      notificationsSwitch(server),
-    ),
-  );
-  const leaving = removingNote(removing);
-  draw(titled('Devices'), element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add a device', () => go({ name: pairing ? 'start' : 'add' }), 'primary'), lockSection(lockRow(lock), lockNotice), startupLogButton());
-  lockScreen = render;
-}
-
-// What the last starts did, for a bug report. An app without the method says so instead.
-function startupLogButton() {
-  const note = element('p', { className: 'muted' });
-  const copy = button('Copy startup log', async () => {
+// The phone-wide part of the list, apart from any one cezar.
+function appSection(lockRowNow) {
+  const permission = notificationsRow(notifications);
+  const note = element('p', { className: 'muted log-note' });
+  const copy = item('button', 'Copy startup log', { type: 'button' }, small('For a bug report.'));
+  copy.onclick = async () => {
     try {
       const outcome = await call('startupLogCopy');
       note.textContent = outcome?.copied ? `Copied ${outcome.lines} lines.` : 'Could not reach the clipboard.';
     } catch {
       note.textContent = 'This version of the app keeps no startup log.';
     }
-  });
-  return element('section', { className: 'stack' }, copy, note);
+  };
+  const settings = permission && (permission.settings
+    ? item('button', 'Notifications', { type: 'button', onclick: () => call('notificationSettings').catch(() => {}) }, small(permission.note), element('span', { className: 'value', textContent: permission.value }))
+    : item('div', 'Notifications', {}, small(permission.note), element('span', { className: 'value', textContent: permission.value })));
+  const policy = item('a', 'Privacy policy', { href: 'https://openmercatocloud.com/privacy', target: '_blank', rel: 'noreferrer' });
+  const shown = version && item('div', 'Version', {}, element('span', { className: 'value', textContent: version }));
+  return element('section', { className: 'app-section' }, eyebrow('App'), group(lockItem(lockRowNow), settings, copy, policy, shown), note);
+}
+
+function avatar(server, view, size = '') {
+  const node = element('span', { className: `avatar ${size}`.trim(), textContent: server.initials ?? '' }, view.dot ? element('span', { className: `dot ${view.dot}` }) : null);
+  // CSSOM, which the page's CSP allows where a style attribute would not be.
+  if (server.color) node.style.background = server.color;
+  node.setAttribute('aria-hidden', 'true');
+  return node;
+}
+
+const pill = (view) => (view.current ? element('span', { className: 'pill', textContent: 'Current' }) : null);
+
+function statusLine(view, need = view.need) {
+  if (!view.words) return null;
+  return element('span', { className: `state ${view.dot}` }, element('span', { textContent: view.words }), need ? element('span', { className: 'need', textContent: ` · ${need}` }) : null);
+}
+
+function openCezar(server) {
+  run('open', server.id === cameFrom ? { id: server.id, quick: true } : { id: server.id }, { serverId: server.id });
+}
+
+function act(action, server) {
+  if (action === 'pair') go({ name: pairing ? 'start' : 'add' });
+  else openCezar(server);
+}
+
+function showCezar(id) {
+  renaming = null;
+  renameNotice = null;
+  if (wide()) {
+    selected = id;
+    render();
+  } else go({ name: 'cezar', serverId: id });
+}
+
+const selectedId = (ordered) => (ordered.some((row) => row.id === selected) ? selected : ordered[0]?.id);
+
+function card(server, { chosen } = {}) {
+  const view = cardFor(server, cameFrom);
+  const open = element(
+    'button',
+    { type: 'button', className: 'open', onclick: () => openCezar(server) },
+    avatar(server, view),
+    element('span', { className: 'who' }, element('span', { className: 'name' }, element('span', { className: 'label', textContent: view.label }), pill(view)), element('span', { className: 'where', textContent: view.where }), statusLine(view)),
+    view.fix ? null : element('span', { className: 'chevron', textContent: '›' }),
+  );
+  open.setAttribute('aria-label', `${view.aria}. Opens it.`);
+  const fix = view.fix ? button(view.fix.label, () => act(view.fix.action, server), 'fix') : null;
+  const more = button('⋯', () => showCezar(server.id), 'more');
+  more.setAttribute('aria-label', `Settings for ${view.label}`);
+  return element('li', { className: ['card', view.current && 'current', chosen && 'selected'].filter(Boolean).join(' ') }, open, fix, more);
+}
+
+// One cezar: its card, why it cannot open, and the one button that does the main job.
+function hero(server) {
+  const view = cardFor(server, cameFrom);
+  const primary = primaryFor(view);
+  const hint = view.status === 'offline'
+    ? `${view.label} is asleep or offline. Wake it, or check that cezar is running on it.`
+    : view.need ? `${view.need} in the Manager.` : null;
+  return element('div', { className: 'hero' }, element('ul', { className: 'cards' }, card(server)), hint && element('p', { className: 'muted', textContent: hint }), button(primary.label, () => act(primary.action, server), 'primary'));
+}
+
+// The "+" is CSS decoration: the accessible name leaves it out (PR #2340 smoke).
+function connectAnother() {
+  const add = button('Connect another cezar', () => go({ name: pairing ? 'start' : 'add' }), 'add');
+  add.setAttribute('aria-label', 'Connect another cezar');
+  return add;
+}
+
+function listNodes(text) {
+  const ordered = orderServers(servers, cameFrom);
+  const split = wide();
+  const chosen = split ? selectedId(ordered) : null;
+  const leaving = removingNote(removing);
+  const list = [
+    titled('Your cezars'),
+    element('p', { className: 'muted lead', textContent: countLine(ordered.length) }),
+    notice(text),
+    ordered.length === 1 && !split ? hero(ordered[0]) : element('ul', { className: 'cards' }, ...ordered.map((server) => card(server, { chosen: server.id === chosen }))),
+    leaving && element('p', { className: 'muted', textContent: leaving }),
+    connectAnother(),
+    appSection(lockRow(lock)),
+  ];
+  if (!split) return list;
+  const server = servers.find((row) => row.id === chosen);
+  return [element('div', { className: 'split' }, element('div', { className: 'pane' }, ...list), element('div', { className: 'pane detail' }, ...(server ? cezarNodes(server, { heading: true }) : [])))];
+}
+
+function drawList(text) {
+  if (!servers.length) return pairing ? drawStart({}, text) : drawAdd({});
+  draw(...listNodes(text));
+  lockScreen = render;
+  probeSoon();
+}
+
+function notifyItem(server) {
+  const row = pushSwitch(server);
+  if (row) {
+    const input = switchInput(`${row.label} when ${server.label} needs you`, row.checked, async () => {
+      try {
+        const outcome = await call('pushSet', { id: server.id, enabled: row.enable });
+        show(outcome);
+        if (outcome.pushError) render(outcome.pushError);
+      } catch (error) {
+        render(String(error?.message ?? error));
+      }
+    });
+    return item('label', row.label, { className: 'toggle' }, small(row.note), input);
+  }
+  return server.relay ? null : item('div', 'Notifications', {}, small('Available for cezars paired with a code.'));
+}
+
+function nameItem(server) {
+  if (renaming !== server.id) {
+    return item('button', 'Name', { type: 'button', onclick: () => { renaming = server.id; renameNotice = null; render(); } }, element('span', { className: 'value', textContent: server.label }));
+  }
+  const form = element(
+    'form',
+    { className: 'rename' },
+    notice(renameNotice),
+    field('Name', 'label', { value: server.label, maxLength: MAX_NAME, autocapitalize: 'words', required: true }),
+    element('div', { className: 'actions' }, button('Cancel', () => { renaming = null; renameNotice = null; render(); }), element('button', { className: 'primary', textContent: 'Save' })),
+  );
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const checked = checkName(new FormData(form).get('label'));
+    if (checked.error) {
+      renameNotice = checked.error;
+      return render();
+    }
+    const here = stillHere();
+    try {
+      const outcome = await call('rename', { id: server.id, label: checked.name });
+      if (!here()) return;
+      renameNotice = outcome.renameError ?? null;
+      if (!renameNotice) renaming = null;
+      show(outcome);
+    } catch (error) {
+      if (!here()) return;
+      renameNotice = String(error?.message ?? error);
+      render();
+    }
+  };
+  return element('div', { className: 'item editing' }, form);
+}
+
+function cezarNodes(server, { heading = false, text } = {}) {
+  const view = cardFor(server, cameFrom);
+  const primary = primaryFor(view);
+  const where = server.relay ? 'Through the Cezar relay, end-to-end encrypted.' : `Directly, at ${view.where}.`;
+  return [
+    element('div', { className: 'dhead' }, avatar(server, view, 'lg'), heading ? element('h2', { className: 'title-name', textContent: view.label }) : null, pill(view), statusLine(view)),
+    notice(text),
+    button(primary.label, () => act(primary.action, server), 'primary'),
+    eyebrow('This cezar'),
+    group(notifyItem(server), nameItem(server), item('div', 'Connection', {}, small(where)), !server.relay && server.username ? item('div', 'Signed in as', {}, element('span', { className: 'value', textContent: server.username })) : null),
+    group(item('button', 'Forget this cezar', { type: 'button', className: 'danger', onclick: () => go({ name: 'forget', server }) })),
+    element('p', { className: 'muted', textContent: server.relay ? 'Removes this phone from it. You can pair again with a new code.' : 'Deletes its saved password from this phone.' }),
+  ];
+}
+
+function drawCezar({ serverId }, text) {
+  const server = servers.find((row) => row.id === serverId);
+  if (!server) return drawList(text);
+  if (wide()) {
+    // Grown wide on this page (an iPad turned): the split shows the same cezar.
+    selected = serverId;
+    stack = stack.slice(0, -1);
+    return render(text);
+  }
+  draw(titled(server.label), ...cezarNodes(server, { text }));
+  lockScreen = render;
+  probeSoon();
 }
 
 // The phone's screen lock can change in Settings with this page alive. Only the row redraws, so no form loses its input.
@@ -289,29 +465,35 @@ async function refreshLock() {
 }
 
 function drawForget({ server }) {
-  draw(
-    titled(`Forget ${server.label}?`),
-    element('p', { textContent: server.relay ? 'This removes this phone from that computer and deletes its keys and website data.' : 'This deletes its saved password and website data from this phone.' }),
-    element(
-      'div',
-      { className: 'actions' },
-      button('Cancel', () => goBack()),
-      // `from`: Android restarts the app to drop the webview's auth cache, and the list's Back must survive that.
-      button('Forget this device', () => run('forget', { id: server.id, from: cameFrom === server.id ? null : cameFrom }, {}, 'reset'), 'primary'),
-    ),
-  );
+  const saved = servers.find((row) => row.id === server.id);
+  const confirm = button(`Forget ${server.label}`, () => run('forget', { id: server.id, from: cameFrom === server.id ? null : cameFrom }, {}, 'reset'), 'destructive');
+  // `from` above: Android restarts the app to drop the webview's auth cache, and the list's Back must survive that.
+  const cancel = button('Cancel', () => goBack());
+  if (!saved) {
+    // Asked from a screen with no page under it (removed, suspended): the question is the screen.
+    return draw(titled(`Forget ${server.label}?`), element('p', { textContent: forgetLead(server) }), element('div', { className: 'actions' }, cancel, confirm));
+  }
+  const sheet = element('div', { className: 'sheet', role: 'dialog' }, element('h2', { id: 'forget-title', textContent: `Forget ${server.label}?` }), element('p', { textContent: forgetLead(server) }), cancel, confirm);
+  sheet.setAttribute('aria-modal', 'true');
+  sheet.setAttribute('aria-labelledby', 'forget-title');
+  const under = wide() ? listNodes() : [titled(saved.label), ...cezarNodes(saved)];
+  draw(...under, element('div', { className: 'scrim', onclick: (event) => event.target === event.currentTarget && goBack() }, sheet));
+  cancel.focus?.({ preventScroll: true });
 }
 
 // Advanced unfolds in place and is no level of its own: Back leaves the screen, folded or not.
 function drawStart({ advanced, url }, lockNotice) {
-  const details = element('details', { open: Boolean(advanced) }, element('summary', { textContent: 'Advanced' }), addForm({ url }));
+  const details = element('details', { open: Boolean(advanced) }, element('summary', { textContent: 'Use a server address instead' }), addForm({ url }));
   details.ontoggle = () => keep({ advanced: details.open });
+  const first = !servers.length;
   draw(
-    titled('Connect to cezar'),
-    element('p', { className: 'muted', textContent: 'On your computer, open Settings, then Connect a phone.' }),
+    titled(first ? 'Connect your cezar' : 'Connect another cezar'),
+    first ? element('p', { className: 'muted', textContent: 'CezarBot shows a cezar running on your laptop, a server or the cloud, so you can answer it from here.' }) : null,
+    element('ol', { className: 'steps' }, element('li', { textContent: 'Open cezar, wherever it runs.' }), element('li', { textContent: 'Go to Settings, then Connect a phone.' }), element('li', { textContent: 'Scan the code it shows.' })),
+    notice(lockNotice),
     element('div', { className: 'stack' }, button('Scan QR code', () => run('scan', {}, {}), 'primary'), button('Enter code', () => go({ name: 'code' }))),
     details,
-    lockSection(startLockRow(lock), lockNotice),
+    first ? appSection(startLockRow(lock)) : null,
   );
   lockScreen = render;
 }
@@ -493,14 +675,14 @@ function drawSuspended({ serverId, label }) {
     titled('Relay access suspended'),
     element('p', { textContent: `Relay access for ${label ?? 'this computer'} is suspended, so this phone cannot connect to it through the relay. Contact Open Mercato.` }),
     element('div', { className: 'stack' },
-      button('Back to devices', () => goBack(), 'primary'),
+      button('Back to Your cezars', () => goBack(), 'primary'),
       button('Forget', () => go({ name: 'forget', server: { id: serverId, label, relay: true } })),
     ),
   );
 }
 
 function drawAdd({ url, notice: text }) {
-  draw(titled('Connect to cezar'), addForm({ url, notice: text }));
+  draw(titled(servers.length ? 'Connect another cezar' : 'Connect your cezar'), addForm({ url, notice: text }));
 }
 
 function addForm({ url, notice: text }) {
@@ -543,12 +725,59 @@ function drawError({ serverId, message }) {
   draw(titled('Connection problem'), notice(message), serverId ? element('div', { className: 'actions' }, button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')) : null);
 }
 
-// Back in the foreground: the lock row may have changed, and a link may have been opened meanwhile (§ 18).
+// Live status (spec 2026-11-19-mobile-devices-screen): one probe round when the list shows, on return to the
+// foreground, and each minute while it stays. Only an app that sends `status` knows `probe`.
+const PROBE_MS = 60_000;
+let probeTimer = null;
+let probing = false;
+let probeOff = false;
+let lastProbe = 0;
+
+const onList = () => {
+  const name = stack.at(-1)?.name ?? rootScreen({ servers, pairing });
+  return !inflight && (name === 'list' || name === 'cezar');
+};
+
+function probeSoon() {
+  if (probeOff || probeTimer || !servers.some((server) => server.status !== undefined)) return;
+  probeTimer = setTimeout(probeNow, Math.max(0, lastProbe + PROBE_MS - Date.now()));
+  probeTimer?.unref?.();
+}
+
+async function probeNow() {
+  probeTimer = null;
+  if (probing || document.visibilityState !== 'visible' || !onList()) return;
+  probing = true;
+  try {
+    const outcome = await call('probe', { current: cameFrom ?? '' });
+    lastProbe = Date.now();
+    servers = outcome.servers ?? servers;
+    notifications = outcome.notifications ?? notifications;
+    version = outcome.version ?? version;
+    // A name being typed keeps its field: the next round redraws.
+    if (onList() && !renaming) render();
+  } catch {
+    probeOff = true;
+  } finally {
+    probing = false;
+  }
+  if (onList()) probeSoon();
+}
+
+// Back in the foreground: the lock row may have changed, statuses are stale, and a link may have been opened meanwhile (§ 18).
 document.addEventListener('visibilitychange', () => {
   const top = confirmScreen();
   if (top && document.visibilityState === 'visible') checkAccount(top.serverId);
+  if (document.visibilityState === 'visible') {
+    clearTimeout(probeTimer);
+    probeTimer = null;
+    lastProbe = 0;
+    probeSoon();
+  }
   return refreshLock();
 });
+// An iPad turned or resized across the split's width.
+wideQuery?.addEventListener?.('change', () => onList() && render());
 // Native asks before its own Back: true means the page took it, false lets Android leave the app (MainActivity, ShellViewController).
 window.cezarBack = () => goBack();
 

@@ -31,6 +31,12 @@ public class AvatarTest {
     }
 
     @Test
+    public void unicodeSpaceSplitsAndTrimsAsJavaScriptDoes() {
+        assertEquals("BB", Avatar.initials("\u00A0Build\u3000box\u2009"));
+        assertEquals(Avatar.color("Build box"), Avatar.color("\uFEFFBuild box\u00A0"));
+    }
+
+    @Test
     public void anEmptyNameHasNoLetters() {
         assertEquals("", Avatar.initials(""));
         assertEquals("", Avatar.initials(null));

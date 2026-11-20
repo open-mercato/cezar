@@ -482,10 +482,11 @@ export function managerAttention(manager: AttentionCounts): ManagerAttention | n
 }
 
 /** The strongest reason across managers: one waiting approval outranks any amount of news. */
-export function managersAttention(managers: readonly AttentionCounts[] | undefined): ManagerAttention | null {
+export function managersAttention(managers: readonly (AttentionCounts & Pick<ManagerSummary, 'inactive'>)[] | undefined): ManagerAttention | null {
   let found: ManagerAttention | null = null
   for (const manager of managers ?? []) {
-    const attention = managerAttention(manager)
+    // An inactive manager's approvals still wait on the user; its questions and news do not.
+    const attention = isInactive(manager) ? (manager.pendingActions > 0 ? 'needs-you' : null) : managerAttention(manager)
     if (attention === 'needs-you') return attention
     found ??= attention
   }
@@ -498,7 +499,25 @@ export const MANAGER_ATTENTION_DOT: Record<ManagerAttention, string> = { 'needs-
 /** Screen-reader words for the dot, read as part of the row's name. */
 export const MANAGER_ATTENTION_TEXT: Record<ManagerAttention, string> = { 'needs-you': ', needs you', unread: ', unread' }
 
+// ---- deactivation (spec 2026-11-19-manager-deactivate) -------------------------------------
+
+export const isInactive = (manager: Pick<ManagerSummary, 'inactive'> | undefined): boolean => manager?.inactive !== undefined
+
+/** The dot an inactive manager shows while it holds cards: grey, never the blue that waits on you. */
+export const MANAGER_INACTIVE_DOT = 'bg-muted-foreground'
+
+/** Active managers, then the inactive ones under their divider; each half keeps its order. */
+export function splitByActivity<T extends Pick<ManagerSummary, 'inactive'>>(managers: readonly T[]): { active: T[]; inactive: T[] } {
+  return { active: managers.filter((manager) => !isInactive(manager)), inactive: managers.filter(isInactive) }
+}
+
+export function inactiveSinceLabel(manager: Pick<ManagerSummary, 'inactive'>, now: Date = new Date()): string {
+  const since = manager.inactive ? managerMessageTime(manager.inactive.since, now) : ''
+  return since ? `Inactive · since ${since}` : 'Inactive'
+}
+
 export function managerRowPreview(manager: ManagerSummary): string {
+  if (isInactive(manager)) return inactiveSinceLabel(manager)
   // Counts open ask cards, and one card can hold several questions: word it per answer.
   if (manager.pendingQuestions > 0) {
     return manager.pendingQuestions === 1 ? 'Waiting for your answer' : `Waiting for ${manager.pendingQuestions} answers`
