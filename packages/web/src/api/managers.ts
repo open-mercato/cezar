@@ -51,6 +51,16 @@ export async function updateManager(id: string, patch: UpdateManagerInput): Prom
   return unwrap(await managers()[':id'].$patch({ param: managerParam(id), json: patch }), managerPath(id))
 }
 
+/** Deactivate or reactivate (spec 2026-11-19-manager-deactivate); `catchUp` runs one forced check. */
+export async function setManagerActive(id: string, active: boolean, opts?: { catchUp?: boolean }): Promise<ManagerSummary> {
+  return updateManager(id, { active, ...(active && opts?.catchUp ? { catchUp: true as const } : {}) })
+}
+
+/** Every manager at once (the bulk route): the ids whose state changed. */
+export async function setManagersActive(active: boolean): Promise<string[]> {
+  return (await unwrap(await managers().activity.$post({ json: { active } }), '/workspace/managers/activity')).changed
+}
+
 export async function deleteManager(id: string) {
   return unwrap(await managers()[':id'].$delete({ param: managerParam(id) }), managerPath(id))
 }
@@ -153,11 +163,12 @@ export function resetManagerSendKeys(): void {
   unansweredSends.clear()
 }
 
-export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
+export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string, opts?: { reactivate?: boolean }) {
   // Staging may re-upload a file under a new id, so a file counts by its name, not its upload.
   const files = (images ?? []).map((image) => ('data' in image ? `${image.mediaType}:${image.data.length}` : image.name ?? '?'))
   const fingerprint = JSON.stringify([id, askId ?? '', text, files])
-  const base = { text, ...(images?.length ? { images } : {}) }
+  // `reactivate`: the user confirmed waking an inactive manager for this message (spec 2026-11-19-manager-deactivate).
+  const base = { text, ...(images?.length ? { images } : {}), ...(opts?.reactivate ? { reactivate: true as const } : {}) }
   const timeout = images?.length ? MANAGER_SEND_WITH_FILES_TIMEOUT_MS : MANAGER_SEND_TIMEOUT_MS
   const post = (json: typeof base & { askId?: string; idempotencyKey?: string }) => bounded(async (signal) =>
     unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }, { init: { signal } }), managerPath(id, '/messages')), timeout, MANAGER_SEND_INTERRUPTED)
@@ -167,7 +178,7 @@ export async function sendManagerMessage(id: string, text: string, images?: Atta
   const send = async (json: typeof base & { askId?: string; idempotencyKey?: string }): Promise<Awaited<ReturnType<typeof post>>> =>
     post(json).catch((failure: unknown) => {
       if (!(failure instanceof ApiError) || failure.status !== 400) throw failure
-      const known = Object.fromEntries(Object.entries(json).filter(([key]) => key === 'text' || key === 'images' || !failure.message.includes(key)))
+      const known = Object.fromEntries(Object.entries(json).filter(([key]) => key === 'text' || key === 'images' || key === 'reactivate' || !failure.message.includes(key)))
       if (Object.keys(known).length === Object.keys(json).length) throw failure
       return send(known as typeof json)
     })
@@ -241,9 +252,10 @@ export const managerKeys = {
 type MessagePages = InfiniteData<ManagerMessagesResponse, number | undefined>
 
 /** Most recently active first; a manager that never spoke sorts by its creation. */
+/** Most recent first, inactive managers after the active ones (spec 2026-11-19-manager-deactivate). */
 export function orderManagers(managers: readonly ManagerSummary[]): ManagerSummary[] {
   const at = (manager: ManagerSummary) => Date.parse(manager.lastActivityAt ?? manager.createdAt) || 0
-  return [...managers].sort((a, b) => at(b) - at(a))
+  return [...managers].sort((a, b) => Number(a.inactive !== undefined) - Number(b.inactive !== undefined) || at(b) - at(a))
 }
 
 export function applyManagerChange(
@@ -593,6 +605,25 @@ export function useUpdateManager(id: string) {
     onSuccess: (manager) => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, false))
     },
+  })
+}
+
+/** Deactivate or reactivate any manager; the list row updates from the answer. */
+export function useSetManagerActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, active, catchUp }: { id: string; active: boolean; catchUp?: boolean }) => setManagerActive(id, active, { ...(catchUp ? { catchUp } : {}) }),
+    onSuccess: (manager) => {
+      queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, manager.id, manager, false))
+    },
+  })
+}
+
+export function useSetManagersActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ active }: { active: boolean }) => setManagersActive(active),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: managerKeys.list }),
   })
 }
 
