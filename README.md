@@ -123,7 +123,8 @@
 ## Quick start
 
 Two ways in: the **desktop app** for most people, or the **npm package** for servers and headless use.
-Either way you need **Node 20+** and at least one agent CLI you're logged into (listed under [npm / CLI](#npm--cli)).
+Either way you need at least one agent CLI you're logged into (listed under [npm / CLI](#npm--cli)).
+The npm package also needs **Node 20+**; the desktop app uses yours, or downloads its own when you have none.
 
 ### Downloads
 
@@ -134,13 +135,14 @@ keeps it up to date, and switches between stable and nightly from the menu.
 | --- | --- | --- |
 | macOS | [Apple silicon (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-aarch64.dmg) | Macs with an M-series chip |
 | macOS | [Intel (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-x86_64.dmg) | Macs with an Intel processor |
-| Windows | [x64 installer (.exe)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-windows-x86_64-setup.exe) | 64-bit Windows, signed setup installer |
+| Windows | [x64 installer (.exe)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-windows-x86_64-setup.exe) | 64-bit Windows, setup installer |
 | Linux | [AppImage](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.AppImage) | Any 64-bit distribution, no install step |
 | Debian, Ubuntu | [.deb package](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.deb) | Debian, Ubuntu and derivatives (apt) |
 | Arch, Omarchy, Manjaro | [.pkg.tar.zst](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.pkg.tar.zst) | Arch and Arch-based distributions (pacman) |
 
 All files: [desktop-latest release](https://github.com/open-mercato/cezar/releases/tag/desktop-latest).
-Windows code signing is provided free by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Windows release signing through [SignPath.io](https://signpath.io) (certificate by [SignPath Foundation](https://signpath.org))
+is still being set up, so Windows SmartScreen may warn when you run the installer.
 
 #### Homebrew (macOS)
 
