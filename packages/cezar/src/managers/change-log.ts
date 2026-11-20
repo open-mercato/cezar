@@ -4,7 +4,7 @@
  * rotated by size into `admin-audit.1.ndjson`. Deleting either loses history, never boot; a bad line
  * is skipped. Secret values are redacted before a line is written.
  */
-import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
+import { closeSync, fstatSync, ftruncateSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { managerChangeSchema, type ManagerChange } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
@@ -33,13 +33,12 @@ export class ManagerChangeLog {
     try {
       assertCezarHomeWriteIsSandboxed(path);
       mkdirSync(dirname(path), { recursive: true });
-      // The size comes from the open descriptor, never a path check before the write (CodeQL js/file-system-race).
-      fd = openSync(path, 'a', 0o600);
+      // Everything goes through the descriptor, never a second look at the path (CodeQL js/file-system-race):
+      // a full log is copied aside and emptied in place, not renamed.
+      fd = openSync(path, 'a+', 0o600);
       if (fstatSync(fd).size >= this.rotateBytes) {
-        closeSync(fd);
-        fd = undefined;
-        renameSync(path, rotatedPath(path));
-        fd = openSync(path, 'a', 0o600);
+        writeFileSync(rotatedPath(path), readFileSync(fd), { mode: 0o600 });
+        ftruncateSync(fd, 0);
       }
       writeSync(fd, `${JSON.stringify(redactDeep(entry, this.secrets))}\n`);
     } catch (cause) {
