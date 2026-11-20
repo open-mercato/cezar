@@ -34,8 +34,9 @@ import { Button } from '@/components/ui/button'
 import { shortAge } from '@/lib/format'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
-import { LINGER_MS, lingerFading, useLingerClock } from '@/routes/manager/approvals-linger'
+import { useLinger } from '@/routes/manager/approvals-linger'
 import { DecisionSourceList } from '@/routes/manager/decision-sources'
+import { LingerCollapse } from '@/routes/manager/linger-collapse'
 import { ManagerAvatar } from '@/routes/manager/manager-avatar'
 import { useActivityConfirm } from '@/routes/manager/manager-activity'
 import { ManagerAskText, ManagerProjectsContext, ManagerReferenceText } from '@/routes/manager/manager-reference'
@@ -236,20 +237,17 @@ export function QuestionsRoute() {
     const candidates = at < 0 ? keys : [...keys.slice(at + 1), ...keys.slice(0, at).reverse()]
     setTimeout(() => {
       const target = candidates.filter((key) => key !== leaving).map(cardFocusTarget).find(Boolean)
-      ;(target ?? heading.current)?.focus({ preventScroll: false })
+      ;(target ?? heading.current)?.focus({ preventScroll: true })
     }, 0)
   }, [])
 
-  const prune = useCallback((at: number) => {
-    setFinished((rows) => {
-      const kept = rows.filter((row) => row.finishedAt === undefined || row.finishedAt + LINGER_MS > at)
-      if (kept.length === rows.length) return rows
-      const holder = document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')
-      if (holder && rows.some((row) => !kept.includes(row) && row.item.key === holder)) handOffFocus(holder)
-      return kept
-    })
+  const remove = useCallback((keys: ReadonlySet<string>) => {
+    const holder = document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')
+    if (holder && keys.has(holder)) handOffFocus(holder)
+    setFinished((rows) => rows.filter((row) => !keys.has(row.item.key)))
   }, [handOffFocus])
-  const clock = useLingerClock(finished, prune)
+  const list = useRef<HTMLDivElement>(null)
+  const leaving = useLinger(finished.map((row) => ({ key: row.item.key, ...(row.finishedAt === undefined ? {} : { finishedAt: row.finishedAt }) })), remove, list)
 
   const dismiss = useCallback((item: QuestionItem) => {
     scheduleDismiss(queryClient, item.key, firstHeader(item))
@@ -299,7 +297,7 @@ export function QuestionsRoute() {
     const row = finishedByKey.get(item.key)
     if (row) {
       const closed = row.closed ?? query.data?.closed.find((entry) => entry.key === item.key)?.closed
-      return { kind: 'finished', row: closed ? { ...row, closed } : row, fading: lingerFading(row.finishedAt, clock) }
+      return { kind: 'finished', row: closed ? { ...row, closed } : row, fading: leaving.has(item.key) }
     }
     const entry = dismissing.get(item.key)
     return entry ? { kind: 'dismissing', label: entry.label } : { kind: 'open' }
@@ -361,17 +359,20 @@ export function QuestionsRoute() {
         />
       ) : null}
 
-      {groups.map((group) => (
-        <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} {...groupProps} />
-      ))}
+      {/* The cards region: the pointer or focus in here holds a lingering card back (useLinger). */}
+      <div ref={list} data-slot="questions-list" className="contents">
+        {groups.map((group) => (
+          <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} {...groupProps} />
+        ))}
 
-      {query.data && older.length > 0 ? (
-        <Fold slot="questions-older" label={`Older · ${older.length}`} hint={`Open longer than ${olderAfterDays} ${olderAfterDays === 1 ? 'day' : 'days'}, not counted`} open={olderOpen} onToggle={() => setOlderOpen((value) => !value)}>
-          {groupQuestions(older).map((group) => (
-            <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} {...groupProps} />
-          ))}
-        </Fold>
-      ) : null}
+        {query.data && older.length > 0 ? (
+          <Fold slot="questions-older" label={`Older · ${older.length}`} hint={`Open longer than ${olderAfterDays} ${olderAfterDays === 1 ? 'day' : 'days'}, not counted`} open={olderOpen} onToggle={() => setOlderOpen((value) => !value)}>
+            {groupQuestions(older).map((group) => (
+              <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} {...groupProps} />
+            ))}
+          </Fold>
+        ) : null}
+      </div>
 
       {query.data && closed.length > 0 ? (
         <Fold slot="questions-closed" label={`Closed · ${closed.length}`} hint="Last 7 days" open={closedOpen} onToggle={() => setClosedOpen((value) => !value)}>
@@ -470,20 +471,31 @@ function QuestionGroupSection({ group, manager, ...card }: CardProps & { group: 
   const name = source.kind === 'manager' ? source.name : source.title
   const project = source.kind === 'task' ? projects.data?.projects.find((entry) => entry.id === source.projectId)?.name ?? source.projectId : undefined
   const inactive = manager?.inactive !== undefined
+  // Its last card leaving takes the heading along, so nothing below jumps when the group goes.
+  const leaving = group.items.every((item) => { const state = card.cardState(item); return state.kind === 'finished' && state.fading })
   return (
-    <section aria-label={name} data-slot="question-group" data-source={source.kind} data-inactive={inactive || undefined} className="flex flex-col gap-3">
-      <div className="flex items-center gap-2.5">
-        <SourceGlyph source={source} manager={manager} />
-        <div className="min-w-0 flex-1">
-          <h2 className={cn('truncate font-semibold', inactive && 'text-muted-foreground')}>{name}</h2>
-          <p className="truncate text-meta text-muted-foreground">{source.kind === 'manager' ? (inactive ? 'Manager · inactive' : 'Manager') : `${project} · ${source.status}`}</p>
+    <LingerCollapse leaving={leaving}>
+      <section aria-label={name} data-slot="question-group" data-source={source.kind} data-inactive={inactive || undefined} className="flex flex-col gap-3">
+        <div className="flex items-center gap-2.5">
+          <SourceGlyph source={source} manager={manager} />
+          <div className="min-w-0 flex-1">
+            <h2 className={cn('truncate font-semibold', inactive && 'text-muted-foreground')}>{name}</h2>
+            <p className="truncate text-meta text-muted-foreground">{source.kind === 'manager' ? (inactive ? 'Manager · inactive' : 'Manager') : `${project} · ${source.status}`}</p>
+          </div>
+          <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
+            <Link to={sourceHref(source)} aria-label={`${source.kind === 'manager' ? 'Open chat with' : 'Open task'} ${name}`}>{source.kind === 'manager' ? 'Open chat' : 'Open task'}</Link>
+          </Button>
         </div>
-        <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
-          <Link to={sourceHref(source)} aria-label={`${source.kind === 'manager' ? 'Open chat with' : 'Open task'} ${name}`}>{source.kind === 'manager' ? 'Open chat' : 'Open task'}</Link>
-        </Button>
-      </div>
-      {group.items.map((item) => <QuestionCard key={item.key} item={item} state={card.cardState(item)} {...card} />)}
-    </section>
+        {group.items.map((item) => {
+          const state = card.cardState(item)
+          return (
+            <LingerCollapse key={item.key} lingerKey={item.key} leaving={state.kind === 'finished' && state.fading}>
+              <QuestionCard item={item} state={state} {...card} />
+            </LingerCollapse>
+          )
+        })}
+      </section>
+    </LingerCollapse>
   )
 }
 
@@ -565,9 +577,8 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
         if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) focusedInside.current = false
       }}
       className={cn(
-        'flex flex-col gap-2.5 rounded-xl border border-border p-3.5 motion-safe:transition-opacity motion-safe:duration-300',
+        'flex flex-col gap-2.5 rounded-xl border border-border p-3.5',
         state.kind !== 'open' ? 'bg-card/60' : inactive ? 'bg-card-2' : 'bg-card',
-        fading && 'motion-safe:opacity-0',
       )}
     >
       {inactive ? (

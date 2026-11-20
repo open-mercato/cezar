@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { managerKeys } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { DISMISS_UNDO_MS, questionKeys, resetDismissals } from '@/api/questions'
-import { LINGER_MS } from '@/routes/manager/approvals-linger'
+import { FADE_MS as FADE, IDLE_MS, LINGER_MS } from '@/routes/manager/approvals-linger'
 import { managerFixture } from '@/routes/manager/manager-fixtures'
 import { ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import type { QuestionItem, QuestionsResponse } from '@open-mercato/cezar-api-client'
@@ -88,6 +88,7 @@ afterEach(() => {
   resetDismissals()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 function renderPage({ managers = true, entry = '/manager/questions', client: reuse, list }: { managers?: boolean; entry?: string; client?: QueryClient; list?: typeof managerList } = {}) {
@@ -214,6 +215,103 @@ describe('the Questions page', () => {
     // Now the last card: the one just above it, not Alpha at the top.
     await answerAndLinger('Delta')
     expect(focusedKey()).toBe('m:global:m2')
+  })
+
+  describe('a lingering card leaves only when the reader is idle', () => {
+    const answerDesign = async () => {
+      data.open = [managerItem('m1', 'Design', { askedAt: ago(20 * 60_000) }), managerItem('m2', 'Budget', { askedAt: ago(10 * 60_000) })]
+      renderPage()
+      fireEvent.click(within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'Yes' }))
+      await waitFor(() => expect(within(card('Design')).getByRole('img', { name: 'Delivered' })).toBeTruthy())
+    }
+    const listRegion = () => document.querySelector<HTMLElement>('[data-slot="questions-list"]')!
+    const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+    const present = () => screen.queryByRole('group', { name: 'Design' }) !== null
+
+    it('not while the pointer is over the list', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      await answerDesign()
+      fireEvent.pointerEnter(listRegion())
+      await advance(LINGER_MS + 5_000)
+      expect(present()).toBe(true)
+      expect(card('Design').getAttribute('data-lingering')).toBe('shown')
+      fireEvent.pointerLeave(listRegion())
+      // The held-back removal looks again within half a second, then collapses.
+      await advance(500 + FADE)
+      expect(present()).toBe(false)
+    })
+
+    it('not while focus is on another card in the list', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      await answerDesign()
+      within(card('Budget')).getByRole('button', { name: 'No' }).focus()
+      await advance(LINGER_MS + 5_000)
+      expect(present()).toBe(true)
+      screen.getByRole('heading', { name: 'Questions' }).focus()
+      await advance(1_000)
+      expect(present()).toBe(false)
+    })
+
+    it('not within 3 s of a scroll or a key', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      await answerDesign()
+      await advance(LINGER_MS - 2_000)
+      fireEvent.scroll(window)
+      await advance(2_500)
+      expect(present()).toBe(true)
+      fireEvent.keyDown(document.body, { key: 'ArrowDown' })
+      await advance(IDLE_MS - 200)
+      expect(present()).toBe(true)
+      expect(card('Design').getAttribute('data-lingering')).toBe('shown')
+      await advance(600)
+      await advance(FADE)
+      expect(present()).toBe(false)
+    })
+
+    it.each([false, true])('a card above the view leaves at once and the scroll keeps the reader’s place (reduced motion: %s)', async (reduced) => {
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: reduced && query.includes('reduce'), media: query, onchange: null,
+        addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+      }))
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      await answerDesign()
+      const box = (top: number, height: number) => ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON() {} }) as DOMRect
+      // Design sits 300 px above the view; everything after it moves up by its 200 px once it's gone.
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        if (this.closest('[data-linger-key]')?.getAttribute('data-linger-key') === 'm:global:m1') return box(-300, 200)
+        return box(document.querySelector('[data-question-key="m:global:m1"]') ? 300 : 100, 100)
+      })
+      const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+      await advance(LINGER_MS - 400)
+      expect(present()).toBe(true)
+      await advance(500)
+      expect(present()).toBe(false)
+      expect(scrollBy).toHaveBeenCalledWith(0, -200)
+    })
+
+    it('reduced motion: a visible card leaves at 30 s with no collapse', async () => {
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: query.includes('reduce'), media: query, onchange: null,
+        addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+      }))
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      await answerDesign()
+      await advance(LINGER_MS - 100)
+      expect(card('Design').getAttribute('data-lingering')).toBe('shown')
+      await advance(200)
+      expect(present()).toBe(false)
+    })
+
+    it('a visible card collapses before it leaves, with the gap before it', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      await answerDesign()
+      await advance(LINGER_MS - 200)
+      const wrapper = card('Design').closest<HTMLElement>('[data-linger-key]')!
+      expect(wrapper.dataset.leaving).toBe('true')
+      expect(wrapper.className).toContain('grid-rows-[0fr]')
+      await advance(300)
+      expect(present()).toBe(false)
+    })
   })
 
   it('counts drop on the click: the Questions badge and the manager’s “Waiting for N answers”', async () => {
