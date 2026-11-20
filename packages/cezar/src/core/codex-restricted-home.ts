@@ -217,12 +217,12 @@ export function pruneRestrictedCodexHomes(
 }
 
 function readHomeMetadata(path: string): string {
-  const before = lstatSync(path);
-  if (!before.isFile() || before.nlink !== 1) throw new Error('invalid isolated home metadata');
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || info.nlink !== 1 || info.dev !== before.dev || info.ino !== before.ino || info.size > 64 * 1024) throw new Error('invalid isolated home metadata');
+    // Validate the opened file, then bind the current non-symlink leaf to that identity.
+    const leaf = lstatSync(path);
+    if (!info.isFile() || !leaf.isFile() || info.nlink !== 1 || info.dev !== leaf.dev || info.ino !== leaf.ino || info.size > 64 * 1024) throw new Error('invalid isolated home metadata');
     return readFileSync(fd, 'utf8');
   } finally { closeSync(fd); }
 }
