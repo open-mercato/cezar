@@ -31,6 +31,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+mod cli_command;
 mod disclaim;
 mod node_runtime;
 #[cfg(target_os = "macos")]
@@ -43,7 +45,7 @@ mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
 use telemetry::Failure;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -380,23 +382,21 @@ fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
     let versions_menu = Submenu::with_id(app, "versions", "Versions", true)?;
     *shell.versions_menu.lock().unwrap() = Some(versions_menu.clone());
     refresh_versions_menu(app, shell);
-    let app_menu = Submenu::with_items(
-        app,
-        "Cezar",
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &update_item,
-            &versions_menu,
-            &open_item,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
+    let about = PredefinedMenuItem::about(app, None, None)?;
+    let separators = [PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?];
+    let (hide, hide_others, quit) = (PredefinedMenuItem::hide(app, None)?, PredefinedMenuItem::hide_others(app, None)?, PredefinedMenuItem::quit(app, None)?);
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&about, &separators[0], &update_item, &versions_menu, &open_item];
+    // The terminal command (`cli_command.rs`): the bundle's shim linked onto the PATH, like VS Code's `code`.
+    #[cfg(target_os = "macos")]
+    let cli_items = (
+        PredefinedMenuItem::separator(app)?,
+        MenuItem::with_id(app, "install-cli", "Install 'cez' command in PATH…", true, None::<&str>)?,
+        MenuItem::with_id(app, "uninstall-cli", "Uninstall 'cez' command", true, None::<&str>)?,
+    );
+    #[cfg(target_os = "macos")]
+    items.extend([&cli_items.0 as &dyn IsMenuItem<tauri::Wry>, &cli_items.1, &cli_items.2]);
+    items.extend([&separators[1] as &dyn IsMenuItem<tauri::Wry>, &hide, &hide_others, &separators[2], &quit]);
+    let app_menu = Submenu::with_items(app, "Cezar", true, &items)?;
     // Without an Edit menu the webview has no Cmd+C / Cmd+V on macOS.
     let edit_menu = Submenu::with_items(
         app,
@@ -792,6 +792,14 @@ pub fn run() {
                         refresh_versions_menu(&app, &shell);
                     }
                 });
+            }
+            #[cfg(target_os = "macos")]
+            id @ ("install-cli" | "uninstall-cli") => {
+                let Ok(resources) = app.path().resource_dir() else { return };
+                let shim_dir = resources.join("bin");
+                let install = id == "install-cli";
+                // osascript dialogs block until answered: never on the main thread.
+                std::thread::spawn(move || if install { cli_command::install(shim_dir) } else { cli_command::uninstall(shim_dir) });
             }
             "update-cezar" => {
                 let app = app.clone();

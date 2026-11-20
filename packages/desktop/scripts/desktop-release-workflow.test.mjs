@@ -64,21 +64,36 @@ describe('desktop release workflow signing path', () => {
     expect(publishRun).toContain('gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"')
   })
 
-  it('bumps the Homebrew tap only after a real publish, and skips with a warning without its token', () => {
-    const job = workflow().jobs['homebrew-tap']
+  it('bumps the Homebrew tap only after a real publish, with a tap-scoped release-app token, and skips with a warning without one', () => {
+    const doc = workflow()
+    const job = doc.jobs['homebrew-tap']
+    const mint = step(job.steps, 'Mint the tap token')
     const status = step(job.steps, 'Homebrew tap status')
     const bump = step(job.steps, 'Bump Casks/cezar.rb')
+    const releasePin = readFileSync(path.join(root, '.github/workflows/release.yml'), 'utf8').match(/uses: (actions\/create-github-app-token@\S+)/)[1]
 
     expect(job.needs).toEqual(['prepare', 'publish'])
     expect(job.if).toBe('${{ !inputs.dry_run }}')
     expect(job.permissions).toEqual({ contents: 'read' })
-    expect(status.env.HAS_TAP_TOKEN).toContain('secrets.HOMEBREW_TAP_TOKEN')
-    expect(status.run).toContain('::warning::HOMEBREW_TAP_TOKEN is not set')
-    for (const s of job.steps.slice(1)) expect(s.if).toBe("steps.tap.outputs.token == 'true'")
-    expect(bump.env.TAP_TOKEN).toBe('${{ secrets.HOMEBREW_TAP_TOKEN }}')
+    expect(mint.uses).toBe(releasePin)
+    expect(mint['continue-on-error']).toBe(true)
+    expect(mint.with).toEqual({
+      'client-id': '${{ vars.RELEASE_APP_CLIENT_ID }}',
+      'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}',
+      owner: 'open-mercato',
+      repositories: 'homebrew-tap',
+      'permission-contents': 'write',
+    })
+    expect(status.env.MINTED).toBe("${{ steps.app-token.outputs.token != '' }}")
+    expect(status.run).toContain('install the release app on open-mercato/homebrew-tap')
+    for (const s of job.steps.slice(2)) expect(s.if).toBe("steps.tap.outputs.token == 'true'")
+    expect(bump.env.TAP_TOKEN).toBe('${{ steps.app-token.outputs.token }}')
+    expect(readFileSync(workflowPath, 'utf8')).not.toContain('HOMEBREW_TAP_TOKEN')
     expect(bump.run).toContain('--branch main')
     expect(bump.run).toContain('open-mercato/homebrew-tap.git')
-    expect(bump.run).toContain('node packages/desktop/scripts/bump-homebrew-cask.mjs tap/Casks/cezar.rb "$VERSION" "$ARM" "$INTEL"')
+    expect(bump.run).toContain('node packages/desktop/scripts/bump-homebrew-cask.mjs tap/Casks/cezar.rb "$VERSION" "$ARM" "$INTEL" $BINARIES')
+    expect(bump.run).toContain('[ -x packages/desktop/src-tauri/resources/bin/cez ] && BINARIES="--binaries"')
+    expect(step(job.steps, 'Check out repository').with['sparse-checkout']).toContain('packages/desktop/src-tauri/resources/bin')
     expect(bump.run).toContain('git push origin HEAD:main')
   })
 })

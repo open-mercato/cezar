@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Rewrites the tap's Casks/cezar.rb for a new desktop release: the version and the sha256 in
-// each of `on_arm` / `on_intel`. Run by desktop-release.yml's Homebrew tap job.
-//   node bump-homebrew-cask.mjs <cask.rb> <version> <arm64 sha256> <x86_64 sha256>
+// each of `on_arm` / `on_intel`. With `--binaries` (the release ships Contents/Resources/bin/cez)
+// it also adds the `binary` stanzas once; it never removes them. Run by desktop-release.yml.
+//   node bump-homebrew-cask.mjs <cask.rb> <version> <arm64 sha256> <x86_64 sha256> [--binaries]
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -21,7 +22,9 @@ export function caskVersion(source) {
   return source.match(/^\s*version\s+"([^"]*)"/m)?.[1]
 }
 
-export function bumpCask(source, version, armSha, intelSha) {
+export const BINARIES = ['cez', 'cezar'].map(name => `  binary "#{appdir}/Cezar.app/Contents/Resources/bin/${name}"`).join('\n')
+
+export function bumpCask(source, version, armSha, intelSha, { binaries = false } = {}) {
   if (!VERSION.test(version)) throw new Error(`not a version: ${version}`)
   for (const sha of [armSha, intelSha]) if (!SHA.test(sha)) throw new Error(`not a sha256: ${sha}`)
   const replaceOnce = (text, pattern, replacement, what) => {
@@ -31,13 +34,18 @@ export function bumpCask(source, version, armSha, intelSha) {
   let out = replaceOnce(source, /^(\s*version\s+)"[^"]*"/m, `$1"${version}"`, 'version')
   out = replaceOnce(out, /(on_arm do\s*\n\s*sha256\s+)"[0-9a-f]*"/, `$1"${armSha}"`, 'on_arm sha256')
   out = replaceOnce(out, /(on_intel do\s*\n\s*sha256\s+)"[0-9a-f]*"/, `$1"${intelSha}"`, 'on_intel sha256')
+  if (binaries && !out.includes('/Contents/Resources/bin/cez"')) {
+    out = replaceOnce(out, /^( {2}app "Cezar\.app"\n)/m, `$1${BINARIES}\n`, 'app "Cezar.app"')
+  }
   return out
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [file, version, armSha, intelSha] = process.argv.slice(2)
+  const args = process.argv.slice(2)
+  const binaries = args.includes('--binaries')
+  const [file, version, armSha, intelSha] = args.filter(arg => arg !== '--binaries')
   if (!intelSha) {
-    console.error('usage: bump-homebrew-cask.mjs <cask.rb> <version> <arm64 sha256> <x86_64 sha256>')
+    console.error('usage: bump-homebrew-cask.mjs <cask.rb> <version> <arm64 sha256> <x86_64 sha256> [--binaries]')
     process.exit(2)
   }
   const source = readFileSync(file, 'utf8')

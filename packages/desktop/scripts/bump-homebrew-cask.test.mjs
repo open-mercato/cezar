@@ -47,4 +47,14 @@ describe('bumpCask', () => {
     execFileSync(process.execPath, [path.join(here, 'bump-homebrew-cask.mjs'), file, '0.2.0', ARM, INTEL])
     expect(caskVersion(readFileSync(file, 'utf8'))).toBe('0.2.0')
   })
+
+  it('adds the binary stanzas once, only when asked, right after the app', () => {
+    expect(bumpCask(cask, '0.2.0', ARM, INTEL)).not.toContain('binary')
+    const out = bumpCask(cask, '0.2.0', ARM, INTEL, { binaries: true })
+    expect(out).toContain(
+      'app "Cezar.app"\n  binary "#{appdir}/Cezar.app/Contents/Resources/bin/cez"\n  binary "#{appdir}/Cezar.app/Contents/Resources/bin/cezar"\n',
+    )
+    expect(bumpCask(out, '0.2.1', ARM, INTEL, { binaries: true })).toBe(out.replace('version "0.2.0"', 'version "0.2.1"'))
+    expect(bumpCask(out, '0.2.1', ARM, INTEL)).toContain('binary', 'never removed once there')
+  })
 })
