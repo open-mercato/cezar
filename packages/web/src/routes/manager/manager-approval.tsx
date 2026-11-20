@@ -22,7 +22,7 @@ import { ManagerCard } from './manager-card'
 import { ForgeReference, ManagerReferenceText } from './manager-reference'
 import { taskPath } from './manager-session-card'
 
-export type DecideAction = (actionId: string, decision: 'approve' | 'reject' | 'dismiss', opts?: { onlyIfStale?: boolean }) => Promise<unknown>
+export type DecideAction = (actionId: string, decision: 'approve' | 'reject' | 'dismiss', opts?: { onlyIfStale?: boolean; seen?: string }) => Promise<unknown>
 
 type ActionMessage = Extract<ManagerMessage, { kind: 'action' }>
 
@@ -53,6 +53,14 @@ const SHEET_COPY: Record<string, { title: string; confirm: string; effect: strin
 }
 
 const UNKNOWN_ACTION_COPY = { title: 'Approve this action?', confirm: 'Approve', effect: 'This version of the cockpit cannot describe it.' }
+
+/**
+ * What this device showed, sent with an approve (spec 2026-11-20 § 2.2): only for a type this cockpit
+ * can describe. A type it cannot show sends nothing, so the server refuses to approve it blind.
+ */
+export function seenOf(message: ActionMessage): string | undefined {
+  return SHEET_COPY[message.action.type] ? message.pin : undefined
+}
 
 const SHORT_SHA = 12
 
@@ -388,7 +396,8 @@ export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigi
     setDeciding(true)
     setRefusal(undefined)
     try {
-      await onDecide(message.id, decision)
+      const seen = decision === 'approve' ? seenOf(message) : undefined
+      await (seen ? onDecide(message.id, decision, { seen }) : onDecide(message.id, decision))
       focusCard()
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)

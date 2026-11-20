@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { managerActionRequestSchema, managerSchema, type Manager, type ManagerActionRequest } from '@open-mercato/cezar-contract';
-import { ACTION_OPS, actionKey, actionOpsFor, actionSubject, describeAction } from './actions.ts';
+import { ACTION_OPS, actionKey, actionOpsFor, actionPin, actionSubject, CARD_CHANGED, describeAction, seenRefusal, UPDATE_TO_APPROVE } from './actions.ts';
 
 const manager = (overrides: Partial<Manager> = {}): Manager => managerSchema.parse({
   id: 'm1', name: 'Scout', instructions: '', avatar: 0, projects: ['alpha'], cronMinutes: 0, jobs: [],
@@ -66,6 +66,34 @@ describe('the proposal registry (spec 2026-11-20-manager-admin-actions § 2.1)',
     it('says why an op is unavailable', () => {
       const merge = actionOpsFor(manager({ access: 'read' }), 'claude').find((op) => op.type === 'merge-pr');
       expect(merge).toMatchObject({ available: false, reason: 'every project is read-only for this manager' });
+    });
+  });
+
+  describe('what the deciding device showed (spec 2026-11-20 § 2.2)', () => {
+    const merge: ManagerActionRequest = { type: 'merge-pr', projectId: 'alpha', number: 12, headSha: 'abc' };
+
+    it('fingerprints the stamped action, so any stamped fact changes it', () => {
+      expect(actionPin(merge)).toMatch(/^[0-9a-f]{32}$/);
+      expect(actionPin({ ...merge })).toBe(actionPin(merge));
+      expect(actionPin({ ...merge, headSha: 'abd' })).not.toBe(actionPin(merge));
+    });
+
+    it('marks only the types every released cockpit can show', () => {
+      for (const op of Object.values(ACTION_OPS)) expect(op.shownByEveryCockpit).toBe(true);
+    });
+
+    it('refuses a pin that differs, and a missing one for a type older cockpits cannot show', () => {
+      const pin = actionPin(merge);
+      const legacy = { shownByEveryCockpit: true as const };
+      const newer = {};
+      expect(seenRefusal(legacy, pin, pin)).toBeUndefined();
+      expect(seenRefusal(newer, pin, pin)).toBeUndefined();
+      expect(seenRefusal(legacy, pin, undefined)).toBeUndefined();
+      expect(seenRefusal(newer, pin, undefined)).toEqual({ error: UPDATE_TO_APPROVE, status: 409 });
+      expect(seenRefusal(legacy, pin, 'other')).toEqual({ error: CARD_CHANGED, status: 409 });
+      expect(seenRefusal(newer, pin, 'other')).toEqual({ error: CARD_CHANGED, status: 409 });
+      // A card stored before the pin existed: nothing to compare.
+      expect(seenRefusal(newer, undefined, undefined)).toBeUndefined();
     });
   });
 });

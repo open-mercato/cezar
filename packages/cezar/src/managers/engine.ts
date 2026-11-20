@@ -53,7 +53,7 @@ import {
   questionCardSharedHeaders,
 } from '@open-mercato/cezar-contract';
 import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
-import { actionOp, actionOpsFor, actionProject, actionKey, actionReplacedBy, actionSubject, CONNECTORS_CLAUDE_ONLY, describeAction, type ActionContext } from './actions.ts';
+import { actionOp, actionOpsFor, actionPin, seenRefusal, actionProject, actionKey, actionReplacedBy, actionSubject, CONNECTORS_CLAUDE_ONLY, describeAction, type ActionContext } from './actions.ts';
 import { evaluateAutoApproval } from './auto-approve.ts';
 import { ManagerChangeLog } from './change-log.ts';
 import { MANAGER_TURN_ENV } from './turn-token.ts';
@@ -2956,6 +2956,7 @@ export class ManagerEngine {
       sourceTasks: this.actionSources(action, input.reason ?? '', scope.source?.runs() ?? []),
       action,
       ...(input.reason ? { reason: input.reason } : {}),
+      pin: actionPin(action),
       status: 'pending',
     };
     // The auto-approval seam (spec 2026-11-20 § 4). It answers `ask` until phase 4, which approves on `auto` here through `decide`.
@@ -3024,6 +3025,8 @@ export class ManagerEngine {
     decision: 'approve' | 'reject' | 'dismiss',
     ctx: ManagerTelemetryContext = {},
     onlyIfStale = false,
+    /** The card's `pin` as the deciding device showed it (spec 2026-11-20 § 2.2). */
+    seen?: string,
   ): Promise<{ ok: true } | ManagerRefusal> {
     const manager = this.deps.store.get(id);
     if (!manager) return { error: 'manager not found', status: 404 };
@@ -3042,6 +3045,11 @@ export class ManagerEngine {
       if (!onlyIfStale) this.deps.telemetry?.track('manager_action_decided', `${managerActionLabel(message.action)}:dismiss`, ctx);
       this.settleAction(id, message, 'dismissed', stale ?? 'Dismissed', stale ? 'cezar' : 'user');
       return { ok: true as const };
+    }
+    // Approve only what this device could show: refused before anything runs or is recorded.
+    if (decision === 'approve') {
+      const unseen = seenRefusal(actionOp(message.action), message.pin, seen);
+      if (unseen) return unseen;
     }
     // A connector call is a model session: it waits on the card until the manager is reactivated.
     if (decision === 'approve' && message.action.type === 'connector-call' && manager.inactive) return { error: MANAGER_INACTIVE, status: 409 };

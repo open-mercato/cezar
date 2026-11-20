@@ -220,11 +220,11 @@ export async function markManagerRead(id: string) {
   return unwrap(await managers()[':id'].read.$post({ param: managerParam(id) }), managerPath(id, '/read'))
 }
 
-export async function decideManagerAction(id: string, actionId: string, decision: ManagerActionDecisionInput['decision'], opts?: { onlyIfStale?: boolean }) {
+export async function decideManagerAction(id: string, actionId: string, decision: ManagerActionDecisionInput['decision'], opts?: { onlyIfStale?: boolean; seen?: string }) {
   return unwrap(
     await managers()[':id'].actions[':actionId'].decision.$post({
       param: { ...managerParam(id), actionId: encodeURIComponent(actionId) },
-      json: { decision, ...(opts?.onlyIfStale ? { onlyIfStale: true } : {}) },
+      json: { decision, ...(opts?.onlyIfStale ? { onlyIfStale: true } : {}), ...(opts?.seen ? { seen: opts.seen } : {}) },
     }),
     managerPath(id, `/actions/${encodeURIComponent(actionId)}/decision`),
   )

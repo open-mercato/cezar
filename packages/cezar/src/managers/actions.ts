@@ -14,6 +14,7 @@ import type {
   ManagerJob,
 } from '@open-mercato/cezar-contract';
 import { managerAccessOf, managerConnectorToolMode } from '@open-mercato/cezar-contract';
+import { createHash } from 'node:crypto';
 import { canonicalJson, connectorToolName } from './connectors.ts';
 
 export type ManagerActionType = ManagerActionRequest['type'];
@@ -64,6 +65,12 @@ export interface ActionOp<T extends ManagerActionType> {
   perform(ctx: ActionContext, action: ActionOf<T>): Promise<ActionOutcome>;
   /** Why the card is moot now, or `undefined` while it is current or unknown. */
   stale?(ctx: ActionContext, action: ActionOf<T>): Promise<string | undefined>;
+  /**
+   * Every cockpit released with managers can show this type, so an approve without `seen` is still
+   * allowed (old phones keep working). Only the types that predate the pin set it: a new type must
+   * not, so a cockpit too old to show it cannot approve it blind (spec 2026-11-20 § 2.2).
+   */
+  shownByEveryCockpit?: true;
 }
 
 const SUMMARY_LIMIT = 8_000;
@@ -79,6 +86,7 @@ const READ_ONLY_REFUSAL = projectRefusal('merge or enable');
 
 const mergeOp: ActionOp<'merge-pr'> = {
   type: 'merge-pr',
+  shownByEveryCockpit: true,
   category: 'pull-requests',
   risk: 'high',
   pinnedAsk: true,
@@ -129,6 +137,7 @@ const automationPath = (action: { projectId: string; automationId: string }): st
 
 const enableOp: ActionOp<'enable-automation'> = {
   type: 'enable-automation',
+  shownByEveryCockpit: true,
   category: 'automations',
   risk: 'high',
   pinnedAsk: true,
@@ -177,6 +186,7 @@ const enableOp: ActionOp<'enable-automation'> = {
 /** A job runs unattended, so one the agent asks for waits for the user too. */
 const jobOp: ActionOp<'add-job'> = {
   type: 'add-job',
+  shownByEveryCockpit: true,
   category: 'jobs',
   risk: 'high',
   pinnedAsk: true,
@@ -201,6 +211,7 @@ export const CONNECTORS_CLAUDE_ONLY = 'Only a Claude Code manager can use connec
 
 const connectorOp: ActionOp<'connector-call'> = {
   type: 'connector-call',
+  shownByEveryCockpit: true,
   category: 'connectors',
   risk: 'high',
   pinnedAsk: true,
@@ -273,4 +284,20 @@ export function actionOpsFor(manager: Manager, runner: string): ManagerActionOp[
       ...(reason ? { reason } : {}),
     };
   });
+}
+
+/** The card's fingerprint: what the user is shown is what the approval acts on. */
+export const actionPin = (action: ManagerActionRequest): string =>
+  createHash('sha256').update(canonicalJson(action)).digest('hex').slice(0, 32);
+
+export const CARD_CHANGED = 'This card changed since your device showed it. Reload and decide again.';
+export const UPDATE_TO_APPROVE = 'Update cezar on this device to approve this: it cannot show what this card would do.';
+
+/** Why an approve must not go through on what this device showed, or `undefined` (spec 2026-11-20 § 2.2). */
+export function seenRefusal(op: Pick<ActionOp<ManagerActionType>, 'shownByEveryCockpit'>, pin: string | undefined, seen: string | undefined): ActionRefusal | undefined {
+  // A card from before the pin: nothing to compare.
+  if (pin === undefined) return undefined;
+  if (seen !== undefined && seen !== pin) return { error: CARD_CHANGED, status: 409 };
+  if (seen === undefined && !op.shownByEveryCockpit) return { error: UPDATE_TO_APPROVE, status: 409 };
+  return undefined;
 }

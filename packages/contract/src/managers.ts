@@ -541,6 +541,9 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     action: managerActionRequestSchema,
     /** The manager's reason, shown on the approval card. */
     reason: z.string().optional(),
+    /** The server's fingerprint of the stamped action. A cockpit that can show this type sends it back
+     *  as the decision's `seen` (spec 2026-11-20 § 2.2); absent on cards from before it. */
+    pin: z.string().optional(),
     status: managerActionStatusSchema,
     /** The outcome sentence once it left `pending`. */
     result: z.string().optional(),
@@ -609,6 +612,9 @@ export const managerActionDecisionInputSchema = z.object({
   decision: z.enum(['approve', 'reject', 'dismiss']),
   /** With `dismiss`: only when the card's pull request is no longer open, else `409`. */
   onlyIfStale: z.boolean().optional(),
+  /** The card's `pin`, sent only by a cockpit that can show this card's type (spec 2026-11-20 § 2.2).
+   *  A different pin is `409`; a type older cockpits cannot show refuses an approve without it. */
+  seen: z.string().max(200).optional(),
 });
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;
 

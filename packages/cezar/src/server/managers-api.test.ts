@@ -321,7 +321,7 @@ describe('the managers routes', () => {
       const { id, connectedProjectIds: [projectId] } = await createManager();
       const other = await createManager();
       const body = { action: { type: 'add-job', name: 'n', prompt: 'p', everyMinutes: 60 } };
-      const as = (token: string | undefined) => (token ? { 'x-cez-manager-turn': token } : {});
+      const as = (token: string): Record<string, string> => ({ 'x-cez-manager-turn': token });
       expect((await request(`${BASE}/${id}/actions`, { method: 'POST', body })).status).toBe(403);
       expect((await request(`${BASE}/${id}/snapshot`)).status).toBe(403);
       expect((await request(`${BASE}/${id}/actions`, { method: 'POST', body, headers: as('forged') })).status).toBe(403);
@@ -354,6 +354,25 @@ describe('the managers routes', () => {
       }
       const { messages } = (await (await request(`${BASE}/${id}/messages`)).json()) as { messages: Array<{ id: string; status?: string }> };
       expect(messages.find((message) => message.id === actionId)?.status).toBe('pending');
+    });
+
+    it('approves only the card the deciding device showed', async () => {
+      const { id, connectedProjectIds: [projectId] } = await createManager();
+      const propose = async (number: number) => ((await (await tool(`${BASE}/${id}/actions`, { method: 'POST', body: { action: { type: 'merge-pr', projectId, number } } })).json()) as { actionId: string }).actionId;
+      const card = async (actionId: string) => ((await (await request(`${BASE}/${id}/messages`)).json()) as { messages: Array<{ id: string; pin?: string; status?: string }> }).messages.find((message) => message.id === actionId);
+      const first = await propose(140);
+      const { pin } = (await card(first))!;
+      expect(pin).toMatch(/^[0-9a-f]{32}$/);
+      const stale = await request(`${BASE}/${id}/actions/${first}/decision`, { method: 'POST', body: { decision: 'approve', seen: 'not-this-card' } });
+      expect(stale.status).toBe(409);
+      expect(((await stale.json()) as { error: string }).error).toContain('changed since your device showed it');
+      expect((await card(first))?.status).toBe('pending');
+      expect((await request(`${BASE}/${id}/actions/${first}/decision`, { method: 'POST', body: { decision: 'approve', seen: pin } })).status).toBe(200);
+      expect((await card(first))?.status).toBe('done');
+      // The four existing types stay approvable by a cockpit that predates `seen`.
+      const second = await propose(141);
+      expect((await request(`${BASE}/${id}/actions/${second}/decision`, { method: 'POST', body: { decision: 'approve' } })).status).toBe(200);
+      expect((await card(second))?.status).toBe('done');
     });
 
     it('lists what a manager may propose, and why not', async () => {
