@@ -23,11 +23,13 @@ After the explicit operator continuation following the ownership blocker, use th
 
 ## Progress
 
+PR: #2365
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Parent patch
 
-- [ ] 1.1 Upgrade compatible parent and exercise cleanup-glob behavior
+- [x] 1.1 Upgrade compatible parent and exercise cleanup-glob behavior — a87c31511
 
 ### Phase 2: Validation
 
@@ -36,3 +38,8 @@ After the explicit operator continuation following the ownership blocker, use th
 ### Phase 3: Review and publication
 
 - [ ] 3.1 Complete independent review, evidence, labels and exact owned lock release
+
+## Verification so far
+Installed pre-upgrade path is CLI8.6.0→rimraf6.1.3→glob13.0.6→minimatch10.2.6. After parent patch: CLIunchanged→rimraf6.1.4→glob14.0.6→minimatch11.0.9; incoming ranges accept every step. Only required six transitive lock entries change, no override/direct manifest change. Mobile checkPASS;149testsPASS including2real parent cleanup-glob controls;CLIversion/helpPASS;npmlsPASS;audit0vulnerabilities. Independent npm-semver comparison proves old version in alert85 range and installed/alllocked new copies outside it. No native iOS/Android build claim.
+
+Shared root workspace source/config inputs are identical to the Next group and main; full gate first attempt in order:typecheckPASS,npmtesttimeout900s with known pre-existing automationrace(PR2193),coreunit54PASS,build/checkpackPASS,packagePASS. No full gate pass claimed; Phase2 stays unchecked pending bounded full revalidation by final reviewer. No source change or gate/audit bypass for the unrelated defect.
