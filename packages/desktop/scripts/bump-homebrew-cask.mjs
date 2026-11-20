@@ -8,6 +8,19 @@ import { fileURLToPath } from 'node:url'
 const SHA = /^[0-9a-f]{64}$/
 const VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 
+// Compares the numeric x.y.z cores only; a pre-release suffix never makes a version "older".
+export function isOlderVersion(candidate, current) {
+  const core = v => (v.match(/^(\d+)\.(\d+)\.(\d+)/) ?? []).slice(1).map(Number)
+  const [a, b] = [core(candidate), core(current)]
+  if (a.length !== 3 || b.length !== 3) return false
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i]
+  return false
+}
+
+export function caskVersion(source) {
+  return source.match(/^\s*version\s+"([^"]*)"/m)?.[1]
+}
+
 export function bumpCask(source, version, armSha, intelSha) {
   if (!VERSION.test(version)) throw new Error(`not a version: ${version}`)
   for (const sha of [armSha, intelSha]) if (!SHA.test(sha)) throw new Error(`not a sha256: ${sha}`)
@@ -27,5 +40,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error('usage: bump-homebrew-cask.mjs <cask.rb> <version> <arm64 sha256> <x86_64 sha256>')
     process.exit(2)
   }
-  writeFileSync(file, bumpCask(readFileSync(file, 'utf8'), version, armSha, intelSha))
+  const source = readFileSync(file, 'utf8')
+  const current = caskVersion(source)
+  // A re-run of an older release's workflow must not roll brew users back.
+  if (current && isOlderVersion(version, current)) {
+    console.log(`::warning::${file} is already at ${current}; not downgrading it to ${version}.`)
+    process.exit(0)
+  }
+  writeFileSync(file, bumpCask(source, version, armSha, intelSha))
 }

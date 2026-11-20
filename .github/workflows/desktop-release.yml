@@ -572,6 +572,8 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read # only downloads release assets; the tap push uses HOMEBREW_TAP_TOKEN
     steps:
       - name: Homebrew tap status
         id: tap

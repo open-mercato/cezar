@@ -71,6 +71,7 @@ describe('desktop release workflow signing path', () => {
 
     expect(job.needs).toEqual(['prepare', 'publish'])
     expect(job.if).toBe('${{ !inputs.dry_run }}')
+    expect(job.permissions).toEqual({ contents: 'read' })
     expect(status.env.HAS_TAP_TOKEN).toContain('secrets.HOMEBREW_TAP_TOKEN')
     expect(status.run).toContain('::warning::HOMEBREW_TAP_TOKEN is not set')
     for (const s of job.steps.slice(1)) expect(s.if).toBe("steps.tap.outputs.token == 'true'")
