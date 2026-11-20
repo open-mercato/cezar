@@ -323,9 +323,11 @@ function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
  * The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where there is no
  * second column to trade width with and no pointer to drag a border.
  */
-export function SidebarDrawer({ slot, title, children }: {
+export function SidebarDrawer({ slot, title, everyWidth = false, children }: {
   /** The `data-slot` the tests and e2e address this drawer by. */
   slot: string
+  /** The phone navigation's drawer: no sidebar takes over at `md`, so it stays. */
+  everyWidth?: boolean
   /** The dialog's accessible name — visually redundant with the brand lockup inside. */
   title: string
   /** The content, handed the drawer's close button to place in its header row — so every
@@ -346,7 +348,7 @@ export function SidebarDrawer({ slot, title, children }: {
       showCloseButton={false}
       // The drawer is the sidebar: same width, same surface token, and no padding of its own —
       // the content brings its own. `sm:max-w-none` sheds the primitive's sheet width cap.
-      className="w-[264px] gap-0 border-border bg-sidebar p-0 sm:max-w-none md:hidden"
+      className={cn('w-[264px] gap-0 border-border bg-sidebar p-0 sm:max-w-none', !everyWidth && 'md:hidden')}
       // Nav needs no prose description, and Radix warns when it cannot find the one it links to.
       aria-describedby={undefined}
     >

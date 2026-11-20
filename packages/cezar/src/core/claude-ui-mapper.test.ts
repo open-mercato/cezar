@@ -754,7 +754,8 @@ describe('ClaudeCliRunner v2 wiring (against the bundled mock CLI)', () => {
 
       // v2 rides alongside: session.started first (mock init has no
       // session_id → spec.sessionId fallback), then the queued turn.started.
-      expect(v2[0]).toEqual({ type: 'session.started', sessionId: 'sess-mock-1', backend: 'claude' });
+      // No --model: the init names what "auto" resolved to.
+      expect(v2[0]).toEqual({ type: 'session.started', sessionId: 'sess-mock-1', backend: 'claude', model: 'claude-opus-5-5' });
       expect(v2[1]).toEqual({ type: 'turn.started', turnId: 'turn_1' });
       const bashStart = v2.find(
         (e): e is Extract<UiEvent, { type: 'item.started' }> =>
@@ -773,6 +774,7 @@ describe('ClaudeCliRunner v2 wiring (against the bundled mock CLI)', () => {
         stopReason: 'end_turn',
         usage: { input: 1270, output: 185, total: 1455 },
         costUsd: 0.0342,
+        models: [{ model: 'claude-opus-5-5', inputTokens: 1270, outputTokens: 185, costUsd: 0.0342 }],
       });
       expect(v2.at(-1)?.type).toBe('usage.updated');
     } finally {

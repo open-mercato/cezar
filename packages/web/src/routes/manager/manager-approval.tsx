@@ -1,21 +1,28 @@
 import { CircleAlertIcon, CircleCheckIcon, ClockIcon, ExternalLinkIcon, GitMergeIcon, PlugIcon, ZapIcon, type LucideIcon } from 'lucide-react'
-import { useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { Link } from 'react-router'
 
-import { useProjects, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
-import { ReferenceChip } from '@/components/reference-chip'
-import { ReferenceStatusProvider } from '@/components/reference-status'
+import { useProjects, useRunsIndex, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
+import { chipClass } from '@/components/chip'
+import { prTaskRuns } from '@/components/reference-conflict-action'
+import { ReferenceStatusProvider, useReferenceStatus } from '@/components/reference-status'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/toaster'
 import { useManagers } from '@/api/managers'
-import { actionConfirms, actionTitle, managerConfirmOf } from '@/lib/managers'
+import { deriveAttention } from '@/lib/attention'
+import { actionConfirms, actionTitle, managerConfirmOf, type ManagerOrigin } from '@/lib/managers'
+import { runTitle } from '@/lib/task-groups'
 import { cn } from '@/lib/utils'
-import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
+import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage, RunRecord } from '@open-mercato/cezar-api-client'
 
+import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
+import { ForgeReference, ManagerReferenceText } from './manager-reference'
+import { taskPath } from './manager-session-card'
 
-export type DecideAction = (actionId: string, decision: 'approve' | 'reject') => Promise<unknown>
+export type DecideAction = (actionId: string, decision: 'approve' | 'reject' | 'dismiss', opts?: { onlyIfStale?: boolean }) => Promise<unknown>
 
 type ActionMessage = Extract<ManagerMessage, { kind: 'action' }>
 
@@ -25,6 +32,16 @@ const ACTION_STATUS: Record<ManagerActionStatus, { tone: StatusDotTone; label: s
   done: { tone: 'success', label: 'Done' },
   rejected: { tone: 'neutral', label: 'Rejected' },
   failed: { tone: 'danger', label: 'Failed' },
+  dismissed: { tone: 'neutral', label: 'Dismissed' },
+}
+
+/** A merge says what it did: "Merging…" then "Merged" (the Approvals page shows it live). */
+const MERGE_STATUS: Partial<Record<ManagerActionStatus, string>> = { running: 'Merging…', done: 'Merged' }
+
+const statusOf = (message: ActionMessage) => {
+  const base = ACTION_STATUS[message.status]
+  const merge = message.action.type === 'merge-pr' ? MERGE_STATUS[message.status] : undefined
+  return merge ? { ...base, label: merge } : base
 }
 
 /** Keyed by string: a type from a newer server must still get a sheet, never a crash. */
@@ -38,6 +55,9 @@ const SHEET_COPY: Record<string, { title: string; confirm: string; effect: strin
 const UNKNOWN_ACTION_COPY = { title: 'Approve this action?', confirm: 'Approve', effect: 'This version of the cockpit cannot describe it.' }
 
 const SHORT_SHA = 12
+
+/** Tasks named on a merge card before the rest fold into '+N'. */
+const PR_TASKS_SHOWN = 3
 
 /** The prompt or definition that will actually run, when the action carries one. */
 function actionDetail(action: ManagerActionRequest): string | undefined {
@@ -84,21 +104,17 @@ const CARD_ICON: Record<string, LucideIcon | undefined> = {
 
 /** The card's pinned facts (design, Proposal 10): the PR as the tables' chip, the head sha with
  *  what pinning means. The sheet keeps `ActionFacts`, where the link is what a reader checks. */
-function CardFacts({ action, projectName }: { action: ManagerActionRequest; projectName: string | undefined }) {
+function CardFacts({ action, projectName, origin }: { action: ManagerActionRequest; projectName: string | undefined; origin: ManagerOrigin }) {
   if (action.type === 'merge-pr') {
     return (
       <>
         <Fact label="Project">{projectName ?? action.projectId}</Fact>
         <Fact label="Pull request">
-          <ReferenceChip
-            compact
-            reference={{ kind: 'PR', number: action.number }}
-            taskTitle={`#${action.number}${action.title ? `, ${action.title}` : ''}`}
-            projectId={action.projectId}
-            className="align-middle no-underline"
-          />
+          {/* The chat's own chip: without the URL it painted an inert span. */}
+          <ForgeReference kind="PR" projectId={action.projectId} number={action.number} {...(action.title ? { title: action.title } : {})} />
           {action.title ? <span className="ml-1.5">{action.title}</span> : null}
         </Fact>
+        <PrTasks projectId={action.projectId} number={action.number} projectName={projectName} origin={origin} />
         <Fact label="Method">{action.method ?? 'Repository default'}</Fact>
         <Fact label="Head">
           {action.headSha ? (
@@ -133,6 +149,51 @@ function CardFacts({ action, projectName }: { action: ManagerActionRequest; proj
       <Fact label="Name">{action.name ?? action.automationId}</Fact>
       {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
     </>
+  )
+}
+
+/**
+ * The tasks carrying the PR, by the rule Resolve conflicts uses to find its owner (#2199): the
+ * creator first. A read of the shared runs index, so a chat of merge cards fetches it once.
+ */
+function PrTasks({ projectId, number, projectName, origin }: { projectId: string; number: number; projectName: string | undefined; origin: ManagerOrigin }) {
+  const runs = useRunsIndex().data?.runs
+  const repoBase = useProjects().data?.projects.find((entry) => entry.id === projectId)?.repoUrl
+  const tasks = useMemo(() => (runs ? prTaskRuns(runs, projectId, number, repoBase) : []), [runs, projectId, number, repoBase])
+  if (tasks.length === 0) return null
+  const shown = tasks.slice(0, PR_TASKS_SHOWN)
+  const more = tasks.length - shown.length
+  return (
+    <Fact label={tasks.length === 1 ? 'Task' : 'Tasks'}>
+      <span data-slot="manager-action-tasks" className="flex flex-wrap items-center gap-1.5">
+        {shown.map((run) => {
+          const record = run as unknown as RunRecord
+          const attention = deriveAttention(record)
+          return (
+            // The manager rides the link, so a phone or CezarBot keeps Manager current (#2220).
+            <Link
+              key={run.id}
+              to={taskPath(run.projectId, run.id)}
+              state={{ manager: origin }}
+              data-slot="manager-action-task"
+              data-run={run.id}
+              title={attention.label}
+              className={cn(chipClass, 'max-w-full min-w-0 no-underline text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50')}
+            >
+              <StatusDot tone={attention.tone} pulse={attention.pulse} className="shrink-0" />
+              <span className="min-w-0 truncate">{runTitle(record)}</span>
+              {projectName ? <span className="shrink-0 text-muted-foreground">· {projectName}</span> : null}
+              <span className="sr-only">, {attention.label}</span>
+            </Link>
+          )
+        })}
+        {more > 0 ? (
+          <span data-slot="manager-action-tasks-more" className="text-xs text-muted-foreground" title={tasks.slice(PR_TASKS_SHOWN).map((run) => runTitle(run as unknown as RunRecord)).join('\n')}>
+            +{more}<span className="sr-only"> more {more === 1 ? 'task' : 'tasks'}</span>
+          </span>
+        ) : null}
+      </span>
+    </Fact>
   )
 }
 
@@ -245,9 +306,53 @@ function ActionSheet({
   )
 }
 
-export function ActionCard({ managerId, message, onDecide }: { managerId: string; message: ActionMessage; onDecide: DecideAction }) {
+/** Merge and enable cards already asked about this page session, so a re-render never asks again. */
+const staleChecked = new Set<string>()
+
+/**
+ * Asks the server once per pending merge card whether its PR is still open, and once per enable
+ * card whether its automation is unchanged; an outdated one is closed as `dismissed`. The chip's colour cannot decide this: it can be a cached 'ready'.
+ */
+export function useDismissStaleMerges(messages: readonly ManagerMessage[], onDecide: DecideAction): void {
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.kind !== 'action' || message.status !== 'pending' || (message.action.type !== 'merge-pr' && message.action.type !== 'enable-automation') || staleChecked.has(message.id)) continue
+      staleChecked.add(message.id)
+      // A 409 is the answer "still open"; nothing to show.
+      onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
+    }
+  }, [messages, onDecide])
+}
+
+/** Merge cards whose chip already reported the PR merged or closed, so the ask goes out once. */
+const closedChecked = new Set<string>()
+
+/**
+ * The fallback for a PR that merges while the chat is open: the chip's own status, which the
+ * cockpit already polls, re-sends the onlyIfStale dismiss. The server confirms before closing.
+ */
+function DismissWhenPrCloses({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
   const { action } = message
-  const status = ACTION_STATUS[message.status]
+  const merge = action.type === 'merge-pr' ? action : undefined
+  const status = useReferenceStatus('PR', merge?.number, merge?.projectId).status
+  const closed = message.status === 'pending' && (status === 'merged' || status === 'closed')
+  useEffect(() => {
+    if (!closed || closedChecked.has(message.id)) return
+    closedChecked.add(message.id)
+    onDecide(message.id, 'dismiss', { onlyIfStale: true }).catch(() => {})
+  }, [closed, message.id, onDecide])
+  return null
+}
+
+export function forgetStaleChecks(): void {
+  staleChecked.clear()
+  closedChecked.clear()
+}
+
+export function ActionCard({ origin, message, onDecide }: { origin: ManagerOrigin; message: ActionMessage; onDecide: DecideAction }) {
+  const managerId = origin.id
+  const { action } = message
+  const status = statusOf(message)
   const detail = actionPreview(action)
   const own = useManagers().data?.managers.find((entry) => entry.id === managerId)?.confirm
   const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
@@ -277,7 +382,7 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
     card.current.focus({ preventScroll: true })
   }
 
-  const decide = async (decision: 'approve' | 'reject') => {
+  const decide = async (decision: 'approve' | 'reject' | 'dismiss') => {
     if (inFlight.current) return
     inFlight.current = true
     setDeciding(true)
@@ -302,6 +407,7 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
   return (
     <ManagerCard
       ref={card}
+      id={`decision-${message.id}`}
       data-slot="manager-action"
       data-status={message.status}
       data-action-id={message.id}
@@ -321,12 +427,16 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
             Approve
           </Button>
           <Button variant="outline" className="max-md:h-10 max-md:flex-1" disabled={deciding} onClick={() => void decide('reject')}>Reject</Button>
+          {/* Neither yes nor no: the proposal is moot, e.g. its PR was merged elsewhere. */}
+          <Button variant="ghost" className="ml-auto max-md:h-10" disabled={deciding} onClick={() => void decide('dismiss')}>Dismiss</Button>
         </>
       ) : undefined}
     >
+      <DecisionSources message={message} origin={origin} />
       <ReferenceStatusProvider requests={references}>
+        {action.type === 'merge-pr' && message.status === 'pending' ? <DismissWhenPrCloses message={message} onDecide={onDecide} /> : null}
         <dl className="flex flex-col gap-1.5">
-          <CardFacts action={action} projectName={projectName} />
+          <CardFacts action={action} projectName={projectName} origin={origin} />
         </dl>
       </ReferenceStatusProvider>
       {/* What will actually run. Three lines here: a prompt can be 20,000 characters, and a nested
@@ -343,7 +453,7 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
           </button>
         </div>
       ) : null}
-      {message.reason ? <p className="text-sm">{message.reason}</p> : null}
+      {message.reason ? <p className="text-sm"><ManagerReferenceText text={message.reason} origin={origin} /></p> : null}
       {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
       <div role="status" data-slot="manager-action-outcome" className="empty:hidden">
         {message.status === 'pending' ? null : (

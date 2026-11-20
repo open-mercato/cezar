@@ -48,6 +48,7 @@ import {
   retryProviderAuth,
 } from './client'
 import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
+import { connectionStatus, nativeConnectionStatus } from './connection-status'
 
 /** A message's idempotency key (telemetry 1a212342) — fixed here so the request shape is exact. */
 const KEY = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f'
@@ -221,7 +222,7 @@ describe('request shapes', () => {
       method: 'POST',
       body: { task: 'do it', workflow: 'quick-task', variants: 2 },
     },
-    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/v1/runs/run-1/cancel', method: 'POST' },
+    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/v1/runs/run-1/cancel', method: 'POST', body: {} },
     {
       name: 'archiveRun (default)',
       call: () => archiveRun('run-1'),
@@ -400,7 +401,7 @@ describe('workspace branding logo client', () => {
       browseRoot: '~/source', projectsDir: '~/projects', skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
       composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
-      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }, },
       agentDefaults: {},
     })
     const config = await getWorkspaceConfig()
@@ -464,7 +465,7 @@ describe('response parsing', () => {
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
-      worktreeRetentionDefault: 10,
+      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       ...resources,
     },
     agentDefaults: {},
@@ -849,5 +850,43 @@ describe('history responses are validated at the boundary (#827)', () => {
     const error = (await getRunHistory('nope').catch((e: unknown) => e)) as ApiError
     expect(error.status).toBe(404)
     expect(error.message).toBe('run not found')
+  })
+})
+
+describe("the CezarBot shell's 502", () => {
+  afterEach(() => nativeConnectionStatus.clear())
+
+  it('carries why the relay is down, and the next answer that gets through clears it', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', {
+      status: 502,
+      headers: { 'X-Cezar-Unreachable': 'peer-offline', 'X-Cezar-Computer': encodeURIComponent('Studio Mac') },
+    }))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(nativeConnectionStatus.current()).toEqual({ reason: 'peer-offline', computerName: 'Studio Mac' })
+    reply({ ok: true })
+    await getHealth()
+    expect(nativeConnectionStatus.current()).toBeUndefined()
+  })
+})
+
+describe('whether cezar still answers plain requests', () => {
+  afterEach(() => connectionStatus.requestSettled(false))
+
+  it("is cezar's own answer, not a gateway's 502/503/504 or no answer at all", async () => {
+    reply({ ok: true })
+    await getHealth()
+    expect(connectionStatus.answering()).toBe(true)
+    for (const status of [502, 503, 504]) {
+      connectionStatus.requestSettled(true)
+      fetchMock.mockResolvedValueOnce(new Response('', { status }))
+      await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+      expect(connectionStatus.answering()).toBe(false)
+    }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'nope' }), { status: 404 }))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(connectionStatus.answering()).toBe(true)
+    fetchMock.mockRejectedValueOnce(new TypeError('Load failed'))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(connectionStatus.answering()).toBe(false)
   })
 })

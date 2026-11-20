@@ -46,7 +46,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** One registered project — the degenerate workspace every existing install upgrades into. */
@@ -297,6 +297,26 @@ describe('sidebar wiring', () => {
     expect(screen.queryByRole('link', { name: /Automations/ })).toBeNull()
     // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
     expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+  })
+
+  // Questions inbox § F: task questions exist with managers off, so the row moves here.
+  it('puts Questions in the project sidebar’s Workspace group when managers are off', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } },
+      '/api/v1/todos': [],
+      '/api/v1/workspace/questions': { open: [], closed: [], counts: { live: 2, older: 0 }, olderAfterDays: 7 },
+    })
+    renderShell()
+    const link = await screen.findByRole('link', { name: 'Questions, 2 waiting' })
+    expect(link.getAttribute('href')).toBe('/questions')
+    expect(link.closest('nav')?.getAttribute('aria-label')).toBe('Workspace')
+  })
+
+  it('keeps Questions out of the project sidebar when managers are on (it is in manager mode)', async () => {
+    serve({ '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } }, '/api/v1/todos': [], '/api/v1/workspace/managers': { managers: [] } })
+    renderShell()
+    await waitFor(() => expect(healthAnswered()).toBe(true))
+    expect(screen.queryByRole('link', { name: /^Questions/ })).toBeNull()
   })
 
   it('shows the Automations nav item once health reports the capability', async () => {

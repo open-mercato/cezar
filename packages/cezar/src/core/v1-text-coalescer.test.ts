@@ -86,4 +86,28 @@ describe('V1TextCoalescer', () => {
     coalescer.complete(undefined);
     expect(texts).toEqual(['one', 'two']);
   });
+
+  it('drainOlder emits abandoned items BEFORE the completing one (#2197)', () => {
+    const { texts, coalescer } = collect();
+    coalescer.append('c', 'abandoned');
+    coalescer.complete('f', 'final CEZ:MONITORING', { drainOlder: true });
+    coalescer.flush();
+    expect(texts).toEqual(['abandoned', 'final CEZ:MONITORING']);
+  });
+
+  it('drainOlder keeps the final item\'s own id-less deltas and still prefers the snapshot', () => {
+    const { texts, coalescer } = collect();
+    coalescer.append('c', 'old');
+    coalescer.append(undefined, 'partial');
+    coalescer.complete('f', undefined, { drainOlder: true });
+    expect(texts).toEqual(['old', 'partial']);
+  });
+
+  it('without drainOlder the default flush order is unchanged', () => {
+    const { texts, coalescer } = collect();
+    coalescer.append('c', 'old');
+    coalescer.complete('f', 'final');
+    coalescer.flush();
+    expect(texts).toEqual(['final', 'old']);
+  });
 });

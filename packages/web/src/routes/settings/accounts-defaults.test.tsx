@@ -81,6 +81,7 @@ function serve({
   requests = []
   const state: WorkspaceConfigResponse = {
     branding: { name: 'cezar', logoUrl: null },
+    computerName: 'Test Mac',
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
@@ -100,7 +101,7 @@ function serve({
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
-      worktreeRetentionDefault: 10,
+      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
     },
     agentDefaults,
   }
@@ -228,7 +229,7 @@ describe('Agent accounts → Defaults for new projects', () => {
               monitoringWakeIntervalMinutes: null,
               autoResumeOnUsageLimit: true,
               memoryLimitMb: null,
-              worktreeRetentionDefault: 10,
+              worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
             },
             // …and no `agentDefaults`.
           })

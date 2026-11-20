@@ -42,6 +42,10 @@ export interface Skill {
     /** The exact commit `ref` resolved to when the skill was read (#428). */
     commit?: string;
   };
+  /** A repo extension layered on this shared skill (`layerSkillExtensions`). */
+  extension?: { path: string };
+  /** A repo extension whose shared skill is not loaded (`layerSkillExtensions`). */
+  missingShared?: true;
 }
 
 /* Precedence order — earlier dirs win name collisions. `npx skills` writes
@@ -119,12 +123,10 @@ export async function discoverSkills(
     readUiState(repoRoot),
     readMarkdownSkills(builtinDir, 'builtin'),
   ]);
-  const teamSkills = filterImportedTeamSkills(
-    getTeamSkillsCached(repoRoot),
-    gatedRepos,
-    readImportedSkills(uiState),
-  );
-  const merged = mergeByName([...lists, teamSkills, builtinSkills(), bundled]);
+  const allTeam = getTeamSkillsCached(repoRoot);
+  const teamSkills = filterImportedTeamSkills(allTeam, gatedRepos, readImportedSkills(uiState));
+  // The ungated team list still counts as a base: curating a skill out of the picker does not uninstall it.
+  const merged = mergeByName(layerSkillExtensions([...lists, teamSkills, builtinSkills(), bundled], allTeam));
   merged.sort((a, b) => a.name.localeCompare(b.name));
   return merged;
 }
@@ -132,7 +134,36 @@ export async function discoverSkills(
 /** The repo's and the user's own skill files, read from disk only: unlike `discoverSkills`, it
  *  never starts a team-repo clone or fetch (the daily `feature_inventory` reads every project). */
 export async function discoverLocalSkills(repoRoot: string): Promise<Skill[]> {
-  return mergeByName(await readLocalLists(repoRoot));
+  return mergeByName(layerSkillExtensions(await readLocalLists(repoRoot)));
+}
+
+const REPO_SKILL_SOURCES: ReadonlySet<Skill['source']> = new Set(['cezar', 'ai']);
+const SHARED_SKILL_SOURCES: ReadonlySet<Skill['source']> = new Set(['agents', 'global', 'team']);
+
+/** The local skill says it extends the shared skill OF ITS OWN NAME ("extends the shared `x` skill",
+ *  Open Mercato's convention) — "extends the shared Button component" is not that. */
+function declaresExtension(skill: Skill): boolean {
+  const name = skill.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`\\bexten(?:ds?|sion of)\\s+(?:the\\s+)?shared\\s+\`?${name}\`?(?![A-Za-z0-9_-])`, 'i');
+  return pattern.test(`${skill.description ?? ''}\n${skill.body.slice(0, 2000)}`);
+}
+
+/**
+ * When a repo skill declares an extension, use the shared skill and carry the extension's path.
+ * The shared skill may document a project path that also contains a standalone override, so
+ * the local declaration controls layering. Flag extensions with no shared skill for repair.
+ */
+export function layerSkillExtensions(lists: readonly Skill[][], sharedPool: readonly Skill[] = []): Skill[][] {
+  const all = [...lists.flat(), ...sharedPool];
+  const replace = new Map<Skill, Skill>();
+  for (const local of all) {
+    if (!REPO_SKILL_SOURCES.has(local.source) || local.kind || !declaresExtension(local)) continue;
+    const base = all.find(
+      (s) => s.name === local.name && !s.kind && SHARED_SKILL_SOURCES.has(s.source) && s.body.trim() !== local.body.trim(),
+    );
+    replace.set(local, base ? { ...base, extension: { path: local.path } } : { ...local, missingShared: true });
+  }
+  return lists.map((list) => list.map((skill) => replace.get(skill) ?? skill));
 }
 
 /** Skill dirs (project, then global), then the command dirs — a skill shadows a same-named command. */

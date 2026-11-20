@@ -19,6 +19,7 @@ import type {
   WorkspaceLayoutsResponse,
 } from '@open-mercato/cezar-api-client'
 import type { TaskActionSurface, TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
+import type { LoginSession, LoginSessionInput, LoginSessionStartInput } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
   AgentConfigFileContent,
@@ -208,16 +209,19 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  runUserMessagesSchema,
   artifactsBySubjectResponseSchema,
   githubOwnersResponseSchema,
   projectAssetsResponseSchema,
 } from '@open-mercato/cezar-api-client'
-import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
+import type { Ok, OkJson, RunUserMessages } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
 import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
+import { BUILD_HEADER, noteServerBuild } from '@/lib/build-identity'
+import { answeredByCezar, connectionStatus, nativeConnectionStatus } from './connection-status'
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -486,10 +490,14 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     const headers = new Headers(init?.headers)
     headers.set(SID_HEADER, sid())
     const res = await fetch(url, { ...init, headers, credentials: 'include' })
+    noteServerBuild(res.headers?.get(BUILD_HEADER) ?? null)
+    nativeConnectionStatus.fromResponse(res)
+    connectionStatus.requestSettled(answeredByCezar(res.status))
     if (!res.ok) noteFailedRequest(url, init?.method, res.status, init?.body)
     return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    connectionStatus.requestSettled(false)
     noteFailedRequest(url, init?.method, 0, init?.body, cause)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
@@ -769,6 +777,18 @@ export async function getRunHistory(
     ),
     `${runPath(id)}/history`,
     runHistoryPageSchema,
+  )
+}
+
+/** The user's own messages in a run, for the "your messages" list (spec 2026-11-17-my-message-navigation). */
+export async function getRunUserMessages(id: string, opts?: ReadOptions): Promise<RunUserMessages> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].runs[':id']['user-messages'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `${runPath(id)}/user-messages`,
+    runUserMessagesSchema,
   )
 }
 
@@ -1487,12 +1507,34 @@ export async function getGroup(groupId: string, opts?: ReadOptions): Promise<Gro
 export async function connectProvider(
   provider: ProviderId,
   profileId?: string,
+  reconnect?: boolean,
 ): Promise<ProviderConnectResponse> {
   return unwrap(
     await cez.api.v1.providers.connect.$post({
-      json: { provider, ...(profileId ? { profileId } : {}) },
+      json: { provider, ...(profileId ? { profileId } : {}), ...(reconnect ? { reconnect } : {}) },
     }),
     '/providers/connect',
+  )
+}
+
+/** Start an inline sign-in (spec 2026-11-18-inline-account-reconnect). A 4xx carries `command`
+ *  for the terminal fallback (hosted cockpit without `CEZ_REMOTE_AGENT_ACCOUNTS=1`). */
+export async function startLoginSession(input: LoginSessionStartInput): Promise<LoginSession> {
+  return unwrap(await cez.api.v1.providers.login.$post({ json: input }), '/providers/login')
+}
+
+/** A pasted code or API key, straight to the CLI. The caller must not keep `input` anywhere. */
+export async function sendLoginSessionInput(sessionId: string, input: LoginSessionInput): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].input.$post({ param: { sessionId }, json: input }),
+    '/providers/login/:sessionId/input',
+  )
+}
+
+export async function cancelLoginSession(sessionId: string): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].$delete({ param: { sessionId } }),
+    '/providers/login/:sessionId',
   )
 }
 
@@ -1652,6 +1694,7 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].cancel.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: {},
     }),
     runPath(id, '/cancel'),
   )
@@ -1859,6 +1902,8 @@ export interface ContinueOptions {
   agentProfile?: string
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey?: string
+  /** Sent from an ask card: the reopened session answers that card (Questions inbox spec). */
+  askRequestId?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1872,6 +1917,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+    ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
@@ -1898,6 +1944,7 @@ export async function continueProjectRun(
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
         ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
+        ...(opts.askRequestId !== undefined ? { askRequestId: opts.askRequestId } : {}),
       },
     }),
     runPath(id, '/continue'),
@@ -2143,7 +2190,13 @@ export async function postMessageWithRetry(
   message: MessageInput,
   wait: (delayMs: number) => Promise<void> = delayMessageRetry,
 ): Promise<MessageResponse> {
-  const json = { text: message.text ?? '', images: message.images ?? [], idempotencyKey: message.idempotencyKey ?? uuidv7() }
+  const json = {
+    text: message.text ?? '',
+    images: message.images ?? [],
+    idempotencyKey: message.idempotencyKey ?? uuidv7(),
+    // An answer from an ask card names its card (Questions inbox); a composer reply does not.
+    ...(message.askRequestId ? { askRequestId: message.askRequestId } : {}),
+  }
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await post(json)

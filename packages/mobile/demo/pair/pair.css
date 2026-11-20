@@ -1,0 +1,14 @@
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+body { margin: 0; padding: 1.5rem; line-height: 1.5; }
+main { max-width: 34rem; margin: 0 auto; }
+h1 { font-size: 1.4rem; }
+.muted { opacity: 0.75; }
+.small { font-size: 0.85rem; margin-top: 2rem; }
+.label { margin-bottom: 0; font-weight: 600; }
+.code { font: 600 2rem/1.2 ui-monospace, 'SF Mono', Menlo, monospace; letter-spacing: 0.08em; margin: 0.25rem 0; user-select: all; }
+button { font: inherit; padding: 0.6rem 1.1rem; border-radius: 0.5rem; border: 1px solid currentColor; background: none; color: inherit; cursor: pointer; }
+button.primary { background: #111; color: #fff; border-color: #111; }
+button:disabled { opacity: 0.5; cursor: default; }
+.actions { display: flex; gap: 0.75rem; }
+#status { min-height: 1.5rem; font-weight: 500; }
+@media (prefers-color-scheme: dark) { button.primary { background: #fff; color: #111; border-color: #fff; } }

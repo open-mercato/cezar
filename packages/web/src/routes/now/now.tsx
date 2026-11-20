@@ -10,10 +10,12 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { FirstRun, SetupPill, WelcomeBack } from '@/components/first-run'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
+import { SignInRow } from '@/components/reconnect/reconnect-row'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { StatusDot } from '@/components/status-dot'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
@@ -35,6 +37,7 @@ import {
   NEEDS_YOU_ACTION_LABEL,
   finishedTodayRows,
   needsYouRows,
+  signInGroups,
   runningRows,
   todayLabel,
   type NeedsYouRow,
@@ -63,7 +66,10 @@ export function NowView({
   hasScheduledTasks = false,
   setupPill,
   welcomeBack,
+  managersAvailable = false,
 }: {
+  /** Manager owns task creation on mobile when available, as on the Tasks page (#2272). */
+  managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body waits. */
   runs: RunRecord[] | undefined
   projectName?: string
@@ -88,6 +94,7 @@ export function NowView({
   const at = now ?? clock
   const all = runs ?? NO_RUNS
   const needsYou = React.useMemo(() => needsYouRows(all), [all])
+  const signIn = React.useMemo(() => signInGroups(all), [all])
   const running = React.useMemo(() => runningRows(all), [all])
   const finished = React.useMemo(() => finishedTodayRows(all, at), [all, at])
   const positions = React.useMemo(() => queuePositions(all), [all])
@@ -155,6 +162,21 @@ export function NowView({
                   {setupPill}
                 </div>
               ) : null}
+              {signIn.length > 0 ? (
+                <Section slot="sign-in" title="Sign-in needed" count={signIn.length} empty="">
+                  <ul data-slot="sign-in-list" className="overflow-hidden rounded-xl border border-border bg-card">
+                    {signIn.map((group, index) => (
+                      <SignInRow
+                        key={`${group.provider}:${group.profileId}`}
+                        provider={group.provider}
+                        profileId={group.profileId}
+                        first={index === 0}
+                        blocks={group.runs.map((run) => `“${runTitle(run)}”`)}
+                      />
+                    ))}
+                  </ul>
+                </Section>
+              ) : null}
               <Section slot="needs-you" title="Needs you" count={needsYou.length} empty="Nothing needs you right now.">
                 {needsYou.map((row) => (
                   <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} />
@@ -172,10 +194,12 @@ export function NowView({
                 empty="Nothing finished today."
                 actions={
                   finished.length > 0 ? (
-                    <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
-                      <ArchiveIcon className="size-3.5" aria-hidden="true" />
-                      Archive all finished
-                    </Button>
+                    <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+                      <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
+                        <ArchiveIcon className="size-3.5" aria-hidden="true" />
+                        Archive all finished
+                      </Button>
+                    </IconTooltip>
                   ) : null
                 }
               >
@@ -197,14 +221,14 @@ export function NowView({
         </div>
 
         {/* The mobile New-task FAB — the desktop CTA lives in the sidebar. */}
-        <Link
+        {managersAvailable ? null : <Link
           to="/new"
           data-slot="new-task-fab"
           aria-label="New task"
           className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
         >
           <PlusIcon className="size-[22px]" aria-hidden="true" />
-        </Link>
+        </Link>}
       </div>
     </LiveNowProvider>
   )
@@ -436,7 +460,7 @@ function FinishedRowView({ run }: { run: RunRecord }) {
       data-kind="finished"
       className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-1.5 md:grid-cols-[16px_minmax(0,1fr)_auto_auto] md:gap-x-3.5"
     >
-      {/* Done, cancelled and closed · idle all land here: the shape tells them apart (WCAG 1.4.1). */}
+      {/* Done, cancelled and idle all land here: the shape tells them apart (WCAG 1.4.1). */}
       <StatusMark attention={attention} />
       {/* Unread is weight, plus the word for a screen reader (#unread-done-items) — the table's rule. */}
       <Link
@@ -523,6 +547,7 @@ export function NowRoute() {
         hasScheduledTasks={hasScheduledTasks}
         setupPill={<SetupPill />}
         welcomeBack={<WelcomeBack runs={runs.data ?? NO_RUNS} />}
+        managersAvailable={health.data?.capabilities?.managers === true}
 
       />
     </ReferenceStatusProvider>

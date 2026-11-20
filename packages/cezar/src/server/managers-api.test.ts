@@ -6,9 +6,11 @@ import { delimiter, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagerMessage } from '@open-mercato/cezar-contract';
+import { agentProfileResponseSchema, runnerSchema } from '@open-mercato/cezar-contract';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import type { AgentEvent } from '../core/agent-runner.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
+import { ManagerStore } from '../managers/store.ts';
 import { RunStore } from '../runs/store.ts';
 import { track } from '../telemetry.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -18,6 +20,7 @@ vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal
 
 const JSON_HEADERS = { 'content-type': 'application/json', host: '127.0.0.1' };
 const BASE = '/api/v1/workspace/managers';
+const managerStore = () => new ManagerStore(() => undefined);
 
 describe('the managers routes', () => {
   let root: string;
@@ -179,6 +182,97 @@ describe('the managers routes', () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
+  it('persists the task agent and enforces it through the real run route, then clears to Automatic', async () => {
+    const { id, connectedProjectIds } = await createManager({ instructions: '', projects: 'all', runner: 'claude', taskRunner: 'codex', cronMinutes: 0 });
+    const [projectId] = connectedProjectIds;
+    expect(await (await request(`${BASE}/${id}`)).json()).toMatchObject({ taskRunner: 'codex' });
+    const path = `${BASE}/${id}/tasks`;
+    expect((await request(path, { method: 'POST', body: { projectId, task: 'Use my selection', runner: 'claude' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
+    const automatic = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: null, runner: 'codex' } });
+    expect(automatic.status).toBe(200);
+    expect(await automatic.json()).not.toHaveProperty('taskRunner');
+    expect((await request(path, { method: 'POST', body: { projectId, task: 'Use the manager backend' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
+    expect((await request(path, { method: 'POST', body: { projectId, task: 'Choose another agent', runner: 'claude' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'claude' });
+  });
+
+  it('rejects an unknown task agent on create and update', async () => {
+    expect((await request(BASE, { method: 'POST', body: { instructions: '', projects: 'all', taskRunner: 'imaginary' } })).status).toBe(400);
+    const { id } = await createManager();
+    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: 'imaginary' } })).status).toBe(400);
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it.each(runnerSchema.options)('persists %s for newly spawned tasks independently of the manager agent and account', async (runner) => {
+    const { id, connectedProjectIds: [projectId] } = await createManager({
+      instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskRunner: runner, cronMinutes: 0,
+    });
+    const managerPath = `${BASE}/${id}`;
+    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
+    const spawn = async (requested?: string) => {
+      const response = await request(`${managerPath}/tasks`, {
+        method: 'POST', body: { projectId, task: 'Spawn with the selected agent', ...(requested ? { runner: requested } : {}) },
+      });
+      expect(response.status).toBe(201);
+      return startRun.mock.calls.at(-1)?.[1];
+    };
+    // The real manager-task route forwards its resolved runner into the real POST /runs.
+    expect(await spawn(runner === 'claude' ? 'codex' : 'claude')).toMatchObject({ runner });
+    const automatic = await request(managerPath, { method: 'PATCH', body: { taskRunner: null } });
+    expect(await automatic.json()).not.toHaveProperty('taskRunner');
+    expect(new ManagerStore().get(id)).not.toHaveProperty('taskRunner');
+    expect(await spawn()).toMatchObject({ runner: 'codex' });
+    expect(await spawn(runner)).toMatchObject({ runner });
+    const pinned = await request(managerPath, { method: 'PATCH', body: { taskRunner: runner } });
+    expect(await pinned.json()).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
+    expect(new ManagerStore().get(id)?.taskRunner).toBe(runner);
+    expect(await spawn()).toMatchObject({ runner });
+  });
+
+  it('persists two Claude accounts and one Codex account and forwards only selected pairs into POST /runs', async () => {
+    const add = async (provider: 'claude' | 'codex', label: string) => {
+      const configDir = join(home, label);
+      mkdirSync(configDir);
+      const response = await request('/api/v1/workspace/agent-profiles', { method: 'POST', body: { provider, label, configDir } });
+      expect(response.status).toBe(201);
+      return agentProfileResponseSchema.parse(await response.json()).profile.id;
+    };
+    const first = await add('claude', 'First');
+    const second = await add('claude', 'Second');
+    const codex = await add('codex', 'Codex');
+    const agents = [{ runner: 'claude', agentProfile: first }, { runner: 'claude', agentProfile: second }, { runner: 'codex', agentProfile: codex }];
+    const { id, connectedProjectIds: [projectId] } = await createManager({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents: agents, cronMinutes: 0 });
+    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskAgents: agents });
+    for (const agent of agents) {
+      expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Use this exact account', ...agent } })).status).toBe(201);
+      expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject(agent);
+    }
+    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents: [{ runner: 'codex', agentProfile: first }] } })).status).toBe(400);
+    const before = startRun.mock.calls.length;
+    for (const agent of [{ runner: 'opencode' }, { runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: first }]) {
+      expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Outside the allowed set', ...agent } })).status).toBe(403);
+    }
+    expect(startRun).toHaveBeenCalledTimes(before);
+    await request(`${BASE}/${id}`, { method: 'PATCH', body: { name: 'Renamed' } });
+    expect(new ManagerStore().get(id)?.taskAgents).toEqual(agents);
+    const clear = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents: null, taskRunner: null } });
+    expect(await clear.json()).not.toHaveProperty('taskAgents');
+    expect(new ManagerStore().get(id)).not.toHaveProperty('taskAgents');
+    expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Automatic account choice', runner: 'claude', agentProfile: 'default' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'claude', agentProfile: 'default' });
+  });
+
+  it('rejects empty, repeated, unknown and cross-provider task account choices before saving', async () => {
+    const { id } = await createManager({ instructions: '', projects: 'all', cronMinutes: 0 });
+    for (const taskAgents of [[], [{ runner: 'claude', agentProfile: 'missing' }], [{ runner: 'imaginary', agentProfile: 'default' }], [{ runner: 'claude' }, { runner: 'claude' }]]) {
+      expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents } })).status).toBe(400);
+      expect(new ManagerStore().get(id)).not.toHaveProperty('taskAgents');
+    }
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   it('merges only through the decision route, on the same code the GitHub tab uses', async () => {
     const { id, connectedProjectIds } = await createManager();
     const [projectId] = connectedProjectIds;
@@ -205,6 +299,64 @@ describe('the managers routes', () => {
     expect(response.status).toBe(403);
   });
 
+  it('refuses a second answer to a card that is already closed (Questions inbox)', async () => {
+    const { id } = await createManager();
+    const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+    const ask = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'next' }] }] };
+    log.persistMessage(id, { id: 'closed', seq: 0, at: 't', kind: 'assistant', turn: 'chat', text: '', streaming: false, commands: [], ask, askClosed: { reason: 'dismissed', at: 't' } } as ManagerMessage);
+    const send = (askId: string) => request(`${BASE}/${id}/messages`, { method: 'POST', body: { text: 'Base: main', askId } });
+    const refused = await send('closed');
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'question already closed' });
+  });
+
+  it('an inactive manager refuses chat, Check now and a connector probe until reactivated (spec 2026-11-19-manager-deactivate)', async () => {
+    const { id } = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const off = await request(`${BASE}/${id}`, { method: 'PATCH', body: { active: false } });
+    expect(off.status).toBe(200);
+    expect(((await off.json()) as { inactive?: { since: string } }).inactive?.since).toBeDefined();
+    for (const [path, body] of [[`${BASE}/${id}/messages`, { text: 'hi' }], [`${BASE}/${id}/check`, undefined], [`${BASE}/${id}/connectors/refresh`, undefined]] as const) {
+      const refused = await request(path, { method: 'POST', ...(body ? { body } : {}) });
+      expect(refused.status, path).toBe(409);
+      expect(await refused.json()).toEqual({ error: 'manager inactive' });
+    }
+    expect(managerStore().messages(id).filter((message) => message.kind === 'user')).toEqual([]);
+    const sent = await request(`${BASE}/${id}/messages`, { method: 'POST', body: { text: 'hi', reactivate: true } });
+    expect(sent.status).toBe(200);
+    expect(managerStore().get(id)?.inactive).toBeUndefined();
+    await vi.waitFor(() => expect(engine.inFlight()).toBe(0), { timeout: 15_000 });
+    expect(managerStore().messages(id).filter((message) => message.kind === 'user').map((message) => 'text' in message && message.text)).toEqual(['hi']);
+  });
+
+  it('deactivates and reactivates every manager at once, answering the ids that changed', async () => {
+    const one = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const two = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    await request(`${BASE}/${two.id}`, { method: 'PATCH', body: { active: false } });
+    const off = await request(`${BASE}/activity`, { method: 'POST', body: { active: false } });
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ ok: true, changed: [one.id] });
+    const on = await request(`${BASE}/activity`, { method: 'POST', body: { active: true } });
+    expect(((await on.json()) as { changed: string[] }).changed.sort()).toEqual([one.id, two.id].sort());
+    expect((await request(`${BASE}/activity`, { method: 'POST', body: { active: true, extra: 1 } })).status).toBe(400);
+  });
+
+  it('keeps an inactive manager\'s question listed but out of the count, and answers it only with reactivate', async () => {
+    const { id } = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const ask = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'next' }] }] };
+    managerStore().persistMessage(id, { id: 'card', seq: 0, at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '', streaming: false, commands: [], ask } as ManagerMessage);
+    await request(`${BASE}/${id}`, { method: 'PATCH', body: { active: false } });
+    const listed = (await (await request('/api/v1/workspace/questions')).json()) as { open: Array<{ key: string }>; counts: { live: number; older: number } };
+    expect(listed.open.map((item) => item.key)).toEqual([`m:${id}:card`]);
+    expect(listed.counts).toEqual({ live: 0, older: 0 });
+    const answer = (body: unknown) => request(`/api/v1/workspace/questions/${encodeURIComponent(`m:${id}:card`)}/answer`, { method: 'POST', body });
+    const refused = await answer({ text: 'Base: main' });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'manager inactive' });
+    expect((await answer({ text: 'Base: main', reactivate: true })).status).toBe(200);
+    expect(managerStore().get(id)?.inactive).toBeUndefined();
+    await vi.waitFor(() => expect(engine.inFlight()).toBe(0), { timeout: 15_000 });
+  });
+
   it('pages history oldest-first within the page, newest page by default', async () => {
     const { id } = await createManager();
     const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
@@ -215,6 +367,22 @@ describe('the managers routes', () => {
     const older = (await (await request(`${BASE}/${id}/messages?before=3&limit=10`)).json()) as { messages: Array<{ seq: number }>; hasMore: boolean };
     expect(older.messages.map((message) => message.seq)).toEqual([0, 1, 2]);
     expect(older.hasMore).toBe(false);
+  });
+
+  describe('kind=user', () => {
+    it('returns only the user\'s messages and keeps before/limit', async () => {
+      const { id } = await createManager();
+      const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+      const kinds = ['user', 'notice', 'user', 'notice', 'user'] as const;
+      kinds.forEach((kind, seq) =>
+        log.persistMessage(id, kind === 'user' ? { id: `m${seq}`, seq, at: 't', kind, text: 'q' } : { id: `m${seq}`, seq, at: 't', kind, text: 'x' }));
+      const page = async (query: string) =>
+        (await (await request(`${BASE}/${id}/messages?${query}`)).json()) as { messages: Array<{ seq: number }>; hasMore: boolean };
+      expect((await page('kind=user&limit=2')).messages.map((m) => m.seq)).toEqual([2, 4]);
+      const older = await page('kind=user&limit=2&before=4');
+      expect(older.messages.map((m) => m.seq)).toEqual([0, 2]);
+      expect(older.hasMore).toBe(false);
+    });
   });
 
   describe('pending=1', () => {

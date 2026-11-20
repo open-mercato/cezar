@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -87,6 +87,48 @@ describe('buildClaudeArgs enforceReadOnly', () => {
 
   it('denies nothing on an ordinary run', () => {
     expect(buildClaudeArgs(spec)).not.toContain('--disallowedTools');
+  });
+});
+
+describe('buildClaudeArgs bashHookCommand', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr view'] };
+
+  it('installs it as a Bash PreToolUse hook beside the prefix rules', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: "'/usr/bin/node' '/x/hook.js'" });
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Bash(gh pr view:*)');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "'/usr/bin/node' '/x/hook.js'" }] }] },
+    });
+  });
+
+  it('adds no settings without a hook, or when Bash is not allowed at all', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--settings');
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], bashHookCommand: 'x' })).not.toContain('--settings');
+  });
+
+  // The Seatbelt sandbox denies the loopback connect, so `cez-manager` failed with `fetch failed`.
+  it('excludes sandboxExcludedCommands from the sandbox in the same settings as the hook', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: 'h', sandboxExcludedCommands: ['cez-manager *'] });
+    expect(args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'h' }] }] },
+      sandbox: { excludedCommands: ['cez-manager *'] },
+    });
+    const alone = buildClaudeArgs({ ...spec, sandboxExcludedCommands: ['cez-manager *'] });
+    expect(JSON.parse(alone[alone.indexOf('--settings') + 1]!)).toEqual({ sandbox: { excludedCommands: ['cez-manager *'] } });
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], sandboxExcludedCommands: ['cez-manager *'] })).not.toContain('--settings');
+  });
+});
+
+describe('buildClaudeArgs bypassPermissions', () => {
+  const spec = { userPrompt: 'go', cwd: '/tmp' };
+  const mode = (args: string[]) => args[args.indexOf('--permission-mode') + 1];
+
+  it('skips every prompt only when the project opted in, and never for a read-only run', () => {
+    expect(mode(buildClaudeArgs(spec))).toBe('dontAsk');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true }))).toBe('bypassPermissions');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true }, { CEZ_APPROVAL_GATE: '1' }))).toBe('bypassPermissions');
+    expect(mode(buildClaudeArgs({ ...spec, bypassPermissions: true, enforceReadOnly: true }))).toBe('dontAsk');
   });
 });
 
@@ -411,6 +453,36 @@ describe('prependSystemPrompt (codex/opencode delivery)', () => {
 
   it('leaves the user prompt untouched when no systemPrompt is set', () => {
     expect(prependSystemPrompt(undefined, 'do it')).toBe('do it');
+  });
+});
+
+describe('ClaudeCliRunner dry-run auth replay', () => {
+  it('rejects a manager prompt once and answers its replay with CEZ_HOME unset', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-auth-replay-'));
+    const home = join(cwd, 'home');
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    vi.stubEnv('CEZ_HOME', undefined);
+    vi.stubEnv('CEZ_CLAUDE_BIN', undefined);
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+
+    try {
+      const runner = new ClaudeCliRunner({ timeoutMs: 3_000 });
+      const spec = { cwd, userPrompt: '[cez-manager:watch]\nmock:auth-error' };
+      const firstEvents: AgentEvent[] = [];
+      await runner.run(spec, (event) => firstEvents.push(event));
+      expect(firstEvents).toContainEqual({
+        type: 'error',
+        message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      });
+
+      const replay = await runner.run(spec);
+      expect(replay.text).toBe('MANAGER:QUIET');
+      expect(readdirSync(join(home, '.cezar', 'mock-auth-once'))).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(cwd, { force: true, recursive: true });
+    }
   });
 });
 

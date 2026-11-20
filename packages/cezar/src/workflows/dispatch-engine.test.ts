@@ -162,6 +162,13 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
   // ---- dispatch ------------------------------------------------------------------------------
 
   describe('dispatch()', () => {
+    it('preserves an explicit empty child tool grant instead of restoring unrestricted defaults', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot();
+      const child = dispatchOk(parent.id, order('mock:done no tools', { allowed_tools: [], runner: 'codex' }));
+      expect(store.getRun(child.id)?.workflowDef?.steps[0]?.allowedTools).toEqual([]);
+    }, 40_000);
+
     it('creates a child forked off the parent branch, with its order, budget and tree files', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(20);
@@ -502,6 +509,28 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       await waitFor(parent.id, () => stdin(stdinFile).includes('Report from task'), 40_000);
       const text = delivered(stdinFile, 'Report from task');
       expect(text).toContain(child.id);
+    }, 60_000);
+
+    // spec 2026-11-04-idle-closed-attention-state § Revision: an idle park reopens on a report too.
+    it('reopens an idle-parked parent with a child’s report', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-idle.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+
+      const parent = start('mock:done first pass');
+      store.updateRun(parent.id, { dispatch: rootOf(parent.id) });
+      await waitFor(parent.id, settled);
+      await waitFor(parent.id, () => !manager.isActive(parent.id));
+      // The record an idle close leaves: still `waiting`, no process.
+      store.updateRun(parent.id, { status: 'waiting' });
+      store.updateRun(parent.id, { status: 'waiting', idleClosedAt: new Date().toISOString() });
+      expect(store.getRun(parent.id)?.idleClosedAt).toBeDefined();
+
+      const child = start('mock:done take the right flank', childOf(parent.id));
+      await waitFor(child.id, settled);
+      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from task'), 40_000);
+      expect(delivered(stdinFile, 'Report from task')).toContain(child.id);
+      expect(store.getRun(parent.id)?.idleClosedAt).toBeUndefined();
     }, 60_000);
 
     it('forwards a settled child’s suggestions to the root’s inbox', async () => {

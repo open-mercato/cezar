@@ -8,6 +8,7 @@ import {
   CodexAppServerRpc,
   endCodexAppServer,
   resolveCodexExecutable,
+  waitForCodexAppServerExit,
 } from './codex-app-server-transport.ts';
 
 const originalBin = process.env.CEZ_CODEX_BIN;
@@ -85,6 +86,18 @@ describe('Codex app-server transport', () => {
     const request = rpc.request('model/list', {});
     rpc.dispatchResponse({ id: 1, error: { code: -32601, message: 'method unavailable' } });
     await expect(request).rejects.toThrow('method unavailable');
+  });
+
+  it('resolves immediately when the child has already exited on a signal', async () => {
+    const emitter = new EventEmitter();
+    const child = Object.assign(emitter, {
+      exitCode: null,
+      signalCode: 'SIGTERM',
+    }) as unknown as ChildProcessWithoutNullStreams;
+
+    const result = waitForCodexAppServerExit(child);
+    expect(emitter.listenerCount('exit')).toBe(0);
+    await expect(result).resolves.toBeNull();
   });
 });
 

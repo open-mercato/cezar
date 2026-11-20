@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { managerKeys } from '@/api/managers'
 import { queryKeys } from '@/api/queries'
+import { questionKeys } from '@/api/questions'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { managerFixture } from './manager-fixtures'
@@ -181,24 +182,60 @@ describe('ManagerSidebar', () => {
     expect(quiet!.querySelector('[data-slot="manager-unread"]')).toBeNull()
   })
 
-  it('has a small Workspace group: Approvals into the first waiting chat, Jobs, Manager settings', () => {
+  it('opens workspace approvals even when the first waiting manager is already open, counting actions only', () => {
     renderSidebar([
       managerFixture({ lastActivityAt: new Date(Date.now() - 60_000).toISOString() }),
       managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, pendingQuestions: 1, lastActivityAt: new Date(Date.now() - 120_000).toISOString() }),
       managerFixture({ id: 'ops', name: 'Ops', pendingActions: 1, lastActivityAt: new Date(Date.now() - 180_000).toISOString() }),
-    ])
+    ], true, '/manager/shop')
     const links = within(workspace()).getAllByRole('link')
-    expect(links.map((link) => link.textContent)).toEqual(['Approvals3 waiting on you', 'Manager settings'])
-    expect(links[0]!.getAttribute('href')).toBe('/manager/shop')
-    expect(links[1]!.getAttribute('href')).toBe('/settings/global/manager')
+    expect(links.map((link) => link.textContent)).toEqual(['Approvals2 pending approvals', 'Questions', 'Manager settings'])
+    expect(links[0]!.getAttribute('href')).toBe('/manager/approvals')
+    expect(links[0]!.getAttribute('aria-current')).toBeNull()
+    expect(links[1]!.getAttribute('href')).toBe('/manager/questions')
+    expect(links[2]!.getAttribute('href')).toBe('/settings/global/manager')
     expect(within(workspace()).getByRole('button', { name: 'Jobs' }).getAttribute('aria-haspopup')).toBe('dialog')
   })
 
-  it('drops Approvals when nothing waits, and Jobs without an open chat', () => {
+  // Questions inbox design § 01: workspace counts fill info-blue above zero, muted at zero.
+  it('lists Questions between Approvals and Jobs, with the live count; counts fill blue above zero', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
+    client.setQueryData(managerKeys.list, { managers: [managerFixture({ pendingActions: 0, jobs: [] })] })
+    client.setQueryData(questionKeys.all, { open: [], closed: [], counts: { live: 3, older: 2 }, olderAfterDays: 7 })
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/manager/global']}><ManagerSidebar /></MemoryRouter></QueryClientProvider>)
+    const nav = workspace()
+    const questions = within(nav).getByRole('link', { name: 'Questions, 3 waiting' })
+    expect(questions.getAttribute('href')).toBe('/manager/questions')
+    const labels = [...nav.querySelectorAll('a, button')].map((node) => node.getAttribute('data-slot'))
+    expect(labels.indexOf('sidebar-questions')).toBe(labels.indexOf('manager-sidebar-approvals') + 1)
+    expect(labels.indexOf('manager-sidebar-jobs')).toBe(labels.indexOf('sidebar-questions') + 1)
+    // Older questions are not counted.
+    expect(questions.querySelector('[data-slot="sidebar-questions-count"]')?.textContent).toBe('3')
+    expect(questions.querySelector('[data-slot="sidebar-questions-count"]')?.className).toContain('bg-info')
+    expect(nav.querySelector('[data-slot="sidebar-approvals-count"]')?.className).toContain('bg-muted')
+    act(() => client.setQueryData(questionKeys.all, { open: [], closed: [], counts: { live: 0, older: 2 }, olderAfterDays: 7 }))
+    await waitFor(() => expect(questions.querySelector('[data-slot="sidebar-questions-count"]')?.className).toContain('bg-muted'))
+    cleanup()
+    renderSidebar([managerFixture({ pendingActions: 2 })])
+    expect(document.querySelector('[data-slot="sidebar-approvals-count"]')?.className).toContain('bg-info')
+  })
+
+  it('keeps Approvals reachable with zero pending actions, and Jobs needs an open chat', () => {
     renderSidebar([managerFixture()], true, '/manager/new')
-    expect(within(workspace()).queryByRole('link', { name: /Approvals/ })).toBeNull()
+    expect(within(workspace()).getByRole('link', { name: 'Approvals, 0 pending approvals' }).getAttribute('href')).toBe('/manager/approvals')
     expect(within(workspace()).queryByRole('button', { name: 'Jobs' })).toBeNull()
     expect(within(workspace()).getByRole('link', { name: 'Manager settings' })).toBeTruthy()
+  })
+
+  it('selects only the workspace Approvals item at its deep link', () => {
+    renderSidebar([managerFixture({ pendingActions: 1 })], true, '/manager/approvals')
+    const approvals = within(workspace()).getByRole('link', { name: /Approvals/ })
+    expect(approvals.getAttribute('aria-current')).toBe('page')
+    expect(approvals.className).toContain('bg-muted')
+    expect(rows().every((row) => row.getAttribute('aria-current') === null)).toBe(true)
+    expect(within(workspace()).queryByRole('button', { name: 'Jobs' })).toBeNull()
+    expect(rows()[0]!.textContent).toContain('1 approval waiting')
   })
 
   it('opens the open chat\'s jobs dialog from Jobs', async () => {
@@ -212,6 +249,7 @@ describe('ManagerSidebar', () => {
     const loading = document.querySelector('[data-slot="manager-sidebar-loading"]')
     expect(loading?.getAttribute('role')).toBe('status')
     expect(screen.getByText('Loading managers…')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Approvals' }).textContent).toBe('Approvals')
     expect(loading?.querySelector('[data-slot="list-skeleton"]')?.children).toHaveLength(3)
     cleanup()
     renderSidebar([managerFixture()])

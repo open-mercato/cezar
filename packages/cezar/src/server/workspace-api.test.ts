@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hostUsageSchema, setWorkspaceConfigInputSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
+import { diskGuardStatusSchema, hostUsageSchema, setWorkspaceConfigInputSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunStore } from '../runs/store.ts';
@@ -91,6 +91,7 @@ describe('the workspace settings API (step 2.7)', () => {
     const body = (await res.json()) as WorkspaceConfigResponse & Record<string, unknown>;
     expect(body).toEqual({
       branding: { name: 'cezar', logoUrl: null },
+      computerName: expect.any(String),
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
@@ -111,6 +112,9 @@ describe('the workspace settings API (step 2.7)', () => {
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
+        worktreeIdleDaysDefault: 7,
+        archivedTaskDeleteDaysDefault: 90,
+        diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
       // keys mean "this machine has no opinion", which is what makes them defaults a repo can be
@@ -274,6 +278,15 @@ describe('the workspace settings API (step 2.7)', () => {
     }
   });
 
+  // ---- GET /api/v1/workspace/disk-guard ---------------------------------------
+
+  it('GET disk-guard answers the configured thresholds before any pass has run', async () => {
+    const res = await apiRequest(app, '/api/v1/workspace/disk-guard');
+    expect(res.status).toBe(200);
+    const body = diskGuardStatusSchema.parse(await res.json());
+    expect(body).toEqual({ thresholds: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 } });
+  });
+
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {
     expect(semaphore.maxParallel()).toBe(2); // the pre-PUT snapshot
     const res = await putConfig({
@@ -289,6 +302,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(res.status).toBe(200);
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
       branding: { name: 'cezar', logoUrl: null },
+      computerName: expect.any(String),
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
@@ -309,6 +323,9 @@ describe('the workspace settings API (step 2.7)', () => {
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
+        worktreeIdleDaysDefault: 7,
+        archivedTaskDeleteDaysDefault: 90,
+        diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
       // unrelated questions, so one must never materialize the other.
@@ -370,6 +387,9 @@ describe('the workspace settings API (step 2.7)', () => {
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
+      worktreeIdleDaysDefault: 7,
+      archivedTaskDeleteDaysDefault: 90,
+      diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
     });
   });
 

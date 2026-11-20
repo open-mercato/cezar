@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,6 +11,7 @@ import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { provisionSkills } from '../skills-provision.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
@@ -249,6 +250,9 @@ describe('opencode serve startup', () => {
   });
 
   it.each([0, 0.5, 0.99999])('passes a random port in 40000–59999 and exposes the PID synchronously (random=%s)', (random) => {
+    // An absent fixture binary keeps host-installed CLIs and desktop/Windows wrappers out of this argv check.
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-port-'));
+    const bin = join(dir, 'opencode');
     let argv: unknown;
     spawnHook.override = (_bin, args) => {
       argv = args;
@@ -257,7 +261,7 @@ describe('opencode serve startup', () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(random);
     try {
-      const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession({ userPrompt: 'do it', cwd: process.cwd() });
+      const session = new OpencodeServerRunner({ bin, timeoutMs: 0 }).startSession({ userPrompt: 'do it', cwd: process.cwd() });
       void session.result.catch(() => undefined);
       const port = 40000 + Math.floor(random * 20000);
       expect(argv).toEqual(['serve', '--hostname', '127.0.0.1', '--port', String(port)]);
@@ -267,6 +271,7 @@ describe('opencode serve startup', () => {
       expect(session.pid).toBe(5151);
     } finally {
       randomSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -816,6 +821,44 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   it('grants exactly this run\'s handoff file and its own pasted attachments', () => {
     expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), env)).toBe('once');
     expect(opencodePermissionReply(ask(`${runs}/r1-images/pasted-1.png`), env)).toBe('once');
+  });
+
+  it('grants the dispatch tree, the artifacts dir and provisioned skill links, not siblings (#2115, #2103)', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'oc-perm-')));
+    const tree = join(root, 'tree');
+    const arts = join(root, 'arts');
+    const cwd = join(root, 'wt');
+    const skill = join(root, 'shared', 'my-skill');
+    mkdirSync(join(tree, 'inbox'), { recursive: true });
+    mkdirSync(arts, { recursive: true });
+    mkdirSync(join(skill, 'references'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '---\nname: my-skill\n---\nBody\n');
+    mkdirSync(cwd, { recursive: true });
+    await provisionSkills(cwd, [{ name: 'my-skill', body: 'Body', path: join(skill, 'SKILL.md'), source: 'agents' }], []);
+    const e = { ...env, CEZ_TREE_DIR: tree, CEZ_ARTIFACTS_DIR: arts };
+    expect(opencodePermissionReply(ask(join(tree, 'units', 'x', 'order.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(tree, 'inbox', 'r1', 'm.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(arts, 'a.html')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(skill, 'references', 'required.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(root, 'shared', 'other', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(root, 'tree-sibling', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(tree, '..', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(tree, 'brief.md')), env, cwd)).toBe('reject');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('never follows a committed or agent-made skill link (#2103)', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'oc-perm-')));
+    const cwd = join(root, 'wt');
+    const secret = join(root, 'home');
+    mkdirSync(join(secret, '.ssh'), { recursive: true });
+    mkdirSync(join(cwd, '.agents', 'skills'), { recursive: true });
+    mkdirSync(join(cwd, '.claude', 'skills'), { recursive: true });
+    symlinkSync(secret, join(cwd, '.agents', 'skills', 'evil'), 'dir');
+    symlinkSync('/', join(cwd, '.claude', 'skills', 'root'), 'dir');
+    expect(opencodePermissionReply(ask(join(secret, '.ssh', 'id_ed25519')), env, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask('/etc/passwd'), env, cwd)).toBe('reject');
+    rmSync(root, { recursive: true, force: true });
   });
 
   it('refuses everything else outside the worktree', () => {

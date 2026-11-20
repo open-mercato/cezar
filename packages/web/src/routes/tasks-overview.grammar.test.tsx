@@ -73,7 +73,7 @@ describe('status grammar', () => {
     const expected = {
       done: { tone: 'success', label: 'done' },
       cancelled: { tone: 'neutral', label: 'cancelled' },
-      idle: { tone: 'idle', label: 'closed · idle' },
+      idle: { tone: 'neutral', label: 'idle' },
     } as const
     const glyphs = new Set<string>()
     for (const id of ['done', 'cancelled', 'idle'] as const) {
@@ -219,7 +219,7 @@ describe('column headers and the Columns menu', () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' })
     fireEvent.click(trigger)
     const items = await screen.findAllByRole('menuitemcheckbox')
-    expect(items.map((item) => item.textContent)).toEqual(['Workflow', 'Branch', '±', 'Ref', 'IN / OUT', 'Cost', 'CPU', 'Mem', 'Updated'])
+    expect(items.map((item) => item.textContent)).toEqual(['Workflow', 'Branch', '±', 'Ref', 'IN / OUT', 'Cost', 'Plan limit', 'CPU', 'Mem', 'Updated'])
     expect(items.find((item) => item.textContent === 'Branch')?.getAttribute('aria-checked')).toBe('true')
     expect(items.find((item) => item.textContent === 'Mem')?.getAttribute('aria-checked')).toBe('false')
 

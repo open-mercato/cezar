@@ -56,7 +56,9 @@ import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { AddAccountDialog } from './add-account-dialog'
+import { CursorConnection } from './cursor-connection'
 import { CardNote, FormRow, SavedIndicator, SettingsCard, useSavedFlash } from './form-row'
+import { AccountPlanUsage } from './account-plan-usage'
 
 /**
  * Settings → Agents, the two account cards (spec `.ai/specs/2026-07-29-agent-profiles.md`;
@@ -591,7 +593,7 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
               </span>
             ) : null}
           </div>
-          {status?.status === 'not-installed' && status.hint ? (
+          {status?.status !== 'connected' && status?.hint ? (
             <p data-slot="account-install-hint" className="mt-1 text-label text-muted-foreground">
               {status.hint}
             </p>
@@ -603,7 +605,7 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
         <div className="flex shrink-0 items-center gap-2">
           {/* No Connect for a CLI that is not installed: the login it opens cannot run, and the
               server only answers its install hint (telemetry 23976d8d) — the row shows that. */}
-          {status?.status !== 'connected' && status?.status !== 'not-installed' ? (
+          {account.provider !== 'cursor' && status?.status !== 'connected' && status?.status !== 'not-installed' ? (
             <Button
               type="button"
               size="sm"
@@ -638,11 +640,14 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
             disabled={recheck.isPending}
             onClick={() =>
               recheck.mutate(routeId, {
+                onSuccess: (result) => {
+                  if (account.provider === 'cursor') toast(`Cursor connection check: ${STATUS_PRESENTATION[result.status.status].label.toLowerCase()}.`)
+                },
                 onError: (error: Error) => toast(error.message, { tone: 'danger' }),
               })
             }
           >
-            Check again
+            {account.provider === 'cursor' ? (recheck.isPending ? 'Verifying…' : 'Verify connection') : 'Check again'}
           </Button>
           {/* Identity is opt-in: nothing is requested until this is pressed, so an email is absent
               from the page rather than merely unrendered. */}
@@ -658,6 +663,8 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
           </Button>
         </div>
       </div>
+
+      {account.provider === 'cursor' ? <CursorConnection status={status} installCommand={PROVIDER_INSTALL.cursor} /> : null}
 
       {showDetails ? (
         <AccountDetails account={account} routeId={routeId} onRemove={onRemove} />
@@ -732,6 +739,10 @@ function AccountDetails({
           {details.data.reason ?? 'No account details to show.'}
         </p>
       )}
+
+      {account.provider === 'claude' || account.provider === 'codex' ? (
+        <AccountPlanUsage provider={account.provider} accountId={account.id} />
+      ) : null}
 
       {localHandoff ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">

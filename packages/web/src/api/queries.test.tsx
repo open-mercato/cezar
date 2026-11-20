@@ -7,7 +7,8 @@ import { ApiError } from './client'
 import { createQueryClient } from './query-client'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import { ProjectScopeContext } from './project-scope-context'
-import type { GithubRefStatusData, HealthResponse } from '@open-mercato/cezar-api-client'
+import type { GithubRefStatusData, HealthResponse, ProviderStatusResponse } from '@open-mercato/cezar-api-client'
+import { usableRunners } from '@/lib/provider-status'
 import {
   refStatusRecheckAfter,
   useReferenceProjectId,
@@ -16,6 +17,7 @@ import {
   useProviderStatus,
   useRefreshProviderStatus,
   useRetryProviderAuth,
+  useRecheckAgentAccount,
   useHealth,
   useHealthSubscription,
   healthRecheckInterval,
@@ -65,6 +67,72 @@ function deferredResponse() {
   })
   return { promise, resolve }
 }
+
+describe('account verification and task provider selection', () => {
+  const claude = { provider: 'claude', status: 'connected', enabled: true } as const
+  const cursor = { provider: 'cursor', status: 'disconnected', enabled: true } as const
+  const initial: ProviderStatusResponse = { providers: [claude, cursor] }
+  const connected = { provider: 'cursor', status: 'connected', enabled: true } as const
+  function mount(status = initial) {
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.providerStatus, status)
+    const hook = renderHook(() => useRecheckAgentAccount(), {
+      wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    })
+    return { client, ...hook }
+  }
+
+  it('makes a manually connected Cursor immediately usable by the new-task picker', async () => {
+    fetchMock.mockResolvedValue(json({ status: connected }))
+    const { client, result } = mount()
+    await act(async () => { await result.current.mutateAsync('default:cursor') })
+    expect(usableRunners(client.getQueryData(workspaceQueryKeys.providerStatus))).toEqual(['claude', 'cursor'])
+    expect(client.getQueryData(workspaceQueryKeys.agentAccountStatus('default:cursor'))).toEqual({ status: connected })
+  })
+
+  it('acknowledges the exact Cursor runtime incident before verifying a fresh login', async () => {
+    fetchMock.mockImplementation(async (input) => String(input).endsWith('/retry')
+      ? json({ providers: [claude, connected] })
+      : json({ status: connected }))
+    const { result } = mount({ providers: [claude, { ...cursor, authFailureId: 'incident-1' }] })
+    await act(async () => { await result.current.mutateAsync('default:cursor') })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/providers/cursor/retry')
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ authFailureId: 'incident-1' })
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/status?refresh=1&recheck=1')
+  })
+
+  it('stops when retry refuses an incident that changed before the request arrived', async () => {
+    fetchMock.mockImplementation(async (input) => String(input).endsWith('/retry')
+      ? new Response(JSON.stringify({ error: 'Authentication incident changed. Refresh and try again.' }), { status: 409 })
+      : json({ status: connected }))
+    const status: ProviderStatusResponse = { providers: [claude, { ...cursor, authFailureId: 'old-incident' }] }
+    const { client, result } = mount(status)
+    await act(async () => { await expect(result.current.mutateAsync('default:cursor')).rejects.toThrow('incident changed') })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(status)
+  })
+
+  it('preserves a newer rejection that arrives while verification is in flight', async () => {
+    const response = deferredResponse()
+    fetchMock.mockReturnValue(response.promise)
+    const { client, result } = mount()
+    let pending!: Promise<unknown>
+    act(() => { pending = result.current.mutateAsync('default:cursor') })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    const latest: ProviderStatusResponse = { providers: [claude, { ...cursor, authFailureId: 'new-incident' }] }
+    client.setQueryData(workspaceQueryKeys.providerStatus, latest)
+    await act(async () => { response.resolve(json({ status: connected })); await pending })
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(latest)
+    expect(client.getQueryData(workspaceQueryKeys.agentAccountStatus('default:cursor'))).toEqual({ status: { ...cursor, authFailureId: 'new-incident' } })
+  })
+
+  it('keeps a named account verification separate from the discovered login', async () => {
+    fetchMock.mockResolvedValue(json({ status: connected }))
+    const { client, result } = mount()
+    await act(async () => { await result.current.mutateAsync('cursor-work') })
+    expect(client.getQueryData(workspaceQueryKeys.providerStatus)).toEqual(initial)
+  })
+})
 
 /** A client per test: a shared cache would let one test's data satisfy the next test's query,
  *  and "loading → data" would pass without a fetch ever happening. */
@@ -751,6 +819,27 @@ describe('useReferenceStatuses', () => {
 
     const { result } = renderHook(() => useReferenceStatuses([ref], false), { wrapper: wrapper() })
     expect(result.current(ref)).toMatchObject({ status: 'draft' })
+  })
+
+  describe('an issue reference', () => {
+    // #21 is a conflicting PR the cockpit asked about as an issue; #22 a real issue; #23 nothing.
+    const asked = [21, 22, 23].map((number) => ({ projectId: 'p1', kind: 'Issue' as const, number }))
+    const [asPr, issue, missing] = asked as [(typeof asked)[number], (typeof asked)[number], (typeof asked)[number]]
+
+    it('answers as the pull request it really is, conflict and all, and remembers that', async () => {
+      __clearRememberedStatusesForTests()
+      fetchMock.mockImplementation(async () =>
+        json({ available: true, prs: { 21: 'review-required' }, issues: { 22: 'open' }, conflicts: [21], recheckAfterMs: null }),
+      )
+      const { result } = renderHook(() => useReferenceStatuses(asked), { wrapper: wrapper() })
+      await waitFor(() => expect(result.current(asPr).state).toBe('ready'))
+      expect(result.current(asPr)).toEqual({ state: 'ready', status: 'review-required', conflicting: true, kind: 'PR' })
+      expect(result.current(issue)).toEqual({ state: 'ready', status: 'open' })
+      expect(result.current(missing)).toEqual({ state: 'unknown' })
+
+      const later = renderHook(() => useReferenceStatuses([asPr], false), { wrapper: wrapper() })
+      expect(later.result.current(asPr)).toMatchObject({ kind: 'PR', conflicting: true })
+    })
   })
 })
 

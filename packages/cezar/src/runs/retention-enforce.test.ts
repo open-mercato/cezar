@@ -120,3 +120,42 @@ describe('reclaimWorktrees (real git, #483)', () => {
     expect(existsSync(wt.path)).toBe(true);
   });
 });
+
+describe('reclaimWorktrees keeps uncommitted work (#2215)', () => {
+  it('skips a tree with tracked edits and untracked files, and still reclaims a clean one', async () => {
+    const repo = await fixtureRepo();
+    const dirtyId = '77777777-7777-4777-8777-777777777777';
+    const cleanId = '88888888-8888-4888-8888-888888888888';
+    const newId = '99999999-9999-4999-8999-999999999999';
+    const dirty = await createWorktree(repo, dirtyId, 'main');
+    const clean = await createWorktree(repo, cleanId, 'main');
+    const fresh = await createWorktree(repo, newId, 'main');
+    writeFileSync(join(dirty.path, 'base.txt'), '<<<<<<< a\nx\n=======\ny\n>>>>>>> b\n');
+    writeFileSync(join(dirty.path, 'new.ts'), 'export {};\n');
+    const store = fakeStore([
+      finishedRun(dirtyId, dirty.path, '2026-07-01T00:00:00.000Z'),
+      finishedRun(cleanId, clean.path, '2026-07-02T00:00:00.000Z'),
+      finishedRun(newId, fresh.path, '2026-07-09T00:00:00.000Z'),
+    ]);
+    const reclaimed = await reclaimWorktrees(repo, store, 1);
+    expect(reclaimed).toEqual([cleanId]);
+    expect(existsSync(join(dirty.path, 'new.ts'))).toBe(true);
+    expect(existsSync(join(dirty.path, 'base.txt'))).toBe(true);
+    expect(store.runs.find((r) => r.id === dirtyId)?.worktreeReclaimedAt).toBeUndefined();
+  });
+
+  it('skips a tree whose git state is unreadable', async () => {
+    const repo = await fixtureRepo();
+    const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const newId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const wt = await createWorktree(repo, id, 'main');
+    const fresh = await createWorktree(repo, newId, 'main');
+    rmSync(join(wt.path, '.git'), { force: true });
+    const store = fakeStore([
+      finishedRun(id, wt.path, '2026-07-01T00:00:00.000Z'),
+      finishedRun(newId, fresh.path, '2026-07-09T00:00:00.000Z'),
+    ]);
+    expect(await reclaimWorktrees(repo, store, 1)).toEqual([]);
+    expect(existsSync(wt.path)).toBe(true);
+  });
+});

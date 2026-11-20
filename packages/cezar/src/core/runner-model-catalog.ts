@@ -63,6 +63,13 @@ export class RunnerModelCatalog {
     this.#usableTtlMs = options.usableTtlMs ?? DEFAULT_USABLE_TTL_MS;
   }
 
+  /** A user's account recheck must bypass both healthy and failed pre-login discoveries. */
+  async refresh(runner: RunnerId): Promise<RunnerModelCatalogResult> {
+    await this.#inFlight.get(runner);
+    this.#cache.delete(runner);
+    return this.get(runner);
+  }
+
   get(runner: RunnerId): Promise<RunnerModelCatalogResult> {
     const cached = this.#cache.get(runner);
     const now = this.#now();

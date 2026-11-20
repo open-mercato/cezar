@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
-import { ToolsMenu, ToolsMenuItems, diskNote, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
+import { ToolsMenu, ToolsMenuItems, diskNote, forgeNote, toolsBlocker, toolsTone, toolsTooltip } from './tools-menu'
 
 afterEach(cleanup)
 
@@ -47,7 +47,7 @@ const HEALTH: HealthResponse = {
     },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const ALL_GOOD: HealthResponse = {
@@ -352,6 +352,17 @@ describe('disk space', () => {
     const NEARLY_FULL: HealthResponse = { ...ALL_GOOD, disk: { freeBytes: 0, totalBytes: 500 * GIB, level: 'critical' } }
     expect(toolsBlocker(NEARLY_FULL)).toBe('disk almost full — under 100 MB free')
     expect(diskNote(NEARLY_FULL)).toMatch(/^Only under 100 MB free on/)
+  })
+
+  it('carries the disk guard warning when reclaiming was not enough, even with the level ok', () => {
+    const WARNED: HealthResponse = {
+      ...ALL_GOOD,
+      disk: { freeBytes: 40 * GIB, totalBytes: 500 * GIB, level: 'ok', worktreesBytes: 21 * GIB, guardWarning: 'Disk almost full — 21.0 GB in task worktrees' },
+    }
+    expect(diskNote(WARNED)).toMatch(/^Disk almost full — 21\.0 GB in task worktrees\. Every idle task worktree/)
+    expect(toolsBlocker(WARNED)).toBeNull()
+    expect(toolsTone(WARNED)).toBe('pending')
+    expect(toolsTooltip(WARNED)).toBe('cezar v0.1.3 · Disk almost full — 21.0 GB in task worktrees')
   })
 
   it('goes amber and links to Settings → Worktrees', async () => {

@@ -8,6 +8,7 @@ export const TASK_COLUMN_IDS = [
   'reference',
   'tokens',
   'cost',
+  'planLimit',
   'cpu',
   'memory',
   'started',
@@ -21,6 +22,7 @@ export type TaskColumnIcon =
   | 'reference'
   | 'tokens'
   | 'cost'
+  | 'planLimit'
   | 'cpu'
   | 'memory'
   | 'started'
@@ -35,6 +37,8 @@ export interface TaskColumnDefinition {
   width?: string
   icon?: TaskColumnIcon
   capability?: 'tokens' | 'cost'
+  /** One-line explanation behind an ⓘ beside the expanded header. */
+  hint?: string
 }
 
 /**
@@ -93,6 +97,17 @@ export const TASK_COLUMNS = [
     width: '76px',
     icon: 'cost',
     capability: 'cost',
+  },
+  // Optional (plan-usage design, screen 4): folded until chosen, and only then is the ledger asked.
+  {
+    id: 'planLimit',
+    label: 'Plan limit',
+    canFold: true,
+    defaultExpanded: false,
+    align: 'right',
+    width: '144px',
+    icon: 'planLimit',
+    hint: "Each task's estimated share of its Claude or Codex account's 5-hour limit. Providers report usage per account, so busy periods are split by each task's cost.",
   },
   { id: 'cpu', label: 'CPU', canFold: true, defaultExpanded: true, align: 'right', width: '68px', icon: 'cpu' },
   {
@@ -164,6 +179,27 @@ export function toggleExpandedColumn(raw: unknown, id: TaskColumnId): Record<str
     ...current,
     [id]: !isColumnExpanded(id, normalizeExpandedColumns(raw)),
   }
+}
+
+/** A folded column's width in the colgroup. */
+export const FOLDED_COLUMN_WIDTH_PX = 42
+/** The controls (checkbox) column's width in the colgroup. */
+export const CONTROLS_COLUMN_WIDTH_PX = 36
+/** The Task column's floor for a root row; `taskCellMinWidth` in tasks-table.ts adds the indent. */
+export const TASK_COLUMN_MIN_PX = 220
+
+/** The narrowest the fixed-layout table may get before the Task column would drop under its floor. */
+export function tableMinWidth(
+  columns: readonly TaskColumnDefinition[],
+  normalized: NormalizedExpandedColumns,
+  controls: boolean,
+): number {
+  let total = (controls ? CONTROLS_COLUMN_WIDTH_PX : 0) + TASK_COLUMN_MIN_PX
+  for (const column of columns) {
+    if (column.width === undefined) continue
+    total += isColumnExpanded(column.id, normalized) ? Number.parseFloat(column.width) : FOLDED_COLUMN_WIDTH_PX
+  }
+  return total
 }
 
 export function taskColumnsForCapabilities(capabilities: {

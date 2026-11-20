@@ -114,6 +114,8 @@ describe('the project folder in settings', () => {
     })
     // The whole path, not an ellipsised head — this row exists to be read and pasted.
     expect(field.querySelector('[data-slot="project-location-path"]')?.textContent).toBe(ROOT)
+    // A basis, not `flex-1`: on a phone the buttons wrap below instead of squeezing the path.
+    expect(field.querySelector('[data-slot="project-location-path"]')?.className).toContain('flex-[1_1_16rem]')
   })
 
   it('every project section keeps the root in the nav footer', async () => {

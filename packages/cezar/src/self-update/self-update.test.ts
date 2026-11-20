@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -253,6 +254,48 @@ describe('update when idle', () => {
     const status = await service.status();
     expect(status.scheduled).toBeNull();
     expect(status.job?.status).toBe('restarting');
+  });
+
+  it('keeps the hosted limits of the request that scheduled it, whoever the timer runs as', async () => {
+    const repo = join(home, 'repo');
+    mkdirSync(join(repo, 'packages', 'cezar'), { recursive: true });
+    writeFileSync(join(repo, 'packages', 'cezar', 'package.json'), JSON.stringify({ name: '@open-mercato/cezar', version: '0.12.2' }));
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'ignore', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+    git('init', '-q', '-b', 'main');
+    git('add', '.');
+    git('commit', '-q', '-m', 'init');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ projects: [{ id: 'cezar', root: realpathSync(repo) }] }));
+
+    let hosted = true;
+    const buildCheckout = vi.fn(async () => {});
+    const offline = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
+    const scoped = new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: '0.12.0',
+      entry: versionEntry('0.12.0', env),
+      restart,
+      runs: { idle: () => idle, activeRuns: () => (idle ? 0 : 1) },
+      idlePollMs: 10,
+      env,
+      registry: new RegistryCache('@open-mercato/cezar', offline),
+      trimPaths: () => hosted,
+      buildCheckout,
+    });
+    // Refusing the link falls through to the registry: a closed port makes that npm fail at once, with no
+    // network and no retry (#2249 retries only a version npm cannot see), so nothing outlives the test.
+    vi.stubEnv('npm_config_registry', 'http://127.0.0.1:9/');
+    vi.stubEnv('npm_config_fetch_retries', '0');
+    try {
+      scoped.scheduleWhenIdle('0.12.2+main');
+      hosted = false; // The timer fires outside the request's relay scope.
+      idle = true;
+      await vi.waitFor(async () => expect((await scoped.status()).job?.status).toBe('failed'), { timeout: 10_000 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect((await scoped.status()).job?.log.some((line) => line.startsWith('npm install '))).toBe(true);
+    expect(buildCheckout).not.toHaveBeenCalled();
+    expect(activeId(env)).toBe('0.12.0');
   });
 
   it('applies at once when nothing is running', async () => {

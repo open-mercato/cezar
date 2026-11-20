@@ -6,13 +6,15 @@ import { agentFallbackPolicySchema } from '@open-mercato/cezar-contract';
 import type { AgentAccountStatusResponse, AgentProfilesResponse, AgentProfileResponse } from '@open-mercato/cezar-contract';
 import { agentAccountsPath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
-import type { RunManager } from '../workflows/run.ts';
+import { RunManager } from '../workflows/run.ts';
 import { loadAgentAccounts, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
-import { clearProjectProbeCache, registerProject } from '../workspace/projects.ts';
+import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { PROFILE_CAPABLE_PROVIDERS } from '../core/agent-profiles.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
-import { createApp, type ServerDeps } from './server.ts';
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { ProjectContexts } from './project-context.ts';
+import { createApp, WorkspaceEventBus, type ServerDeps } from './server.ts';
 
 // `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
 // executable these cases assert on would otherwise be whatever the DEVELOPER has. Pinned to the
@@ -697,6 +699,55 @@ describe('agent profiles API', () => {
     });
   });
 
+  describe('auth park recovery', () => {
+    it.each(['work', 'default'])('rechecks a %s account parked in an unopened project with a partially unreadable index', async (profileId) => {
+      if (profileId === 'work') {
+        await send('POST', '/api/v1/workspace/agent-profiles', {
+          provider: 'claude', label: 'work', configDir: claudeDir('claude-work'),
+        });
+      }
+      const projectRoot = join(home, 'unopened');
+      mkdirSync(projectRoot);
+      const project = await registerProject(projectRoot);
+      const dataDir = join(project.root, '.ai/cezar');
+      const parkedStore = RunStore.open(dataDir);
+      const run = parkedStore.createRun({ title: 'Parked task', task: 'work', workflow: 'quick-task', steps: [] });
+      const at = new Date(Date.now() - 1_000).toISOString();
+      parkedStore.updateRun(run.id, { status: 'waiting', idleClosedAt: at, parked: { kind: 'auth', provider: 'claude', profileId, at } });
+      parkedStore.flush();
+      const indexPath = join(dataDir, 'runs.json');
+      const savedRuns = JSON.parse(readFileSync(indexPath, 'utf8')) as unknown[];
+      writeFileSync(indexPath, JSON.stringify([...savedRuns, { id: 'unreadable', createdAt: at }]));
+
+      const contexts = new ProjectContexts({ listProjects });
+      const workspaceEvents = new WorkspaceEventBus();
+      const emit = vi.spyOn(workspaceEvents, 'emit');
+      const continueRun = vi.spyOn(RunManager.prototype, 'continueRun').mockReturnValue({ ok: true });
+      const disposers: Array<() => void> = [];
+      try {
+        const app = makeApp({
+          contexts, workspaceEvents, onDispose: (dispose) => disposers.push(dispose),
+          manager: { resumeAuthParked: () => [] } as unknown as RunManager,
+        });
+        const routeId = profileId === 'default' ? 'default:claude' : profileId;
+        const statusUrl = `/api/v1/workspace/agent-profiles/${routeId}/status`;
+        await expect((await apiRequest(app, `${statusUrl}?refresh=1`)).json()).resolves.toMatchObject({ status: { status: 'connected' } });
+        expect(emit).not.toHaveBeenCalledWith('account-reconnected', expect.anything());
+        expect((await apiRequest(app, `${statusUrl}?recheck=1`)).status).toBe(200);
+        await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('account-reconnected', expect.objectContaining({ provider: 'claude', profileId })));
+        expect(contexts.peek(project.id)).toBeUndefined();
+
+        const opened = await contexts.context(project.id);
+        expect(opened.store.getRun(run.id)?.parked).toBeUndefined();
+        expect(continueRun).toHaveBeenCalledWith(run.id, expect.objectContaining({ text: expect.any(String) }), true);
+      } finally {
+        for (const dispose of disposers.reverse()) dispose();
+        contexts.disposeAll();
+        continueRun.mockRestore();
+      }
+    });
+  });
+
   describe('per-account details and files', () => {
     /** A Claude account dir signed in as someone, with a settings.json beside it. */
     const signedIn = (name: string): string => {
@@ -1037,6 +1088,61 @@ describe('agent profiles API', () => {
    * signed in", and the branch the cockpit now calls. Connect creates a missing folder (#1918).
    */
   describe('connect, aimed at one account', () => {
+    it('opens Cursor sign-in again only on explicit reconnect, preserving normal connected behaviour', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const app = makeApp({ openTerminal });
+      const connect = (reconnect?: unknown) => apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cursor', ...(reconnect === undefined ? {} : { reconnect }) }),
+      });
+      const normal = await connect();
+      expect(await normal.json()).toMatchObject({ opened: false, connected: true });
+      expect(openTerminal).not.toHaveBeenCalled();
+      const again = await connect(true);
+      expect(again.status).toBe(200);
+      expect(await again.json()).toMatchObject({ opened: true, command: expect.stringContaining('login') });
+      expect(openTerminal).toHaveBeenCalledTimes(1);
+      expect((await connect('true')).status).toBe(400);
+    });
+
+    it('returns the login command when Cursor reconnect cannot open a terminal', async () => {
+      const app = makeApp({ openTerminal: async () => false });
+      const result = await apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cursor', reconnect: true }),
+      });
+      expect(result.status).toBe(409);
+      expect(await result.json()).toMatchObject({ error: expect.stringContaining('manually'), command: expect.stringContaining('login') });
+    });
+
+    it('keeps Cursor reconnect behind the hosted terminal boundary', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const app = makeApp({ bindHost: '0.0.0.0', openTerminal });
+      const result = await apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cursor', reconnect: true }),
+      });
+      expect(result.status).toBe(409);
+      expect(await result.json()).toMatchObject({ error: expect.stringContaining('hosting cezar') });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('refreshes Cursor models on explicit verification after a cached discovery failure', async () => {
+      const discover = vi.fn().mockRejectedValueOnce(new Error('signed out')).mockResolvedValueOnce([
+        { id: 'composer', label: 'Composer', description: '' },
+      ]);
+      const modelCatalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+      const app = makeApp({ modelCatalog });
+      await expect(modelCatalog.get('cursor')).resolves.toMatchObject({ source: 'unavailable' });
+      await apiRequest(app, '/api/v1/workspace/agent-profiles/default:cursor/status?refresh=1');
+      expect(discover).toHaveBeenCalledTimes(1);
+      const verified = await apiRequest(app, '/api/v1/workspace/agent-profiles/default:cursor/status?refresh=1&recheck=1');
+      expect(verified.status).toBe(200);
+      expect(discover).toHaveBeenCalledTimes(2);
+      const models = await apiRequest(app, '/api/v1/models?runner=cursor');
+      expect(await models.json()).toMatchObject({ models: [{ id: 'composer' }], stale: false });
+    });
+
     it('re-probes rather than answering "already connected" from a warm cache', async () => {
       // The trap: `profileStatus` serves the per-account cache, and a CONNECTED answer stands for
       // ten minutes. Without an eviction, Connect after a `claude /logout` opens nothing and says

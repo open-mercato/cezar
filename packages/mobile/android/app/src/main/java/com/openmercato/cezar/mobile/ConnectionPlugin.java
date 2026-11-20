@@ -1,0 +1,595 @@
+package com.openmercato.cezar.mobile;
+
+import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Build;
+import android.provider.Settings;
+import android.webkit.CookieManager;
+import androidx.activity.result.ActivityResult;
+import com.getcapacitor.JSArray;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PermissionState;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
+import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
+import com.journeyapps.barcodescanner.ScanIntentResult;
+import com.journeyapps.barcodescanner.ScanOptions;
+import com.openmercato.cezar.mobile.shell.AppLock;
+import com.openmercato.cezar.mobile.shell.CezarRows;
+import com.openmercato.cezar.mobile.shell.DeviceProbes;
+import com.openmercato.cezar.mobile.shell.LaunchHold;
+import com.openmercato.cezar.mobile.shell.OriginGate;
+import com.openmercato.cezar.mobile.shell.OriginWipe;
+import com.openmercato.cezar.mobile.shell.RestartActivity;
+import com.openmercato.cezar.mobile.shell.ProxyOrigin;
+import com.openmercato.cezar.mobile.shell.ServerActivity;
+import com.openmercato.cezar.mobile.shell.ServerListStore;
+import com.openmercato.cezar.mobile.shell.ServerRecord;
+import com.openmercato.cezar.mobile.shell.ShellConnector;
+import com.openmercato.cezar.mobile.shell.ShellRoute;
+import com.openmercato.cezar.mobile.shell.ShellServices;
+import com.openmercato.cezar.mobile.push.PushNotifier;
+import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
+import com.openmercato.cezar.mobile.shell.push.PushTap;
+import com.openmercato.cezar.mobile.shell.relay.AccountClient;
+import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
+import com.openmercato.cezar.mobile.shell.relay.PairingClient;
+import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
+import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
+import com.openmercato.cezar.mobile.shell.relay.RelayLink;
+import com.openmercato.cezar.mobile.shell.relay.RelayOrigin;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import org.json.JSONObject;
+
+/** Framework adapter for the connect page. All decisions live in the plain shell package. */
+@CapacitorPlugin(name = "Connection", permissions = @Permission(alias = ConnectionPlugin.NOTIFICATIONS, strings = { Manifest.permission.POST_NOTIFICATIONS }))
+public class ConnectionPlugin extends Plugin {
+    /** A QR string from the debug-only DebugPairActivity. Release builds have no way to set this route. */
+    public static final String DEBUG_QR = "debug-qr";
+    static final String NOTIFICATIONS = "notifications";
+    private static final long POLL_MS = 20000;
+
+    private final ExecutorService background = Executors.newSingleThreadExecutor();
+    private final ExecutorService polls = Executors.newCachedThreadPool();
+    private final ScheduledExecutorService bounds = Executors.newSingleThreadScheduledExecutor();
+    /** The last probe's reading per server, for every listed outcome after it. */
+    private final Map<String, DeviceProbes.Reading> readings = new ConcurrentHashMap<>();
+    private final Object probeLock = new Object();
+    /** Non-null while a probe runs: the calls it answers when it settles. */
+    private List<PluginCall> probeCalls;
+    private volatile String probeCurrent;
+
+    /** Waits for the lock, so a locked app opens no server and consumes no route behind it (spec QR3). */
+    @PluginMethod
+    public void launch(PluginCall call) {
+        getActivity().runOnUiThread(() -> AppLock.get(getContext()).whenUnlocked(() -> start(call)));
+    }
+
+    private void start(PluginCall call) {
+        PushCoordinator push = ShellServices.push(getContext());
+        // § 7: an owed revoke is retried on each app open. Off the launch's thread, so the page never waits on the relay.
+        polls.execute(push::retryRevokes);
+        ShellRoute route = ShellRoute.take();
+        if (route != null) LaunchHold.SHARED.release();
+        if (route != null && BuildConfig.DEBUG && DEBUG_QR.equals(route.screen)) {
+            run(call, connector -> pair(connector, ShellServices.pairing(getContext()).startQr(route.serverId)));
+            return;
+        }
+        PushTap.Tap tap = PushTap.take();
+        if (tap != null) {
+            run(call, connector -> {
+                ShellConnector.Outcome outcome = PushTap.open(connector, tap, this::managerId);
+                if (outcome != null && outcome.url == null) LaunchHold.SHARED.release();
+                return outcome != null ? present(outcome, connector, null) : launchAsUsual(connector);
+            });
+            return;
+        }
+        if (route != null) {
+            run(call, connector -> {
+                JSObject result = list(connector);
+                result.put("screen", route.screen);
+                result.put("serverId", route.serverId);
+                return result;
+            });
+            return;
+        }
+        run(call, this::launchAsUsual);
+    }
+
+    private JSObject launchAsUsual(ShellConnector connector) {
+        if (ServerActivity.isOpen()) {
+            LaunchHold.SHARED.release();
+            JSObject result = list(connector);
+            result.put("screen", ShellConnector.OPEN);
+            return result;
+        }
+        ShellConnector.Outcome outcome = connector.launch(cookiesForLast(connector));
+        // Opening a server: its view releases the splash once its own cover is up.
+        if (outcome.url == null) LaunchHold.SHARED.release();
+        return present(outcome, connector, null);
+    }
+
+    /** Asked in the session the open just made. The id never left it: the push carries only the cezarId. */
+    private String managerId(ServerRecord server) {
+        RelayLink link = ShellServices.relay(getContext()).link(server);
+        if (link == null || link.session() == null) return null;
+        try {
+            return ShellServices.cezarPush(getContext(), link::session).get().managerId;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    @PluginMethod
+    public void open(PluginCall call) {
+        String id = call.getString("id");
+        // Back from Servers: the bundle is on the phone, so the view opens at once and reports the link itself.
+        boolean quick = Boolean.TRUE.equals(call.getBoolean("quick"));
+        run(call, connector -> {
+            ServerRecord server = connector.server(id);
+            return present(connector.open(id, server == null || server.url == null ? null : cookies(server.url), quick), connector, null);
+        });
+    }
+
+    @PluginMethod
+    public void add(PluginCall call) {
+        String url = call.getString("url");
+        String username = call.getString("username");
+        String password = call.getString("password");
+        String label = call.getString("label");
+        run(call, connector -> present(connector.add(url, username, password, label), connector, label));
+    }
+
+    @PluginMethod
+    public void forget(PluginCall call) {
+        String id = call.getString("id");
+        // The list's Back target, carried through the restart (connect.js `from`).
+        String from = call.getString("from");
+        run(call, connector -> {
+            ServerRecord server = connector.server(id);
+            connector.forget(id);
+            if (server != null) getActivity().runOnUiThread(() -> {
+                // Only a URL server's Basic answer lives in the process; the restart waits for the wipe.
+                Runnable then = server.relay == null && ServerActivity.everOpened() ? () -> RestartActivity.restart(getActivity(), from) : null;
+                if (server.relay != null) OriginWipe.wipe(getActivity(), new ProxyOrigin(server.relay.port).origin(), then);
+                else clearWebsiteData(server.url, then);
+            });
+            return list(connector);
+        });
+    }
+
+    /** A relay server's Notifications switch. On asks Android 13+ for the permission first (spec R5). */
+    @PluginMethod
+    public void pushSet(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled"));
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && getPermissionState(NOTIFICATIONS) != PermissionState.GRANTED) {
+                requestPermissionForAlias(NOTIFICATIONS, call, "pushPermission");
+                return;
+            }
+            setPush(call, enabled);
+        });
+    }
+
+    @PermissionCallback
+    private void pushPermission(PluginCall call) {
+        if (getPermissionState(NOTIFICATIONS) == PermissionState.GRANTED) {
+            setPush(call, true);
+            return;
+        }
+        run(call, connector -> {
+            JSObject result = list(connector);
+            result.put("pushError", "Allow notifications for CezarBot in Android settings to turn this on.");
+            return result;
+        });
+    }
+
+    private void setPush(PluginCall call, boolean enabled) {
+        String id = call.getString("id");
+        run(call, connector -> {
+            ShellServices.push(getContext()).setEnabled(connector.server(id), enabled);
+            JSObject result = list(connector);
+            if (enabled && !PushNotifier.allowed(getContext())) result.put("pushError", "Notifications for CezarBot are off in Android settings.");
+            return result;
+        });
+    }
+
+    @PluginMethod
+    public void lockSet(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled"));
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            AppLock.get(getContext()).change(getActivity(), enabled, error -> run(call, connector -> {
+                JSObject result = list(connector);
+                result.put("lockError", error);
+                return result;
+            }));
+        });
+    }
+
+    /** The Servers screen's "Copy startup log": steps and timings of the last starts, to the clipboard. */
+    @PluginMethod
+    public void startupLogCopy(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            String text = ShellServices.startupLog(getContext()).text();
+            ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("CezarBot startup log", text));
+            JSObject result = new JSObject();
+            result.put("copied", clipboard != null);
+            result.put("lines", text.isEmpty() ? 0 : text.split("\n").length);
+            call.resolve(result);
+        });
+    }
+
+    /** Reads and opens nothing, unlike launch: the page calls it each time it returns to the foreground. */
+    @PluginMethod
+    public void list(PluginCall call) {
+        run(call, this::list);
+    }
+
+    /** One round of the switcher's probes over every saved server; a call during one joins it (Your cezars spec). */
+    @PluginMethod
+    public void probe(PluginCall call) {
+        String current = call.getString("current");
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            synchronized (probeLock) {
+                if (probeCalls != null) {
+                    probeCalls.add(call);
+                    return;
+                }
+                probeCalls = new ArrayList<>();
+                probeCalls.add(call);
+            }
+            probeCurrent = current;
+            polls.execute(this::startProbe);
+        });
+    }
+
+    private void startProbe() {
+        try {
+            ShellConnector connector = ShellServices.connector(getContext());
+            RelayConnections relay = ShellServices.relay(getContext());
+            DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, polls), DeviceProbes.directProbe(connector, server -> server.url == null ? null : cookies(server.url), polls),
+                    relay::cool, (ms, work) -> bounds.schedule(work, ms, TimeUnit.MILLISECONDS),
+                    (id, answer) -> connector.sawHealth(id, answer, System.currentTimeMillis()), readings::put);
+            probes.whenSettled(() -> {
+                probes.stop(null);
+                answerProbe(calls -> {
+                    JSObject result = list(connector);
+                    for (PluginCall each : calls) each.resolve(result);
+                });
+            });
+            probes.start(connector.list());
+        } catch (RuntimeException e) {
+            answerProbe(calls -> {
+                for (PluginCall each : calls) each.reject(String.valueOf(e.getMessage()));
+            });
+        }
+    }
+
+    private void answerProbe(java.util.function.Consumer<List<PluginCall>> answer) {
+        List<PluginCall> calls;
+        synchronized (probeLock) {
+            calls = probeCalls;
+            probeCalls = null;
+        }
+        if (calls != null) answer.accept(calls);
+    }
+
+    /** Your cezars' Name. An unknown id or a bad name answers the list with `renameError`. */
+    @PluginMethod
+    public void rename(PluginCall call) {
+        String id = call.getString("id");
+        String label = call.getString("label");
+        run(call, connector -> {
+            String error = connector.rename(id, label);
+            JSObject result = list(connector);
+            if (error != null) result.put("renameError", error);
+            return result;
+        });
+    }
+
+    /** The App section's Notifications row: Android's own settings for this app. */
+    @PluginMethod
+    public void notificationSettings(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            String app = getContext().getPackageName();
+            Intent intent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app)
+                    : new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app, null));
+            try {
+                getActivity().startActivity(intent);
+            } catch (ActivityNotFoundException e) {
+                getActivity().startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app, null)));
+            }
+            call.resolve(new JSObject());
+        });
+    }
+
+    /** The system camera path is out of reach here: zxing's own activity, needing no Play services. */
+    @PluginMethod
+    public void scan(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            ScanOptions options = new ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setBeepEnabled(false)
+                    .setOrientationLocked(true).setPrompt("Scan the code on your computer");
+            startActivityForResult(call, options.createScanIntent(getContext()), "scanned");
+        });
+    }
+
+    @ActivityCallback
+    private void scanned(PluginCall call, ActivityResult result) {
+        String contents = call == null ? null : ScanIntentResult.parseActivityResult(result.getResultCode(), result.getData()).getContents();
+        if (call == null) return;
+        if (contents == null) {
+            run(call, this::list);
+            return;
+        }
+        run(call, connector -> pair(connector, ShellServices.pairing(getContext()).startQr(contents)));
+    }
+
+    @PluginMethod
+    public void pairCode(PluginCall call) {
+        String code = call.getString("code");
+        String relay = call.getString("relay");
+        run(call, connector -> pair(connector, ShellServices.pairing(getContext()).startCode(code, relay)));
+    }
+
+    @PluginMethod
+    public void pairCancel(PluginCall call) {
+        run(call, connector -> {
+            ShellServices.pairing(getContext()).cancel();
+            return list(connector);
+        });
+    }
+
+    /** A long poll, on its own thread so that Cancel still gets through. */
+    @PluginMethod
+    public void pairPoll(PluginCall call) {
+        int seq = call.getInt("seq", 0);
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            polls.execute(() -> {
+                try {
+                    ShellConnector connector = ShellServices.connector(getContext());
+                    PairingFlow.Snapshot next = ShellServices.pairing(getContext()).next(seq, POLL_MS);
+                    if (next.phase == PairingClient.Phase.APPROVED) {
+                        call.resolve(present(connector.open(ShellServices.lastPaired(), null), connector, null, ShellServices.push(getContext()).shouldAsk()));
+                    } else {
+                        call.resolve(pair(connector, next));
+                    }
+                } catch (InterruptedException | RuntimeException e) {
+                    call.reject(String.valueOf(e.getMessage()));
+                }
+            });
+        });
+    }
+
+    // ---- the computer's relay account (RELAY_PROTOCOL.md § 18) ----
+
+    @PluginMethod
+    public void accountStatus(PluginCall call) {
+        String id = call.getString("id");
+        run(call, connector -> account(connector, id, (server, keys) -> ShellServices.accounts().status(server.relay.origin, keys, server.relay.cezarId)));
+    }
+
+    @PluginMethod
+    public void accountResend(PluginCall call) {
+        String id = call.getString("id");
+        run(call, connector -> account(connector, id, (server, keys) -> {
+            ShellServices.accounts().resend(server.relay.origin, keys, server.relay.cezarId);
+            return null;
+        }));
+    }
+
+    /** `{device}`, or `{error, code, current?}`; never reconnects, the page calls `open` next. */
+    @PluginMethod
+    public void deviceTerms(PluginCall call) {
+        String id = call.getString("id");
+        String version = call.getString("termsVersion");
+        run(call, connector -> {
+            ServerRecord server = id == null ? null : connector.server(id);
+            DeviceKeys keys = server == null || server.relay == null ? null : ShellServices.deviceKeysFor(getContext(), server.id);
+            JSObject result = new JSObject();
+            if (keys == null) return result.put("error", "This server is not paired through the relay.");
+            if (version == null || version.isEmpty()) return result.put("error", "No terms version to accept.").put("code", "bad-request");
+            try {
+                return result.put("device", device(ShellServices.accounts().deviceTerms(server.relay.origin, keys, server.relay.cezarId, version)));
+            } catch (AccountClient.Failure failure) {
+                return failure(result, failure);
+            }
+        });
+    }
+
+    private static JSObject device(AccountClient.Device device) {
+        JSObject out = new JSObject();
+        out.put("termsVersion", device.termsVersion == null ? JSONObject.NULL : device.termsVersion);
+        out.put("acceptedAt", device.acceptedAt == null ? JSONObject.NULL : device.acceptedAt);
+        return out;
+    }
+
+    private static JSObject failure(JSObject result, AccountClient.Failure failure) {
+        result.put("error", AccountClient.message(failure));
+        result.put("code", failure.code);
+        if (failure.current != null) result.put("current", failure.current);
+        return result;
+    }
+
+    private interface AccountCall {
+        AccountClient.Status apply(ServerRecord server, DeviceKeys keys) throws AccountClient.Failure;
+    }
+
+    /** `{state, email, secondsLeft, suspended, device}`, `{}` for a call with no status, or `{error}` the page shows as is. */
+    private JSObject account(ShellConnector connector, String id, AccountCall work) {
+        JSObject result = new JSObject();
+        ServerRecord server = id == null ? null : connector.server(id);
+        DeviceKeys keys = server == null || server.relay == null ? null : ShellServices.deviceKeysFor(getContext(), server.id);
+        if (keys == null) return result.put("error", "This server is not paired through the relay.");
+        try {
+            AccountClient.Status status = work.apply(server, keys);
+            if (status != null) {
+                result.put("state", status.state);
+                result.put("email", status.email);
+                result.put("secondsLeft", status.secondsLeft);
+                result.put("suspended", status.suspended);
+                result.put("device", status.device == null ? JSONObject.NULL : device(status.device));
+            }
+        } catch (AccountClient.Failure failure) {
+            failure(result, failure);
+        }
+        return result;
+    }
+
+    private JSObject pair(ShellConnector connector, PairingFlow.Snapshot snapshot) {
+        JSObject result = list(connector);
+        result.put("screen", "pair");
+        result.put("seq", snapshot.seq);
+        result.put("phase", snapshot.phase.name().toLowerCase(java.util.Locale.ROOT));
+        result.put("digits", snapshot.digits);
+        result.put("label", snapshot.label);
+        result.put("reason", snapshot.reason);
+        return result;
+    }
+
+    private boolean allowed(PluginCall call) {
+        if (OriginGate.allows(getBridge().getWebView().getUrl(), getBridge().getAppUrl())) return true;
+        call.reject("Refused: the connection plugin serves the bundled connect page only.");
+        return false;
+    }
+
+    /** Refuses before any work: WebView.getUrl is main-thread only, the work is not. */
+    private void run(PluginCall call, Function<ShellConnector, JSObject> work) {
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            background.execute(() -> {
+                try {
+                    call.resolve(work.apply(ShellServices.connector(getContext())));
+                } catch (RuntimeException e) {
+                    call.reject(e.getMessage());
+                }
+            });
+        });
+    }
+
+    private JSObject present(ShellConnector.Outcome outcome, ShellConnector connector, String label) {
+        return present(outcome, connector, label, false);
+    }
+
+    /** `askPush`: the first relay pairing, whose server view asks once about notifications. */
+    private JSObject present(ShellConnector.Outcome outcome, ShellConnector connector, String label, boolean askPush) {
+        JSObject result = list(connector);
+        result.put("screen", outcome.screen);
+        result.put("serverId", outcome.serverId);
+        result.put("status", outcome.status);
+        if (ShellConnector.DEVICE_REMOVED.equals(outcome.screen)) forgetPageData(connector.server(outcome.serverId));
+        if (outcome.url != null) {
+            Intent intent = new Intent(getContext(), ServerActivity.class);
+            intent.putExtra(ServerActivity.EXTRA_URL, outcome.url);
+            intent.putExtra(ServerActivity.EXTRA_SERVER_ID, outcome.serverId);
+            intent.putExtra(ServerActivity.EXTRA_NOTE, outcome.note);
+            if (askPush) intent.putExtra(ServerActivity.EXTRA_ASK_PUSH, true);
+            if (ShellConnector.LOGIN.equals(outcome.screen)) {
+                intent.putExtra(ServerActivity.EXTRA_PENDING_ORIGIN, outcome.url);
+                intent.putExtra(ServerActivity.EXTRA_PENDING_LABEL, label);
+            }
+            getActivity().startActivity(intent);
+        }
+        return result;
+    }
+
+    private JSObject list(ShellConnector connector) {
+        PushCoordinator push = ShellServices.push(getContext());
+        JSArray servers = new JSArray();
+        List<ServerRecord> saved = connector.list();
+        Map<String, ServerListStore.Seen> seen = new HashMap<>();
+        for (ServerRecord server : saved) seen.put(server.id, connector.seen(server.id));
+        for (CezarRows.Row listed : CezarRows.rows(saved, readings, seen, probeCurrent, ShellServices.clock(getContext()))) {
+            ServerRecord server = listed.server;
+            JSObject row = new JSObject();
+            row.put("id", server.id);
+            row.put("label", server.label);
+            row.put("url", server.relay != null ? server.relay.origin : server.url);
+            row.put("relay", server.relay != null);
+            row.put("username", server.username);
+            // Stage 1 needs only the session, so every relay server has the switch, Firebase or not.
+            if (server.relay != null) row.put("push", push.enabled(server.id));
+            row.put("initials", listed.initials);
+            row.put("color", listed.color);
+            row.put("status", listed.status);
+            row.put("words", listed.words);
+            if (listed.reason != null) row.put("reason", listed.reason);
+            row.put("need", listed.need == null ? JSONObject.NULL : listed.need);
+            servers.put(row);
+        }
+        JSArray removing = new JSArray();
+        for (String label : push.removing()) removing.put(label);
+        JSObject result = new JSObject();
+        result.put("servers", servers);
+        result.put("removing", removing);
+        result.put("pairing", true);
+        result.put("relayDefault", RelayOrigin.DEFAULT_ORIGIN);
+        AppLock lock = AppLock.get(getContext());
+        result.put("lock", new JSObject().put("enabled", lock.enabled()).put("available", lock.available()));
+        result.put("notifications", CezarRows.notifications(PushNotifier.allowed(getContext()), canAskNotifications()));
+        result.put("version", BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")");
+        return result;
+    }
+
+    /** Android 13+ asks once; denied twice, or turned off in settings, only settings can change it. */
+    private boolean canAskNotifications() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
+        PermissionState state = getPermissionState(NOTIFICATIONS);
+        return state == PermissionState.PROMPT || state == PermissionState.PROMPT_WITH_RATIONALE;
+    }
+
+    /** Removed by the computer: what the cockpit kept on the phone goes, as on Forget. */
+    private void forgetPageData(ServerRecord server) {
+        if (server == null || server.relay == null) return;
+        getActivity().runOnUiThread(() -> OriginWipe.wipe(getActivity(), new ProxyOrigin(server.relay.port).origin(), null));
+    }
+
+    private String cookiesForLast(ShellConnector connector) {
+        for (ServerRecord server : connector.list()) if (server.id.equals(connector.lastUsedId()) && server.url != null) return cookies(server.url);
+        return null;
+    }
+
+    private static String cookies(String url) {
+        return CookieManager.getInstance().getCookie(url);
+    }
+
+    private void clearWebsiteData(String url, Runnable then) {
+        CookieManager cookies = CookieManager.getInstance();
+        String header = cookies.getCookie(url);
+        if (header != null) {
+            for (String pair : header.split(";")) {
+                String name = pair.split("=", 2)[0].trim();
+                cookies.setCookie(url, name + "=; Max-Age=0; Path=/; Secure");
+            }
+            cookies.flush();
+        }
+        OriginWipe.wipe(getActivity(), url, then);
+    }
+}

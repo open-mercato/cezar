@@ -253,10 +253,11 @@ describe('model identity wiring (dry run)', () => {
   }, 40_000);
 
   it('fails a run when the runner reports a model error instead of parking it as active', async () => {
-    const id = await runToEnd({ task: 'mock:auth-error' });
+    // Not an auth rejection: that parks the run instead (spec 2026-11-18-inline-account-reconnect).
+    const id = await runToEnd({ task: 'mock:credit' });
     const record = store.getRun(id);
     expect(record?.status).toBe('failed');
-    expect(record?.error).toContain('Failed to authenticate');
+    expect(record?.error).toContain('Credit balance is too low');
     expect(record?.steps.find((step) => step.id === 'work')?.status).toBe('failed');
   }, 30_000);
 

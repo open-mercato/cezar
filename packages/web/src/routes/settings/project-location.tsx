@@ -62,10 +62,11 @@ export function ProjectFolderField() {
         className="flex flex-wrap items-center gap-3"
       >
         {/* `break-all`, not `truncate`: a deep checkout path is exactly the case this row exists
-            for, and half of it is not an answer. */}
+            for, and half of it is not an answer. A 16rem basis wraps the buttons below on a phone
+            instead of squeezing the path to a ten-character column. */}
         <span
           data-slot="project-location-path"
-          className="min-w-0 flex-1 font-mono text-ui break-all text-foreground"
+          className="min-w-0 flex-[1_1_16rem] font-mono text-ui break-all text-foreground"
         >
           {root}
         </span>

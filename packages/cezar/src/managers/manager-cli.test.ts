@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runManagerCommand, type ManagerCliIo } from './manager-cli.ts';
+import { runManagerCommand, SANDBOX_BLOCKED_HINT, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
 
 const snapshot = {
   generatedAt: '',
   attention: [{ key: 'k', kind: 'pr-ready', projectId: 'alpha', title: 'Ship it', number: 4 }, { key: 'q', kind: 'task-needs-you', projectId: 'alpha', title: 'Gate', runId: 'r2', detail: 'Ship it?' }],
   projects: [{ projectId: 'alpha', name: 'alpha', available: true, tasks: [{ runId: 'r1', title: 't', status: 'running', workflow: 'w', childCount: 2 }], prs: [{ number: 4, title: 'Ship it', status: 'ready' }] }],
 };
+
+let workflows: unknown = { workflows: [] };
 
 function harness(env: Record<string, string> = {}, manager: Record<string, unknown> = {}, pending: Array<{ id: string; at: string }> = [], extra: Partial<ManagerCliIo> = {}) {
   const calls: Array<{ url: string; method: string; body?: unknown }> = [];
@@ -23,6 +25,9 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
       if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}) }, { status: 201 });
       if (String(url).endsWith('/task-message')) return Response.json({ ok: true, ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 0 } } : {}) });
+      if (String(url).endsWith('/task-cancel')) return Response.json({ runId: body?.runId, cancelled: true, status: 'cancelled', children: ['c1', 'c2'] });
+      if (String(url).endsWith('/task-retry')) return Response.json({ projectId: 'alpha', runId: 'retried' }, { status: 201 });
+      if (String(url).endsWith('/workflows')) return Response.json(workflows);
       if (/\/automations\/[^/]+(\/report)?$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
       return Response.json({ automations: [], ok: true });
     }) as typeof fetch,
@@ -41,11 +46,24 @@ describe('cez manager', () => {
     expect(error.mock.calls[1]?.[0]).toContain('CEZ_MANAGER_ID');
   });
 
+  it('passes the selected task runner and account together', async () => {
+    const { run, calls } = harness();
+    expect(await run('task', 'create', '--project', 'alpha', '--runner', 'claude', '--account', 'claude-second', 'Review it')).toBe(0);
+    expect(calls.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'claude-second', task: 'Review it' });
+  });
+
   it('prints attention and tasks', async () => {
     const { run, logs } = harness();
     expect(await run('status')).toBe(0);
     expect(logs.join('\n')).toContain('pr-ready');
-    expect(logs.join('\n')).toContain('(2 dispatched)');
+    expect(logs.join('\n')).toContain('2 dispatched)');
+  });
+
+  it('names the model a task asked for and the one it ran, arrow only when they differ', () => {
+    expect(taskModelLabel(undefined, 'claude-opus-5-5')).toBe('auto → claude-opus-5-5');
+    expect(taskModelLabel('anthropic/opus', 'claude-opus-5-5[1m]')).toBe('anthropic/opus → claude-opus-5-5[1m]');
+    expect(taskModelLabel('anthropic/claude-opus-5-5', 'claude-opus-5-5[1m]')).toBe('anthropic/claude-opus-5-5');
+    expect(taskModelLabel('anthropic/claude-opus-5-5', undefined)).toBe('anthropic/claude-opus-5-5');
   });
 
   it('follows and unfollows a task, finding its project from the snapshot', async () => {
@@ -173,6 +191,13 @@ describe('cez manager', () => {
     expect(watching.calls).toEqual([]);
   });
 
+  it('cannot switch a manager off or on: rename sends the name alone, and nothing reaches the activity route', async () => {
+    const { run, calls } = harness();
+    expect(await run('rename', '{"active":false}')).toBe(0);
+    expect(calls.at(-1)).toEqual(expect.objectContaining({ method: 'PATCH', body: { name: '{"active":false}' } }));
+    expect(calls.some((call) => call.url.includes('/activity'))).toBe(false);
+  });
+
   it('refuses to set up automations on a read-only project, and still reads them', async () => {
     const { run, calls } = harness({}, { access: 'read' });
     expect(await run('automation', '--project', 'alpha', 'create', '--json', '{"name":"n"}')).toBe(1);
@@ -273,5 +298,129 @@ describe('cez manager', () => {
     expect(await run('automation', '--project', 'alpha', 'list')).toBe(0);
     expect(await run('automation', '--project', 'alpha', 'pause', 'a')).toBe(1);
     expect(errors.join()).toContain('read-only');
+  });
+
+  describe('task lifecycle and strict parsing', () => {
+    it('cancels a task with a reason and reports its dispatched children', async () => {
+      const { run, calls, logs } = harness();
+      expect(await run('task', 'cancel', '--project', 'alpha', 'r1', '--reason', 'review only')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ url: 'http://x/api/v1/workspace/managers/m1/task-cancel', method: 'POST', body: { projectId: 'alpha', runId: 'r1', reason: 'review only' } });
+      expect(logs.at(-1)).toBe('cancelled r1, and 2 dispatched tasks: c1, c2. Its worktree and branch are kept.');
+    });
+
+    it('a watch turn may not cancel', async () => {
+      const { run, calls, errors } = harness({ CEZ_MANAGER_TURN: 'watch' });
+      expect(await run('task', 'cancel', '--project', 'alpha', 'r1')).toBe(1);
+      expect(errors.join('\n')).toContain('read-only');
+      expect(calls.some((call) => call.url.endsWith('/task-cancel'))).toBe(false);
+    });
+
+    it('retries a task as a new one', async () => {
+      const { run, calls, logs } = harness();
+      expect(await run('task', 'retry', '--project', 'alpha', 'r1')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ url: 'http://x/api/v1/workspace/managers/m1/task-retry', body: { projectId: 'alpha', runId: 'r1' } });
+      expect(logs.at(-1)).toBe('[[task:alpha/retried]]');
+    });
+
+    it('sends --model and --effort, and refuses an effort it does not know', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('task', 'create', '--project', 'alpha', '--model', 'opus', '--effort', 'max', 'Review it')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ url: 'http://x/api/v1/workspace/managers/m1/tasks', body: { model: 'opus', effort: 'max', task: 'Review it' } });
+      expect(await run('task', 'say', '--project', 'alpha', 'r1', '--model', 'sonnet', '--effort', 'low', 'again')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ url: 'http://x/api/v1/workspace/managers/m1/task-message', body: { runId: 'r1', text: 'again', model: 'sonnet', effort: 'low' } });
+      const before = calls.length;
+      expect(await run('task', 'create', '--project', 'alpha', '--effort', 'extreme', 'x')).toBe(1);
+      expect(errors.at(-1)).toContain('--effort must be one of low, medium, high, max');
+      expect(calls).toHaveLength(before);
+    });
+
+    it('an unknown subcommand fails instead of being read as a run id', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('task', 'foo')).toBe(1);
+      expect(errors.at(-1)).toContain("unknown subcommand 'foo' for 'task'. Valid: create, say, cancel, retry, follow, unfollow, or a run id");
+      expect(await run('job', 'frob')).toBe(1);
+      expect(errors.at(-1)).toContain("unknown subcommand 'frob' for 'job'. Valid: add, list, remove");
+      expect(calls).toEqual([]);
+    });
+
+    it('still reads a run id, or its eight-character prefix', async () => {
+      const { run, calls } = harness();
+      expect(await run('task', '0123abcd', '--project', 'alpha')).toBe(0);
+      expect(calls.at(-1)?.url).toBe('http://x/api/v1/workspace/managers/m1/task?projectId=alpha&runId=0123abcd');
+      expect(await run('task', '--project', 'alpha', '0123abcd-1111-2222-3333-444455556666')).toBe(0);
+    });
+
+    it('an unknown command or flag names what is valid', async () => {
+      const { run, errors } = harness();
+      expect(await run('frobnicate')).toBe(2);
+      expect(errors.at(-1)).toContain("unknown command 'frobnicate'. Valid: status, attention, tasks");
+      expect(await run('task', 'cancel', '--project', 'alpha', 'r1', '--force')).toBe(1);
+      expect(errors.at(-1)).toContain("unknown flag '--force' for 'task cancel'. Flags: --project, --reason. See: cez manager task cancel --help");
+    });
+
+    it('--help works on every command and subcommand, without a cockpit', async () => {
+      const io = { fetch: vi.fn() as unknown as typeof fetch, log: vi.fn(), error: vi.fn() };
+      for (const args of [['status', '--help'], ['task', '--help'], ['task', 'cancel', '-h'], ['task', 'say', '--help'], ['task', 'retry', '--help'], ['workflows', '--help'], ['merge', '--help'], ['job', 'add', '--help'], ['rename', '--help'], ['automation', '--help'], ['help', 'task', 'cancel']]) {
+        io.log.mockClear();
+        expect(await runManagerCommand(args, {}, io)).toBe(0);
+        expect(String(io.log.mock.calls[0]?.[0])).toContain(`cez manager ${args[0] === 'help' ? 'task cancel' : args[0]}`);
+      }
+      io.log.mockClear();
+      await runManagerCommand(['task', 'cancel', '--help'], {}, io);
+      expect(String(io.log.mock.calls[0]?.[0])).toContain('--reason');
+    });
+
+    // #2258: a sandboxed connect is EPERM, not ECONNREFUSED; the agent needs the way out.
+    it('says a sandbox blocked the call, and only then', async () => {
+      const failing = (code: string) => ({
+        fetch: vi.fn(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code } }); }) as unknown as typeof fetch,
+        log: vi.fn(),
+        error: vi.fn(),
+      });
+      const env = { CEZ_API_URL: 'http://127.0.0.1:4321', CEZ_MANAGER_ID: 'm1' };
+      const blocked = failing('EPERM');
+      expect(await runManagerCommand(['status'], env, blocked)).toBe(1);
+      expect(String(blocked.error.mock.calls[0]?.[0])).toBe(`cez manager: fetch failed\n${SANDBOX_BLOCKED_HINT}`);
+      const down = failing('ECONNREFUSED');
+      expect(await runManagerCommand(['status'], env, down)).toBe(1);
+      expect(String(down.error.mock.calls[0]?.[0])).toBe('cez manager: fetch failed');
+    });
+
+    it('task create --help lists the workflows, and says so when it cannot', async () => {
+      workflows = { workflows: [{ name: 'quick-task', description: 'One agent' }, { name: 'review-pr', description: 'Review a PR' }] };
+      const { run, logs } = harness();
+      expect(await run('task', 'create', '--help')).toBe(0);
+      expect(logs.join('\n')).toContain('--effort');
+      expect(logs.join('\n')).toContain('Workflows in alpha:');
+      expect(logs.join('\n')).toContain('review-pr  Review a PR');
+      const io = { fetch: vi.fn() as unknown as typeof fetch, log: vi.fn(), error: vi.fn() };
+      expect(await runManagerCommand(['task', 'create', '--help'], {}, io)).toBe(0);
+      expect(io.log.mock.calls.flat().join('\n')).toContain('Workflows: unavailable');
+    });
+
+    it('flags what each workflow can do, and keeps --json raw', async () => {
+      workflows = { workflows: [
+        { name: 'review-council', description: 'Council\nreview', capabilities: { push: true, openPr: true, postToGithub: false } },
+        { name: 'review-pr', description: 'Review a PR', capabilities: { push: false, openPr: false, postToGithub: false } },
+        { name: 'custom', description: '' },
+      ] };
+      const { run, logs } = harness();
+      expect(await run('workflows', '--project', 'alpha')).toBe(0);
+      expect(logs).toEqual([
+        'review-council  Council review  [push, open-pr]',
+        'review-pr  Review a PR  [read-only]',
+        'custom  -  [capabilities unknown]',
+      ]);
+      logs.length = 0;
+      expect(await run('workflows', '--project', 'alpha', '--json')).toBe(0);
+      expect(JSON.parse(logs.join('\n'))).toEqual(workflows);
+    });
+
+    it('prints the raw list from a cockpit without capabilities', async () => {
+      workflows = { workflows: [{ name: 'quick-task' }] };
+      const { run, logs } = harness();
+      expect(await run('workflows', '--project', 'alpha')).toBe(0);
+      expect(JSON.parse(logs.join('\n'))).toEqual(workflows);
+    });
   });
 });

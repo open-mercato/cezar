@@ -22,4 +22,4 @@ Workflows → Add node → Git section
 2. Add Push or Draft PR.
 3. Handle the success and failure outputs.
 
-> **Good to know**: Draft PR uses gh. The repository must have access to the relevant GitHub instance.
+> **Good to know**: Draft PR uses gh. The repository must have access to the relevant GitHub instance. When the task branch has no commits ahead of its base and nothing uncommitted, Draft PR pushes nothing, opens no PR, and leaves by its `nothing` output, which ends the run as a success when left unconnected.

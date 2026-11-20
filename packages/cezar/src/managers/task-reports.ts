@@ -13,7 +13,7 @@ export interface TaskReportWatch {
   projectId: () => string | Promise<string>;
   dataDir: string;
   store: RunStore;
-  engine: Pick<ManagerEngine, 'taskChanged' | 'reconcileProject'>;
+  engine: Pick<ManagerEngine, 'taskChanged' | 'reconcileProject'> & Partial<Pick<ManagerEngine, 'taskEnded'>>;
   /** `CEZ_MANAGERS=0` posts nothing. */
   enabled: () => boolean;
 }
@@ -21,9 +21,14 @@ export interface TaskReportWatch {
 /** The event's identity without the project id: only a change of it is worth a look. */
 const signature = (run: RunRecord): string | undefined => taskEventOf('', run)?.ledger;
 
+/** What ends a manager card about the run (Questions inbox spec): archived, done, review, cancelled. */
+const endOf = (run: RunRecord): string | undefined =>
+  run.archived ? 'archived' : run.status === 'done' || run.status === 'review' || run.status === 'cancelled' ? run.status : undefined;
+
 /** Returns the unsubscribe. At attach it hands the engine the whole list, for what happened unheard. */
 export function watchTaskReports(watch: TaskReportWatch): () => void {
   const seen = new Map(watch.store.listRuns().map((run) => [run.id, signature(run)] as const));
+  const ends = new Map(watch.store.listRuns().map((run) => [run.id, endOf(run)] as const));
   const warn = (error: unknown) => console.warn(`[cezar] task report: ${error instanceof Error ? error.message : String(error)}`);
   setImmediate(() => {
     if (!watch.enabled()) return;
@@ -31,7 +36,20 @@ export function watchTaskReports(watch: TaskReportWatch): () => void {
       .then((projectId) => watch.engine.reconcileProject(projectId, watch.dataDir, watch.store.listRuns()))
       .catch(warn);
   });
+  const ended = (runId: string, run: RunRecord | undefined) => {
+    if (!watch.engine.taskEnded || !watch.enabled()) return;
+    setImmediate(() => {
+      void Promise.resolve(watch.projectId())
+        .then((projectId) => watch.engine.taskEnded?.(projectId, runId, run))
+        .catch(warn);
+    });
+  };
   const onRun = (run: RunRecord) => {
+    const end = endOf(run);
+    if (ends.get(run.id) !== end) {
+      ends.set(run.id, end);
+      if (end !== undefined) ended(run.id, run);
+    }
     const next = signature(run);
     if (seen.get(run.id) === next) return;
     seen.set(run.id, next);
@@ -43,8 +61,15 @@ export function watchTaskReports(watch: TaskReportWatch): () => void {
         .catch(warn);
     });
   };
+  const onDeleted = (runId: string) => {
+    seen.delete(runId);
+    ends.delete(runId);
+    ended(runId, undefined);
+  };
   watch.store.on('run', onRun);
+  watch.store.on('deleted', onDeleted);
   return () => {
     watch.store.off('run', onRun);
+    watch.store.off('deleted', onDeleted);
   };
 }
