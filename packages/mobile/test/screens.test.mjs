@@ -269,11 +269,21 @@ test('a new name is trimmed, and refused when empty or too long', () => {
   assert.deepEqual(checkName('x'.repeat(MAX_NAME)), { name: 'x'.repeat(MAX_NAME) });
 });
 
-test('the App section reports the phone-wide notification permission only when native knows it', () => {
-  assert.equal(notificationsRow('allowed').value, 'On');
-  assert.equal(notificationsRow('denied').value, 'Off');
-  assert.equal(notificationsRow('unknown'), null);
+test('the App section always reports the phone-wide notification permission an app knows', () => {
+  assert.deepEqual([notificationsRow('allowed').value, notificationsRow('allowed').settings], ['On', true]);
+  assert.deepEqual([notificationsRow('denied').value, notificationsRow('denied').settings], ['Off', true]);
+  // Not asked yet (Android 13+, iOS): still shown, saying how to be asked; there is no setting to open yet.
+  const unasked = notificationsRow('unknown');
+  assert.deepEqual([unasked.value, unasked.settings], ['Not set', false]);
+  assert.match(unasked.note, /Notify me/);
+  // An older app sends nothing to report.
   assert.equal(notificationsRow(undefined), null);
+});
+
+test('a current cezar reads online only until its probe answers', () => {
+  assert.equal(cardFor({ ...laptop, status: 'checking', words: 'Checking…' }, 'l').status, 'online');
+  const dead = cardFor({ ...laptop, status: 'offline', words: 'Offline since 09:41' }, 'l');
+  assert.deepEqual([dead.status, dead.words, dead.current], ['offline', 'Offline since 09:41', true]);
 });
 
 test('the app lock is one switch that says what it does', () => {

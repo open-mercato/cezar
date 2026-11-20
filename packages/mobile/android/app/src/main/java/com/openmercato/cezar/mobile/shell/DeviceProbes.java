@@ -214,7 +214,7 @@ public final class DeviceProbes {
             }
             AtomicBoolean counted = new AtomicBoolean();
             Consumer<RelayStatus.Kind> seen = kind -> {
-                report.reading(Reading.of(kind));
+                report.reading(relayReading(kind));
                 if (!DeviceSwitch.answered(kind)) return;
                 if (kind != RelayStatus.Kind.READY) {
                     report.done();
@@ -222,7 +222,9 @@ public final class DeviceProbes {
                 }
                 if (!counted.compareAndSet(false, true)) return;
                 execute(work, report, () -> {
-                    report.health(relay.health(link));
+                    HealthAnswer answer = relay.health(link);
+                    report.reading(healthReading(answer));
+                    report.health(answer);
                     report.done();
                 });
             };
@@ -230,6 +232,16 @@ public final class DeviceProbes {
             // A link warmed by an earlier open may have settled already, and a listener hears only changes.
             seen.accept(link.status().kind);
         };
+    }
+
+    /** Ready means only that the relay took the phone: the cezar's own answer makes it online (PR #2340 smoke). */
+    static Reading relayReading(RelayStatus.Kind kind) {
+        return kind == RelayStatus.Kind.READY ? Reading.CHECKING : Reading.of(kind);
+    }
+
+    /** A ready link's health: no answer through the tunnel reads offline, so a cezar that stopped answering does. */
+    static Reading healthReading(HealthAnswer answer) {
+        return answer == null ? Reading.OFFLINE : Reading.of(answer.kind);
     }
 
     /** A direct server's health, with its saved password and the cookies `cookies` reads. */

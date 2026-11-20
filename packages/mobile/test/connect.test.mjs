@@ -747,3 +747,39 @@ test('an iPad shows the list and the chosen cezar side by side, and ⋯ picks wi
   assert.equal(find(pane(), (node) => node.tag === 'h2' && node.className === 'title-name').textContent, 'Home');
   assert.equal(window.cezarBack(), false);
 });
+
+// PR #2340 smoke findings.
+test('the App section shows Notifications before the phone was ever asked, without a dead link', async () => {
+  const { app } = await boot(none, () => none, { ...listed(), notifications: 'unknown' });
+  assert.match(app.text, /Notifications/);
+  assert.match(app.text, /Not set/);
+  assert.equal(byText(app, 'Notifications'), null);
+});
+
+test('the Notify me switch says its state outright, and keeps saying it as it flips', async () => {
+  const { app } = await boot(none, () => none, { servers: [paired], pairing: true, lock: none }, {
+    pushSet: ({ enabled }) => ({ servers: [{ ...paired, push: enabled }], pairing: true, lock: none }),
+  });
+  await settingsFor(app, 'Laptop');
+  assert.equal(notify(app).attributes['aria-checked'], 'false');
+  const input = notify(app);
+  input.checked = true;
+  const flipping = input.onchange();
+  assert.equal(input.attributes['aria-checked'], 'true');
+  await flipping;
+  assert.equal(notify(app).attributes['aria-checked'], 'true');
+  await systemBack();
+  assert.equal(lockSwitch(app).attributes['aria-checked'], 'false');
+});
+
+test('Connect another cezar is named without its decorative plus', async () => {
+  const { app } = await boot(none, () => none, listed());
+  assert.equal(byText(app, 'Connect another cezar').attributes['aria-label'], 'Connect another cezar');
+});
+
+test('a dead current cezar reads offline on the list once its probe answers', async () => {
+  const { app } = await boot(none, () => none, { ...listed([{ ...live, status: 'offline', words: 'Offline since 09:41' }, saved]), screen: 'list', serverId: 'l' });
+  const current = find(app, (node) => node.tag === 'li' && node.className.includes('current'));
+  assert.match(current.text, /Offline since 09:41/);
+  assert.doesNotMatch(current.text, /Online/);
+});

@@ -75,7 +75,7 @@ final class CezarProbe {
         }
         waiters = [done]
         self.currentId = currentId
-        relayIds = Set(servers.filter { $0.relay != nil && $0.id != currentId }.map(\.id))
+        relayIds = Set(servers.filter { $0.relay != nil }.map(\.id))
         let probes = make { [weak self] id, reading in self?.changed(id, reading) }
         running = probes
         lock.unlock()
@@ -98,7 +98,7 @@ final class CezarProbe {
         let readings = self.readings
         let currentId = self.currentId
         lock.unlock()
-        return DeviceSwitch.rows(servers, currentId: currentId, readings: readings, book: book.load(), now: now)
+        return DeviceSwitch.rows(servers, currentId: currentId, readings: readings, book: book.load(), now: now, probedCurrent: true)
     }
 
     private func changed(_ id: String, _ reading: DeviceSwitch.Reading) {

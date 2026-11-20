@@ -226,9 +226,10 @@ export const needWords = (need) => (need > 0 ? (need === 1 ? '1 needs you' : `${
 /** One card: what it says, how its dot looks, and the fix it offers. `current` is the cezar the list was opened from. */
 export function cardFor(server, current) {
   const isCurrent = server.id === current;
-  // The page on screen is up, whatever a probe said, as in the native switcher.
-  const status = isCurrent && server.status ? 'online' : server.status ?? null;
-  const words = isCurrent && server.status ? 'Online' : server.words ?? null;
+  // The page it came from was up a moment ago; once a probe answers, a dead current cezar reads offline.
+  const assumed = isCurrent && server.status === 'checking';
+  const status = assumed ? 'online' : server.status ?? null;
+  const words = assumed ? 'Online' : server.words ?? null;
   const need = isCurrent ? null : needWords(server.need);
   const fix = status === 'other' ? FIXES[server.reason] ?? null : null;
   const label = server.label;
@@ -278,8 +279,10 @@ export function checkName(value) {
 
 /** The App section's Notifications row, from the OS permission native reports. Null on an older app. */
 export function notificationsRow(state) {
-  if (state === 'allowed') return { value: 'On', note: 'Choose which cezars notify you on each one\'s page.' };
-  if (state === 'denied') return { value: 'Off', note: 'Turned off for CezarBot in the phone\'s settings.' };
+  if (state === 'allowed') return { value: 'On', note: 'Choose which cezars notify you on each one\'s page.', settings: true };
+  if (state === 'denied') return { value: 'Off', note: 'Turned off for CezarBot in the phone\'s settings.', settings: true };
+  // Not asked yet: the phone has no setting to open, so the row only says how to be asked (PR #2340 smoke).
+  if (state === 'unknown') return { value: 'Not set', note: 'You\'re asked when you turn on Notify me for a cezar.', settings: false };
   return null;
 }
 

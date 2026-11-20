@@ -150,13 +150,15 @@ enum DeviceSwitch {
     }
 
     /// The current one first, then online, offline, the rest; by need inside each, else list order.
+    /// `probedCurrent`: Your cezars, where the current page is no longer on screen, so its probe's answer counts.
     static func rows(_ servers: [ServerRecord], currentId: String?, readings: [String: Reading], book: DeviceBook, now: Int64,
-                     calendar: Calendar = .current, locale: Locale = .current) -> [Row] {
+                     probedCurrent: Bool = false, calendar: Calendar = .current, locale: Locale = .current) -> [Row] {
         let rows = servers.map { server -> Row in
             let current = server.id == currentId
             let reading = readings[server.id]
-            // The page on screen is up, whatever its probe said.
-            let status = current ? .online : reading?.status ?? .checking
+            // The page on screen is up, whatever its probe said; on the list, until a probe says otherwise.
+            let answered = probedCurrent && reading.map { $0.status != .checking } == true
+            let status = current && !answered ? .online : reading?.status ?? .checking
             let entry = book.entries[server.id]
             let need = reading?.attention?.need ?? entry?.need
             return Row(id: server.id, label: server.label, initials: DeviceIdentity.initials(server.label),

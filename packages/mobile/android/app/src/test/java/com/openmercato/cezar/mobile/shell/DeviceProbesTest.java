@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import com.openmercato.cezar.mobile.shell.relay.RelayStatus;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -33,6 +34,16 @@ public class DeviceProbesTest {
 
     private static ServerRecord server(String id) {
         return new ServerRecord(id, id, "https://" + id + ".example", null, null, null);
+    }
+
+    @Test
+    public void aReadyRelayLinkWaitsForTheCezarsOwnAnswer() {
+        // PR #2340 smoke: a killed cezar behind a still-ready link read online.
+        assertSame(DeviceProbes.Reading.CHECKING, DeviceProbes.relayReading(RelayStatus.Kind.READY));
+        assertEquals(DeviceSwitch.Status.CONNECTED, DeviceProbes.healthReading(HealthAnswer.of(HealthAnswer.Kind.CEZAR, 200)).status);
+        assertSame(DeviceProbes.Reading.OFFLINE, DeviceProbes.healthReading(null));
+        assertEquals(DeviceSwitch.Status.OFFLINE, DeviceProbes.healthReading(HealthAnswer.of(HealthAnswer.Kind.UNREACHABLE, 200)).status);
+        assertEquals(DeviceSwitch.Status.OFFLINE, DeviceProbes.relayReading(RelayStatus.Kind.CEZAR_OFFLINE).status);
     }
 
     @Test

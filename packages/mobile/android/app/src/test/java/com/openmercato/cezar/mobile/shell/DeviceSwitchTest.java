@@ -103,7 +103,9 @@ public class DeviceSwitchTest {
         assertEquals("Online", DeviceSwitch.state(HealthAnswer.Kind.CEZAR, 0, clock).words);
         assertEquals("Email not confirmed", DeviceSwitch.state(RelayStatus.Kind.EMAIL_UNCONFIRMED, 0, clock).words);
         assertEquals("Suspended", DeviceSwitch.state(RelayStatus.Kind.SUSPENDED, 0, clock).words);
-        assertEquals("Can't connect", DeviceSwitch.state(RelayStatus.Kind.RELAY_DOWN, 0, clock).words);
+        // As on iOS: the relay being down says nothing about the cezar, so it reads offline, not broken.
+        assertEquals("Offline", DeviceSwitch.state(RelayStatus.Kind.RELAY_DOWN, 0, clock).words);
+        assertEquals(DeviceSwitch.Status.OFFLINE, DeviceSwitch.state(RelayStatus.Kind.RELAY_DOWN, 0, clock).status);
         assertEquals("Can't connect", DeviceSwitch.state(HealthAnswer.Kind.TLS_FAILURE, 0, clock).words);
         assertEquals("Sign in needed", DeviceSwitch.state(HealthAnswer.Kind.LOGIN_PAGE, 0, clock).words);
         assertEquals("Offline", DeviceSwitch.state(RelayStatus.Kind.CEZAR_OFFLINE, 0, clock).words);

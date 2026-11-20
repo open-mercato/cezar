@@ -40,8 +40,11 @@ public final class CezarRows {
         List<DeviceSwitch.Entry> entries = new ArrayList<>();
         for (ServerRecord server : servers) {
             boolean current = server.id.equals(currentId);
-            DeviceProbes.Reading reading = current ? DeviceProbes.Reading.of(HealthAnswer.Kind.CEZAR) : readings.get(server.id);
-            if (reading == null) reading = DeviceProbes.Reading.CHECKING;
+            // The page it came from was up a moment ago; a probe's own answer still wins, so a dead current cezar reads offline.
+            DeviceProbes.Reading reading = readings.get(server.id);
+            if (reading == null || (current && reading.status == DeviceSwitch.Status.CHECKING)) {
+                reading = current ? DeviceProbes.Reading.of(HealthAnswer.Kind.CEZAR) : DeviceProbes.Reading.CHECKING;
+            }
             ServerListStore.Seen sighting = seen.get(server.id);
             long lastSeen = sighting == null ? 0 : sighting.at;
             Integer need = sighting == null ? null : sighting.need();

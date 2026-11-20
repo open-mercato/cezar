@@ -146,7 +146,6 @@ public final class DeviceSwitch {
                 return "Over the limit";
             case "LOCAL_MODE":
                 return "Local only";
-            case "RELAY_DOWN":
             case "BROKEN":
             case "TLS_FAILURE":
             case "NOT_CEZAR":

@@ -157,6 +157,19 @@ expect(rows[2].switchingLabel == "Patryk's MacBook Pro, switching", "reads switc
 let one = DeviceSwitch.rows([here], currentId: "h", readings: [:], book: DeviceBook(), now: 0)
 expect(one.count == 1 && one[0].current && one[0].words == "Online", "one computer: one ticked row")
 expect(DeviceSwitch.rows([directServer], currentId: "h", readings: [:], book: DeviceBook(), now: 0)[0].status == .checking, "not reported yet is checking")
+// Your cezars: the current page is gone, so a probe's answer for it counts (PR #2340 smoke).
+expect(DeviceSwitch.rows([here], currentId: "h", readings: ["h": .init(.offline)], book: DeviceBook(), now: 0, probedCurrent: true)[0].status == .offline,
+       "a dead current cezar reads offline on the list")
+expect(DeviceSwitch.rows([here], currentId: "h", readings: ["h": .init(.checking)], book: DeviceBook(), now: 0, probedCurrent: true)[0].status == .online,
+       "the current cezar reads online until its probe answers")
+expect(DeviceSwitch.rows([here], currentId: "h", readings: [:], book: DeviceBook(), now: 0, probedCurrent: true)[0].status == .online, "and before any probe")
+// A ready link only means the relay took the phone: the cezar's own health answer makes it online.
+expect(DeviceProbes.relayReading(.ready).status == .checking, "ready waits for the cezar's answer")
+expect(DeviceProbes.relayReading(.cezarOffline).status == .offline, "cezar-offline reads offline")
+expect(DeviceProbes.healthReading(.of(.unreachable, 0)).status == .offline, "no answer through the tunnel reads offline")
+var answered = HealthAnswer.of(.cezar, 200)
+answered.attention = .init(waiting: 1, failed: 1)
+expect(DeviceProbes.healthReading(answered) == .init(.online, attention: .init(waiting: 1, failed: 1)), "an answer is online with its counts")
 
 // The book: sync, counts, the badge, naming a push
 do {

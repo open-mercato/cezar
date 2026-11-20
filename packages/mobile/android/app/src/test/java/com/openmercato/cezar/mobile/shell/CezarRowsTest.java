@@ -79,15 +79,6 @@ public class CezarRowsTest {
     }
 
     @Test
-    public void theCurrentOneReadsOnlineWhateverItsProbe() {
-        Map<String, DeviceProbes.Reading> readings = new HashMap<>();
-        readings.put("a", DeviceProbes.Reading.OFFLINE);
-        CezarRows.Row row = rows(Collections.singletonList(direct("a", "box")), readings, new HashMap<>(), "a").get(0);
-        assertEquals("online", row.status);
-        assertEquals("Online", row.words);
-    }
-
-    @Test
     public void blockedKindsAreOtherWithTheirReason() {
         Object[][] cases = {
             {HealthAnswer.Kind.BASIC_GATE, "sign-in", "Sign in needed"},
@@ -147,6 +138,18 @@ public class CezarRowsTest {
         List<String> ids = new ArrayList<>();
         for (CezarRows.Row row : rows(servers, readings, new HashMap<>(), "cur")) ids.add(row.server.id);
         assertEquals(Arrays.asList("cur", "on", "off", "blocked"), ids);
+    }
+
+    @Test
+    public void theCurrentCezarReadsOnlineUntilAProbeSaysOtherwise() {
+        List<ServerRecord> servers = Collections.singletonList(direct("cur", "Cur"));
+        assertEquals("online", rows(servers, new HashMap<>(), new HashMap<>(), "cur").get(0).status);
+        Map<String, DeviceProbes.Reading> readings = new HashMap<>();
+        readings.put("cur", DeviceProbes.Reading.CHECKING);
+        assertEquals("online", rows(servers, readings, new HashMap<>(), "cur").get(0).status);
+        // The page it came from is gone: a dead current cezar reads offline.
+        readings.put("cur", DeviceProbes.Reading.OFFLINE);
+        assertEquals("offline", rows(servers, readings, new HashMap<>(), "cur").get(0).status);
     }
 
     @Test

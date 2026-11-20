@@ -231,7 +231,10 @@ function switchInput(label, checked, onchange) {
   const input = element('input', { type: 'checkbox', checked: Boolean(checked) });
   input.setAttribute('role', 'switch');
   input.setAttribute('aria-label', label);
+  // Said outright: WebView's TalkBack mapping missed the checkbox state behind role="switch" (PR #2340 smoke).
+  input.setAttribute('aria-checked', String(Boolean(checked)));
   input.onchange = async () => {
+    input.setAttribute('aria-checked', String(Boolean(input.checked)));
     input.disabled = true;
     await onchange();
   };
@@ -257,8 +260,8 @@ function lockItem(row) {
 }
 
 // The phone-wide part of the list, apart from any one cezar.
-function appSection(lockRowNow, { full = true } = {}) {
-  const permission = full ? notificationsRow(notifications) : null;
+function appSection(lockRowNow) {
+  const permission = notificationsRow(notifications);
   const note = element('p', { className: 'muted log-note' });
   const copy = item('button', 'Copy startup log', { type: 'button' }, small('For a bug report.'));
   copy.onclick = async () => {
@@ -269,7 +272,9 @@ function appSection(lockRowNow, { full = true } = {}) {
       note.textContent = 'This version of the app keeps no startup log.';
     }
   };
-  const settings = permission && item('button', 'Notifications', { type: 'button', onclick: () => call('notificationSettings').catch(() => {}) }, small(permission.note), element('span', { className: 'value', textContent: permission.value }));
+  const settings = permission && (permission.settings
+    ? item('button', 'Notifications', { type: 'button', onclick: () => call('notificationSettings').catch(() => {}) }, small(permission.note), element('span', { className: 'value', textContent: permission.value }))
+    : item('div', 'Notifications', {}, small(permission.note), element('span', { className: 'value', textContent: permission.value })));
   const policy = item('a', 'Privacy policy', { href: 'https://openmercatocloud.com/privacy', target: '_blank', rel: 'noreferrer' });
   const shown = version && item('div', 'Version', {}, element('span', { className: 'value', textContent: version }));
   return element('section', { className: 'app-section' }, eyebrow('App'), group(lockItem(lockRowNow), settings, copy, policy, shown), note);
@@ -336,6 +341,13 @@ function hero(server) {
   return element('div', { className: 'hero' }, element('ul', { className: 'cards' }, card(server)), hint && element('p', { className: 'muted', textContent: hint }), button(primary.label, () => act(primary.action, server), 'primary'));
 }
 
+// The "+" is CSS decoration: the accessible name leaves it out (PR #2340 smoke).
+function connectAnother() {
+  const add = button('Connect another cezar', () => go({ name: pairing ? 'start' : 'add' }), 'add');
+  add.setAttribute('aria-label', 'Connect another cezar');
+  return add;
+}
+
 function listNodes(text) {
   const ordered = orderServers(servers, cameFrom);
   const split = wide();
@@ -347,7 +359,7 @@ function listNodes(text) {
     notice(text),
     ordered.length === 1 && !split ? hero(ordered[0]) : element('ul', { className: 'cards' }, ...ordered.map((server) => card(server, { chosen: server.id === chosen }))),
     leaving && element('p', { className: 'muted', textContent: leaving }),
-    button('Connect another cezar', () => go({ name: pairing ? 'start' : 'add' }), 'add'),
+    connectAnother(),
     appSection(lockRow(lock)),
   ];
   if (!split) return list;
@@ -481,7 +493,7 @@ function drawStart({ advanced, url }, lockNotice) {
     notice(lockNotice),
     element('div', { className: 'stack' }, button('Scan QR code', () => run('scan', {}, {}), 'primary'), button('Enter code', () => go({ name: 'code' }))),
     details,
-    first ? appSection(startLockRow(lock), { full: false }) : null,
+    first ? appSection(startLockRow(lock)) : null,
   );
   lockScreen = render;
 }
