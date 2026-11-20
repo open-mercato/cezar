@@ -141,7 +141,15 @@ be updated by one. Say that wherever the APK is linked. Publish the draft GitHub
 5. **GitHub**: secrets `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` (the whole `.p8` file, including the
    BEGIN and END lines); **variable** `APPLE_TEAM_ID` (Settings > Secrets and variables > Actions >
    Variables).
-6. **First TestFlight build**: **Run workflow** with iOS on. It archives on a macOS runner with
+6. **Xcode**: App Store Connect accepts only builds made with the **iOS 27 SDK or later, from Xcode 27
+   or later** (ITMS-90725; enforced from April 2027). Both iOS jobs, mobile-release's archive and
+   mobile-check's simulator build, run on the `xcode-27` runner image (`macos-latest` and `macos-26`
+   stop at Xcode 26.x) and select the newest released Xcode 27+ with
+   `packages/mobile/scripts/select-xcode.sh`, which fails early if the image has none. The release job
+   logs `xcodebuild -version` and the SDK, and fails unless the archive's `DTSDKName` is `iphoneos27`
+   or later. When Apple raises the minimum, bump the runner label and the `27` in both workflows. A
+   local build for upload needs Xcode 27 or later too.
+7. **First TestFlight build**: **Run workflow** with iOS on. It archives on a macOS runner with
    automatic signing, exports an `.ipa` (kept as a run artifact) and uploads it with `altool`.
    mobile-check's iOS leg already compiles the app for the simulator on every change, so a failure
    here is signing, provisioning or upload, not Swift.
@@ -150,9 +158,9 @@ be updated by one. Say that wherever the APK is linked. Publish the draft GitHub
    Register one iPhone or iPad under **Devices > +** in Certificates, Identifiers & Profiles. Its
    UDID: connect it to a Mac, open it in Finder and click the line under its name until the UDID
    shows (right-click to copy).
-7. In App Store Connect > **TestFlight**: answer **export compliance** (see `store/data-safety.md`),
+8. In App Store Connect > **TestFlight**: answer **export compliance** (see `store/data-safety.md`),
    add yourself as an internal tester, install through the TestFlight app and run the checklist.
-8. **App Store tab**: App Privacy (`store/data-safety.md`), Age Rating (`store/age-rating.md`), the
+9. **App Store tab**: App Privacy (`store/data-safety.md`), Age Rating (`store/age-rating.md`), the
    listing (`store/listing.md`), screenshots `store/screenshots/ios/iphone-6.9/` (also 6.5" and
    `ipad-13/`; the app targets iPad too), privacy policy URL, support URL, and **App Review
    Information** from `store/reviewer-notes.md`. Then **Add for Review**.
