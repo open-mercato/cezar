@@ -15,8 +15,10 @@ describe('watchPrompt and the manager goal', () => {
     const prompt = watchPrompt(snapshot, [pr], '', [], `  ${GOAL}\n`);
     expect(prompt).toContain(`The user created you for this goal, and it takes precedence over the default role of watching pull requests and proposing merges:\n${GOAL}\n`);
     expect(prompt).toContain('Raise only what serves that goal.');
-    expect(prompt).toContain('never ask whether to merge or review them unless the goal asks for that');
-    expect(prompt).toContain(`If nothing in the snapshot serves the goal, reply with exactly ${MANAGER_QUIET}.`);
+    expect(prompt).toContain('Anything in the snapshot that does not serve it, open pull requests and failing tasks included, is not your concern on this check');
+    expect(prompt).toContain('never ask whether to merge or review it unless the goal asks for that');
+    expect(prompt).toContain('If nothing in the snapshot serves the goal, give the quiet reply described below.');
+    expect(prompt).toContain(`reply with exactly ${MANAGER_QUIET} and nothing else, after any CEZ:ASK-CLOSE lines`);
   });
 
   it('without a goal keeps the default check, with no goal section', () => {

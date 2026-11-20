@@ -140,7 +140,7 @@ ${purpose ? `
 The user created you for this goal, and it takes precedence over the default role of watching pull requests and proposing merges:
 ${purpose}
 
-Raise only what serves that goal. Open pull requests, failing tasks and anything else in the snapshot that does not serve it are not your concern on this check: leave them out, and never ask whether to merge or review them unless the goal asks for that. If nothing in the snapshot serves the goal, reply with exactly ${MANAGER_QUIET}.
+Raise only what serves that goal. Anything in the snapshot that does not serve it, open pull requests and failing tasks included, is not your concern on this check: leave it out, and never ask whether to merge or review it unless the goal asks for that. If nothing in the snapshot serves the goal, give the quiet reply described below.
 ` : ''}
 Tell the user, briefly, what deserves their attention and why, with [[task:…]] and [[pr:…]] cards. This check is read-only: you cannot start tasks, message tasks or propose anything from it, so ask the user instead. Judge how much it matters: start with the ${MANAGER_IMPORTANT} line only if it should interrupt them. If nothing deserves them, reply with exactly ${MANAGER_QUIET} and nothing else, after any CEZ:ASK-CLOSE lines.${taskQuestions.length > 0 ? ' openTaskQuestions gives the id of each waiting task\'s open question: a card relaying one declares "about":[{"task":"<task>","ask":"<ask>"}].' : ''}`;
 }
