@@ -874,6 +874,9 @@ export type ManagerAutomationReportInput = z.infer<typeof managerAutomationRepor
 /** Preview only: a manager never launches an automation's matches. */
 export const managerAutomationCheckInputSchema = z.object({ projectId: boundedId });
 export type ManagerAutomationCheckInput = z.infer<typeof managerAutomationCheckInputSchema>;
+/** Pausing only ever narrows what runs, so it needs no card; a read-only project still refuses it. */
+export const managerAutomationPauseInputSchema = z.object({ projectId: boundedId });
+export type ManagerAutomationPauseInput = z.infer<typeof managerAutomationPauseInputSchema>;
 export const managerAutomationParamSchema = z.object({ id: managerIdSchema, automationId: boundedId });
 
 /**

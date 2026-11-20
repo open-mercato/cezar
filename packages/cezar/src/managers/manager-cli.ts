@@ -344,6 +344,7 @@ export function automationWritesVia(fetcher: typeof fetch, url: string, managerB
     if (parts && method === 'POST' && parts.length === 0) return send('/automations', 'POST', { projectId, definition: body });
     if (parts && method === 'PUT' && parts.length === 1) return send(`/automations/${parts[0]}`, 'PUT', { projectId, definition: body });
     if (parts && method === 'PUT' && parts.length === 2 && parts[1] === 'report') return send(`/automations/${parts[0]}/report`, 'PUT', { projectId, report: body.report ?? null });
+    if (parts && method === 'POST' && parts.length === 2 && parts[1] === 'pause') return send(`/automations/${parts[0]}/pause`, 'POST', { projectId });
     if (parts && method === 'POST' && parts.length === 2 && parts[1] === 'check' && body.mode !== 'execute') return send(`/automations/${parts[0]}/check`, 'POST', { projectId });
     return new Response(JSON.stringify({ error: 'a manager cannot do that to an automation: ask the user to do it in the cockpit' }), { status: 403, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;

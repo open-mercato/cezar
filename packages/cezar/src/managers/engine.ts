@@ -17,6 +17,7 @@ import {
   type ManagerActionOp,
   type ManagerActionRequest,
   type ManagerAutomationCheckInput,
+  type ManagerAutomationPauseInput,
   type ManagerAutomationCreateInput,
   type ManagerAutomationReportInput,
   type ManagerAutomationUpdateInput,
@@ -3194,6 +3195,20 @@ export class ManagerEngine {
     return { manager: scope.manager };
   }
 
+  /** The automation as stored now, or the refusal its read gave. */
+  private async currentAutomation(projectId: string, automationId: string): Promise<AutomationDefinition | ManagerRefusal> {
+    const read = await this.forwardAutomation(`/p/${encodeURIComponent(projectId)}/automations/${encodeURIComponent(automationId)}`, { method: 'GET' });
+    if ('error' in read) return read;
+    const { automation } = read.body as { automation?: AutomationDefinition };
+    return automation ?? { error: 'automation not found', status: 404 };
+  }
+
+  /** Another manager's link is that manager's, and the user's: never unlinked or taken over. */
+  private static linkedElsewhere(id: string, automation: AutomationDefinition): ManagerRefusal | undefined {
+    const owner = automation.report?.managerId;
+    return owner !== undefined && owner !== id ? { error: 'that automation reports to another manager: ask the user to change it', status: 403 } : undefined;
+  }
+
   /** What it creates or links reports to itself or to nobody, never to another manager. */
   private static foreignReport(id: string, report: unknown): ManagerRefusal | undefined {
     if (report === undefined || report === null) return undefined;
@@ -3201,7 +3216,7 @@ export class ManagerEngine {
     return managerId === id ? undefined : { error: 'a manager links automations to itself only', status: 403 };
   }
 
-  private async forwardAutomation(path: string, init: { method: string; body: unknown }): Promise<{ status: number; body: unknown } | ManagerRefusal> {
+  private async forwardAutomation(path: string, init: { method: string; body?: unknown }): Promise<{ status: number; body: unknown } | ManagerRefusal> {
     const response = await this.forward(path, init);
     if (!response.ok) return ManagerEngine.refusalOf(response);
     return { status: response.status, body: await response.json() };
@@ -3227,6 +3242,10 @@ export class ManagerEngine {
     if ('error' in scope) return scope;
     const foreign = ManagerEngine.foreignReport(id, input.definition.report);
     if (foreign) return foreign;
+    const current = await this.currentAutomation(input.projectId, automationId);
+    if ('error' in current) return current;
+    // A composer start's PUT re-times it and keeps it on: the user's scheduled task, never a manager's edit.
+    if (current.deferredStart) return { error: 'that is a scheduled task the user set: ask them to change it in Tasks', status: 409 };
     const path = `/p/${encodeURIComponent(input.projectId)}/automations/${encodeURIComponent(automationId)}`;
     const updated = await this.forwardAutomation(path, { method: 'PUT', body: { ...input.definition, enabled: false } });
     if ('error' in updated) return updated;
@@ -3240,11 +3259,27 @@ export class ManagerEngine {
     if ('error' in scope) return scope;
     const foreign = ManagerEngine.foreignReport(id, input.report);
     if (foreign) return foreign;
+    const current = await this.currentAutomation(input.projectId, automationId);
+    if ('error' in current) return current;
+    const taken = ManagerEngine.linkedElsewhere(id, current);
+    if (taken) return taken;
     const path = `/p/${encodeURIComponent(input.projectId)}/automations/${encodeURIComponent(automationId)}/report`;
     const set = await this.forwardAutomation(path, { method: 'PUT', body: { report: input.report } });
     if ('error' in set) return set;
     const { automation } = set.body as { automation: AutomationDefinition };
     this.logDirect(scope.manager, 'automation-report', `${input.report ? 'Linked' : 'Unlinked'} automation ${automation.name} ${input.report ? 'to' : 'from'} this chat`, input.projectId);
+    return { automation };
+  }
+
+  /** Pausing narrows what runs, so it needs no card; scope and read-only still apply (as before #2358). */
+  async pauseAutomation(id: string, automationId: string, input: ManagerAutomationPauseInput): Promise<{ automation: AutomationDefinition } | ManagerRefusal> {
+    const scope = await this.automationScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const path = `/p/${encodeURIComponent(input.projectId)}/automations/${encodeURIComponent(automationId)}/pause`;
+    const paused = await this.forwardAutomation(path, { method: 'POST' });
+    if ('error' in paused) return paused;
+    const { automation } = paused.body as { automation: AutomationDefinition };
+    this.logDirect(scope.manager, 'automation-pause', `Paused automation ${automation.name}`, input.projectId);
     return { automation };
   }
 

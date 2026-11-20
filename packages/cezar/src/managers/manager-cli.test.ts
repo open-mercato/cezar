@@ -254,6 +254,13 @@ describe('cez manager', () => {
       await via(`${scope}/a1/check`, { method: 'POST', body: JSON.stringify({ mode: 'preview' }) });
       expect(recorded).toEqual([{ url: 'http://x/api/v1/workspace/managers/m1/automations/a1/check', method: 'POST', body: { projectId: 'alpha' } }]);
     });
+
+    it('sends a pause to the manager route, as `cez manager automation pause` worked before the routes', async () => {
+      recorded.length = 0;
+      const response = await via(`${scope}/a1/pause`, { method: 'POST' });
+      expect(response.status).toBe(200);
+      expect(recorded).toEqual([{ url: 'http://x/api/v1/workspace/managers/m1/automations/a1/pause', method: 'POST', body: { projectId: 'alpha' } }]);
+    });
   });
 
   it('renames, but not from a watch check', async () => {

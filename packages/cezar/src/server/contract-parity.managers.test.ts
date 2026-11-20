@@ -7,6 +7,7 @@ import type {
   managerActionDecisionInputSchema,
   managerActionOpsResponseSchema,
   managerAutomationCheckInputSchema,
+  managerAutomationPauseInputSchema,
   managerAutomationCreateInputSchema,
   managerAutomationReportInputSchema,
   managerAutomationUpdateInputSchema,
@@ -83,6 +84,7 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.infer<typeof automationResponseSchema>, InferResponseType<One['automations'][':automationId']['$put'], 200>>>,
     Assert<Mutual<z.infer<typeof automationResponseSchema>, InferResponseType<One['automations'][':automationId']['report']['$put'], 200>>>,
     Assert<Mutual<z.infer<typeof automationCheckQueuedResponseSchema>, InferResponseType<One['automations'][':automationId']['check']['$post'], 202>>>,
+    Assert<Mutual<z.infer<typeof automationResponseSchema>, InferResponseType<One['automations'][':automationId']['pause']['$post'], 200>>>,
     Assert<Mutual<z.infer<typeof managerChangesResponseSchema>, InferResponseType<typeof client.api.v1.workspace['admin-audit']['$get'], 200>>>,
 
     Assert<Mutual<z.input<typeof createManagerInputSchema>, Body<InferRequestType<Managers['$post']>>>>,
@@ -101,6 +103,7 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.input<typeof managerAutomationUpdateInputSchema>, Body<InferRequestType<One['automations'][':automationId']['$put']>>>>,
     Assert<Mutual<z.input<typeof managerAutomationReportInputSchema>, Body<InferRequestType<One['automations'][':automationId']['report']['$put']>>>>,
     Assert<Mutual<z.input<typeof managerAutomationCheckInputSchema>, Body<InferRequestType<One['automations'][':automationId']['check']['$post']>>>>,
+    Assert<Mutual<z.input<typeof managerAutomationPauseInputSchema>, Body<InferRequestType<One['automations'][':automationId']['pause']['$post']>>>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

@@ -50,6 +50,7 @@ import {
   managerAutomationUpdateInputSchema,
   managerAutomationReportInputSchema,
   managerAutomationCheckInputSchema,
+  managerAutomationPauseInputSchema,
   managerAutomationParamSchema,
   managerChangesQuerySchema,
   runsListQuerySchema,
@@ -9340,6 +9341,11 @@ export function createApp(deps: ServerDeps) {
       const { id, automationId } = c.req.valid('param');
       const set = await managerEngine.setAutomationReport(id, automationId, c.req.valid('json'));
       return 'error' in set ? c.json({ error: set.error }, set.status) : c.json(set);
+    })
+    .post('/workspace/managers/:id/automations/:automationId/pause', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationPauseInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const paused = await managerEngine.pauseAutomation(id, automationId, c.req.valid('json'));
+      return 'error' in paused ? c.json({ error: paused.error }, paused.status) : c.json(paused);
     })
     .post('/workspace/managers/:id/automations/:automationId/check', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationCheckInputSchema), async (c) => {
       const { id, automationId } = c.req.valid('param');

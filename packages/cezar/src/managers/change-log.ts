@@ -37,16 +37,25 @@ export class ManagerChangeLog {
       // a full log is copied aside and emptied in place, not renamed.
       fd = openSync(path, 'a+', 0o600);
       if (fstatSync(fd).size >= this.rotateBytes) {
-        writeFileSync(rotatedPath(path), readFileSync(fd), { mode: 0o600 });
-        ftruncateSync(fd, 0);
+        // A copy that fails keeps the log growing rather than stopping it: the entry below still lands.
+        try {
+          writeFileSync(rotatedPath(path), readFileSync(fd), { mode: 0o600 });
+          ftruncateSync(fd, 0);
+        } catch (cause) {
+          this.warnOnce(path, cause);
+        }
       }
       writeSync(fd, `${JSON.stringify(redactDeep(entry, this.secrets))}\n`);
     } catch (cause) {
-      if (!this.warned) this.warn(`[cezar] could not write the manager change log ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
-      this.warned = true;
+      this.warnOnce(path, cause);
     } finally {
       if (fd !== undefined) closeSync(fd);
     }
+  }
+
+  private warnOnce(path: string, cause: unknown): void {
+    if (!this.warned) this.warn(`[cezar] could not write the manager change log ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.warned = true;
   }
 
   /** Newest first. */

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -50,6 +50,15 @@ describe('the manager change log (spec 2026-11-20-manager-admin-actions § 3.3)'
     expect(existsSync(join(home, 'admin-audit.1.ndjson'))).toBe(true);
     // Each line outgrows the 1-byte cap, so the current file holds one entry and the rotated one the previous.
     expect(log.list().map((change) => change.id)).toEqual(['c4', 'c3']);
+  });
+
+  it('keeps logging when the rotated half cannot be written', () => {
+    mkdirSync(join(home, 'admin-audit.1.ndjson'));
+    const warnings: string[] = [];
+    const log = new ManagerChangeLog((message) => warnings.push(message), 1);
+    for (let n = 1; n <= 3; n += 1) log.append(entry(n));
+    expect(warnings).toHaveLength(1);
+    expect(log.list().map((change) => change.id)).toEqual(['c3', 'c2', 'c1']);
   });
 
   it('never writes a secret value from the environment', () => {
