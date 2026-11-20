@@ -484,9 +484,14 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
     if ((failuresBy.get(share.consumerId) ?? []).some((f) => share.at > f.since && share.at <= f.at)) c.retryWasteEstimatePp += share.pp;
     if (c.parts && s.part) c.parts[s.part] += share.pp;
     if (c.messages && s.messageId && s.part) {
-      const m = c.messages.find((x) => x.messageId === s.messageId);
-      if (m) m.estimatePp += share.pp;
-      else c.messages.push({ messageId: s.messageId, part: s.part, estimatePp: share.pp });
+      let m = c.messages.find((x) => x.messageId === s.messageId);
+      if (!m) {
+        m = { messageId: s.messageId, part: s.part, at: new Date(s.begin).toISOString(), estimatePp: 0, aloneInferredPp: 0, sharedEstimatePp: 0 };
+        c.messages.push(m);
+      }
+      m.estimatePp += share.pp;
+      if (share.alone) m.aloneInferredPp += share.pp;
+      else m.sharedEstimatePp += share.pp;
     }
   }
   // "Ran together with": other consumers holding a shared slice of the same reading pair.
@@ -511,7 +516,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
       ...(c.kind === 'manager' ? {
         turns: { chat: own.filter((s) => s.part === 'chat').length, watch: own.filter((s) => s.part === 'watch').length, job: own.filter((s) => s.part === 'job').length },
         quietWatchTurns: own.filter((s) => s.part === 'watch' && s.quiet === true).length,
-        messages: (c.messages ?? []).map((m) => ({ ...m, estimatePp: round(m.estimatePp) })),
+        messages: (c.messages ?? []).map((m) => ({ ...m, estimatePp: round(m.estimatePp), aloneInferredPp: round(m.aloneInferredPp), sharedEstimatePp: round(m.sharedEstimatePp) })),
       } : {}),
     };
   }).filter((c) => c.estimatePp > 0).sort((x, y) => y.estimatePp - x.estimatePp);

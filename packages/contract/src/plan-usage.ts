@@ -69,8 +69,11 @@ export const planUsageConsumerSchema = z.object({
   turns: z.object({ chat: z.number().int().nonnegative(), watch: z.number().int().nonnegative(), job: z.number().int().nonnegative() }).optional(),
   /** Manager watch checks whose reply reported nothing new. */
   quietWatchTurns: z.number().int().nonnegative().optional(),
-  /** Manager only: estimate per assistant message id (the per-reply footnote). */
-  messages: z.array(z.object({ messageId: z.string(), part: planUsageManagerPartSchema, estimatePp: pp })).optional(),
+  /** Manager only: estimate per turn, keyed by its assistant message id — the popover's largest turns,
+   *  kept to debug a spike (spec 2026-11-20-manager-plan-usage-popover). `at`: when the turn began. */
+  messages: z.array(z.object({
+    messageId: z.string(), part: planUsageManagerPartSchema, at: iso, estimatePp: pp, aloneInferredPp: pp, sharedEstimatePp: pp,
+  })).optional(),
 });
 export type PlanUsageConsumer = z.infer<typeof planUsageConsumerSchema>;
 

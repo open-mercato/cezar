@@ -60,3 +60,11 @@ instead of "cost".
 1. Session view: A, B, C or A + warning strip?
 2. Manager chip headline: keep "Today ≈ N% of 5h" (sum of today's windows) or switch to the current
    window like the task chip?
+
+## Decisions (owner, 2026-11-20)
+
+- Chip total: **manager + the tasks it started** (latest 5-hour window on the manager's account).
+- Reply footnote: **removed**. Per-turn usage is still recorded (`messages[]` gains `at`, `aloneInferredPp`,
+  `sharedEstimatePp`), and the popover lists the window's three largest turns to trace a spike.
+- Session view: **A + warning strip**. The chip carries the account meter, and a strip above the composer appears from 80 %.
+- Phones: **bottom sheet** for the shared surface (task chip included), via `PlanUsageSurface`.
