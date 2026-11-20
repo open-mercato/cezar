@@ -25,7 +25,6 @@ import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
 import com.openmercato.cezar.mobile.shell.AppLock;
 import com.openmercato.cezar.mobile.shell.CezarRows;
-import com.openmercato.cezar.mobile.shell.DeviceProbes;
 import com.openmercato.cezar.mobile.shell.LaunchHold;
 import com.openmercato.cezar.mobile.shell.OriginGate;
 import com.openmercato.cezar.mobile.shell.OriginWipe;
@@ -44,7 +43,6 @@ import com.openmercato.cezar.mobile.shell.relay.AccountClient;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.PairingClient;
 import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
-import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.RelayLink;
 import com.openmercato.cezar.mobile.shell.relay.RelayOrigin;
 import java.io.IOException;
@@ -52,11 +50,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import org.json.JSONObject;
 
@@ -70,9 +65,7 @@ public class ConnectionPlugin extends Plugin {
 
     private final ExecutorService background = Executors.newSingleThreadExecutor();
     private final ExecutorService polls = Executors.newCachedThreadPool();
-    private final ScheduledExecutorService bounds = Executors.newSingleThreadScheduledExecutor();
     /** The last probe's reading per server, for every listed outcome after it. */
-    private final Map<String, DeviceProbes.Reading> readings = new ConcurrentHashMap<>();
     private final Object probeLock = new Object();
     /** Non-null while a probe runs: the calls it answers when it settles. */
     private List<PluginCall> probeCalls;
@@ -267,27 +260,21 @@ public class ConnectionPlugin extends Plugin {
         });
     }
 
+    /** The round shared with the badge rounds (B1): two rounds at once would cool each other's warm links. */
     private void startProbe() {
-        try {
-            ShellConnector connector = ShellServices.connector(getContext());
-            RelayConnections relay = ShellServices.relay(getContext());
-            DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, polls), DeviceProbes.directProbe(connector, server -> server.url == null ? null : cookies(server.url), polls),
-                    relay::cool, (ms, work) -> bounds.schedule(work, ms, TimeUnit.MILLISECONDS),
-                    (id, answer) -> connector.sawHealth(id, answer, System.currentTimeMillis()), readings::put);
-            probes.whenSettled(() -> {
-                probes.stop(null);
-                PushNotifier.settle(getContext());
+        ShellServices.probeRound(getContext(), error -> {
+            if (error != null) {
                 answerProbe(calls -> {
-                    JSObject result = list(connector);
-                    for (PluginCall each : calls) each.resolve(result);
+                    for (PluginCall each : calls) each.reject(String.valueOf(error.getMessage()));
                 });
-            });
-            probes.start(connector.list());
-        } catch (RuntimeException e) {
+                return;
+            }
+            PushNotifier.settle(getContext());
             answerProbe(calls -> {
-                for (PluginCall each : calls) each.reject(String.valueOf(e.getMessage()));
+                JSObject result = list(ShellServices.connector(getContext()));
+                for (PluginCall each : calls) each.resolve(result);
             });
-        }
+        });
     }
 
     private void answerProbe(java.util.function.Consumer<List<PluginCall>> answer) {
@@ -527,7 +514,7 @@ public class ConnectionPlugin extends Plugin {
         List<ServerRecord> saved = connector.list();
         Map<String, ServerListStore.Seen> seen = new HashMap<>();
         for (ServerRecord server : saved) seen.put(server.id, connector.seen(server.id));
-        for (CezarRows.Row listed : CezarRows.rows(saved, readings, seen, probeCurrent, ShellServices.clock(getContext()))) {
+        for (CezarRows.Row listed : CezarRows.rows(saved, ShellServices.probeReadings(), seen, probeCurrent, ShellServices.clock(getContext()))) {
             ServerRecord server = listed.server;
             JSObject row = new JSObject();
             row.put("id", server.id);
