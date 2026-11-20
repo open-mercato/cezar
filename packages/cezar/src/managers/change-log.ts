@@ -4,7 +4,7 @@
  * rotated by size into `admin-audit.1.ndjson`. Deleting either loses history, never boot; a bad line
  * is skipped. Secret values are redacted before a line is written.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { managerChangeSchema, type ManagerChange } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
@@ -29,14 +29,24 @@ export class ManagerChangeLog {
   /** Never throws: a log that cannot be written must not fail the change it records. */
   append(entry: ManagerChange): void {
     const path = changeLogPath();
+    let fd: number | undefined;
     try {
       assertCezarHomeWriteIsSandboxed(path);
       mkdirSync(dirname(path), { recursive: true });
-      if (existsSync(path) && statSync(path).size >= this.rotateBytes) renameSync(path, rotatedPath(path));
-      appendFileSync(path, `${JSON.stringify(redactDeep(entry, this.secrets))}\n`, { encoding: 'utf8', mode: 0o600 });
+      // The size comes from the open descriptor, never a path check before the write (CodeQL js/file-system-race).
+      fd = openSync(path, 'a', 0o600);
+      if (fstatSync(fd).size >= this.rotateBytes) {
+        closeSync(fd);
+        fd = undefined;
+        renameSync(path, rotatedPath(path));
+        fd = openSync(path, 'a', 0o600);
+      }
+      writeSync(fd, `${JSON.stringify(redactDeep(entry, this.secrets))}\n`);
     } catch (cause) {
       if (!this.warned) this.warn(`[cezar] could not write the manager change log ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
       this.warned = true;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   }
 
@@ -59,12 +69,11 @@ export class ManagerChangeLog {
 const rotatedPath = (path: string): string => path.replace(/\.ndjson$/, '.1.ndjson');
 
 function readEntries(path: string): ManagerChange[] {
-  if (!existsSync(path)) return [];
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch {
-    return [];
+    return []; // Missing or unreadable: no history, never an error.
   }
   return text.split('\n').flatMap((line) => {
     if (!line.trim()) return [];
