@@ -186,7 +186,7 @@ The **target** of an op may be the proposing manager (*self*) or another manager
 | `manager.connectors` | MCP grant levels, per-tool modes | H* when it widens | change | full | 3 |
 | `manager.shell-allow` | `bashAllow` patterns | H* when it widens | change | full | 3 |
 | `manager.cancel-any` | `cancelAnyTask` | H* when it widens | change | full | 3 |
-| `manager.admin-access` | The new `adminAccess` (§ 3.1) | H* | change. **Never self**, and only from the cockpit for any manager in v1 | full | 3 |
+| `manager.admin-access` | The new `adminAccess` (§ 3.1) | — | not proposable: set only in Settings, by the user, for any manager | — | never |
 | `manager.deactivate` | Deactivate another manager | M | change, applied by the decision route (the deactivate spec's "no tool route changes it" still holds). Never self: a manager that wants to stop says so in chat | full | 3 |
 | `manager.reactivate` | — | — | not offered: the deactivate spec's rule "a manager never switches itself or another manager on" stands | — | never |
 | `manager.create` | New manager with the stated instructions and permissions | H* | change. The card lists every permission the new manager gets; it can never exceed the proposer's own | partial (deactivate) | 3 |
@@ -313,6 +313,10 @@ The `action` message gains two optional fields:
 
 All new fields are optional, so old chat files parse.
 
+**Telemetry.** `managers/telemetry.ts` records action types as closed sets. Phase 0 adds `admin` to
+them, plus the op's `category`, `risk` and `decidedBy.kind` as closed-set labels (from the registry,
+enforced by the server). The op's params, rows, reason and project never leave the machine.
+
 **Old clients.** `UNKNOWN_ACTION_COPY` lets an older cockpit approve a card it cannot describe. For
 `admin` cards the decision input gains `seen: <pin>`, and the server refuses an approve without the
 matching pin with 409 "Update cezar on this device to approve this". A stale phone build can then
@@ -393,12 +397,15 @@ These hold in v1 and continue to hold with auto-approval.
   - it is pinned to ask, and never auto-approved.
   A manager connected to `all` projects gets the project anyway, and that row is omitted.
 - **Ops on any manager's permissions** (`manager.projects`, `.access`, `.connectors`,
-  `.shell-allow`, `.cancel-any`, `.task-agents`, `.admin-access`, `.create`) are always H and pinned
-  to ask. `manager.admin-access` and every widening op refuse when the target is the proposer itself;
-  the only exception is a new project joining it, above. Narrowing itself is allowed but still asks.
-- **`manager.create` is capped by the proposer.** The new manager's projects, access, connectors and
-  adminAccess must each be a subset of the proposer's own. Otherwise the proposal refuses, saying
-  which grant exceeds.
+  `.shell-allow`, `.cancel-any`, `.task-agents`, `.create`) are always H and pinned to ask. Every
+  widening op refuses when the target is the proposer itself; the only exception is a new project
+  joining it, above. Narrowing itself is allowed but still asks. `adminAccess` is not an op at all.
+- **Every manager-to-manager widening is capped by the proposer** (§ 7, decision 3). For
+  `manager.create` and for every widening op whose target is another manager, each granted value
+  (projects, access, connectors, shell patterns, task agents, `cancelAnyTask`, and the new manager's
+  adminAccess) must be a subset of the proposer's own. Otherwise the proposal refuses, saying which
+  grant exceeds. Without this, two managers could widen each other past what either holds, one
+  "never self" card at a time.
 - **Policy and confirmation settings are not ops** (§ 1.7). The policy can only be edited in
   Settings, by the user.
 - **Decisions.** The `decision` and `undo` routes are cockpit routes. Today the only thing between a
@@ -411,6 +418,11 @@ These hold in v1 and continue to hold with auto-approval.
     one.
   This is not a fence against a process that omits the header (§ 3.7). It does stop the manager's
   own CLI from ever reaching them, and gives honest attribution.
+  - This changes routes `BACKWARD_COMPATIBILITY.md` § 2 already lists (the tool routes and
+    `PATCH /workspace/managers/:id`), so phase 0 updates those rows, not only adds new ones. The
+    `cez-manager` shim ships with the server, so no supported client lacks the header. A turn already
+    running across an upgrade has no token: its next tool call is refused once with "cezar was
+    updated: finish this reply", and the following turn has one.
 - **Today's gaps closed in phase 0:**
   - `cez-manager rename` calls the general `PATCH /workspace/managers/:id`, the same route that
     changes access. It moves to a narrow tool route `POST …/rename` (name only), and the PATCH then
@@ -435,8 +447,9 @@ These hold in v1 and continue to hold with auto-approval.
 ### 3.3 Everything is audit-logged
 
 - **Storage.** `~/.cezar/admin-audit.ndjson`, append-only, written through `cezarHomeDir()` and
-  rotated at 5,000 entries (the older half moves to `admin-audit.1.ndjson`). Deleting it loses
-  history, never boot.
+  rotated at 5,000 entries (the older half moves to `admin-audit.1.ndjson`). Appends and rotation
+  run under one cross-process lock, so a CLI and a server writing at once never lose or duplicate a
+  line. Deleting it loses history, never boot.
 - **Each entry** holds:
   - `id`, `at`, `op`, `scope`, `managerId`, `managerName`, `actionId` (the card), `reason` (the
     manager's, verbatim and fenced as agent text);
@@ -659,7 +672,8 @@ Each phase has its own PR, tests and BACKWARD_COMPATIBILITY.md §2 rows for new 
   scope. Every `change` op whose undo is `full` has an `undo`. Every pinned op is refused by
   `evaluate` even with a rule naming it.
 - **Ceiling**: one test per clause in § 4.3.
-- **Self-widening refusal** for each manager op, and the proposer-subset cap on `manager.create`.
+- **Self-widening refusal** for each manager op, and the proposer-subset cap on `manager.create` and
+  on every widening op that targets another manager (A cannot widen B past A's own grants).
 - **Turn token**: manager tool routes refuse without it; decision, undo and PATCH refuse with it;
   a watch turn's token cannot propose.
 - **Pin**: the state changes between proposal and approval, so the approval refuses. An undo after
