@@ -335,88 +335,43 @@ export async function probeKimiSubscription(
   });
 }
 
-/** Resolve an advisor credential the way the vendored runtime does: the
- *  declared env var first, then the opencode auth store. Returns the key and
- *  where it came from — never logs or returns it anywhere user-visible. */
-export function resolveAdvisorCredential(model: {
+/** Check local prerequisites without using a project file to choose an outbound request.
+ * The council verifies provider access and the selected model on its first call. */
+export function checkHttpAdvisorReadiness(model: {
   adapter?: string;
   preset?: string;
+  model: string;
   endpoint?: string;
   credentialEnv?: string;
   authStoreProvider?: string;
-}): { key: string; source: string } | { key: null; reason: string } {
-  // The selected repository config chooses a model, but an ambient auth-store
-  // credential has a narrower trust boundary: it may leave only for its
-  // official provider endpoint. This must happen before even looking up a key,
-  // and mirrors the later runtime validation for preflight probes.
-  const credentialIssue = advisorCredentialBindingIssue(model);
-  if (credentialIssue) return { key: null, reason: credentialIssue };
-  if (model.credentialEnv && process.env[model.credentialEnv]) {
-    return { key: String(process.env[model.credentialEnv]), source: `env ${model.credentialEnv}` };
+}): ProbeVerdict {
+  if (!model.endpoint) return { status: 'unverified', detail: 'no endpoint declared for this advisor' };
+  if (typeof model.model !== 'string' || !model.model.trim()) {
+    return { status: 'failed', detail: 'no model declared for this advisor' };
   }
-  if (model.authStoreProvider) {
+  const credentialIssue = advisorCredentialBindingIssue(model);
+  if (credentialIssue) return { status: 'failed', detail: credentialIssue };
+
+  let source: string | undefined;
+  if (model.credentialEnv && process.env[model.credentialEnv]) {
+    source = `env ${model.credentialEnv}`;
+  } else if (model.authStoreProvider) {
     try {
       const store = JSON.parse(
         readFileSync(join(homedir(), '.local', 'share', 'opencode', 'auth.json'), 'utf8'),
-      ) as Record<string, Record<string, string>>;
-      const entry = store[model.authStoreProvider];
-      const key = entry?.key ?? entry?.apiKey ?? entry?.access ?? entry?.token;
-      if (key) return { key, source: `opencode auth store (${model.authStoreProvider})` };
+      ) as Record<string, { key?: unknown }>;
+      const key = store[model.authStoreProvider]?.key;
+      if (typeof key === 'string' && key) source = `OpenCode auth store (${model.authStoreProvider})`;
     } catch {
+      // Missing or unreadable auth is reported as a missing credential below.
     }
   }
-  return {
-    key: null,
-    reason: `no credential: ${model.credentialEnv ?? '(no env var)'} unset and no opencode auth entry`,
-  };
-}
-
-/** An OpenAI-compatible advisor (Zen, DeepSeek): one real completion. */
-export async function probeAdvisorHttp(
-  model: {
-    adapter?: string;
-    preset?: string;
-    model: string;
-    endpoint?: string;
-    credentialEnv?: string;
-    authStoreProvider?: string;
-  },
-  opts: { timeoutMs?: number } = {},
-): Promise<ProbeVerdict> {
-  if (!model.endpoint) return { status: 'unverified', detail: 'no endpoint declared for this advisor' };
-  const credential = resolveAdvisorCredential(model);
-  if (credential.key === null) return { status: 'failed', detail: credential.reason };
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? PROBE_TIMEOUT_MS);
-  timer.unref?.();
-  try {
-    const res = await fetch(model.endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${credential.key}` },
-      body: JSON.stringify({
-        model: model.model,
-        messages: [{ role: 'user', content: PROBE_PROMPT }],
-        max_tokens: 8,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      return {
-        status: 'failed',
-        detail: `${model.endpoint} → ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`.trim(),
-      };
-    }
-    return { status: 'ready', detail: `round-trip ok via ${credential.source}` };
-  } catch (err) {
-    return { status: 'failed', detail: err instanceof Error ? err.message : String(err) };
-  } finally {
-    clearTimeout(timer);
+  if (!source) {
+    return { status: 'failed', detail: `no credential: ${model.credentialEnv ?? '(no env var)'} unset and no OpenCode auth entry` };
   }
+  return { status: 'ready', detail: `credential configured via ${source}; the binding is verified when its council runs` };
 }
 
-/** Build the transport that routes a ref to its real code path. `advisors`
- *  supplies the `agentHarness.models` entry for `runner: 'harness'` refs. */
 /**
  * A command advisor is ready when its CLI is installed. Its argv is never run here: this probe
  * fires when the Multi-model tab opens, and repository config must not execute then. The council
@@ -452,6 +407,7 @@ type LiveAdvisors = Record<string, { adapter?: string; model: string; preset?: s
 /** Each runner's selected account for a project: the id and the env that points its CLI at it. */
 export type ProbeAccounts = Partial<Record<ProbeRunner, { id: string; env: Record<string, string> }>>;
 
+/** Route each binding to the readiness check for its transport. */
 export function createLiveTransport(deps: {
   advisors?: LiveAdvisors;
   cwd?: string;
@@ -475,12 +431,11 @@ export function createLiveTransport(deps: {
         return probeKimiSubscription(advisor, { timeoutMs: deps.timeoutMs });
       }
       if (advisor.adapter === 'command') return probeCommandAdvisor(advisor, deps.cwd);
-      // Only an adapter that calls an endpoint is probed over HTTP, as the runtime does: a command
-      // adapter never sends its key to one.
+      // HTTP advisors use the same local readiness check in the composer and preflight.
       if (advisor.adapter !== 'openai-compatible' && advisor.adapter !== 'preset') {
         return { status: 'unverified', detail: `a ${advisor.adapter ?? 'unknown'} advisor cannot be probed` };
       }
-      return probeAdvisorHttp(advisor, { timeoutMs: deps.timeoutMs });
+      return checkHttpAdvisorReadiness(advisor);
     }
     return { status: 'failed', detail: `unsupported harness probe transport: ${ref.runner}` };
   };

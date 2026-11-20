@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as childProcess from 'node:child_process';
 import * as net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.js';
 import {
   createLiveTransport,
-  probeAdvisorHttp,
+  checkHttpAdvisorReadiness,
   probeCodex,
   probeKimiSubscription,
 } from './probe-transports.js';
@@ -152,9 +152,9 @@ describe('harness live probe transports', () => {
     vi.stubGlobal('fetch', fetch);
     vi.stubEnv(binding.credentialEnv, 'host-secret-sentinel');
 
-    await expect(
-      probeAdvisorHttp({ adapter: 'openai-compatible', model: 'm', ...binding }),
-    ).resolves.toMatchObject({ status: 'failed', detail: expect.stringMatching(reason) });
+    expect(
+      checkHttpAdvisorReadiness({ adapter: 'openai-compatible', model: 'm', ...binding }),
+    ).toMatchObject({ status: 'failed', detail: expect.stringMatching(reason) });
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -173,7 +173,7 @@ describe('harness live probe transports', () => {
 
     await expect(createLiveTransport({ advisors: { leak: binding } })({ runner: 'harness', model: 'leak' }))
       .resolves.not.toMatchObject({ status: 'ready' });
-    await expect(probeAdvisorHttp(binding)).resolves.toMatchObject({
+    expect(checkHttpAdvisorReadiness(binding)).toMatchObject({
       status: 'failed',
       detail: expect.stringMatching(/only over https/),
     });
@@ -208,13 +208,42 @@ describe('harness live probe transports', () => {
     ['a custom key over https', { credentialEnv: 'MY_LLM_KEY', endpoint: 'https://llm.example.org/v1/chat/completions' }],
     ['a provider key to its own host', { credentialEnv: 'DEEPSEEK_API_KEY', endpoint: 'https://api.deepseek.com/chat/completions' }],
     ['a local server over http', { credentialEnv: 'MY_LLM_KEY', endpoint: 'http://127.0.0.1:8080/v1/chat/completions' }],
-  ])('still probes %s', async (_name, binding) => {
-    const fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 }));
+  ])('checks %s locally without sending the project binding', async (_name, binding) => {
+    const fetch = vi.fn(async () => new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetch);
+    vi.stubEnv('CEZ_DRY_RUN', '0');
     vi.stubEnv(binding.credentialEnv, 'user-key');
 
-    await probeAdvisorHttp({ adapter: 'openai-compatible', model: 'm', ...binding });
-    expect(fetch).toHaveBeenCalledOnce();
+    const transport = createLiveTransport({ advisors: {
+      configured: { adapter: 'openai-compatible', model: 'project-model-id', ...binding },
+    } });
+    const result = await transport({ runner: 'harness', model: 'configured' });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: 'ready', detail: expect.stringContaining('verified when its council runs') });
+  });
+
+  it('can use an official preset with an OpenCode auth-store key without transmitting it at readiness', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-advisor-home-'));
+    dirs.push(home);
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    vi.stubEnv('CEZ_DRY_RUN', '0');
+    const store = join(home, '.local', 'share', 'opencode');
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, 'auth.json'), JSON.stringify({ opencode: { key: 'fixture-opencode-key' } }));
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+
+    const transport = createLiveTransport({ advisors: {
+      zen: {
+        adapter: 'preset', preset: 'opencode-zen', authStoreProvider: 'opencode',
+        endpoint: 'https://opencode.ai/zen/v1/chat/completions', model: 'mimo-v2.5-free',
+      },
+    } });
+    const result = await transport({ runner: 'harness', model: 'zen' });
+    expect(result).toMatchObject({ status: 'ready', detail: expect.stringContaining('OpenCode auth store') });
+    expect(result.detail).not.toContain('fixture-opencode-key');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('refuses a redirected auth-store binding before reading credentials or sending a request', async () => {
@@ -222,8 +251,8 @@ describe('harness live probe transports', () => {
     vi.stubGlobal('fetch', fetch);
     process.env.CEZ_TEST_ADVISOR_KEY = 'test-only-sentinel';
 
-    await expect(
-      probeAdvisorHttp({
+    expect(
+      checkHttpAdvisorReadiness({
         adapter: 'preset',
         preset: 'opencode-zen',
         model: 'mimo-v2.5-free',
@@ -231,7 +260,7 @@ describe('harness live probe transports', () => {
         credentialEnv: 'CEZ_TEST_ADVISOR_KEY',
         authStoreProvider: 'opencode',
       }),
-    ).resolves.toMatchObject({
+    ).toMatchObject({
       status: 'failed',
       detail: expect.stringContaining('official preset, provider, and endpoint'),
     });

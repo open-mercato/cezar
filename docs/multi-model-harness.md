@@ -41,8 +41,10 @@ locking must be off to choose a lineup.
 Search the model picker by name, model ID, provider or runner. Every search word
 must match; model and provider matches appear before description-only matches.
 
-The composer probes the selected bindings and shows readiness beside the models.
-Readiness checks model access even outside a Git repository. To start a writing
+The composer checks the selected bindings and shows readiness beside the models.
+Configured HTTP advisors check endpoint policy and credential presence locally.
+The first council call verifies provider access and model availability.
+Native runner probes check model access even outside a Git repository. To start a writing
 workflow, select the Git checkout itself as the project, with at least one commit;
 cezar creates the isolated worktree automatically. A parent folder containing
 repositories cannot start a multi-model run.

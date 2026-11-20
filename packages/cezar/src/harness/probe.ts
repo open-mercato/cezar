@@ -13,7 +13,7 @@ export interface ProbeVerdict {
   detail: string;
 }
 
-/** Performs one live round-trip. Implementations may throw; the prober
+/** Checks the binding’s readiness, using a live round-trip where supported. Implementations may throw; the prober
  *  converts a throw into a `failed` verdict — a probe must never be the thing
  *  that crashes preflight. */
 export type ProbeTransport = (ref: ProbeRef) => Promise<ProbeVerdict>;
