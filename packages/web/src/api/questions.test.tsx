@@ -7,13 +7,17 @@ import type { QuestionItem, QuestionsResponse } from '@open-mercato/cezar-api-cl
 
 import { queryKeys } from './queries'
 import {
+  applyQuestionCounts,
   DISMISS_UNDO_MS,
   liveQuestionCount,
+  markAnswering,
   noteQuestionsMaybeChanged,
   questionKeys,
   resetDismissals,
   scheduleDismiss,
+  settleQuestion,
   undoDismiss,
+  useLiveQuestionCount,
   usePendingDismissals,
   useQuestionsSubscription,
 } from './questions'
@@ -165,5 +169,31 @@ describe('dismiss with undo', () => {
     expect(liveQuestionCount(data, [])).toBe(2)
     expect(liveQuestionCount(data, [{ key: 'a', label: 'A', paused: false }])).toBe(1)
     expect(liveQuestionCount(data, [{ key: 'c', label: 'C', paused: false }])).toBe(2)
+  })
+})
+
+describe('the badge while an answer is on its way', () => {
+  // Every render, not a poll: a one-frame dip below the true count is what this guards.
+  it('never reads below the true count when the live counts drop before the list and the reply', async () => {
+    const a = item('m:global:a')
+    const b = item('m:global:b')
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(questionKeys.all, response([a, b]))
+    fetchMock.mockImplementation(async () => Response.json(response([b])))
+    const renders: Array<number | undefined> = []
+    renderHook(() => { const count = useLiveQuestionCount(); renders.push(count); return count }, { wrapper })
+    expect(renders.at(-1)).toBe(2)
+    act(() => markAnswering(a.key, true))
+    expect(renders.at(-1)).toBe(1)
+    // The topic frame says the server already counts it off; the list still has it.
+    act(() => applyQuestionCounts(client, { live: 1, older: 0 }))
+    // The reply lands: the page settles it and clears the in-flight mark.
+    act(() => {
+      settleQuestion(client, { ...a, closed: { reason: 'answered', at: new Date().toISOString(), answer: 'Yes' } })
+      markAnswering(a.key, false)
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(renders.at(-1)).toBe(1)
+    expect(Math.min(...renders.filter((count) => count !== undefined))).toBe(1)
   })
 })

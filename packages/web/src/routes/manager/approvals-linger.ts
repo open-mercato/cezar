@@ -30,20 +30,50 @@ function scrollerOf(element: HTMLElement): HTMLElement | null {
   return null
 }
 
+type Hold = { element: HTMLElement; top: number; scroller: HTMLElement | null }
+
+/** How a visible card leaves: fading in place (something the reader sees follows it) or collapsing. */
+export type LeaveMode = 'fade' | 'collapse'
+
+/**
+ * What the reader is looking at below the leaving cards: the first element after the earliest of
+ * them that is laid out and in view. A hidden element reports top 0 wherever it sits, so it never
+ * counts (an approval card's hidden outcome made the correction 0, #2335 QA).
+ */
+function readingAnchor(root: HTMLElement, leaving: readonly HTMLElement[], viewTop: number): HTMLElement | undefined {
+  const first = [...leaving].sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))[0]
+  if (!first) return undefined
+  return [...root.querySelectorAll<HTMLElement>('[data-linger-key], section, [data-slot]')].find((element) =>
+    (first.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    && !leaving.some((item) => item.contains(element) || element.contains(item))
+    && element.getClientRects().length > 0
+    && element.getBoundingClientRect().top >= viewTop)
+}
+
 /**
  * Finished rows linger 30 s, then leave at the next idle moment: not while the pointer is over
  * `list`, not while focus is inside it (unless on the leaving card), and not within IDLE_MS of the
- * last scroll or key. A card above the view leaves at once and the scroll position takes up its
- * height; a visible one collapses for FADE_MS first (reduced motion: leaves at once). Rows are
- * found by `data-linger-key` (LingerCollapse); returns the keys collapsing now.
+ * last scroll or key. A card above the view leaves at once; a visible one fades or collapses for
+ * FADE_MS first (reduced motion: leaves at once). What the reader sees after it holds still: the
+ * scroll position takes up its height. Rows are found by `data-linger-key` (LingerCollapse);
+ * returns the keys leaving now and how.
  */
-export function useLinger(rows: readonly LingerRow[], remove: (keys: ReadonlySet<string>) => void, list: RefObject<HTMLElement | null>): ReadonlySet<string> {
-  const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set())
+export function useLinger(rows: readonly LingerRow[], remove: (keys: ReadonlySet<string>) => void, list: RefObject<HTMLElement | null>): ReadonlyMap<string, LeaveMode> {
+  const [leaving, setLeaving] = useState<ReadonlyMap<string, LeaveMode>>(() => new Map())
   const latest = useRef({ rows, remove, leaving })
   latest.current = { rows, remove, leaving }
   const activity = useRef({ at: 0, hovering: false, ownScrollUntil: 0 })
-  const anchor = useRef<{ element: HTMLElement; top: number; scroller: HTMLElement | null } | null>(null)
+  const anchor = useRef<Hold | null>(null)
   const collapses = useRef(new Set<ReturnType<typeof setTimeout>>())
+  // Scroll by however far the held element moved, back to where the reader had it.
+  const keep = (held: Hold) => {
+    if (!held.element.isConnected) return
+    const delta = held.element.getBoundingClientRect().top - held.top
+    if (delta === 0) return
+    activity.current.ownScrollUntil = Date.now() + 100
+    if (held.scroller) held.scroller.scrollTop += delta
+    else window.scrollBy(0, delta)
+  }
 
   useEffect(() => {
     const root = list.current
@@ -65,20 +95,15 @@ export function useLinger(rows: readonly LingerRow[], remove: (keys: ReadonlySet
     }
   }, [list])
 
-  // A card above the view was just removed: put the text below it back where the reader had it.
+  // A card was just removed: put the text below it back where the reader had it.
   useLayoutEffect(() => {
     const held = anchor.current
     if (!held) return
     anchor.current = null
-    if (!held.element.isConnected) return
-    const delta = held.element.getBoundingClientRect().top - held.top
-    if (delta === 0) return
-    activity.current.ownScrollUntil = Date.now() + 100
-    if (held.scroller) held.scroller.scrollTop += delta
-    else window.scrollBy(0, delta)
+    keep(held)
   })
 
-  const signature = `${rows.map((row) => `${row.key}:${row.finishedAt ?? ''}`).join('|')}#${[...leaving].join('|')}`
+  const signature = `${rows.map((row) => `${row.key}:${row.finishedAt ?? ''}`).join('|')}#${[...leaving.keys()].join('|')}`
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const lead = () => (reducedMotion() ? 0 : FADE_MS)
@@ -104,25 +129,34 @@ export function useLinger(rows: readonly LingerRow[], remove: (keys: ReadonlySet
       const scroller = root ? scrollerOf(root) : null
       const viewTop = scroller ? scroller.getBoundingClientRect().top : 0
       const gone = new Set<string>()
-      const collapse = new Set<string>()
+      const visible = new Set<string>()
       for (const row of due) {
         const element = itemOf(row.key)
         if (!element || element.getBoundingClientRect().top < viewTop || reducedMotion()) gone.add(row.key)
-        else collapse.add(row.key)
+        else visible.add(row.key)
+      }
+      const holdFor = (keys: ReadonlySet<string>): Hold | null => {
+        const below = root ? readingAnchor(root, [...keys].map(itemOf).filter((element) => element !== null), viewTop) : undefined
+        return below ? { element: below, top: below.getBoundingClientRect().top, scroller } : null
       }
       if (gone.size > 0) {
-        const leavingNow = [...gone].map(itemOf)
-        const below = [...(root?.querySelectorAll<HTMLElement>('[data-linger-key], section, [data-slot]') ?? [])]
-          .find((element) => !leavingNow.some((item) => item?.contains(element)) && element.getBoundingClientRect().top >= viewTop)
-        anchor.current = below ? { element: below, top: below.getBoundingClientRect().top, scroller } : null
+        anchor.current = holdFor(gone)
         latest.current.remove(gone)
       }
-      if (collapse.size > 0) {
-        setLeaving((keys) => new Set([...keys, ...collapse]))
+      if (visible.size > 0) {
+        // Something the reader sees follows it and the scroll can take up its height: fade in place,
+        // then leave with the scroll correction, so that stays exactly still. Otherwise (nothing
+        // visible after it, or too near the top to scroll back) collapse, so what follows slides.
+        const hold = holdFor(visible)
+        const firstTop = Math.min(...[...visible].map((key) => itemOf(key)?.getBoundingClientRect().top ?? Infinity))
+        const room = scroller ? scroller.scrollTop : window.scrollY
+        const mode: LeaveMode = hold && room >= hold.top - firstTop ? 'fade' : 'collapse'
+        setLeaving((keys) => new Map([...keys, ...[...visible].map((key) => [key, mode] as const)]))
         const done = setTimeout(() => {
           collapses.current.delete(done)
-          latest.current.remove(collapse)
-          setLeaving((keys) => new Set([...keys].filter((key) => !collapse.has(key))))
+          anchor.current = holdFor(visible)
+          latest.current.remove(visible)
+          setLeaving((keys) => new Map([...keys].filter(([key]) => !visible.has(key))))
         }, FADE_MS)
         collapses.current.add(done)
       }

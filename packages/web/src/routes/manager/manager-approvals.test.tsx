@@ -428,7 +428,7 @@ it('holds a finished card while the pointer is over the list or the reader just 
   await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
   expect(screen.getByText('Required checks are failing.')).toBeTruthy()
   await act(async () => { await vi.advanceTimersByTimeAsync(600) })
-  expect(document.querySelector('[data-slot="approval-slot"][data-leaving="true"]')).not.toBeNull()
+  expect(document.querySelector('[data-slot="approval-slot"][data-leaving]')).not.toBeNull()
   await act(async () => { await vi.advanceTimersByTimeAsync(400) })
   expect(document.querySelector('[data-slot="manager-action"]')).toBeNull()
   expect(screen.getByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
