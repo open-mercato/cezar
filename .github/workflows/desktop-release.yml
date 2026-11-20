@@ -202,10 +202,9 @@ jobs:
           releaseName: ${{ !inputs.dry_run && format('cezar desktop v{0}', needs.prepare.outputs.version) || '' }}
           releaseDraft: true
           prerelease: false
-          # The manifest every installed shell polls (plugins.updater.endpoints). Renamed below
-          # so it sits beside the installers as `desktop-latest.json`.
-          includeUpdaterJson: ${{ !inputs.dry_run && steps.signing.outputs.updater == 'true' }}
-          updaterJsonKeepUniversal: false
+          # No `latest.json` from the legs: each one read-merge-replaces the same asset, and in
+          # parallel they race (desktop-v0.1.12). The publish job writes the manifest once.
+          includeUpdaterJson: false
           # macOS without a Developer ID: sign AD-HOC (`signingIdentity: "-"`). Unsigned is not an
           # option — the linker's own signature does not seal the bundle, and macOS reports a
           # downloaded app like that as "damaged", with no way for the user to allow it. An
@@ -245,8 +244,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # Under the onboarding `test-signing` policy the signature is SignPath's self-signed test
+      # certificate, which Windows does not trust either, so a failed request (desktop-v0.1.12:
+      # a transient "Invalid URL for GitHub API") falls back to the unsigned installer with a
+      # warning. Under `release-signing` a failure stops the release.
       - name: Sign the installer with SignPath
+        id: signpath
         if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        continue-on-error: ${{ (vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing') != 'release-signing' }}
         uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -258,8 +263,17 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: ${{ env.DESKTOP_DIR }}/signed
 
+      - name: Report the unsigned Windows fallback
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true' && steps.signpath.outcome == 'failure'
+        shell: bash
+        env:
+          SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+        run: |
+          echo "::warning::SignPath ($SIGNPATH_SIGNING_POLICY) failed — the Windows installer ships UNSIGNED."
+          echo "⚠️ SignPath ($SIGNPATH_SIGNING_POLICY) failed: the Windows installer is UNSIGNED — SmartScreen will warn on install." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Put the signed installer in place
-        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true' && steps.signpath.outcome == 'success'
         shell: bash
         working-directory: ${{ env.DESKTOP_DIR }}
         env:
@@ -475,30 +489,34 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
-      - name: Rename the updater manifest and publish
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packages/desktop/scripts
+
+      - name: Write the updater manifest and publish
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
-          # tauri-action uploads `latest.json`; the shells poll `desktop-latest.json` so the name
-          # can never collide with a future cezar (CLI) manifest on the same release page.
-          if gh release download "$TAG" --repo "$REPO" --pattern latest.json --output desktop-latest.json 2>/dev/null; then
-            # An installer signed AFTER the build has a new updater signature beside it; the
-            # manifest still carries the one made for the unsigned file. Every platform entry
-            # takes the signature of the `.sig` asset that belongs to its own download.
-            mkdir sigs && gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
-            node packages/desktop/scripts/refresh-updater-manifest.mjs desktop-latest.json sigs
+          # Every updater bundle's `.sig` is on the release, re-made after any later signing, so
+          # the manifest is built from them here. The shells poll `desktop-latest.json`, a name
+          # that cannot collide with a future cezar (CLI) manifest on the same release page.
+          if [ "$HAS_UPDATER_KEY" = "true" ]; then
+            mkdir sigs
+            gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
+            node packages/desktop/scripts/build-updater-manifest.mjs desktop-latest.json sigs "$VERSION" \
+              "https://github.com/$REPO/releases/download/$TAG"
             gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"
-            gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" || true
             echo "updater manifest published"
-          elif gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -qx desktop-latest.json; then
-            # A re-run of this job alone: the first attempt already renamed it.
-            echo "updater manifest already published as desktop-latest.json"
           else
             echo "::warning::no updater manifest on $TAG — installed shells will not see this release. Is TAURI_SIGNING_PRIVATE_KEY configured?"
           fi
+          # A draft that predates this job writing the manifest still carries tauri-action's.
+          gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" 2>/dev/null || true
           gh release edit "$TAG" --draft=false --latest=false --repo "$REPO"
 
       # `releases/latest/download/…` follows the repo's "latest" release, and that is cezar's own

@@ -56,12 +56,33 @@ describe('desktop release workflow signing path', () => {
     expect(upload).toBeGreaterThan(authenticode)
   })
 
-  it('refreshes manifest signatures from release assets before publishing desktop-latest.json', () => {
-    const publishRun = step(workflow().jobs.publish.steps, 'Rename the updater manifest and publish').run
+  it('falls back to the unsigned installer only when a non-release SignPath policy fails', () => {
+    const buildSteps = workflow().jobs.build.steps
+    const signPathStep = step(buildSteps, 'Sign the installer with SignPath')
+    const fallback = step(buildSteps, 'Report the unsigned Windows fallback')
+    const replaceStep = step(buildSteps, 'Put the signed installer in place')
 
+    // desktop-v0.1.12: a transient "Invalid URL for GitHub API" from the connector held the release.
+    expect(signPathStep['continue-on-error']).toBe("${{ (vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing') != 'release-signing' }}")
+    expect(fallback.if).toContain("steps.signpath.outcome == 'failure'")
+    expect(fallback.run).toContain('GITHUB_STEP_SUMMARY')
+    expect(replaceStep.if).toContain("steps.signpath.outcome == 'success'")
+  })
+
+  it('writes desktop-latest.json once, in the publish job, never from the parallel build legs', () => {
+    const doc = workflow()
+    const tauri = step(doc.jobs.build.steps, 'Build and upload with tauri-action')
+    const checkout = step(doc.jobs.publish.steps, 'Check out repository')
+    const publishRun = step(doc.jobs.publish.steps, 'Write the updater manifest and publish').run
+
+    // Every leg read-merge-replaced the same latest.json: desktop-v0.1.12's Intel leg 404'd.
+    expect(tauri.with.includeUpdaterJson).toBe(false)
+    expect(doc.jobs.publish.steps.indexOf(checkout)).toBe(0)
+    expect(checkout.with['sparse-checkout']).toContain('packages/desktop/scripts')
     expect(publishRun).toContain("gh release download \"$TAG\" --repo \"$REPO\" --pattern '*.sig' --dir sigs")
-    expect(publishRun).toContain('node packages/desktop/scripts/refresh-updater-manifest.mjs desktop-latest.json sigs')
+    expect(publishRun).toContain('node packages/desktop/scripts/build-updater-manifest.mjs desktop-latest.json sigs "$VERSION"')
     expect(publishRun).toContain('gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"')
+    expect(publishRun.indexOf('delete-asset "$TAG" latest.json')).toBeLessThan(publishRun.indexOf('--draft=false'))
   })
 
   it('bumps the Homebrew tap only after a real publish, with a tap-scoped release-app token, and skips with a warning without one', () => {
