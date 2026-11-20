@@ -22,7 +22,7 @@ function setup(over: {
   const sent: Sent[] = [];
   const dropped: string[] = [];
   const delivered: Array<[string, string | undefined]> = [];
-  const devices: PushGrantRow[] = over.devices ?? [{ deviceId: 'phone-a', push: { grant: GRANT, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 } }];
+  const devices: PushGrantRow[] = over.devices ?? [{ deviceId: 'phone-a', push: { grant: GRANT, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, acceptsCount: true }];
   const sink = new RelayPushSink({
     enabled: () => over.enabled ?? true,
     origin: () => ORIGIN,
@@ -186,6 +186,7 @@ describe('RelayPushSink', () => {
     const grant = (deviceId: string, notifications?: PushGrantRow['notifications']): PushGrantRow => ({
       deviceId,
       push: { grant: `${GRANT}-${deviceId}`, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 },
+      acceptsCount: true,
       ...(notifications ? { notifications } : {}),
     });
     const kinds = (sent: Sent[]) => sent.map((one) => (JSON.parse(one.body) as { kind: string }).kind);
@@ -253,13 +254,15 @@ describe('RelayPushSink', () => {
       expect(sent).toHaveLength(2);
     });
 
-    it('sends 0 when everything was handled, and never to a phone whose app is open', async () => {
+    it('sends 0 when everything was handled, never to a phone whose app is open, nor to an app that cannot read it', async () => {
       vi.useFakeTimers();
       let count = 2;
       const { sink, sent, advance } = setup({
         devices: [
-          { deviceId: 'closed', push: { grant: 'g-closed', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 } },
-          { deviceId: 'open', push: { grant: 'g-open', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 } },
+          { deviceId: 'closed', push: { grant: 'g-closed', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, acceptsCount: true },
+          { deviceId: 'open', push: { grant: 'g-open', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, acceptsCount: true },
+          // An app that never said it reads count pushes would show one as an alert.
+          { deviceId: 'older-app', push: { grant: 'g-older', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 } },
         ],
         live: ['open'],
         count: async () => count,

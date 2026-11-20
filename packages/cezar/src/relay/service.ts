@@ -959,9 +959,16 @@ export class RelayService {
   // ---- the calling phone's push grant (spec R5) --------------------------------------------------
 
   /** `null` for a device with no row. `managerId` is checked by the caller, which knows the managers. */
-  async phonePush(deviceId: string): Promise<PhonePushState | null> {
+  async phonePush(deviceId: string, acceptsCount?: boolean): Promise<PhonePushState | null> {
     const device = this.devices.get(deviceId);
     if (!device) return null;
+    if (acceptsCount !== undefined) {
+      try {
+        this.devices.setAcceptsCount(deviceId, acceptsCount);
+      } catch {
+        // A read-only home sends no count pushes: the badge still refreshes when the app opens.
+      }
+    }
     const identity = pushBlocked(this.env) ? null : this.identity ?? (await this.identityStore.load().catch(() => null));
     if (!identity) return { available: false };
     const target = this.push.latestManager();

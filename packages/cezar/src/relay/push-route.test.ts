@@ -258,4 +258,16 @@ describe('/workspace/phone/signals (spec R5, stage 1)', () => {
       expect((await app.request('/api/v1/workspace/phones/CCCCCCCCCCCCCCCCCCCCCC/notifications', { ...put(PREFS), headers: { ...JSON_HEADERS, host: '127.0.0.1' } })).status).toBe(404);
     });
   });
+
+  it('remembers whether the app reads count pushes, from the query it opens with', async () => {
+    const app = makeApp();
+    const open = (query: string) => Promise.resolve(runInRelayScope({ deviceId: DEVICE }, () => app.request(`/api/v1/workspace/phone/push${query}`)));
+    const stored = () => (JSON.parse(readFileSync(join(home, 'relay', 'devices.json'), 'utf8')) as { devices: Array<{ deviceId: string; acceptsCount?: boolean }> })
+      .devices.find((row) => row.deviceId === DEVICE)?.acceptsCount;
+    expect((await open('?accepts=count')).status).toBe(200);
+    expect(stored()).toBe(true);
+    // An older app says nothing, and loses them again.
+    expect((await open('')).status).toBe(200);
+    expect(stored()).toBeUndefined();
+  });
 });

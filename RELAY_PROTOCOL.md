@@ -337,6 +337,9 @@ paired-server list.
     sends at most one every 10 minutes, and after a 429 sends the then-current count, with a new id,
     once `Retry-After` has passed. The relay remembers a count push's `id` for an hour, so an id is
     never reused. A relay that predates `count` answers 400; cezar then stops sending count pushes until it restarts.
+  - **Who gets one**: only a phone whose app said it reads them, with `GET /api/v1/workspace/phone/push?accepts=count`
+    on open. An app that predates `count` builds a notification from every FCM data message, so it would show
+    one as an alert; cezar sends it none.
 
 | Answer | Meaning | cezar does |
 | --- | --- | --- |

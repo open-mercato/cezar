@@ -91,6 +91,10 @@ export const phonePushStateSchema = z.object({
 });
 export type PhonePushState = z.infer<typeof phonePushStateSchema>;
 
+/** `GET /workspace/phone/push?accepts=count`: the app reads `kind: "count"` pushes (spec
+ *  2026-11-20-phone-notifications-inbox). An app that does not say so gets none: it would show them. */
+export const phonePushQuerySchema = z.object({ accepts: z.string().max(200).optional() });
+
 export const setPhonePushGrantInputSchema = z.object({
   grant: z.string().min(1).max(4096),
   grantId: z.string().regex(/^[A-Za-z0-9_-]{22}$/),

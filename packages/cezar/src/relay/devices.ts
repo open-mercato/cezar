@@ -29,6 +29,8 @@ const deviceSchema = z.looseObject({
   push: z.object({ grant: z.string().min(1).max(4096), grantId: b64u22, expiresAt: z.number().int() }).optional().catch(undefined),
   // Absent means the defaults (spec 2026-11-20-phone-notifications-inbox); a bad value reads as absent.
   notifications: phoneNotificationPrefsSchema.optional().catch(undefined),
+  // The app said it reads silent count pushes; one that has not would show them as alerts.
+  acceptsCount: z.boolean().optional().catch(undefined),
 });
 export type RelayDevice = z.infer<typeof deviceSchema>;
 
@@ -133,6 +135,15 @@ export class RelayDevices {
     device.push = push;
     this.write();
     return true;
+  }
+
+  /** Written only when it changes: the phone reports it on every open. */
+  setAcceptsCount(deviceId: string, acceptsCount: boolean): void {
+    const device = this.get(deviceId);
+    if (!device || (device.acceptsCount ?? false) === acceptsCount) return;
+    if (acceptsCount) device.acceptsCount = true;
+    else delete device.acceptsCount;
+    this.write();
   }
 
   setNotifications(deviceId: string, notifications: PhoneNotificationPrefs): boolean {

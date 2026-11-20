@@ -20,6 +20,8 @@ export interface PushGrantRow {
   push?: { grant: string; grantId: string; expiresAt: number } | undefined;
   /** Absent means the defaults (spec 2026-11-20-phone-notifications-inbox). */
   notifications?: PhoneNotificationPrefs | undefined;
+  /** The app reads `kind: "count"`; an older one would show it as an alert, so it gets none. */
+  acceptsCount?: boolean | undefined;
 }
 
 export type PushPost = (url: string, init: { headers: Record<string, string>; body: Uint8Array }) => Promise<{ status: number; retryAfter?: number }>;
@@ -171,7 +173,7 @@ export class RelayPushSink {
     const due: Array<{ device: PushGrantRow; count: number }> = [];
     for (const device of this.deps.devices()) {
       // An open app reads its counts itself; an expired grant would only earn a 410.
-      if (!device.push || device.push.expiresAt <= now / 1000 || this.deps.live(device.deviceId)) continue;
+      if (!device.acceptsCount || !device.push || device.push.expiresAt <= now / 1000 || this.deps.live(device.deviceId)) continue;
       const count = badgeCount(await this.deps.count(prefsOf(device).badge).catch(() => NaN));
       if (Number.isNaN(count) || this.told.get(device.deviceId) === count) continue;
       const notBefore = this.countNotBefore.get(device.deviceId) ?? 0;

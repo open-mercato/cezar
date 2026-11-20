@@ -7,7 +7,7 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
-import { DEFAULT_PHONE_NOTIFICATION_PREFS, setPhoneNotificationsInputSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_NOTIFICATION_PREFS, phonePushQuerySchema, setPhoneNotificationsInputSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
 import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
 import { createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
@@ -9497,10 +9497,11 @@ export function createApp(deps: ServerDeps) {
       const notifications = phonePairing.setPhoneNotifications(deviceId, c.req.valid('json'));
       return notifications ? c.json({ notifications }) : c.json(PHONE_NOT_FOUND, 404);
     })
-    .get('/workspace/phone/push', async (c) => {
+    .get('/workspace/phone/push', queryZodValidator(phonePushQuerySchema), async (c) => {
       const deviceId = relayDeviceId();
       if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
-      const state = await phonePairing.phonePush(deviceId);
+      const accepts = c.req.valid('query').accepts?.split(',') ?? [];
+      const state = await phonePairing.phonePush(deviceId, accepts.includes('count'));
       return state ? c.json(withLiveManager(state)) : c.json(PHONE_NOT_FOUND, 404);
     })
     .put('/workspace/phone/push', jsonZodValidator(setPhonePushGrantInputSchema), async (c) => {

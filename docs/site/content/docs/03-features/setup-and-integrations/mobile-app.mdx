@@ -39,6 +39,16 @@ Your computer's avatar sits in the cockpit's header: a circle with its initials,
 
 A notification names the computer that needs you, and tapping it opens that computer. The app icon's badge shows the total across your computers.
 
+## What needs you
+
+**Now** is the one list of what waits on you: questions, approvals, tasks that need you, tasks ready for review, failed tasks and important manager messages. The Now tab's badge counts it, and each computer's share of the app icon's badge is the same list. **This project** shows the project's own tasks plus the managers connected to it; **All** shows everything on that computer, grouped by manager and project. Answer a one-question card or approve a merge in place, or **Mark read** a message, a review or a failure. **Mark all read** never answers a question or decides an approval.
+
+When you handle something anywhere, on the computer or another phone, it leaves the list, and the app's count follows the next time it opens.
+
+## Notification settings
+
+On the phone, **Settings → Notifications → This phone** chooses which kinds send a push, which count on the icon, and quiet hours. On the computer, the same settings sit under **Settings → Connect a phone → Notifications**, one set per phone. They are kept on the computer: the relay never learns what a push is about. By default everything pushes, and failed tasks do not count on the icon. During quiet hours no alert arrives; one comes when they end if something still waits.
+
 The server must run in hosted mode. Links that leave your server open in the system browser.
 
 > **Good to know**: Plain `http://` is refused. Without a public server, reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. A temporary `trycloudflare.com` tunnel loads the cockpit, but live updates do not arrive through it. Both apps build in CI, and test builds go out through TestFlight and Google Play internal testing.
