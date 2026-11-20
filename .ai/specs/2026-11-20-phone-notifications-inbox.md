@@ -1,7 +1,18 @@
 # Phone notifications: a stuck icon badge, and a place to handle what it counts
 
-Status: proposal, waiting for the owner's pick (design page: `2026-11-20-phone-notifications-inbox.html`
-in the task's Assets). Nothing is implemented.
+Status: accepted 2026-11-20. Design page: `2026-11-20-phone-notifications-inbox.html`, beside this file.
+
+## Decisions (owner, 2026-11-20)
+
+| Question | Decision |
+| --- | --- |
+| Where the list lives | **Variant D**: the Now tab is the one list, plus C's per-computer count chips on *Your cezars*. No new tab. |
+| Review-ready tasks | They count toward the icon, with their own switch, **on** by default. |
+| Relay | `kind: "count"` as in § Relay change, built in rome (task `rome/a753ea6e`). |
+| Settings | A full page per cezar: which kinds push, which count on the icon, and quiet hours, stored on the computer. |
+| Fix first | B1–B3 ship separately (task `cezar/5aeb1ea2`). The D work builds on main and does not repeat them. |
+
+Default kinds are all on, for both push and icon, except **Failed tasks**, which push but do not count on the icon.
 
 ## Problem
 
@@ -165,7 +176,8 @@ no new navigation, and closes the gap that Now's "Needs you" counts different th
 
 Where the per-cezar **Notify me** switch is today (*Your cezars → cezar → Notifications*), a sub-page:
 
-- **Push me for**: Questions, Approvals, Tasks that need me, Failed tasks, Important manager messages.
+- **Push me for**: Questions, Approvals, Tasks that need me, Tasks ready for review, Failed tasks, Important
+  manager messages.
 - **Count on the icon**: the same kinds (defaults: all but failed tasks).
 - **Quiet hours** (cheap, server-side): pushes held; a single push at the end if anything is still waiting;
   `count` pushes still go out.
@@ -174,9 +186,11 @@ The choice must live on the server, because the relay carries no kind: the phone
 `PUT /api/v1/workspace/phone/push` (an added optional `prefs` object, stored per device in `devices.json`).
 Per-manager "Notify me when important" stays as it is and still gates `message`.
 
-## Open questions for the owner
+## Delivery
 
-1. Variant A, B, C or D (recommended: D with C's native chips).
-2. Ship the *Fix first* PR now, ahead of the rest?
-3. Do failed tasks count on the icon by default?
-4. Quiet hours in the first cut, or later?
+1. Spec (this PR).
+2. Fix first: task `cezar/5aeb1ea2`.
+3. Relay `kind: "count"`: task `rome/a753ea6e`. cezar's sender lands once the relay accepts the kind.
+4. D, in the code PR: the server attention list and its route; Now's Needs you reads it, with a From-managers
+   group and the This project · All switch; the Now tab's count badge; the per-phone prefs (push kinds, icon kinds,
+   quiet hours) on `PUT /api/v1/workspace/phone/push` and their settings page; the count chips on *Your cezars*.
