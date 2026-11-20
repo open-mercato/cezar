@@ -3,7 +3,7 @@
 Extends `2026-10-31-managers.md` (§ Safety, § `cez manager`), `2026-11-12-manager-connectors.md`,
 `2026-11-17-questions-inbox.md` and `2026-11-19-manager-deactivate.md`. Design page:
 `2026-11-20-manager-admin-actions.html` (card mockups, desktop and phone, and the future policy screen).
-Status: **design, awaiting approval**. No code yet.
+Status: **design approved** (2026-11-20, decisions in § 7). No code yet; phase 0 next.
 
 ## Problem
 
@@ -34,9 +34,14 @@ Today each proposal type has its own command, its own `ManagerActionRequest` var
 4. **Every decision goes through the existing `decision` route.** Nothing a manager's tools can
    reach performs a change. Auto-approval, when it arrives, calls the same `decide` path with
    `decidedBy: policy`. It is not a second path.
-5. **An approval never grants more than the approving device could do itself.** An approval from a
-   phone applies the change with the phone's narrowed capabilities (`narrowForRelay`), not the
-   loopback host's.
+5. **A paired phone may approve any change card** (decided 2026-11-20). The card is the authority:
+   the server stamped its rows and pin, the phone proves it showed them (`seen`, § 2.2), and the
+   change applies with the host's capabilities, as it does for a desktop approval. What the phone
+   could not do *directly* (unpair a phone, add an account) it can approve as a card. Limits:
+   - handoff cards still need their screen, and a screen that exists only on the computer says
+     "Open on your computer";
+   - pairing a new phone stays physical.
+   The audit entry records `device: 'phone'`.
 6. **Everything is audit-logged**, with undo where the registry declares one.
 7. **v1 always asks.** The policy model, its evaluation hook and its hard ceilings ship in the code
    (§ Auto-approval). The rule list stays empty, and no route can write it until phase 4.
@@ -86,12 +91,12 @@ A risk level belongs to the op, never to the card: a manager cannot argue a dele
 |---|---|---|---|---|---|---|
 | `project.tags` | Set a project's tags | `PATCH /projects/:id {tags}` | L | change | full | 1 |
 | `project.max-parallel` | Per-project parallel limit | `PATCH /projects/:id {maxParallel}` | M | change | full | 1 |
-| `project.add` | Register an existing folder | `POST /projects {root}` | H* | change | full (unregister) | 3 |
-| `project.clone` | Clone from GitHub and register | `POST /projects/checkout` | H* | change | partial (unregister; the clone stays on disk) | 3 |
-| `project.create` | New repository, optionally on GitHub | `POST /projects/create` | H* | change | none (the GitHub repository stays) | later |
-| `project.git-init` / `project.publish-github` | Initialise git, publish to GitHub | `POST /projects/:id/git-init`, `/publish-github` | H* | change | none | later |
+| `project.add` | Register an existing folder, and attach it to the proposer (§ 3.1) | `POST /projects {root}` + manager attach | H* | change | full (unregister and detach) | 3 |
+| `project.clone` | Clone from GitHub, register, attach | `POST /projects/checkout` | H* | change | partial (unregister and detach; the clone stays on disk) | 3 |
+| `project.create` | New repository (optionally on GitHub, in a named owner or org), register, attach | `POST /projects/create` | H* | change | partial (unregister and detach; the GitHub repository and the folder stay) | 3 |
+| `project.git-init` / `project.publish-github` | Initialise git, publish to GitHub | `POST /projects/:id/git-init`, `/publish-github` | H* | change | none | 3 |
 | `project.remove` | Unregister. Files stay; refused while tasks run | `DELETE /projects/:id` | H* | change | partial (re-add; open tasks and the workspace's per-project settings are not restored) | 3 |
-| `project.rename` | **No such route exists.** A project's name is its folder name | — | — | — | — | needs a `label` field first (§ 7 Q1) |
+| `project.rename` | Set a display label. **New**: an optional `label` on the registry entry, shown wherever the name is (the folder name stays the fallback and the id never changes). Users get the same field in Settings → Project → General | `PATCH /projects/:id {label}` (new field) | L | change | full | 1 |
 
 ### 1.3 Project settings (`PUT /p/:id/config`, one op per field group; each is a one-field PUT)
 
@@ -228,9 +233,10 @@ There is **no skill install or delete route**: skills arrive through repositorie
 | `phone.pair`, `relay.account`, `relay.address`, pairing approve/deny | Physical pairing, an email link, legal terms, or unpairing every phone | — | handoff | — | 3 |
 | `phone.push` | Phone-only grant | — | never | — | — |
 
-The phone routes refuse requests that come *from* a phone (`requirePhones` 403). Rule 5 keeps that:
-a phone may approve a `phone.rename` card only if the phone could rename itself. Today it cannot,
-so the card says "Approve on your computer".
+The phone routes refuse requests that come *from* a phone (`requirePhones` 403). A card is
+different (rule 5): a phone may approve `phone.rename` or `phone.remove`, and the decision route
+applies it through the host. A phone can never approve its own removal: that card says "Approve on
+another device", or the phone would lose its pairing mid-decision.
 
 ### 1.11 Worktrees and disk
 
@@ -340,7 +346,7 @@ cez-manager propose project-config.default-models --project meblohand --set clau
 user taps Approve (desktop or phone)
   → decision {approve, seen: pin}
   → engine.decide: re-read scope, access, adminAccess; plan again and compare the pin (refuse if the state moved)
-      → apply with the decider's capabilities (rule 5)
+      → apply with the host's capabilities, desktop or phone (rule 5)
       → audit entry; settle 'done' or 'failed'; note to the manager
 ```
 
@@ -369,15 +375,27 @@ These hold in v1 and continue to hold with auto-approval.
 
 - **New `Manager.adminAccess?: 'none' | 'projects' | 'workspace'`** is set only in the cockpit. The
   default (absent) is `projects`:
-  - `projects`: project-scope ops on its **write** projects only;
+  - `projects`: project-scope ops on its **write** projects, plus **bringing in new projects**
+    (`project.create`, `project.clone`, `project.add`), each attached to itself (below);
   - `workspace`: also workspace and manager ops;
   - `none`: no admin ops.
   A read-only project never admits an admin op, matching today's rule that read-only refuses
   proposals.
+- **New projects join their proposer: the one sanctioned self-widening** (decided 2026-11-20). A
+  project op's `attachToSelf` param defaults to true. The card then carries one more row,
+  "Scout's projects: meblohand, cezar → meblohand, cezar, **shop** (write)", so the widening is shown
+  on the card that causes it. One approval registers the project and attaches it. Example: "create a
+  repo `shop` in org xyz" proposes one `project.create` card: GitHub repository, local clone,
+  registration and attach. The carve-out is narrow:
+  - it applies only to a project that did not exist in the registry before this card (an existing
+    project still needs `manager.projects`, which refuses for self);
+  - the access granted is at most the proposer's default access;
+  - it is pinned to ask, and never auto-approved.
+  A manager connected to `all` projects gets the project anyway, and that row is omitted.
 - **Ops on any manager's permissions** (`manager.projects`, `.access`, `.connectors`,
   `.shell-allow`, `.cancel-any`, `.task-agents`, `.admin-access`, `.create`) are always H and pinned
-  to ask. `manager.admin-access` and every widening op refuse when the target is the proposer itself.
-  Narrowing itself is allowed but still asks.
+  to ask. `manager.admin-access` and every widening op refuse when the target is the proposer itself;
+  the only exception is a new project joining it, above. Narrowing itself is allowed but still asks.
 - **`manager.create` is capped by the proposer.** The new manager's projects, access, connectors and
   adminAccess must each be a subset of the proposer's own. Otherwise the proposal refuses, saying
   which grant exceeds.
@@ -473,7 +491,7 @@ task's final message) and the model proposes or performs something.
    - anything not provenance `chat`;
    - anything high or pinned;
    - anything without full undo.
-   The user can widen provenance per rule later (§ 7 Q6), but never past pinned ops.
+   Decided: chat only (§ 7). No rule can cover follow-up, job or watch turns.
 6. **Bursts are capped**:
    - at most 10 admin proposals per turn (the 11th refuses: "propose fewer changes at once");
    - at most 20 auto-approvals per manager per day, then the policy pauses itself and says so
@@ -493,8 +511,9 @@ registry fenced only by the client would be the same gap at scale.
   documented gap, not a new one. A task a manager starts has a full shell, as today. Auto-approval
   (phase 4) is therefore offered **only for managers on fenced runners**, and the settings screen
   says why.
-- A phone's approval is bounded by what the phone could do (rule 5), so a few cards read "Approve on
-  your computer".
+- A phone approval applies with the host's capabilities (rule 5), so a stolen, still-paired, unlocked
+  phone can approve any waiting card. This is the same exposure as that phone's chat today. Removing
+  the phone (Settings → Connect a phone) cuts it off, and the audit log shows which device decided.
 
 ## 4. Auto-approval: designed now, built in phase 4
 
@@ -598,8 +617,8 @@ The other three examples are:
 
 The same card, compact, in the chat. A tap opens the existing bottom sheet: the title, the
 before → after rows stacked vertically (label, old struck through, new), the provenance line,
-the reason, and a full-width Approve button above Reject. A card the phone may not approve (rule 5)
-shows "Approve on your computer" in place of Approve and stays pending. Handoff cards whose screen
+the reason, and a full-width Approve button above Reject. Every change card is approvable from the
+phone (rule 5); the one exception is the phone's own removal. Handoff cards whose screen
 exists on the phone (account sign-in through the relay, notifications) open it. The others say
 "Open on your computer". The auto notice is one line with Undo.
 
@@ -626,11 +645,11 @@ exists on the phone (account sign-in through the relay, notifications) open it. 
 | Phase | Ships | Risk exposure |
 |---|---|---|
 | **0: foundation** (no user-visible change except audit) | Registry; the four existing types moved onto it with wire shapes unchanged; turn token; `rename` and `automation` moved behind server-checked tool routes; `admin-ops` capability route and `propose --help`; audit log for existing actions; the `autoApprove` schema plus `evaluate` returning `ask`; the `seen` pin on decisions; Change history (read-only list) | none new |
-| **1: low and medium project and workspace settings** | `adminAccess` setting (default `projects`). Ops: project tags and max parallel; project config (runner, models, base branch, review gate, task workspace, retention, max parallel); workspace resources, retention defaults, task and agent defaults, branding; `account.plan-usage`; automation pause and delete; skills refresh; worktrees reclaim and prune; archive finished; `manager.rename`. Undo from cards and history | L/M plus two pinned H (automation delete, which has undo) |
+| **1: low and medium project and workspace settings** | `adminAccess` setting (default `projects`). Ops: project tags, max parallel and label (`project.rename`, new field); project config (runner, models, base branch, review gate, task workspace, retention, max parallel); workspace resources, retention defaults, task and agent defaults, branding; `account.plan-usage`; automation pause and delete; skills refresh; worktrees reclaim and prune; archive finished; `manager.rename`. Undo from cards and history | L/M plus two pinned H (automation delete, which has undo) |
 | **2: prompt text, accounts, handoffs** | Handoff cards (account sign-in, secrets, notifications, telemetry consent); system prompt, global instructions, branch naming, team skills and skill repos (pinned, full text and diff); workflows save and delete; jobs edit and pause; account select, fallback and rename; provider enabled; manager notify, cadence, follow-up, agent and quick prompts; phone rename, keep awake, computer name | adds H, all pinned |
-| **3: structure and permissions** | Project add, clone and remove; account add and remove; manager create, deactivate (others), projects, access, connectors, shell allow, cancel-any and task agents (widening pinned, never self); tracker association; phone remove; folders; delete-expired and orphan removal; agent-config handoff | the high end |
+| **3: structure and permissions** | Project create (GitHub, in a named org), clone, add (each joining its proposer), git-init, publish and remove; account add and remove; manager create, deactivate (others), projects, access, connectors, shell allow, cancel-any and task agents (widening pinned, never self); tracker association; phone remove; folders; delete-expired and orphan removal; agent-config handoff | the high end |
 | **4: auto-approval** | Settings UI, rule writes, `evaluate` live, notices, the Recent automatic changes section, undo-burst pause | only L/M, chat, full-undo, fenced runners |
-| later | Project create, git-init and publish; webhooks; self-update; config import; lifecycle scripts; start-app; provider update; `manager.delete`; automation import | |
+| later | Webhooks; self-update; config import; lifecycle scripts; start-app; provider update; `manager.delete`; automation import | |
 
 Each phase has its own PR, tests and BACKWARD_COMPATIBILITY.md §2 rows for new routes.
 
@@ -645,8 +664,11 @@ Each phase has its own PR, tests and BACKWARD_COMPATIBILITY.md §2 rows for new 
   a watch turn's token cannot propose.
 - **Pin**: the state changes between proposal and approval, so the approval refuses. An undo after
   another change refuses.
-- **Rule 5**: an approval from a relay device applies with phone capabilities. A phone-forbidden op
-  shows "Approve on your computer" and the server refuses an approval from the phone.
+- **Rule 5**: an approval from a relay device applies a phone-forbidden op (for example
+  `phone.rename`) through the host, records `device: 'phone'`, and refuses the phone's own removal.
+- **New project joins its proposer**: `project.create`/`clone`/`add` attach the new project to the
+  proposer, and the card shows that row. An already-registered project refuses `attachToSelf`.
+  Detach on undo.
 - **Old client**: an approve without `seen` on an `admin` card is a 409.
 - **Legacy cards**: merge, enable, job and connector proposals behave byte-for-byte as before
   (existing tests stay green, untouched).
@@ -657,24 +679,16 @@ Each phase has its own PR, tests and BACKWARD_COMPATIBILITY.md §2 rows for new 
 - **Dry run**: `CEZ_DRY_RUN=1` mock turn proposes one `admin` card when asked to change a model (e2e
   plus screenshots, desktop and phone).
 
-## 7. Open questions
+## 7. Decisions (2026-11-20, owner)
 
-1. **Project rename.** There is no route and no field; a project's name is its folder name. Add a
-   display `label` to the registry entry (shown everywhere the name is), or leave rename out?
-2. **Default `adminAccess`.** Absent = `projects` means every existing manager can *propose* setting
-   changes for its write projects on upgrade (all still ask). Alternatives: default `none` (opt-in
-   per manager), or `workspace` for managers connected to all projects.
-3. **Manager-to-manager changes.** Should a manager be able to propose changes to *other* managers
-   at all (create, deactivate, narrow), or only to itself (rename, cadence, narrowing)?
-4. **Deleting.** Automation and workflow deletes ship in phases 1 and 2 with stamped-definition undo.
-   Should project removal, account removal and phone unpairing be offered at all, or stay
-   human-only?
-5. **Undo window.** 30 days for full undo, or shorter (7 days, like the worktree idle default)?
-6. **Provenance for auto-approval.** Phase 4 auto-approves only changes asked for in chat. Should a
-   rule later be allowed to cover follow-up turns too (for example "pause an automation that failed
-   3 times")? That is the main injection exposure, which is why it is off in this design.
-7. **Phone approvals of workspace changes.** Rule 5 makes some cards computer-only. Is that
-   acceptable, or should a phone approval of a stamped, pinned card be trusted further than a
-   phone's own direct actions?
-8. **Spec landing.** This spec lands alone as a `docs(specs)` PR (precedent: #1893), and phase 0
-   follows on approval. OK?
+1. **Project rename**: add an optional display `label` (phase 1), for users and managers alike.
+2. **Default `adminAccess`**: `projects`, which also covers bringing in new projects (create on
+   GitHub, clone, add) that join the proposing manager (§ 3.1). Example: "create a repo in org xyz"
+   creates the repository, registers the project and adds it to this manager, on one card.
+3. **Manager-to-manager changes**: yes, as cards. Always asks, and capped by the proposer's own
+   permissions.
+4. **Deleting**: project removal, account removal and phone unpairing are offered in phase 3.
+5. **Undo window**: 30 days.
+6. **Auto-approval provenance**: chat only.
+7. **Phone approvals**: trust the phone. A paired phone may approve any change card (rule 5).
+8. **Spec landing**: as a `docs(specs)` PR, ready for review.

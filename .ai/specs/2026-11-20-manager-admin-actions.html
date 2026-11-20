@@ -166,7 +166,7 @@ th{color:var(--soft-foreground);font-weight:500;font-size:12px}
   </div>
 
   <h2><span class="num">3</span>CezarBot on the phone</h2>
-  <p class="sub">The card in the chat, the existing approval bottom sheet with before → after rows stacked, a card only the computer may approve (rule 5), and the automatic notice.</p>
+  <p class="sub">The card in the chat, the existing approval bottom sheet with before → after rows stacked, a new project that joins its manager (approvable from the phone, rule 5), and the automatic notice.</p>
   <div class="phones">
     <div class="phone">
       <div class="bar">← Scout <span class="soft" style="margin-left:auto">⚙</span></div>
@@ -203,12 +203,17 @@ th{color:var(--soft-foreground);font-weight:500;font-size:12px}
     <div class="phone">
       <div class="bar">← Scout</div>
       <div class="body">
+        <div class="bubble">create a repo shop in org xyz and take care of it</div>
         <div class="card high">
-          <div class="head"><span class="ico">📱</span>Remove phone "Old Pixel"<span class="chip h">High</span></div>
-          <div class="prov"><span class="own">On its own</span> after a watch noticed it offline 40 days</div>
-          <div class="small muted">Unpairs it. Pairing again needs the phone.</div>
-          <div class="note" style="margin-top:8px">A phone can't unpair phones, so this approval happens on your computer.</div>
-          <button class="btn block" disabled>Approve on your computer</button>
+          <div class="head"><span class="ico">＋</span>Create project shop<span class="chip h">High · always asks</span></div>
+          <div class="prov">Asked in chat, after your message <q>create a repo shop…</q></div>
+          <div class="rows">
+            <div class="row"><span class="k xs">GitHub repository</span><span class="a">xyz/shop · private</span></div>
+            <div class="row"><span class="k xs">Folder</span><span class="a">~/code/shop</span></div>
+            <div class="row"><span class="k xs">Scout's projects</span><span><span class="b">meblohand, cezar</span> → <span class="a">meblohand, cezar, shop (write)</span></span></div>
+          </div>
+          <p class="note">Partial undo: unregisters and detaches; the GitHub repository and folder stay.</p>
+          <button class="btn primary block">Approve</button>
         </div>
       </div>
     </div>
