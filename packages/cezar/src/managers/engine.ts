@@ -485,13 +485,13 @@ const judgedFields = ({ important, headline, ask }: Judged) => ({
   ...(ask ? { ask } : {}),
 });
 
-/** A question always waits on the user, so it interrupts like an approval does. */
 /** A task report's push kind; any other headline is an important message. */
 const reportKind = (fields: unknown): AttentionKind => {
   const state = (fields as { taskReport?: { state?: string } } | undefined)?.taskReport?.state;
   return state === 'failed' ? 'failed' : state === 'needs-you' ? 'task' : 'message';
 };
 
+/** A question always waits on the user, so it interrupts like an approval does. */
 const alertBody = ({ important, headline, ask, text }: Judged): string | undefined =>
   important ? headline ?? onePlainLine(text) : ask ? 'Has a question for you' : undefined;
 

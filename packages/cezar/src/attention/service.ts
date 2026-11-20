@@ -2,6 +2,12 @@ import type { AttentionResponse } from '@open-mercato/cezar-contract';
 
 /** A burst of run, manager and question events is one recount. */
 export const ATTENTION_SETTLE_MS = 2_000;
+/**
+ * How long a read is reused with no poke in between. Health is polled and every phone's push counts,
+ * and a read parses each cold project's `runs.json`; only another process changes those, so a short
+ * age bounds how late they show.
+ */
+export const ATTENTION_MAX_AGE_MS = 10_000;
 
 export interface AttentionService {
   list(): Promise<AttentionResponse>;
@@ -13,15 +19,38 @@ export interface AttentionService {
   dispose(): void;
 }
 
-export function createAttentionService(deps: { read: () => Promise<AttentionResponse>; settleMs?: number }): AttentionService {
+export function createAttentionService(deps: {
+  read: () => Promise<AttentionResponse>;
+  settleMs?: number;
+  maxAgeMs?: number;
+  now?: () => number;
+}): AttentionService {
   const listeners = new Set<(list: AttentionResponse) => void>();
+  const now = deps.now ?? Date.now;
   let revision: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running: Promise<void> | undefined;
   let disposed = false;
+  // A poke bumps the generation: a read started before it is never cached or shared after it.
+  let generation = 0;
+  let cached: { list: AttentionResponse; at: number; generation: number } | undefined;
+  let inflight: { promise: Promise<AttentionResponse>; generation: number } | undefined;
+
+  const fresh = (): Promise<AttentionResponse> => {
+    if (inflight && inflight.generation === generation) return inflight.promise;
+    const started = generation;
+    const promise = deps.read().then((list) => {
+      if (started === generation) cached = { list, at: now(), generation: started };
+      return list;
+    }).finally(() => {
+      if (inflight?.promise === promise) inflight = undefined;
+    });
+    inflight = { promise, generation: started };
+    return promise;
+  };
 
   const recount = async () => {
-    const list = await deps.read().catch(() => undefined);
+    const list = await fresh().catch(() => undefined);
     if (!list || disposed) return;
     // The first recount after a restart is news too: a phone may hold a count from before it.
     const changed = list.revision !== revision;
@@ -31,10 +60,13 @@ export function createAttentionService(deps: { read: () => Promise<AttentionResp
 
   return {
     async list() {
-      return deps.read();
+      if (cached && cached.generation === generation && now() - cached.at < (deps.maxAgeMs ?? ATTENTION_MAX_AGE_MS)) return cached.list;
+      return fresh();
     },
     poke() {
-      if (disposed || timer) return;
+      if (disposed) return;
+      generation += 1;
+      if (timer) return;
       timer = setTimeout(() => {
         timer = undefined;
         running = recount().finally(() => { running = undefined; });
