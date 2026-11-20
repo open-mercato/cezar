@@ -500,6 +500,21 @@ describe('the Questions page', () => {
     expect(count()).toBe('1')
   })
 
+  it('a card closed elsewhere during its undo window shows why, not Undo', async () => {
+    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
+    const client = renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(within(card('Design')).getByRole('button', { name: 'Undo' })).toBeTruthy()
+    const [design] = data.open
+    data = { ...data, open: data.open.slice(1), closed: [{ ...design!, closed: { reason: 'replaced', at: new Date().toISOString(), replacedBy: 'm9' } }] }
+    await act(async () => { await client.invalidateQueries({ queryKey: questionKeys.all }) })
+    await waitFor(() => expect(card('Design').querySelector('[data-slot="question-outcome"]')?.getAttribute('data-reason')).toBe('replaced'))
+    expect(within(card('Design')).queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
   it('a dismissal that fails gives the manager its “Waiting for N answers” back', async () => {
     managerList = [managerFixture({ pendingQuestions: 1 })]
     data.open = [managerItem('m1', 'Design')]

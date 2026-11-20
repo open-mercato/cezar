@@ -298,8 +298,10 @@ export function QuestionsRoute() {
     const row = finishedByKey.get(item.key)
     const entry = dismissing.get(item.key)
     // The live counts can take a card off the list while its dismissal is pending (questions.ts,
-    // applyQuestionCounts): it still shows Undo until the dismissal lands.
-    if (row && !(entry && row.outcome.kind === 'closed' && !row.closed)) {
+    // applyQuestionCounts): it still shows Undo until the dismissal lands. A card closed for
+    // another reason is in the closed list already and shows why.
+    const closedElsewhere = query.data?.closed.some((closed) => closed.key === item.key) === true
+    if (row && !(entry && row.outcome.kind === 'closed' && !row.closed && !closedElsewhere)) {
       const closed = row.closed ?? query.data?.closed.find((entry) => entry.key === item.key)?.closed
       return { kind: 'finished', row: closed ? { ...row, closed } : row, fading: leaving.has(item.key), leaving: leaving.get(item.key) }
     }
