@@ -27,7 +27,7 @@ Risks: Cleanup is destructive. Reclaimed/native resume history, multiple account
 - [x] Triage and atomic issue claim
 - [x] Root-cause brief
 - [x] Implementation and red/green proof — original source fails both integration regressions; cleanup suites pass 25 tests; full targeted resume suite passed 60 tests before added guards.
-- [ ] Five configured npm gates — typecheck passed; remaining ordered gates running.
-- [ ] PR, review, labels, release
+- [x] Five configured npm gates — typecheck;17,656 Vitest tests (8 skips);54 core tests; build/check:pack;35 package tests all pass on final code40144564a.
+- [x] PR and code review — #2341; latest-code CI/CodeQL green, no remaining actionable findings. Automerge eligible; human QA still required. Claim release is recorded on the PR.
 
-Status: in-progress; publication stays draft until verification completes.
+Status: automated implementation and validation complete. PR stays draft/needs-qa for required human lifecycle QA.
