@@ -43,14 +43,16 @@ PR: #2364
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Complete ordered root gate and docs/resolution/security/runtime validation
+- [x] 2.1 Complete ordered root gate and docs/resolution/security/runtime validation — 73a9e742d
 
 ### Phase 3: Review and publication
 
-- [ ] 3.1 Complete authoritative independent review and any fixes
+- [x] 3.1 Complete authoritative independent review and any fixes — 73a9e742d
 - [ ] 3.2 Finalize evidence, labels, deduplication and exact owned lock release
 
 ## Verification so far
 BaselineNext16.4.2: new regression suite fails5/10 with5controls passing. Patched16.4.5:10/10 new cases and7/7 existing compression cases pass. Reproduces SVG/ftyp bypass, Edge cookie-header disclosure and gzip response-framing flaws; no claim of independently reproducing the other four cache findings. Docs check/typecheck/build,17security cases,3preview pages+3script assets, npm ls and audit(0vulnerabilities) pass. Installed and all locked Next copies16.4.5 are outside all7source intervals. Only Next/env/SWC patch entries change; root lock unchanged. Node24/Linux; no separateNode20/Windows/macOS/browser QA claim.
 
 Initial configured root gate attempted in order: typecheckPASS; npmtest hit900s timeout after an unrelated existing automation lock-reclaim assertion failure; coreunit54PASS; build/checkpackPASS; packagePASS. Source is unchanged at the failure and existingPR2193 describes the same race. No gate pass is claimed yet; Phase2 stays unchecked until bounded full revalidation. No audit exception or gate bypass. Independent review must complete validation before readiness; retain draft otherwise. All underlying evidence is preserved in task Assets/resumed, with exact commands/results summarized on the PR.
+
+Final validation/review: all five ordered gates independentlyPASS (17,818unit/component tests+8existing skips,54core,35package). Docs17security and build/typecheck/check/runtime pass. Authoritative independentapprove review5998249708; native author approval is not eligible. Full evidence: .ai/runs/2026-11-20-dependabot-next16-4-5-verification.md.
