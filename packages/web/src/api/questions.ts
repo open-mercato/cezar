@@ -112,7 +112,14 @@ export function useQuestionsSubscription(): void {
 export function applyQuestionCounts(queryClient: QueryClient, counts: QuestionCounts, listChanged = false): void {
   const before = queryClient.getQueryData<QuestionsResponse>(questionKeys.all)
   if (!listChanged && before && before.counts.live === counts.live && before.counts.older === counts.older) return
-  queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => (data ? { ...data, counts } : data))
+  queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => {
+    if (!data) return data
+    // The server stopped counting answers still in flight here: they leave the list in the same
+    // write, or the badge would subtract them twice for a frame (and settleQuestion again after).
+    let dropped = Math.max(0, data.counts.live - counts.live)
+    const gone = new Set(data.open.filter((row) => !row.older && answering.has(row.key) && dropped-- > 0).map((row) => row.key))
+    return { ...data, counts, ...(gone.size > 0 ? { open: data.open.filter((row) => !gone.has(row.key)) } : {}) }
+  })
   void queryClient.invalidateQueries({ queryKey: questionKeys.all })
 }
 
