@@ -56,8 +56,10 @@ nothing), and:
    change when a version ships. `desktop-latest` is a ROLLING release the publish job refreshes;
    GitHub's own `releases/latest/download/…` cannot be used, because the repo's "latest" release
    is cezar's `v*` release, which carries no installers.
-3. **publish** — renames tauri-action's `latest.json` to **`desktop-latest.json`** (the name
-   the shells poll; namespaced so a future cezar manifest on the same page cannot collide),
+3. **publish** — writes **`desktop-latest.json`** (the name the shells poll; namespaced so a
+   future cezar manifest on the same page cannot collide) from the release's `.sig` assets
+   (`scripts/build-updater-manifest.mjs`). The build legs upload no `latest.json`: tauri-action
+   read-merge-replaces it from every leg in parallel, and desktop-v0.1.12 lost that race),
    flips the draft to published with `--latest=false` (cezar's `v*` releases stay the repo's
    "latest"), copies the stable-named installers and `desktop-latest.json` onto the rolling
    `desktop-latest` release (its assets and title change; its tag stays where the first
