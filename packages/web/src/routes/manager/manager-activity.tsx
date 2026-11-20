@@ -220,12 +220,30 @@ export function useActivityConfirm(onCloseAutoFocus?: (event: Event) => void): {
     resolver.current = undefined
     setRequest(null)
   }, [])
+  // What had focus when the confirm opened (an answer chip, a send button): the dialog was not opened
+  // by a trigger of its own, so on close Radix would drop focus to <body>.
+  const opener = useRef<{ element: HTMLElement | null; card: HTMLElement | null }>({ element: null, card: null })
   const confirmActivity = useCallback((next: ActivityRequest) => new Promise<ActivityChoice | null>((resolve) => {
     resolver.current?.(null)
     resolver.current = resolve
+    const element = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
+    opener.current = { element, card: element?.closest<HTMLElement>('[data-question-key], [data-slot="manager-ask"]') ?? null }
     setRequest(next)
   }), [])
-  const dialog = <ManagerActivityDialog request={request} onConfirm={(choice) => settle(choice)} onCancel={() => settle(null)} onCloseAutoFocus={onCloseAutoFocus} />
+  const closeFocus = useCallback((event: Event) => {
+    onCloseAutoFocus?.(event)
+    if (event.defaultPrevented) return
+    const { element, card } = opener.current
+    opener.current = { element: null, card: null }
+    // The chip itself when it is still there (cancelled); else what replaced it on its card (sent).
+    const target = element?.isConnected ? element
+      : card?.isConnected ? card.querySelector<HTMLElement>('[data-slot="question-outcome"]') ?? (card.hasAttribute('tabindex') ? card : null)
+      : null
+    if (!target) return
+    event.preventDefault()
+    target.focus({ preventScroll: true })
+  }, [onCloseAutoFocus])
+  const dialog = <ManagerActivityDialog request={request} onConfirm={(choice) => settle(choice)} onCancel={() => settle(null)} onCloseAutoFocus={closeFocus} />
   return { confirmActivity, dialog }
 }
 

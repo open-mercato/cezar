@@ -624,6 +624,28 @@ describe('an inactive manager on the Questions page (spec 2026-11-19-manager-dea
     await waitFor(() => expect(posts).toEqual([{ path: 'answer m:global:m1', body: { text: 'Design: Yes', reactivate: true } }]))
   })
 
+  it('Cancel or Escape on the reactivate confirm puts focus back on the option pressed and says “Not sent”', async () => {
+    inactiveIds = new Set(['global'])
+    data.open = [managerItem('m1', 'Design')]
+    renderPage({ list: list() })
+    const no = within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'No' })
+    no.focus()
+    fireEvent.click(no)
+    let dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('No'))
+    expect(within(card('Design')).getByText(/Not sent: Global is still inactive/)).toBeTruthy()
+    // Escape, from the restored chip.
+    fireEvent.click(document.activeElement!)
+    dialog = await screen.findByRole('alertdialog')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('No'))
+    expect(within(card('Design')).getByText(/Not sent: Global is still inactive/)).toBeTruthy()
+    expect(posts).toEqual([])
+  })
+
   it('dismisses without asking and without counting it off the badge', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     inactiveIds = new Set(['global'])

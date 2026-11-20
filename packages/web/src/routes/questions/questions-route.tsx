@@ -519,7 +519,9 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
     const chips = [...(root.current?.querySelectorAll<HTMLElement>('[aria-pressed]') ?? [])]
     const from = chips.indexOf(document.activeElement as HTMLElement)
     if (owner && inactive && !(await confirmActivity({ kind: 'answer', manager: owner, answer: text }))) {
-      return `Not sent: ${owner.name} is still inactive. Dismiss closes the question without waking it.`
+      const message = `Not sent: ${owner.name} is still inactive. Dismiss closes the question without waking it.`
+      setError(message)
+      return message
     }
     setPending(true)
     setError(undefined)
