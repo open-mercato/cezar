@@ -86,7 +86,7 @@ export function PhoneBottomBar({
         <span
           aria-hidden="true"
           data-slot="bottom-bar-now-count"
-          className="absolute top-1.5 left-[calc(50%+6px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-micro font-semibold text-white tabular-nums"
+          className="absolute top-1.5 left-[calc(50%+6px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-micro font-semibold text-danger-foreground tabular-nums"
         >
           {count > 99 ? '99+' : count}
         </span>
