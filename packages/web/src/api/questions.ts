@@ -61,7 +61,9 @@ export function settleQuestion(queryClient: QueryClient, item: QuestionItem): vo
   queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => {
     if (!data) return data
     const was = data.open.find((row) => row.key === item.key)
-    if (!was || !item.closed) return data
+    if (!item.closed) return data
+    // Already off the list (the live counts took it): record why, the counts are already right.
+    if (!was) return { ...data, closed: [item, ...data.closed.filter((row) => row.key !== item.key)] }
     const counts = {
       live: Math.max(0, data.counts.live - (was.older ? 0 : 1)),
       older: Math.max(0, data.counts.older - (was.older ? 1 : 0)),
@@ -114,10 +116,13 @@ export function applyQuestionCounts(queryClient: QueryClient, counts: QuestionCo
   if (!listChanged && before && before.counts.live === counts.live && before.counts.older === counts.older) return
   queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => {
     if (!data) return data
-    // The server stopped counting answers still in flight here: they leave the list in the same
-    // write, or the badge would subtract them twice for a frame (and settleQuestion again after).
+    // The server stopped counting cards the badge already subtracts (an answer in flight, a
+    // dismissal pending or sent): they leave the list in the same write, or the badge would
+    // subtract them twice for a frame (and settleQuestion again after). Sent ones first.
     let dropped = Math.max(0, data.counts.live - counts.live)
-    const gone = new Set(data.open.filter((row) => !row.older && answering.has(row.key) && dropped-- > 0).map((row) => row.key))
+    const subtracted = data.open.filter((row) => !row.older && (answering.has(row.key) || isDismissing(row.key)))
+    const rank = (key: string) => (answering.has(key) || dismissals.get(key)?.timer === undefined ? 0 : 1)
+    const gone = new Set(subtracted.sort((x, y) => rank(x.key) - rank(y.key)).filter(() => dropped-- > 0).map((row) => row.key))
     return { ...data, counts, ...(gone.size > 0 ? { open: data.open.filter((row) => !gone.has(row.key)) } : {}) }
   })
   void queryClient.invalidateQueries({ queryKey: questionKeys.all })
@@ -210,6 +215,12 @@ async function commit(key: string): Promise<void> {
     // The page dropped its manager's "Waiting for N answers" on the click: put it back.
     void entry.queryClient.invalidateQueries({ queryKey: managerKeys.list })
   }
+}
+
+/** Inside its undo window or on its way: the badge already counts it off. */
+function isDismissing(key: string): boolean {
+  const entry = dismissals.get(key)
+  return entry !== undefined && !entry.error
 }
 
 export function scheduleDismiss(queryClient: QueryClient, key: string, label: string): void {
