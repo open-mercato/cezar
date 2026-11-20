@@ -34,7 +34,7 @@ import { Button } from '@/components/ui/button'
 import { shortAge } from '@/lib/format'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
-import { useLinger } from '@/routes/manager/approvals-linger'
+import { useLinger, type LeaveMode } from '@/routes/manager/approvals-linger'
 import { DecisionSourceList } from '@/routes/manager/decision-sources'
 import { LingerCollapse } from '@/routes/manager/linger-collapse'
 import { ManagerAvatar } from '@/routes/manager/manager-avatar'
@@ -297,7 +297,7 @@ export function QuestionsRoute() {
     const row = finishedByKey.get(item.key)
     if (row) {
       const closed = row.closed ?? query.data?.closed.find((entry) => entry.key === item.key)?.closed
-      return { kind: 'finished', row: closed ? { ...row, closed } : row, fading: leaving.has(item.key) }
+      return { kind: 'finished', row: closed ? { ...row, closed } : row, fading: leaving.has(item.key), leaving: leaving.get(item.key) }
     }
     const entry = dismissing.get(item.key)
     return entry ? { kind: 'dismissing', label: entry.label } : { kind: 'open' }
@@ -447,7 +447,7 @@ function SourceGlyph({ source, manager }: { source: QuestionSource; manager?: Ma
 type CardState =
   | { kind: 'open' }
   | { kind: 'dismissing'; label: string }
-  | { kind: 'finished'; row: Finished; fading: boolean }
+  | { kind: 'finished'; row: Finished; fading: boolean; leaving: LeaveMode | undefined }
 
 interface AnswerHandlers {
   start: (item: QuestionItem, text: string) => void
@@ -472,7 +472,8 @@ function QuestionGroupSection({ group, manager, ...card }: CardProps & { group: 
   const project = source.kind === 'task' ? projects.data?.projects.find((entry) => entry.id === source.projectId)?.name ?? source.projectId : undefined
   const inactive = manager?.inactive !== undefined
   // Its last card leaving takes the heading along, so nothing below jumps when the group goes.
-  const leaving = group.items.every((item) => { const state = card.cardState(item); return state.kind === 'finished' && state.fading })
+  const modes = group.items.map((item) => { const state = card.cardState(item); return state.kind === 'finished' ? state.leaving : undefined })
+  const leaving = modes.every((mode) => mode !== undefined) ? modes[0] : undefined
   return (
     <LingerCollapse leaving={leaving}>
       <section aria-label={name} data-slot="question-group" data-source={source.kind} data-inactive={inactive || undefined} className="flex flex-col gap-3">
@@ -489,7 +490,7 @@ function QuestionGroupSection({ group, manager, ...card }: CardProps & { group: 
         {group.items.map((item) => {
           const state = card.cardState(item)
           return (
-            <LingerCollapse key={item.key} lingerKey={item.key} leaving={state.kind === 'finished' && state.fading}>
+            <LingerCollapse key={item.key} lingerKey={item.key} leaving={state.kind === 'finished' ? state.leaving : undefined}>
               <QuestionCard item={item} state={state} {...card} />
             </LingerCollapse>
           )

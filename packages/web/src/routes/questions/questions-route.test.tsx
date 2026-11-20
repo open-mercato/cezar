@@ -281,6 +281,7 @@ describe('the Questions page', () => {
         if (this.closest('[data-linger-key]')?.getAttribute('data-linger-key') === 'm:global:m1') return box(-300, 200)
         return box(document.querySelector('[data-question-key="m:global:m1"]') ? 300 : 100, 100)
       })
+      vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function (this: Element) { return [this.getBoundingClientRect()] as unknown as DOMRectList })
       const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
       await advance(LINGER_MS - 400)
       expect(present()).toBe(true)
@@ -307,7 +308,7 @@ describe('the Questions page', () => {
       await answerDesign()
       await advance(LINGER_MS - 200)
       const wrapper = card('Design').closest<HTMLElement>('[data-linger-key]')!
-      expect(wrapper.dataset.leaving).toBe('true')
+      expect(wrapper.dataset.leaving).toBe('collapse')
       expect(wrapper.className).toContain('grid-rows-[0fr]')
       await advance(300)
       expect(present()).toBe(false)
