@@ -167,6 +167,7 @@ function rehypeLocalFileLinks() {
       node.tagName = 'span'
       node.properties = {
         'data-local-only-link': '',
+        'data-local-path': href,
         title: `Local file: ${href}. Open it from the task's Files tab.`,
       }
     }
@@ -190,6 +191,7 @@ export function TranscriptLink({ href, children, className, ...props }: Transcri
       <span
         {...props}
         data-local-only-link={isLocalFilesystemDestination(href ?? '') ? '' : undefined}
+        data-local-path={href ? href.replace(LOCAL_ONLY_DESTINATION_PREFIX, '') : undefined}
         title={
           isLocalFilesystemDestination(href ?? '')
             ? 'This is a local filesystem path and cannot be opened here.'

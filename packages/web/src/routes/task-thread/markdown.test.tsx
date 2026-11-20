@@ -55,6 +55,13 @@ describe('Markdown', () => {
       expect(container.querySelector('[data-streamdown="strong"]')).not.toBeNull()
     })
 
+    it('tags path links so the conversation can open the ones inside the worktree', () => {
+      const rel = render(<Markdown>{'[a](temp/out.txt)'}</Markdown>).container
+      expect(rel.querySelector('[data-local-path]')?.getAttribute('data-local-path')).toBe('temp/out.txt')
+      const abs = render(<Markdown>{'[b](/tmp/wt/r1/temp/out.txt)'}</Markdown>).container
+      expect(abs.querySelector('[data-local-path]')?.getAttribute('data-local-path')).toBe('/tmp/wt/r1/temp/out.txt')
+    })
+
     it('leaves document previews with a custom URL resolver in control', () => {
       const transform = vi.fn(() => '/p/project/tasks/123')
       const { container } = render(<Markdown variant="document" urlTransform={transform}>{'[report](./report.md)'}</Markdown>)
