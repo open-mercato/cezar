@@ -143,3 +143,39 @@ describe('Tasks selected and quick actions (#1599)', () => {
     }
   })
 })
+
+describe('Cancel queued bulk action (#1960)', () => {
+  const status = () => screen.getByRole('status', { name: 'Task action status' }).textContent
+  it('offers Cancel queued only for eligible queued selections', () => {
+    render(overview({ runs: [run('q', { status: 'queued' }), run('d')], onTaskAction: vi.fn() }))
+    select('d')
+    expect(screen.queryByRole('button', { name: /Cancel queued/ })).toBeNull()
+    select('q')
+    expect(screen.getByRole('button', { name: 'Cancel queued (1)' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Archive (1)' })).toBeTruthy()
+  })
+
+  it('confirms before cancelling, skips parents with dispatched children, and reports partial failures', async () => {
+    const onTaskAction = vi.fn(async (r: RunRecord, _action?: string) => { if (r.id === 'bad') throw new Error('No longer queued') })
+    render(overview({ runs: [
+      run('a', { status: 'queued' }), run('bad', { status: 'queued' }), run('parent', { status: 'queued' }),
+      run('kid', { status: 'running', dispatch: { rootRunId: 'parent', parentRunId: 'parent', kind: 'implement' } as RunRecord['dispatch'] }),
+    ], onTaskAction }))
+    for (const id of ['a', 'bad', 'parent']) select(id)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel queued (2)' }))
+    expect(onTaskAction).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep' }))
+    expect(onTaskAction).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel queued (2)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm cancel' }))
+    await waitFor(() => expect(status()).toContain('1 succeeded, 1 skipped, 1 failed'))
+    expect(status()).toContain('No longer queued')
+    expect(onTaskAction.mock.calls.map(([r, action]) => [r.id, action])).toEqual([['a', 'cancel'], ['bad', 'cancel']])
+  })
+
+  it('taskActionEligible rejects non-queued and archived runs', () => {
+    expect(taskActionEligible(run('r', { status: 'running' }), 'cancel')).toBe(false)
+    expect(taskActionEligible(run('r', { status: 'queued', archived: true }), 'cancel')).toBe(false)
+    expect(taskActionEligible(run('r', { status: 'queued' }), 'cancel')).toBe(true)
+  })
+})
