@@ -55,5 +55,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`::warning::${file} is already at ${current}; not downgrading it to ${version}.`)
     process.exit(0)
   }
-  writeFileSync(file, bumpCask(source, version, armSha, intelSha))
+  writeFileSync(file, bumpCask(source, version, armSha, intelSha, { binaries }))
 }

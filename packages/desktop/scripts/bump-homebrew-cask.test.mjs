@@ -46,6 +46,9 @@ describe('bumpCask', () => {
     expect(readFileSync(file, 'utf8')).toBe(cask)
     execFileSync(process.execPath, [path.join(here, 'bump-homebrew-cask.mjs'), file, '0.2.0', ARM, INTEL])
     expect(caskVersion(readFileSync(file, 'utf8'))).toBe('0.2.0')
+    expect(readFileSync(file, 'utf8')).not.toContain('binary')
+    execFileSync(process.execPath, [path.join(here, 'bump-homebrew-cask.mjs'), file, '0.2.1', ARM, INTEL, '--binaries'])
+    expect(readFileSync(file, 'utf8')).toContain('binary "#{appdir}/Cezar.app/Contents/Resources/bin/cezar"')
   })
 
   it('adds the binary stanzas once, only when asked, right after the app', () => {
