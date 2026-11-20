@@ -10,10 +10,13 @@ import { managerAccessOf, managerTaskEffortSchema, type Manager } from '@open-me
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { MANAGER_TURN_ENV, MANAGER_TURN_HEADER } from './turn-token.ts';
 import { sameModel } from '../runs/reported-model.ts';
 
 export interface ManagerCliEnv {
   CEZ_API_URL?: string;
+  /** The live turn's token (spec 2026-11-20 § 3.1); the tool routes refuse a call without it. */
+  CEZ_MANAGER_TURN_TOKEN?: string;
   CEZ_MANAGER_ID?: string;
   CEZ_MANAGER_TURN?: string;
   CEZ_TASK_ID?: string;
@@ -235,7 +238,7 @@ async function workflowNames(url: string | undefined, env: ManagerCliEnv, io: Ma
   try {
     if (!url || !env.CEZ_MANAGER_ID) throw new Error('run it inside a manager turn to list them');
     if (!project) {
-      const response = await io.fetch(`${url}/api/v1/workspace/managers/${encodeURIComponent(env.CEZ_MANAGER_ID)}/snapshot`);
+      const response = await io.fetch(`${url}/api/v1/workspace/managers/${encodeURIComponent(env.CEZ_MANAGER_ID)}/snapshot`, { headers: turnHeaders(env) });
       const projects = response.ok ? ((await response.json()) as ManagerSnapshot).projects : [];
       if (projects.length !== 1) throw new Error('add --project <id> to list them');
       project = projects[0]?.projectId;
@@ -309,11 +312,17 @@ async function contentOf(words: string[], values: ContentValues, io: ManagerCliI
   };
 }
 
+/** The turn token as a header, on every call to a manager route. */
+const turnHeaders = (env: ManagerCliEnv): Record<string, string> => {
+  const token = env[MANAGER_TURN_ENV];
+  return token ? { [MANAGER_TURN_HEADER]: token } : {};
+};
+
 /** `propose --help`'s list, from the server: what THIS manager may propose now, and why not otherwise. */
 async function actionOpsList(url: string | undefined, env: ManagerCliEnv, io: ManagerCliIo): Promise<string> {
   try {
     if (!url || !env.CEZ_MANAGER_ID) throw new Error('run it inside a manager turn to list them');
-    const response = await io.fetch(`${url}/api/v1/workspace/managers/${encodeURIComponent(env.CEZ_MANAGER_ID)}/action-ops`);
+    const response = await io.fetch(`${url}/api/v1/workspace/managers/${encodeURIComponent(env.CEZ_MANAGER_ID)}/action-ops`, { headers: turnHeaders(env) });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const { ops } = (await response.json()) as ManagerActionOpsResponse;
     const lines = ops.map((op) => `  ${op.type.padEnd(18)} ${op.summary} [${op.risk}${op.pinnedAsk ? ', always asks' : ''}]${op.available ? '' : ` (unavailable: ${op.reason ?? 'not now'})`}\n  ${' '.repeat(18)} ${op.usage}`);
@@ -327,7 +336,7 @@ async function actionOpsList(url: string | undefined, env: ManagerCliEnv, io: Ma
  * `cez automation` reads as before, but sends every write to the manager's own routes, which check
  * scope, read-only and always-paused on the server (spec 2026-11-20 § 3.6). Any other write is refused.
  */
-export function automationWritesVia(fetcher: typeof fetch, url: string, managerBase: string, projectId: string): typeof fetch {
+export function automationWritesVia(fetcher: typeof fetch, url: string, managerBase: string, projectId: string, headers: Record<string, string> = {}): typeof fetch {
   const scope = `${url}/api/v1/p/${encodeURIComponent(projectId)}/automations`;
   return (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -338,7 +347,7 @@ export function automationWritesVia(fetcher: typeof fetch, url: string, managerB
     const body = typeof init?.body === 'string' && init.body ? (JSON.parse(init.body) as Record<string, unknown>) : {};
     const send = (path: string, sendMethod: string, payload: unknown) => fetcher(`${managerBase}${path}`, {
       method: sendMethod,
-      headers: { 'content-type': 'application/json' },
+      headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
     if (parts && method === 'POST' && parts.length === 0) return send('/automations', 'POST', { projectId, definition: body });
@@ -398,7 +407,8 @@ export async function runManagerCommand(
   const call = async <T>(path: string, init?: { method: string; body?: unknown }): Promise<T> => {
     const response = await io.fetch(`${base}${path}`, {
       method: init?.method ?? 'GET',
-      ...(init?.body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(init.body) } : {}),
+      headers: { ...turnHeaders(env), ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}) },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: unknown };
@@ -636,7 +646,7 @@ export async function runManagerCommand(
           fail(`${project.projectId} is read-only for this manager: it cannot set up automations there`);
         }
         // What it creates reports its results to this chat unless it passes --no-report.
-        const managerFetch = automationWritesVia(io.fetch, url, base, project.projectId);
+        const managerFetch = automationWritesVia(io.fetch, url, base, project.projectId, turnHeaders(env));
         return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, { ...io, fetch: managerFetch }, { neverEnable: true, reportTo: env.CEZ_MANAGER_ID });
       }
 

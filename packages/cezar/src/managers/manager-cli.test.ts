@@ -189,6 +189,24 @@ describe('cez manager', () => {
     });
   });
 
+  it('sends its turn token on every manager route it calls (spec 2026-11-20 § 3.1)', async () => {
+    const seen: Array<{ url: string; token: string | null }> = [];
+    const { run } = harness({ CEZ_MANAGER_TURN_TOKEN: 't-1' }, {}, [], {
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        seen.push({ url: String(url), token: new Headers(init?.headers).get('x-cez-manager-turn') });
+        if (String(url).endsWith('/snapshot')) return Response.json({ projects: [{ projectId: 'alpha', name: 'alpha', available: true, attention: [], tasks: [], prs: [] }] });
+        if (String(url).includes('/messages?pending=1')) return Response.json({ messages: [], hasMore: false });
+        return Response.json({ actionId: 'a1', status: 'pending', automation: { id: 'a1', name: 'n', revision: 1, enabled: false } }, { status: 201 });
+      }) as typeof fetch,
+    });
+    await run('merge', '--project', 'alpha', '12');
+    await run('rename', 'Scout');
+    await run('automation', '--project', 'alpha', 'create', '--json', '{"name":"n"}');
+    const managerCalls = seen.filter((call) => call.url.includes('/workspace/managers/'));
+    expect(managerCalls.length).toBeGreaterThan(4);
+    expect(managerCalls.every((call) => call.token === 't-1')).toBe(true);
+  });
+
   describe('propose (spec 2026-11-20-manager-admin-actions)', () => {
     it('proposes any kind through the one route, with the project pinned from the snapshot', async () => {
       const { run, calls, logs } = harness();

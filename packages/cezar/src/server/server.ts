@@ -63,6 +63,7 @@ import {
   workspaceLayoutsSchema,
 } from '@open-mercato/cezar-contract';
 import { ManagerEngine, MANAGER_INACTIVE, type ManagerEngineDeps } from '../managers/engine.ts';
+import { MANAGER_TURN_HEADER, MANAGER_TURN_REFUSED, MANAGER_TURN_REQUIRED } from '../managers/turn-token.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { watchAutomationReports } from '../managers/automation-reports.ts';
@@ -9198,10 +9199,43 @@ export function createApp(deps: ServerDeps) {
     await next();
   };
   const MANAGER_NOT_FOUND = { error: 'manager not found' } as const;
+  // Spec 2026-11-20 § 3.1: the agent's tools answer only to the live turn's token, and the cockpit's own
+  // writes (decisions, settings, activity, chat) refuse any request that carries one.
+  const requireManagerTurn = async (c: Context, next: Next) => {
+    const turn = managerEngine.turnOfToken(c.req.header(MANAGER_TURN_HEADER));
+    if (!turn || turn.managerId !== c.req.param('id')) return c.json({ error: MANAGER_TURN_REQUIRED }, 403);
+    await next();
+  };
+  const refuseManagerTurn = async (c: Context, next: Next) => {
+    if (c.req.method !== 'GET' && c.req.header(MANAGER_TURN_HEADER) !== undefined) return c.json({ error: MANAGER_TURN_REFUSED }, 403);
+    await next();
+  };
 
   const managersRoutes = new Hono()
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
+    .use('/workspace/managers', refuseManagerTurn)
+    .use('/workspace/managers/activity', refuseManagerTurn)
+    .use('/workspace/managers/:id', refuseManagerTurn)
+    .use('/workspace/managers/:id/messages', refuseManagerTurn)
+    .use('/workspace/managers/:id/stop', refuseManagerTurn)
+    .use('/workspace/managers/:id/check', refuseManagerTurn)
+    .use('/workspace/managers/:id/read', refuseManagerTurn)
+    .use('/workspace/managers/:id/connectors/refresh', refuseManagerTurn)
+    .use('/workspace/managers/:id/actions/:actionId/decision', refuseManagerTurn)
+    .use('/workspace/managers/:id/snapshot', requireManagerTurn)
+    .use('/workspace/managers/:id/task', requireManagerTurn)
+    .use('/workspace/managers/:id/tasks', requireManagerTurn)
+    .use('/workspace/managers/:id/task-message', requireManagerTurn)
+    .use('/workspace/managers/:id/follows', requireManagerTurn)
+    .use('/workspace/managers/:id/task-cancel', requireManagerTurn)
+    .use('/workspace/managers/:id/task-retry', requireManagerTurn)
+    .use('/workspace/managers/:id/actions', requireManagerTurn)
+    .use('/workspace/managers/:id/jobs/*', requireManagerTurn)
+    .use('/workspace/managers/:id/action-ops', requireManagerTurn)
+    .use('/workspace/managers/:id/rename', requireManagerTurn)
+    .use('/workspace/managers/:id/automations', requireManagerTurn)
+    .use('/workspace/managers/:id/automations/*', requireManagerTurn)
     .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
     // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
     .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>

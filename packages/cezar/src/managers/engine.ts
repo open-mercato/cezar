@@ -56,6 +56,7 @@ import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } fr
 import { actionOp, actionOpsFor, actionProject, actionKey, actionReplacedBy, actionSubject, CONNECTORS_CLAUDE_ONLY, describeAction, type ActionContext } from './actions.ts';
 import { evaluateAutoApproval } from './auto-approve.ts';
 import { ManagerChangeLog } from './change-log.ts';
+import { MANAGER_TURN_ENV } from './turn-token.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
@@ -288,6 +289,8 @@ type QueueItem =
 interface ActiveTurn {
   sourceTasks?: ReturnType<typeof taskSources>;
   kind: ManagerTurnKind;
+  /** This turn's `CEZ_MANAGER_TURN_TOKEN` (spec 2026-11-20 § 3.1): the tool routes answer only to it. */
+  token?: string;
   /** Screenshots the user sent with this message, for the model to see. */
   images?: ContentBlock[];
   /** The user messages this chat turn answers, oldest first: `fromMessage: 'last'` is the newest. */
@@ -550,6 +553,7 @@ export class ManagerEngine {
   private readonly askListeners = new Set<(change: ManagerAskChange) => void>();
 
   private readonly changeLog: ManagerChangeLog;
+  private readonly turnTokens = new Map<string, { managerId: string; kind: ManagerTurnKind }>();
 
   constructor(private readonly deps: ManagerEngineDeps) {
     this.changeLog = deps.changeLog ?? new ManagerChangeLog();
@@ -1309,6 +1313,8 @@ export class ManagerEngine {
       ...(item.kind === 'chat' ? { messageIds: item.messageIds } : {}),
     };
     runtime.active = turn;
+    const tokenGrant = this.issueTurnToken(id, turn.kind);
+    turn.token = tokenGrant.token;
     turn.limit = setTimeout(() => {
       turn.timedOut = true;
       if (runtime.active === turn) this.interrupt(runtime);
@@ -1319,6 +1325,7 @@ export class ManagerEngine {
       .finally(() => {
         if (turn.stopTimer) clearTimeout(turn.stopTimer);
         clearTimeout(turn.limit);
+        tokenGrant.revoke();
         release();
         if (runtime.active === turn) runtime.active = undefined;
         this.settling.delete(running);
@@ -2257,6 +2264,7 @@ export class ManagerEngine {
         ...profile.env,
         CEZ_MANAGER_ID: id,
         CEZ_MANAGER_TURN: turn.kind,
+        ...(turn.token ? { [MANAGER_TURN_ENV]: turn.token } : {}),
         ...(manager.bashAllow?.length ? { [MANAGER_BASH_ALLOW_ENV]: JSON.stringify(manager.bashAllow) } : {}),
         ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
         ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
@@ -2893,6 +2901,21 @@ export class ManagerEngine {
       callConnector: (action) => this.callConnector(id, action),
       iso: () => this.iso(),
     };
+  }
+
+  /**
+   * A token for one turn (spec 2026-11-20 § 3.1): `cez manager` sends it, the tool routes require it,
+   * and the cockpit's own routes refuse it. It lives in memory only, so it dies with the turn and the process.
+   */
+  issueTurnToken(managerId: string, kind: ManagerTurnKind): { token: string; revoke: () => void } {
+    const token = randomUUID();
+    this.turnTokens.set(token, { managerId, kind });
+    return { token, revoke: () => this.turnTokens.delete(token) };
+  }
+
+  /** The live turn a token belongs to, or `undefined` for a stale, forged or absent one. */
+  turnOfToken(token: string | undefined): { managerId: string; kind: ManagerTurnKind } | undefined {
+    return token === undefined ? undefined : this.turnTokens.get(token);
   }
 
   /** What this manager may propose now (`cez manager propose --help`, spec 2026-11-20 § 5.3). */
