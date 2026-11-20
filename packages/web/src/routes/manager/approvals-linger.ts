@@ -144,9 +144,13 @@ export function useLinger(rows: readonly LingerRow[], remove: (keys: ReadonlySet
         latest.current.remove(gone)
       }
       if (visible.size > 0) {
-        // Something the reader sees follows it: fade in place, then leave with the scroll taking up
-        // its height, so that stays exactly still. Nothing visible after it: collapse.
-        const mode: LeaveMode = holdFor(visible) ? 'fade' : 'collapse'
+        // Something the reader sees follows it and the scroll can take up its height: fade in place,
+        // then leave with the scroll correction, so that stays exactly still. Otherwise (nothing
+        // visible after it, or too near the top to scroll back) collapse, so what follows slides.
+        const hold = holdFor(visible)
+        const firstTop = Math.min(...[...visible].map((key) => itemOf(key)?.getBoundingClientRect().top ?? Infinity))
+        const room = scroller ? scroller.scrollTop : window.scrollY
+        const mode: LeaveMode = hold && room >= hold.top - firstTop ? 'fade' : 'collapse'
         setLeaving((keys) => new Map([...keys, ...[...visible].map((key) => [key, mode] as const)]))
         const done = setTimeout(() => {
           collapses.current.delete(done)

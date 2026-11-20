@@ -58,7 +58,9 @@ beforeEach(() => {
   vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function (this: Element) {
     return (this.closest('[hidden]') ? [] : [layout(this)]) as unknown as DOMRectList
   })
-  vi.spyOn(window, 'scrollBy').mockImplementation(((_x: number, y: number) => { scrollY += y }) as typeof window.scrollBy)
+  // A page scrolls no higher than its top.
+  vi.spyOn(window, 'scrollBy').mockImplementation(((_x: number, y: number) => { scrollY = Math.max(0, scrollY + y) }) as typeof window.scrollBy)
+  Object.defineProperty(window, 'scrollY', { configurable: true, get: () => scrollY })
   reduce(false)
 })
 afterEach(() => {
@@ -99,6 +101,16 @@ describe('useLinger keeps what the reader is looking at still', () => {
     expect(document.querySelector('[data-linger-key="a"]')).toBeNull()
     expect(top('b')).toBe(100)
     expect(scrollY).toBe(0)
+  })
+
+  it('collapses when the page cannot scroll back by its height: what follows slides, never snaps', async () => {
+    const finishedAt = Date.now()
+    render(<Harness rows={[{ key: 'a', finishedAt }, { key: 'b' }, { key: 'c' }]} />)
+    // At the top of the page: a fade would end with b jumping up a whole card at once.
+    await advance(LINGER_MS - FADE_MS)
+    expect(document.querySelector('[data-linger-key="a"]')?.getAttribute('data-leaving')).toBe('collapse')
+    await advance(FADE_MS)
+    expect(document.querySelector('[data-linger-key="a"]')).toBeNull()
   })
 
   it('the last visible card collapses: nothing the reader sees follows it', async () => {
