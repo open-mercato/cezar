@@ -33,11 +33,13 @@ After receiving the specific unsupported-ownership blocker, the operator explici
 
 ## Progress
 
+PR: #2364
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Minimal patch and security proof
 
-- [ ] 1.1 PinNext16.4.5 consistently and prove security regression red/green
+- [x] 1.1 PinNext16.4.5 consistently and prove security regression red/green — 635d186df
 
 ### Phase 2: Validation
 
@@ -47,3 +49,8 @@ After receiving the specific unsupported-ownership blocker, the operator explici
 
 - [ ] 3.1 Complete authoritative independent review and any fixes
 - [ ] 3.2 Finalize evidence, labels, deduplication and exact owned lock release
+
+## Verification so far
+BaselineNext16.4.2: new regression suite fails5/10 with5controls passing. Patched16.4.5:10/10 new cases and7/7 existing compression cases pass. Reproduces SVG/ftyp bypass, Edge cookie-header disclosure and gzip response-framing flaws; no claim of independently reproducing the other four cache findings. Docs check/typecheck/build,17security cases,3preview pages+3script assets, npm ls and audit(0vulnerabilities) pass. Installed and all locked Next copies16.4.5 are outside all7source intervals. Only Next/env/SWC patch entries change; root lock unchanged. Node24/Linux; no separateNode20/Windows/macOS/browser QA claim.
+
+Initial configured root gate attempted in order: typecheckPASS; npmtest hit900s timeout after an unrelated existing automation lock-reclaim assertion failure; coreunit54PASS; build/checkpackPASS; packagePASS. Source is unchanged at the failure and existingPR2193 describes the same race. No gate pass is claimed yet; Phase2 stays unchecked until bounded full revalidation. No audit exception or gate bypass. Independent review must complete validation before readiness; retain draft otherwise. All underlying evidence is preserved in task Assets/resumed, with exact commands/results summarized on the PR.
