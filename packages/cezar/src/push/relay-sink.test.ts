@@ -1,7 +1,8 @@
 import { randomBytes, verify, createPublicKey } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { b64u, edPublic, postProof } from '../relay/wire.ts';
-import { PUSH_DEBOUNCE_MS, PUSH_MIN_INTERVAL_MS, RelayPushSink, badgeCount, pushBody, type PushGrantRow } from './relay-sink.ts';
+import type { AttentionKind } from '@open-mercato/cezar-contract';
+import { COUNT_DEBOUNCE_MS, COUNT_MIN_INTERVAL_MS, PUSH_DEBOUNCE_MS, PUSH_MIN_INTERVAL_MS, RelayPushSink, badgeCount, pushBody, quietUntil, type PushGrantRow } from './relay-sink.ts';
 
 const ORIGIN = 'https://relay.example.test';
 const SEED = randomBytes(32);
@@ -11,7 +12,12 @@ const NOW = 1_793_491_200_000;
 
 interface Sent { url: string; headers: Record<string, string>; body: string }
 
-function setup(over: { devices?: PushGrantRow[]; live?: string[]; streams?: string[]; status?: number; enabled?: boolean } = {}) {
+function setup(over: {
+  devices?: PushGrantRow[]; live?: string[]; streams?: string[]; status?: number; enabled?: boolean;
+  count?: (kinds: readonly AttentionKind[]) => Promise<number>;
+  answer?: (body: Record<string, unknown>) => { status: number; retryAfter?: number };
+  warn?: (line: string) => void;
+} = {}) {
   let now = NOW;
   const sent: Sent[] = [];
   const dropped: string[] = [];
@@ -30,11 +36,13 @@ function setup(over: { devices?: PushGrantRow[]; live?: string[]; streams?: stri
     },
     hasStreams: () => (over.streams ?? []).length > 0,
     dropGrant: (id, grantId) => { dropped.push(`${id}:${grantId}`); },
-    count: async () => 3,
+    count: over.count ?? (async () => 3),
     post: async (url, { headers, body }) => {
-      sent.push({ url, headers, body: Buffer.from(body).toString('utf8') });
-      return { status: over.status ?? 202 };
+      const text = Buffer.from(body).toString('utf8');
+      sent.push({ url, headers, body: text });
+      return over.answer?.(JSON.parse(text) as Record<string, unknown>) ?? { status: over.status ?? 202 };
     },
+    ...(over.warn ? { warn: over.warn } : {}),
     now: () => now,
   });
   const advance = async (ms: number) => {
@@ -169,8 +177,145 @@ describe('RelayPushSink', () => {
     expect(dropped).toEqual([`phone-a:${GRANT_ID}`]);
   });
 
-  it('keeps the badge in the protocol range', () => {
-    expect([badgeCount(0), badgeCount(5), badgeCount(500), badgeCount(Number.NaN)]).toEqual([1, 5, 99, 1]);
+  it('keeps the badge in the protocol range, down to 0', () => {
+    expect([badgeCount(0), badgeCount(-3), badgeCount(5), badgeCount(500), badgeCount(Number.NaN)]).toEqual([0, 0, 5, 99, 0]);
     expect(JSON.parse(pushBody('g', 1, 'i', 2))).toEqual({ v: 1, grant: 'g', kind: 'attention', count: 1, id: 'i', ts: 2 });
+  });
+
+  describe('per-phone settings (spec 2026-11-20-phone-notifications-inbox)', () => {
+    const grant = (deviceId: string, notifications?: PushGrantRow['notifications']): PushGrantRow => ({
+      deviceId,
+      push: { grant: `${GRANT}-${deviceId}`, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 },
+      ...(notifications ? { notifications } : {}),
+    });
+    const kinds = (sent: Sent[]) => sent.map((one) => (JSON.parse(one.body) as { kind: string }).kind);
+
+    it('pushes only to a phone that chose the kind, each with its own count', async () => {
+      vi.useFakeTimers();
+      const { sink, sent, advance } = setup({
+        devices: [grant('all'), grant('approvals', { push: ['approval'], badge: ['approval'], quietHours: null })],
+        count: async (badge) => (badge.length === 1 ? 1 : 4),
+      });
+      sink.signal('m', 'message');
+      await advance(PUSH_DEBOUNCE_MS);
+      expect(sent.map((one) => JSON.parse(one.body) as { grant: string; count: number }).map(({ grant, count }) => [grant, count]))
+        .toEqual([[`${GRANT}-all`, 4]]);
+      await advance(PUSH_MIN_INTERVAL_MS);
+      sink.signal('m', 'approval');
+      await advance(PUSH_DEBOUNCE_MS);
+      // Between the two, the approvals-only phone learned its count by a silent count push.
+      const alerts = sent.slice(1).map((one) => JSON.parse(one.body) as { kind: string; count: number }).filter((body) => body.kind === 'attention');
+      expect(alerts.map((body) => body.count).sort()).toEqual([1, 4]);
+    });
+
+    it('holds a push during quiet hours and sends one when they end, if anything still waits', async () => {
+      vi.useFakeTimers();
+      const start = new Date(NOW);
+      const clock = (minutes: number) => `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+      const minute = start.getHours() * 60 + start.getMinutes();
+      const quietHours = { start: clock(minute), end: clock(minute + 60) };
+      const { sink, sent, advance } = setup({ devices: [grant('quiet', { push: ['message'], badge: ['message'], quietHours })] });
+      sink.signal('m', 'message');
+      await advance(PUSH_DEBOUNCE_MS);
+      expect(sent).toHaveLength(0);
+      await advance(60 * 60_000);
+      expect(kinds(sent)).toEqual(['attention']);
+    });
+
+    it('reads quiet hours that span midnight', () => {
+      const at = (h: number, m = 0) => new Date(2026, 10, 20, h, m).getTime();
+      const night = { start: '22:00', end: '07:00' };
+      expect(quietUntil(night, at(23))).toBe(new Date(2026, 10, 21, 7).getTime());
+      expect(quietUntil(night, at(6, 59))).toBe(at(7));
+      expect(quietUntil(night, at(12))).toBeNull();
+      expect(quietUntil({ start: '08:00', end: '08:00' }, at(8))).toBeNull();
+      expect(quietUntil(null, at(8))).toBeNull();
+    });
+  });
+
+  describe('count pushes (RELAY_PROTOCOL.md § 7)', () => {
+    it('tells a closed phone its new count silently, with a fresh id, and nothing when it is unchanged', async () => {
+      vi.useFakeTimers();
+      let count = 3;
+      const { sink, sent, advance } = setup({ count: async () => count });
+      sink.signal('m', 'question');
+      await advance(PUSH_DEBOUNCE_MS);
+      count = 1;
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      expect(sent.map((one) => JSON.parse(one.body) as Record<string, unknown>).map(({ kind, count: n }) => [kind, n]))
+        .toEqual([['attention', 3], ['count', 1]]);
+      const body = JSON.parse(sent[1]!.body) as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(['count', 'grant', 'id', 'kind', 'ts', 'v']);
+      expect(body.id).not.toBe((JSON.parse(sent[0]!.body) as { id: string }).id);
+      sink.noteChange();
+      await advance(COUNT_MIN_INTERVAL_MS);
+      expect(sent).toHaveLength(2);
+    });
+
+    it('sends 0 when everything was handled, and never to a phone whose app is open', async () => {
+      vi.useFakeTimers();
+      let count = 2;
+      const { sink, sent, advance } = setup({
+        devices: [
+          { deviceId: 'closed', push: { grant: 'g-closed', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 } },
+          { deviceId: 'open', push: { grant: 'g-open', grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 } },
+        ],
+        live: ['open'],
+        count: async () => count,
+      });
+      count = 0;
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      expect(sent.map((one) => JSON.parse(one.body) as { grant: string; kind: string; count: number }).map(({ grant, kind, count: n }) => [grant, kind, n]))
+        .toEqual([['g-closed', 'count', 0]]);
+    });
+
+    it('keeps one count push per phone per 10 minutes, sending only the latest', async () => {
+      vi.useFakeTimers();
+      let count = 5;
+      const { sink, sent, advance } = setup({ count: async () => count });
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      count = 4;
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      count = 3;
+      sink.noteChange();
+      await advance(COUNT_MIN_INTERVAL_MS);
+      expect(sent.map((one) => (JSON.parse(one.body) as { count: number }).count)).toEqual([5, 3]);
+    });
+
+    it('retries after a 429 with the latest count and a new id', async () => {
+      vi.useFakeTimers();
+      let count = 2;
+      let refuse = true;
+      const { sink, sent, advance } = setup({
+        count: async () => count,
+        answer: () => (refuse ? { status: 429, retryAfter: 120 } : { status: 202 }),
+      });
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      refuse = false;
+      count = 1;
+      await advance(120_000);
+      const bodies = sent.map((one) => JSON.parse(one.body) as { count: number; id: string });
+      expect(bodies.map((body) => body.count)).toEqual([2, 1]);
+      expect(bodies[0]!.id).not.toBe(bodies[1]!.id);
+    });
+
+    it('stops count pushes, with one warning, on a relay that does not know the kind', async () => {
+      vi.useFakeTimers();
+      let count = 2;
+      const warnings: string[] = [];
+      const { sink, sent, advance } = setup({ count: async () => count, answer: () => ({ status: 400 }), warn: (line) => warnings.push(line) });
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      count = 1;
+      sink.noteChange();
+      await advance(COUNT_MIN_INTERVAL_MS);
+      expect(sent).toHaveLength(1);
+      expect(warnings).toHaveLength(1);
+    });
   });
 });

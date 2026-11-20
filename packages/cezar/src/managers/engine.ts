@@ -46,7 +46,7 @@ import {
   questionCardPartlyReasked,
   questionCardSharedHeaders,
 } from '@open-mercato/cezar-contract';
-import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
+import type { AttentionKind, AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
@@ -149,8 +149,9 @@ export interface ManagerEngineDeps {
   autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
-  /** Wakes a sleeping phone (spec relay R5). Takes the manager's id only: no text reaches a push. */
-  pushSignal?: (managerId: string) => void;
+  /** Wakes a sleeping phone (spec relay R5). The manager's id and the kind, which each phone's
+   *  settings filter on (spec 2026-11-20-phone-notifications-inbox); no text reaches a push. */
+  pushSignal?: (managerId: string, kind: AttentionKind) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   /** Usage telemetry (docs/telemetry.md); absent sends nothing. Consent is the sender's to check. */
   telemetry?: ManagerTelemetry;
@@ -485,6 +486,12 @@ const judgedFields = ({ important, headline, ask }: Judged) => ({
 });
 
 /** A question always waits on the user, so it interrupts like an approval does. */
+/** A task report's push kind; any other headline is an important message. */
+const reportKind = (fields: unknown): AttentionKind => {
+  const state = (fields as { taskReport?: { state?: string } } | undefined)?.taskReport?.state;
+  return state === 'failed' ? 'failed' : state === 'needs-you' ? 'task' : 'message';
+};
+
 const alertBody = ({ important, headline, ask, text }: Judged): string | undefined =>
   important ? headline ?? onePlainLine(text) : ask ? 'Has a question for you' : undefined;
 
@@ -1507,7 +1514,7 @@ export class ManagerEngine {
       return 'limited';
     }
     const body = alertBody(judgement);
-    if (body) this.alert(id, base, body);
+    if (body) this.alert(id, base, body, judgement.important ? 'message' : 'question');
     const heard = !result.error && !turn.stopped;
     // A turn that got through proves the limit lifted (or the account changed).
     if (heard && kind === 'chat') this.clearResume(id, false);
@@ -1574,7 +1581,7 @@ export class ManagerEngine {
       }));
     }
     this.emitChange(id);
-    if (post.headline) this.alert(id, written, post.headline);
+    if (post.headline) this.alert(id, written, post.headline, reportKind(post.fields));
     return written;
   }
 
@@ -2010,7 +2017,7 @@ export class ManagerEngine {
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
-  private alert(id: string, message: { id: string; seq: number }, body: string): void {
+  private alert(id: string, message: { id: string; seq: number }, body: string, kind: AttentionKind): void {
     const { notifySystem, pushSignal, store } = this.deps;
     // An inactive manager raises nothing: its tasks' own surfaces (Questions, Now) still show them.
     if ((!notifySystem && !pushSignal) || this.inactive(id)) return;
@@ -2019,7 +2026,7 @@ export class ManagerEngine {
       const manager = store.get(id);
       if (!manager || manager.notify === false || manager.inactive || !unseen(store.state(id), message)) return;
       notifySystem?.(manager.name, body);
-      pushSignal?.(id);
+      pushSignal?.(id, kind);
     }, SYSTEM_NOTIFY_DELAY_MS));
     timer.unref?.();
     this.alerts.add(timer);
@@ -2035,7 +2042,7 @@ export class ManagerEngine {
     // Only keys still fresh are worth remembering; the rest were reported and will not come back.
     this.pushedAttention.set(id, new Set(waiting));
     if (newKeys.length === 0 || store.get(id)?.notify === false) return;
-    pushSignal(id);
+    pushSignal(id, 'task');
   }
 
   private async watchTurn(
@@ -2122,7 +2129,7 @@ export class ManagerEngine {
     }, true);
     this.settleAsks(id, written, closes);
     const body = alertBody(judgement);
-    if (body) this.alert(id, written, body);
+    if (body) this.alert(id, written, body, judgement.important ? 'message' : 'question');
   }
 
   /** `manager_turn_completed`, and the turn's duration as a timing (stopped turns time nothing). */
@@ -2927,7 +2934,7 @@ export class ManagerEngine {
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
-    this.alert(id, message, `Needs your approval: ${describe(action)}`);
+    this.alert(id, message, `Needs your approval: ${describeAction(action)}`, 'approval');
     return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
   }
 
@@ -3042,7 +3049,7 @@ export class ManagerEngine {
     // Deleted while the action ran: writing the result would recreate its directory.
     if (!this.deps.store.get(id)) return;
     this.publish(id, { ...message, status, result }, true);
-    this.addNote(id, `${describe(message.action)}: ${result}`);
+    this.addNote(id, `${describeAction(message.action)}: ${result}`);
     this.emitChange(id);
   }
 
@@ -3261,7 +3268,7 @@ const replacedBy = (action: ManagerActionRequest): string => {
   return 'Replaced by a newer proposal';
 };
 
-const describe = (action: ManagerActionRequest): string => {
+export const describeAction = (action: ManagerActionRequest): string => {
   if (action.type === 'merge-pr') return `Merge of ${action.projectId}#${action.number}`;
   if (action.type === 'enable-automation') return `Enabling automation ${action.name ?? action.automationId}`;
   if (action.type === 'connector-call') return `Calling ${action.tool} on ${action.connectorName ?? action.connector}`;

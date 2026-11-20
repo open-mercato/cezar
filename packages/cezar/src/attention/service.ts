@@ -1,0 +1,55 @@
+import type { AttentionResponse } from '@open-mercato/cezar-contract';
+
+/** A burst of run, manager and question events is one recount. */
+export const ATTENTION_SETTLE_MS = 2_000;
+
+export interface AttentionService {
+  list(): Promise<AttentionResponse>;
+  /** Something that may change the list happened; listeners hear only a real change. */
+  poke(): void;
+  onChange(listener: (list: AttentionResponse) => void): () => void;
+  /** Tests wait on this. */
+  idle(): Promise<void>;
+  dispose(): void;
+}
+
+export function createAttentionService(deps: { read: () => Promise<AttentionResponse>; settleMs?: number }): AttentionService {
+  const listeners = new Set<(list: AttentionResponse) => void>();
+  let revision: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running: Promise<void> | undefined;
+  let disposed = false;
+
+  const recount = async () => {
+    const list = await deps.read().catch(() => undefined);
+    if (!list || disposed) return;
+    // The first recount after a restart is news too: a phone may hold a count from before it.
+    const changed = list.revision !== revision;
+    revision = list.revision;
+    if (changed) for (const listener of listeners) listener(list);
+  };
+
+  return {
+    async list() {
+      return deps.read();
+    },
+    poke() {
+      if (disposed || timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        running = recount().finally(() => { running = undefined; });
+      }, deps.settleMs ?? ATTENTION_SETTLE_MS);
+      timer.unref?.();
+    },
+    onChange(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    idle: () => running ?? Promise.resolve(),
+    dispose() {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      listeners.clear();
+    },
+  };
+}

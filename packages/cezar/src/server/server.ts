@@ -7,6 +7,9 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_NOTIFICATION_PREFS, setPhoneNotificationsInputSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
+import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
+import { createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
 import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
 import {
@@ -54,7 +57,7 @@ import {
   workspaceLayoutsResponseSchema,
   workspaceLayoutsSchema,
 } from '@open-mercato/cezar-contract';
-import { ManagerEngine, MANAGER_INACTIVE, type ManagerEngineDeps } from '../managers/engine.ts';
+import { describeAction, ManagerEngine, MANAGER_INACTIVE, type ManagerEngineDeps } from '../managers/engine.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { watchAutomationReports } from '../managers/automation-reports.ts';
@@ -9082,7 +9085,7 @@ export function createApp(deps: ServerDeps) {
       track: (event, label, opts) => track(event, { label }, opts),
       timing: recordTiming,
     },
-    pushSignal: (managerId) => phonePairing.signalPush(managerId),
+    pushSignal: (managerId, kind) => phonePairing.signalPush(managerId, kind),
     // An open card older than this stops counting (spec 2026-11-17-questions-inbox, Older).
     olderAfterDays: async () => (await readWorkspaceUiState()).questions?.olderAfterDays,
     // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
@@ -9121,14 +9124,55 @@ export function createApp(deps: ServerDeps) {
   deps.onDispose?.(() => questionInbox.dispose());
   // Trusted-only like `host`: attention counts are never readable by a foreign local page (BACKWARD_COMPATIBILITY.md).
   deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox));
-  // The badge, read when a push goes out: approvals across managers that notify, plus the live questions
-  // (spec § Counts: one live count everywhere).
-  waitingOnUser = async () => {
-    const approvals = (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0);
-    const { live } = await questionInbox.counts().catch(() => ({ live: 0 }));
-    return approvals + live;
+  // The attention list (spec 2026-11-20-phone-notifications-inbox, variant D): Now's Needs you, the Now
+  // badge and every phone's icon are filters of it.
+  const readAttention = async (): Promise<AttentionResponse> => {
+    const managersOn = capabilities().managers !== false;
+    const managers = managersOn ? await managerEngine.list() : [];
+    const approvals = managers.flatMap((manager) => manager.pendingActions > 0
+      ? managerEngine.messages(manager.id, { pending: '1' }).messages.flatMap((message) =>
+        message.kind === 'action' ? [{ managerId: manager.id, message, title: describeAction(message.action) }] : [])
+      : []);
+    const questions = (await questionInbox.list().catch(() => undefined))?.open ?? [];
+    const sources = await workspaceProjectSources();
+    const projects = sources.filter((source) => source.available).map((source) => ({ id: source.id, runs: source.runs() }));
+    return buildAttentionList({ questions, managers, approvals, projects, now: Date.now() });
   };
-  phonePairing.attachPush(waitingOnUser);
+  const attention = createAttentionService({ read: readAttention });
+  deps.onDispose?.(() => attention.dispose());
+  attention.onChange(() => phonePairing.noteAttentionChange());
+  questionInbox.onChange(() => attention.poke());
+  const offAttentionEvents = workspaceEvents.on((event) => {
+    if (event === 'manager-change' || event === 'manager-message') attention.poke();
+  });
+  deps.onDispose?.(offAttentionEvents);
+  const watchedStores = new Set<RunStore>();
+  const watchRuns = (store: RunStore) => {
+    if (watchedStores.has(store)) return;
+    watchedStores.add(store);
+    const poke = () => attention.poke();
+    store.on('run', poke);
+    store.on('deleted', poke);
+    deps.onDispose?.(() => { store.off('run', poke); store.off('deleted', poke); });
+  };
+  watchRuns(bootContext.store);
+  for (const id of contexts.ids()) {
+    const built = contexts.peek(id);
+    if (built) watchRuns(built.store);
+  }
+  deps.onDispose?.(contexts.onContextBuilt((ctx) => { watchRuns(ctx.store); attention.poke(); }));
+  // Health's `waiting` for the phone asking: the kinds it counts, as its pushes do.
+  waitingOnUser = async () => {
+    const { items } = await attention.list();
+    const deviceId = relayDeviceId();
+    const prefs = (deviceId ? phonePairing.phoneNotifications(deviceId) : null) ?? DEFAULT_PHONE_NOTIFICATION_PREFS;
+    return phoneBadgeCount(items, prefs.badge);
+  };
+  phonePairing.attachPush(async (kinds) => phoneBadgeCount((await attention.list()).items, kinds));
+
+  // ---- chained family: attention (workspace-level, single-mount) ----
+  const attentionRoutes = new Hono()
+    .get('/workspace/attention', async (c) => c.json(await attention.list()));
 
   // ---- chained family: Questions inbox (workspace-level, single-mount) ----
   // Spec 2026-11-17-questions-inbox. A manager copy folded into its task's item answers the task.
@@ -9375,6 +9419,10 @@ export function createApp(deps: ServerDeps) {
       phonePairing.denyPairing(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(PAIRING_NOT_FOUND, 409))
     .patch('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(renamePhoneInputSchema), (c) =>
       phonePairing.rename(c.req.valid('param').deviceId, c.req.valid('json').label) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
+    .put('/workspace/phones/:deviceId/notifications', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(setPhoneNotificationsInputSchema), (c) => {
+      const notifications = phonePairing.setPhoneNotifications(c.req.valid('param').deviceId, c.req.valid('json'));
+      return notifications ? c.json({ notifications }) : c.json(PHONE_NOT_FOUND, 404);
+    })
     .delete('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), (c) =>
       phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
     // The relay account (RELAY_PROTOCOL.md § 18). Each one asks the relay, so only Settings calls them.
@@ -9436,6 +9484,19 @@ export function createApp(deps: ServerDeps) {
     return rest;
   };
   const phonePushRoutes = new Hono()
+    // The calling phone's own notification settings (spec 2026-11-20-phone-notifications-inbox).
+    .get('/workspace/phone/notifications', (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      const notifications = phonePairing.phoneNotifications(deviceId);
+      return notifications ? c.json({ notifications }) : c.json(PHONE_NOT_FOUND, 404);
+    })
+    .put('/workspace/phone/notifications', jsonZodValidator(setPhoneNotificationsInputSchema), (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      const notifications = phonePairing.setPhoneNotifications(deviceId, c.req.valid('json'));
+      return notifications ? c.json({ notifications }) : c.json(PHONE_NOT_FOUND, 404);
+    })
     .get('/workspace/phone/push', async (c) => {
       const deviceId = relayDeviceId();
       if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
@@ -9507,6 +9568,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', runsIndexRoutes)
     .route('/', managersRoutes)
     .route('/', questionsRoutes)
+    .route('/', attentionRoutes)
     .route('/', phonesRoutes)
     .route('/', phonePushRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))

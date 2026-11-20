@@ -4,6 +4,7 @@ import type {
   PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayAccountLocal, RelayAccountResendResponse, RelayAccountResponse, RelayAccountStatus,
   RelayKeepAwake, RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse, TestRelayAddressResponse,
 } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_NOTIFICATION_PREFS, type AttentionKind, type PhoneNotificationPrefs } from '@open-mercato/cezar-contract';
 import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
 import { loadWorkspaceConfigOrThrow, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
@@ -141,7 +142,7 @@ export class RelayService {
   private readonly push: RelayPushSink;
   /** Each phone's open `GET /workspace/phone/signals` streams (stage 1), ended with its session. */
   private readonly signalStreams = new Map<string, Set<(managerId: string | undefined) => void>>();
-  private pushCount: () => Promise<number> = async () => 1;
+  private pushCount: (kinds: readonly AttentionKind[]) => Promise<number> = async () => 0;
   private readonly accountFile: RelayAccountFile;
   private readonly accounts: RelayAccountClient;
   /** Relays that answered `no-route` for accounts: a custom relay older than § 18. */
@@ -185,21 +186,40 @@ export class RelayService {
           // A read-only home sends to a dead grant again, and the relay refuses it again.
         }
       },
-      count: () => this.pushCount(),
+      count: (kinds) => this.pushCount(kinds),
       ...(options.pushPost ? { post: options.pushPost } : {}),
       now: this.now,
       warn: (line) => console.warn(line),
     });
   }
 
-  /** The badge: the server's own total of what waits on the user. */
-  attachPush(count: () => Promise<number>): void {
+  /** A phone's badge: the attention list filtered to the kinds that phone counts. */
+  attachPush(count: (kinds: readonly AttentionKind[]) => Promise<number>): void {
     this.pushCount = count;
   }
 
-  /** A manager wants the user. Carries the manager id for the tap, never what it said. */
-  signalPush(managerId: string): void {
-    this.push.signal(managerId);
+  /** A manager wants the user. Carries the manager id for the tap and the kind, never what it said. */
+  signalPush(managerId: string, kind: AttentionKind): void {
+    this.push.signal(managerId, kind);
+  }
+
+  /** The attention list changed: phones that are not open get their new count silently. */
+  noteAttentionChange(): void {
+    this.push.noteChange();
+  }
+
+  /** `null` for a device with no row. */
+  phoneNotifications(deviceId: string): PhoneNotificationPrefs | null {
+    const device = this.devices.get(deviceId);
+    return device ? device.notifications ?? DEFAULT_PHONE_NOTIFICATION_PREFS : null;
+  }
+
+  setPhoneNotifications(deviceId: string, prefs: PhoneNotificationPrefs): PhoneNotificationPrefs | null {
+    if (!this.devices.setNotifications(deviceId, prefs)) return null;
+    this.onChange();
+    // A phone that now counts other kinds is owed its new number.
+    this.push.noteChange();
+    return prefs;
   }
 
   /**
@@ -617,6 +637,7 @@ export class RelayService {
         ...(device.lastSeenAt ? { lastSeenAt: device.lastSeenAt } : {}),
         connected: this.sessions.get(device.deviceId)?.proven === true,
         ...(device.push ? { push: true as const } : {}),
+        notifications: device.notifications ?? DEFAULT_PHONE_NOTIFICATION_PREFS,
       })),
       pairing: this.pairing?.view() ?? null,
       ...(undenied > 0 ? { undeniedGrants: undenied } : {}),

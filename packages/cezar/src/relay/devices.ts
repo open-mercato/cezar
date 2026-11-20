@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { phoneNotificationPrefsSchema, type PhoneNotificationPrefs } from '@open-mercato/cezar-contract';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
 
 /**
@@ -26,6 +27,8 @@ const deviceSchema = z.looseObject({
   grants: z.array(z.string().max(64)).catch([]),
   // The one live push grant (spec R5). Sealed by the relay: cezar cannot read the token inside.
   push: z.object({ grant: z.string().min(1).max(4096), grantId: b64u22, expiresAt: z.number().int() }).optional().catch(undefined),
+  // Absent means the defaults (spec 2026-11-20-phone-notifications-inbox); a bad value reads as absent.
+  notifications: phoneNotificationPrefsSchema.optional().catch(undefined),
 });
 export type RelayDevice = z.infer<typeof deviceSchema>;
 
@@ -128,6 +131,14 @@ export class RelayDevices {
       device.grants = [...device.grants, push.grantId];
     }
     device.push = push;
+    this.write();
+    return true;
+  }
+
+  setNotifications(deviceId: string, notifications: PhoneNotificationPrefs): boolean {
+    const device = this.get(deviceId);
+    if (!device) return false;
+    device.notifications = notifications;
     this.write();
     return true;
   }
