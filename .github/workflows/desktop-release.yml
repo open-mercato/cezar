@@ -245,14 +245,15 @@ jobs:
           retention-days: 1
 
       # Under the onboarding `test-signing` policy the signature is SignPath's self-signed test
-      # certificate, which Windows does not trust either, so a failed request (desktop-v0.1.12:
-      # a transient "Invalid URL for GitHub API") falls back to the unsigned installer with a
-      # warning. Under `release-signing` a failure stops the release.
+      # certificate, which Windows does not trust either, so a failed request falls back to the
+      # unsigned installer with a warning. Under `release-signing` a failure stops the release.
+      # v3, not v2: v2's deprecated githubactions.connectors.signpath.io intermittently answers
+      # "Invalid URL for GitHub API" (2 of 3 desktop-v0.1.12 attempts); v3 uses the Pipeline Connector.
       - name: Sign the installer with SignPath
         id: signpath
         if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
         continue-on-error: ${{ (vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing') != 'release-signing' }}
-        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}

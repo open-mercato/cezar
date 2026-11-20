@@ -62,7 +62,10 @@ describe('desktop release workflow signing path', () => {
     const fallback = step(buildSteps, 'Report the unsigned Windows fallback')
     const replaceStep = step(buildSteps, 'Put the signed installer in place')
 
-    // desktop-v0.1.12: a transient "Invalid URL for GitHub API" from the connector held the release.
+    // v2's deprecated connector failed 2 of 3 desktop-v0.1.12 attempts ("Invalid URL for GitHub API").
+    expect(signPathStep.uses).toMatch(/^signpath\/github-action-submit-signing-request@[0-9a-f]{40}$/)
+    expect(readFileSync(workflowPath, 'utf8')).toMatch(/submit-signing-request@[0-9a-f]{40} # v3/)
+    expect(signPathStep.with['connector-url']).toBeUndefined()
     expect(signPathStep['continue-on-error']).toBe("${{ (vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing') != 'release-signing' }}")
     expect(fallback.if).toContain("steps.signpath.outcome == 'failure'")
     expect(fallback.run).toContain('GITHUB_STEP_SUMMARY')
