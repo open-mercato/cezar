@@ -1,11 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowDownIcon, ArrowLeftIcon, BotIcon, ListChecksIcon, LoaderCircleIcon, PanelRightIcon, RefreshCwIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowLeftIcon, BotIcon, ListChecksIcon, LoaderCircleIcon, PanelRightIcon, PauseIcon, PlayIcon, RefreshCwIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
 
 import {
   applyManagerChange,
   checkManager,
+  setManagerActive,
   decideManagerAction,
   getOldestPendingAction,
   managerChat,
@@ -32,6 +33,8 @@ import { toast } from '@/components/ui/toaster'
 import { ChatSkeleton, LoadingState } from '@/components/loading-state'
 import { Spinner } from '@/components/ui/spinner'
 import {
+  cronLabel,
+  inactiveSinceLabel,
   MANAGER_COMMANDS,
   managerReplyAnnouncement,
   needsYouCount,
@@ -53,7 +56,9 @@ import { managerAccessOf, supersededAskIds, type ManagerListResponse, type Manag
 
 import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
-import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
+import { cameFromManagerList, FOCUS_COMPOSER, opensManagerSettings, shouldFocusComposer } from './manager-focus'
+import { useManagerActivityActions } from './manager-activity'
+import { ManagerAvatar } from './manager-avatar'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
@@ -491,6 +496,13 @@ function WorkingSpinner({ label }: { label: string }) {
   )
 }
 
+/** The header's sub line while inactive: since when, and what is paused. */
+function inactiveLine(manager: ManagerSummary): string {
+  const jobs = manager.jobs.filter((job) => job.enabled).length
+  const paused = [jobs > 0 ? `${jobs} ${jobs === 1 ? 'job' : 'jobs'}` : '', manager.cronMinutes > 0 ? `checks every ${cronLabel(manager.cronMinutes)}` : ''].filter(Boolean).join(' and ')
+  return `${inactiveSinceLabel(manager).replace(' · since', ' since')}${paused ? ` · ${paused} paused` : ''}`
+}
+
 function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const { id } = manager
   const chat = useManagerChat(id)
@@ -564,6 +576,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   })
   const checkNow = useCheckNow(id)
   const settings = useRef<ManagerSettingsHandle>(null)
+  // Spec 2026-11-19-manager-deactivate: a banner, Check now off, and a send that asks first.
+  const inactive = manager.inactive !== undefined
+  const activity = useManagerActivityActions()
+  // A sidebar row's Settings… lands here with the gear menu to open, once.
+  const navigateOnce = useNavigate()
+  useEffect(() => {
+    if (!opensManagerSettings(location.state)) return
+    settings.current?.openMenu()
+    navigateOnce({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: null })
+  }, [location.key]) // once per arrival
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
   const watchingId = `manager-watching-${id}`
   const [sheetParam, setSheetOpen] = useWatchingSheet()
@@ -600,7 +622,11 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   }, [wantsJump, needsYou.ready]) // once per arrival: the hash is cleared right after
 
   // What a card can ask of the chat: the gear, opened on the account picker.
-  const chatActions = useMemo<ManagerChatActions>(() => ({ switchAccount: () => settings.current?.openAccount() }), [])
+  const confirmActivity = activity.confirmActivity
+  const chatActions = useMemo<ManagerChatActions>(() => ({
+    switchAccount: () => settings.current?.openAccount(),
+    ...(inactive ? { confirmReactivate: async (answer: string) => (await confirmActivity({ kind: 'answer', manager, answer })) !== null } : {}),
+  }), [inactive, confirmActivity, manager])
   const authLive = useMemo(() => liveAuthFailures(chat.messages), [chat.messages])
   // "Use <other> instead" on a reconnect card: the manager's own account, then the failed turn again.
   const latestMessages = useRef(chat.messages)
@@ -624,15 +650,21 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const deliver = async (text: string, attachments: AttachmentEntry[], via: 'composer' | 'chip') => {
     // A command takes no files, so a message that has them is a message.
     const command = attachments.length > 0 ? null : parseManagerCommand(text)
+    // A message to an inactive manager wakes it, so it asks first; a cancel hands the draft back.
+    const reactivate = inactive && command?.name !== 'stop'
+    if (reactivate && !(await activity.confirmActivity({ kind: command?.name === 'check' ? 'check' : 'send', manager }))) {
+      throw new Error(`Not sent: ${manager.name} is still inactive.`)
+    }
     scroll.jump()
     lastSent.current = Date.now()
     if (command?.name === 'stop') return stopManager(id)
     if (command?.name === 'check') {
-      await checkManager(id)
+      // Reactivating with Catch me up is exactly one forced check; a plain check would 409 while inactive.
+      await (reactivate ? setManagerActive(id, true, { catchUp: true }) : checkManager(id))
       toast('Check started')
       return undefined
     }
-    const sent = await sendManagerMessage(id, command?.prompt ?? text, attachments)
+    const sent = await sendManagerMessage(id, command?.prompt ?? text, attachments, undefined, reactivate ? { reactivate: true } : undefined)
     trackManagerMessageSent(via, attachments.length > 0)
     // The next message answers an open card, whatever it says (spec 2026-10-31-managers, Questions).
     if (questionOpen) trackManagerQuestionAnswered('typed')
@@ -659,17 +691,22 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       <header className="flex items-center gap-3 border-b border-border bg-card px-3 py-2.5 max-md:box-content max-md:h-13 max-md:gap-1 max-md:px-1 max-md:py-0 max-md:pt-[env(safe-area-inset-top)] md:px-5">
         <BackToList />
         {/* Avatar-sized so it fits the 52 px phone bar (h-13) and centres on the title rows. */}
-        <ManagerCompanion manager={manager} messages={chat.messages} className="size-10 self-center md:size-11" />
+        {inactive ? (
+          <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} inactive className="size-10 self-center md:size-11" sizes="44px" />
+        ) : (
+          <ManagerCompanion manager={manager} messages={chat.messages} className="size-10 self-center md:size-11" />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h1 className="truncate text-body font-semibold md:text-base">{manager.name}</h1>
             {working ? <WorkingSpinner label={turnKindLabel(streamingReply(chat.messages))} /> : null}
           </div>
-          <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
+          <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{inactive ? inactiveLine(manager) : subline}</p>
+          {inactive ? <p className="text-xs text-muted-foreground md:hidden">Inactive</p> : null}
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
         </div>
         <ManagerUsageChip name={manager.name} usage={planUsage.today} />
-        <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" onClick={checkNow}>
+        <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" disabled={inactive} title={inactive ? 'Reactivate to check' : undefined} onClick={checkNow}>
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now
         </Button>
@@ -704,6 +741,18 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         </Button>}
         <ManagerSettings ref={settings} manager={manager} onPatch={onPatch} />
       </header>
+
+      {inactive ? (
+        <div data-slot="manager-inactive-banner" role="status" className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-border bg-muted/70 px-3 py-2 text-sm md:flex-nowrap md:px-5">
+          <PauseIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="font-semibold">Inactive</span>
+          <span className="min-w-0 basis-full text-muted-foreground max-md:order-last md:basis-auto md:truncate">No checks, jobs or model calls. Its tasks keep running; their cards still arrive here.</span>
+          <Button size="sm" className="ml-auto shrink-0 pointer-coarse:min-h-11" data-slot="manager-reactivate" onClick={() => void activity.reactivate(manager)}>
+            <PlayIcon aria-hidden="true" />
+            Reactivate…
+          </Button>
+        </div>
+      ) : null}
 
       {waiting > 0 ? (
         // Replaces the floating "N approvals waiting" pill (design, Proposal 10).
@@ -862,7 +911,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           }}
           onSubmit={submit}
           slashCommands={MANAGER_COMMANDS}
-          placeholder={`Message ${manager.name}, or / for commands`}
+          placeholder={inactive ? `${manager.name} is inactive — write anyway; sending reactivates it` : `Message ${manager.name}, or / for commands`}
+          {...(inactive ? { sendLabel: 'Reactivate and send', sendAriaLabel: 'Reactivate and send' } : {})}
           ariaLabel={`Message ${manager.name}`}
           textareaClassName="max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)]"
           sendShortcut="↵"
@@ -870,6 +920,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         />
       </div>
     </div>
+    {activity.dialog}
     {watchingOpen && !barEverywhere ? (
       <WatchingPanel
         id={watchingId}

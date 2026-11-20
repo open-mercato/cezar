@@ -230,6 +230,11 @@ export const managerSchema = z.object({
   /** Read-only `gh` patterns the user allowed beyond the built-in policy. Absent = none. */
   bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
   jobs: z.array(managerJobSchema).max(32),
+  /** Deactivated by the user (spec 2026-11-19-manager-deactivate): no checks, jobs, follow-ups or
+   *  model calls until reactivated. Absent = active. */
+  inactive: z.object({ since: z.string() }).optional(),
+  /** The last reactivation: the floor every check and job due time counts from, so nothing overdue fires at once. */
+  activeSince: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -317,6 +322,10 @@ export const updateManagerInputSchema = z.object({
   /** Forget the refused-command log. */
   clearBashDenials: z.literal(true).optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
+  /** false deactivates, true reactivates (spec 2026-11-19-manager-deactivate). */
+  active: z.boolean().optional(),
+  /** With `active: true`: run one forced check on reactivation (one model call). */
+  catchUp: z.literal(true).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
 
@@ -425,6 +434,18 @@ const managerMessageBase = {
   sourceTasks: z.array(managerTaskSourceSchema).optional(),
 };
 
+/** What a deactivate or reactivate line carries; `reactivated` counts what happened while inactive. */
+export const managerActivityNoticeSchema = z.object({
+  change: z.enum(['deactivated', 'reactivated']),
+  since: z.string().optional(),
+  taskUpdates: z.number().int().min(0).optional(),
+  automationReports: z.number().int().min(0).optional(),
+  checksSkipped: z.number().int().min(0).optional(),
+  jobRunsSkipped: z.number().int().min(0).optional(),
+  catchUp: z.boolean().optional(),
+});
+export type ManagerActivityNotice = z.infer<typeof managerActivityNoticeSchema>;
+
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
 export const managerMessageSchema = z.discriminatedUnion('kind', [
   z.object({ ...managerMessageBase, kind: z.literal('user'), text: z.string(), attachments: z.array(managerAttachmentSchema).optional() }),
@@ -488,7 +509,13 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     result: z.string().optional(),
   }),
   /** A quiet system line: "Connected to meblohand", "Merged #12". */
-  z.object({ ...managerMessageBase, kind: z.literal('notice'), text: z.string() }),
+  z.object({
+    ...managerMessageBase,
+    kind: z.literal('notice'),
+    text: z.string(),
+    /** Set on the deactivate and reactivate lines (spec 2026-11-19-manager-deactivate); `text` says the same for older cockpits. */
+    activity: managerActivityNoticeSchema.optional(),
+  }),
 ]);
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;
 
@@ -532,6 +559,8 @@ export const sendManagerMessageInputSchema = z
     askId: z.string().min(1).max(200).optional(),
     // A resend of a send that already landed answers the first result (relay incident 2026-11-15).
     idempotencyKey: z.string().uuid().optional(),
+    // An inactive manager takes a message only when the user confirmed reactivating it (spec 2026-11-19-manager-deactivate).
+    reactivate: z.literal(true).optional(),
   })
   .refine((input) => input.text !== '' || (input.images?.length ?? 0) > 0, {
     message: 'write a message or attach a file',
@@ -547,6 +576,13 @@ export const managerActionDecisionInputSchema = z.object({
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;
 
 export const managerOkResponseSchema = z.object({ ok: z.literal(true) });
+
+/** `POST /workspace/managers/activity`: deactivate or reactivate every manager at once. */
+export const managerActivityInputSchema = z.strictObject({ active: z.boolean() });
+export type ManagerActivityInput = z.infer<typeof managerActivityInputSchema>;
+/** The managers whose state changed; one already in that state is left alone. */
+export const managerActivityResponseSchema = z.object({ ok: z.literal(true), changed: z.array(managerIdSchema) });
+export type ManagerActivityResponse = z.infer<typeof managerActivityResponseSchema>;
 
 /** `attachments` is what the server kept: the client's proof that nothing was dropped on the way. */
 export const managerSendResponseSchema = z.object({ ok: z.literal(true), attachments: z.number().int().min(0) });

@@ -35,9 +35,11 @@ const taskItem = (requestId: string, header: string, rest: Partial<QuestionItem>
 let data: QuestionsResponse
 const posts: Array<{ path: string; body: unknown }> = []
 let answerStatus = 200
+/** Managers the server holds inactive: their cards stay listed but leave `live` (spec 2026-11-19-manager-deactivate). */
+let inactiveIds = new Set<string>()
 
 function respond(): QuestionsResponse {
-  const live = data.open.filter((item) => !item.older).length
+  const live = data.open.filter((item) => !item.older && !(item.source.kind === 'manager' && inactiveIds.has(item.source.managerId))).length
   return { ...data, counts: { live, older: data.open.length - live } }
 }
 
@@ -45,6 +47,7 @@ beforeEach(() => {
   data = { open: [], closed: [], counts: { live: 0, older: 0 }, olderAfterDays: 7 }
   posts.length = 0
   answerStatus = 200
+  inactiveIds = new Set()
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input, 'http://localhost')
     if (url.pathname === '/api/v1/workspace/questions') return Response.json(respond())
@@ -77,10 +80,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderPage({ managers = true, entry = '/manager/questions' } = {}) {
+function renderPage({ managers = true, entry = '/manager/questions', list = [managerFixture({ pendingActions: 2 })] } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(queryKeys.health, { capabilities: { managers, localHandoff: true } })
-  client.setQueryData(managerKeys.list, { managers: [managerFixture({ pendingActions: 2 })] })
+  client.setQueryData(managerKeys.list, { managers: list })
   client.setQueryData(workspaceQueryKeys.projects, { projects: [{ id: 'alpha', name: 'Alpha' }], bootProject: null, projectsDir: '' })
   client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [] })
   client.setQueryData(workspaceQueryKeys.uiState, {})
@@ -357,5 +360,56 @@ describe('question helpers', () => {
   it('groupQuestions keeps one group per source', () => {
     const groups = groupQuestions([managerItem('m1', 'A'), taskItem('r1', 'B'), managerItem('m2', 'C')])
     expect(groups.map((group) => [group.key, group.items.length])).toEqual([['manager:global', 2], ['task:alpha/run1', 1]])
+  })
+})
+
+describe('an inactive manager on the Questions page (spec 2026-11-19-manager-deactivate)', () => {
+  const list = () => [managerFixture({ id: 'global', name: 'Global', inactive: { since: ago(HOUR) } })]
+
+  it('keeps its group listed and flagged, and leaves it out of the badge with a +N note', async () => {
+    inactiveIds = new Set(['global'])
+    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
+    renderPage({ list: list() })
+    const group = (await screen.findAllByRole('region')).find((region) => region.getAttribute('aria-label') === 'Global')!
+    expect(group.dataset.inactive).toBe('true')
+    expect(within(group).getByText('Manager · inactive')).toBeTruthy()
+    expect(group.querySelector('[data-slot="manager-avatar-inactive"]')).not.toBeNull()
+    expect(within(card('Design')).getByText('Manager inactive — answering reactivates it; dismissing does not')).toBeTruthy()
+    expect(within(card('Storage')).queryByText(/Manager inactive/)).toBeNull()
+    await waitFor(() => expect(document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent).toBe('1'))
+    expect(screen.getByText('+1 from inactive managers, not counted')).toBeTruthy()
+    // The header counts what the sidebar badge counts: the task question only.
+    expect(document.querySelector('[data-slot="questions-status"]')!.textContent).toBe('1 question waiting, from 1 task')
+    expect(document.querySelector('[data-slot="sidebar-questions"]')!.getAttribute('title')).toBe('1 more from inactive managers, not counted')
+  })
+
+  it('asks before an answer wakes it: Cancel sends nothing, Reactivate and answer sends reactivate: true', async () => {
+    inactiveIds = new Set(['global'])
+    data.open = [managerItem('m1', 'Design')]
+    renderPage({ list: list() })
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'Yes' }))
+    let dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global and answer\?/ })
+    expect(within(dialog).getByText('“Design: Yes”')).toBeTruthy()
+    expect(within(dialog).getByText('Dismiss')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(posts).toEqual([])
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Yes' }))
+    dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and answer' }))
+    await waitFor(() => expect(posts).toEqual([{ path: 'answer m:global:m1', body: { text: 'Design: Yes', reactivate: true } }]))
+  })
+
+  it('dismisses without asking and without counting it off the badge', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    inactiveIds = new Set(['global'])
+    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
+    renderPage({ list: list() })
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Design' })).getByRole('button', { name: 'Dismiss «Design»' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    // Inside the undo window the badge still reads 1: the server never counted this card.
+    await waitFor(() => expect(document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent).toBe('1'))
+    await act(async () => { vi.advanceTimersByTime(DISMISS_UNDO_MS + 10) })
+    await waitFor(() => expect(posts).toEqual([{ path: 'dismiss m:global:m1', body: undefined }]))
   })
 })

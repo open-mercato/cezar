@@ -12,8 +12,9 @@ export interface QuestionProvider {
   list(): Promise<QuestionItem[]>;
   /** Owns `key` (its `m:`/`r:` prefix and source). */
   owns(key: string): boolean;
-  /** Deliver an answer, as the card itself would. Closes the item as `answered`. */
-  answer(key: string, text: string): Promise<QuestionResult>;
+  /** Deliver an answer, as the card itself would. Closes the item as `answered`. `reactivate`: the
+   *  user confirmed reactivating an inactive manager first (spec 2026-11-19-manager-deactivate). */
+  answer(key: string, text: string, options?: AnswerOptions): Promise<QuestionResult>;
   /** Close as `dismissed` and tell the agent it was skipped (delivery rules per source, spec §dismiss). */
   dismiss(key: string): Promise<QuestionResult>;
   /** Close from outside without telling the agent anything beyond `closed` itself: the aggregator
@@ -23,6 +24,10 @@ export interface QuestionProvider {
   /** Fired after any change to this provider's questions: opened, closed, flagged. `closedItem` is
    *  set when the change closed a question, so the aggregator can close its linked copy. */
   onChange(listener: (change: QuestionChange) => void): () => void;
+}
+
+export interface AnswerOptions {
+  reactivate?: boolean;
 }
 
 export type QuestionResult =

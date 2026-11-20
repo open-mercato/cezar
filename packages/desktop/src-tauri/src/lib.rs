@@ -1002,6 +1002,9 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 }
             });
         } else {
+            if matches!(child.try_wait(), Ok(Some(status)) if status.code() == Some(0)) && attach_to_running(&window, &shell, &log) {
+                return;
+            }
             let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
             let failure = match child.try_wait() {
                 Ok(Some(status)) => Failure::new("sidecar_exited_at_start", format!("The cockpit process exited with {status} before answering."))
@@ -1039,6 +1042,7 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 splash_reset(&window, "Restarting cezar…", "Switching to the newly installed version.");
                 continue;
             }
+            Some(0) if attach_to_running(&window, &shell, &log) => return,
             Some(code) => {
                 let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
                 fail(&window, "cezar stopped", &stopped_detail(code), &tail, stopped_failure(code));
@@ -2248,6 +2252,40 @@ fn stopped_failure(code: i32) -> Option<Failure> {
     (code != 0).then(|| Failure::new("sidecar_exited", stopped_detail(code)).with("exit_code", code))
 }
 
+/// The URL a sidecar that handed off to an ALREADY-RUNNING cockpit announced before exiting 0
+/// (`cezar-handoff: <url>`, written by the CLI). Only loopback http is ever attached to
+/// (telemetry f3893dd3).
+fn handoff_url(lines: &[String]) -> Option<url::Url> {
+    let raw = lines.iter().rev().find_map(|line| line.trim().strip_prefix("cezar-handoff:"))?.trim();
+    let url = url::Url::parse(raw).ok()?;
+    let loopback = match url.host()? {
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+        url::Host::Domain(name) => name == "localhost",
+    };
+    (url.scheme() == "http" && loopback && url.port().is_some()).then_some(url)
+}
+
+/// A clean exit after a hand-off is not a stop: the window joins the cockpit that is already up.
+/// The pipe readers may trail the exit by a moment, so the log is polled briefly.
+fn attach_to_running(window: &WebviewWindow, shell: &Shell, log: &Mutex<VecDeque<String>>) -> bool {
+    for _ in 0..10 {
+        let lines = log.lock().unwrap().iter().cloned().collect::<Vec<_>>();
+        if let Some(url) = handoff_url(&lines) {
+            // The marker is only a claim: trust the port (and IPC via is_own_origin) once a cezar answers there.
+            let port = url.port().unwrap_or_default();
+            if health_version(port).is_none() {
+                return false;
+            }
+            shell.port.store(port, Ordering::SeqCst);
+            let _ = window.navigate(url);
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 /// The page's `report` mode, after adding what only the shell knows: the active cezar and where
 /// Node came from.
 fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
@@ -2308,6 +2346,39 @@ mod tests {
             sidecar_args(entry, 4321, Some(Path::new("/Users/o/Documents/my app"))),
             ["/c/index.js", "serve", "--no-open", "--port", "4321", "--repo", "/Users/o/Documents/my app"]
         );
+    }
+
+    fn lines(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|line| line.to_string()).collect()
+    }
+
+    /// Telemetry f3893dd3: exit 0 after "cockpit already running" is a hand-off to attach to.
+    #[test]
+    fn a_handoff_announcement_names_the_cockpit_to_attach_to() {
+        let log = lines(&[
+            "  cockpit already running (pid 1066794) — opened admin-v2",
+            "  cockpit → http://127.0.0.1:4321/p/admin-v2/",
+            "cezar-handoff: http://127.0.0.1:4321/p/admin-v2/",
+        ]);
+        assert_eq!(handoff_url(&log).map(|u| u.to_string()).as_deref(), Some("http://127.0.0.1:4321/p/admin-v2/"));
+        assert!(handoff_url(&lines(&["cezar-handoff: http://localhost:4400/"])).is_some());
+        assert!(handoff_url(&lines(&["cezar-handoff: http://[::1]:4400/"])).is_some());
+    }
+
+    #[test]
+    fn only_loopback_http_with_a_port_is_attached_to() {
+        for bad in [
+            "cezar-handoff: https://127.0.0.1:4321/",
+            "cezar-handoff: http://example.com:4321/",
+            "cezar-handoff: http://127.0.0.1/",
+            "cezar-handoff: file:///etc/passwd",
+            "cezar-handoff: not a url",
+        ] {
+            assert!(handoff_url(&lines(&[bad])).is_none(), "{bad}");
+        }
+        // The human line alone is not a machine contract; a plain stop has no hand-off.
+        assert!(handoff_url(&lines(&["  cockpit → http://127.0.0.1:4321/"])).is_none());
+        assert!(handoff_url(&[]).is_none());
     }
 
     #[test]

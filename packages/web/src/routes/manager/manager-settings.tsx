@@ -34,6 +34,8 @@ import { ConnectorsDialog } from './manager-connectors'
 import { ShellAccessDialog } from './manager-shell-access'
 import { PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerAgentDialog } from './manager-agent-dialog'
+import { activityMenuLabel, useManagerActivityActions } from './manager-activity'
+import { isInactive } from '@/lib/managers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -314,12 +316,14 @@ export function PersonaDialog({
 }
 
 /** A menu action, drawn like the picker rows above it: one icon column, one weight. */
-function MenuRow({ icon, danger, onClick, children }: { icon: ReactNode; danger?: boolean; onClick: () => void; children: ReactNode }) {
+function MenuRow({ icon, danger, disabled, title, slot, onClick, children }: { icon: ReactNode; danger?: boolean; disabled?: boolean; title?: string; slot?: string; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
-      data-slot="manager-menu-row"
-      className={cn(PICKER_TRIGGER, 'w-full [&>svg]:size-3.5 [&>svg]:shrink-0', danger && 'text-danger hover:text-danger')}
+      data-slot={slot ?? 'manager-menu-row'}
+      disabled={disabled}
+      title={title}
+      className={cn(PICKER_TRIGGER, 'w-full [&>svg]:size-3.5 [&>svg]:shrink-0 disabled:opacity-50', danger && 'text-danger hover:text-danger')}
       onClick={onClick}
     >
       {icon}
@@ -342,6 +346,8 @@ export function useCheckNow(managerId: string): () => void {
 export interface ManagerSettingsHandle {
   openAccount: () => void
   openJobs: () => void
+  /** A sidebar row's Settings…: the gear menu itself. */
+  openMenu: () => void
 }
 
 /** The gear groups agent choices in one dialog beside the manager's other settings. */
@@ -360,6 +366,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       setDialog('agent')
     },
     openJobs: () => { setMenuOpen(false); setDialog('jobs') },
+    openMenu: () => setMenuOpen(true),
   }), [])
   const openDialog = (next: 'agent' | 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete') => {
     setFocusAccount(false)
@@ -375,6 +382,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
     if (!open) setDialog(null)
   }
   const checkNow = useCheckNow(manager.id)
+  const activity = useManagerActivityActions(returnFocus)
+  const inactive = isInactive(manager)
+  const { label: activityLabel, Icon: ActivityIcon } = activityMenuLabel(manager)
   const confirmDelete = () => {
     remove.mutate(undefined, {
       onError: (error) => toast(errorMessage(error), { tone: 'danger' }),
@@ -433,7 +443,17 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           <MenuRow icon={<MessageSquareTextIcon aria-hidden="true" />} onClick={() => openDialog('prompts')}>
             Prompt buttons{manager.quickPrompts?.length ? ` (${manager.quickPrompts.length})` : ''}…
           </MenuRow>
-          <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} onClick={checkNow}>Check now</MenuRow>
+          <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} disabled={inactive} {...(inactive ? { title: 'Reactivate to check' } : {})} onClick={checkNow}>Check now</MenuRow>
+          <MenuRow
+            slot="manager-menu-activity"
+            icon={<ActivityIcon aria-hidden="true" />}
+            onClick={() => {
+              setMenuOpen(false)
+              void activity.toggle(manager)
+            }}
+          >
+            {activityLabel}
+          </MenuRow>
           <MenuRow icon={<Trash2Icon aria-hidden="true" />} danger onClick={() => openDialog('delete')}>Delete…</MenuRow>
           {manager.costUsd > 0 ? (
             <p className="px-1.5 pt-1 text-meta text-muted-foreground">Spent ${manager.costUsd.toFixed(2)}</p>
@@ -456,6 +476,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       {dialog === 'prompts' ? (
         <QuickPromptsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(quickPrompts) => update.mutateAsync({ quickPrompts })} />
       ) : null}
+      {activity.dialog}
       <AlertDialog open={dialog === 'delete'} onOpenChange={closeDialog}>
         <AlertDialogContent onCloseAutoFocus={returnFocus}>
           <AlertDialogHeader>

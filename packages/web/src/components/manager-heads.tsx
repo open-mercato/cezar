@@ -257,7 +257,7 @@ function HeadsOverlay({ managers, bottom, right }: { managers: readonly ManagerS
           style={{ bottom: edgeBottom(bottom) }}
           className="fixed left-1/2 z-20 flex max-w-[calc(100%-32px)] -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card py-1 pr-2.5 pl-1 text-label whitespace-nowrap shadow-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 md:hidden"
         >
-          <ManagerAvatar avatar={last.manager.avatar} mascot={last.manager.mascot} sizes="24px" className="size-6 rounded-full object-cover" />
+          <ManagerAvatar avatar={last.manager.avatar} mascot={last.manager.mascot} inactive={last.manager.inactive !== undefined} sizes="24px" className="size-6 rounded-full object-cover" />
           <span className="truncate">
             <span className="font-semibold">{last.manager.name}</span> {HEAD_KIND_PHRASE[last.kind]}
           </span>
@@ -293,6 +293,7 @@ function HeadAvatar({ head, large, arriving, onOpen, ref }: {
       <ManagerAvatar
         avatar={manager.avatar}
         mascot={manager.mascot}
+        inactive={manager.inactive !== undefined}
         sizes={large ? '40px' : '32px'}
         className={cn('rounded-full object-cover', large ? 'size-10' : 'size-8')}
       />

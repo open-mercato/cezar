@@ -191,6 +191,22 @@ From the command line, `cez automation add … --report-to-manager --manager <id
 
 > **Good to know**: Automations that don't report to a manager behave as before. When you delete a manager, its automations drop the link on their next run.
 
+## Deactivate a manager
+
+Deactivating a manager stops its work without deleting it. Its chat, memory, jobs, settings and automation links stay as they are. Open the gear and select **Deactivate…**, or right-click the manager in the sidebar. The dialog lists what stops and what keeps going. To switch every manager off at once, for example before a laptop sleeps, open the **⋯** menu next to *Managers* in the sidebar and select **Deactivate all…**. **Settings → Manager** has the same controls.
+
+While a manager is inactive:
+
+- It makes **no model calls**. Checks, jobs and follow-up turns stop, and so do its notifications. **Check now** is off.
+- Tasks it started keep running, and their *Task update* cards still post to its chat. The manager hears those updates on its next turn after you reactivate it.
+- Automations that report to it keep running and keep posting their results.
+- You can still decide its approvals. Its questions stay listed with a *Manager inactive* label but leave the Questions count. **Dismiss** closes a question without reactivating the manager. Answering a question needs the manager, so the cockpit asks you to reactivate it first.
+- Its avatar turns grey with a pause badge, and it moves below the active managers under *Inactive*.
+
+You can still type in the chat of an inactive manager. **Reactivate and send** asks you to confirm, then reactivates it and sends your message.
+
+To bring a manager back, select **Reactivate…** in the chat banner, the gear or the sidebar menu. Reactivating spends nothing by default: checks and jobs restart from that moment, so overdue ones don't all run at once. The chat shows one line that counts what happened while the manager was off. Tick **Catch me up** to run one check right away. That check is one model turn.
+
 ## What a manager can do
 
 | Action | Chat and job turns | Watch checks |

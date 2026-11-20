@@ -113,6 +113,8 @@ export function restingHeads(managers: readonly ManagerSummary[], later: HeadMem
   return managers
     .flatMap((manager) => {
       const kind = headKind(manager)
+      // An inactive manager surfaces only for an approval: its questions and news wait (spec 2026-11-19-manager-deactivate).
+      if (manager.inactive && kind !== 'approval') return []
       return kind && !laterHidden(later, manager) ? [{ manager, kind }] : []
     })
     .sort((a, b) => at(a.manager) - at(b.manager))
