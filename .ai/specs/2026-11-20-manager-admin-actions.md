@@ -189,7 +189,7 @@ The **target** of an op may be the proposing manager (*self*) or another manager
 | `manager.admin-access` | The new `adminAccess` (§ 3.1) | — | not proposable: set only in Settings, by the user, for any manager | — | never |
 | `manager.deactivate` | Deactivate another manager | M | change, applied by the decision route (the deactivate spec's "no tool route changes it" still holds). Never self: a manager that wants to stop says so in chat | full | 3 |
 | `manager.reactivate` | — | — | not offered: the deactivate spec's rule "a manager never switches itself or another manager on" stands | — | never |
-| `manager.create` | New manager with the stated instructions and permissions | H* | change. The card lists every permission the new manager gets; it can never exceed the proposer's own | partial (deactivate) | 3 |
+| `manager.create` | New manager with the stated instructions and permissions | H* | change. The card lists every permission the new manager gets; it can never exceed the proposer's own, and `adminAccess` always starts at the default | partial (deactivate) | 3 |
 | `manager.delete` | Delete another manager | H* | change. Never self | none | later |
 | `job.add` | Saved job | H* (unattended) | change: **today's `add-job`, unchanged** | full | 0 |
 | `job.edit` | Prompt or interval | H* (prompt text) | change | full | 2 |
@@ -314,8 +314,10 @@ The `action` message gains two optional fields:
 All new fields are optional, so old chat files parse.
 
 **Telemetry.** `managers/telemetry.ts` records action types as closed sets. Phase 0 adds `admin` to
-them, plus the op's `category`, `risk` and `decidedBy.kind` as closed-set labels (from the registry,
-enforced by the server). The op's params, rows, reason and project never leave the machine.
+them, plus one closed-set label per event joining the op's `category`, `risk` and `decidedBy.kind`
+with `:` (from the registry, enforced by the server). `adminAccess` on `UpdateManagerInput` needs
+its own entry in the exhaustive `FIELD_OF` map there (a new `admin-access` setting field). The op's
+params, rows, reason and project never leave the machine.
 
 **Old clients.** `UNKNOWN_ACTION_COPY` lets an older cockpit approve a card it cannot describe. For
 `admin` cards the decision input gains `seen: <pin>`, and the server refuses an approve without the
@@ -402,10 +404,15 @@ These hold in v1 and continue to hold with auto-approval.
   joining it, above. Narrowing itself is allowed but still asks. `adminAccess` is not an op at all.
 - **Every manager-to-manager widening is capped by the proposer** (§ 7, decision 3). For
   `manager.create` and for every widening op whose target is another manager, each granted value
-  (projects, access, connectors, shell patterns, task agents, `cancelAnyTask`, and the new manager's
-  adminAccess) must be a subset of the proposer's own. Otherwise the proposal refuses, saying which
-  grant exceeds. Without this, two managers could widen each other past what either holds, one
-  "never self" card at a time.
+  (projects, access, connectors, shell patterns, task agents, `cancelAnyTask`) must be within the
+  proposer's own. Otherwise the proposal refuses, saying which grant exceeds. Without this, two
+  managers could widen each other past what either holds, one "never self" card at a time.
+  - "Within" means: projects, connectors, task agents and shell patterns as set containment (a
+    pattern must appear verbatim in the proposer's list); access per project ordered
+    `read` < `write`; connector grant levels by their existing order; `cancelAnyTask` `false` <
+    `true`.
+  - Narrowing ops are not capped.
+  - A created manager always starts at the default `adminAccess`; `manager.create` cannot set it.
 - **Policy and confirmation settings are not ops** (§ 1.7). The policy can only be edited in
   Settings, by the user.
 - **Decisions.** The `decision` and `undo` routes are cockpit routes. Today the only thing between a
@@ -448,7 +455,8 @@ These hold in v1 and continue to hold with auto-approval.
 
 - **Storage.** `~/.cezar/admin-audit.ndjson`, append-only, written through `cezarHomeDir()` and
   rotated at 5,000 entries (the older half moves to `admin-audit.1.ndjson`). Appends and rotation
-  run under one cross-process lock, so a CLI and a server writing at once never lose or duplicate a
+  run under one cross-process lock (the mkdir + PID-owner lease of `withLifecycleFileLock` in
+  `worktree-lifecycle/store.ts`, lifted into a shared helper rather than a new mechanism), so a CLI and a server writing at once never lose or duplicate a
   line. Deleting it loses history, never boot.
 - **Each entry** holds:
   - `id`, `at`, `op`, `scope`, `managerId`, `managerName`, `actionId` (the card), `reason` (the
