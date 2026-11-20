@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { managerKeys } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
-import { DISMISS_UNDO_MS, questionKeys, resetDismissals } from '@/api/questions'
+import { applyQuestionCounts, DISMISS_UNDO_MS, questionKeys, resetDismissals } from '@/api/questions'
 import { FADE_MS as FADE, IDLE_MS, LINGER_MS } from '@/routes/manager/approvals-linger'
 import { managerFixture } from '@/routes/manager/manager-fixtures'
 import { ManagerSidebar } from '@/routes/manager/manager-sidebar'
@@ -39,6 +39,7 @@ let answerStatus = 200
 let dismissStatus = 200
 /** Holds the answer POST open until released, so the in-flight card can be inspected. */
 let answerGate: Promise<void> | undefined
+let dismissGate: Promise<void> | undefined
 let managerList = [managerFixture({ pendingActions: 2 })]
 /** Managers the server holds inactive: their cards stay listed but leave `live` (spec 2026-11-19-manager-deactivate). */
 let inactiveIds = new Set<string>()
@@ -54,6 +55,7 @@ beforeEach(() => {
   answerStatus = 200
   dismissStatus = 200
   answerGate = undefined
+  dismissGate = undefined
   managerList = [managerFixture({ pendingActions: 2 })]
   inactiveIds = new Set()
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
@@ -64,6 +66,7 @@ beforeEach(() => {
       const key = decodeURIComponent(verb[1]!)
       posts.push({ path: `${verb[2]} ${key}`, body: init?.body ? JSON.parse(init.body as string) : undefined })
       if (verb[2] === 'answer' && answerGate) await answerGate
+      if (verb[2] === 'dismiss' && dismissGate) await dismissGate
       if (verb[2] === 'dismiss' && dismissStatus !== 200) return Response.json({ error: 'the store is read-only' }, { status: dismissStatus })
       if (verb[2] === 'answer' && answerStatus !== 200) return Response.json({ error: answerStatus === 409 ? 'already closed' : 'the agent session is gone' }, { status: answerStatus })
       const item = data.open.find((row) => row.key === key)!
@@ -470,6 +473,46 @@ describe('the Questions page', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(LINGER_MS + 10) })
     expect(screen.queryByRole('group', { name: 'Design' })).toBeNull()
     expect(card('Storage')).toBeTruthy()
+  })
+
+  it('a live count that lands while the dismissal is sent keeps the badge true and the card on “Dismissed”', async () => {
+    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
+    const client = renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    const count = () => document.querySelector('[data-slot="sidebar-questions-count"]')?.textContent
+    await waitFor(() => expect(count()).toBe('2'))
+    const seen: Array<string | undefined> = []
+    const observer = new MutationObserver(() => seen.push(count()))
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true })
+    let release!: () => void
+    dismissGate = new Promise((resolve) => { release = resolve })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS + 10) })
+    await waitFor(() => expect(posts).toEqual([{ path: 'dismiss m:global:m1', body: undefined }]))
+    // The server already counted it off; the list re-read is slower than the frame.
+    await act(async () => { applyQuestionCounts(client, { live: 1, older: 0 }); await vi.advanceTimersByTimeAsync(0) })
+    expect(within(card('Design')).getByRole('button', { name: 'Undo' })).toBeTruthy()
+    await act(async () => { release(); await vi.advanceTimersByTimeAsync(50) })
+    await waitFor(() => expect(card('Design').querySelector('[data-slot="question-outcome"]')?.getAttribute('data-reason')).toBe('dismissed'))
+    observer.disconnect()
+    expect(seen.filter((value) => value !== undefined && Number(value) < 1)).toEqual([])
+    expect(count()).toBe('1')
+  })
+
+  it('a card closed elsewhere during its undo window shows why, not Undo', async () => {
+    data.open = [managerItem('m1', 'Design'), taskItem('ask_1', 'Storage')]
+    const client = renderPage()
+    await screen.findByRole('group', { name: 'Design' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fireEvent.click(within(card('Design')).getByRole('button', { name: 'Dismiss «Design»' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(within(card('Design')).getByRole('button', { name: 'Undo' })).toBeTruthy()
+    const [design] = data.open
+    data = { ...data, open: data.open.slice(1), closed: [{ ...design!, closed: { reason: 'replaced', at: new Date().toISOString(), replacedBy: 'm9' } }] }
+    await act(async () => { await client.invalidateQueries({ queryKey: questionKeys.all }) })
+    await waitFor(() => expect(card('Design').querySelector('[data-slot="question-outcome"]')?.getAttribute('data-reason')).toBe('replaced'))
+    expect(within(card('Design')).queryByRole('button', { name: 'Undo' })).toBeNull()
   })
 
   it('a dismissal that fails gives the manager its “Waiting for N answers” back', async () => {

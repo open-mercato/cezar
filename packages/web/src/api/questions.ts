@@ -61,7 +61,9 @@ export function settleQuestion(queryClient: QueryClient, item: QuestionItem): vo
   queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => {
     if (!data) return data
     const was = data.open.find((row) => row.key === item.key)
-    if (!was || !item.closed) return data
+    if (!item.closed) return data
+    // Already off the list (the live counts took it): record why, the counts are already right.
+    if (!was) return { ...data, closed: [item, ...data.closed.filter((row) => row.key !== item.key)] }
     const counts = {
       live: Math.max(0, data.counts.live - (was.older ? 0 : 1)),
       older: Math.max(0, data.counts.older - (was.older ? 1 : 0)),
@@ -112,14 +114,20 @@ export function useQuestionsSubscription(): void {
 export function applyQuestionCounts(queryClient: QueryClient, counts: QuestionCounts, listChanged = false): void {
   const before = queryClient.getQueryData<QuestionsResponse>(questionKeys.all)
   if (!listChanged && before && before.counts.live === counts.live && before.counts.older === counts.older) return
-  queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => {
-    if (!data) return data
-    // The server stopped counting answers still in flight here: they leave the list in the same
-    // write, or the badge would subtract them twice for a frame (and settleQuestion again after).
-    let dropped = Math.max(0, data.counts.live - counts.live)
-    const gone = new Set(data.open.filter((row) => !row.older && answering.has(row.key) && dropped-- > 0).map((row) => row.key))
-    return { ...data, counts, ...(gone.size > 0 ? { open: data.open.filter((row) => !gone.has(row.key)) } : {}) }
-  })
+  // The server stopped counting cards the badge already subtracts and has been told about (an
+  // answer in flight, a dismissal sent): they leave the list in the same write, or the badge
+  // would subtract them twice for a frame (and settleQuestion again after).
+  let dropped = Math.max(0, (before?.counts.live ?? 0) - counts.live)
+  const gone = new Set((before?.open ?? []).filter((row) => !row.older && (answering.has(row.key) || isDismissalSent(row.key)) && dropped-- > 0).map((row) => row.key))
+  // A drop left over while a card waits out its undo window could be that card (closed elsewhere,
+  // already subtracted) or another one: the counts alone cannot say, so they wait for the list
+  // re-read below, which brings both together and cancels that dismissal if it is the one.
+  const ambiguous = dropped > 0 && (before?.open ?? []).some((row) => !row.older && isDismissalPending(row.key))
+  if (!ambiguous) {
+    queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => (
+      data ? { ...data, counts, ...(gone.size > 0 ? { open: data.open.filter((row) => !gone.has(row.key)) } : {}) } : data
+    ))
+  }
   void queryClient.invalidateQueries({ queryKey: questionKeys.all })
 }
 
@@ -212,11 +220,49 @@ async function commit(key: string): Promise<void> {
   }
 }
 
+/** Past its undo window, request on its way: the server may already count it off. */
+function isDismissalSent(key: string): boolean {
+  const entry = dismissals.get(key)
+  return entry !== undefined && !entry.error && !entry.paused && entry.timer === undefined
+}
+
+/** Inside its undo window (paused or not): nothing sent, the badge already counts it off. */
+function isDismissalPending(key: string): boolean {
+  const entry = dismissals.get(key)
+  return entry !== undefined && !entry.error && !isDismissalSent(key)
+}
+
+const watched = new WeakSet<QueryClient>()
+
+/**
+ * The list says a card waiting out its undo window is no longer open (answered, replaced, expired,
+ * its task ended): drop the dismissal in the same cache update that drops the card, so the badge
+ * never subtracts it twice and nothing is sent for it.
+ */
+function watchClosedElsewhere(queryClient: QueryClient): void {
+  if (watched.has(queryClient)) return
+  watched.add(queryClient)
+  queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated' || dismissals.size === 0) return
+    const data = queryClient.getQueryData<QuestionsResponse>(questionKeys.all)
+    if (!data || event.query.queryHash !== queryClient.getQueryCache().find({ queryKey: questionKeys.all, exact: true })?.queryHash) return
+    let changed = false
+    for (const entry of [...dismissals.values()]) {
+      if (entry.queryClient !== queryClient || isDismissalSent(entry.key) || data.open.some((row) => row.key === entry.key)) continue
+      clearTimeout(entry.timer)
+      dismissals.delete(entry.key)
+      changed = true
+    }
+    if (changed) publish()
+  })
+}
+
 export function scheduleDismiss(queryClient: QueryClient, key: string, label: string): void {
   const existing = dismissals.get(key)
   if (existing && !existing.error) return
   clearTimeout(existing?.timer)
   const entry: Entry = { key, label, paused: false, remaining: DISMISS_UNDO_MS, startedAt: Date.now(), queryClient }
+  watchClosedElsewhere(queryClient)
   dismissals.set(key, entry)
   arm(entry)
   publish()

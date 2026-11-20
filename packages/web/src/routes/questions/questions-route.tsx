@@ -257,6 +257,7 @@ export function QuestionsRoute() {
 
   const undo = useCallback((item: QuestionItem) => {
     undoDismiss(item.key)
+    setFinished((rows) => rows.filter((row) => row.item.key !== item.key))
     void queryClient.invalidateQueries({ queryKey: managerKeys.list })
     setAnnouncement(`Kept «${firstHeader(item)}».`)
     setTimeout(() => {
@@ -295,11 +296,15 @@ export function QuestionsRoute() {
 
   const cardState = (item: QuestionItem): CardState => {
     const row = finishedByKey.get(item.key)
-    if (row) {
+    const entry = dismissing.get(item.key)
+    // The live counts can take a card off the list while its dismissal is pending (questions.ts,
+    // applyQuestionCounts): it still shows Undo until the dismissal lands. A card closed for
+    // another reason is in the closed list already and shows why.
+    const closedElsewhere = query.data?.closed.some((closed) => closed.key === item.key) === true
+    if (row && !(entry && row.outcome.kind === 'closed' && !row.closed && !closedElsewhere)) {
       const closed = row.closed ?? query.data?.closed.find((entry) => entry.key === item.key)?.closed
       return { kind: 'finished', row: closed ? { ...row, closed } : row, fading: leaving.has(item.key), leaving: leaving.get(item.key) }
     }
-    const entry = dismissing.get(item.key)
     return entry ? { kind: 'dismissing', label: entry.label } : { kind: 'open' }
   }
   const groupProps = { now, managerById, cardState, onDismiss: dismiss, onUndo: undo, answer }
