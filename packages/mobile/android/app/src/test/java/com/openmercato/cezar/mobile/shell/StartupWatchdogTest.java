@@ -34,7 +34,7 @@ public class StartupWatchdogTest {
         relay.start(now);
         status(RelayStatus.Kind.READY);
         relay.firstByte(now);
-        relay.painted();
+        relay.page(PageCheck.PAINTED);
         assertEquals(Kind.REVEAL, at(10).kind);
     }
 
@@ -88,14 +88,42 @@ public class StartupWatchdogTest {
     }
 
     @Test
-    public void thePaintSignalIsOptionalAfterTheLoadEvent() {
-        // An older cockpit, or paint answers lost with their document: the page shows anyway.
+    public void aCockpitThatLoadsAndNeverDrawsIsBlankNotBlack() {
+        // The shell named bundle files the updated server no longer has, or the app crashed booting.
         relay.start(now);
         status(RelayStatus.Kind.READY);
         at(800);
         relay.loaded(now);
-        assertEquals(Kind.WAIT, at(800 + StartupWatchdog.PAINT_GRACE_MS - 1).kind);
-        assertEquals(Kind.REVEAL, at(800 + StartupWatchdog.PAINT_GRACE_MS).kind);
+        relay.page(PageCheck.BLANK);
+        assertEquals(Kind.WAIT, at(800 + StartupWatchdog.BLANK_MS - 1).kind);
+        StartupWatchdog.Decision decision = at(800 + StartupWatchdog.BLANK_MS);
+        assertEquals(Kind.BLANK, decision.kind);
+        assertEquals(StartupWatchdog.BLANK_TEXT, decision.text);
+    }
+
+    @Test
+    public void noAnswerAfterTheLoadEventIsBlankToo() {
+        relay.start(now);
+        status(RelayStatus.Kind.READY);
+        at(800);
+        relay.loaded(now);
+        assertEquals(Kind.BLANK, at(800 + StartupWatchdog.BLANK_MS).kind);
+    }
+
+    @Test
+    public void aSignInPageWithNoRootShowsAfterTheGraceOnADirectServerOnly() {
+        StartupWatchdog direct = new StartupWatchdog("lab", false);
+        direct.start(0);
+        direct.loaded(100);
+        direct.page(PageCheck.PAGE);
+        assertEquals(Kind.WAIT, direct.decide(100 + StartupWatchdog.PAINT_GRACE_MS - 1).kind);
+        assertEquals(Kind.REVEAL, direct.decide(100 + StartupWatchdog.PAINT_GRACE_MS).kind);
+        // Through the relay a page with no #root is the proxy's own error page.
+        relay.start(now);
+        status(RelayStatus.Kind.READY);
+        relay.loaded(now);
+        relay.page(PageCheck.PAGE);
+        assertEquals(Kind.BLANK, at(StartupWatchdog.BLANK_MS).kind);
     }
 
     @Test
@@ -104,7 +132,7 @@ public class StartupWatchdogTest {
         status(RelayStatus.Kind.RELAY_DOWN);
         at(150);
         relay.loaded(now);
-        relay.painted();
+        relay.page(PageCheck.PAINTED);
         assertEquals(Kind.REVEAL, at(200).kind);
     }
 
@@ -121,12 +149,12 @@ public class StartupWatchdogTest {
         relay.start(now);
         relay.failed("No connection to cezar came up in time.");
         relay.firstByte(now);
-        relay.painted();
+        relay.page(PageCheck.PAINTED);
         assertEquals(Kind.PROBLEM, at(10).kind);
         assertEquals("settled until the next start", Kind.PROBLEM, at(20).kind);
         relay.start(now);
         status(RelayStatus.Kind.READY);
-        relay.painted();
+        relay.page(PageCheck.PAINTED);
         assertEquals(Kind.REVEAL, at(30).kind);
     }
 
@@ -152,5 +180,6 @@ public class StartupWatchdogTest {
     public void everyDeadlineFitsUnderTheCap() {
         assertEquals(true, StartupWatchdog.CONNECT_MS + StartupWatchdog.FIRST_BYTE_MS <= StartupWatchdog.MAX_MS);
         assertEquals(true, StartupWatchdog.PAINT_GRACE_MS <= 2000);
+        assertEquals(true, StartupWatchdog.PAINT_GRACE_MS < StartupWatchdog.BLANK_MS);
     }
 }
