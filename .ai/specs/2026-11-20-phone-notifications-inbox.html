@@ -231,7 +231,7 @@
   <div style="flex:1;min-width:280px">
     <ul>
       <li>The existing per-cezar <b>Notify me</b> row becomes a page; its switch stays at the top and still owns the push grant.</li>
-      <li>The relay carries no kind, so the choice is stored on the computer, per phone: an optional <code>prefs</code> object on <code>PUT /api/v1/workspace/phone/push</code>, kept in <code>devices.json</code>.</li>
+      <li>The relay carries no kind, so the choice is stored on the computer, per phone: its own route, <code>GET</code>/<code>PUT /api/v1/workspace/phone/push/prefs</code>, kept in <code>devices.json</code>: push kinds, icon kinds, quiet hours with the phone's IANA <code>timeZone</code>, and the push <code>kinds</code> the app understands (only a phone that declares <code>count</code> gets silent count pushes). Not on <code>PUT /workspace/phone/push</code>: that body is strict, so an older cezar would reject it and the phone would lose its grant. An older cezar answers the new route with 404, and the page then shows the defaults read-only.</li>
       <li>"Count on the icon" defaults to the push kinds; turning it off shows the full list.</li>
       <li>Quiet hours are server-side and cheap: <code>attention</code> pushes are held, one is sent at the end if anything still waits, and silent <code>count</code> pushes still go out.</li>
       <li>Per-manager "Notify me when important" on the desktop stays and still gates important messages.</li>

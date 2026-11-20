@@ -78,7 +78,7 @@ Add `kind: "count"` to `POST /v1/push` (protocol `v` stays 1; the relay already 
   (the app sums over computers itself). iOS may throttle it; the on-open refresh is the backstop.
 - **FCM**: data-only, `priority: normal`, `ttl: 3600s`, `collapse_key` `cezarId`,
   `data: { "s": "<cezarId>", "count": "N", "t": "count" }`.
-- Its own rate limit: at most 6 per grant per hour, not counted against `attention`'s.
+- Its own rate limit, new in the relay: at most 6 per grant per hour, in a bucket of its own that never uses up `attention`'s.
 - Answers as for `attention`. RELAY_PROTOCOL.md § 7 gains the row and both payloads. This adds to v1 and
   does not replace anything: § 7's "`attention` is the only value" becomes "`attention` or `count`", and
   `test-vectors/relay/` gains the `count` cases. The request keeps § 7's six fields, so AGENTS.md's
@@ -94,7 +94,7 @@ refresh. Released iOS builds have no background handler and drop the push, but t
 cezar sends one only after an `attention` push went to that grant and the count has since gone down. It sends
 at most one per 10 minutes per grant, which fits the relay's 6 an hour. Changes in between are merged, and
 the newest count goes out at the next free slot, so the final 0 always gets sent and is never rate-limited
-away. A 429 moves the next slot to the `Retry-After` time and leaves the pending value in place. Tests pin
+away. A 429 moves the next slot to the `Retry-After` time and leaves the pending value in place. The highest count a grant was last pushed is stored on its device row in `devices.json`, so after a restart cezar still knows it owes that phone a lower number. Tests pin
 the gate (no `count` push to a device that did not declare it) and the cadence (a falling count ends with one
 push of 0). The app, on receipt: store the count, set the badge, remove the delivered notification if 0.
 
@@ -207,7 +207,7 @@ Same scope rules as its siblings: 403 outside a relay scope, and it acts only on
 The time zone is the phone's own, sent with each `PUT`, because the cezar host's clock is wrong for a phone
 that is travelling. Prefs do not go on `PUT /workspace/phone/push`: that body is `.strict()` (BACKWARD_COMPATIBILITY.md
 §2, "takes exactly `{grant, grantId, expiresAt}`"), so a new phone sending `prefs` to an older cezar would get
-a 400 and lose its push grant. On the separate route, an older cezar answers 404. The phone then shows the
+a 400 and lose its push grant. On the separate route, an older cezar answers 404. A cezar that has the route never answers 404 to a paired device: `GET` returns the defaults (with `kinds: ["attention"]`) until the phone first `PUT`s, so a 404 can only mean an older cezar. `PUT` rejects a `timeZone` that `Intl.DateTimeFormat` does not know with 400, and the phone keeps its previous prefs. The phone then shows the
 settings page read-only with the defaults and keeps its grant. The route gets its BACKWARD_COMPATIBILITY.md §2
 line in the code PR. Per-manager "Notify me when important" stays as it is and still gates `message`.
 
