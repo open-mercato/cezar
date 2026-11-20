@@ -25,7 +25,10 @@ vi.mock('../core/runner-factory.ts', () => ({
         result: new Promise<AgentRunResult>((resolve) => {
           setTimeout(() => {
             onEvent?.({ type: 'session', sessionId: `sess-${captured.launches.length}` });
-            resolve({ text: 'ok', toolCalls: [], tokensUsed: 0 });
+            const text = 'ok\n\nCEZ:VERDICT approve';
+            onEvent?.({ type: 'text', text });
+            onEvent?.({ type: 'turn-end' });
+            resolve({ text, toolCalls: [], tokensUsed: 0 });
           }, 0);
         }),
         sendMessage: () => false,
@@ -78,20 +81,38 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     expect(spec.mcpServers).toEqual([]);
   });
 
-  it('refuses a backend that ignores tool limits, before spawning it', async () => {
+  it('passes the owning step limits to isolated Codex on launch and Continue', async () => {
     const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'codex' }).id;
     await terminal(id);
+    expect(store.getRun(id)?.status, store.getRun(id)?.error).not.toBe('failed');
+    const before = captured.launches.filter(l => l.backend === 'codex').length;
+    manager!.continueRun(id, { text: 'now push it', runner: 'codex' });
+    await vi.waitFor(() => expect(captured.launches.filter(l => l.backend === 'codex').length).toBeGreaterThan(before), { timeout: 15_000 });
+    await terminal(id);
+    const launches = captured.launches.filter(l => l.backend === 'codex');
+    expect(launches.length).toBeGreaterThan(1);
+    for (const { spec } of launches) {
+      expect(spec.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      expect(spec.bashAllowlist).toContain('gh pr diff');
+      expect(spec.bashAllowlist).not.toContain('git push');
+      expect(spec.mcpServers).toEqual([]);
+    }
+  });
+
+  it('refuses a backend that ignores tool limits, before spawning it', async () => {
+    const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'opencode' }).id;
+    await terminal(id);
     // By backend: a previous case's disposed run may still land a late launch of its own.
-    expect(captured.launches.filter((l) => l.backend === 'codex')).toEqual([]);
+    expect(captured.launches.filter((l) => l.backend === 'opencode')).toEqual([]);
     expect(store.getRun(id)?.status).toBe('failed');
-    expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')).toContain('codex does not enforce');
+    expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')).toContain('opencode does not enforce');
   });
 
   it('refuses a Continue on such a backend too', async () => {
     const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'claude' }).id;
     await terminal(id);
-    manager!.continueRun(id, { text: 'now push it', runner: 'codex' });
-    await vi.waitFor(() => expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')).toContain('codex does not enforce'), { timeout: 15_000 });
-    expect(captured.launches.filter((l) => l.backend === 'codex')).toEqual([]);
+    manager!.continueRun(id, { text: 'now push it', runner: 'opencode' });
+    await vi.waitFor(() => expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')).toContain('opencode does not enforce'), { timeout: 15_000 });
+    expect(captured.launches.filter((l) => l.backend === 'opencode')).toEqual([]);
   });
 });

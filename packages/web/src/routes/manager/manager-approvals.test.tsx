@@ -425,3 +425,15 @@ it('does not bring finished cards back when the reader leaves and returns', asyn
   expect(screen.queryByText('Job 2')).toBeNull()
   expect(screen.queryByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })).toBeNull()
 })
+
+it('keeps an inactive manager\'s approvals answerable and counted, flagged and greyed (spec 2026-11-19-manager-deactivate)', async () => {
+  managers = managers.map((manager) => (manager.id === 'shop' ? { ...manager, inactive: { since: '2026-11-18T23:40:00Z' } } : manager))
+  renderApprovals()
+  const shop = await screen.findByRole('region', { name: 'Shop' })
+  expect(within(shop).getByText('Manager · inactive')).toBeTruthy()
+  expect(within(shop).getByText('Manager inactive — it hears your decision when reactivated')).toBeTruthy()
+  expect(shop.querySelector('[data-slot="manager-avatar-inactive"]')).not.toBeNull()
+  expect(within(screen.getByRole('region', { name: 'Global Manager' })).queryByText(/Manager inactive/)).toBeNull()
+  expect(screen.getByRole('link', { name: 'Approvals, 3 pending approvals' })).toBeTruthy()
+  await within(shop).findByText('Job 2')
+})

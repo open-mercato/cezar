@@ -7,7 +7,7 @@ import {
   type QuestionItem,
   type QuestionsResponse,
 } from '@open-mercato/cezar-contract';
-import type { QuestionChange, QuestionProvider, QuestionResult } from './types.ts';
+import type { AnswerOptions, QuestionChange, QuestionProvider, QuestionResult } from './types.ts';
 
 /**
  * The Questions inbox (spec `.ai/specs/2026-11-17-questions-inbox.md`): merges the manager and the
@@ -19,6 +19,8 @@ export interface QuestionInboxDeps {
   /** Absent, or gated off by `managersEnabled`, under `CEZ_MANAGERS=0`: the inbox serves task questions only. */
   manager?: QuestionProvider;
   managersEnabled?: () => boolean;
+  /** A deactivated manager's open cards stay listed but leave the counts (spec 2026-11-19-manager-deactivate). */
+  managerInactive?: (managerId: string) => boolean;
   /** Workspace ui-state `questions.olderAfterDays`, read raw: anything but a non-negative integer is the default. */
   olderAfterDays?: () => Promise<unknown>;
   now?: () => number;
@@ -27,7 +29,7 @@ export interface QuestionInboxDeps {
 export interface QuestionInbox {
   list(): Promise<QuestionsResponse>;
   counts(): Promise<QuestionCounts>;
-  answer(key: string, text: string): Promise<QuestionResult>;
+  answer(key: string, text: string, options?: AnswerOptions): Promise<QuestionResult>;
   dismiss(key: string): Promise<QuestionResult>;
   /** Fired after either provider changed (and on `refresh`), for the `questions` topic. */
   onChange(listener: () => void): () => void;
@@ -133,8 +135,9 @@ export function createQuestionInbox(deps: QuestionInboxDeps): QuestionInbox {
     }
     open.sort((a, b) => Date.parse(b.askedAt) - Date.parse(a.askedAt));
     closed.sort((a, b) => Date.parse(b.closed!.at) - Date.parse(a.closed!.at));
-    const live = open.filter((item) => !item.older).length;
-    return { open, closed: closed.slice(0, QUESTIONS_CLOSED_MAX), counts: { live, older: open.length - live }, olderAfterDays };
+    const counted = open.filter((item) => item.source.kind !== 'manager' || !deps.managerInactive?.(item.source.managerId));
+    const live = counted.filter((item) => !item.older).length;
+    return { open, closed: closed.slice(0, QUESTIONS_CLOSED_MAX), counts: { live, older: counted.length - live }, olderAfterDays };
   };
 
   /** The task copy answered on the manager card says where; derived at read time so it holds even if
@@ -234,7 +237,7 @@ export function createQuestionInbox(deps: QuestionInboxDeps): QuestionInbox {
   return {
     list: build,
     counts: async () => (await build()).counts,
-    answer: (key, text) => mutate(key, (provider, k) => provider.answer(k, text)),
+    answer: (key, text, options) => mutate(key, (provider, k) => provider.answer(k, text, options)),
     dismiss: (key) => mutate(key, (provider, k) => provider.dismiss(k)),
     onChange(listener) {
       listeners.add(listener);

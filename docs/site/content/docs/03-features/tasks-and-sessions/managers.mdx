@@ -191,6 +191,22 @@ From the command line, `cez automation add … --report-to-manager --manager <id
 
 > **Good to know**: Automations that don't report to a manager behave as before. When you delete a manager, its automations drop the link on their next run.
 
+## Deactivate a manager
+
+Deactivating a manager stops its work without deleting it. Its chat, memory, jobs, settings and automation links stay as they are. Open the gear and select **Deactivate…**, or right-click the manager in the sidebar. The dialog lists what stops and what keeps going. To switch every manager off at once, for example before a laptop sleeps, open the **⋯** menu next to *Managers* in the sidebar and select **Deactivate all…**. **Settings → Manager** has the same controls.
+
+While a manager is inactive:
+
+- It makes **no model calls**. Checks, jobs and follow-up turns stop, and so do its notifications. **Check now** is off.
+- Tasks it started keep running, and their *Task update* cards still post to its chat. The manager hears those updates on its next turn after you reactivate it.
+- Automations that report to it keep running and keep posting their results.
+- You can still decide its approvals. Its questions stay listed with a *Manager inactive* label but leave the Questions count. **Dismiss** closes a question without reactivating the manager. Answering a question needs the manager, so the cockpit asks you to reactivate it first.
+- Its avatar turns grey with a pause badge, and it moves below the active managers under *Inactive*.
+
+You can still type in the chat of an inactive manager. **Reactivate and send** asks you to confirm, then reactivates it and sends your message.
+
+To bring a manager back, select **Reactivate…** in the chat banner, the gear or the sidebar menu. Reactivating spends nothing by default: checks and jobs restart from that moment, so overdue ones don't all run at once. The chat shows one line that counts what happened while the manager was off. Tick **Catch me up** to run one check right away. That check is one model turn.
+
 ## What a manager can do
 
 | Action | Chat and job turns | Watch checks |
@@ -252,9 +268,11 @@ A write produces an approval card, like a merge. The card shows the connector, t
 
 Open the chat's settings gear → **Manager agent** to change the manager's agent, account, model and effort in one dialog. The account field lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. During setup, **Model and effort** also offers agent and account choices.
 
+> **Good to know**: Codex is not offered as the manager's own agent. A manager's tools are limited to a `cez-manager` shell allowlist, and Codex cannot enforce that limit, so a manager already set to Codex, or one with no agent set on a machine whose default is Codex, shows an error in its chat instead of running. Choose Claude Code for the manager. Tasks the manager starts can still run on Codex.
+
 Use **Agent for new tasks** during setup or in the dialog's **For new tasks** section to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
 
-**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Codex manager's task runs on Codex even when the project's default is Claude. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
+**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Claude Code manager's task runs on Claude Code even when the project's default is Codex. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
 
 The manager passes an account with `cez-manager task create --runner claude --account <id>`. The task records the requested account and the account that actually ran; open its agent badge to see the account label. If a selected account was deleted, task creation is refused instead of using another account.
 

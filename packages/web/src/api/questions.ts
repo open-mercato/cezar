@@ -3,12 +3,13 @@ import {
   questionsResponseSchema,
   questionsTopicFrameSchema,
   type HealthResponse,
+  type ManagerListResponse,
   type QuestionCounts,
   type QuestionItem,
   type QuestionsResponse,
 } from '@open-mercato/cezar-api-client'
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 
 import { ApiError, cez, unwrap } from './client'
 import { managerKeys } from './managers'
@@ -38,9 +39,11 @@ export async function getQuestions(opts?: { signal?: AbortSignal }): Promise<Que
   return checked(questionsResponseSchema, path, await unwrap(await questions().$get({}, opts?.signal ? { init: { signal: opts.signal } } : undefined), path))
 }
 
-export async function answerQuestion(key: string, text: string): Promise<QuestionItem> {
+/** `reactivate`: the card's manager is inactive and the user confirmed waking it (spec 2026-11-19-manager-deactivate). */
+export async function answerQuestion(key: string, text: string, opts?: { reactivate?: boolean }): Promise<QuestionItem> {
   const path = '/workspace/questions/:key/answer'
-  return checked(questionMutationResponseSchema, path, await unwrap(await questions()[':key'].answer.$post({ param: { key: encodeURIComponent(key) }, json: { text } }), path)).item
+  const json = { text, ...(opts?.reactivate ? { reactivate: true as const } : {}) }
+  return checked(questionMutationResponseSchema, path, await unwrap(await questions()[':key'].answer.$post({ param: { key: encodeURIComponent(key) }, json }), path)).item
 }
 
 export async function dismissQuestion(key: string): Promise<QuestionItem> {
@@ -271,17 +274,42 @@ export function visibleOpen(data: QuestionsResponse | undefined, pending: readon
   return (data?.open ?? []).filter((item) => !hidden.has(item.key))
 }
 
+const NO_MANAGERS: ReadonlySet<string> = new Set()
+const NO_KEYS: ReadonlySet<string> = new Set()
+
+const fromInactive = (item: QuestionItem, inactive: ReadonlySet<string>) => item.source.kind === 'manager' && inactive.has(item.source.managerId)
+
 /** The badge: the server's live count, less a dismissal still inside its undo window and an answer
  *  in flight. Undefined until the first answer (or when the route is missing), so the badge says
- *  nothing rather than 0. */
-export function liveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[], inFlight: ReadonlySet<string> = new Set()): number | undefined {
+ *  nothing rather than 0. The server leaves inactive managers' cards out of `live` (spec
+ *  2026-11-19-manager-deactivate), so hiding one of them takes nothing off it. */
+export function liveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[], inactive: ReadonlySet<string> = NO_MANAGERS, inFlight: ReadonlySet<string> = NO_KEYS): number | undefined {
   if (!data) return undefined
   const hidden = new Set([...pending.filter((entry) => !entry.error).map((entry) => entry.key), ...inFlight])
-  const leaving = data.open.filter((item) => hidden.has(item.key) && !item.older).length
+  const leaving = data.open.filter((item) => hidden.has(item.key) && !item.older && !fromInactive(item, inactive)).length
   return Math.max(0, data.counts.live - leaving)
+}
+
+/** The "+N from inactive managers, not counted" note: their live cards still shown. */
+export function inactiveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[], inactive: ReadonlySet<string>): number {
+  return visibleOpen(data, pending).filter((item) => !item.older && fromInactive(item, inactive)).length
+}
+
+/** Ids of the inactive managers, from the shared list cache (never fetched from here). */
+export function useInactiveManagerIds(): ReadonlySet<string> {
+  const list = useQuery<ManagerListResponse>({ queryKey: managerKeys.list, enabled: false }).data
+  return useMemo(() => {
+    const ids = (list?.managers ?? []).filter((manager) => manager.inactive !== undefined).map((manager) => manager.id)
+    return ids.length === 0 ? NO_MANAGERS : new Set(ids)
+  }, [list])
 }
 
 export function useLiveQuestionCount(enabled = true): number | undefined {
   const query = useQuestions(enabled)
-  return liveQuestionCount(query.data, usePendingDismissals(), useAnsweringQuestions())
+  return liveQuestionCount(query.data, usePendingDismissals(), useInactiveManagerIds(), useAnsweringQuestions())
+}
+
+export function useInactiveQuestionCount(): number {
+  const query = useQuestions()
+  return inactiveQuestionCount(query.data, usePendingDismissals(), useInactiveManagerIds())
 }

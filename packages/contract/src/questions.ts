@@ -116,7 +116,11 @@ export const questionsResponseSchema = z.object({
 export type QuestionsResponse = z.infer<typeof questionsResponseSchema>;
 
 export const questionKeyParamSchema = z.object({ key: z.string().min(3).max(400) });
-export const answerQuestionInputSchema = z.strictObject({ text: z.string().trim().min(1).max(100_000) });
+export const answerQuestionInputSchema = z.strictObject({
+  text: z.string().trim().min(1).max(100_000),
+  /** A manager's card whose manager is inactive: the user confirmed reactivating it (spec 2026-11-19-manager-deactivate). */
+  reactivate: z.literal(true).optional(),
+});
 export type AnswerQuestionInput = z.infer<typeof answerQuestionInputSchema>;
 export const questionMutationResponseSchema = z.object({ ok: z.literal(true), item: questionItemSchema });
 export type QuestionMutationResponse = z.infer<typeof questionMutationResponseSchema>;

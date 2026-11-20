@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, ChevronRightIcon, MessageCircleQuestionIcon, SquareTerminalIcon } from 'lucide-react'
+import { CheckIcon, ChevronRightIcon, MessageCircleQuestionIcon, PauseIcon, SquareTerminalIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
@@ -17,6 +17,8 @@ import {
   settleQuestion,
   undoDismiss,
   useAnsweringQuestions,
+  useInactiveManagerIds,
+  useInactiveQuestionCount,
   useLiveQuestionCount,
   usePendingDismissals,
   useQuestions,
@@ -35,6 +37,7 @@ import { cn } from '@/lib/utils'
 import { LINGER_MS, lingerFading, useLingerClock } from '@/routes/manager/approvals-linger'
 import { DecisionSourceList } from '@/routes/manager/decision-sources'
 import { ManagerAvatar } from '@/routes/manager/manager-avatar'
+import { useActivityConfirm } from '@/routes/manager/manager-activity'
 import { ManagerAskText, ManagerProjectsContext, ManagerReferenceText } from '@/routes/manager/manager-reference'
 import { taskPath } from '@/routes/manager/manager-session-card'
 import { AskForm } from '@/routes/task-thread/ask-card'
@@ -163,8 +166,9 @@ export function closedLabel(closed: QuestionClosed, managerName?: (id: string) =
   return REASON_LABEL[closed.reason]
 }
 
-function summaryLine(open: readonly QuestionItem[]): string {
-  const live = open.filter((item) => !item.older)
+/** The header count matches the sidebar badge: an inactive manager's cards are not counted (spec 2026-11-19-manager-deactivate). */
+function summaryLine(open: readonly QuestionItem[], inactive: ReadonlySet<string>): string {
+  const live = open.filter((item) => !item.older && !(item.source.kind === 'manager' && inactive.has(item.source.managerId)))
   if (live.length === 0) return 'Nothing waiting on you'
   const managers = new Set(live.filter((item) => item.source.kind === 'manager').map((item) => sourceKey(item.source))).size
   const tasks = new Set(live.filter((item) => item.source.kind === 'task').map((item) => sourceKey(item.source))).size
@@ -218,6 +222,8 @@ export function QuestionsRoute() {
   const groups = groupQuestions(live)
   const managerById = useCallback((id: string) => managers.data?.managers.find((manager) => manager.id === id), [managers.data])
   const approvals = (managers.data?.managers ?? []).reduce((sum, manager) => sum + manager.pendingActions, 0)
+  const fromInactive = useInactiveQuestionCount()
+  const inactiveIds = useInactiveManagerIds()
 
   // When a lingering card leaves, focus goes to its nearest surviving neighbour, next then previous,
   // else the heading (design § E).
@@ -312,9 +318,12 @@ export function QuestionsRoute() {
               {approvals} {approvals === 1 ? 'approval' : 'approvals'} waiting<ChevronRightIcon aria-hidden="true" className="size-3.5" />
             </Link>
           ) : null}
+          {fromInactive > 0 ? (
+            <span data-slot="questions-inactive-note" className="text-meta text-muted-foreground md:ml-auto">+{fromInactive} from inactive managers, not counted</span>
+          ) : null}
         </div>
         <p data-slot="questions-status" className="text-sm text-muted-foreground">
-          {query.data ? summaryLine(open) : query.isError ? 'Questions from your managers and tasks' : 'Loading questions…'}
+          {query.data ? summaryLine(open, inactiveIds) : query.isError ? 'Questions from your managers and tasks' : 'Loading questions…'}
         </p>
       </header>
       <p aria-live="polite" data-slot="questions-announcer" className="sr-only">{announcement}</p>
@@ -429,7 +438,7 @@ function Fold({ slot, label, hint, open, onToggle, children }: { slot: string; l
 
 function SourceGlyph({ source, manager }: { source: QuestionSource; manager?: ManagerSummary | undefined }) {
   if (source.kind === 'manager') {
-    return manager ? <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} className="size-8" sizes="32px" /> : <span aria-hidden="true" className="flex size-8 items-center justify-center rounded-full bg-muted"><MessageCircleQuestionIcon className="size-4" /></span>
+    return manager ? <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} inactive={manager.inactive !== undefined} className="size-8" sizes="32px" /> : <span aria-hidden="true" className="flex size-8 items-center justify-center rounded-full bg-muted"><MessageCircleQuestionIcon className="size-4" /></span>
   }
   return <span aria-hidden="true" data-slot="question-task-glyph" className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-card"><SquareTerminalIcon className="size-4 text-muted-foreground" /></span>
 }
@@ -460,13 +469,14 @@ function QuestionGroupSection({ group, manager, ...card }: CardProps & { group: 
   const { source } = group
   const name = source.kind === 'manager' ? source.name : source.title
   const project = source.kind === 'task' ? projects.data?.projects.find((entry) => entry.id === source.projectId)?.name ?? source.projectId : undefined
+  const inactive = manager?.inactive !== undefined
   return (
-    <section aria-label={name} data-slot="question-group" data-source={source.kind} className="flex flex-col gap-3">
+    <section aria-label={name} data-slot="question-group" data-source={source.kind} data-inactive={inactive || undefined} className="flex flex-col gap-3">
       <div className="flex items-center gap-2.5">
         <SourceGlyph source={source} manager={manager} />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate font-semibold">{name}</h2>
-          <p className="truncate text-meta text-muted-foreground">{source.kind === 'manager' ? 'Manager' : `${project} · ${source.status}`}</p>
+          <h2 className={cn('truncate font-semibold', inactive && 'text-muted-foreground')}>{name}</h2>
+          <p className="truncate text-meta text-muted-foreground">{source.kind === 'manager' ? (inactive ? 'Manager · inactive' : 'Manager') : `${project} · ${source.status}`}</p>
         </div>
         <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
           <Link to={sourceHref(source)} aria-label={`${source.kind === 'manager' ? 'Open chat with' : 'Open task'} ${name}`}>{source.kind === 'manager' ? 'Open chat' : 'Open task'}</Link>
@@ -500,14 +510,23 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
       : root.current?.querySelector<HTMLElement>('[data-slot="question-outcome"], [data-slot="question-dismissing-wrap"]')
     target?.focus({ preventScroll: true })
   }, [phase])
+  // An inactive manager's answer is a chat turn: confirm waking it first (spec 2026-11-19-manager-deactivate).
+  const owner = item.source.kind === 'manager' ? managerById(item.source.managerId) : undefined
+  const inactive = owner?.inactive !== undefined
+  const { confirmActivity, dialog } = useActivityConfirm()
   const send = async (text: string) => {
+    // Read before the inactive-manager confirm: its dialog takes the focus.
+    const chips = [...(root.current?.querySelectorAll<HTMLElement>('[aria-pressed]') ?? [])]
+    const from = chips.indexOf(document.activeElement as HTMLElement)
+    if (owner && inactive && !(await confirmActivity({ kind: 'answer', manager: owner, answer: text }))) {
+      return `Not sent: ${owner.name} is still inactive. Dismiss closes the question without waking it.`
+    }
     setPending(true)
     setError(undefined)
-    const chips = [...(root.current?.querySelectorAll<HTMLElement>('[aria-pressed]') ?? [])]
-    sentFrom.current = chips.indexOf(document.activeElement as HTMLElement)
+    sentFrom.current = from
     answer.start(item, text)
     try {
-      answer.done(item, text, await answerQuestion(item.key, text))
+      answer.done(item, text, await answerQuestion(item.key, text, inactive ? { reactivate: true } : undefined))
       return undefined
     } catch (failure) {
       const gone = failure instanceof ApiError && failure.status === 409
@@ -536,6 +555,7 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
       data-question-key={item.key}
       data-stale={item.stale ? true : undefined}
       data-state={state.kind}
+      data-inactive={inactive || undefined}
       data-lingering={finished?.finishedAt === undefined ? undefined : fading ? 'leaving' : 'shown'}
       onFocus={() => { focusedInside.current = true }}
       onBlur={(event) => {
@@ -543,11 +563,17 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
         if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) focusedInside.current = false
       }}
       className={cn(
-        'flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5 motion-safe:transition-opacity motion-safe:duration-300',
-        state.kind !== 'open' && 'bg-card/60',
+        'flex flex-col gap-2.5 rounded-xl border border-border p-3.5 motion-safe:transition-opacity motion-safe:duration-300',
+        state.kind !== 'open' ? 'bg-card/60' : inactive ? 'bg-card-2' : 'bg-card',
         fading && 'motion-safe:opacity-0',
       )}
     >
+      {inactive ? (
+        <p data-slot="question-inactive-flag" className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
+          <PauseIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          Manager inactive — answering reactivates it; dismissing does not
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-muted-foreground">
         <time dateTime={item.askedAt} title={new Date(item.askedAt).toLocaleString()}>asked {shortAge(item.askedAt, now) || 'just now'} ago</time>
         {linkedManager && linked ? (
@@ -598,6 +624,7 @@ function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer
           )}
         </QuestionText>
       </div>
+      {dialog}
     </div>
   )
 }

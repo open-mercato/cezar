@@ -84,10 +84,11 @@ export function nextGuardCandidate(
 
 /** The warning the cockpit, the attention dot and the notification share. */
 export function diskGuardWarning(worktreesBytes: number | undefined): string {
-  return worktreesBytes !== undefined
-    // Whole GiB: health carries this and is CORS-open, like its other sizes (#431).
-    ? `Disk almost full — ${formatBytes(Math.max(1, Math.round(worktreesBytes / GIB)) * GIB)} in task worktrees`
-    : 'Disk almost full — task worktrees could not be reclaimed';
+  if (worktreesBytes === undefined) return 'Disk almost full — task worktrees could not be reclaimed';
+  // Whole GiB: health carries this and is CORS-open, like its other sizes (#431).
+  return worktreesBytes < GIB
+    ? 'Disk almost full — under 1 GB in task worktrees'
+    : `Disk almost full — ${formatBytes(Math.round(worktreesBytes / GIB) * GIB)} in task worktrees`;
 }
 
 /** A registered project, cheap to list: no store, no manager. */

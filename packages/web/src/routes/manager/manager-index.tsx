@@ -20,7 +20,7 @@ import { ManagerDirectoryCard } from './manager-directory-card'
 import { DeviceChip } from '@/components/device-avatar'
 import { isCezarShell } from '@/lib/phone-app'
 import { ManagerNewRoute } from './manager-new'
-import { workspaceCountClass } from './manager-sidebar'
+import { InactiveDivider, workspaceCountClass } from './manager-sidebar'
 
 const DESKTOP = '(min-width: 768px)'
 
@@ -36,7 +36,8 @@ function useDesktopViewport(): boolean {
   )
 }
 
-const waitsOnUser = (manager: ManagerSummary) => manager.pendingActions > 0 || manager.pendingQuestions > 0
+// An inactive manager's questions do not count (spec 2026-11-19-manager-deactivate); its approvals do.
+const waitsOnUser = (manager: ManagerSummary) => manager.pendingActions > 0 || (manager.inactive === undefined && manager.pendingQuestions > 0)
 
 /** Approvals and questions first, then `orderManagers`' recency: a sort of the same order, because
  *  desktop `/manager` and the palette rely on that one staying most-recent-first. */
@@ -86,6 +87,7 @@ function ManagerListScreen({ managers, isFetching, isError }: { managers: readon
     return rank(a.id) - rank(b.id)
   }).filter((manager) => (!needsYou || waitsOnUser(manager)) && `${manager.name} ${deviceLabel}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
     .map((manager) => ({ key: `current-device/${manager.id}`, deviceLabel, manager, href: `/manager/${encodeURIComponent(manager.id)}` }))
+  const inactiveEntries = entries.filter((entry) => entry.manager.inactive !== undefined)
   return (
     <div data-route="manager-list" className="@container/directory mx-auto flex w-full max-w-[1200px] flex-col gap-3 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">Managers</h1>{isCezarShell() ? <DeviceChip name={deviceLabel} /> : <span className="text-sm text-muted-foreground">{deviceLabel}</span>}</div>
@@ -100,8 +102,16 @@ function ManagerListScreen({ managers, isFetching, isError }: { managers: readon
       </div>
       {entries.length === 0 ? <p role="status" className="p-3 text-muted-foreground">No matching managers</p> : null}
       <div className="grid grid-cols-1 gap-3 @min-[576px]/directory:grid-cols-2 @min-[936px]/directory:grid-cols-3">
-        {entries.map((entry) => <ManagerDirectoryCard key={entry.key} entry={entry} now={now} />)}
+        {entries.filter((entry) => entry.manager.inactive === undefined).map((entry) => <ManagerDirectoryCard key={entry.key} entry={entry} now={now} />)}
       </div>
+      {inactiveEntries.length > 0 ? (
+        <>
+          <InactiveDivider count={inactiveEntries.length} className="px-0.5 pt-1" />
+          <div className="grid grid-cols-1 gap-3 @min-[576px]/directory:grid-cols-2 @min-[936px]/directory:grid-cols-3">
+            {inactiveEntries.map((entry) => <ManagerDirectoryCard key={entry.key} entry={entry} now={now} />)}
+          </div>
+        </>
+      ) : null}
       <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground pointer-coarse:min-h-11">
         <Link to="/manager/new">
           <PlusIcon aria-hidden="true" className="size-4" />

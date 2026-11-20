@@ -4,8 +4,11 @@ import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.Settings;
 import android.webkit.CookieManager;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSArray;
@@ -21,12 +24,15 @@ import com.getcapacitor.annotation.PermissionCallback;
 import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
 import com.openmercato.cezar.mobile.shell.AppLock;
+import com.openmercato.cezar.mobile.shell.CezarRows;
+import com.openmercato.cezar.mobile.shell.DeviceProbes;
 import com.openmercato.cezar.mobile.shell.LaunchHold;
 import com.openmercato.cezar.mobile.shell.OriginGate;
 import com.openmercato.cezar.mobile.shell.OriginWipe;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ProxyOrigin;
 import com.openmercato.cezar.mobile.shell.ServerActivity;
+import com.openmercato.cezar.mobile.shell.ServerListStore;
 import com.openmercato.cezar.mobile.shell.ServerRecord;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
 import com.openmercato.cezar.mobile.shell.ShellRoute;
@@ -38,11 +44,19 @@ import com.openmercato.cezar.mobile.shell.relay.AccountClient;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.PairingClient;
 import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
+import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.RelayLink;
 import com.openmercato.cezar.mobile.shell.relay.RelayOrigin;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import org.json.JSONObject;
 
@@ -56,6 +70,13 @@ public class ConnectionPlugin extends Plugin {
 
     private final ExecutorService background = Executors.newSingleThreadExecutor();
     private final ExecutorService polls = Executors.newCachedThreadPool();
+    private final ScheduledExecutorService bounds = Executors.newSingleThreadScheduledExecutor();
+    /** The last probe's reading per server, for every listed outcome after it. */
+    private final Map<String, DeviceProbes.Reading> readings = new ConcurrentHashMap<>();
+    private final Object probeLock = new Object();
+    /** Non-null while a probe runs: the calls it answers when it settles. */
+    private List<PluginCall> probeCalls;
+    private volatile String probeCurrent;
 
     /** Waits for the lock, so a locked app opens no server and consumes no route behind it (spec QR3). */
     @PluginMethod
@@ -225,6 +246,87 @@ public class ConnectionPlugin extends Plugin {
     @PluginMethod
     public void list(PluginCall call) {
         run(call, this::list);
+    }
+
+    /** One round of the switcher's probes over every saved server; a call during one joins it (Your cezars spec). */
+    @PluginMethod
+    public void probe(PluginCall call) {
+        String current = call.getString("current");
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            synchronized (probeLock) {
+                if (probeCalls != null) {
+                    probeCalls.add(call);
+                    return;
+                }
+                probeCalls = new ArrayList<>();
+                probeCalls.add(call);
+            }
+            probeCurrent = current;
+            polls.execute(this::startProbe);
+        });
+    }
+
+    private void startProbe() {
+        try {
+            ShellConnector connector = ShellServices.connector(getContext());
+            RelayConnections relay = ShellServices.relay(getContext());
+            DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, polls), DeviceProbes.directProbe(connector, server -> server.url == null ? null : cookies(server.url), polls),
+                    relay::cool, (ms, work) -> bounds.schedule(work, ms, TimeUnit.MILLISECONDS),
+                    (id, answer) -> connector.sawHealth(id, answer, System.currentTimeMillis()), readings::put);
+            probes.whenSettled(() -> {
+                probes.stop(null);
+                answerProbe(calls -> {
+                    JSObject result = list(connector);
+                    for (PluginCall each : calls) each.resolve(result);
+                });
+            });
+            probes.start(connector.list());
+        } catch (RuntimeException e) {
+            answerProbe(calls -> {
+                for (PluginCall each : calls) each.reject(String.valueOf(e.getMessage()));
+            });
+        }
+    }
+
+    private void answerProbe(java.util.function.Consumer<List<PluginCall>> answer) {
+        List<PluginCall> calls;
+        synchronized (probeLock) {
+            calls = probeCalls;
+            probeCalls = null;
+        }
+        if (calls != null) answer.accept(calls);
+    }
+
+    /** Your cezars' Name. An unknown id or a bad name answers the list with `renameError`. */
+    @PluginMethod
+    public void rename(PluginCall call) {
+        String id = call.getString("id");
+        String label = call.getString("label");
+        run(call, connector -> {
+            String error = connector.rename(id, label);
+            JSObject result = list(connector);
+            if (error != null) result.put("renameError", error);
+            return result;
+        });
+    }
+
+    /** The App section's Notifications row: Android's own settings for this app. */
+    @PluginMethod
+    public void notificationSettings(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            String app = getContext().getPackageName();
+            Intent intent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app)
+                    : new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app, null));
+            try {
+                getActivity().startActivity(intent);
+            } catch (ActivityNotFoundException e) {
+                getActivity().startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app, null)));
+            }
+            call.resolve(new JSObject());
+        });
     }
 
     /** The system camera path is out of reach here: zxing's own activity, needing no Play services. */
@@ -421,7 +523,11 @@ public class ConnectionPlugin extends Plugin {
     private JSObject list(ShellConnector connector) {
         PushCoordinator push = ShellServices.push(getContext());
         JSArray servers = new JSArray();
-        for (ServerRecord server : connector.list()) {
+        List<ServerRecord> saved = connector.list();
+        Map<String, ServerListStore.Seen> seen = new HashMap<>();
+        for (ServerRecord server : saved) seen.put(server.id, connector.seen(server.id));
+        for (CezarRows.Row listed : CezarRows.rows(saved, readings, seen, probeCurrent, ShellServices.clock(getContext()))) {
+            ServerRecord server = listed.server;
             JSObject row = new JSObject();
             row.put("id", server.id);
             row.put("label", server.label);
@@ -430,6 +536,12 @@ public class ConnectionPlugin extends Plugin {
             row.put("username", server.username);
             // Stage 1 needs only the session, so every relay server has the switch, Firebase or not.
             if (server.relay != null) row.put("push", push.enabled(server.id));
+            row.put("initials", listed.initials);
+            row.put("color", listed.color);
+            row.put("status", listed.status);
+            row.put("words", listed.words);
+            if (listed.reason != null) row.put("reason", listed.reason);
+            row.put("need", listed.need == null ? JSONObject.NULL : listed.need);
             servers.put(row);
         }
         JSArray removing = new JSArray();
@@ -441,7 +553,16 @@ public class ConnectionPlugin extends Plugin {
         result.put("relayDefault", RelayOrigin.DEFAULT_ORIGIN);
         AppLock lock = AppLock.get(getContext());
         result.put("lock", new JSObject().put("enabled", lock.enabled()).put("available", lock.available()));
+        result.put("notifications", CezarRows.notifications(PushNotifier.allowed(getContext()), canAskNotifications()));
+        result.put("version", BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")");
         return result;
+    }
+
+    /** Android 13+ asks once; denied twice, or turned off in settings, only settings can change it. */
+    private boolean canAskNotifications() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
+        PermissionState state = getPermissionState(NOTIFICATIONS);
+        return state == PermissionState.PROMPT || state == PermissionState.PROMPT_WITH_RATIONALE;
     }
 
     /** Removed by the computer: what the cockpit kept on the phone goes, as on Forget. */

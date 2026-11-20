@@ -58,6 +58,7 @@ import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-
 import { AddAccountDialog } from './add-account-dialog'
 import { CursorConnection } from './cursor-connection'
 import { CardNote, FormRow, SavedIndicator, SettingsCard, useSavedFlash } from './form-row'
+import { AccountPlanUsage } from './account-plan-usage'
 
 /**
  * Settings → Agents, the two account cards (spec `.ai/specs/2026-07-29-agent-profiles.md`;
@@ -738,6 +739,10 @@ function AccountDetails({
           {details.data.reason ?? 'No account details to show.'}
         </p>
       )}
+
+      {account.provider === 'claude' || account.provider === 'codex' ? (
+        <AccountPlanUsage provider={account.provider} accountId={account.id} />
+      ) : null}
 
       {localHandoff ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">

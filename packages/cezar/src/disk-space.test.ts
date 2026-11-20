@@ -8,6 +8,7 @@ import {
   diskFloorRefusal,
   diskFullAgentErrorText,
   diskLevel,
+  dirSizeForBackground,
   isDiskFullError,
   lowDiskSpaceMessage,
   probeDiskSpace,
@@ -85,5 +86,22 @@ describe('cachedDirSize', () => {
     await vi.waitFor(() => expect(sizer).toHaveBeenCalled());
     await Promise.resolve();
     expect(cachedDirSize('/x', sizer)).toBeUndefined();
+  });
+});
+
+describe('dirSizeForBackground', () => {
+  afterEach(() => resetDirSizeCacheForTests());
+
+  it('answers 0 for a worktrees directory that does not exist yet, without running du', async () => {
+    const sizer = vi.fn(async () => null);
+    expect(await dirSizeForBackground(join(tmpdir(), 'cez-no-such-worktrees-dir'), sizer)).toBe(0);
+    expect(sizer).not.toHaveBeenCalled();
+  });
+
+  it('measures again after a failed du instead of reporting unknown until the TTL runs out', async () => {
+    const dir = tmpdir();
+    const sizer = vi.fn<(path: string) => Promise<number | null>>().mockResolvedValueOnce(null).mockResolvedValueOnce(4096);
+    expect(await dirSizeForBackground(dir, sizer)).toBeUndefined();
+    expect(await dirSizeForBackground(dir, sizer)).toBe(4096);
   });
 });

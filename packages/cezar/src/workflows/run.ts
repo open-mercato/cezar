@@ -1,9 +1,13 @@
+import type { StepToolPolicy } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
+import { PlanUsageTracker, recordFailedAttempt, recordUsageObservation, type PlanUsageAccountRef } from '../usage-ledger/recorder.ts';
+import { ledgerAccountRef } from '../usage-ledger/identity.ts';
+import { taskConsumerId } from '../usage-ledger/report.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
@@ -1638,6 +1642,8 @@ export class RunManager {
   /** The workspace-registry id of this manager's project — what a dispatched agent's `cez task`
    *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
   private readonly projectId: string | undefined;
+  /** Each task's plan-limit account and the start of its current attempt, for the retry flag. */
+  private readonly planAttempts = new Map<string, { account: string; since?: number }>();
 
   /** See the constructor option of the same name. */
   private readonly secrets: SecretStore;
@@ -1951,7 +1957,7 @@ export class RunManager {
     runId: string,
     backend: RunnerId,
     options: { generateFollowups?: boolean; recordedProfileId?: string; namingOnly?: boolean } = {},
-  ): Promise<{ env: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void }> {
+  ): Promise<{ env: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void; planUsageAccount?: PlanUsageAccountRef }> {
     const run = this.store.getRun(runId);
     const owner = this.active.get(runId);
     const ownsTrackerContext = () => this.active.get(runId) === owner
@@ -2039,7 +2045,17 @@ export class RunManager {
       trackerContext = trackerPrompt({ binding, ...(context && contextFile ? { context, contextFile } : {}), ...(unavailable ? { unavailable } : {}), commands });
     }
     const usageProvider = backend === 'claude' ? 'claude' : boundIdentity ? 'codex' : undefined;
-    const onUsageWindows = usageProvider ? async (observation: UsageWindowsObservation) => {
+    // The plan-usage ledger reads every Claude/Codex account (design rev 3); the reset store
+    // above stays limited to accounts whose identity it can bind.
+    const ledgerProvider = backend === 'claude' || backend === 'codex' ? backend : undefined;
+    const planUsageAccount = ledgerProvider
+      ? await ledgerAccountRef(ledgerProvider, { id: resolved.profile.id, label: resolved.profile.label, path: profilePath }).catch(() => undefined)
+      : undefined;
+    const onUsageWindows = ledgerProvider ? async (observation: UsageWindowsObservation) => {
+      if (planUsageAccount && !(ledgerProvider === 'codex' && attributionDisabled)) {
+        try { recordUsageObservation(planUsageAccount, observation); } catch { /* metadata only */ }
+      }
+      if (!usageProvider) return;
       try {
         if (usageProvider === 'codex') {
           if (attributionDisabled) return;
@@ -2064,6 +2080,7 @@ export class RunManager {
       ...(trackerContext ? { trackerContext } : {}),
       profileId: resolved.profile.id,
       ...(onUsageWindows ? { onUsageWindows } : {}),
+      ...(planUsageAccount ? { planUsageAccount } : {}),
     };
   }
 
@@ -3575,7 +3592,7 @@ export class RunManager {
           prompt: '{{task}}',
           // The order's own tool list when it names one (#430: `allowedTools` is the only tool
           // seam a step has), else the run-wide default.
-          ...(input.allowed_tools?.length ? { allowedTools: input.allowed_tools } : {}),
+          ...(input.allowed_tools !== undefined ? { allowedTools: input.allowed_tools } : {}),
         },
       ],
     };
@@ -4680,7 +4697,9 @@ export class RunManager {
     this.retentionPass = this.retentionPass.then(async () => {
       if (this.disposed) return;
       await new Promise((resolve) => setTimeout(resolve, ARCHIVE_RECLAIM_DELAY_MS));
-      out = await reclaimSelectedWorktrees(this.repoRoot, this.store, runIds, {lifecycle: this.lifecycle, isLive: (id) => this.isActive(id)});
+      // Re-read per run right before removal: an unarchive inside the delay keeps the tree.
+      const keep = (id: string) => this.isActive(id) || this.store.getRun(id)?.archived !== true;
+      out = await reclaimSelectedWorktrees(this.repoRoot, this.store, runIds, {lifecycle: this.lifecycle, isLive: keep});
     }).catch(() => undefined);
     return this.retentionPass.then(() => out);
   }
@@ -6385,6 +6404,21 @@ export class RunManager {
         ? undefined
         : defSteps.find((s) => s.id === owningStep?.id)
           ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
+    const savedTools = owningStep?.toolPolicy ?? (!owningStep
+      ? [...(record?.steps ?? [])].reverse().find(s => s.kind === 'agent' && s.toolPolicy)?.toolPolicy : undefined);
+    if (continueBackend === 'codex' && record?.workflowDef?.graph && !savedTools &&
+      (!owningStep || (!owningStep.id.startsWith('continue-') && !defSteps?.some(s => s.id === owningStep.id)))) {
+      failBeforeSpawn('codex: cannot restore this legacy graph step’s tool policy safely; start a new restricted task');
+      return;
+    }
+    const continuationTools: StepToolPolicy = state.readOnly ? {
+      allowedTools: [...READ_ONLY_TOOLS], ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    } : savedTools ?? {
+      allowedTools: [...(toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
+      ...(toolsStep?.bashAllowlist !== undefined ? { bashAllowlist: [...toolsStep.bashAllowlist] } : {}),
+      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    };
+    this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
     // returns nothing is worse than a turn that refuses to start and says why.
@@ -6456,6 +6490,7 @@ export class RunManager {
       ? `${context}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
+    const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
       const started = runner.startSession(
@@ -6476,28 +6511,27 @@ export class RunManager {
             : contextualOpeningPrompt,
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
-          allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
-          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
-          bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
+          ...continuationTools,
+          ...(state.bypassPermissions && !continuationTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             continueProfile.env,
           ),
-          env: state.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
+          env: continuationTools.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
-          mcpServers: state.enforceReadOnly ? [] : continueMcp,
+          mcpServers: continuationTools.enforceReadOnly ? [] : continueMcp,
           model: continueModel,
           reasoningEffort: continuationReasoningEffort,
           sessionId: launchSessionId,
           resume,
           timeoutMs: 0,
         },
-        onEvent,
+        (event) => { planUsage?.event(event); onEvent(event); },
         {
           onUiEvent: (event) => {
+            planUsage?.ui(event);
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
           canAskPermission: () => this.canAskPermission(state),
@@ -6600,6 +6634,7 @@ export class RunManager {
         if (!parked) this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
     } finally {
+      planUsage?.close();
       this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
@@ -7433,6 +7468,7 @@ export class RunManager {
           // scrubbed like an event is: host secrets, this run's registered secrets (project
           // secrets included) and token patterns. Strictly narrowing, for every workflow.
           checkFailure = this.store.redactRunText(runId, output);
+          this.recordFailedPlanAttempt(runId);
           if (node.retryOn?.length && !node.retryOn.includes(exitCode)) {
             const codes = node.retryOn.join(', ');
             const error = `check "${node.id}" exited ${exitCode}, which onFail.retryOn (${codes}) does not retry`;
@@ -8275,7 +8311,8 @@ export class RunManager {
         : undefined,
     );
     const step: WorkflowStepDef = {
-      ...(worker ? nodeToStep(worker) : { allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'] }),
+      // Codex enforces only the exact default or a read-only grant; a write subset would refuse (#2330).
+      ...(worker ? nodeToStep(worker) : { allowedTools: taskBackend === 'codex' ? [...DEFAULT_ALLOWED_TOOLS] : ['Read', 'Grep', 'Glob', 'Edit', 'Write'] }),
       id: gate.id, name: gate.name ?? gate.id, prompt,
     };
     const backend = step.runner ?? taskBackend;
@@ -8914,6 +8951,12 @@ export class RunManager {
       const refusal = readOnlyWorkflowRefusal(stepDef, stepBackend);
       if (refusal) return refusal;
     }
+    const stepTools: StepToolPolicy = {
+      allowedTools: [...(state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
+      ...(!state.readOnly && step.bashAllowlist !== undefined ? { bashAllowlist: [...step.bashAllowlist] } : {}),
+      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+    };
+    this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
@@ -8921,6 +8964,7 @@ export class RunManager {
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
+    const planUsage = this.planUsageTracker(runId, stepProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
       runner.startSession(
         {
@@ -8942,10 +8986,8 @@ export class RunManager {
           userPrompt: [stepProfile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
-          allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
+          ...stepTools,
           ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
-          bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
@@ -8973,7 +9015,7 @@ export class RunManager {
           // the `askPark` branch in `execute`), never as a run stuck `waiting`.
           timeoutMs: interactive ? 0 : undefined,
         },
-        onEvent,
+        (event) => { planUsage?.event(event); onEvent(event); },
         {
           // Ordinary intermediate sessions are closed explicitly at turn-end
           // instead (with the same delay the runners apply). That is what lets
@@ -8981,6 +9023,7 @@ export class RunManager {
           // the user's answer rather than have the runner close it first (#917).
           autoEndAfterFirstTurn: false,
           onUiEvent: (event) => {
+            planUsage?.ui(event);
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
           canAskPermission: () => this.canAskPermission(state),
@@ -9047,6 +9090,7 @@ export class RunManager {
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
+      planUsage?.close();
       this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
       if (this.active.get(runId) === state) {
@@ -9226,9 +9270,10 @@ export class RunManager {
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
-        execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows };
+        execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows, ...(profile.planUsageAccount ? { planUsageAccount: profile.planUsageAccount } : {}) };
       }
-      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
+      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,
+        (reason) => this.store.appendEvent(runId, { type: 'note', message: `model naming unavailable — ${reason}` }));
       if (!result) return undefined;
       const run = this.store.getRun(runId);
       // Marker-owned state outranks the namer (spec 2026-07-18-task-ref-markers):
@@ -9381,6 +9426,39 @@ export class RunManager {
       .catch(() => undefined)
       .finally(() => this.namerInFlight.delete(runId));
     this.namerInFlight.set(runId, pending);
+  }
+
+  /** Everything this task spent since its previous failed check was a failed attempt. Only a run
+   *  with a plan-limit account writes one, and only to that account (its tracking switch applies). */
+  private recordFailedPlanAttempt(runId: string): void {
+    const attempt = this.planAttempts.get(runId);
+    if (!attempt) return;
+    const run = this.store.getRun(runId);
+    const now = Date.now();
+    const started = Date.parse(run?.startedAt ?? run?.createdAt ?? '');
+    const since = attempt.since ?? (Number.isFinite(started) ? started : now);
+    this.planAttempts.set(runId, { account: attempt.account, since: now });
+    try { recordFailedAttempt(attempt.account, taskConsumerId(this.projectId ?? 'default', runId), since, now); }
+    catch { /* metadata only */ }
+  }
+
+  /** Plan-limit activity for one agent session (design rev 3); undefined off Claude/Codex. */
+  private planUsageTracker(runId: string, account: PlanUsageAccountRef | undefined): PlanUsageTracker | undefined {
+    if (!account) return undefined;
+    const run = this.store.getRun(runId);
+    const projectId = this.projectId ?? 'default';
+    // Bounded: one entry per run that ran on a plan-limit account, oldest dropped first.
+    const prior = this.planAttempts.get(runId);
+    this.planAttempts.delete(runId);
+    this.planAttempts.set(runId, { account: account.key, ...(prior?.since !== undefined ? { since: prior.since } : {}) });
+    if (this.planAttempts.size > 500) this.planAttempts.delete(this.planAttempts.keys().next().value!);
+    try {
+      return new PlanUsageTracker(account.provider, account, {
+        id: taskConsumerId(projectId, runId), kind: 'task', title: run?.title ?? runId, projectId, runId,
+      });
+    } catch {
+      return undefined;
+    }
   }
 
   /**

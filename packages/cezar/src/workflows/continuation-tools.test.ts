@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
+import type { StepToolPolicy } from '@open-mercato/cezar-contract';
 import { RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
 
@@ -122,7 +123,7 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
   /** A terminal run whose `workflowDef` and steps are exactly what the caller says. */
   function terminalRun(input: {
     def?: WorkflowDef;
-    steps: { id: string; sessionId?: string; backend?: 'claude' | 'codex' }[];
+    steps: { id: string; sessionId?: string; backend?: 'claude' | 'codex'; toolPolicy?: StepToolPolicy }[];
     status?: 'done' | 'failed';
     error?: string;
     autoResumeAt?: string;
@@ -145,6 +146,7 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
         status: 'done',
         sessionId: s.sessionId,
         backend: s.backend,
+        ...(s.toolPolicy ? { toolPolicy: s.toolPolicy } : {}),
       });
     }
     return record.id;
@@ -220,6 +222,36 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
     expect(spec.allowedTools).toEqual(TOOLS);
     expect(spec.bashAllowlist).toEqual(BASH);
     await settled(id);
+  });
+
+  it('restores a persisted nested-step policy even when its definition is absent or wider', async () => {
+    const policy: StepToolPolicy = { allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff'], enforceReadOnly: true };
+    const id = terminalRun({ def: CHAIN_DEF, steps: [{ id: 'nested::read', sessionId: 'sess-1', backend: 'codex', toolPolicy: policy }] });
+    expect(manager!.continueRun(id, { text: 'push instead' })).toEqual({ ok: true });
+    const resumed = await specAt(0);
+    expect(resumed.allowedTools).toEqual(policy.allowedTools);
+    expect(resumed.bashAllowlist).toEqual(policy.bashAllowlist);
+    expect(resumed.enforceReadOnly).toBe(true);
+    expect(resumed.env?.GH_TOKEN).toBe('');
+    expect(resumed.mcpServers).toEqual([]);
+    await settled(id);
+    expect(store.getRun(id)?.steps.at(-1)?.toolPolicy).toEqual(policy);
+    expect(manager!.continueRun(id, { text: 'try a second time' })).toEqual({ ok: true });
+    const again = await specAt(1);
+    expect(again.allowedTools).toEqual(policy.allowedTools);
+    expect(again.bashAllowlist).toEqual(policy.bashAllowlist);
+    await settled(id);
+  });
+
+  it('refuses an ambiguous legacy graph continuation on Codex', async () => {
+    const def: WorkflowDef = { ...CHAIN_DEF, graph: {
+      nodes: [{ id: 'start', type: 'start' }, { id: 'nested', type: 'workflow', workflow: 'missing-child' }, { id: 'end', type: 'end', status: 'success' }],
+      edges: [{ from: 'start', to: 'nested' }, { from: 'nested.done', to: 'end' }],
+    } };
+    const id = terminalRun({ def, steps: [{ id: 'nested::read', sessionId: 'old', backend: 'codex' }] });
+    expect(manager!.continueRun(id, { text: 'continue', runner: 'codex' })).toEqual({ ok: true });
+    await expect.poll(() => store.readEvents(id).map(e => 'message' in e ? e.message : '').join('\n')).toContain('cannot restore this legacy graph step');
+    expect(captured.specs).toEqual([]);
   });
 
   it('a legacy record without workflowDef keeps the defaults, with no bashAllowlist', async () => {

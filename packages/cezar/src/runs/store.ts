@@ -1,4 +1,4 @@
-import { deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -127,6 +127,7 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
   modelIdentity: z.string().optional(),
