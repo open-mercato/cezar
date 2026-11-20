@@ -8,6 +8,7 @@ import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-run
 import { ledgerPath, loadLedger } from '../harness/ledger.ts';
 import { createModelProber } from '../harness/probe.ts';
 import * as probeTransports from '../harness/probe-transports.ts';
+import * as issueContext from '../harness/issue-context.ts';
 import { harnessWorkflowDefs, HARNESS_FIX_ISSUE } from '../harness/workflows.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { RunStore } from '../runs/store.ts';
@@ -92,6 +93,7 @@ describe('harness transient preflight retry', () => {
   beforeEach(() => {
     vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '0');
+    vi.spyOn(issueContext, 'resolveHarnessIssue').mockResolvedValue({ id: '642', text: 'Issue 642: fixture defect in a.txt' });
     vi.mocked(reportAgentError).mockClear();
     model.phases.length = 0;
     probeFails = true;

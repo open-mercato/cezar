@@ -538,6 +538,21 @@ describe('the hero surface', () => {
     await waitFor(() => expect(postedBody()).toMatchObject({ harness: { issueId: '642' } }))
   })
 
+  it('preserves a separately entered issue URL for host-side project validation', async () => {
+    writeDraft({ ...readDraft(), text: 'Fix this issue', composerMode: 'multi' })
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI,
+      workflows: { workflows: [{ name: 'harness-fix-issue', source: 'built-in', steps: [], capabilities: { push: false, openPr: false, postToGithub: false } }], issues: [] },
+    })
+    renderNewTask()
+    const issue = await screen.findByRole('textbox', { name: /issue id/i })
+    const url = 'https://github.com/acme/project/issues/642'
+    fireEvent.change(issue, { target: { value: url } })
+    const start = screen.getByRole('button', { name: 'Start multi-model run' })
+    await waitFor(() => expect(start.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(start)
+    await waitFor(() => expect(postedBody()).toMatchObject({ harness: { issueId: url } }))
+  })
+
   it('switches from an issue fix to a feature brief without requiring an issue id', async () => {
     writeDraft({ ...readDraft(), text: 'Improve email layout', composerMode: 'multi' })
     serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI,
@@ -573,12 +588,12 @@ describe('the hero surface', () => {
     expect(readAttachments()).toEqual([attachment])
   })
 
-  it.each(['Fix issue #642', 'Fix https://github.com/acme/project/issues/642'])('fills the issue id from %s and preserves an explicit override', async (text) => {
+  it.each([['Fix issue #642', '642'], ['Fix https://github.com/acme/project/issues/642', 'https://github.com/acme/project/issues/642']])('fills the issue id from %s and preserves an explicit override', async (text, expected) => {
     writeDraft({ ...readDraft(), text, composerMode: 'multi' })
     serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
     const issue = await screen.findByRole('textbox', { name: /issue id/i }) as HTMLInputElement
-    expect(issue.value).toBe('642')
+    expect(issue.value).toBe(expected)
     fireEvent.change(issue, { target: { value: 'OM-777' } })
     fireEvent.change(textarea(), { target: { value: 'Related to issue #888' } })
     expect(issue.value).toBe('OM-777')

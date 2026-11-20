@@ -36,6 +36,64 @@ function tempDir(prefix: string): string {
 }
 
 describe('harness safety primitives', () => {
+  it('serializes orphan claim takeover against a second process', () => {
+    const cwd = tempDir('cez-claim-race-');
+    execFileSync('git', ['init', '-q'], { cwd });
+    const dataDir = join(cwd, '.ai', 'cezar');
+    const stale = acquireIssueClaim(cwd, 'deleted-run', '42', { dataDir, runExists: () => true });
+    expect(stale.ok).toBe(true);
+    let contender: { acquire: unknown; release: unknown } | undefined;
+    const first = acquireIssueClaim(cwd, 'first', '42', {
+      dataDir,
+      runExists: () => {
+        // Run a real competing process between this owner's read and its unlink.
+        contender = JSON.parse(execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+          import { acquireIssueClaim, releaseIssueClaim } from ${JSON.stringify(new URL('./issue-claim.ts', import.meta.url).href)};
+          console.log(JSON.stringify({
+            release: releaseIssueClaim(${JSON.stringify(stale.ok ? stale.claim.path : '')}, 'deleted-run'),
+            acquire: acquireIssueClaim(${JSON.stringify(cwd)}, 'second', '42', {
+              dataDir: ${JSON.stringify(dataDir)}, runExists: () => false,
+            }),
+          }));
+        `], { encoding: 'utf8' }));
+        return false;
+      },
+    });
+    expect(first.ok).toBe(true);
+    expect(contender).toMatchObject({ acquire: { ok: false }, release: { ok: false } });
+    if (!first.ok) throw new Error(first.error);
+    expect(JSON.parse(readFileSync(first.claim.path, 'utf8'))).toMatchObject({ runId: 'first' });
+    expect(releaseIssueClaim(first.claim.path, 'second').ok).toBe(false);
+    expect(releaseIssueClaim(first.claim.path, 'first').ok).toBe(true);
+    expect(acquireIssueClaim(cwd, 'second', '42').ok).toBe(true);
+  });
+
+  it('confines NotebookEdit to the worktree and its own phase output', () => {
+    const root = tempDir('cez-notebook-guard-');
+    const worktree = join(root, 'worktree');
+    const output = join(root, 'output');
+    mkdirSync(worktree);
+    const guard = createClaudeStageOnlySettings(join(root, 'artifacts'), worktree, output, 'linux');
+    const guardPath = join(root, 'artifacts', 'claude-guard', 'guard.mjs');
+    const invoke = (notebook_path: string) => execFileSync(process.execPath, [guardPath], {
+      input: JSON.stringify({ tool_name: 'NotebookEdit', tool_input: { notebook_path, new_source: 'changed', cell_type: 'code' } }),
+      env: { ...process.env, ...guard.env }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    expect(() => invoke('')).toThrow();
+    expect(() => invoke(join(root, 'outside.ipynb'))).toThrow();
+    expect(() => invoke(join(worktree, '.git', 'notebook.ipynb'))).toThrow();
+    if (process.platform !== 'win32') {
+      symlinkSync(root, join(worktree, 'escape'));
+      expect(() => invoke(join(worktree, 'escape', 'outside.ipynb'))).toThrow();
+    }
+    expect(() => invoke(join(worktree, 'inside.ipynb'))).not.toThrow();
+    expect(() => invoke(join(output, 'result.ipynb'))).not.toThrow();
+    const settings = JSON.parse(readFileSync(guard.settingsPath, 'utf8')) as {
+      hooks: { PreToolUse: Array<{ matcher: string }> };
+    };
+    expect(settings.hooks.PreToolUse.some((hook) => hook.matcher.split('|').includes('NotebookEdit'))).toBe(true);
+  });
+
   it('[925-7] renders severity first and excerpts evidence within a byte budget', () => {
     const rendered = boundedFindings([
       { severity: 'nit', title: 'cosmetic', evidence: '界'.repeat(4_000) },

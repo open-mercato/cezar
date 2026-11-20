@@ -8,6 +8,7 @@ import { MAX_TRANSIENT_RETRIES } from '../core/agent-failure-class.ts';
 import { councilDecisionDetail, loadLedger, saveLedger } from '../harness/ledger.ts';
 import { createModelProber } from '../harness/probe.ts';
 import * as probeTransports from '../harness/probe-transports.ts';
+import * as issueContext from '../harness/issue-context.ts';
 import { harnessWorkflowDefs, HARNESS_FIX_ISSUE, HARNESS_IMPLEMENT_FEATURE } from '../harness/workflows.ts';
 import { RunStore } from '../runs/store.ts';
 import * as profiles from '../workspace/agent-profiles.ts';
@@ -15,7 +16,7 @@ import { RunManager } from './run.ts';
 import { QUICK_TASK_WORKFLOW } from './types.ts';
 
 const model = vi.hoisted(() => ({
-  calls: [] as Array<{ phase: string; runner: RunnerId; timeoutMs?: number }>,
+  calls: [] as Array<{ phase: string; runner: RunnerId; timeoutMs?: number; prompt: string }>,
   behavior: (_phase: string, _runner: RunnerId, _spec: AgentRunSpec): string | null | undefined => undefined,
 }));
 vi.mock('../core/runner-factory.ts', () => ({
@@ -35,7 +36,7 @@ vi.mock('../core/runner-factory.ts', () => ({
             return;
           }
           const phase = basename(dirname(resultPath)).replace(/^phase-/, '').replace(/-r\d+$/, '');
-          model.calls.push({ phase, runner, timeoutMs: spec.timeoutMs });
+          model.calls.push({ phase, runner, timeoutMs: spec.timeoutMs, prompt: spec.userPrompt });
           emit({ type: 'session', sessionId: `test-${model.calls.length}` });
           const failure = model.behavior(phase, runner, spec);
           if (failure) {
@@ -116,6 +117,7 @@ describe('council transient retries', () => {
   beforeEach(() => {
     vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '0');
+    vi.spyOn(issueContext, 'resolveHarnessIssue').mockResolvedValue({ id: '642', text: 'Issue 642: fixture defect in a.txt' });
     model.calls.length = 0;
     model.behavior = () => undefined;
     root = mkdtempSync(join(tmpdir(), 'cez-council-transient-'));
@@ -167,6 +169,25 @@ describe('council transient retries', () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+
+  it('delivers a separately selected issue report through the real manager to every native phase', async () => {
+    const workflow = harnessWorkflowDefs().find((item) => item.name === HARNESS_FIX_ISSUE);
+    if (!workflow) throw new Error('missing harness workflow');
+    const run = manager.startRun(workflow, { task: 'Fix this issue', runner: 'claude', harness: { profile: 'standard', skillProfile: 'generic', issueId: '642' } });
+    await settled(run.id);
+    expect(store.getRun(run.id)?.status, store.getRun(run.id)?.error).toBe('review');
+    for (const phase of ['qualify', 'diagnose', 'implement', 'review']) {
+      expect(model.calls.find((call) => call.phase === phase)?.prompt).toContain('Issue 642: fixture defect in a.txt');
+    }
+  }, 40_000);
+
+  it('reports an unavailable issue without starting a qualification session', async () => {
+    vi.mocked(issueContext.resolveHarnessIssue).mockRejectedValue(new Error('Issue not found in this project'));
+    const run = start(HARNESS_FIX_ISSUE, false);
+    await settled(run.id);
+    expect(store.getRun(run.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('could not load issue 642') });
+    expect(model.calls).toEqual([]);
+  }, 40_000);
 
   it('guard: harness phase timeout options retain their existing inactivity windows', async () => {
     const run = start(HARNESS_FIX_ISSUE, false);

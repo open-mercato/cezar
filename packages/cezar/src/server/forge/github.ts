@@ -3791,6 +3791,19 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
     detect: () => detectGithub(repoRoot),
     detectCached: () => detectGithubCached(repoRoot),
 
+    getIssue: async (number) => {
+      if (process.env.CEZ_DRY_RUN === '1' || !repoRef) return { available: false, reason: 'GitHub issue lookup is unavailable' };
+      if (!Number.isSafeInteger(number) || number < 1) return { available: false, reason: 'Invalid issue number' };
+      try {
+        const out = await gh(repoRoot, ['issue', 'view', String(number), '--repo',
+          `${repoRef.host}/${repoRef.owner}/${repoRef.repo}`, '--json', 'title,body,url']);
+        return { available: true, ...z.object({ title: z.string().min(1).max(1_000), body: z.string().max(60_000).nullish().transform((body) => body ?? ''), url: z.url().max(2_048) }).parse(JSON.parse(out)) };
+      } catch {
+        // CLI stderr can include credential-bearing URLs or headers; keep it out of the ledger.
+        return { available: false, reason: `Could not read GitHub issue #${number}. Check the issue number, report size and gh authentication, then retry.` };
+      }
+    },
+
     listIssues: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).issues,
 
     listPRs: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).prs,

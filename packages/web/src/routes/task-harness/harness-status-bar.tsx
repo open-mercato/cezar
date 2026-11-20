@@ -50,13 +50,13 @@ export function HarnessStatusBar({
   return (
     <div
       data-slot="harness-status-bar"
-      className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 py-2 text-label @sm/run:flex-nowrap"
+      className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 py-2 text-label @xl/run:flex-nowrap"
     >
       <StatusDot
         tone={setup || checksNeedAttention || ledger.outcome.status === 'contested' ? 'pending' : blocked ? 'danger' : toneOf(current?.status)}
         pulse={current?.status === 'running'}
       />
-      <span className="min-w-0 font-semibold text-foreground">
+      <span className="min-w-0 max-w-full shrink-0 break-words font-semibold text-foreground">
         {!active && setup ? 'Project setup needed' : !active && checksNeedAttention ? 'Checks need attention' : !active && ledger.outcome.status === 'contested' ? 'Verification needed' : current ? phaseLabel(current) : 'Starting'}
       </span>
       <span className="shrink-0 text-soft-foreground tabular-nums">
@@ -65,7 +65,7 @@ export function HarnessStatusBar({
 
       <span
         aria-hidden="true"
-        className="hidden h-[3px] min-w-[60px] max-w-[240px] flex-1 overflow-hidden rounded-full bg-muted @sm/run:block"
+        className="hidden h-[3px] min-w-[60px] max-w-[240px] flex-1 overflow-hidden rounded-full bg-muted @xl/run:block"
       >
         <i
           className={cn('block h-full rounded-full transition-[width] duration-500', setup || checksNeedAttention ? 'bg-warning' : 'bg-primary')}
@@ -74,7 +74,7 @@ export function HarnessStatusBar({
       </span>
 
       {council ? (
-        <span className="min-w-0 truncate text-muted-foreground @max-sm/run:hidden">
+        <span className="min-w-0 truncate text-muted-foreground @max-xl/run:hidden">
           council round {council.round} ·{' '}
           <span className="tabular-nums">
             {completed}/{reviewers.length || '—'}

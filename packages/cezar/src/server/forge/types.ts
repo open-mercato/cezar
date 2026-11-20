@@ -284,6 +284,8 @@ export interface ForgeDriver {
   /** Non-blocking availability for the health path: cached result, or null while warming — never
    *  shells out on the read (keeps /api/health under the bookmarklet's latency budget). */
   detectCached(): ForgeAvailability | null;
+  /** Complete issue report for host-side task context; never throws. */
+  getIssue?(number: number): Promise<{ available: true; title: string; body: string; url: string } | { available: false; reason: string }>;
   listIssues(opts?: ForgeListOptions): Promise<ForgeItem[]>;
   listPRs(opts?: ForgeListOptions): Promise<ForgeItem[]>;
   /** Search the forge for issues/PRs in ANY state (#730) — the escape hatch from the open-only

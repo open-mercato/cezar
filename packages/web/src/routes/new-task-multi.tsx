@@ -87,9 +87,13 @@ export function MultiModelSurface({
   const harnessMode =
     draft.harnessMode ?? HARNESS_MODES.find((m) => m.workflow === sourceRef)?.id ?? 'fix-issue'
   const harnessSkillProfile = draft.harnessSkillProfile ?? 'generic'
-  const inferredIssue = extractTaskRefs(draft.text).issueNumber
+  // Preserve the repository in an issue link so the host can validate its scope.
+  // Scan complete URL tokens once and bound suffix matching, as extractTaskRefs does.
+  const inferredIssue = [...draft.text.matchAll(/https?:\/\/[^\s<>()]+/gi)]
+    .find(([url]) => url.length <= 512 && /\/issues\/[1-9]\d*(?:[/?#].*)?$/.test(url))?.[0]
+    ?? extractTaskRefs(draft.text).issueNumber
   const issueValue = draft.harnessIssueId ?? (inferredIssue === undefined ? '' : String(inferredIssue))
-  const issueId = String(extractTaskRefs(issueValue).issueNumber ?? issueValue.trim().replace(/^#(?=\d+$)/, ''))
+  const issueId = issueValue.trim().replace(/^#(?=\d+$)/, '')
   const issueReason = harnessMode === 'fix-issue' && !issueId
     ? 'Enter an issue ID, or choose Build a feature to work from a brief.'
     : undefined

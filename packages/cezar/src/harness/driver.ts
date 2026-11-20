@@ -56,6 +56,7 @@ import {
   parseFrontmatter,
   type Skill,
 } from '../skills.js';
+import { resolveHarnessIssue } from './issue-context.js';
 import { HARNESS_FIX_ISSUE, HARNESS_IMPLEMENT_FEATURE } from './workflows.js';
 import type { ModelProber } from './probe.js';
 import { opencodeSeatingError, synthesizeReviewerBinding } from './reviewer-binding.js';
@@ -262,6 +263,7 @@ export interface HarnessDriverDeps {
   reconcileProcess?: (
     identity: HarnessProcessIdentity,
   ) => Promise<ReconcileHarnessProcessResult>;
+  resolveIssue?: typeof resolveHarnessIssue;
   acquireClaim?: typeof acquireIssueClaim;
   releaseClaim?: typeof releaseIssueClaim;
 }
@@ -2448,15 +2450,39 @@ export async function runHarnessDriver(
       return `harness recovery blocked: pinned skill "${name}" is missing or unreadable`;
     }
   }
+  let phaseTask = input.task;
+  if (!isFeature && input.issueId) {
+    if (ledger.subject.id !== input.issueId) return 'harness recovery blocked: issue id differs from the recorded subject';
+    if (!ledger.subject.issueContext) {
+      try {
+        ledger.subject.issueContext = await (deps.resolveIssue ?? resolveHarnessIssue)(host.repoRoot, host.dataDir, input.issueId);
+        if (!ledger.subject.issueContext.text.trim()) throw new Error('The issue source returned an empty report.');
+        persist();
+      } catch (error) {
+        return `could not load issue ${input.issueId}: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    phaseTask = `${input.task}\n\nIssue reference: ${input.issueId}\n${ledger.subject.issueContext.text}`;
+  }
   if (input.issueId) {
-    const claimed = acquireClaim(host.cwd, host.runId, input.issueId, {
+    const claimId = ledger.subject.issueContext?.id ?? input.issueId;
+    const claimed = acquireClaim(host.cwd, host.runId, claimId, {
       dataDir: host.dataDir,
       runExists: (runId) => readLedger(host.dataDir, runId).status !== 'missing',
     });
     if (!claimed.ok) return claimed.error;
+    // Older ledgers may hold a URL-shaped claim. Acquire the canonical claim
+    // before releasing it, so recovery never leaves the issue unclaimed.
+    if (ledger.claim?.held && ledger.claim.path && ledger.claim.path !== claimed.claim.path) {
+      const released = releaseClaim(ledger.claim.path, host.runId);
+      if (!released.ok) {
+        releaseClaim(claimed.claim.path, host.runId);
+        return released.error;
+      }
+    }
     ledger.claim = {
       held: true,
-      issueId: input.issueId,
+      issueId: claimId,
       path: claimed.claim.path,
     };
     persist();
@@ -4126,7 +4152,7 @@ export async function runHarnessDriver(
           `Qualify this tracker issue with the ${phaseSkills.qualify} skill: decide whether it is a real, still-unfixed defect on the current branch.`,
           ``,
           `Issue:`,
-          input.task,
+          phaseTask,
           ``,
           `Cezar already holds the run-local issue lease. Skip the skill's tracker claim and all tracker mutations.`,
           `Read-only triage — change nothing. When you are done write a JSON result file at the path in $CEZ_HARNESS_RESULT_FILE of the shape:`,
@@ -4158,7 +4184,7 @@ export async function runHarnessDriver(
           `Diagnose the root cause of this issue with the ${phaseSkills.diagnose} skill. Read-only — locate the cause and the minimal change surface; do not fix anything yet.`,
           ``,
           `Issue:`,
-          input.task,
+          phaseTask,
           ``,
           `Qualification evidence: ${qualifyResult.evidence}`,
           ``,
@@ -4187,7 +4213,7 @@ export async function runHarnessDriver(
         : `Fix this issue in the current worktree with the ${phaseSkills.fix} skill. Add the mandatory regression test and prove the complete fix through its validation workflow.`,
       ``,
       `Task:`,
-      input.task,
+      phaseTask,
       ``,
       `${isFeature ? 'Specification' : 'Diagnosis'}: ${diagnosisSummary}`,
       ``,
@@ -4642,7 +4668,7 @@ export async function runHarnessDriver(
       const reviewPromptText = [
         `You are a FRESH review context with no implementation transcript — review this worktree's complete uncommitted diff against the base branch, following the already-injected ${phaseSkills.codeReview} instructions in full.`,
         ``,
-        `The task under review: ${input.task}`,
+        `The task under review: ${phaseTask}`,
         `Validation gate: ${
           ledger.validation.length === 0
             ? 'no commands configured'
@@ -4683,7 +4709,7 @@ export async function runHarnessDriver(
           advisorCriteria: `${[
             `Role-based cezar council criteria (run ${host.runId}).`,
             ``,
-            `The task under review: ${input.task}`,
+            `The task under review: ${phaseTask}`,
             `Validation gate: ${
               ledger.validation.length === 0
                 ? 'no commands configured'

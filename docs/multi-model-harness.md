@@ -52,6 +52,12 @@ issue reference or URL in the prompt fills it automatically; you can edit it for
 another tracker ID. For a freeform requirement brief, choose **Build a feature** —
 it does not require an issue. Missing prerequisites stay visible beside the form
 and prevent submission before a session is created.
+The host loads the issue title and description through the project's connected
+tracker, or its GitHub base repository when no tracker is connected. Qualification,
+diagnosis, implementation and review receive that report alongside your prompt.
+The report is saved with the run so Continue uses the same context; an unavailable
+or incomplete report stops the run before qualification. Issue links must belong
+to the selected project, and links and numeric IDs share the same issue claim.
 You can keep editing the prompt while a check blocks submission. Fix missing
 logins or unavailable models before starting; execution does not silently substitute
 another model. Omitting a lineup through the API selects the standard Claude flow

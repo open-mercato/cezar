@@ -277,6 +277,8 @@ const harnessLedgerBaseShape = {
     kind: z.enum(['issue', 'brief']),
     id: z.string().optional(),
     text: z.string(),
+    /** Host-fetched report, pinned across retries and recovery. */
+    issueContext: z.object({ id: z.string().min(1).max(512), text: z.string().min(1).max(64_000) }).optional(),
   }),
   trustedConfig: z
     .object({

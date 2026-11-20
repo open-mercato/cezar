@@ -161,6 +161,7 @@ function makeHarness(dir: string) {
   let runtimeEnv: Record<string, string> | undefined;
 
   const deps: HarnessDriverDeps = {
+    resolveIssue: async (_root, _dataDir, id) => ({ id, text: `Issue ${id}: Replay defect\nQueued messages are lost while flushing.` }),
     bundledSkillsRoot: null,
     resolveScript: () => join(dir, 'harness.mjs'),
     // The sealed-runtime seam (2026-07-27). Tests never materialize a real
@@ -307,6 +308,84 @@ describe('harness driver — standard fix-issue graph', { timeout: 30_000 }, () 
     skillProfile: 'open-mercato' as const,
     issueId: '642',
   };
+  it('supplies a separately entered issue and its fetched report to qualification and diagnosis', async () => {
+    const h = makeHarness(dir);
+    const snapshot = 'Issue #642: Replay loses queued messages\nSteps: enqueue while flushing; expected delivery, actual dropped message.';
+    const resolveIssue = vi.fn(async () => ({ id: '642', text: snapshot }));
+    Object.assign(h.deps, { resolveIssue });
+    const prompts: string[] = [];
+    h.agentBehavior.set('qualify', (req) => {
+      prompts.push(req.prompt);
+      writeFileSync(req.resultPath, JSON.stringify({ outcome: 'work_needed', evidence: 'reproduced' }));
+      return null;
+    });
+    h.agentBehavior.set('diagnose', (req) => {
+      prompts.push(req.prompt);
+      return 'stop after inspecting diagnosis input';
+    });
+    await runHarnessDriver(h.host, { ...input, task: 'Fix this issue', skillProfile: 'generic' }, h.deps);
+    expect(prompts).toHaveLength(2);
+    for (const prompt of prompts) {
+      expect(prompt).toContain(snapshot);
+      expect(prompt).toContain('Fix this issue');
+    }
+    expect(resolveIssue).toHaveBeenCalledWith(h.host.repoRoot, h.host.dataDir, '642');
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.subject).toMatchObject({ issueContext: { id: '642', text: snapshot } });
+    // Recovery uses the same report even if the tracker is unavailable or has changed.
+    resolveIssue.mockRejectedValue(new Error('offline'));
+    await runHarnessDriver(h.host, { ...input, task: 'Fix this issue', skillProfile: 'generic' }, h.deps);
+    expect(resolveIssue).toHaveBeenCalledTimes(1);
+    expect(prompts.at(-1)).toContain(snapshot);
+  });
+
+  it('uses the canonical issue claim and includes the report in implementation and review', async () => {
+    const h = makeHarness(dir);
+    h.deps.resolveIssue = async () => ({ id: '642', text: 'Pinned report: dropped queued message.' });
+    const acquire = vi.fn(h.deps.acquireClaim);
+    h.deps.acquireClaim = acquire;
+    const prompts: HarnessAgentPhaseRequest[] = [];
+    const runAgent = h.host.runAgent;
+    h.host.runAgent = async (req) => { prompts.push(req); return runAgent(req); };
+    expect(await runHarnessDriver(h.host, { ...input, task: 'Fix this issue', issueId: 'https://github.com/acme/app/issues/642' }, h.deps)).toBeNull();
+    expect(acquire).toHaveBeenCalledWith(h.host.cwd, h.host.runId, '642', expect.any(Object));
+    for (const phase of ['qualify', 'diagnose', 'implement', 'review']) {
+      expect(prompts.find((req) => req.phaseId === phase)?.prompt).toContain('Pinned report: dropped queued message.');
+    }
+  });
+
+  it('replaces a legacy URL-shaped claim only after acquiring the canonical claim', async () => {
+    const h = makeHarness(dir);
+    const issueId = 'https://github.com/acme/app/issues/642';
+    const ledger = createLedger({ workflow: input.workflow, requestedProfile: input.profile, skillProfile: input.skillProfile, subject: { kind: 'issue', id: issueId, text: input.task } });
+    const oldPath = join(dir, '.old-url-claim');
+    ledger.claim = { held: true, issueId, path: oldPath };
+    saveLedger(h.host.dataDir, h.host.runId, ledger);
+    h.deps.resolveIssue = async () => ({ id: '642', text: 'Pinned issue report' });
+    const sequence: string[] = [];
+    const acquire = h.deps.acquireClaim;
+    h.deps.acquireClaim = (...args) => { sequence.push(`acquire:${args[2]}`); if (!acquire) throw new Error('missing test seam'); return acquire(...args); };
+    h.deps.releaseClaim = (path) => { sequence.push(`release:${path}`); return { ok: true }; };
+    expect(await runHarnessDriver(h.host, { ...input, issueId }, h.deps)).toBeNull();
+    expect(sequence.slice(0, 2)).toEqual(['acquire:642', `release:${oldPath}`]);
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.claim?.issueId).toBe('642');
+  });
+
+  it('does not require an issue source for a feature brief', async () => {
+    const h = makeHarness(dir);
+    const resolveIssue = vi.fn(async () => { throw new Error('No tracker configured'); });
+    h.deps.resolveIssue = resolveIssue;
+    h.agentBehavior.set('spec', () => 'stop after entering the feature graph');
+    expect(await runHarnessDriver(h.host, { ...input, workflow: HARNESS_IMPLEMENT_FEATURE, issueId: undefined }, h.deps)).toContain('stop after entering');
+    expect(resolveIssue).not.toHaveBeenCalled();
+  });
+
+  it('stops a fix before qualification when its issue report cannot be loaded', async () => {
+    const h = makeHarness(dir);
+    Object.assign(h.deps, { resolveIssue: async () => { throw new Error('issue is unavailable'); } });
+    expect(await runHarnessDriver(h.host, input, h.deps)).toMatch(/could not load issue.*642/i);
+    expect(h.calls.filter((call) => call.kind === 'agent')).toEqual([]);
+  });
+
   it('pauses missing Yarn dependencies before paying for any agent phase', async () => {
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ packageManager: 'yarn@4.6.0', devDependencies: { vitest: '1' } }));
     const h = makeHarness(dir);

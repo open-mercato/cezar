@@ -3964,3 +3964,28 @@ describe('fetchPrWatchFingerprint (#2040)', () => {
     expect(execFileMock.mock.calls.length).toBe(calls);
   });
 });
+
+
+describe('host issue report lookup', () => {
+  beforeEach(() => { vi.stubEnv('CEZ_DRY_RUN', '0'); execFileMock.mockReset(); });
+  afterEach(() => vi.unstubAllEnvs());
+  it('pins the repository and enterprise host and retains the complete report', async () => {
+    const report = { title: 'Replay race', body: 'x'.repeat(20_000), url: 'https://acme.ghe.com/team/app/issues/42' };
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args.at(-1) as (error: unknown, result: unknown) => void;
+      cb(null, { stdout: JSON.stringify(report), stderr: '' });
+    });
+    const driver = createGithubDriver('/tmp/issue-context-enterprise', { host: 'acme.ghe.com', owner: 'team', repo: 'app' });
+    expect(await driver.getIssue?.(42)).toEqual({ available: true, ...report });
+    expect(execFileMock).toHaveBeenCalledWith('gh', ['issue', 'view', '42', '--repo', 'acme.ghe.com/team/app', '--json', 'title,body,url'], expect.objectContaining({ env: expect.objectContaining({ GH_HOST: 'acme.ghe.com' }), timeout: 15_000 }), expect.any(Function));
+  });
+  it('does not expose CLI error details to phase context', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args.at(-1) as (error: unknown) => void;
+      cb(new Error('Authorization: secret-token'));
+    });
+    const driver = createGithubDriver('/tmp/issue-context-failure', { host: 'github.com', owner: 'team', repo: 'app' });
+    expect(await driver.getIssue?.(42)).toMatchObject({ available: false, reason: expect.stringContaining('Check the issue number') });
+    expect(JSON.stringify(await driver.getIssue?.(42))).not.toContain('secret-token');
+  });
+});

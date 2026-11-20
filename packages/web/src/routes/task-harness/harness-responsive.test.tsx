@@ -34,9 +34,9 @@ describe('harness surfaces in a narrow run container', () => {
     const status = document.querySelector('[data-slot="harness-status-bar"]')!
     const progress = status.querySelector('span[aria-hidden="true"]')!
     const council = screen.getByText(/council round/)
-    expect(progress.className.split(/\s+/)).toContain('@sm/run:block')
+    expect(progress.className.split(/\s+/)).toContain('@xl/run:block')
     expect(progress.className.split(/\s+/)).not.toContain('sm:block')
-    expect(council.className.split(/\s+/)).toContain('@max-sm/run:hidden')
+    expect(council.className.split(/\s+/)).toContain('@max-xl/run:hidden')
     expect(council.className.split(/\s+/)).not.toContain('max-sm:hidden')
     expect(screen.getByRole('button', { name: 'Timeline' })).toBeTruthy()
   })

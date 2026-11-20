@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
+import lockfile from 'proper-lockfile';
 import { readHarnessFsEntry } from '../fs-read.js';
 import { readLedger, saveLedger } from './ledger.js';
 import type { HarnessLedger } from './types.js';
@@ -63,6 +64,24 @@ export function acquireIssueClaim(
         (error instanceof Error ? error.message : String(error)),
     };
   }
+  let release: (() => void) | undefined;
+  try {
+    release = lockfile.lockSync(path, { realpath: false, stale: 30_000, retries: 0 });
+    return acquireClaimLocked(path, runId, issueId, owner);
+  } catch {
+    return { ok: false, error: `issue ${issueId} claim is busy or unavailable; retry after the other operation finishes` };
+  } finally {
+    release?.();
+  }
+}
+
+/** All claim readers/writers share this short synchronous critical section. */
+function acquireClaimLocked(
+  path: string,
+  runId: string,
+  issueId: string,
+  owner?: { dataDir: string; runExists: (runId: string) => boolean },
+): { ok: true; claim: IssueClaim } | { ok: false; error: string } {
   try {
     const descriptor = openSync(path, 'wx', 0o600);
     try {
@@ -95,8 +114,8 @@ export function acquireIssueClaim(
         !owner.runExists(existing.data.runId)
       ) {
         unlinkSync(path);
-        // Once: a claim that reappears in between belongs to a live racer.
-        return acquireIssueClaim(cwd, runId, issueId, { ...owner, runExists: () => true });
+        // Keep the mutex until the replacement is durable.
+        return acquireClaimLocked(path, runId, issueId, { ...owner, runExists: () => true });
       }
       if (existing.success) {
         return {
@@ -117,7 +136,9 @@ export function acquireIssueClaim(
 }
 
 export function releaseIssueClaim(path: string, runId: string): { ok: true } | { ok: false; error: string } {
+  let release: (() => void) | undefined;
   try {
+    release = lockfile.lockSync(path, { realpath: false, stale: 30_000, retries: 0 });
     const entry = readHarnessFsEntry(path, 64 * 1024);
     const parsed =
       entry.kind === 'file' && entry.content !== null
@@ -139,6 +160,8 @@ export function releaseIssueClaim(path: string, runId: string): { ok: true } | {
     return code === 'ENOENT'
       ? { ok: true }
       : { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    release?.();
   }
 }
 

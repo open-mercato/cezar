@@ -14,7 +14,8 @@ let input = {}
 try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch {}
 const toolName = typeof input?.tool_name === 'string' ? input.tool_name : ''
 const command = typeof input?.tool_input?.command === 'string' ? input.tool_input.command : ''
-const filePath = typeof input?.tool_input?.file_path === 'string' ? input.tool_input.file_path : ''
+const rawWritePath = toolName === 'NotebookEdit' ? input?.tool_input?.notebook_path : input?.tool_input?.file_path
+const filePath = typeof rawWritePath === 'string' ? rawWritePath : ''
 // Read, Grep and Glob run in-process, outside the Bash sandbox and its denyRead.
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'NotebookRead'])
 const readTool = READ_TOOLS.has(toolName)
@@ -23,6 +24,7 @@ const refuse = (message) => {
   process.stderr.write(\`[cez-harness] \${message}\\n\`)
   process.exit(2)
 }
+if (toolName === 'NotebookEdit' && !filePath) refuse('NotebookEdit requires a notebook_path')
 // MCP tools run outside the sandbox and this guard's path checks alike.
 if (typeof input?.tool_name === 'string' && input.tool_name.startsWith('mcp__')) {
   refuse(\`\${input.tool_name} is not available in a stage-only harness phase\`)
@@ -217,7 +219,7 @@ export function createClaudeStageOnlySettings(
   const hooks = {
     PreToolUse: [
       {
-        matcher: 'Bash|Edit|Write|Read|Grep|Glob|NotebookRead|mcp__.*',
+        matcher: 'Bash|Edit|Write|NotebookEdit|Read|Grep|Glob|NotebookRead|mcp__.*',
         hooks: [{ type: 'command', command: `node ${JSON.stringify(guardPath)}` }],
       },
     ],
