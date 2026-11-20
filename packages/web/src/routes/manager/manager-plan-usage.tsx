@@ -243,7 +243,7 @@ function ManagerUsageDetails({ usage, account, provider, now }: { usage: Manager
     <>
       {account.fiveHour ? (
         <section data-slot="manager-usage-account" className="mb-2 border-b border-border pb-2">
-          <p className="text-meta font-medium tracking-wide text-muted-foreground uppercase">Account now · {label}</p>
+          <p className="eyebrow text-muted-foreground">Account now · {label}</p>
           <AccountLimit slot="manager-usage-account-five" w={account.fiveHour} now={now} label={`5-hour limit ${clockTime(account.fiveHour.startsAt)}–${clockTime(account.fiveHour.resetsAt)}`} />
           {account.week ? <AccountLimit slot="manager-usage-account-week" w={account.week} now={now} label="Week" /> : null}
         </section>
@@ -265,7 +265,7 @@ function ManagerUsageDetails({ usage, account, provider, now }: { usage: Manager
           ) : null}
           {usage.topTurns.length > 0 ? (
             <section data-slot="manager-usage-turns" className="mt-2 border-t border-border pt-2">
-              <p className="text-meta font-medium tracking-wide text-muted-foreground uppercase">Largest turns</p>
+              <p className="eyebrow text-muted-foreground">Largest turns</p>
               <PlanUsageRows
                 className="mt-1"
                 rows={usage.topTurns.map((t, i) => ({
