@@ -37,7 +37,7 @@ PR: #2365
 
 ### Phase 3: Review and publication
 
-- [ ] 3.1 Complete independent review, evidence, labels and exact owned lock release
+- [x] 3.1 Complete independent review, evidence, labels and exact owned lock release — d7196c592
 
 ## Verification so far
 Installed pre-upgrade path is CLI8.6.0→rimraf6.1.3→glob13.0.6→minimatch10.2.6. After parent patch: CLIunchanged→rimraf6.1.4→glob14.0.6→minimatch11.0.9; incoming ranges accept every step. Only required six transitive lock entries change, no override/direct manifest change. Mobile checkPASS;149testsPASS including2real parent cleanup-glob controls;CLIversion/helpPASS;npmlsPASS;audit0vulnerabilities. Independent npm-semver comparison proves old version in alert85 range and installed/alllocked new copies outside it. No native iOS/Android build claim.
