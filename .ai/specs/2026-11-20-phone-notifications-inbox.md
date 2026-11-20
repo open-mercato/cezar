@@ -112,7 +112,7 @@ no list shows:
 | `task` | sub-kind `needs-you`: waits on the user with no question card; `review`: at the review gate; `failed`: failed and not yet seen | open, mark seen |
 | `message` | a manager's important message is unread | open, mark read |
 
-Each switch in § Settings filters one of these: Questions → `question`, Approvals → `approval`, Tasks that
+On the wire a `Kind` is flat: `question`, `approval`, `task` (needs-you), `review`, `failed`, `message`. Each switch in § Settings filters one of these: Questions → `question`, Approvals → `approval`, Tasks that
 need me → `task/needs-you`, Tasks ready for review → `task/review`, Failed tasks → `task/failed`, Important
 manager messages → `message`. "Mark seen" on a task reuses the run's existing read receipt (`RunRecord.seenAt`,
 `isUnread()` in `lib/read-state.ts`) and needs no new store.
@@ -219,4 +219,6 @@ line in the code PR. Per-manager "Notify me when important" stays as it is and s
 4. D, in the code PR: the server attention list and its route; Now's Needs you reads it, with a From-managers
    group and the This project · All switch; the Now tab's count badge; the per-phone prefs (push kinds, icon kinds,
    quiet hours, declared push kinds) on `PUT /api/v1/workspace/phone/push/prefs` and their settings page; the count
-   chips on *Your cezars*.
+   chips on *Your cezars*. Code PR #2367.
+5. App follow-up, after #2361: read `c` (iOS) and `t: "count"` (Android), store the count, call #2361's `settle()`,
+   and declare `kinds: ["attention", "count"]` on the prefs route.
