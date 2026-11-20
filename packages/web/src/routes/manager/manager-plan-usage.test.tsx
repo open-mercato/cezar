@@ -155,7 +155,7 @@ describe('ManagerUsageChip', () => {
   it('shows the account meter and manager + tasks, and opens the shared breakdown', () => {
     renderIn(<ManagerUsageChip usage={usage()} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
     const chip = row('manager-usage-chip')!
-    expect(chip.textContent).toBe('63%of 5h · manager + tasks ≈ 23%')
+    expect(chip.textContent).toBe('63% of 5h · manager + tasks ≈ 23%')
     expect(chip.getAttribute('data-level')).toBe('ok')
     expect(chip.getAttribute('aria-label')).toMatch(/^Plan limit: 63% of the 5-hour limit used, resets .+; this manager and its tasks ≈ 23%$/)
     fireEvent.click(chip)
@@ -206,7 +206,7 @@ describe('ManagerUsageChip', () => {
 
   it('still shows the account when the manager spent nothing today, and nothing at all with neither', () => {
     const { unmount } = renderIn(<ManagerUsageChip usage={null} account={accountNow(40)} provider="claude" now={NOW.getTime()} />)
-    expect(row('manager-usage-chip')!.textContent).toBe('40%of 5h')
+    expect(row('manager-usage-chip')!.textContent).toBe('40% of 5h')
     fireEvent.click(row('manager-usage-chip')!)
     expect(row('manager-usage-none')!.textContent).toBe('Nothing measured for this manager today.')
     unmount()

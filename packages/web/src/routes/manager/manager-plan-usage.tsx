@@ -334,10 +334,10 @@ export function ManagerUsageChip(props: UsageProps) {
         >
           {five ? <Meter pct={pct} level={level} className="w-6 md:w-8" /> : <GaugeIcon aria-hidden="true" className="size-3" />}
           {five ? (
-            <>
-              <span>{exactPp(pct)}</span>
-              <span className="max-md:hidden">of 5h{usage ? ` · ${share}` : ''}</span>
-            </>
+            <span>
+              {exactPp(pct)}
+              <span className="max-md:hidden"> of 5h{usage ? ` · ${share}` : ''}</span>
+            </span>
           ) : (
             <span>
               <span className="max-md:hidden">Manager + tasks </span>

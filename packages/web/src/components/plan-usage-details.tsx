@@ -34,11 +34,12 @@ export function PlanUsageSurface({
     return (
       <Sheet>
         <SheetTrigger asChild>{trigger}</SheetTrigger>
+        {/* pt-15 clears the sheet's 44 px close button (top-4) so no row runs under it. */}
         <SheetContent
           side="bottom"
           data-slot={slot}
           aria-describedby={undefined}
-          className={cn('max-h-[85dvh] gap-0 overflow-y-auto rounded-t-xl px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-label', className)}
+          className={cn('max-h-[85dvh] gap-0 overflow-y-auto rounded-t-xl px-4 pt-15 pb-[max(1rem,env(safe-area-inset-bottom))] text-label', className)}
         >
           <InSheet.Provider value>{children}</InSheet.Provider>
         </SheetContent>
@@ -59,7 +60,7 @@ export function PlanUsageSurface({
 /** The sheet needs a dialog title; the popover keeps a plain line. */
 export function PlanUsageTitle({ children }: { children: ReactNode }) {
   return useContext(InSheet) ? (
-    <SheetTitle className="pr-12 text-label font-medium">{children}</SheetTitle>
+    <SheetTitle className="text-label font-medium">{children}</SheetTitle>
   ) : (
     <p className="font-medium text-foreground">{children}</p>
   )
