@@ -71,6 +71,11 @@ public final class BadgeRefresh {
         holds = Math.max(0, holds + (on ? 1 : -1));
     }
 
+    /** The device sheet is open: a round that ends now leaves the warm links to it. */
+    public synchronized boolean held() {
+        return holds > 0;
+    }
+
     private void tick(int ticking) {
         schedule.after(PAGE_EVERY_MS, () -> {
             synchronized (this) {

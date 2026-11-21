@@ -25,8 +25,10 @@ public final class CezarApplication extends Application {
         ShellServices.setTokenSource(new FcmTokenSource(this));
         PushNotifier.createChannel(this);
         // Every computer's count on resume and while a page is open, not only on Your cezars (B1).
+        // Every round, the badge's and Your cezars' alike, ends in one settle: what reached 0 is cleared (B3).
+        ShellServices.setOnRoundEnd(() -> PushNotifier.settle(this));
         BadgeRefresh badges = new BadgeRefresh(this::probeRound, (ms, run) -> timer.schedule(run, ms, TimeUnit.MILLISECONDS),
-                System::currentTimeMillis, () -> PushNotifier.settle(this));
+                System::currentTimeMillis, () -> {});
         ShellServices.setBadges(badges);
         registerActivityLifecycleCallbacks(new Foreground(badges));
     }

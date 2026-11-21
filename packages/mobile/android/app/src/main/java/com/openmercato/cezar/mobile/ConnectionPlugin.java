@@ -269,7 +269,6 @@ public class ConnectionPlugin extends Plugin {
                 });
                 return;
             }
-            PushNotifier.settle(getContext());
             answerProbe(calls -> {
                 JSObject result = list(ShellServices.connector(getContext()));
                 for (PluginCall each : calls) each.resolve(result);

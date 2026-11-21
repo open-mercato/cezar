@@ -397,6 +397,36 @@ do {
     expect(done == 3 && cezars.rows([directServer], now: noon)[0].status == .offline, "a reading still checking at the bound reads offline")
 }
 
+// CezarProbe: a joiner listing a cezar the round does not cover runs again; a held round keeps the warm links
+do {
+    final class Memory: DeviceBookStorage {
+        var data: Data?
+        func read() -> Data? { data }
+        func write(_ data: Data) { self.data = data }
+    }
+    var reports: [String: (DeviceSwitch.Reading) -> Void] = [:]
+    var released: [String] = []
+    var made = 0
+    var held = true
+    let cezars = CezarProbe(make: { onChange in
+        made += 1
+        return DeviceProbes(relay: { server, report in reports[server.id] = report }, direct: { server, report in reports[server.id] = report },
+                            release: { released.append($0.id) }, schedule: { _, _ in }, onChange: onChange)
+    }, book: DeviceBookStore(storage: Memory()), clock: { noon }, schedule: { _, _ in }, keepLinks: { held })
+    var done: [String] = []
+    cezars.probe([relayServer], currentId: nil) { done.append("first") }
+    cezars.probe([relayServer], currentId: nil) { done.append("joined") }
+    cezars.probe([relayServer, directServer], currentId: nil) { done.append("with d") }
+    expect(made == 1, "one round runs")
+    reports["r"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    expect(done == ["first", "joined"] && made == 2, "the round answers what it covers, then runs again for the new cezar")
+    expect(released.isEmpty, "held by the sheet: the round leaves the warm links")
+    held = false
+    reports["r"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    reports["d"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    expect(done == ["first", "joined", "with d"] && released == ["r", "d"], "the follow-up reads it, and lets go once the sheet is closed")
+}
+
 // BadgeRefresh (spec 2026-11-20-phone-notifications-inbox, B1): a round on resume, and a minute's tick while a page is open
 do {
     let manual = Manual()

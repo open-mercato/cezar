@@ -71,7 +71,9 @@ public class BadgeRefreshTest {
         badges.hold(true);
         badges.resumed();
         assertEquals(0, rounds);
+        assertEquals("a round already running leaves the sheet's links", true, badges.held());
         badges.hold(false);
+        assertEquals(false, badges.held());
         badges.resumed();
         assertEquals(1, rounds);
     }

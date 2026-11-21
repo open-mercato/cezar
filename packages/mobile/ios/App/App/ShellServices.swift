@@ -75,11 +75,11 @@ enum ShellServices {
     }
 
     /// The connect page's `probe`, whose readings the next listed outcome carries.
-    static let cezars = CezarProbe(make: { deviceProbes(connector, onChange: $0) }, book: devices, clock: relayNowMs,
-                                   onBadge: { _ in notifier.settle() })
+    static let cezars: CezarProbe = CezarProbe(make: { deviceProbes(connector, onChange: $0) }, book: devices, clock: relayNowMs,
+                                   onBadge: { _ in notifier.settle() }, keepLinks: { badges.held })
 
     /// Every saved cezar's count on resume and while a page is open, not only on Your cezars (B1).
-    static let badges = BadgeRefresh(round: { current, done in cezars.probe(connector.list(), currentId: current, done: done) },
+    static let badges: BadgeRefresh = BadgeRefresh(round: { current, done in cezars.probe(connector.list(), currentId: current, done: done) },
                                      clock: relayNowMs, apply: { notifier.settle() })
 
     /// The relay account calls (RELAY_PROTOCOL.md § 18), signed by the server's device key.

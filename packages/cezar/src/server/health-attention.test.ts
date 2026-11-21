@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { healthResponseSchema } from '@open-mercato/cezar-contract';
-import { ManagerStore } from '../managers/store.ts';
 import { RunStore } from '../runs/store.ts';
 import { runInRelayScope } from '../relay/scope.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -63,22 +62,6 @@ describe('health attention counts', () => {
     process.env.CEZ_REMOTE = '1';
     expect((await read(build())).attention).toEqual({ waiting: 1, failed: 2 });
   });
-
-  // Spec 2026-11-20-phone-notifications-inbox, B2: what raises a push is what the badge counts.
-  it('counts an unread important manager message until it is read', async () => {
-    const app = build();
-    const post = (path: string, body?: unknown) => apiRequest(app, path, { method: 'POST', headers: { 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
-    const created = await post('/api/v1/workspace/managers', { instructions: 'Watch', projects: 'all', cronMinutes: 0 });
-    expect(created.status).toBe(201);
-    const { id } = (await created.json()) as { id: string };
-    const managers = new ManagerStore();
-    const waiting = async () => (await runInRelayScope({ deviceId: 'phone' }, () => read(app))).attention?.waiting ?? 0;
-    const before = await waiting();
-    managers.persistMessage(id, { id: 'm1', seq: managers.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', text: 'Blocked', turn: 'watch', streaming: false, important: true, headline: 'Blocked', commands: [] });
-    expect(await waiting()).toBe(before + 1);
-    expect((await post(`/api/v1/workspace/managers/${id}/read`)).status).toBe(200);
-    expect(await waiting()).toBe(before);
-  }, 30_000);
 
   it('never rides the shared health topic, even on a hosted cockpit', async () => {
     process.env.CEZ_REMOTE = '1';

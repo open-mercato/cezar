@@ -63,6 +63,13 @@ final class BadgeRefresh {
         lock.unlock()
     }
 
+    /// The device sheet is open: a round that ends now leaves the warm links to it.
+    var held: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return holds > 0
+    }
+
     private func tick(_ ticking: Int) {
         schedule(Self.pageEveryMs) { [weak self] in
             guard let self else { return }

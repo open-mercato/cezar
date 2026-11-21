@@ -9,6 +9,7 @@ import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
 import com.openmercato.cezar.mobile.shell.push.CezarPush;
 import com.openmercato.cezar.mobile.shell.push.GrantClient;
 import com.openmercato.cezar.mobile.shell.push.OkHttpPushRelay;
+import com.openmercato.cezar.mobile.shell.push.ProbeRounds;
 import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
 import com.openmercato.cezar.mobile.shell.push.PushStore;
 import com.openmercato.cezar.mobile.shell.push.SignalStream;
@@ -26,10 +27,10 @@ import com.openmercato.cezar.mobile.shell.relay.TunnelSession;
 import java.io.File;
 import java.io.IOException;
 import java.security.SecureRandom;
-import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,11 +52,11 @@ public final class ShellServices {
     private static PushCoordinator push;
     private static StartupLog startupLog;
     private static BadgeRefresh badges;
-    private static final Object PROBE_LOCK = new Object();
     private static final ExecutorService PROBE_WORK = Executors.newCachedThreadPool();
     private static final ScheduledExecutorService PROBE_BOUNDS = Executors.newSingleThreadScheduledExecutor();
     private static final Map<String, DeviceProbes.Reading> PROBE_READINGS = new ConcurrentHashMap<>();
-    private static List<Consumer<RuntimeException>> probeWaiters;
+    private static ProbeRounds rounds;
+    private static Runnable roundEnded;
 
     private ShellServices() {}
 
@@ -103,54 +104,55 @@ public final class ShellServices {
         return PROBE_READINGS;
     }
 
+    /** Run once at the end of every probe round, before its callers: the application clears what reached 0 (B3). */
+    public static synchronized void setOnRoundEnd(Runnable ended) {
+        roundEnded = ended;
+    }
+
     /**
-     * One probe round over every saved cezar at a time; a call during one joins it. Your cezars and the badge rounds
-     * share it, because a round's end cools every warm link and would cut another round's probes short (B1).
+     * One probe round over every saved cezar at a time, shared by Your cezars and the badge rounds (B1, `ProbeRounds`).
      * `done` gets null, or the error that stopped the round.
      */
     public static void probeRound(Context context, Consumer<RuntimeException> done) {
-        synchronized (PROBE_LOCK) {
-            if (probeWaiters != null) {
-                probeWaiters.add(done);
-                return;
-            }
-            probeWaiters = new ArrayList<>();
-            probeWaiters.add(done);
-        }
-        Context app = context.getApplicationContext();
-        PROBE_WORK.execute(() -> {
-            try {
-                ShellConnector shell = connector(app);
-                RelayConnections relay = relay(app);
-                DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, PROBE_WORK),
-                        DeviceProbes.directProbe(shell, server -> server.url == null ? null : CookieManager.getInstance().getCookie(server.url), PROBE_WORK),
-                        relay::cool, (ms, work) -> PROBE_BOUNDS.schedule(work, ms, TimeUnit.MILLISECONDS),
-                        (id, answer) -> shell.sawHealth(id, answer, System.currentTimeMillis()), PROBE_READINGS::put);
-                probes.whenSettled(() -> {
-                    probes.stop(null);
-                    endProbeRound(null);
-                });
-                probes.start(shell.list());
-            } catch (RuntimeException e) {
-                endProbeRound(e);
-            }
-        });
+        rounds(context.getApplicationContext()).join(done);
     }
 
-    private static void endProbeRound(RuntimeException error) {
-        List<Consumer<RuntimeException>> waiters;
-        synchronized (PROBE_LOCK) {
-            waiters = probeWaiters;
-            probeWaiters = null;
+    private static synchronized ProbeRounds rounds(Context app) {
+        if (rounds == null) {
+            rounds = new ProbeRounds(settled -> PROBE_WORK.execute(() -> runRound(app, settled)), () -> {
+                Set<String> ids = new HashSet<>();
+                for (ServerRecord server : connector(app).list()) ids.add(server.id);
+                return ids;
+            }, () -> {
+                Runnable ended;
+                synchronized (ShellServices.class) {
+                    ended = roundEnded;
+                }
+                if (ended != null) ended.run();
+            });
         }
-        if (waiters == null) return;
-        // One caller's failure must not skip the next: a badge round left unanswered never runs again.
-        for (Consumer<RuntimeException> each : waiters) {
-            try {
-                each.accept(error);
-            } catch (RuntimeException ignored) {
-                // The failing caller's own problem.
-            }
+        return rounds;
+    }
+
+    private static void runRound(Context app, Consumer<RuntimeException> settled) {
+        try {
+            ShellConnector shell = connector(app);
+            RelayConnections relay = relay(app);
+            // While the device sheet is open its own close lets the warm links go; cooling them here would cut its probes.
+            DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, PROBE_WORK),
+                    DeviceProbes.directProbe(shell, server -> server.url == null ? null : CookieManager.getInstance().getCookie(server.url), PROBE_WORK),
+                    keep -> {
+                        BadgeRefresh held = badges();
+                        if (held == null || !held.held()) relay.cool(keep);
+                    }, (ms, work) -> PROBE_BOUNDS.schedule(work, ms, TimeUnit.MILLISECONDS),
+                    (id, answer) -> shell.sawHealth(id, answer, System.currentTimeMillis()), PROBE_READINGS::put);
+            probes.whenSettled(() -> {
+                probes.stop(null);
+                settled.accept(null);
+            });
+            probes.start(shell.list());
+        } catch (RuntimeException e) {
+            settled.accept(e);
         }
     }
 
