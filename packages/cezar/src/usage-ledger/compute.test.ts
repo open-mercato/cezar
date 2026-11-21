@@ -66,6 +66,21 @@ describe('plan usage attribution', () => {
     expect(invariant(w)).toBeCloseTo(19, 5);
   });
 
+  it('carries a manager turn’s stats and its cost onto the message (spec 2026-11-21 § 2.3)', () => {
+    const turn = {
+      requests: 5, contextFirst: 928_533, contextPeak: 942_220, toolResultChars: 13_185,
+      tools: { route: 2, look: 1, own: 1, write: 0 }, fresh: false, sessionTurn: 118, idleMs: 34_000_000,
+    };
+    const w = only([
+      reading('10:40', 10),
+      { t: 'begin', at: T('10:40'), account: ACC, session: 'm', consumer: { id: 'mgr:rel', kind: 'manager', title: 'Release manager' }, part: 'chat', messageId: 'msg1' },
+      sample('m', '10:40', '10:45', 8.36),
+      { t: 'end', at: T('10:45'), session: 'm', turn },
+      reading('10:45', 15),
+    ]);
+    expect(w.consumers[0]!.messages).toMatchObject([{ messageId: 'msg1', part: 'chat', estimatePp: 5, turn: { ...turn, usd: 8.36 } }]);
+  });
+
   it('leaves time no cost report covers unsplit instead of guessing (a task stopped mid-reply)', () => {
     const w = only([
       reading('13:50', 60),
