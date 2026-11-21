@@ -93,6 +93,9 @@ jobs:
         working-directory: packages/desktop/src-tauri
         run: cargo test --locked --lib -- --ignored --test-threads=1
 
+      - name: Rustls security and TLS compatibility regressions
+        run: node packages/desktop/scripts/test-rustls-security.mjs
+
       # The cockpit's own updater writes the same layout; its link handling is per-platform too.
       - name: Install workspace dependencies
         run: npm ci --no-audit --no-fund
