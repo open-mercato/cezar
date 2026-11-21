@@ -498,6 +498,30 @@ describe('graph system nodes', () => {
     expect(final.graphState?.outputs?.correctness?.runId).toBe(children.find((c) => c.title === 'Correctness')?.id);
   }, 70_000);
 
+  it('a verdict agent after a fork routes its verdict instead of parking as a monitor (#2289)', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'council', type: 'fork', branches: 1 },
+        { id: 'review', type: 'agent', prompt: 'review mock:done', review: true },
+        { id: 'meet', type: 'join', wait: 'all' },
+        { id: 'judge', type: 'agent', prompt: 'judge mock:verdict=ship', verdicts: ['ship', 'fix'] },
+        { id: 'mark', type: 'check', command: 'echo "{{nodes.judge.verdict}}" > verdict.txt' },
+      ],
+      edges: [
+        { from: 'start', to: 'council' },
+        { from: 'council.1', to: 'review' },
+        { from: 'review.done', to: 'meet' },
+        { from: 'meet.done', to: 'judge' },
+        { from: 'judge.ship', to: 'mark' },
+      ],
+    };
+    const id = manager.startRun(def(graph), { task: 'x', worktree: false }).id;
+    const final = await until(id, terminal, 60_000);
+    expect(final.monitoringWakeAt).toBeUndefined();
+    expect(readFileSync(join(repoRoot, 'verdict.txt'), 'utf8').trim()).toBe('ship');
+  }, 70_000);
+
   it("fork commits the task's work first, so the branches fork from it", async () => {
     const id = manager.startRun(def(FORK), { task: 'x', worktree: true }).id;
     const final = await until(id, terminal, 60_000);
