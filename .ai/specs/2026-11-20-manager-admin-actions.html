@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Managers change cezar through approval cards — design</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.1.0/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/jetbrains-mono@5.1.0/index.css">
+<style>
+/* Tokens copied from packages/web/src/styles/index.css (as in 2026-11-19-manager-deactivate.html) */
+:root{
+  --background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--muted:#262626;
+  --muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;
+  --primary:#6457e8;--primary-foreground:#fff;--violet:#8f86e8;
+  --danger:#ef4444;--success:#10b981;--pending:#fbbf24;--info:#93c5fd;
+  --grad:linear-gradient(135deg,#b4f372 12%,#eefb63 58%,#bc9aff 100%);
+  --sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+}
+[data-theme=light]{
+  --background:#fff;--foreground:#171717;--card:#fff;--card-2:#fbfbfb;--muted:#f4f4f4;
+  --muted-foreground:#5c5c5c;--soft-foreground:#767676;--border:#ebebeb;
+  --primary:#5b52c7;--violet:#5b52c7;--info:#1d4ed8;--pending:#b45309;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--mono);font-size:12px}
+button{font:inherit;color:inherit;cursor:pointer}
+.wrap{max-width:1240px;margin:0 auto;padding:32px 24px 96px}
+h1{font-size:26px;letter-spacing:-.02em;margin:0 0 6px}
+h2{font-size:18px;margin:56px 0 6px}
+h2 .num{color:var(--soft-foreground);font-weight:500;margin-right:8px}
+.lead,.sub{color:var(--muted-foreground);max-width:820px;margin:0 0 18px}
+.grad-rule{height:3px;border-radius:2px;background:var(--grad);width:96px;margin:14px 0 20px}
+.muted{color:var(--muted-foreground)}.soft{color:var(--soft-foreground)}.small{font-size:12px}.xs{font-size:11px}
+.toolbar{display:flex;gap:8px;margin:0 0 8px}
+.btn{border:1px solid var(--border);background:var(--card);border-radius:8px;padding:6px 12px;font-size:13px}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}
+.btn.danger{color:var(--danger)}
+.btn.block{display:block;width:100%;padding:10px;text-align:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(520px,1fr));gap:20px}
+.label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground);margin:0 0 8px}
+/* card */
+.card{border:1px solid var(--border);background:var(--card);border-radius:12px;padding:14px 16px;position:relative}
+.card.high{border-left:3px solid var(--danger)}
+.card.handoff{border-left:3px solid var(--info)}
+.head{display:flex;align-items:center;gap:8px;font-weight:600}
+.head .ico{width:22px;height:22px;border-radius:6px;background:var(--muted);display:grid;place-items:center;font-size:12px}
+.chip{margin-left:auto;font-size:11px;font-weight:600;border-radius:999px;padding:2px 8px;border:1px solid var(--border)}
+.chip.m{color:var(--pending)}.chip.l{color:var(--success)}.chip.h{color:var(--danger)}.chip.i{color:var(--info)}
+.prov{font-size:12px;color:var(--muted-foreground);margin:6px 0 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.own{font-size:11px;color:var(--pending);border:1px solid currentColor;border-radius:999px;padding:0 6px}
+.rows{border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:8px 0;margin:0 0 10px}
+.row{display:grid;grid-template-columns:150px 1fr 18px 1fr;gap:8px;align-items:baseline;padding:3px 0;font-size:13px}
+.row .k{color:var(--muted-foreground)}
+.row .b{color:var(--soft-foreground);text-decoration:line-through}
+.row .arrow{color:var(--soft-foreground);text-align:center}
+.row .a{font-weight:600}
+.list{font-size:12px;margin:4px 0 0;padding-left:18px;color:var(--muted-foreground)}
+.reason{font-size:13px;margin:0 0 6px}.reason q{color:var(--muted-foreground)}
+.note{font-size:12px;color:var(--soft-foreground);margin:0 0 10px}
+.warn{font-size:12px;color:var(--danger);margin:0 0 10px}
+.actions{display:flex;gap:8px;justify-content:flex-end}
+.notice{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted-foreground);padding:6px 10px;border-radius:8px;background:var(--card-2);border:1px dashed var(--border)}
+.notice a{color:var(--violet);text-decoration:none}
+/* phone */
+.phones{display:flex;gap:20px;flex-wrap:wrap}
+.phone{width:300px;border:10px solid #000;border-radius:36px;background:var(--background);overflow:hidden;box-shadow:0 0 0 1px var(--border)}
+.phone .bar{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border);font-weight:600}
+.phone .body{padding:12px;min-height:420px;display:flex;flex-direction:column;gap:10px;position:relative}
+.phone .card{padding:12px}
+.phone .row{grid-template-columns:1fr;gap:0;padding:6px 0;border-bottom:1px solid var(--border)}
+.phone .row:last-child{border-bottom:0}
+.phone .row .arrow{display:none}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--border);border-radius:16px 16px 0 0;padding:14px;box-shadow:0 -12px 32px rgba(0,0,0,.35)}
+.grab{width:36px;height:4px;border-radius:2px;background:var(--muted);margin:0 auto 10px}
+.bubble{align-self:flex-end;background:var(--primary);color:#fff;border-radius:14px 14px 4px 14px;padding:8px 12px;font-size:13px;max-width:85%}
+.assist{font-size:13px}
+/* settings */
+.settings{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:20px;max-width:760px}
+.set{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);gap:16px}
+.set:last-child{border-bottom:0}
+.seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg span{padding:5px 10px;font-size:12px}.seg span.on{background:var(--muted);font-weight:600}
+.cb{display:flex;gap:8px;align-items:center}
+.box{width:16px;height:16px;border-radius:4px;border:1px solid var(--border);display:inline-grid;place-items:center;font-size:11px}
+.box.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.box.lock{opacity:.6}
+.select{border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:12px}
+.greyed{opacity:.5}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{border-bottom:1px solid var(--border);padding:6px 8px;text-align:left;vertical-align:top}
+th{color:var(--soft-foreground);font-weight:500;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toolbar"><button class="btn" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">Toggle light / dark</button></div>
+  <h1>Managers change cezar through approval cards</h1>
+  <div class="grad-rule"></div>
+  <p class="lead">Design page for <code>2026-11-20-manager-admin-actions.md</code>. These are static mockups. Every card's rows are stamped by the server from the op's parameters, so the cockpit renders them generically: the same component on desktop, in Approvals and in CezarBot.</p>
+
+  <h2><span class="num">1</span>Desktop cards</h2>
+  <p class="sub">Four examples: a medium setting, a pinned high-risk change to the manager itself, a handoff that needs the human, and a cleanup with only partial undo.</p>
+  <div class="grid">
+    <div>
+      <p class="label">project-config.default-models · medium · asked in chat</p>
+      <div class="card">
+        <div class="head"><span class="ico">⚙</span>Change default model · meblohand<span class="chip m">Medium</span></div>
+        <div class="prov">Asked in chat, after your message <q>use the cheaper model on meblohand</q></div>
+        <div class="rows">
+          <div class="row"><span class="k">Claude model</span><span class="b">Opus 5.5</span><span class="arrow">→</span><span class="a">Sonnet 5.5</span></div>
+        </div>
+        <p class="reason"><b>Scout's reason</b> <q>You said meblohand tasks are routine fixes.</q></p>
+        <p class="note">Running tasks keep their model. You can undo this for 30 days.</p>
+        <div class="actions"><button class="btn">Reject</button><button class="btn primary">Approve</button></div>
+      </div>
+    </div>
+    <div>
+      <p class="label">manager.access on itself · high · pinned · on its own</p>
+      <div class="card high">
+        <div class="head"><span class="ico">🛡</span>Give Scout write access · cezar-mobile<span class="chip h">High · always asks</span></div>
+        <div class="prov"><span class="own">On its own</span> Proposed after task <u>Fix relay reconnect</u> finished, not in reply to you</div>
+        <div class="rows">
+          <div class="row"><span class="k">cezar-mobile access</span><span class="b">Read-only</span><span class="arrow">→</span><span class="a">Write</span></div>
+        </div>
+        <p class="warn">Widens Scout's own permissions. Scout could then start write tasks and propose merges in cezar-mobile.</p>
+        <p class="reason"><b>Scout's reason</b> <q>The task asked me to open a follow-up PR there.</q></p>
+        <div class="actions"><button class="btn">Reject</button><button class="btn primary">Approve</button></div>
+      </div>
+    </div>
+    <div>
+      <p class="label">account.reconnect · handoff · secrets stay in the cockpit</p>
+      <div class="card handoff">
+        <div class="head"><span class="ico">🔑</span>Sign Codex (work) in again<span class="chip i">Needs you</span></div>
+        <div class="prov">Asked in chat, after your message <q>why did the nightly review fail?</q></div>
+        <div class="rows">
+          <div class="row"><span class="k">Codex (work)</span><span class="b">Signed out · login rejected 02:14</span><span class="arrow">→</span><span class="a">Signed in</span></div>
+        </div>
+        <p class="note">You sign in here, in cezar. The manager never sees the code or the key; it hears "Codex (work) signed in again".</p>
+        <div class="actions"><button class="btn">Dismiss</button><button class="btn primary">Sign in…</button></div>
+      </div>
+    </div>
+    <div>
+      <p class="label">worktrees.reclaim · medium · partial undo</p>
+      <div class="card">
+        <div class="head"><span class="ico">🧹</span>Reclaim 12 idle worktrees · meblohand<span class="chip m">Medium</span></div>
+        <div class="prov">Asked in chat, after your message <q>my disk is almost full</q></div>
+        <div class="rows">
+          <div class="row"><span class="k">Worktrees on disk</span><span class="b">31 · 9.8 GB</span><span class="arrow">→</span><span class="a">19 · 6.4 GB</span></div>
+          <ul class="list"><li>Fix checkout total · idle 19 days · 410 MB</li><li>Bump deps · idle 16 days · 388 MB</li><li>… 10 more <u>Show all</u></li></ul>
+        </div>
+        <p class="note">Partial undo: branches are kept and Continue restores each worktree, but not as one undo.</p>
+        <div class="actions"><button class="btn">Reject</button><button class="btn primary">Reclaim</button></div>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="num">2</span>Settled cards and automatic changes</h2>
+  <p class="sub">After a decision a card becomes one line. An auto-approved change (phase 4) never asks: it lands as a notice with Undo, raises the unread dot, and sends no OS notification.</p>
+  <div style="display:flex;flex-direction:column;gap:10px;max-width:760px">
+    <div class="notice">✓ Changed meblohand's default model to Sonnet 5.5 · approved by you on your phone · <a href="#">Undo</a> · <a href="#">History</a></div>
+    <div class="notice">⚡ Paused automation <b>Nightly triage</b> · <i>automatically</i> · <a href="#">Undo</a> · <a href="#">Why</a> <span class="soft xs">— Allowed: low-risk automation changes in my projects, asked in chat</span></div>
+    <div class="notice">↩ Undone: worktree retention back to 7 days</div>
+    <div class="notice" style="border-style:solid;color:var(--pending)">⏸ Paused automatic changes for Scout: you undid 3 today. <a href="#">Resume</a></div>
+  </div>
+
+  <h2><span class="num">3</span>CezarBot on the phone</h2>
+  <p class="sub">The card in the chat, the existing approval bottom sheet with before → after rows stacked, a new project that joins its manager (approvable from the phone, rule 5), and the automatic notice.</p>
+  <div class="phones">
+    <div class="phone">
+      <div class="bar">← Scout <span class="soft" style="margin-left:auto">⚙</span></div>
+      <div class="body">
+        <div class="bubble">use the cheaper model on meblohand</div>
+        <div class="assist">I'll switch meblohand to Sonnet 5.5. Running tasks keep theirs.</div>
+        <div class="card">
+          <div class="head"><span class="ico">⚙</span>Change default model<span class="chip m">Medium</span></div>
+          <div class="small muted">meblohand · Opus 5.5 → Sonnet 5.5</div>
+          <div class="actions" style="margin-top:8px"><button class="btn">Reject</button><button class="btn primary">Review</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="bar">← Scout</div>
+      <div class="body" style="opacity:1">
+        <div class="assist muted small">…</div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="head">Change default model?<span class="chip m">Medium</span></div>
+          <div class="prov">Asked in chat, after your message <q>use the cheaper model…</q></div>
+          <div class="rows">
+            <div class="row"><span class="k xs">Project</span><span class="a">meblohand</span></div>
+            <div class="row"><span class="k xs">Claude model</span><span><span class="b">Opus 5.5</span> → <span class="a">Sonnet 5.5</span></span></div>
+          </div>
+          <p class="reason small"><b>Reason</b> <q>You said meblohand tasks are routine fixes.</q></p>
+          <p class="note">Undo for 30 days.</p>
+          <button class="btn primary block">Approve</button>
+          <div style="height:8px"></div>
+          <button class="btn block">Reject</button>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="bar">← Scout</div>
+      <div class="body">
+        <div class="bubble">create a repo shop in org xyz and take care of it</div>
+        <div class="card high">
+          <div class="head"><span class="ico">＋</span>Create project shop<span class="chip h">High · always asks</span></div>
+          <div class="prov">Asked in chat, after your message <q>create a repo shop…</q></div>
+          <div class="rows">
+            <div class="row"><span class="k xs">GitHub repository</span><span class="a">xyz/shop · private</span></div>
+            <div class="row"><span class="k xs">Folder</span><span class="a">~/code/shop</span></div>
+            <div class="row"><span class="k xs">Scout's projects</span><span><span class="b">meblohand, cezar</span> → <span class="a">meblohand, cezar, shop (write)</span></span></div>
+          </div>
+          <p class="note">Partial undo: unregisters and detaches; the GitHub repository and folder stay.</p>
+          <button class="btn primary block">Approve</button>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="bar">← Scout</div>
+      <div class="body">
+        <div class="bubble">pause the nightly triage, it's noisy this week</div>
+        <div class="notice">⚡ Paused <b>Nightly triage</b> · automatically · <a href="#">Undo</a></div>
+        <div class="assist">Done. I'll re-propose enabling it Monday.</div>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="num">4</span>Settings → Manager → Scout → Changes to cezar</h2>
+  <p class="sub">The access row ships in phase 1. "Allow without asking" ships in phase 4; until then the section reads "Scout always asks".</p>
+  <div class="settings">
+    <div class="set"><div><b>Access to cezar settings</b><div class="small muted">What Scout may propose. Every proposal still asks you.</div></div>
+      <div class="seg"><span>None</span><span class="on">Its projects</span><span>Projects + workspace</span></div></div>
+    <div class="set" style="display:block">
+      <div style="display:flex;justify-content:space-between"><b>Allow without asking</b><span class="small muted">Phase 4</span></div>
+      <div class="small muted" style="margin:4px 0 10px">Done automatically, shown in the chat with Undo. Only for changes you asked for in chat, that can be fully undone.</div>
+      <table>
+        <tr><th></th><th>Category</th><th>Up to</th><th>In</th></tr>
+        <tr><td><span class="box on">✓</span></td><td>Automations (pause)</td><td><span class="select">Low</span></td><td>Its projects</td></tr>
+        <tr><td><span class="box on">✓</span></td><td>Project settings</td><td><span class="select">Low and medium</span></td><td><span class="select">meblohand, cezar</span></td></tr>
+        <tr><td><span class="box"></span></td><td>Workspace settings</td><td><span class="select">Low</span></td><td>—</td></tr>
+        <tr><td><span class="box"></span></td><td>Worktrees and disk</td><td><span class="select greyed">Partial undo: always asks</span></td><td>—</td></tr>
+      </table>
+      <div class="cb small" style="margin-top:10px"><span class="box on lock">✓</span> Only when I asked in chat <span class="soft">(locked)</span></div>
+      <div class="cb small" style="margin-top:6px">At most <span class="select">20</span> a day · until <span class="select">no end date</span></div>
+      <div class="small greyed" style="margin-top:10px"><b>Always asks</b>: deletes, prompts and instructions, accounts, projects added or removed, any manager's permissions, anything without a full undo. <u>Why?</u></div>
+    </div>
+    <div class="set"><div><b>Change history</b><div class="small muted">Every change Scout proposed, who decided it, and Undo.</div></div><button class="btn">Open</button></div>
+  </div>
+
+  <h2><span class="num">5</span>How the manager finds out what it may do</h2>
+  <pre class="card mono" style="white-space:pre-wrap">$ cez-manager propose --help
+Changes to cezar. Each one becomes a card the user approves.
+Scout may propose: its projects' settings (meblohand, cezar). Workspace settings: no.
+
+Project settings
+  project-config.default-models   Default model per runner        medium
+  project-config.default-runner   Default runner                  medium
+  project-config.retention        Worktree retention and cleanup  medium
+  project.tags                    Project tags                    low
+Automations
+  automation.pause                Pause an automation             low
+  automation.delete               Delete (undo recreates it)      high, always asks
+Worktrees
+  worktrees.reclaim               Reclaim idle worktrees          medium
+Needs the user (opens a screen)
+  account.reconnect               Sign an account in again        handoff
+
+$ cez-manager propose project-config.default-models --project meblohand --set claude=claude-sonnet-5-5 --dry-run
+Change default model · meblohand           medium · undo: full
+  Claude model   Opus 5.5 → Sonnet 5.5
+(dry run: no card created)</pre>
+</div>
+</body>
+</html>
