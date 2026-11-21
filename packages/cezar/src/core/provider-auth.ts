@@ -16,6 +16,7 @@ import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
 import { geminiHasCredentials } from './gemini-credentials.ts';
 import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
+import { opencodeHasUserConfigCredential } from './opencode-config-credential.ts';
 
 /** Every runner is a provider cezar verifies — one tuple, the contract's. */
 export const PROVIDER_IDS = RUNNER_IDS;
@@ -324,9 +325,14 @@ function parseOpenCodeJson(stdout: string): ProviderConnectionState | null {
   return value.length > 0 ? 'connected' : 'disconnected';
 }
 
-function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+function parseOpenCodeStatus(result: ProviderCommandResult, context: ProviderParseContext): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
-  if (/^\s*\[/.test(result.stdout)) return parseOpenCodeJson(result.stdout);
+  const configuredStatus = (): ProviderConnectionState => opencodeHasUserConfigCredential(context.env)
+    ? 'connected' : 'disconnected';
+  if (/^\s*\[/.test(result.stdout)) {
+    const status = parseOpenCodeJson(result.stdout);
+    return status === 'disconnected' ? configuredStatus() : status;
+  }
   const lines = normalizedLines(result.stdout);
   const storedSummaries = lines
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
@@ -338,7 +344,7 @@ function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionS
   // summary or 2.x rows remains inconclusive rather than being guessed as disconnected.
   if (storedSummaries.length === 0) {
     if (lines.length === 0 || (lines.length === 1 && lines[0] === 'no authenticated integrations')) {
-      return 'disconnected';
+      return configuredStatus();
     }
     const rows = lines.filter((line) => /^.+\s{2,}.+\s+(?:stored|environment)$/.test(line));
     return rows.length === lines.length && rows.length > 0 ? 'connected' : null;
