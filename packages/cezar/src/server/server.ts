@@ -9315,19 +9315,19 @@ export function createApp(deps: ServerDeps) {
       return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
     })
     // Memory (spec 2026-11-21-manager-short-sessions-and-memory § 2.1): what every new session starts from.
-    .get('/workspace/managers/:id/memory', paramZodValidator(managerIdParamSchema), (c) => {
-      const memory = managerEngine.memory(c.req.valid('param').id);
+    .get('/workspace/managers/:id/memory', paramZodValidator(managerIdParamSchema), async (c) => {
+      const memory = await managerEngine.memory(c.req.valid('param').id);
       return memory ? c.json(memory) : c.json(MANAGER_NOT_FOUND, 404);
     })
-    .put('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), jsonZodValidator(putManagerMemoryInputSchema), (c) => {
+    .put('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), jsonZodValidator(putManagerMemoryInputSchema), async (c) => {
       const { id, key } = c.req.valid('param');
-      const memory = managerEngine.setMemory(id, key, c.req.valid('json'));
+      const memory = await managerEngine.setMemory(id, key, c.req.valid('json'));
       if (!memory) return c.json(MANAGER_NOT_FOUND, 404);
       return 'error' in memory ? c.json({ error: memory.error }, memory.status) : c.json(memory);
     })
-    .delete('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), (c) => {
+    .delete('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), async (c) => {
       const { id, key } = c.req.valid('param');
-      const memory = managerEngine.removeMemory(id, key);
+      const memory = await managerEngine.removeMemory(id, key);
       if (!memory) return c.json(MANAGER_NOT_FOUND, 404);
       return 'error' in memory ? c.json({ error: memory.error }, memory.status) : c.json(memory);
     })

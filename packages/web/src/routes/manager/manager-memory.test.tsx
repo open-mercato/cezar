@@ -59,6 +59,17 @@ describe('MemoryDialog (spec 2026-11-21-manager-short-sessions-and-memory § 2.1
     expect(await screen.findByText('HTML design before UI')).toBeTruthy()
   })
 
+  it('refuses to add a new entry under a key that is already saved', async () => {
+    const calls = stub({ get: memory() })
+    renderDialog()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }))
+    fireEvent.change(screen.getByLabelText('Key'), { target: { value: 'full-prs' } })
+    fireEvent.change(screen.getByLabelText('What to remember'), { target: { value: 'Something else' } })
+    expect(screen.getByText(/already saved/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+
   it('deletes an entry', async () => {
     const calls = stub({ get: memory(), write: memory([]) })
     renderDialog()

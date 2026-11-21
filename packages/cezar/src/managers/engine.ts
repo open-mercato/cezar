@@ -2543,22 +2543,34 @@ export class ManagerEngine {
     return { entries: file.entries, limits: { entries: MANAGER_MEMORY_LIMITS.entries, bytes: MANAGER_MEMORY_LIMITS.bytes }, usedBytes: memoryBytes(file.entries) };
   }
 
-  memory(id: string): ManagerMemoryResponse | undefined {
-    if (!this.deps.store.get(id)) return undefined;
-    return this.memoryResponse(this.memoryFor(id, process.env.CLAUDE_CONFIG_DIR));
+  /** The Claude config dir a turn would import from: the manager's account, not the server's own. */
+  private async claudeConfigDir(manager: Manager): Promise<string | undefined> {
+    const runner = await this.runnerOf(manager);
+    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
+    return (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR;
   }
 
-  setMemory(id: string, key: string, input: PutManagerMemoryInput): ManagerMemoryResponse | ManagerRefusal | undefined {
-    if (!this.deps.store.get(id)) return undefined;
-    const next = setMemoryEntry(this.memoryFor(id, process.env.CLAUDE_CONFIG_DIR), key, input, this.iso());
+  async memory(id: string): Promise<ManagerMemoryResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    return this.memoryResponse(this.memoryFor(id, await this.claudeConfigDir(manager)));
+  }
+
+  async setMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    // Memory reaches every later system prompt unfenced, so a watch (which reads untrusted text) never writes it.
+    if (input.source !== 'user' && this.runtimes.get(id)?.active?.kind === 'watch') return { error: WATCH_REFUSAL, status: 409 };
+    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso());
     if ('error' in next) return next;
     writeMemory(this.deps.store.dir(id), next);
     return this.memoryResponse(next);
   }
 
-  removeMemory(id: string, key: string): ManagerMemoryResponse | ManagerRefusal | undefined {
-    if (!this.deps.store.get(id)) return undefined;
-    const next = removeMemoryEntry(this.memoryFor(id, process.env.CLAUDE_CONFIG_DIR), key);
+  async removeMemory(id: string, key: string): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    const next = removeMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key);
     if ('error' in next) return next;
     writeMemory(this.deps.store.dir(id), next);
     return this.memoryResponse(next);

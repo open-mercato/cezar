@@ -32,8 +32,10 @@ interface Draft { key: string; kind: ManagerMemoryKind; text: string; why: strin
 
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64).replace(/-+$/, '')
 
-function EntryForm({ draft, onChange, onCancel, onSave, saving }: {
+function EntryForm({ draft, onChange, onCancel, onSave, saving, taken = [] }: {
   draft: Draft
+  /** Keys already saved: a new entry under one would silently replace it. */
+  taken?: string[]
   onChange: (draft: Draft) => void
   onCancel: () => void
   onSave: () => void
@@ -41,7 +43,8 @@ function EntryForm({ draft, onChange, onCancel, onSave, saving }: {
 }) {
   const key = draft.isNew ? (draft.key || slug(draft.text)) : draft.key
   const keyValid = managerMemoryKeySchema.safeParse(key).success
-  const valid = keyValid && draft.text.trim().length > 0
+  const keyTaken = draft.isNew && taken.includes(key)
+  const valid = keyValid && !keyTaken && draft.text.trim().length > 0
   return (
     <form
       data-slot="manager-memory-form"
@@ -81,6 +84,7 @@ function EntryForm({ draft, onChange, onCancel, onSave, saving }: {
         onChange={(event) => onChange({ ...draft, why: event.target.value })}
       />
       {draft.isNew && draft.key && !keyValid ? <p className="text-xs text-danger">Use lowercase letters, digits and dashes.</p> : null}
+      {keyTaken ? <p className="text-xs text-danger">“{key}” is already saved: edit that entry instead.</p> : null}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button type="submit" size="sm" disabled={!valid || saving}>Save</Button>
@@ -168,7 +172,7 @@ export function MemoryDialog({ manager, open, onOpenChange, onCloseAutoFocus }: 
             ))}
           </ul>
           {draft?.isNew ? (
-            <EntryForm draft={draft} onChange={setDraft} onCancel={() => setDraft(null)} onSave={save} saving={write.isPending} />
+            <EntryForm draft={draft} onChange={setDraft} onCancel={() => setDraft(null)} onSave={save} saving={write.isPending} taken={data?.entries.map((entry) => entry.key)} />
           ) : data && !draft ? (
             <Button type="button" variant="outline" size="sm" className="self-start" disabled={full} onClick={() => setDraft({ key: '', kind: 'preference', text: '', why: '', isNew: true })}>
               <PlusIcon aria-hidden="true" />
