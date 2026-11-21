@@ -83,7 +83,12 @@ let bootProject: string
  *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
 const scoped = (path: string) => `/p/${bootProject}${path}`
 
-const MAIN = `document.querySelector('[data-slot="main"]')`
+// The workspace layout (#1525) nests a second `[data-slot="main"]` inside the shell's `<main>`; the
+// first match never overflows. The thread's own scroller is the nearest ancestor of its rows.
+const MAIN = `document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]')`
+// With a user message in the thread the pill is the my-messages pill (#2290); its "latest" button
+// replaces the plain jump pill, so either one is "the way back to the tail".
+const PILL = '[data-slot="jump-to-latest"], [data-slot="my-messages-latest"]'
 const nearBottom = `(() => { const m = ${MAIN}; return m.scrollHeight - m.scrollTop - m.clientHeight < 80 })()`
 const rowCount = () => browser.count('[data-slot="thread-row"]')
 const domSize = () => Number(browser.evaluate(`document.querySelectorAll('*').length`))
@@ -222,20 +227,20 @@ describe('thread virtualization on a 1,000-row transcript', () => {
 
   it('arrives pinned to the live tail (bottom-anchored), with no jump pill', () => {
     expect(browser.evaluate(nearBottom)).toBe(true)
-    expect(browser.count('[data-slot="jump-to-latest"]')).toBe(0)
+    expect(browser.count(PILL)).toBe(0)
     browser.screenshot(`${artifactsDir}/thread-long-desktop.png`)
   })
 
   it('scrolling up shows the jump pill; clicking it returns to the tail', () => {
     parkAt('0')
-    browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
+    browser.waitForFunction(`document.querySelector(${JSON.stringify(PILL)}) !== null`)
     // Viewport shot: full-page capture scroll-stitches 48k px and re-pins the thread,
     // unmounting the very pill this is photographing.
     browser.screenshot(`${artifactsDir}/thread-jump-pill.png`, { viewport: true })
 
-    browser.click('[data-slot="jump-to-latest"]')
+    browser.click('[data-slot="my-messages-latest"], [data-slot="jump-to-latest"]')
     browser.waitForFunction(nearBottom)
-    browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') === null`)
+    browser.waitForFunction(`document.querySelector(${JSON.stringify(PILL)}) === null`)
     // Let the smooth scroll LAND, not merely enter the near-bottom slack — the next test
     // parks mid-thread, and a still-running animation would carry its park away.
     browser.waitForFunction(
@@ -261,7 +266,7 @@ describe('thread virtualization on a 1,000-row transcript', () => {
   it('restores the scroll position across a client-side leave and return', () => {
     // Park mid-thread (a position the arrival logic would never pick on its own).
     parkAt(`Math.round((m.scrollHeight - m.clientHeight) / 2)`)
-    browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
+    browser.waitForFunction(`document.querySelector(${JSON.stringify(PILL)}) !== null`)
     const parked = Number(browser.evaluate(`${MAIN}.scrollTop`))
     expect(parked).toBeGreaterThan(1000)
     const maxTop = Number(browser.evaluate(`${MAIN}.scrollHeight - ${MAIN}.clientHeight`))
