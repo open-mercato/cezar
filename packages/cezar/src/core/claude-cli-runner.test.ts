@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
@@ -677,8 +677,14 @@ describe('ClaudeCliRunner connectors (spec 2026-11-12-manager-connectors)', () =
 
 // Claude's result totals are session-wide running sums; each turn reports only its own share.
 describe('per-turn cost from a session running total', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cez-claude-turn-cost-'));
-  afterEach(() => resetClaudeSessionCosts());
+  let dir = '';
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-claude-turn-cost-'));
+  });
+  afterEach(() => {
+    resetClaudeSessionCosts();
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   it('reports each result as an increment, in v1 cost and v2 turn usage alike', async () => {
     const stubBin = join(dir, 'claude-two-turns.mjs');

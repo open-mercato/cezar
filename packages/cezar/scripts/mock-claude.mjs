@@ -58,25 +58,28 @@ const MOCK_SESSION = (() => {
 const mockCostFile = MOCK_SESSION && process.env.CEZ_HOME && /^[A-Za-z0-9-]+$/.test(MOCK_SESSION)
   ? join(process.env.CEZ_HOME, 'mock-claude-costs', `${MOCK_SESSION}.json`)
   : undefined;
-let mockCostTotal = (() => {
+const mockTotals = (() => {
   try {
-    return mockCostFile ? Number(JSON.parse(readFileSync(mockCostFile, 'utf8')).total) || 0 : 0;
+    const saved = mockCostFile ? JSON.parse(readFileSync(mockCostFile, 'utf8')) : {};
+    return { total: Number(saved.total) || 0, input: Number(saved.input) || 0, output: Number(saved.output) || 0 };
   } catch {
-    return 0;
+    return { total: 0, input: 0, output: 0 };
   }
 })();
 function runningCost(obj) {
   if (obj?.type !== 'result' || typeof obj.total_cost_usd !== 'number') return obj;
-  mockCostTotal += obj.total_cost_usd;
+  mockTotals.total += obj.total_cost_usd;
+  mockTotals.input += obj.usage?.input_tokens ?? 0;
+  mockTotals.output += obj.usage?.output_tokens ?? 0;
   if (mockCostFile) {
     try {
       mkdirSync(dirname(mockCostFile), { recursive: true });
-      writeFileSync(mockCostFile, JSON.stringify({ total: mockCostTotal }));
+      writeFileSync(mockCostFile, JSON.stringify(mockTotals));
     } catch {
       // a read-only home: the total stays per process
     }
   }
-  return { ...obj, total_cost_usd: mockCostTotal };
+  return { ...obj, total_cost_usd: mockTotals.total };
 }
 
 function emit(obj) {
@@ -86,7 +89,10 @@ function emit(obj) {
     obj = {
       ...obj,
       modelUsage: {
-        [MOCK_MODEL]: { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, costUSD: obj.total_cost_usd ?? 0 },
+        // Session running totals, like the real CLI's.
+        [MOCK_MODEL]: typeof obj.total_cost_usd === 'number'
+          ? { inputTokens: mockTotals.input, outputTokens: mockTotals.output, costUSD: mockTotals.total }
+          : { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, costUSD: 0 },
       },
     };
   }
