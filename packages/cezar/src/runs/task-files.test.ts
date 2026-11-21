@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { prepareRestrictedCodexHome } from '../core/codex-restricted-home.ts';
+import { deleteExpiredArchivedTasks } from './archived-cleanup.ts';
 import { RunStore } from './store.ts';
 import { attachmentLibraryPath, runImagesDir } from './task-files.ts';
 
@@ -125,4 +127,81 @@ describe('task files are cleaned up with the task', () => {
     expect(RunStore.open(dataDir).sweepOrphanTaskFiles()).toEqual({ artifacts: [], dispatch: [] });
     expect(existsSync(join(dataDir, 'artifacts', 'some-run'))).toBe(true);
   });
+});
+
+describe.skipIf(process.platform === 'win32')('task deletion prunes restricted Codex homes', () => {
+  const dirs: string[] = [];
+  afterEach(() => { vi.unstubAllEnvs(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+  function fixture() {
+    const project = mkdtempSync(join(tmpdir(), 'cez-codex-prune-')); dirs.push(project);
+    vi.stubEnv('CEZ_HOME', join(project, 'home'));
+    const dataDir = join(project, '.ai', 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'test', workflow: 'w', task: 't', steps: [] });
+    const cwd = join(dataDir, 'worktrees', run.id); mkdirSync(cwd, { recursive: true });
+    const home = prepareRestrictedCodexHome({ cwd }, { CEZ_HOME: process.env.CEZ_HOME, CEZ_DRY_RUN: '1' });
+    writeFileSync(join(home.path, 'rollout.jsonl'), 'native-history');
+    store.updateRun(run.id, { status: 'done', worktreePath: cwd, worktreeReclaimedAt: new Date().toISOString() });
+    rmSync(cwd, { recursive: true }); store.flush();
+    return { project, dataDir, store, run, home };
+  }
+  it('keeps a reclaimed task at startup, then removes its home on permanent deletion', () => {
+    const f = fixture();
+    f.store.sweepOrphanTaskFiles();
+    expect(readFileSync(join(f.home.path, 'rollout.jsonl'), 'utf8')).toBe('native-history');
+    expect(f.store.deleteRun(f.run.id)).toBe(true);
+    expect(existsSync(f.home.path)).toBe(false);
+    f.store.flush();
+  });
+  it('startup removes orphan homes even when the worktree directory was already absent', () => {
+    const f = fixture();
+    // Simulate a previous version deleting the record while leaving its home behind.
+    f.store.createRun({ title: 'retained', workflow: 'w', task: 't', steps: [] }); f.store.flush();
+    const index = join(f.dataDir, 'runs.json');
+    writeFileSync(index, JSON.stringify(JSON.parse(readFileSync(index, 'utf8')).filter((r: {id: string}) => r.id !== f.run.id)));
+    const reopened = RunStore.open(f.dataDir);
+    reopened.sweepOrphanTaskFiles();
+    expect(existsSync(f.home.path)).toBe(false);
+    reopened.flush();
+  });
+  it('index-cap pruning cleans the forgotten home through the same permanent-delete path', () => {
+    const f = fixture();
+    vi.stubEnv('CEZ_RUNS_KEEP', '1');
+    f.store.updateRun(f.run.id, { createdAt: '2020-01-01T00:00:00Z' });
+    const other = f.store.createRun({ title: 'newer', workflow: 'w', task: 't', steps: [] });
+    f.store.updateRun(other.id, { status: 'done' });
+    expect(f.store.getRun(f.run.id)).toBeUndefined();
+    expect(existsSync(f.home.path)).toBe(false);
+    f.store.flush();
+  });
+  it('a partially readable index cannot authorize startup home deletion', () => {
+    const f = fixture();
+    const index = join(f.dataDir, 'runs.json');
+    writeFileSync(index, JSON.stringify([{ id: 'unreadable', future: true }]));
+    const partial = RunStore.open(f.dataDir);
+    partial.sweepOrphanTaskFiles();
+    expect(existsSync(f.home.path)).toBe(true);
+    partial.flush();
+  });
+
+  it('archived expiry removes native history even after the tree was reclaimed', async () => {
+    const f = fixture();
+    f.store.updateRun(f.run.id, { archived: true, archivedAt: '2020-01-01T00:00:00Z' });
+    const result = await deleteExpiredArchivedTasks(f.project, f.store, 90, { isLive: () => false, now: Date.parse('2026-11-20T00:00:00Z') });
+    expect(result.deleted).toEqual([f.run.id]);
+    expect(existsSync(f.home.path)).toBe(false);
+    f.store.flush();
+  });
+
+  it("permanent deletion does not sweep another process's unindexed reclaimed task", () => {
+    const f = fixture();
+    const cwd = join(f.dataDir, 'worktrees', 'foreign-task'); mkdirSync(cwd);
+    const foreign = prepareRestrictedCodexHome({ cwd }, { CEZ_HOME: process.env.CEZ_HOME, CEZ_DRY_RUN: '1' });
+    rmSync(cwd, { recursive: true });
+    f.store.deleteRun(f.run.id);
+    expect(existsSync(f.home.path)).toBe(false);
+    expect(existsSync(foreign.path)).toBe(true);
+    f.store.flush();
+  });
+
 });

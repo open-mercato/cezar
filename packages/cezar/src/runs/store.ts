@@ -19,12 +19,13 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 import type { AgentUsageStatus } from '../core/agent-runner.ts';
+import { pruneRestrictedCodexHomes } from '../core/codex-restricted-home.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { sweepOrphanTaskFiles } from './task-files.ts';
 import { deleteRunDrafts } from './drafts.ts';
@@ -2551,11 +2552,22 @@ export class RunStore extends EventEmitter {
     const known = new Set([...this.runs.keys(), ...this.salvaged.keys()]);
     const roots = new Set<string>();
     for (const run of this.runs.values()) if (run.dispatch?.rootRunId) roots.add(run.dispatch.rootRunId);
+    this.pruneRestrictedHomes(known);
     return sweepOrphanTaskFiles(this.dataDir, known, roots);
+  }
+
+  private pruneRestrictedHomes(known: ReadonlySet<string>, deletedId?: string): void {
+    // A partial index cannot prove a home is orphaned. All retained IDs protect native resumes,
+    // including reclaimed/archived tasks with no directory, and salvaged newer-version records.
+    const health = this.getIndexReadHealth();
+    if (health.state !== 'complete' || health.omittedRuns > 0) return;
+    pruneRestrictedCodexHomes(resolve(this.dataDir, '../..'), known, process.env, deletedId);
   }
 
   /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
   private deleteRunFiles(id: string, root?: string): void {
+    // A concurrent cockpit may own IDs absent from this in-memory index. Deletion cleans only its own task.
+    this.pruneRestrictedHomes(new Set([...this.runs.keys(), ...this.salvaged.keys()]), id);
     try {
       // A dispatch tree outlives its root while a member remains (they share CEZ_TREE_DIR).
       const tree = root ?? id;

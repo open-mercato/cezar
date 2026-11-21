@@ -1,8 +1,8 @@
-import { symlinkSync, unlinkSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { symlinkSync, unlinkSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, existsSync, realpathSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { prepareRestrictedCodexHome, restrictedCodexModelConfig } from './codex-restricted-home.ts';
+import { prepareRestrictedCodexHome, pruneRestrictedCodexHomes, restrictedCodexModelConfig } from './codex-restricted-home.ts';
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function setup() {
@@ -53,5 +53,76 @@ describe.skipIf(process.platform === 'win32')('restricted Codex homes', () => {
     expect(result.config).not.toHaveProperty('model_providers.other');
     expect(() => restrictedCodexModelConfig('model_provider="x"\n[model_providers.x]\ncommand="evil"')).toThrow('unsupported');
     expect(() => restrictedCodexModelConfig('model_provider="x"\n[model_providers.x]\nenv_key="NODE_OPTIONS"')).toThrow('process controls');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('restricted Codex home cleanup', () => {
+  function managed() {
+    const f = setup();
+    const project = join(f.root, 'project');
+    const cwd = join(project, '.ai', 'cezar', 'worktrees', 'gone');
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(f.native, 'auth.json'), 'native-account');
+    const home = prepareRestrictedCodexHome({ cwd }, f.env);
+    mkdirSync(join(home.path, 'sessions'));
+    writeFileSync(join(home.path, 'sessions', 'rollout.jsonl'), 'sensitive-history');
+    return { ...f, project, cwd, home };
+  }
+  it.each([false, true])('prunes a missing orphan (legacy=%s) without deleting native credentials', legacy => {
+    const f = managed();
+    if (legacy) unlinkSync(join(f.home.path, 'owner.json'));
+    rmSync(f.cwd, { recursive: true });
+    expect(pruneRestrictedCodexHomes(f.project, new Set(), f.env)).toHaveLength(1);
+    expect(existsSync(f.home.path)).toBe(false);
+    expect(readFileSync(join(f.native, 'auth.json'), 'utf8')).toBe('native-account');
+  });
+  it('keeps existing worktrees and every retained task, including reclaimed tasks', () => {
+    const f = managed();
+    expect(pruneRestrictedCodexHomes(f.project, new Set(), f.env)).toEqual([]);
+    rmSync(f.cwd, { recursive: true });
+    expect(pruneRestrictedCodexHomes(f.project, new Set(['gone']), f.env)).toEqual([]);
+    mkdirSync(f.cwd);
+    expect(prepareRestrictedCodexHome({ cwd: f.cwd }, f.env).path).toBe(f.home.path);
+    expect(readFileSync(join(f.home.path, 'sessions', 'rollout.jsonl'), 'utf8')).toBe('sensitive-history');
+  });
+  it('keeps other projects and non-managed working directories', () => {
+    const f = managed();
+    const other = join(f.root, 'other-project'); mkdirSync(other);
+    const ordinary = prepareRestrictedCodexHome({ cwd: f.root }, f.env);
+    rmSync(f.cwd, { recursive: true });
+    expect(pruneRestrictedCodexHomes(other, new Set(), f.env)).toEqual([]);
+    expect(existsSync(f.home.path)).toBe(true);
+    pruneRestrictedCodexHomes(f.project, new Set(), f.env);
+    expect(existsSync(ordinary.path)).toBe(true);
+  });
+  it.each(['malformed', 'wrong-key', 'symlink', 'oversized', 'ambiguous-legacy'])('retains uncertain metadata: %s', mode => {
+    const f = managed(); const marker = join(f.home.path, 'owner.json');
+    rmSync(f.cwd, { recursive: true });
+    if (mode === 'malformed') writeFileSync(marker, '{broken');
+    if (mode === 'wrong-key') writeFileSync(marker, JSON.stringify({ version: 1, cwd: f.cwd, nativeHome: 'wrong' }));
+    if (mode === 'symlink') { unlinkSync(marker); symlinkSync(join(f.native, 'auth.json'), marker); }
+    if (mode === 'oversized') writeFileSync(marker, 'x'.repeat(65 * 1024));
+    if (mode === 'ambiguous-legacy') {
+      unlinkSync(marker);
+      writeFileSync(join(f.home.path, 'config.toml'), '[projects.a]\ntrust_level="untrusted"\n[projects.b]\ntrust_level="untrusted"');
+    }
+    expect(pruneRestrictedCodexHomes(f.project, new Set(), f.env)).toEqual([]);
+    expect(existsSync(f.home.path)).toBe(true);
+  });
+  it('does not follow a symlinked home or store', () => {
+    const f = managed(); const moved = join(f.root, 'moved');
+    rmSync(f.cwd, { recursive: true });
+    renameSync(f.home.path, moved); symlinkSync(moved, f.home.path);
+    expect(pruneRestrictedCodexHomes(f.project, new Set(), f.env)).toEqual([]);
+    expect(readFileSync(join(moved, 'sessions', 'rollout.jsonl'), 'utf8')).toBe('sensitive-history');
+    unlinkSync(f.home.path);
+    const homes = join(f.env.CEZ_HOME, 'codex-restricted');
+    rmSync(homes, { recursive: true }); symlinkSync(moved, homes);
+    expect(pruneRestrictedCodexHomes(f.project, new Set(), f.env)).toEqual([]);
+    expect(existsSync(join(moved, 'sessions'))).toBe(true);
+  });
+  it('fails closed when the home is unavailable', () => {
+    const f = setup();
+    expect(pruneRestrictedCodexHomes(f.root, new Set(), f.env)).toEqual([]);
   });
 });
