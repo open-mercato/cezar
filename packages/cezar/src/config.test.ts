@@ -1,9 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RUNNER_IDS } from './core/agent-runner.ts';
-import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.ts';
+import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, multiModelEnabled, resolveWorktreeRetention } from './config.ts';
 
 /**
  * `config.json` schema roundtrips (R2 2.3: `systemPrompt?`). The invariants
@@ -128,6 +128,33 @@ describe('loadConfig systemPrompt', () => {
       const config = await loadConfig(repoRoot);
       expect(config.modelsLocked).toBeUndefined();
       expect(config.defaultRunner).toBe('codex');
+    });
+  });
+
+  describe('instance multi-model flag', () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it.each([undefined, '', '0', 'true', 'yes', '1'])('requires exact process opt-in: %s', async (value) => {
+      vi.stubEnv('CEZ_MULTI_MODEL', value);
+      expect(multiModelEnabled()).toBe(value === '1');
+      expect((await loadConfig(repoRoot)).multiModel).toBe(value === '1');
+    });
+
+    it('ignores repository attempts to enable the instance', async () => {
+      vi.stubEnv('CEZ_MULTI_MODEL', '0');
+      write({ multiModel: true, defaultRunner: 'codex' });
+      expect(multiModelEnabled()).toBe(false);
+      expect(await loadConfig(repoRoot)).toMatchObject({ multiModel: false, defaultRunner: 'codex' });
+    });
+
+    it('keeps the instance enabled with absent, disabled or malformed project configuration', async () => {
+      vi.stubEnv('CEZ_MULTI_MODEL', '1');
+      expect((await loadConfig(repoRoot)).multiModel).toBe(true);
+      for (const raw of ['{"multiModel":false}', '{', 'null', '[]', '{"maxParallel":"invalid"}']) {
+        writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), raw);
+        expect(multiModelEnabled()).toBe(true);
+        expect((await loadConfig(repoRoot)).multiModel).toBe(true);
+      }
     });
   });
 

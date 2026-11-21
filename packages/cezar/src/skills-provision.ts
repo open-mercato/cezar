@@ -3,6 +3,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import type { Skill } from './skills.ts';
 import { excludeFromGit, materializeSkillDir, skillPathIsUntracked, TASK_SKILL_IGNORE_MARK } from './skills-remote.ts';
 import { reportError } from './telemetry.ts';
+import { readHarnessFsEntry } from './fs-read.ts';
+import { skillDestination, writeSkillFile } from './skill-destination.ts';
 
 /**
  * Install a task's selected skill — and every catalog skill it names, transitively — into the
@@ -40,6 +42,11 @@ const MAX_CLOSURE = 24;
 
 /** A skill name that is safe as one directory name (no separators, never `.`/`..`). */
 const SAFE_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** The frontmatter `name` becomes a path segment wherever a skill is written to disk. */
+export function isSafeSkillName(name: string): boolean {
+  return SAFE_SKILL_NAME.test(name);
+}
 
 /** True when `body` names `name` as a skill: hyphenated names by word, plain names only as `/name` or `` `name` ``. */
 export function mentionsSkill(body: string, name: string): boolean {
@@ -87,25 +94,29 @@ function skillMarkdown(skill: Skill): string {
  * hide that path in the user's main checkout, so a self-ignoring `.gitignore` in the skills dir is
  * used instead — unless the repo has its own there, which is never edited.
  */
-async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
-  const file = join(cwd, skillsDir, '.gitignore');
-  if ((await lstat(file).catch(() => undefined))?.isSymbolicLink()) return excludeFromGit(cwd, `${skillsDir}/${name}`);
+export async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
+  const relativePath = join(skillsDir, '.gitignore');
+  const candidate = join(cwd, relativePath);
+  if ((await lstat(candidate).catch(() => undefined))?.isSymbolicLink()) return excludeFromGit(cwd, `${skillsDir}/${name}`);
+  const file = skillDestination(cwd, relativePath);
   let prev: string | undefined;
   try {
-    prev = await readFile(file, 'utf8');
-  } catch {
-    // absent: cezar creates and owns it
+    const entry = readHarnessFsEntry(file, 1 << 20);
+    if (entry.kind !== 'file' || entry.content === null) throw new Error('Skill ignore file must be a regular text file');
+    prev = entry.content.toString('utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   if (prev !== undefined && !prev.startsWith(TASK_SKILL_IGNORE_MARK)) return excludeFromGit(cwd, `${skillsDir}/${name}`);
   const lines = prev?.split('\n').filter(Boolean) ?? [TASK_SKILL_IGNORE_MARK, '/.gitignore'];
   if (lines.includes(`/${name}`)) return;
-  await writeFile(file, [...lines, `/${name}`].join('\n') + '\n', 'utf8');
+  writeSkillFile(cwd, relativePath, [...lines, `/${name}`].join('\n') + '\n');
 }
 
 /** One skill into one skills dir. An existing entry (tracked, or the user's own) is never touched. */
-async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promise<boolean> {
+async function provisionOne(cwd: string, skillsDir: string, skill: Skill, allowDirectoryLinks: boolean): Promise<boolean> {
   // The name is frontmatter verbatim; it becomes a path segment, so it must be exactly one.
-  if (!SAFE_SKILL_NAME.test(skill.name)) return false;
+  if (!isSafeSkillName(skill.name)) return false;
   const dest = join(cwd, skillsDir, skill.name);
   if (skill.extension && (await lstat(dest).catch(() => undefined))?.isSymbolicLink()) {
     const [extension, linked, ignore] = await Promise.all([
@@ -122,9 +133,10 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promi
   }
   // Team copies are rewritten so a Continue picks up a fetched update; everything else stays put.
   if (skill.source === 'team' && skill.team?.dir) {
-    return materializeSkillDir(cwd, skill, skillsDir, () => ignoreProvisioned(cwd, skillsDir, skill.name)).catch(
-      () => false,
-    );
+    return materializeSkillDir(cwd, skill, skillsDir, {
+      allowDirectoryLinks,
+      ignore: (directory, name) => ignoreProvisioned(cwd, directory, name),
+    }).catch(() => false);
   }
   const onDisk = skill.source !== 'team' && skill.source !== 'builtin' && isAbsolute(skill.path);
   // A skill directory cezar ships in its package (`skills/change-impact`), references/ included.
@@ -169,6 +181,7 @@ export async function provisionSkills(
   cwd: string,
   roots: readonly Skill[],
   catalog: readonly Skill[],
+  { allowDirectoryLinks = true }: { allowDirectoryLinks?: boolean } = {},
 ): Promise<string[]> {
   const installed: string[] = [];
   // Commands are delivered inline: a link would point the task at the main checkout's file.
@@ -176,7 +189,7 @@ export async function provisionSkills(
   for (const skill of skillClosure(skills(roots), skills(catalog))) {
     let any = false;
     for (const dir of PROVISION_SKILL_DIRS) {
-      const ok = await provisionOne(cwd, dir, skill).catch((err: unknown) => {
+      const ok = await provisionOne(cwd, dir, skill, allowDirectoryLinks).catch((err: unknown) => {
         const errno = (err as { code?: unknown }).code;
         const code = typeof errno === 'string' ? errno : 'unknown';
         reportError(

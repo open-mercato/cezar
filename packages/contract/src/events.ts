@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { runnerSchema } from './health.ts';
 
 /**
  * SSE frame payloads — the only shapes in this contract that are NOT derived from a route.
@@ -23,6 +24,9 @@ export const runEventSchema = z.looseObject({
   seq: z.number(),
   ts: z.string(),
   stepId: z.string().optional(),
+  sessionKey: z.string().optional(),
+  backend: runnerSchema.optional(),
+  profileId: z.string().optional(),
   type: z.string(),
 });
 export type RunEvent = z.infer<typeof runEventSchema>;

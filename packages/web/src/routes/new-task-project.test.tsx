@@ -271,8 +271,14 @@ const variantsPill = () => document.querySelector('[data-slot="variants-pill"]')
 /** Open the project pill and pick a project by id. */
 async function switchProject(projectId: string) {
   fireEvent.click(projectPill())
-  await screen.findByPlaceholderText('search projects…')
-  fireEvent.click(document.querySelector(`[data-slot="project-option"][data-project-id="${projectId}"]`)!)
+  const projectSearch = await screen.findByPlaceholderText('search projects…')
+  await waitFor(() => expect(document.activeElement).toBe(projectSearch))
+  const option = await waitFor(() => {
+    const element = document.querySelector(`[data-slot="project-option"][data-project-id="${projectId}"]`)
+    if (!element) throw new Error(`Project option ${projectId} is not visible`)
+    return element
+  })
+  fireEvent.click(option)
 }
 
 const sourceRefs = () =>
@@ -326,7 +332,8 @@ describe('switching project', () => {
     await screen.findByPlaceholderText('search skills & workflows…')
     // A leading `null` is the "No skill" row; the built-in `quick-task` has no row of its own.
     expect(sourceRefs()).toEqual([null, 'om-fix'])
-    fireEvent.keyDown(document.body, { key: 'Escape' })
+    fireEvent.click(sourcePill())
+    await waitFor(() => expect(screen.queryByPlaceholderText('search skills & workflows…')).toBeNull())
 
     await switchProject(OTHER)
     await waitFor(() => expect(pathname()).toBe(`/p/${OTHER}/new`))

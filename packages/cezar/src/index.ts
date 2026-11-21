@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.ts';
+import { ownProcessShutdown } from './harness/process-tree.ts';
 import {
   ProviderAuthService,
   providerAuthChecksDisabled,
@@ -457,6 +458,8 @@ async function serveCommand(
       })
       .finally(() => void releaseRuntime().finally(() => process.exit(process.exitCode ?? 0)));
   };
+  // serve owns SIGINT/SIGTERM; the harness's detached processes follow its exit.
+  ownProcessShutdown();
   process.on('SIGINT', () => shutdown('signal'));
   process.on('SIGTERM', () => shutdown('signal'));
   const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
@@ -787,6 +790,7 @@ async function runCommand(
   };
   const interrupt = () => shutdown(130);
   const terminate = () => shutdown(143);
+  ownProcessShutdown();
   process.on('SIGINT', interrupt);
   process.on('SIGTERM', terminate);
 

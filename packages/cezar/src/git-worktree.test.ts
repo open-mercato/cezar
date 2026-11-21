@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,12 +10,18 @@ import {
   createWorktree,
   parseShortstat,
   pruneOrphans,
+  remoteDefaultBranch,
   resolveBaseRef,
+  staleBaseNote,
   uniqueBranchName,
+  worktreeChangedFiles,
   worktreeChangedPaths,
+  worktreeDiff,
+  worktreeDiffStat,
   worktreeShortstat,
   worktreeSizeBytes,
 } from './git-worktree.ts';
+import { pinWorktreeGitDir } from './git-pin.ts';
 
 const run = promisify(execFile);
 
@@ -23,6 +29,12 @@ const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 const worktreeRoots: string[] = [];
+
+function scratchIndexFiles(): string[] {
+  return readdirSync(tmpdir())
+    .filter((name) => name.startsWith(`cez-wt-scratch-${process.pid}-`))
+    .sort();
+}
 
 async function fixtureRepo(prefix: string): Promise<string> {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -285,6 +297,19 @@ describe('worktreeShortstat (real git)', () => {
     }
   });
 
+  it('removes every scratch index after diff reads finish', async () => {
+    const r = await fixtureRepo('cez-scratch-cleanup-');
+    await run('git', ['checkout', '-q', '-b', 'work'], { cwd: r });
+    writeFileSync(join(r, 'untracked.txt'), 'visible only through intent-to-add\n');
+    const before = scratchIndexFiles();
+
+    expect(await worktreeDiff(r, 'main')).toContain('untracked.txt');
+    expect(await worktreeDiffStat(r, 'main')).toContain('untracked.txt');
+    expect(await worktreeShortstat(r, 'main')).toEqual({ adds: 1, dels: 0, files: 1 });
+
+    expect(scratchIndexFiles()).toEqual(before);
+  });
+
   it('counts only the task\'s own changes after the base is merged back in', async () => {
     // Regression: anchoring to a moving base *name* (via merge-base) must stay
     // correct when the task syncs with its base — the routine merge that a
@@ -350,6 +375,72 @@ describe('worktreeShortstat (real git)', () => {
         repointed: true,
       });
     });
+
+    it('never refreshes the real index while choosing a repointed-worktree anchor', async () => {
+      const r = await repoWithForeignBranch();
+      pinWorktreeGitDir(r, join(r, '.git')); // a harness worktree reads through a scratch index
+      const tracked = join(r, 'f.txt');
+      const index = join(r, '.git', 'index');
+      // Make the cached stat data stale without changing the tracked contents. A plain
+      // `git diff --shortstat` refreshes this entry and rewrites the real index; the diff-base
+      // probes must inherit the same scratch-index environment as the final reported stat.
+      const future = new Date(Date.now() + 10_000);
+      utimesSync(tracked, future, future);
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+      const before = readFileSync(index);
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+        repointed: true,
+      });
+
+      expect(readFileSync(index)).toEqual(before);
+      expect((await run('git', ['status', '--porcelain'], { cwd: r })).stdout).toBe('?? mine.txt\n');
+    });
+
+    it.runIf(process.platform !== 'win32')(
+      'runs every repointed diff-base probe under the scratch-index environment',
+      async () => {
+        const r = await repoWithForeignBranch();
+        pinWorktreeGitDir(r, join(r, '.git'));
+        const trace = join(r, 'git-env.log');
+        const bin = join(r, 'bin');
+        const helper = join(bin, 'git');
+        const realGit = (await run('which', ['git'])).stdout.trim();
+        mkdirSync(bin);
+        writeFileSync(
+          helper,
+          `#!/bin/sh\nprintf '%s\\t%s\\n' "\${GIT_INDEX_FILE-unset}" "$*" >> '${trace}'\nexec '${realGit}' "$@"\n`,
+        );
+        chmodSync(helper, 0o755);
+        writeFileSync(join(r, 'f.txt'), 'changed by this run\n');
+
+        const previousPath = process.env.PATH;
+        process.env.PATH = `${bin}:${previousPath ?? ''}`;
+        try {
+          expect(
+            await worktreeShortstat(r, 'main', {
+              taskBranch: 'cez/x',
+              runStartedAt: '2099-01-01T00:00:00Z',
+            }),
+          ).not.toBeNull();
+        } finally {
+          process.env.PATH = previousPath;
+        }
+
+        const seen = readFileSync(trace, 'utf8')
+          .trim()
+          .split('\n')
+          .filter((line) => line.includes('\tdiff --shortstat '));
+        expect(seen.length).toBeGreaterThan(0);
+        // Each scratch index sits in its own private directory.
+        expect(
+          seen.every((line) => line.startsWith(`${tmpdir()}/cez-scratch-`) && line.split('\t')[0]!.endsWith('/index')),
+        ).toBe(true);
+      },
+    );
 
     it('reports the foreign branch\'s whole diff without the guard — the bug being fixed', async () => {
       const r = await repoWithForeignBranch();
@@ -558,6 +649,146 @@ describe('worktreeShortstat (real git)', () => {
         files: 1,
       });
     });
+  });
+});
+
+/**
+ * the scratch index the diff readers build was seeded with `read-tree HEAD`,
+ * which carries no stat data, so every call re-hashed every tracked file. Seeding from a copy of
+ * the real index restores the stat cache; these pin that the answer did not change with it.
+ */
+describe('diff readers seed their scratch index from the real one', () => {
+  const pastTime = new Date(Date.now() - 60_000);
+
+  /** Every kind of worktree state a task leaves: staged, unstaged, staged-new, removed from the
+   *  index, deleted on disk, untracked, renamed. Committed files are backdated so the index
+   *  written after them holds trustworthy (not racily clean) stat data. */
+  async function busyRepo(prefix: string): Promise<string> {
+    const r = mkdtempSync(join(tmpdir(), prefix));
+    worktreeRoots.push(r);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: r });
+    await run('git', ['config', 'core.trustctime', 'false'], { cwd: r });
+    for (const name of ['a', 'b', 'c', 'd', 'e', 'g', 'locked']) {
+      writeFileSync(join(r, `${name}.txt`), `${name}\n`);
+      utimesSync(join(r, `${name}.txt`), pastTime, pastTime);
+    }
+    await run('git', ['add', '-A'], { cwd: r });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: r });
+    writeFileSync(join(r, 'a.txt'), 'a\nstaged\n');
+    await run('git', ['add', 'a.txt'], { cwd: r });
+    writeFileSync(join(r, 'a.txt'), 'a\nstaged\nunstaged\n');
+    writeFileSync(join(r, 'n.txt'), 'staged new\n');
+    await run('git', ['add', 'n.txt'], { cwd: r });
+    await run('git', ['rm', '-q', 'c.txt'], { cwd: r });
+    rmSync(join(r, 'd.txt'));
+    await run('git', ['rm', '-q', '--cached', 'e.txt'], { cwd: r });
+    writeFileSync(join(r, 'g.txt'), 'g\nunstaged\n');
+    writeFileSync(join(r, 'u.txt'), 'untracked\n');
+    mkdirSync(join(r, 'sub'));
+    writeFileSync(join(r, 'sub', 'x.txt'), 'nested untracked\n');
+    await run('git', ['mv', 'b.txt', 'b2.txt'], { cwd: r });
+    return r;
+  }
+
+  /** The output the previous HEAD-seeded scratch index produced. */
+  async function headSeeded(r: string, args: string[]): Promise<string> {
+    const index = join(tmpdir(), `cez-test-head-seeded-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    const env = { ...process.env, GIT_INDEX_FILE: index };
+    try {
+      await run('git', ['read-tree', 'HEAD'], { cwd: r, env });
+      await run('git', ['add', '-N', '.'], { cwd: r, env });
+      return (await run('git', args, { cwd: r, env })).stdout;
+    } finally {
+      rmSync(index, { force: true });
+    }
+  }
+
+  it('reports exactly what a HEAD-seeded scratch index reported', async () => {
+    const r = await busyRepo('cez-scratch-equal-');
+    pinWorktreeGitDir(r, join(r, '.git'));
+    const base = (await run('git', ['merge-base', 'main', 'HEAD'], { cwd: r })).stdout.trim();
+    const indexBefore = readFileSync(join(r, '.git', 'index'));
+
+    expect(await worktreeDiff(r, 'main')).toBe(await headSeeded(r, ['diff', base]));
+    expect(await worktreeDiffStat(r, 'main')).toBe((await headSeeded(r, ['diff', '--stat', base])).trim());
+    expect(await worktreeShortstat(r, 'main')).toEqual(
+      parseShortstat(await headSeeded(r, ['diff', '--shortstat', base])),
+    );
+    expect(await worktreeChangedFiles(r, 'main')).toEqual(
+      (await headSeeded(r, ['diff', '--name-only', base])).split('\n').filter(Boolean),
+    );
+    expect(await worktreeChangedFiles(r, 'main')).toEqual(
+      expect.arrayContaining(['a.txt', 'b2.txt', 'c.txt', 'd.txt', 'g.txt', 'n.txt', 'sub/x.txt', 'u.txt']),
+    );
+    expect(readFileSync(join(r, '.git', 'index'))).toEqual(indexBefore);
+  });
+
+  // Root reads any file regardless of its mode, so the probe below proves nothing there.
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'trusts the real index stat cache instead of re-reading every tracked file',
+    async () => {
+      const r = await busyRepo('cez-scratch-stat-');
+      // Unchanged and stat-clean in the real index, but unreadable: only a reader that re-hashes
+      // tracked files ever opens it.
+      chmodSync(join(r, 'locked.txt'), 0o000);
+      try {
+        expect(await worktreeDiff(r, 'main')).not.toMatch(/^\(diff failed/);
+        expect(await worktreeDiffStat(r, 'main')).toContain('g.txt');
+        expect(await worktreeShortstat(r, 'main')).not.toBeNull();
+        expect(await worktreeChangedFiles(r, 'main')).toContain('g.txt');
+      } finally {
+        chmodSync(join(r, 'locked.txt'), 0o644);
+      }
+    },
+  );
+});
+
+describe('remoteDefaultBranch + staleBaseNote (run 9788d87f: a stale configured base hid tracked files)', () => {
+  it('reads the branch origin/HEAD points at, and null without a remote', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'cez-origin-'));
+    worktreeRoots.push(origin);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: origin });
+    writeFileSync(join(origin, 'a.txt'), '1\n');
+    await run('git', ['add', '-A'], { cwd: origin });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c1'], { cwd: origin });
+    const work = mkdtempSync(join(tmpdir(), 'cez-work-'));
+    worktreeRoots.push(work);
+    await run('git', ['clone', '-q', origin, work], { cwd: tmpdir() });
+    expect(await remoteDefaultBranch(work)).toEqual({ remote: 'origin', branch: 'main' });
+
+    const lone = mkdtempSync(join(tmpdir(), 'cez-lone-'));
+    worktreeRoots.push(lone);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: lone });
+    expect(await remoteDefaultBranch(lone)).toBeNull();
+  });
+
+  it('reads the PR-target remote, not a hard-coded origin', async () => {
+    // A contributor's fork clone: `gh repo set-default` names `upstream` as the base remote,
+    // whose default branch differs from the fork's.
+    const work = mkdtempSync(join(tmpdir(), 'cez-fork-'));
+    worktreeRoots.push(work);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: work });
+    writeFileSync(join(work, 'a.txt'), '1\n');
+    await run('git', ['add', '-A'], { cwd: work });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c1'], { cwd: work });
+    for (const [remote, branch] of [['origin', 'main'], ['upstream', 'trunk']] as const) {
+      await run('git', ['remote', 'add', remote, `https://github.com/${remote}-owner/repo.git`], { cwd: work });
+      await run('git', ['update-ref', `refs/remotes/${remote}/${branch}`, 'HEAD'], { cwd: work });
+      await run('git', ['symbolic-ref', `refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/${branch}`], { cwd: work });
+    }
+    await run('git', ['config', 'remote.upstream.gh-resolved', 'base'], { cwd: work });
+
+    expect(await remoteDefaultBranch(work)).toEqual({ remote: 'upstream', branch: 'trunk' });
+  });
+
+  it('staleBaseNote warns only when the configured base is not the remote default', () => {
+    const origin = { remote: 'origin', branch: 'main' };
+    expect(staleBaseNote('develop', origin)).toContain('"develop" is not the remote default "main"');
+    expect(staleBaseNote('main', origin)).toBeNull();
+    expect(staleBaseNote('origin/main', origin)).toBeNull();
+    expect(staleBaseNote('upstream/trunk', { remote: 'upstream', branch: 'trunk' })).toBeNull();
+    expect(staleBaseNote('origin/trunk', { remote: 'upstream', branch: 'trunk' })).not.toBeNull();
+    expect(staleBaseNote('develop', null)).toBeNull();
   });
 });
 

@@ -3,6 +3,7 @@ import { ghEnv } from '../../core/gh-env.ts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
+import { pinnedGitEnv } from '../../git-pin.ts';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
@@ -351,7 +352,8 @@ async function gh(repoRoot: string, args: string[], timeout = 15_000): Promise<s
     cwd: repoRoot,
     timeout,
     maxBuffer: 50 * 1024 * 1024,
-    env: { ...ghEnv(), ...(host ? { GH_HOST: host } : {}) },
+    // gh runs git itself: a harness worktree's pin keeps its planted hooks off the host.
+    env: { ...ghEnv(), ...(host ? { GH_HOST: host } : {}), ...pinnedGitEnv(repoRoot) },
   });
   return stdout;
 }
@@ -2848,13 +2850,16 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   if (!worktree || !branch) {
     return { ok: false, error: 'this task has no worktree/branch to publish' };
   }
+  if (run.harness && !input.reviewedSha) {
+    return { ok: false, error: 'the harness handoff must be verified before preparing a draft PR' };
+  }
 
   // Final autosave: the branch must hold everything before it leaves the box.
   // This is the LAST flush — unlike the turn-end and run-finalize ones there is
   // no later autosave to pick the work up, so a refusal (conflicted tree) or a
   // failed commit has to stop the publish instead of silently opening a PR from
   // a branch that is missing the run's final state.
-  const saved = await autosaveCommit(worktree, 'pre-PR');
+  const saved = input.reviewedSha ? undefined : await autosaveCommit(worktree, 'pre-PR');
   if (saved === 'refused') {
     return {
       ok: false,
@@ -2882,18 +2887,23 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): gh would only refuse after the
   // push, leaving a branch on the remote with nothing in it. Unknown base → let gh decide.
-  if (!existing && (await baseDivergence(worktree, run.baseBranch)).ahead === 0) {
+  if (!existing && (await baseDivergence(worktree, run.baseBranch, input.reviewedSha)).ahead === 0) {
     return { ok: false, error: nothingToPropose(branch, prBase) };
   }
 
-  let push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+  const refspec = input.reviewedSha ? `${input.reviewedSha}:refs/heads/${branch}` : branch;
+  const pushArgs = [...(input.reviewedSha ? [] : ['-u']), remotes.push, refspec];
+  let push = await execTool(['push', ...pushArgs], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     // A rebased branch is rejected as non-fast-forward; lease only against a tip this branch held (#1758).
     const lease = await rewriteLeaseArg(worktree, remotes.push, branch, [run.baseBranch, prBase]);
-    if (lease) push = await execTool(['push', lease, '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+    if (lease) push = await execTool(['push', lease, ...pushArgs], worktree, 'git', PUSH_TIMEOUT_MS);
   }
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
+  }
+  if (input.reviewedSha) {
+    await execTool(['branch', `--set-upstream-to=${remotes.push}/${branch}`, branch], worktree, 'git');
   }
   if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
 
@@ -3149,7 +3159,9 @@ async function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30
         // piped stdio is not enough to stop it. Without this a `git push` that
         // cannot authenticate hangs for the whole timeout and surfaces as a
         // blank one-minute stall instead of git's own "could not read Username".
-        env: { ...ghEnv(), GIT_TERMINAL_PROMPT: '0', ...(ghHost ? { GH_HOST: ghHost } : {}) },
+        // A harness worktree's pin (git-pin.ts): Create PR pushed with the model's planted hooks
+        // live, while the push route already ran without them.
+        env: { ...ghEnv(), GIT_TERMINAL_PROMPT: '0', ...(ghHost ? { GH_HOST: ghHost } : {}), ...pinnedGitEnv(cwd) },
       },
       (err, stdout, stderr) =>
         resolve({
@@ -3778,6 +3790,19 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
 
     detect: () => detectGithub(repoRoot),
     detectCached: () => detectGithubCached(repoRoot),
+
+    getIssue: async (number) => {
+      if (process.env.CEZ_DRY_RUN === '1' || !repoRef) return { available: false, reason: 'GitHub issue lookup is unavailable' };
+      if (!Number.isSafeInteger(number) || number < 1) return { available: false, reason: 'Invalid issue number' };
+      try {
+        const out = await gh(repoRoot, ['issue', 'view', String(number), '--repo',
+          `${repoRef.host}/${repoRef.owner}/${repoRef.repo}`, '--json', 'title,body,url']);
+        return { available: true, ...z.object({ title: z.string().min(1).max(1_000), body: z.string().max(60_000).nullish().transform((body) => body ?? ''), url: z.url().max(2_048) }).parse(JSON.parse(out)) };
+      } catch {
+        // CLI stderr can include credential-bearing URLs or headers; keep it out of the ledger.
+        return { available: false, reason: `Could not read GitHub issue #${number}. Check the issue number, report size and gh authentication, then retry.` };
+      }
+    },
 
     listIssues: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).issues,
 

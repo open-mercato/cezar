@@ -220,6 +220,13 @@ describe('the section registry', () => {
     expect(settingsSectionsByScope({ singleProject: true }).global.map((s) => s.id)).not.toContain('projects')
   })
 
+  it('hides Harness until the instance enables multi-model', () => {
+    for (const capabilities of [undefined, {}, { multiModel: false }]) {
+      expect(visibleSettingsSections('project', capabilities).map((s) => s.id)).toEqual(PROJECT_SECTIONS)
+    }
+    expect(visibleSettingsSections('project', { multiModel: true }).map((s) => s.id)).toContain('harness')
+  })
+
   it('the rail hint names only the project pages a capability has gated away', () => {
     const all = settingsSectionsByScope().project
     expect(projectRailHint(all)).toBeNull()

@@ -9,7 +9,7 @@ import {
 } from 'react-router'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 
-import { useHealth, useProjects, useStarCount, useWorkspaceConfig } from '@/api/queries'
+import { useConfig, useHealth, useProjects, useStarCount, useWorkspaceConfig } from '@/api/queries'
 import { BrandLockup } from '@/components/brand-mark'
 import { SidebarDrawer, SidebarFrame, useSidebarWidth } from '@/components/sidebar-frame'
 import { SidebarStatusLine } from '@/components/sidebar-status-line'
@@ -27,6 +27,7 @@ import {
   projectRailHint,
   settingsSectionsByScope,
   settingsSectionsInGroup,
+  type GateCapabilities,
   type SettingsScope,
   type SettingsSection,
 } from './registry'
@@ -116,6 +117,19 @@ function useSettingsProjects(capabilities: CapabilityProps | undefined) {
 }
 
 type SettingsProjects = ReturnType<typeof useSettingsProjects>
+
+/**
+ * The config response reports the same instance flag for every project. Reuse the active
+ * project's query for the whole tree without loading repository settings from a global pane.
+ */
+function useSettingsCapabilities(
+  scope: SettingsScope,
+  capabilities: CapabilityProps | undefined,
+): GateCapabilities | undefined {
+  const config = useConfig(scope === 'project')
+  if (!config.data) return capabilities
+  return { ...capabilities, multiModel: config.data.multiModel }
+}
 
 /**
  * `← Back` (and Escape): the last non-settings page the router listener recorded, else the
@@ -446,7 +460,7 @@ function SettingsSidebarContent({
   /** The drawer's close button. Absent on desktop, which has nothing to close. */
   headerAction?: React.ReactNode
 }) {
-  const projectSections = settingsSectionsByScope(capabilities).project
+  const projectSections = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities)).project
   const touch = Boolean(headerAction)
   const globalActive = scope === 'global'
   const health = useHealth().data
@@ -561,7 +575,7 @@ function SectionPills({
   activeId: SettingsSection['id']
   capabilities: CapabilityProps | undefined
 }) {
-  const sections = settingsSectionsByScope(capabilities)[scope]
+  const sections = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))[scope]
   const NavLink = scope === 'global' ? RouterNavLink : ScopedNavLink
   const pillClass = (active: boolean) =>
     cn(
@@ -791,7 +805,7 @@ export function SettingsIndexRoute({ scope, capabilities }: {
   capabilities?: CapabilityProps
 }) {
   const location = useLocation()
-  const sections = settingsSectionsByScope(capabilities)[scope]
+  const sections = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))[scope]
   if (scope === 'global') {
     // Appearance is never hidden, so the first global section always exists.
     const first = sections[0]!

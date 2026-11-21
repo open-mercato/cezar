@@ -53,7 +53,8 @@ describe('allowlists', () => {
       for (const key of exported) expect(excluded[key], `${key} is both exported and excluded`).toBeUndefined();
     };
     classify(Object.keys(workspaceConfigSchema.shape), WORKSPACE_KEYS, WORKSPACE_EXCLUDED);
-    classify(Object.keys(configSchema.shape), PROJECT_CONFIG_KEYS, PROJECT_EXCLUDED);
+    // The process capability is derived after parsing, while optional file keys live on the input.
+    classify([...new Set([...Object.keys(configSchema.in.shape), ...Object.keys(configSchema.parse({}))])], PROJECT_CONFIG_KEYS, PROJECT_EXCLUDED);
   });
 
   it('keeps skills repos portable: credentials stripped, local paths dropped', () => {

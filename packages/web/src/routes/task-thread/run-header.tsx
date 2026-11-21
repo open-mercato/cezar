@@ -20,7 +20,7 @@ import {
   useReferenceProjectId,
   useRuns,
 } from '@/api/queries'
-import type { ApiRun } from '@open-mercato/cezar-api-client'
+import type { ApiRun, StepState } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { TOGGLE_ON_ICON_CLASS } from '@/components/pin-toggle'
@@ -67,15 +67,17 @@ import { stripGroups, stripTabs } from '../task-workspace/strip'
 
 import {
   PRIMARY_ACTION_LABELS,
+  harnessReviewPending,
   primaryRunAction,
   secondaryRunAction,
 } from './run-actions'
 import { GitActions } from '../task-git/git-toolbar'
-import { useRunGitStep } from '../task-git/run-git-step'
+import { useHarnessPublishBlock, useRunGitStep } from '../task-git/run-git-step'
 import { ImpactChip } from '../task-assets/impact-chip'
 import { RunConfirmDialog } from './run-confirm-dialog'
 import { TaskWorktreeRemovalDialog } from './task-worktree-removal'
 import { activeStepIndex, railWanted, stepTally, WorkflowSteps } from './step-rail'
+import { runShellClass } from './run-shell'
 import { useDraft } from './thread-draft'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
 import { writeClipboard } from '@/lib/clipboard'
@@ -100,12 +102,17 @@ import { writeClipboard } from '@/lib/clipboard'
  */
 /** Which run-detail tab this header instance sits above — "Review changes" steps aside while a
  *  Changes view shows. A prop rather than a route match so the header stays testable bare. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal' | 'preview'
+export type RunTab = 'session' | 'review' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal' | 'preview'
 
 interface RunHeaderProps {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
+  /** Steps in EXECUTION order (harness pages derive it from the ledger) —
+   *  older harness runs recorded their dynamic steps appended at the tail. */
+  orderedSteps?: StepState[]
+  /** A harness status bar in the view already owns progress and the expandable timeline. */
+  hideWorkflowProgress?: boolean
   /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
@@ -122,6 +129,8 @@ interface RunHeaderProps {
 const headerPropComparators = {
   run: (before, after) => before.run === after.run,
   tab: (before, after) => before.tab === after.tab,
+  orderedSteps: (before, after) => before.orderedSteps === after.orderedSteps,
+  hideWorkflowProgress: (before, after) => before.hideWorkflowProgress === after.hideWorkflowProgress,
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
   tabs: (before, after) => before.tabs === after.tabs,
   headerActions: (before, after) => before.headerActions === after.headerActions,
@@ -139,11 +148,19 @@ function RunHeaderView({
   run,
   planTally,
   tab = 'session',
+  orderedSteps,
+  hideWorkflowProgress = false,
   onMarkedUnread,
   tabs,
   headerActions,
   wide = false,
 }: RunHeaderProps) {
+  // The header is sticky, so anything else that sticks has to know how tall it
+  // is (review 2026-07-27): the run rail was pinning at 12px and disappearing
+  // behind 185px of header. Its height is genuinely dynamic — the title wraps,
+  // the step rail expands, the header folds — so it is measured and
+  // published as a custom property rather than guessed at.
+  const headerRef = useRef<HTMLElement>(null)
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
   const actions = useRunActions(run, { onMarkedUnread })
@@ -166,6 +183,32 @@ function RunHeaderView({
   const quietWord = statusLabel ? null : closedStatusWord(run)
   const [collapsed, setCollapsed] = useHeaderCollapsed()
 
+  // Only the harness rail reads the header height; ordinary runs skip the observer.
+  const harnessRun = Boolean(run.harness)
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el || !harnessRun) return
+    const publish = () => {
+      document.documentElement.style.setProperty(
+        '--run-header-h',
+        `${Math.round(el.getBoundingClientRect().height)}px`,
+      )
+    }
+    publish()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', publish)
+      return () => {
+        window.removeEventListener('resize', publish)
+        document.documentElement.style.removeProperty('--run-header-h')
+      }
+    }
+    const observer = new ResizeObserver(publish)
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      document.documentElement.style.removeProperty('--run-header-h')
+    }
+  }, [harnessRun])
   // The phone-width details disclosure (#765). The map is the state, so switching runs reads that
   // run's own answer instead of the last one's.
   const [, bumpDetails] = useReducer((n: number) => n + 1, 0)
@@ -179,10 +222,11 @@ function RunHeaderView({
   return (
     <ReferenceStatusProvider projectId={refs.projectId} requests={refs.requests}>
       <header
+        ref={headerRef}
         data-slot="run-header"
         className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
       >
-        <div className={cn('mx-auto w-full', !wide && 'max-w-[var(--measure)]')}>
+        <div className={wide ? 'mx-auto w-full' : runShellClass(harnessRun)}>
           <ManagerBackLink runId={run.id} />
           {/* `min-h-[30px]` is a `size="sm"` button's height: the row keeps it whether or not an
               action is on offer, so the header — and the work under it — never jumps. */}
@@ -204,7 +248,7 @@ function RunHeaderView({
               <ImpactChip run={run} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
-              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} />
+              <HeaderActions run={run} actions={actions} tab={tab} onRename={() => beginRename.current()} />
               {/* Desktop: fold the meta row and the step rail away, leaving the title and the
                   tabs — the minimalist view short of full screen. Phones keep every line. */}
               <IconTooltip label={collapsed ? 'Expand header' : 'Collapse header'}>
@@ -261,14 +305,15 @@ function RunHeaderView({
           <DispatchParentLine run={run} />
           <DispatchChildrenLine run={run} />
 
-          <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
+          <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 overflow-x-auto md:mt-2.5 md:overflow-x-visible">
             {tabs ?? <FallbackTabs run={run} tab={tab} terminalAvailable={health.data?.capabilities?.terminal === true} />}
+            <HarnessTabs run={run} tab={tab} />
           </div>
 
           {/* The rail earns its row only when it has more to say than "k of n done" (line 2). */}
-          {railWanted(run.steps) ? (
+          {!hideWorkflowProgress && (harnessRun ? run.steps.length > 0 : railWanted(run.steps)) ? (
             <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
-              <WorkflowSteps runId={run.id} steps={run.steps} closedAs={runClosure(run)} />
+              <WorkflowSteps runId={run.id} steps={orderedSteps ?? run.steps} overlay={harnessRun} closedAs={runClosure(run)} />
             </div>
           ) : null}
         </div>
@@ -289,6 +334,16 @@ function RunHeaderView({
   )
 }
 
+/** The harness ledger page (spec 2026-07-23-harness-orchestration): Review for every harness run. */
+function HarnessTabs({ run, tab }: { run: ApiRun; tab: RunTab }) {
+  if (!run.harness) return null
+  return (
+    <TabLink to={`/tasks/${run.id}/review`} active={tab === 'review'}>
+      Review
+    </TabLink>
+  )
+}
+
 /**
  * The status word beside the title — only while the state is still open (Proposal 7: "the word
  * appears only when the dot alone would be ambiguous"). A finished task has its neutral dot and
@@ -306,6 +361,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
     case 'review':
       return 'Needs review'
     case 'waiting':
+      if (harnessReviewPending(run)) return 'Review needed'
       if (run.parked?.kind === 'auth') return 'Needs sign-in'
       return budgetStop(run) ? 'Budget reached' : 'Asked'
     case 'queued':
@@ -372,12 +428,12 @@ function StatusChip({ label, className }: { label: string; className?: string })
 function HeaderActions({
   run,
   actions,
-  changesShowing,
+  tab,
   onRename,
 }: {
   run: ApiRun
   actions: RunActions
-  changesShowing: boolean
+  tab: RunTab
   onRename: () => void
 }) {
   const git = useRunGitStep(run)
@@ -395,9 +451,11 @@ function HeaderActions({
   // Read at render: the bridge is published after the workspace commits, so the first paint has
   // no "Write to the agent" row and the next one does — menus are opened later than that.
   const workspace = taskWorkspaceFor(run.id)
+  const acceptBlocked = useHarnessPublishBlock(run)
   const commands = buildTaskCommands(
     {
       run,
+      acceptBlocked,
       canResume: canResumeHere,
       git: git.action,
       gitPending: git.pending,
@@ -439,7 +497,9 @@ function HeaderActions({
     'remove-worktree': actions.removeWorktree.isPending,
   }
 
-  const primary = primaryRunAction(run, { git: git.action, ...(prUrl ? { prUrl } : {}), changesShowing })
+  const primary = primaryRunAction(run, {
+    git: git.action, ...(prUrl ? { prUrl } : {}), changesShowing: tab === 'changes', harnessReviewShowing: tab === 'review',
+  })
   const secondary = secondaryRunAction(run, primary, git.action)
   // The composer when a Chat column shows one; else bring the chat up (the workspace) or go there.
   const toComposer = () => {
@@ -468,6 +528,8 @@ function HeaderActions({
         return toComposer()
       case 'review':
         return toChanges()
+      case 'harness-review':
+        return navigate(`/tasks/${run.id}/review`)
       case 'open-pr':
         return primary?.kind === 'open-pr' ? window.open(primary.url, '_blank', 'noopener,noreferrer') : undefined
       case 'stop':
@@ -655,7 +717,7 @@ function FallbackTabs({ run, tab, terminalAvailable }: { run: ApiRun; tab: RunTa
   const views = FIXED_VIEW_ORDER.filter(
     (view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable),
   )
-  const activeView: ViewId | 'notes' = tab === 'preview' ? 'browser' : tab
+  const activeView: ViewId | 'notes' | 'review' = tab === 'preview' ? 'browser' : tab
   const groups = stripGroups(stripTabs(views))
   return (
     <>

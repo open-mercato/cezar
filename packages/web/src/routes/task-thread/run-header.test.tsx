@@ -236,6 +236,45 @@ describe('collapse header — the minimalist view short of full screen', () => {
   })
 })
 
+describe('workflow step density', () => {
+  // The header used to expand a short LIVE workflow automatically and fold long
+  // ones, inferring intent from step count and status. #711 replaced that with
+  // one rule plus memory: always start folded, remember what the user opened for
+  // this run. A session's chrome should not resize itself out from under you as
+  // steps complete, and a heuristic could never be right for both a 2-step fix
+  // and a 17-phase harness run.
+  it('folds every workflow into one summary line by default', () => {
+    stubFetch()
+    renderHeader(
+      run('review', {
+        steps: Array.from({ length: 18 }, (_, index) =>
+          step({ id: `step-${index + 1}`, name: `Step ${index + 1}` }),
+        ),
+      }),
+    )
+    expect(document.querySelector('[data-slot="workflow-steps"]')?.getAttribute('data-state')).toBe(
+      'closed',
+    )
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('folds a short live workflow too, rather than guessing from step count', () => {
+    stubFetch()
+    renderHeader(
+      run('running', {
+        steps: [
+          step({ id: 'implement', status: 'running' }),
+          step({ id: 'validate', name: 'Validate', status: 'pending' }),
+        ],
+      }),
+    )
+    expect(document.querySelector('[data-slot="workflow-steps"]')?.getAttribute('data-state')).toBe(
+      'closed',
+    )
+    expect(document.body.textContent).toContain('step 1 of 2')
+  })
+})
+
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
     stubFetch()
@@ -622,6 +661,16 @@ describe('the status word (Proposal 7): open states only', () => {
     expect(statusChipLabel(record)).toBe(label)
   })
 
+  it('sends a paused harness run to review and keeps Answer for a real question', () => {
+    const record = run('waiting', { harness: { profile: 'multi', workflow: 'harness-implement-feature' } })
+    const actions = { git: null, changesShowing: false }
+    expect(statusChipLabel(record)).toBe('Review needed')
+    expect(primaryRunAction(record, actions)).toEqual({ kind: 'harness-review' })
+    expect(primaryRunAction(record, { ...actions, harnessReviewShowing: true })).toBeNull()
+    const asks = [{ requestId: 'ask-1', askedAt: '2026-07-14T13:00:00.000Z', questions: [] }]
+    expect(primaryRunAction({ ...record, asks }, actions)).toEqual({ kind: 'answer' })
+  })
+
   it('a done task reads calm: no pill, only a quiet word beside the dot', () => {
     stubFetch()
     renderHeader(run('done'))
@@ -964,6 +1013,29 @@ describe('the facts line', () => {
       await waitFor(() => expect(document.querySelector('[data-slot="commit-message"]')).not.toBeNull())
       expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/messages'))).toBe(false)
       expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/continue'))).toBe(false)
+    })
+
+    it('commits the verified harness handoff through the server even with a reachable agent', async () => {
+      const sent = stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 1 }),
+        '/api/v1/runs/r1/git/commit': () => jsonResponse({ committed: true, sha: 'abcd1234' }),
+        '/api/v1/runs/r1/harness': () => jsonResponse({
+          version: 2, workflow: 'harness-implement-feature', requestedProfile: 'multi', effectiveProfile: 'multi',
+          phases: [], models: [], councils: [], invocations: [], pendingMessages: [],
+          stage: { status: 'staged', stagedPaths: ['file.ts'] },
+          outcome: { status: 'ready', blockingReasons: [] },
+        }),
+      })
+      renderHeader(run('review', {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        harness: { profile: 'multi', workflow: 'harness-implement-feature' },
+      }))
+      fireEvent.click(await enabled('commit'))
+      const dialog = await screen.findByRole('dialog', { name: 'Commit changes' })
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Commit$/ }))
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/git/commit'))).toBe(true))
+      expect(sent.some((r) => r.method === 'POST' && /\/(continue|messages)$/.test(r.path))).toBe(false)
     })
 
     it('one in-flight step per task, shared by every surface: a step sent from one blocks the other', async () => {

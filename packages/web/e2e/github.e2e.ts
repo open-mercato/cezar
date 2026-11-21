@@ -142,7 +142,9 @@ describe('the GitHub tab against the live dry-run server', () => {
     browser.waitForFunction(
       `document.querySelectorAll('[data-slot="gh-workflow-option"]').length === ${workflows.workflows.length}`,
     )
-    browser.fill('[data-slot="command-input"]', 'quick')
+    // The full name: the menu's fuzzy match also finds q-u-i-c-k in a harness workflow's
+    // description, which a local `multiModel` config lists.
+    browser.fill('[data-slot="command-input"]', 'quick-task')
     browser.waitForFunction(
       `document.querySelectorAll('[data-slot="gh-workflow-option"]').length === 1`,
     )

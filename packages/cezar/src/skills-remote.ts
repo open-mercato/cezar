@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
-import { constants, existsSync, readFileSync } from 'node:fs';
+import { constants, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, posix, relative, sep } from 'node:path';
 import { loadConfig, projectGatedSkillsRepos, type SkillsRepoSource } from './config.ts';
 import { parseFrontmatter, type Skill } from './skills.ts';
 import { workspaceConfigPath } from './paths.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
+import { linkedTeamSkillDestination, skillDestination } from './skill-destination.ts';
 
 /**
  * Team skills from remote git repos (spec 005), janitor-style: a bare clone
@@ -410,8 +411,10 @@ export async function materializeSkillDir(
   repoRoot: string,
   skill: Skill,
   skillsDir = '.claude/skills',
-  /** Keeps the copy out of git; defaults to the shared `info/exclude`. */
-  ignore: () => Promise<void> = () => excludeFromGit(repoRoot, `${skillsDir}/${skill.name}/`),
+  { allowDirectoryLinks = true, ignore }: {
+    allowDirectoryLinks?: boolean;
+    ignore?: (canonicalSkillsDir: string, installedName: string) => Promise<void>;
+  } = {},
 ): Promise<boolean> {
   if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md') || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(skill.name)) return false;
   const segments = skillsDir.split('/');
@@ -425,9 +428,11 @@ export async function materializeSkillDir(
   if (!ls.ok) return false;
   if (!(await skillPathIsUntracked(repoRoot, `${skillsDir}/${skill.name}`))) return false;
 
-  const parent = await ensureSkillDirectory(repoRoot, segments);
+  const destDir = (allowDirectoryLinks ? linkedTeamSkillDestination : skillDestination)(repoRoot, join(skillsDir, skill.name));
+  const installed = relative(realpathSync(repoRoot), destDir).split(sep).join('/');
+  if (!(await skillPathIsUntracked(repoRoot, installed))) return false;
+  const parent = await ensureSkillDirectory(realpathSync(repoRoot), installed.split('/').slice(0, -1));
   if (!parent) return false;
-  const destDir = join(parent, skill.name);
   const marker = join(destDir, MATERIALIZATION_MARK);
   const existing = await lstat(destDir).catch(() => undefined);
   if (existing) {
@@ -444,10 +449,12 @@ export async function materializeSkillDir(
     await mkdir(destDir);
     await writeFile(marker, `${skill.name}\n`, { flag: 'wx' });
   }
-  await ignore();
+  if (ignore) await ignore(posix.dirname(installed), posix.basename(installed));
+  else await excludeFromGit(repoRoot, `${installed}/`);
 
   const targets: Array<{ file: string; rel: string; target: string }> = [];
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
+    if (!file.startsWith(`${srcDir}/`)) continue;
     const rel = file.slice(srcDir.length + 1);
     const targetSegments = rel.split('/');
     if (rel === MATERIALIZATION_MARK || targetSegments.some((segment) => !segment || segment === '.' || segment === '..' || segment.includes('\\'))) continue;

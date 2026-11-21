@@ -6,6 +6,7 @@ import { defaultAgentAccountStore, type AgentAccountStore } from '../workspace/a
 import {
   providerForActiveRun,
   providerForExistingRun,
+  providersRequiredByHarness,
   providersRequiredByWorkflow,
   recordedProfileFor,
   unavailableProviderMessage,
@@ -40,6 +41,24 @@ describe('provider action gate', () => {
     };
 
     expect(providersRequiredByWorkflow(workflow, 'claude')).toEqual(['claude', 'codex', 'opencode']);
+  });
+
+  it('collects every runner-backed dynamic harness role', () => {
+    expect(
+      providersRequiredByHarness(
+        {
+          roles: {
+            orchestrator: { runner: 'claude' },
+            implementer: { runner: 'codex' },
+            reviewers: [{ runner: 'opencode' }, { runner: 'harness' }],
+          },
+        },
+      ),
+    ).toEqual(['claude', 'codex', 'opencode']);
+  });
+
+  it('includes the Claude host when a run has no lineup', () => {
+    expect(providersRequiredByHarness({})).toEqual(['claude']);
   });
 
   it('reports disabled before missing credentials', () => {

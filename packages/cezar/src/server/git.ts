@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
+import { pinnedGitEnv } from '../git-pin.ts';
 
 const exec = promisify(execFile);
 
@@ -28,10 +29,12 @@ async function git(
   args: string[],
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<string> {
+  // A harness worktree's `.git` pointer is model-writable (git-pin.ts).
+  const pinned = pinnedGitEnv(root);
   const { stdout } = await exec('git', args, {
     cwd: root,
     maxBuffer: 10 * 1024 * 1024,
-    env: options.env,
+    env: pinned ? { ...(options.env ?? process.env), ...pinned } : options.env,
   });
   return stdout;
 }

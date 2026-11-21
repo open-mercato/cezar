@@ -39,6 +39,17 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, 'clipboard')
 })
 
+describe('recorded harness failure', () => {
+  it('preserves full evidence behind a closed disclosure', () => {
+    render(<NoteLine note={{ kind: 'note', id: 'old-error', text: 'Full earlier validation output', tone: 'dim', detailsLabel: 'Recorded failure details' }} />)
+    const details = document.querySelector<HTMLDetailsElement>('details')!
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain('Full earlier validation output')
+    fireEvent.click(screen.getByText('Recorded failure details'))
+    expect(details.open).toBe(true)
+  })
+})
+
 describe('NoteLine skill recovery', () => {
   const note = {
     kind: 'note', id: 'v1:1', text: 'Shared skill unavailable', tone: 'danger', action: 'install-skills',

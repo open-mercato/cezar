@@ -163,9 +163,14 @@ export const configSchema = z.object({
   /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`).
    *  Off by default; see `bypassPermissionsBlocked` for where it is not honored. */
   bypassPermissions: z.boolean().optional().catch(undefined),
-});
+}).transform((config) => ({ ...config, multiModel: multiModelEnabled() }));
 
 export type CezConfig = z.infer<typeof configSchema>;
+
+/** Process opt-in for every project; repository files cannot grant live harness execution. */
+export function multiModelEnabled(): boolean {
+  return process.env.CEZ_MULTI_MODEL === '1';
+}
 
 /**
  * Fold the machine-wide agent defaults under a repo's own config (spec 2026-07-29-agent-profiles).

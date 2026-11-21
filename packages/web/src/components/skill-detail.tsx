@@ -38,6 +38,7 @@ const SKILL_SOURCE_DESCRIPTIONS: Record<Skill['source'], string> = {
   agents: 'From .agents/skills or an agent-specific folder; always enabled while present.',
   global: 'User-wide from ~/.agents/skills or ~/.claude/skills, shared across projects.',
   team: 'Shared from a team repository configured for this project; importable skills can be enabled or disabled here.',
+  bundled: 'Vendored with Cezar (the cez-* collection); any other source with the same name shadows it.',
   builtin: 'Built into Cezar rather than installed from a skill repository.',
 }
 

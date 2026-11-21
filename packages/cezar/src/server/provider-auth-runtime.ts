@@ -1,6 +1,7 @@
 import {
   isDefinitiveProviderAuthFailure,
   isRuntimeProviderAuthFailure,
+  PROVIDER_IDS,
   type ProviderAuthService,
   type ProviderId,
   type ProviderStatus,
@@ -43,6 +44,8 @@ export function watchProviderRuntimeAuthFailures(
   };
   const onEvent = ({ runId, event }: { runId: string; event: RunEvent }): void => {
     if (!AUTH_ERROR_EVENT_TYPES.has(event.type)) return;
+    // A harness driver note quotes another provider's or an advisor's failure.
+    if (event.origin === 'driver') return;
     const message = event.message;
     if (typeof message !== 'string' || !isRuntimeProviderAuthFailure(message)) return;
 
@@ -51,10 +54,13 @@ export function watchProviderRuntimeAuthFailures(
     const step = typeof event.stepId === 'string'
       ? run.steps.find(({ id }) => id === event.stepId)
       : undefined;
-    const provider: ProviderId = step?.backend ?? run.runner ?? 'claude';
+    // A concurrent reviewer owns its attribution, not the shared step.
+    const attributed = PROVIDER_IDS.find((provider) => provider === event.backend);
+    const provider: ProviderId = attributed ?? step?.backend ?? run.runner ?? 'claude';
     // The account the rejected session ran on: a named one is latched on its own, never on the
     // default login (telemetry 9e4a95db).
-    const recorded = step?.profileId ?? recordedProfileFor(run, provider);
+    const recorded = attributed && typeof event.profileId === 'string'
+      ? event.profileId : step?.profileId ?? recordedProfileFor(run, provider);
     const profileId = recorded && recorded !== DEFAULT_AGENT_ACCOUNT_ID ? recorded : undefined;
     // A dead stored login is one the CLI's own status still calls connected, so it must not be
     // self-checked away — that is how 9e4a95db came back after #1511.

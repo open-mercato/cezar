@@ -26,7 +26,7 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { openInIcon, type OpenInChoice } from '@/components/open-in-menu'
 import type { GitAction, GitActionId } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
-import { canRemoveTaskWorktree, isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
+import { canRemoveTaskWorktree, harnessReviewPending, isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
 import { GIT_ACTION_ICONS, GIT_ACTION_PENDING_LABELS } from '@/routes/task-git/git-toolbar'
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewAliases, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
 import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
@@ -70,7 +70,7 @@ export function menuGroupOf(command: Pick<TaskCommand, 'id' | 'group' | 'hidden'
 }
 
 /** ⋯ menu rows drawn on phones only: on desktop the Open in… button beside the menu carries them. */
-export const PHONE_ONLY_MENU_COMMANDS: ReadonlySet<string> = new Set(['open:terminal-resume'])
+export const PHONE_ONLY_MENU_COMMANDS: ReadonlySet<string> = new Set(['open:terminal-resume', 'review-harness'])
 
 /** `commands` as the ⋯ menu lists them: the three groups in order, each in the palette's order,
  *  empty groups dropped. */
@@ -152,6 +152,9 @@ export interface TaskCommandInput {
   prUrl?: string
   /** An absolute link to this task, for Copy link. */
   taskUrl: string
+  /** Why a harness review cannot be accepted yet — the same gate the Review panel and the server
+   *  apply. */
+  acceptBlocked?: string
   /** The project's archived-task lifetime in days (0 = never), when known: Archive mentions it. */
   archivedDeleteDays?: number
 }
@@ -171,11 +174,22 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
   return [...commands, ...tabCommands(strip, commands)]
 }
 
-function actionCommands({ run, workspace, archivedDeleteDays }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
+function actionCommands({ run, workspace, acceptBlocked, archivedDeleteDays }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const flags = runActionFlags(run)
   const live = isRunActive(run.status) ? 'Stop the task first' : undefined
   const gated = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
   const commands: TaskCommand[] = []
+  if (harnessReviewPending(run)) {
+    commands.push({
+      id: 'review-harness',
+      group: 'actions',
+      label: 'Review next steps',
+      icon: icon(NotebookTextIcon),
+      keywords: ['checks', 'project setup', 'review'],
+      ...(gated ? { unavailable: gated } : {}),
+      perform: () => on.navigate(`/tasks/${run.id}/review`),
+    })
+  }
   if (workspace?.focusComposer) {
     commands.push({
       id: 'reply',
@@ -244,6 +258,7 @@ function actionCommands({ run, workspace, archivedDeleteDays }: TaskCommandInput
       label: 'Accept changes without a PR',
       icon: icon(CheckIcon),
       keywords: ['finish', 'review', 'done'],
+      ...(acceptBlocked ? { unavailable: acceptBlocked } : {}),
       perform: on.finish,
     })
   }

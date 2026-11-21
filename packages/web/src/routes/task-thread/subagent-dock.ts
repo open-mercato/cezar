@@ -22,7 +22,7 @@ import type { ThreadEntry, ThreadTurn } from './thread-state'
 const ACTIVITY_MAX = 120
 
 export interface SubagentSummary {
-  /** The task tool item's id — also the sheet's selection key. */
+  /** The task tool item's scoped id — also the sheet's selection key. */
   id: string
   /** "Review the store layer" — the detail half of "Task: …", else the whole title. */
   title: string
@@ -58,11 +58,11 @@ export interface SkillSummary {
 /** A settled agent is done moving: the dock stops treating the fan-out as live (spec Q6). */
 const isSettled = (status: ToolStatus): boolean => status !== 'pending' && status !== 'running'
 
-const isTaskItem = (entry: ThreadEntry): entry is UiToolItem =>
+const isTaskItem = (entry: ThreadEntry): entry is ThreadEntry & UiToolItem =>
   entry.kind === 'tool' && entry.toolKind === 'task'
 
 /** Dock rows are the parent-less task items only — a nested spawn belongs to its parent's sheet. */
-const isRootTaskItem = (entry: ThreadEntry): entry is UiToolItem =>
+const isRootTaskItem = (entry: ThreadEntry): entry is ThreadEntry & UiToolItem =>
   isTaskItem(entry) && entry.parentItemId === undefined
 
 /**
@@ -71,14 +71,18 @@ const isRootTaskItem = (entry: ThreadEntry): entry is UiToolItem =>
  * row's tool count above what its Task card shows, become the activity line, or render as a
  * raw-JSON card in the sheet.
  */
-const isChildCandidate = (entry: ThreadEntry): entry is UiItem =>
+const isChildCandidate = (entry: ThreadEntry): entry is ThreadEntry & UiItem =>
   (entry.kind === 'message' || entry.kind === 'reasoning' || entry.kind === 'tool') &&
   !(entry.kind === 'tool' && entry.toolKind === 'plan')
+
+// A turn may begin with another step's plan or note.
+const agentKey = (entry: UiItem & { sourceKey?: string }): string => entry.sourceKey ?? entry.id
+const parentKey = (entry: ThreadEntry & UiItem): string | undefined => entry.parentSourceKey ?? entry.parentItemId
 
 /** The first turn holding any of the given roots — where child scanning must begin. */
 function indexOfFirstRoot(turns: ThreadTurn[], rootIds: ReadonlySet<string>): number {
   for (let i = 0; i < turns.length; i += 1) {
-    if (turns[i]!.items.some((entry) => isRootTaskItem(entry) && rootIds.has(entry.id))) return i
+    if (turns[i]!.items.some((entry) => isRootTaskItem(entry) && rootIds.has(agentKey(entry)))) return i
   }
   return 0
 }
@@ -157,28 +161,33 @@ export function collectSubagents(turns: ThreadTurn[], runIsTerminal = false): Su
   //    for the rest of the run, and hijack the collapsed head with its stale activity. Stop at
   //    the first earlier turn whose fan-out is entirely settled: that turn is history.
   const live = (item: UiToolItem): boolean => !runIsTerminal && !isSettled(item.status)
-  const carried: UiToolItem[] = []
+  const carried: Array<{ turn: ThreadTurn; item: UiToolItem }> = []
   for (let i = anchorIndex - 1; i >= 0; i -= 1) {
     const turnRoots = turns[i]!.items.filter(isRootTaskItem)
     if (turnRoots.length === 0) continue // a steering turn carries no agents — look past it
     if (!turnRoots.some(live)) break // a finished fan-out bounds the lookback
-    carried.unshift(...turnRoots)
+    carried.unshift(...turnRoots.map((item) => ({ turn: turns[i]!, item })))
   }
-  const roots = [...carried, ...turns[anchorIndex]!.items.filter(isRootTaskItem)]
+  const anchor = turns[anchorIndex]!
+  const roots = [
+    ...carried,
+    ...anchor.items.filter(isRootTaskItem).map((item) => ({ turn: anchor, item })),
+  ]
   const isLatestTurn = anchorIndex === turns.length - 1
-  if (!isLatestTurn && !roots.some(live)) return []
+  if (!isLatestTurn && !roots.some(({ item }) => live(item))) return []
 
   // Children by parent id. Scanned from the FIRST turn that contributes a row (not the
   // anchor): an agent carried over from an earlier turn owns children recorded back there
   // too. An id that names no root is ignored — exactly as `groupThreadItems` renders such an
   // orphan at top level.
-  const rootIds = new Set(roots.map((item) => item.id))
+  const rootIds = new Set(roots.map(({ item }) => agentKey(item)))
   const firstIndex = carried.length > 0 ? indexOfFirstRoot(turns, rootIds) : anchorIndex
   const childrenOf = new Map<string, ThreadEntry[]>()
   for (let i = firstIndex; i < turns.length; i += 1) {
     for (const entry of turns[i]!.items) {
       if (!isChildCandidate(entry)) continue
-      const parentId = entry.parentItemId
+      if (entry.parentItemId === undefined) continue
+      const parentId = parentKey(entry)
       if (parentId === undefined || !rootIds.has(parentId)) continue
       const siblings = childrenOf.get(parentId)
       if (siblings) siblings.push(entry)
@@ -186,7 +195,10 @@ export function collectSubagents(turns: ThreadTurn[], runIsTerminal = false): Su
     }
   }
 
-  return roots.map((item) => summarize(item, childrenOf.get(item.id) ?? [], runIsTerminal))
+  return roots.map(({ item }) => {
+    const id = agentKey(item)
+    return summarize(item, childrenOf.get(id) ?? [], runIsTerminal, id)
+  })
 }
 
 /**
@@ -230,9 +242,14 @@ export function collectSkills(turns: ThreadTurn[]): SkillSummary[] {
 }
 
 /** The one place a `SubagentSummary` is built — the dock and the sheet must never disagree. */
-function summarize(item: UiToolItem, children: ThreadEntry[], runIsTerminal: boolean): SubagentSummary {
+function summarize(
+  item: UiToolItem,
+  children: ThreadEntry[],
+  runIsTerminal: boolean,
+  id: string,
+): SubagentSummary {
   const summary: SubagentSummary = {
-    id: item.id,
+    id,
     title: splitToolTitle(item.title).detail ?? item.title,
     status: item.status,
     toolCalls: children.filter((child) => child.kind === 'tool').length,
@@ -307,11 +324,14 @@ export function findSubagent(
   runIsTerminal = false,
 ): SubagentSummary | undefined {
   for (let i = turns.length - 1; i >= 0; i -= 1) {
-    const item = turns[i]!.items.find((entry): entry is UiToolItem => entry.id === id && isRootTaskItem(entry))
+    const turn = turns[i]!
+    const item = turn.items.find((entry): entry is ThreadEntry & UiToolItem =>
+      isRootTaskItem(entry) && agentKey(entry) === id,
+    )
     if (item === undefined) continue
     // The SAME summarizer the dock row uses — the sheet's header must not disagree with the
     // row the user clicked (and must carry `activity` rather than a structural blank).
-    return summarize(item, subagentChildren(turns, id), runIsTerminal)
+    return summarize(item, subagentChildren(turns, id), runIsTerminal, id)
   }
   return undefined
 }
@@ -322,14 +342,17 @@ export function findSubagent(
  */
 export function subagentChildren(turns: ThreadTurn[], parentId: string): ThreadEntry[] {
   const anchorIndex = turns.findIndex((turn) =>
-    turn.items.some((entry) => entry.id === parentId && isRootTaskItem(entry)),
+    turn.items.some((entry) => isRootTaskItem(entry) && agentKey(entry) === parentId),
   )
   if (anchorIndex === -1) return []
   const children: ThreadEntry[] = []
   for (let i = anchorIndex; i < turns.length; i += 1) {
     for (const entry of turns[i]!.items) {
       if (!isChildCandidate(entry)) continue
-      if (entry.parentItemId === parentId && entry.id !== parentId) children.push(entry)
+      if (
+        entry.parentItemId !== undefined && entry.id !== entry.parentItemId &&
+        parentKey(entry) === parentId
+      ) children.push(entry)
     }
   }
   return children

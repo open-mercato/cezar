@@ -7,7 +7,15 @@ import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
-import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import {
+  branchesCheckedOutElsewhere,
+  disposeScratchIndexPath,
+  gitHasIdentity,
+  scratchIndexPath,
+  seedScratchIndex,
+  unresolvedConflicts,
+} from '../git-worktree.ts';
+import { pinnedGitEnv } from '../git-pin.ts';
 import { FILESYSTEM_LISTING_CONCURRENCY, mapWithConcurrency } from './concurrency.ts';
 
 /**
@@ -33,6 +41,9 @@ interface GitResult {
 /** Run git, never throw — degradation is the caller's policy. `env` overrides (e.g. a scratch
  *  `GIT_INDEX_FILE`) merge over the process env. */
 function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
+  // A harness worktree's `.git` pointer is model-writable (git-pin.ts).
+  const pinned = pinnedGitEnv(cwd);
+  const merged = env || pinned ? { ...env, ...pinned } : undefined;
   return new Promise((resolvePromise) => {
     execFile(
       'git',
@@ -41,7 +52,7 @@ function git(cwd: string, args: string[], env?: Record<string, string>): Promise
         cwd,
         maxBuffer: 32 * 1024 * 1024,
         encoding: 'utf8',
-        ...(env ? { env: { ...process.env, ...env } } : {}),
+        ...(merged ? { env: { ...process.env, ...merged } } : {}),
       },
       (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
@@ -291,11 +302,19 @@ export async function collectChanges(
   // index — fine in a task worktree cezar owns, but forbidden on the user's real main tree (a
   // read-only GET must never stage files, #major-index-mutation). When `intentToAdd` is false we
   // build a SCRATCH index (GIT_INDEX_FILE) seeded from HEAD + intent-to-add, so untracked files
-  // still show WITHOUT touching the user's real index.
+  // still show WITHOUT touching the user's real index. A harness worktree reads through one too,
+  // seeded from a copy of its own index: that index is part of the review subject (run 5f6fe8ae).
   let env: Record<string, string> | undefined;
   let scratchIndex: string | undefined;
+  const harnessTree = opts.intentToAdd !== true && pinnedGitEnv(dir) !== undefined;
   try {
-    if (opts.intentToAdd === false) {
+    if (harnessTree) {
+      scratchIndex = await scratchIndexPath().catch(() => undefined);
+      if (!scratchIndex) return { ok: false, error: 'could not create a scratch index in the temp directory' };
+      env = { GIT_INDEX_FILE: scratchIndex };
+      await seedScratchIndex(dir, scratchIndex);
+      await git(dir, ['add', '-N', '.'], env);
+    } else if (opts.intentToAdd === false) {
       scratchIndex = join(tmpdir(), `cez-scratch-index-${process.pid}-${scratchSeq++}`);
       env = { GIT_INDEX_FILE: scratchIndex };
       await git(dir, ['read-tree', 'HEAD'], env); // seed with tracked files; harmless if no HEAD
@@ -345,7 +364,8 @@ export async function collectChanges(
       },
     };
   } finally {
-    if (scratchIndex) rmSync(scratchIndex, { force: true });
+    if (scratchIndex && harnessTree) await disposeScratchIndexPath(scratchIndex);
+    else if (scratchIndex) rmSync(scratchIndex, { force: true });
   }
 }
 
@@ -882,6 +902,7 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
 export async function baseDivergence(
   dir: string,
   baseBranch: string | undefined,
+  tip = 'HEAD',
 ): Promise<{ behind: number | null; ahead: number | null }> {
   const unknown = { behind: null, ahead: null };
   if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
@@ -892,7 +913,7 @@ export async function baseDivergence(
     const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
     if (!exists.ok) continue;
     // `--left-right` over `HEAD...ref` prints "<only in HEAD>\t<only in ref>".
-    const count = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...${ref}`]);
+    const count = await git(dir, ['rev-list', '--left-right', '--count', `${tip}...${ref}`]);
     if (!count.ok) return unknown;
     const [ahead, behind] = count.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
     return {
@@ -933,14 +954,16 @@ export type PushResult =
  *  detached HEAD and rejected pushes all degrade to `{ ok:false, error }`. */
 export async function pushCurrentBranch(
   dir: string,
-  opts: { leaseRewrites?: boolean; baseBranch?: string } = {},
+  opts: { leaseRewrites?: boolean; baseBranch?: string; reviewed?: { branch: string; sha: string } } = {},
 ): Promise<PushResult> {
-  const branchRes = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const branchRes = await git(dir, opts.reviewed ? ['symbolic-ref', 'HEAD'] : ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (!branchRes.ok) return { ok: false, error: gitReason(branchRes, 'not a git repository') };
-  const branch = branchRes.stdout.trim();
+  const checkedOut = branchRes.stdout.trim();
+  const branch = opts.reviewed?.branch ?? checkedOut;
   if (!branch || branch === 'HEAD') {
     return { ok: false, error: 'detached HEAD — check out a branch before pushing' };
   }
+  if (opts.reviewed && checkedOut !== `refs/heads/${branch}`) return { ok: false, error: 'the reviewed task branch is no longer checked out' };
   const remotesRes = await git(dir, ['remote']);
   const remotes = remotesRes.stdout.split('\n').map((r) => r.trim()).filter(Boolean);
   if (remotes.length === 0) {
@@ -948,13 +971,16 @@ export async function pushCurrentBranch(
   }
   const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
+  const refspec = opts.reviewed ? `${opts.reviewed.sha}:refs/heads/${branch}` : branch;
+  const args = opts.reviewed ? ['push', remote, refspec] : upstream.ok ? ['push'] : ['push', '-u', remote, branch];
   let push = await git(dir, args);
   // Only a task's own branch: the repo-root Push must keep refusing, it may be on the user's main.
   if (opts.leaseRewrites && !push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     const lease = await rewriteLeaseArg(dir, remote, branch, [opts.baseBranch]);
-    if (lease) push = await git(dir, ['push', lease, ...(upstream.ok ? [] : ['-u']), remote, branch]);
+    if (lease) push = await git(dir, ['push', lease, ...(upstream.ok || opts.reviewed ? [] : ['-u']), remote, refspec]);
   }
   if (!push.ok) return { ok: false, error: syncFailureReason(push, 'git push failed') };
-  return { ok: true, branch, remote, upstreamSet: !upstream.ok };
+  const upstreamSet = !upstream.ok && (!opts.reviewed ||
+    (await git(dir, ['branch', `--set-upstream-to=${remote}/${branch}`, branch])).ok);
+  return { ok: true, branch, remote, upstreamSet };
 }

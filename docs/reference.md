@@ -571,12 +571,13 @@ Useful environment variables:
 
 | Var | Effect |
 |---|---|
-| `CEZ_DRY_RUN=1` | Run every agent's tasks on its bundled mock instead of the real CLI (`claude`, `codex`, `opencode` and the rest); the Codex and OpenCode health checks and model catalogs use the mock too — the entire cockpit works offline, for demos and development. |
+| `CEZ_MULTI_MODEL=1` | Opt in to the experimental multi-model harness for every project served by this cezar instance, including projects added later. Exact `1` enables it; default off. Restart after changing the launch environment. Repository config cannot override it. |
+| `CEZ_DRY_RUN=1` | Run every agent's tasks on its bundled mock instead of the real CLI (`claude`, `codex`, `opencode` and the rest); the Codex and OpenCode health checks and model catalogs use the mock too — the entire cockpit works offline, for demos and development. Multi-model harness probes and execution report unavailable without invoking live models. Stored review evidence remains readable. |
 | `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
 | `CEZ_USAGE_LOG=0` | Stop recording plan-limit usage. On by default and local only: Claude (Pro/Max) and Codex (ChatGPT) limit readings plus per-turn activity go to `~/.cezar/usage-ledger/` (kept 90 days, no prompts or code) and feed Dashboard → Usage & cost → Plan limits and `cezar usage`. One account can also be opted out in Settings → Agent accounts. |
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
-| `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
+| `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. Multi-model harness starts and resumes require model selection to be unlocked. |
 | `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode. Cezar has no cockpit permission response channel; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_RUNS_KEEP=<n>` / `CEZ_ARCHIVED_RUNS_KEEP=<n>` | How many settled runs (and archived ones) a project's index keeps before the oldest are pruned. Defaults 300 / 500, minimum 1; live runs, runs pinned by an active dispatch tree and tasks the user pinned are never pruned. |
 | `CEZ_RELAY_URL=<origin>` | Overrides the phone relay's built-in default and the address in **Settings → Connect a phone → Advanced**, which then shows read-only (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`). You do not need it: Connect a phone works out of the box, and Advanced saves a custom address to `~/.cezar/config.json`. `https://` anywhere; `http://` only for `127.0.0.1`, `localhost` or `[::1]`. One trailing `/` is accepted. Set but invalid, it still wins and phones cannot connect, so nothing falls through to a relay you did not name. Nothing connects before **Test** or **Connect a phone**, and the socket lasts only while a phone is paired. |
@@ -921,6 +922,10 @@ works and how to redeploy new versions.
 ---
 
 ## Configuration (optional)
+
+The experimental multi-model harness is hidden by default. Start a cezar instance
+with `CEZ_MULTI_MODEL=1` to enable it for all its projects, including projects added
+later. Repository config cannot change it; see [the opt-in and recovery behavior](multi-model-harness.md#enable-the-feature).
 
 Zero config is the default — everything below is opt-in via
 `.ai/cezar/config.json` (a missing or invalid file simply uses the defaults, and

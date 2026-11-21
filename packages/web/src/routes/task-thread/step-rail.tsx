@@ -12,6 +12,7 @@ import { useState } from 'react'
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { closingStepId, deriveAttention, type AttentionInput, type AttentionTone, type RunClosure } from '@/lib/attention'
 import { cn } from '@/lib/utils'
 
@@ -219,55 +220,81 @@ const openByRun = new Map<string, boolean>()
 export function WorkflowSteps({
   runId,
   steps,
+  overlay = false,
   closedAs,
 }: {
   runId: string
   steps: StepState[]
-  /** How the run closed without failing (`runClosure(run)`): its closing step is not painted red. */
+  /** A harness run's 12–18 phases open in a popover instead of growing the header (user feedback
+   *  2026-07-29); it closes on Escape or an outside click and is never remembered. Every other run
+   *  keeps the inline expansion. */
+  overlay?: boolean
   closedAs?: RunClosure
 }) {
-  const [open, setOpen] = useState(() => openByRun.get(runId) ?? false)
+  const [open, setOpen] = useState(() => (overlay ? false : (openByRun.get(runId) ?? false)))
   if (steps.length === 0) return null
-  const toggle = (next: boolean) => {
-    openByRun.set(runId, next)
-    setOpen(next)
-  }
   const index = activeStepIndex(steps)
   const current = steps[index]!
   const pct = railProgress(steps) * 100
   const visualOf = stepVisual(steps, closedAs)
+  const label = `Workflow: ${current.name}, step ${index + 1} of ${steps.length}`
+  // Keep the phone header's compact 28px footprint: the negative margins absorb the
+  // extra 16px of a 44px touch target without changing the surrounding row's height.
+  // The step rail is the only control in this bordered section, so the expanded hit box
+  // cannot overlap a neighboring action; desktop keeps its existing 30px row.
+  const triggerClass =
+    'group -my-2 flex min-h-11 w-full items-center gap-2 text-left text-label text-muted-foreground hover:text-foreground md:my-0 md:min-h-[30px] md:gap-2.5'
+  const summary = (
+    <>
+      <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
+        {steps.map((step) => (
+          <StepDot key={step.id} visual={visualOf(step)} />
+        ))}
+      </span>
+      <span className="min-w-0 max-w-[45%] shrink truncate font-semibold text-foreground">{current.name}</span>
+      {current.iterations > 1 ? (
+        <span data-slot="step-summary-iterations" className="shrink-0 text-muted-foreground tabular-nums">
+          ×{current.iterations}
+        </span>
+      ) : null}
+      <span className="shrink-0 text-soft-foreground tabular-nums">
+        step {index + 1} of {steps.length}
+      </span>
+      <span data-slot="step-summary-progress" className="h-0.5 min-w-[36px] flex-1 overflow-hidden rounded-full bg-muted">
+        <span className="block h-full rounded-full bg-violet" style={{ width: `${pct}%` }} />
+      </span>
+      <ChevronDownIcon
+        aria-hidden
+        className="size-4 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-180"
+      />
+    </>
+  )
+  if (overlay) {
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <div data-slot="workflow-steps" data-state={open ? 'open' : 'closed'} className="min-w-0">
+          <PopoverTrigger aria-label={label} className={triggerClass}>
+            {summary}
+          </PopoverTrigger>
+        </div>
+        <PopoverContent
+          data-slot="workflow-steps-panel"
+          align="start"
+          className="max-h-[min(55vh,380px)] w-(--radix-popover-trigger-width) overflow-y-auto rounded-xl bg-card p-2.5 shadow-lg"
+        >
+          <StepRail steps={steps} closedAs={closedAs} />
+        </PopoverContent>
+      </Popover>
+    )
+  }
+  const toggle = (next: boolean) => {
+    openByRun.set(runId, next)
+    setOpen(next)
+  }
   return (
     <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
-      <CollapsibleTrigger
-        aria-label={`Workflow: ${current.name}, step ${index + 1} of ${steps.length}`}
-        // Keep the phone header's compact 28px footprint: the negative margins absorb the
-        // extra 16px of a 44px touch target without changing the surrounding row's height.
-        // The step rail is the only control in this bordered section, so the expanded hit box
-        // cannot overlap a neighboring action; desktop keeps its existing 30px row.
-        className="group -my-2 flex min-h-11 w-full items-center gap-2 text-left text-label text-muted-foreground hover:text-foreground md:my-0 md:min-h-[30px] md:gap-2.5"
-      >
-        <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
-          {steps.map((step) => (
-            <StepDot key={step.id} visual={visualOf(step)} />
-          ))}
-        </span>
-        <span className="min-w-0 max-w-[45%] shrink truncate font-semibold text-foreground">{current.name}</span>
-        {/* The retry count, without opening the rail. */}
-        {current.iterations > 1 ? (
-          <span data-slot="step-summary-iterations" className="shrink-0 text-muted-foreground tabular-nums">
-            ×{current.iterations}
-          </span>
-        ) : null}
-        <span className="shrink-0 text-soft-foreground tabular-nums">
-          step {index + 1} of {steps.length}
-        </span>
-        <span data-slot="step-summary-progress" className="h-0.5 min-w-[36px] flex-1 overflow-hidden rounded-full bg-muted">
-          <span className="block h-full rounded-full bg-violet" style={{ width: `${pct}%` }} />
-        </span>
-        <ChevronDownIcon
-          aria-hidden
-          className="size-4 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-180"
-        />
+      <CollapsibleTrigger aria-label={label} className={triggerClass}>
+        {summary}
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="pt-2">

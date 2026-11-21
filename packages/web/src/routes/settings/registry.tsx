@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  NetworkIcon,
   WebhookIcon,
   BookmarkIcon,
   BotIcon,
@@ -17,7 +18,7 @@ import {
   SlidersHorizontalIcon,
   SmartphoneIcon,
 } from 'lucide-react'
-import type { ComponentType, SVGProps } from 'react'
+import { Suspense, type ComponentType, type SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
 import { AgentConfigSection } from './agent-config-section'
@@ -38,6 +39,19 @@ import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection } from './secrets-section'
 import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
+import { lazyRoute } from '@/lib/telemetry'
+
+// Multi-model is opt-in, so its section is a chunk of its own (UI performance gate).
+const HarnessSectionBody = lazyRoute('settings-harness', () =>
+  import('./harness-section').then((m) => ({ default: m.HarnessSection })),
+)
+function HarnessSection() {
+  return (
+    <Suspense fallback={null}>
+      <HarnessSectionBody />
+    </Suspense>
+  )
+}
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -54,6 +68,7 @@ import { IntegrationsSection } from './integrations-section'
 
 export type SettingsSectionId =
   | 'bookmarklets'
+  | 'harness'
   | 'appearance'
   | 'accounts'
   | 'agents'
@@ -163,6 +178,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Providers, default runner and models.',
     icon: BotIcon,
     component: AgentsSection,
+    scope: 'project',
+  },
+  {
+    id: 'harness',
+    title: 'Harness',
+    description: 'Multi-model runs: profiles, model access, staged-only pipeline.',
+    icon: NetworkIcon,
+    component: HarnessSection,
     scope: 'project',
   },
   {
@@ -296,7 +319,7 @@ export const SETTINGS_REDIRECTS: ReadonlyMap<SettingsSectionId, SettingsRedirect
   SETTINGS_SECTIONS.flatMap((section) => (section.redirect ? [[section.id, section.redirect] as const] : [])),
 )
 
-type GateCapabilities = Partial<Pick<Capabilities, 'singleProject' | 'managers' | 'phonePairing'>>
+export type GateCapabilities = Partial<Pick<Capabilities, 'singleProject' | 'managers' | 'phonePairing'>> & { multiModel?: boolean }
 
 /**
  * What one settings area's ROUTE TABLE shows: hidden sections drop out, and so does everything
@@ -309,6 +332,7 @@ export function visibleSettingsSections(scope: SettingsScope, capabilities?: Gat
       !section.hidden &&
       section.scope === scope &&
       !(capabilities?.singleProject === true && section.id === 'projects') &&
+      !(capabilities?.multiModel !== true && section.id === 'harness') &&
       !(capabilities?.phonePairing !== true && section.id === 'phones'),
   )
 }
@@ -331,7 +355,7 @@ export function settingsSectionsInGroup(group: SettingsGroup, capabilities?: Gat
 export function projectRailHint(visible: readonly SettingsSection[]): string | null {
   const gated = SETTINGS_SECTIONS.filter(
     (section) =>
-      section.scope === 'project' && !section.hidden && !section.redirect && !visible.some((v) => v.id === section.id),
+      section.scope === 'project' && section.id !== 'harness' && !section.hidden && !section.redirect && !visible.some((v) => v.id === section.id),
   )
   if (gated.length === 0) return null
   const names = gated.map((section) => section.title)

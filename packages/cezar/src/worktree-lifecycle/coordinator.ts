@@ -62,6 +62,9 @@ export class WorktreeLifecycleCoordinator {
     onWorktreeRemoved?: () => Promise<void>;
     /** Task-owned state outside the run store (layouts) goes with a delete-task teardown. */
     onTaskDeleted?: (runId: string) => void;
+    /** Runs before the store forgets the task, while its records still exist (the harness issue
+     *  claim's path lives only in the ledger the delete removes). */
+    beforeTaskDeleted?: (runId: string) => void;
     resume: (runId: string, launch: LifecyclePendingLaunch | undefined) => Promise<void>;
   }) {
     try { this.root = realpathSync(root); } catch { /* missing roots remain a local attention failure */ }
@@ -364,7 +367,11 @@ export class WorktreeLifecycleCoordinator {
             });
             if (remains) throw new Error('Worktree directory is gone but its managed branch could not be removed');
           }
-          if (operation.intent === 'delete-task') { this.runs.deleteRun(record.runId); this.options.onTaskDeleted?.(record.runId); }
+          if (operation.intent === 'delete-task') {
+            this.options.beforeTaskDeleted?.(record.runId);
+            this.runs.deleteRun(record.runId);
+            this.options.onTaskDeleted?.(record.runId);
+          }
           else if (this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, operation.intent === 'reclaim'
             ? {worktreeReclaimedAt: now()} : {worktreePath: undefined, branch: undefined});
         }
@@ -407,14 +414,14 @@ export class WorktreeLifecycleCoordinator {
       if (--entry.count === 0) { if (this.agentLeases.get(runId) === entry) this.agentLeases.delete(runId); entry.release(); }
     };
   }
-  async withWorktreeMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
+  async withWorktreeMutation<T>(runId: string, mutate: () => Promise<T>, forceLock = false): Promise<T> {
     // This process's held agent lease already excludes teardown; its own git actions (commit,
     // push, publish) run beside the agent exactly as they did before scripts existed.
     if (this.agentLeases.get(runId)?.held) return mutate();
-    return this.lockedMutation(runId, mutate);
+    return this.lockedMutation(runId, mutate, forceLock);
   }
-  private async lockedMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
-    if (!await this.requiresGate(runId)) return mutate();
+  private async lockedMutation<T>(runId: string, mutate: () => Promise<T>, forceLock = false): Promise<T> {
+    if (!forceLock && !await this.requiresGate(runId)) return mutate();
     return this.store.withWorktreeLock(runId, async () => {
       const record = await this.store.readWorktree(runId);
       const operation = record?.activeOperationId ? await this.store.readOperation(record.activeOperationId) : undefined;

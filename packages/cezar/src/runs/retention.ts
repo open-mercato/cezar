@@ -24,10 +24,11 @@ function recencyKey(run: RunRecord): string {
 }
 
 /** A run is reclaimable when it is finished, still has a materialized worktree
- *  directory, has not already been reclaimed, and is not pinned — a pin is the user
- *  saying "keep this one", so it neither leaves nor counts toward `keep`. */
+ *  directory, has not already been reclaimed, and is not pinned. Failed and cancelled harness
+ *  runs may still resume. For completed runs the normal uncommitted-work check protects the index. */
 export function isReclaimable(run: RunRecord): boolean {
-  return FINISHED.has(run.status) && !!run.worktreePath && !run.worktreeReclaimedAt && !run.pinned;
+  return FINISHED.has(run.status) && !!run.worktreePath && !run.worktreeReclaimedAt && !run.pinned &&
+    (!run.harness || run.status === 'done');
 }
 
 /**

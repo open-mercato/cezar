@@ -102,6 +102,17 @@ describe('periodic autosave gate (#471)', () => {
     expect(rootState.autosaveTimer).toBeUndefined();
   });
 
+  it('never arms the timer for a stage-only harness run', () => {
+    process.env.CEZ_AUTOSAVE = '1';
+    // Decided from the record, so no call site can forget it.
+    store.updateRun(runId, { harness: { profile: 'standard', workflow: 'harness-fix-issue' } });
+    const state: TimerState = { cancelled: false, interrupt: () => undefined, cwd: worktreePath };
+    manager.active.set(runId, state);
+    manager.armAutosave(runId, state);
+    manager.active.delete(runId);
+    expect(state.autosaveTimer).toBeUndefined();
+  });
+
   it('AUTOSAVE_INTERVAL_MS stays the spec-006 90 s contract', () => {
     expect(AUTOSAVE_INTERVAL_MS).toBe(90_000);
   });

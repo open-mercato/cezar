@@ -183,4 +183,16 @@ describe('agentDirectories (#785)', () => {
     expect(agentDirectories('/data/runs', '/data/attachments', {}))
       .toEqual(['/data/runs', '/data/attachments']);
   });
+
+  // on Linux an `--add-dir` is a native-sandbox write root, so the runs tree let a
+  // stage-only phase rewrite the guard hook (run unsandboxed), its settings and the ledger.
+  it('grants a stage-only harness phase its phase-output dir, never the runs tree', () => {
+    const env = {
+      CEZ_HARNESS_STAGE_ONLY: '1',
+      CEZ_HARNESS_OUTPUT_DIR: '/data/runs/r1-harness/agent-output',
+      TMPDIR: '/data/tmp/r1',
+    };
+    expect(agentDirectories('/data/runs', undefined, env))
+      .toEqual(['/data/runs/r1-harness/agent-output', '/data/tmp/r1']);
+  });
 });
