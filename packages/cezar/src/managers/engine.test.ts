@@ -2075,7 +2075,8 @@ describe('ManagerEngine', () => {
     // Spec relay R5: the push sink hears the same alerts, by manager id only.
     it('signals push for an approval, an important reply and a question, with no OS notifier', async () => {
       const pushed: string[] = [];
-      const engine = makeEngine({ pushSignal: (managerId) => pushed.push(managerId) });
+      const kinds: string[] = [];
+      const engine = makeEngine({ pushSignal: (managerId, kind) => { pushed.push(managerId); kinds.push(kind); } });
       const id = await create(engine, 0);
       await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
       backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you'));
@@ -2086,6 +2087,8 @@ describe('ManagerEngine', () => {
       await settled(engine);
       vi.advanceTimersByTime(3_000);
       expect(pushed).toEqual([id, id, id]);
+      // Each phone's settings filter on the kind (spec 2026-11-20-phone-notifications-inbox).
+      expect(kinds).toEqual(['approval', 'message', 'question']);
     });
 
     it('signals no push for a routine reply, a read chat, or a manager told to hush', async () => {
@@ -2113,7 +2116,7 @@ describe('ManagerEngine', () => {
     const watching = (pushed: string[]) => makeEngine({
       now: () => now,
       projects: async () => [{ ...connected, runs: () => [waiting] }],
-      pushSignal: (managerId) => pushed.push(managerId),
+      pushSignal: (managerId, kind) => pushed.push(kind === 'task' ? managerId : `${managerId}:${kind}`),
     });
     const watch = async (engine: ManagerEngine) => {
       now += 16 * 60_000;
