@@ -265,6 +265,26 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect('refused' in manager.dispatch(child.id, order('mock:done by hand'), opts)).toBe(false);
     }, 40_000);
 
+    it('runs the child as the route-resolved named workflow, keeping the paused hold (#2098)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot();
+      const namedWorkflow = {
+        name: 'implement-and-verify',
+        source: 'file' as const,
+        steps: [{ id: 'build', name: 'Build', prompt: '{{task}}' }, { id: 'check', name: 'Check', command: 'true' }],
+      };
+      const created = dispatchOk(parent.id, order('mock:done go'));
+      expect(store.getRun(created.id)?.workflow).toBe('(planned)');
+      const out = manager.dispatch(parent.id, order('mock:done go named', { workflow: 'implement-and-verify' }), { namedWorkflow });
+      if ('refused' in out) throw new Error(out.refused);
+      expect(store.getRun(out.id)?.workflow).toBe('implement-and-verify');
+      // An agent-chosen workflow does NOT skip the paused-automation hold (unlike graph nodes).
+      const trigger = { automationId: 'auto-1', automationRevision: 1, receiptId: 'r1', occurrenceAt: '2026-11-04T15:00:00.000Z', trigger: 'schedule' as const };
+      store.updateRun(parent.id, { automationTrigger: trigger });
+      const held = manager.dispatch(parent.id, order('x', { workflow: 'implement-and-verify' }), { namedWorkflow, automationPaused: () => true });
+      expect('refused' in held && held.refused).toContain('paused');
+    }, 40_000);
+
     it('refuses a child that would overspend the parent, and hands an uncapped child the remainder', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(1);

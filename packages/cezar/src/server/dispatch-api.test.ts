@@ -79,6 +79,20 @@ describe('the dispatch routes', () => {
     expect(calls).toEqual([]);
   });
 
+  it('passes a known --workflow to the manager and 400s an unknown one before dispatching (#2098)', async () => {
+    const ok = await apiRequest(app, '/api/v1/runs/parent-1/dispatch', json({ objective: 'x', workflow: 'quick-task' }));
+    expect(ok.status).toBe(201);
+    expect(calls).toHaveLength(1);
+    const bad = await apiRequest(app, '/api/v1/runs/parent-1/dispatch', json({ objective: 'x', workflow: 'no-such-flow' }));
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe('unknown workflow: no-such-flow');
+    for (const extra of [{ allowed_tools: ['Read'] }, { kind: 'review' }]) {
+      const res = await apiRequest(app, '/api/v1/runs/parent-1/dispatch', json({ objective: 'x', workflow: 'quick-task', ...extra }));
+      expect(res.status).toBe(400);
+    }
+    expect(calls).toHaveLength(1);
+  });
+
   it('records a report and answers ok; 404 for a run outside any tree', async () => {
     const report = { status: 'done', result: 'all green', evidence: ['npm test → 3 passed'], verdict: 'approve' };
     const res = await apiRequest(app, '/api/v1/runs/child-1/report', json(report));
