@@ -10,6 +10,8 @@ import { managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, manag
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { recentTasks } from './snapshot.ts';
+export { recentTasks };
 import { sameModel } from '../runs/reported-model.ts';
 
 export interface ManagerCliEnv {
@@ -229,20 +231,8 @@ function parse<O extends Options>(key: string, args: string[], options: O, allow
   }
 }
 
-/** Finished tasks a compact listing still shows per project, newest first. */
-const RECENT_FINISHED = 20;
 /** A compact listing's size: past it, the rest is counted, not printed. */
 const OUTPUT_CHARS = 8_000;
-const FINISHED = new Set(['done', 'cancelled']);
-
-/** Every unfinished task, plus the newest finished ones. */
-export function recentTasks<T extends { status: string; lastActivityAt?: string }>(tasks: T[]): { shown: T[]; hidden: number } {
-  const finished = tasks.filter((task) => FINISHED.has(task.status))
-    .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
-  const kept = new Set(finished.slice(0, RECENT_FINISHED));
-  const shown = tasks.filter((task) => !FINISHED.has(task.status) || kept.has(task));
-  return { shown, hidden: tasks.length - shown.length };
-}
 
 /** Lines up to `limit` characters, then one line counting the rest. */
 export function capped(lines: string[], limit: number | undefined): string[] {

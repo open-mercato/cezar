@@ -122,6 +122,19 @@ export function snapshotTasks(runs: RunRecord[]): ManagerSnapshotTask[] {
 }
 
 /** A run by its id, or by a prefix of at least eight characters that names only it (the branch's `cez/<id8>`). */
+/** Finished tasks a compact listing still shows per project, newest first. */
+const RECENT_FINISHED = 20;
+const FINISHED = new Set(['done', 'cancelled']);
+
+/** Every unfinished task, plus the newest finished ones (spec 2026-11-21 § 2.4). */
+export function recentTasks<T extends { status: string; lastActivityAt?: string }>(tasks: T[]): { shown: T[]; hidden: number } {
+  const finished = tasks.filter((task) => FINISHED.has(task.status))
+    .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
+  const kept = new Set(finished.slice(0, RECENT_FINISHED));
+  const shown = tasks.filter((task) => !FINISHED.has(task.status) || kept.has(task));
+  return { shown, hidden: tasks.length - shown.length };
+}
+
 export function findRun(runs: RunRecord[], runId: string): RunRecord | undefined {
   const exact = runs.find((candidate) => candidate.id === runId);
   if (exact || runId.length < 8) return exact;
