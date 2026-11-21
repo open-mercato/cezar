@@ -387,11 +387,24 @@ describe('layerSkillExtensions (repo extensions of shared skills)', () => {
     expect(winner([[local]], [skill('om-x', 'team', 'Workflow.')])).toMatchObject({ source: 'team', extension: { path: local.path } });
   });
 
+  it.each([
+    'This folder is a repo-local override for the external `om-x` skill installed from `open-mercato/skills`.',
+    'This folder extends the external `om-x` skill installed from `open-mercato/skills`.',
+    'A repo-local override for the shared `om-x` skill.',
+  ])('the @open-mercato/cli override wording layers too (#2395): %s', (body) => {
+    const local = skill('om-x', 'ai', body);
+    const shared = skill('om-x', 'agents', 'Shared workflow.');
+    expect(winner([[local], [shared]])).toMatchObject({ source: 'agents', body: 'Shared workflow.', extension: { path: local.path } });
+  });
+
   it('a repo skill extending some other shared thing is not an extension of a shared skill', () => {
     const local = skill('button-rules', 'ai', 'Use when a change extends the shared Button component.');
     expect(winner([[local]])).toBe(local);
+    expect(winner([[skill('button-rules', 'ai', 'An override for the external Button component.')]])?.missingShared).toBeUndefined();
     // Naming another skill is not naming itself either.
     expect(winner([[skill('om-x', 'ai', 'This file extends the shared `om-xy` skill.')]])?.missingShared).toBeUndefined();
+    expect(winner([[skill('om-x', 'ai', 'A repo-local override for the external `om-xy` skill.')]])?.missingShared).toBeUndefined();
+    expect(winner([[skill('om-x', 'ai', 'This folder extends the external `om-xy` skill.')]])?.missingShared).toBeUndefined();
   });
 
   it('a plain repo override still wins when the shared skill documents the extension path', () => {

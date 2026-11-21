@@ -141,10 +141,14 @@ const REPO_SKILL_SOURCES: ReadonlySet<Skill['source']> = new Set(['cezar', 'ai']
 const SHARED_SKILL_SOURCES: ReadonlySet<Skill['source']> = new Set(['agents', 'global', 'team']);
 
 /** The local skill says it extends the shared skill OF ITS OWN NAME ("extends the shared `x` skill",
- *  Open Mercato's convention) — "extends the shared Button component" is not that. */
+ *  or `@open-mercato/cli`'s "override for / extends the external `x` skill", #2395) — "extends the
+ *  shared Button component" is not that. */
 function declaresExtension(skill: Skill): boolean {
   const name = skill.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`\\bexten(?:ds?|sion of)\\s+(?:the\\s+)?shared\\s+\`?${name}\`?(?![A-Za-z0-9_-])`, 'i');
+  const pattern = new RegExp(
+    `\\b(?:exten(?:ds?|sion of)|override for)\\s+(?:the\\s+)?(?:shared|external)\\s+\`?${name}\`?(?![A-Za-z0-9_-])`,
+    'i',
+  );
   return pattern.test(`${skill.description ?? ''}\n${skill.body.slice(0, 2000)}`);
 }
 
