@@ -120,6 +120,16 @@ describe('the managers routes', () => {
     expect((await request(`${BASE}/missing/check`, { method: 'POST' })).status).toBe(404);
   });
 
+  it('writes memory only with its writer named, and lists it (spec 2026-11-21 § 2.1)', async () => {
+    const { id } = await createManager();
+    expect((await request(`${BASE}/${id}/memory/full-prs`, { method: 'PUT', body: { kind: 'feedback', text: 'Open full PRs' } })).status).toBe(400);
+    const saved = await request(`${BASE}/${id}/memory/full-prs`, { method: 'PUT', body: { kind: 'feedback', text: 'Open full PRs', source: 'manager' } });
+    expect(await saved.json()).toMatchObject({ entries: [{ key: 'full-prs', source: 'manager' }], limits: { entries: 40, bytes: 6144 } });
+    expect(await (await request(`${BASE}/${id}/memory`)).json()).toMatchObject({ entries: [{ key: 'full-prs' }] });
+    expect((await request(`${BASE}/${id}/memory/Bad Key`, { method: 'PUT', body: { kind: 'feedback', text: 'x', source: 'user' } })).status).toBe(400);
+    expect((await request(`${BASE}/${id}/memory/nope`, { method: 'DELETE' })).status).toBe(404);
+  });
+
   it('persists connector grants and discovers connectors with a dry-run probe', async () => {
     const CAL = 'claude_ai_Google_Calendar';
     const { id } = await createManager({ instructions: 'Calendar', projects: 'all', cronMinutes: 0, connectors: { [CAL]: { level: 'read' } } });

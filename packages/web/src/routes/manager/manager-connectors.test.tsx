@@ -112,6 +112,15 @@ describe('ConnectorsDialog', () => {
     ])
   })
 
+  it('discovers again on Refresh when the probe found nothing', async () => {
+    const calls = stubRoutes({ available: true, servers: [] }, { available: true, servers: [], observedAt: '2026-11-21T08:00:00Z' })
+    renderDialog()
+    expect(await screen.findByText('No connectors seen yet — Refresh to discover')).toBeTruthy()
+    await waitFor(() => expect(calls).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(calls.map((call) => call.method)).toEqual(['GET', 'POST', 'POST']))
+  })
+
   it('explains that only Claude Code managers can use connectors', async () => {
     stubRoutes({ available: false, reason: 'This manager runs on Codex.', servers: [] })
     renderDialog()

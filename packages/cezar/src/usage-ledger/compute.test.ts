@@ -78,7 +78,26 @@ describe('plan usage attribution', () => {
       { t: 'end', at: T('10:45'), session: 'm', turn },
       reading('10:45', 15),
     ]);
-    expect(w.consumers[0]!.messages).toMatchObject([{ messageId: 'msg1', part: 'chat', estimatePp: 5, turn: { ...turn, usd: 8.36 } }]);
+    expect(w.consumers[0]!.messages).toEqual([{
+      messageId: 'msg1', part: 'chat', at: new Date(T('10:40')).toISOString(), estimatePp: 5, aloneInferredPp: 5, sharedEstimatePp: 0,
+      turn: { ...turn, usd: 8.36 },
+    }]);
+  });
+
+  it('gives a retried reply its last attempt’s shape and the cost of both attempts', () => {
+    const shape = (requests: number) => ({
+      requests, contextFirst: 30_000, contextPeak: 30_000, toolResultChars: 0,
+      tools: { route: 0, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 4,
+    });
+    const begin = (session: string, at: string): LedgerRecord => ({ t: 'begin', at: T(at), account: ACC, session, consumer: { id: 'mgr:rel', kind: 'manager', title: 'Release manager' }, part: 'chat', messageId: 'msg1' });
+    const w = only([
+      reading('10:40', 10),
+      begin('a1', '10:40'), sample('a1', '10:40', '10:41', 0.5), { t: 'end', at: T('10:41'), session: 'a1', turn: shape(1) },
+      begin('a2', '10:42'), sample('a2', '10:42', '10:45', 1.5), { t: 'end', at: T('10:45'), session: 'a2', turn: shape(3) },
+      reading('10:45', 12),
+    ]);
+    expect(w.consumers[0]!.messages).toHaveLength(1);
+    expect(w.consumers[0]!.messages![0]!.turn).toEqual({ ...shape(3), usd: 2 });
   });
 
   it('leaves time no cost report covers unsplit instead of guessing (a task stopped mid-reply)', () => {

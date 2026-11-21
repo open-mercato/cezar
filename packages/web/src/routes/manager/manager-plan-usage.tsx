@@ -41,17 +41,24 @@ export interface ManagerTurnShape {
   couldBeTasks: number
 }
 
-/** The prompt cache lasts an hour: a resume after that re-reads the whole history at the write price. */
+/** The prompt cache lasts an hour: a turn recorded before `cold` existed is judged by its idle gap. */
 const CACHE_TTL_MS = 60 * 60_000
 
+/** Writes are left out on purpose: a manager writes files only to hand long text to a task, which
+ *  is routing, not work a task should have done. */
 export const couldBeTask = (turn: PlanUsageTurnStats): boolean => turn.requests >= 6 || turn.tools.own >= 4
+
+/** The history was re-cached: its first request wrote over half its context (spec § 2.3). */
+const isCold = (turn: PlanUsageTurnStats): boolean =>
+  turn.cold ?? (!turn.fresh && turn.idleMs !== undefined && turn.idleMs >= CACHE_TTL_MS)
 
 /** Why a turn cost what it did, most telling first; empty when nothing stands out. */
 export function turnReasons(turn: PlanUsageTurnStats): string[] {
   const reasons: string[] = []
-  if (!turn.fresh && turn.idleMs !== undefined && turn.idleMs >= CACHE_TTL_MS) reasons.push(`cache expired after ${Math.round(turn.idleMs / 3_600_000)} h idle`)
-  if (turn.contextPeak >= 100_000) reasons.push(`large context (${Math.round(turn.contextPeak / 1000)}k)`)
-  if (turn.requests >= 6) reasons.push(`${turn.requests} requests`)
+  // Bare labels: the figures are already on the detail line.
+  if (!turn.fresh && isCold(turn)) reasons.push(turn.idleMs !== undefined && turn.idleMs >= CACHE_TTL_MS ? `cold start after ${Math.round(turn.idleMs / 3_600_000)} h idle` : 'cold start')
+  if (turn.contextPeak >= 100_000) reasons.push('large context')
+  if (turn.requests >= 6) reasons.push('many requests')
   if (turn.toolResultChars >= 20_000) reasons.push('big tool output')
   if (turn.fresh) reasons.push('new session')
   return reasons

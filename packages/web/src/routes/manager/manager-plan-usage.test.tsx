@@ -10,6 +10,7 @@ import {
   managerStartedTasks,
   ManagerLimitStrip,
   ManagerUsageChip,
+  couldBeTask,
   turnReasons,
   turnShape,
   type AccountNow,
@@ -253,8 +254,11 @@ describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)'
 
   it('names why a turn was expensive', () => {
     expect(turnReasons(stats())).toEqual([])
-    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cache expired after 10 h idle', 'large context (942k)'])
-    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['7 requests', 'big tool output', 'new session'])
+    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cold start after 10 h idle', 'large context'])
+    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['many requests', 'big tool output', 'new session'])
+    // The recorded flag wins over the idle-gap guess: a short gap can still miss the cache, a long one hit it.
+    expect(turnReasons(stats({ cold: true, idleMs: 120_000 }))).toEqual(['cold start'])
+    expect(turnReasons(stats({ cold: false, idleMs: 2 * 3_600_000 }))).toEqual([])
   })
 
   it('sums routing against its own work and counts turns a task could have done', () => {
@@ -262,6 +266,8 @@ describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)'
       turns: 2, avgContext: 40_000, avgRequests: 5, tools: { route: 1, look: 2, own: 5, write: 1 }, couldBeTasks: 1,
     })
     expect(turnShape([{}])).toBeNull()
+    // Files a manager writes carry text to a task: routing, never a reason to call it a task.
+    expect(couldBeTask(stats({ tools: { route: 1, look: 0, own: 0, write: 9 } }))).toBe(false)
   })
 
   it('shows the reason under a largest turn and the window’s turn shape', () => {
@@ -269,7 +275,7 @@ describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)'
     const u = managerPlanUsage([entry(withStats)], 'm1', [], KEY, NOW)!
     renderIn(<ManagerUsageChip usage={u} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
     fireEvent.click(screen.getByRole('button'))
-    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cache expired after 10 h idle, large context (942k)')
+    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cold start after 10 h idle, large context')
     expect(row('manager-usage-shape')!.textContent).toContain('942k context · 5.0 requests per turn (1 turn)')
     expect(row('manager-usage-shape')!.textContent).toContain('Tool calls: 1 routing work to tasks, 0 looking up state, 0 its own work')
   })

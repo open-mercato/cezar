@@ -190,15 +190,28 @@ Every manager turn records the following in the plan ledger's `messages[]` (addi
 * cache read and write tokens, and output tokens;
 * `cold` (true when the cache write exceeds 50% of the context);
 * idle gap;
-* the session id and the turn's index in it;
-* the turn kind (chat, followup, watch or job);
+* the session id (its first 8 characters) and the turn's index in it;
+* the turn kind, which the ledger already records as the turn's `part` (chat, watch or job; a
+  followup runs as a chat);
 * tool calls split into **route** (task create/say/follow, merge, proposals), **look**
   (cez-manager reads, history) and **own work** (gh, Read, Grep, Bash other).
+
+Implementation note (#2385): the per-request context and cache write come from Claude's assistant
+frames, and the turn's cache reads, writes and output from its result frame, which is per process.
+Other runners report none of these, so those fields stay absent for them. A turn retried after a
+transient failure counts once: its stats are the answering attempt's, and its cost sums every
+attempt.
 
 The **popover** (PR #2363) gains:
 * a "Largest turns" list with a reason chip: *cold start*, *large context*, *many requests* or
   *big tool output*;
-* for the window, a small breakdown: routing vs own-work cost, and average context per turn.
+* for the window, a small breakdown: routing vs own-work, and average context per turn.
+
+As built (#2388): the breakdown counts tool calls (route, look, own work, writes), because a
+turn's cost belongs to the whole turn and cannot be split per call. A turn's reason is *cold
+start* when its recorded `cold` flag is set; a turn recorded before that flag existed falls back to
+an idle gap of an hour or more, the prompt cache's lifetime. "Could be a task" leaves writes out:
+a manager writes files only to hand long text to a task, which is routing.
 
 A turn with ≥ 6 requests or ≥ 4 own-work calls is flagged "could be a task". The flag counts are
 the evidence for whether managers should do more themselves, so the decision rests on data.
@@ -212,6 +225,13 @@ Also: fix `costUsd` to be the turn's delta (§1.5).
    is a claude.ai connector, the turn also turns claude.ai connectors off (the env/flag name has
    to be checked against the installed CLI). The Connectors settings page still discovers
    servers: a discovery-only turn, or the existing observed list, keeps showing them.
+
+   As built (#2385), this is all-or-nothing. A manager with no grant, and every watch, runs with
+   `--strict-mcp-config` and `ENABLE_CLAUDEAI_MCP_SERVERS=false`. A manager with any grant loads
+   every server, as before. Filtering per grant needs each granted server's own definition:
+   cezar would have to copy it out of the user's Claude config into `--mcp-config`, and
+   claude.ai connectors have no per-connector switch. This stays a follow-up. The measured
+   manager had no grant, so it gets the whole saving.
 2. **Smaller `cez-manager` output.**
    * `attention` and `status` hide finished tasks older than the manager's last turn by default.
      `--all` shows them.

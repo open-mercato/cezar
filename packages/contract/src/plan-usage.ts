@@ -61,6 +61,14 @@ export const planUsageTurnStatsSchema = z.object({
   fresh: z.boolean(),
   sessionTurn: z.number().int().positive(),
   idleMs: z.number().int().nonnegative().optional(),
+  /** The turn's own prompt-cache reads and writes and its output, when the runner reports them. */
+  cacheReadTokens: z.number().int().nonnegative().optional(),
+  cacheWriteTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  /** Its first request wrote more than half its context to the cache: the history was re-cached. */
+  cold: z.boolean().optional(),
+  /** The first 8 characters of the agent session it ran in. */
+  session: z.string().max(64).optional(),
   usd: z.number().finite().nonnegative().optional(),
 });
 export type PlanUsageTurnStats = z.infer<typeof planUsageTurnStatsSchema>;
