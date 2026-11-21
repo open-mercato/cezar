@@ -14,7 +14,7 @@ import {
   type StepSecretBinding,
 } from '@open-mercato/cezar-contract';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
-import { PROJECT_ID_RE } from './config.ts';
+import { PROJECT_ID_RE, serializedByPath } from './config.ts';
 import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring.ts';
 
 /**
@@ -497,41 +497,45 @@ export class SecretStore {
   /** Atomic mkdir serializes cockpit/CLI read-modify-writes. Never steal from a live owner. */
   private async locked<T>(id: string, action: () => Promise<T>): Promise<T> {
     const lock = join(this.directory, `${id}.lock`);
-    const owner = join(lock, String(process.pid));
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await fs.mkdir(lock, { mode: 0o700 });
-        await fs.writeFile(owner, '', { flag: 'wx', mode: 0o600 });
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 200) throw error;
-        const age = await fs.lstat(lock).catch(() => null);
-        if (!age) continue;
-        const owners = await fs.readdir(lock).catch(() => []);
-        if (owners.length === 1 && /^[1-9][0-9]*$/.test(owners[0]!)) {
-          try {
-            process.kill(Number(owners[0]), 0);
-          } catch (killError) {
-            if ((killError as NodeJS.ErrnoException).code === 'ESRCH') {
-              // Exclusive unlink elects one reaper.
-              try {
-                await fs.unlink(join(lock, owners[0]!));
-                await fs.rmdir(lock);
-              } catch {}
+    // Local writers queue without spending the retry budget reserved for another process.
+    // Otherwise a burst of durable writes can exhaust retries while a live local writer owns it.
+    return serializedByPath(lock, async () => {
+      const owner = join(lock, String(process.pid));
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await fs.mkdir(lock, { mode: 0o700 });
+          await fs.writeFile(owner, '', { flag: 'wx', mode: 0o600 });
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 200) throw error;
+          const age = await fs.lstat(lock).catch(() => null);
+          if (!age) continue;
+          const owners = await fs.readdir(lock).catch(() => []);
+          if (owners.length === 1 && /^[1-9][0-9]*$/.test(owners[0]!)) {
+            try {
+              process.kill(Number(owners[0]), 0);
+            } catch (killError) {
+              if ((killError as NodeJS.ErrnoException).code === 'ESRCH') {
+                // Exclusive unlink elects one reaper.
+                try {
+                  await fs.unlink(join(lock, owners[0]!));
+                  await fs.rmdir(lock);
+                } catch {}
+              }
             }
+          } else if (owners.length === 0 && Date.now() - age.mtimeMs > 60_000) {
+            await fs.rmdir(lock).catch(() => {});
           }
-        } else if (owners.length === 0 && Date.now() - age.mtimeMs > 60_000) {
-          await fs.rmdir(lock).catch(() => {});
+          await new Promise((done) => setTimeout(done, 10));
         }
-        await new Promise((done) => setTimeout(done, 10));
       }
-    }
-    try {
-      return await action();
-    } finally {
-      await fs.unlink(owner).catch(() => {});
-      await fs.rmdir(lock).catch(() => {});
-    }
+      try {
+        return await action();
+      } finally {
+        await fs.unlink(owner).catch(() => {});
+        await fs.rmdir(lock).catch(() => {});
+      }
+    });
   }
 }
 
