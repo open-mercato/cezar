@@ -41,7 +41,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-dispatch-'));
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH', 'CEZ_WEBHOOKS', 'CEZ_CODEX_BIN']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH', 'CEZ_AUTOMATIONS', 'CEZ_API_URL', 'CEZ_WEBHOOKS', 'CEZ_CODEX_BIN']) savedEnv[key] = process.env[key];
     delete process.env.CEZ_WEBHOOKS;
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_DISPATCH = '1';
@@ -132,6 +132,89 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     (manager as unknown as {
       active: Map<string, { monitoringWakeTimer?: NodeJS.Timeout }>;
     }).active.get(id);
+
+  it('refuses unauthorized child creation before any run, tree, git or budget mutation (#2382)', async () => {
+    reboot({ maxParallel: 0 });
+    const parent = start('use subagents', undefined, { dispatchAuthorized: false });
+    store.updateRun(parent.id, { dispatch: { rootRunId: parent.id, budgetUsd: 10 } });
+    const before = JSON.stringify(store.listRuns());
+    const refs = (await run('git', ['show-ref'], { cwd: repoRoot })).stdout;
+    expect(refusal(parent.id, order('child', { max_cost: 2 }))).toContain('disabled for this automation run');
+    expect(JSON.stringify(store.listRuns())).toBe(before);
+    expect(existsSync(treeDirOf(parent.id))).toBe(false);
+    expect((await run('git', ['show-ref'], { cwd: repoRoot })).stdout).toBe(refs);
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(parent.id)?.dispatchAuthorized).toBe(false);
+  });
+
+  it('withholds creation capability but retains shared transport and existing child report instructions (#2382)', () => {
+    reboot({ maxParallel: 0 });
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    process.env.CEZ_AUTOMATIONS = '0';
+    const parent = start('denied', undefined, { dispatchAuthorized: false });
+    const seam = manager as unknown as {
+      agentEnv(id: string): Record<string, string>;
+      prepareDispatchSession(id: string, state: { dispatchPrompt?: string }): void;
+    };
+    expect(seam.agentEnv(parent.id).CEZ_API_URL).toBe('');
+    expect(seam.agentEnv(parent.id).CEZ_BIN).toBeTruthy();
+    process.env.CEZ_AUTOMATIONS = '1';
+    expect(seam.agentEnv(parent.id).CEZ_API_URL).toBe(process.env.CEZ_API_URL);
+    process.env.CEZ_AUTOMATIONS = '0';
+    const child = store.createRun({ title: 'old child', workflow: '(planned)', task: 'report', steps: [] });
+    store.updateRun(child.id, { dispatch: { rootRunId: parent.id, parentRunId: parent.id, kind: 'review' } });
+    const state: { dispatchPrompt?: string } = {};
+    seam.prepareDispatchSession(child.id, state);
+    expect(state.dispatchPrompt).toContain('task report');
+    expect(state.dispatchPrompt).toContain('Your KIND is review');
+    expect(state.dispatchPrompt).not.toContain('task create');
+    expect(seam.agentEnv(child.id).CEZ_API_URL).toBe(process.env.CEZ_API_URL);
+  });
+
+  it('denies legacy children with missing roots while preserving their reports (#2382)', () => {
+    reboot({ maxParallel: 0 });
+    const child = start('retained old child', { rootRunId: 'missing-root', parentRunId: 'missing-root' });
+    expect(refusal(child.id, order('grandchild'))).toContain('disabled for this automation run');
+    expect(manager.recordReport(child.id, { status: 'done', result: 'complete', evidence: [], side_effects: [], errors: [], suggestions: [] })).toBe(true);
+    expect(store.listRuns()).toHaveLength(1);
+  });
+
+  it('denies malformed stored authorization without dropping a run (#2382)', () => {
+    reboot({ maxParallel: 0 });
+    const parent = start('malformed authorization');
+    const parsed = runRecordSchema.parse({ ...parent, dispatchAuthorized: 'true' });
+    expect(parsed.dispatchAuthorized).toBe(false);
+    store.updateRun(parent.id, { dispatchAuthorized: parsed.dispatchAuthorized });
+    expect(refusal(parent.id, order('child'))).toContain('disabled for this automation run');
+  });
+
+  it('retains default-on ordinary tasks, explicit grants, and saved legacy automation intent (#2382)', () => {
+    reboot({ maxParallel: 0 });
+    const ordinary = start('ordinary');
+    const enabled = start('enabled automation', undefined, { dispatchAuthorized: true });
+    const legacy = start('old enabled automation');
+    store.updateRun(legacy.id, { automation: { automationId: 'a', automationRevision: 1, receiptId: 'r', event: 'issue.opened', githubUrl: 'https://github.com/a/b/issues/1' }, dispatch: { rootRunId: legacy.id, intent: {} } });
+    for (const parent of [ordinary, enabled, legacy]) {
+      const child = dispatchOk(parent.id, order('child'));
+      started.push(child.id);
+      expect(store.getRun(child.id)?.dispatchAuthorized).toBe(true);
+    }
+  });
+
+  it('fails closed for legacy automation provenance and fences existing descendants, but preserves graph fan-out and reports (#2382)', () => {
+    reboot({ maxParallel: 0 });
+    const legacy = start('old automation');
+    store.updateRun(legacy.id, { automationTrigger: { automationId: 'a', automationRevision: 1, receiptId: 'r', trigger: 'schedule', occurrenceAt: new Date().toISOString() } });
+    expect(refusal(legacy.id, order('child'))).toContain('disabled for this automation run');
+    const graph = manager.dispatch(legacy.id, order('graph node'), { workflow: SINGLE_STEP });
+    if ('refused' in graph) throw new Error(graph.refused);
+    started.push(graph.id);
+    expect(store.getRun(graph.id)?.dispatchAuthorized).toBe(false);
+    expect(refusal(graph.id, order('grandchild'))).toContain('disabled for this automation run');
+    // A pre-fix child with no grant is fenced by its root too.
+    store.updateRun(graph.id, { dispatchAuthorized: undefined });
+    expect(refusal(graph.id, order('grandchild'))).toContain('disabled for this automation run');
+    expect(manager.recordReport(graph.id, { status: 'done', result: 'node complete', evidence: [], side_effects: [], errors: [], suggestions: [] })).toBe(true);
+  });
 
   /** A root's dispatch record — it names itself. */
   const rootOf = (id: string, budgetUsd?: number): RunDispatch => ({
@@ -244,7 +327,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot();
       const trigger = { automationId: 'auto-1', automationRevision: 1, receiptId: 'r1', occurrenceAt: '2026-11-04T15:00:00.000Z' };
-      store.updateRun(parent.id, { automationTrigger: { ...trigger, trigger: 'schedule' } });
+      store.updateRun(parent.id, { dispatchAuthorized: true, automationTrigger: { ...trigger, trigger: 'schedule' } });
       // A queued descendant of that tree is held too: the root decides, not the direct parent.
       const child = store.createRun({ title: 'descendant', workflow: '(planned)', task: 't', steps: [] });
       store.updateRun(child.id, { status: 'running', dispatch: childOf(parent.id) });

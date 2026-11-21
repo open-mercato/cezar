@@ -90,18 +90,19 @@ describe('RunManager agent-profile resolution', () => {
       steps: [{ id: 'work', name: 'work', kind: 'agent' }],
     });
 
-  it('delivers fresh context and a scoped capability, never vendor credentials, on steps and continuations', async () => {
+  it('delivers fresh tracker context on steps and continuations even when automation dispatch is denied (#2382)', async () => {
     vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
     vi.stubEnv('CEZ_BIN', '/synthetic/cezar.js');
     const read = vi.spyOn(trackerAccess, 'trackerTaskContext').mockResolvedValue({ issueId: '100', statusId: 'todo', fetchedAt: new Date().toISOString(), comments: [], transitions: [], limitations: [], item: { kind: 'issue', id: 'SAM-1', title: 'Example', body: 'Current requirements', bodyTruncated: false, unsupportedContent: false, url: 'https://example.com', labels: [], author: '', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', status: 'To Do' } });
     const run = newRun();
-    store.updateRun(run.id, { status: 'running', automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', issueId: '100', association: trackerAssociation, access: { version: 1, writes: [] }, url: 'https://example.com' } });
+    store.updateRun(run.id, { status: 'running', dispatchAuthorized: false, automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', issueId: '100', association: trackerAssociation, access: { version: 1, writes: [] }, url: 'https://example.com' } });
     const first = await seam().agentEnvForStep(run.id, 'claude');
     // The context rides in a file the note points at, never inline in the prompt or argv.
     const contextFile = join(repoRoot, '.ai/cezar/runs', `${run.id}.tracker-context.json`);
     expect(first.trackerContext).toContain(contextFile);
     expect(first.trackerContext).not.toContain('Current requirements');
     expect(JSON.parse(readFileSync(contextFile, 'utf8')).item.body).toBe('Current requirements');
+    expect(first.env.CEZ_API_URL).toBe('http://127.0.0.1:3456');
     expect(first.env.JIRA_API_TOKEN).toBeUndefined();
     expect(first.env.LINEAR_API_KEY).toBeUndefined();
     expect(manager.trackerTaskForCapability(first.env.CEZ_TRACKER_CAPABILITY)?.id).toBe(run.id);

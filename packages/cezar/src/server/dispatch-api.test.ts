@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
-import type { RunManager } from '../workflows/run.ts';
+import { RunManager } from '../workflows/run.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { runTaskCommand } from '../dispatch/task-cli.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
@@ -64,6 +66,27 @@ describe('the dispatch routes', () => {
     const res = await apiRequest(app, '/api/v1/runs/parent-1/dispatch', json({ objective: 'x' }));
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: 'no budget left' });
+  });
+
+  it('refuses direct HTTP and CLI child creation for denied runs with a known address (#2382)', async () => {
+    const manager = new RunManager(store, repoRoot, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
+    try {
+      const parent = manager.startRun({ name: 'auth-test', source: 'built-in', steps: [{ id: 'task', prompt: '{{task}}' }] }, { task: 'use subagents', dispatchAuthorized: false });
+      app = createApp({ repoRoot, store, manager, bootProjectId: 'default', version: 'test', providerAuth: connectedProviderAuth() });
+      const path = `/api/v1/p/default/runs/${parent.id}/dispatch`;
+      const before = JSON.stringify(store.listRuns());
+      const res = await apiRequest(app, path, json({ objective: 'child' }));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: expect.stringContaining('disabled for this automation run') });
+      const errors: string[] = [];
+      const exit = await runTaskCommand(['create', 'child'], { CEZ_API_URL: 'http://127.0.0.1:4321', CEZ_PROJECT_ID: 'default', CEZ_TASK_ID: parent.id }, {
+        fetch: (async (url: string | URL | Request, init?: RequestInit) => apiRequest(app, new URL(String(url)).pathname, init)) as typeof fetch,
+        log: () => {}, error: (line) => errors.push(line),
+      });
+      expect(exit).toBe(1);
+      expect(errors.join(' ')).toContain('disabled for this automation run');
+      expect(JSON.stringify(store.listRuns())).toBe(before);
+    } finally { manager.dispose(); }
   });
 
   it('refuses an unknown --account before the manager is called (#1744)', async () => {

@@ -437,7 +437,7 @@ describe('graph system nodes', () => {
     expect(final.graphState?.outputs?.sub?.runId).toBe(latest?.id);
   }, 70_000);
 
-  it('dispatch waits for its child and takes done when the child settles', async () => {
+  it.each([undefined, false])('graph dispatch waits for its child even with agent dispatchAuthorized=%s (#2382)', async (dispatchAuthorized) => {
     const graph: WorkflowGraph = {
       nodes: [
         { id: 'start', type: 'start' },
@@ -449,13 +449,14 @@ describe('graph system nodes', () => {
         { from: 'sub.done', to: 'after' },
       ],
     };
-    const id = manager.startRun(def(graph), { task: 'x', worktree: false }).id;
+    const id = manager.startRun(def(graph), { task: 'x', worktree: false, dispatchAuthorized }).id;
     const final = await until(id, terminal, 40_000);
     expect(final.status).not.toBe('failed');
     const status = readFileSync(join(repoRoot, 'child.txt'), 'utf8').trim();
     expect(['done', 'review']).toContain(status);
     const children = store.listRuns().filter((r) => r.dispatch?.parentRunId === id);
     expect(children).toHaveLength(1);
+    if (dispatchAuthorized === false) expect(children[0]?.dispatchAuthorized).toBe(false);
   }, 50_000);
 
   const FORK: WorkflowGraph = {

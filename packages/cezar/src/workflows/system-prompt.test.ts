@@ -244,7 +244,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
   };
 
   async function runToEnd(
-    input: { task: string; systemPrompt?: string; generateFollowups?: boolean },
+    input: Parameters<RunManager['startRun']>[1],
     selectedWorkflow: WorkflowDef = workflow,
   ): Promise<string> {
     writeFileSync(argsFile, '', 'utf8'); // fresh capture per run
@@ -286,6 +286,45 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(prompt).toContain('cez task create');
     expect(prompt).toContain(CONFIG_PROMPT);
   });
+
+  it('strips embedded creation instructions from a fresh denied child and keeps reporting (#2382)', async () => {
+    process.env.CEZ_DISPATCH = '1';
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    const root = store.createRun({ title: 'denied root', task: 'root', workflow: 'test', dispatchAuthorized: false, steps: [] });
+    store.updateRun(root.id, { status: 'done' });
+    try {
+      await runToEnd({
+        task: 'existing graph child mock:done',
+        dispatch: { rootRunId: root.id, parentRunId: root.id, kind: 'review' },
+        systemPrompt: composeDispatchPrompt('review'),
+      });
+      expect(capturedSystemPrompt()).not.toContain('cez task create');
+      expect(capturedSystemPrompt()).toContain('task report');
+      expect(capturedSystemPrompt()).toContain('Your KIND is review');
+    } finally { process.env.CEZ_DISPATCH = '0'; delete process.env.CEZ_API_URL; }
+  });
+
+  it('omits cezar creation instructions on fresh and continued denied sessions, retaining automations and handoff (#2382)', async () => {
+    process.env.CEZ_DISPATCH = '1';
+    process.env.CEZ_AUTOMATIONS = '1';
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    try {
+      const id = await runToEnd({ task: 'use subagents mock:done', dispatchAuthorized: false });
+      expect(capturedSystemPrompt()).not.toContain('cez task create');
+      expect(capturedSystemPrompt()).toContain('cez automation');
+      expect(capturedSystemPrompt()).toContain('CEZ_HANDOFF_FILE');
+      // Simulate a pre-fix embedded dispatch snapshot as well as the normal Continue path.
+      store.updateRun(id, { systemPrompt: composeDispatchPrompt(undefined) });
+      expect(manager.continueRun(id, { text: 'continue mock:done' })).toEqual({ ok: true });
+      const deadline = Date.now() + 20_000;
+      while (readFileSync(argsFile, 'utf8').trim().split('\n').length < 2) {
+        if (Date.now() > deadline) throw new Error('continuation did not start in time');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(capturedSystemPrompt(1)).not.toContain('cez task create');
+      expect(capturedSystemPrompt(1)).toContain('cez automation');
+    } finally { process.env.CEZ_DISPATCH = '0'; delete process.env.CEZ_API_URL; delete process.env.CEZ_AUTOMATIONS; }
+  }, 30_000);
 
   // The headless hole: `cezar run` builds its own RunManager and never sets CEZ_API_URL/CEZ_BIN, so
   // `cez task create` can only ever fail — and its refusal tells the agent to STOP and report
