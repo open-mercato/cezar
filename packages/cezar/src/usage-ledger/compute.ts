@@ -1,7 +1,7 @@
 import type {
-  PlanUsageAccount, PlanUsageConsumer, PlanUsageInterval, PlanUsageReading, PlanUsageWindow, PlanUsageWindowKind,
+  PlanUsageAccount, PlanUsageConsumer, PlanUsageInterval, PlanUsageReading, PlanUsageWindow, PlanUsageWindowKind, PlanUsageTurnStats,
 } from '@open-mercato/cezar-contract';
-import type { LedgerConsumer, LedgerRecord } from './store.ts';
+import type { LedgerConsumer, LedgerRecord, LedgerTurnStats } from './store.ts';
 
 /**
  * Plan-limit attribution (design rev 3, "How it's calculated"). Pure: ledger records in,
@@ -33,9 +33,16 @@ interface Session {
   begin: number;
   end?: number;
   quiet?: boolean;
+  turn?: LedgerTurnStats;
   samples: Sample[];
   /** No `end` was recorded: `end` is the open-session bound, not evidence the turn was live. */
   capped?: boolean;
+}
+/** A manager turn's stats plus its reported cost, for the message it wrote. */
+function turnOf(s: Session): { turn?: PlanUsageTurnStats } {
+  if (!s.turn) return {};
+  const usd = s.samples.reduce((sum, sample) => sum + (sample.usd ?? 0), 0);
+  return { turn: { ...s.turn, ...(usd > 0 ? { usd: Math.round(usd * 10_000) / 10_000 } : {}) } };
 }
 interface Reading { at: number; used: number; status: PlanUsageReading['status']; source: PlanUsageReading['source'] }
 interface Share {
@@ -231,6 +238,7 @@ export function indexLedger(records: LedgerRecord[]): Ledger {
       if (s && s.end === undefined) {
         s.end = r.at;
         if (r.quiet !== undefined) s.quiet = r.quiet;
+        if (r.turn) s.turn = r.turn;
       }
     } else if (r.t === 'tracking') {
       markers.push(r);
@@ -484,9 +492,14 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
     if ((failuresBy.get(share.consumerId) ?? []).some((f) => share.at > f.since && share.at <= f.at)) c.retryWasteEstimatePp += share.pp;
     if (c.parts && s.part) c.parts[s.part] += share.pp;
     if (c.messages && s.messageId && s.part) {
-      const m = c.messages.find((x) => x.messageId === s.messageId);
-      if (m) m.estimatePp += share.pp;
-      else c.messages.push({ messageId: s.messageId, part: s.part, estimatePp: share.pp });
+      let m = c.messages.find((x) => x.messageId === s.messageId);
+      if (!m) {
+        m = { messageId: s.messageId, part: s.part, at: new Date(s.begin).toISOString(), estimatePp: 0, aloneInferredPp: 0, sharedEstimatePp: 0, ...turnOf(s) };
+        c.messages.push(m);
+      }
+      m.estimatePp += share.pp;
+      if (share.alone) m.aloneInferredPp += share.pp;
+      else m.sharedEstimatePp += share.pp;
     }
   }
   // "Ran together with": other consumers holding a shared slice of the same reading pair.
@@ -511,7 +524,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
       ...(c.kind === 'manager' ? {
         turns: { chat: own.filter((s) => s.part === 'chat').length, watch: own.filter((s) => s.part === 'watch').length, job: own.filter((s) => s.part === 'job').length },
         quietWatchTurns: own.filter((s) => s.part === 'watch' && s.quiet === true).length,
-        messages: (c.messages ?? []).map((m) => ({ ...m, estimatePp: round(m.estimatePp) })),
+        messages: (c.messages ?? []).map((m) => ({ ...m, estimatePp: round(m.estimatePp), aloneInferredPp: round(m.aloneInferredPp), sharedEstimatePp: round(m.sharedEstimatePp) })),
       } : {}),
     };
   }).filter((c) => c.estimatePp > 0).sort((x, y) => y.estimatePp - x.estimatePp);

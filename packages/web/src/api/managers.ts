@@ -10,6 +10,8 @@ import {
   type ManagerActionDecisionInput,
   type ManagerChangesResponse,
   type ManagerConnectorsResponse,
+  type ManagerMemoryResponse,
+  type PutManagerMemoryInput,
   type ManagerListResponse,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -262,6 +264,24 @@ export async function refreshManagerConnectors(id: string): Promise<ManagerConne
   return unwrap(await managers()[':id'].connectors.refresh.$post({ param: managerParam(id) }), managerPath(id, '/connectors/refresh'))
 }
 
+export async function getManagerMemory(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerMemoryResponse> {
+  return unwrap(await managers()[':id'].memory.$get({ param: managerParam(id) }, { init: { signal: opts?.signal } }), managerPath(id, '/memory'))
+}
+
+export async function putManagerMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse> {
+  return unwrap(
+    await managers()[':id'].memory[':key'].$put({ param: { ...managerParam(id), key }, json: input }),
+    managerPath(id, `/memory/${encodeURIComponent(key)}`),
+  )
+}
+
+export async function deleteManagerMemory(id: string, key: string): Promise<ManagerMemoryResponse> {
+  return unwrap(
+    await managers()[':id'].memory[':key'].$delete({ param: { ...managerParam(id), key } }),
+    managerPath(id, `/memory/${encodeURIComponent(key)}`),
+  )
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export const managerKeys = {
@@ -271,6 +291,7 @@ export const managerKeys = {
   approvals: (id: string) => ['workspace', 'managers', 'approvals', id] as const,
   allApprovals: ['workspace', 'managers', 'approvals'] as const,
   connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
+  memory: (id: string) => ['workspace', 'managers', 'memory', id] as const,
   /** The change log (spec 2026-11-20 § 3.3), one entry per filter. */
   changes: ['workspace', 'managers', 'changes'] as const,
 }
@@ -670,6 +691,24 @@ export function useRefreshManagerConnectors(id: string) {
   return useMutation({
     mutationFn: () => refreshManagerConnectors(id),
     onSuccess: (response) => queryClient.setQueryData(managerKeys.connectors(id), response),
+  })
+}
+
+export function useManagerMemory(id: string, enabled = true) {
+  return useQuery({
+    queryKey: managerKeys.memory(id),
+    queryFn: ({ signal }) => getManagerMemory(id, { signal }),
+    enabled,
+  })
+}
+
+/** Spec 2026-11-21-manager-short-sessions-and-memory § 2.1: the user's own edits to a manager's memory. */
+export function useManagerMemoryWrite(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (change: { key: string; input?: PutManagerMemoryInput }) =>
+      change.input ? putManagerMemory(id, change.key, change.input) : deleteManagerMemory(id, change.key),
+    onSuccess: (response) => queryClient.setQueryData(managerKeys.memory(id), response),
   })
 }
 

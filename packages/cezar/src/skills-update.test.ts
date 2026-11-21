@@ -191,8 +191,53 @@ describe('SkillsUpdateService', () => {
     const state = await service.update(repo);
     expect(state.status).toBe('error');
     expect(state.scopes[0]).toMatchObject({ scope: 'project', updatedAt: expect.any(String) });
-    expect(state.scopes[1]).toMatchObject({ scope: 'global', status: 'error', reason: 'update check failed' });
+    expect(state.scopes[1]).toMatchObject({ scope: 'global', status: 'error', reason: 'update apply failed' });
     expect(JSON.stringify(state)).not.toContain('secret');
+  });
+
+  describe('large pending batch (#2369)', () => {
+    const names = Array.from({ length: 74 }, (_, i) => `skill-${String(i).padStart(2, '0')}`);
+    const mk = async () => {
+      const lock = { skills: { ...Object.fromEntries(names.map((n) => [n, { source: 'open-mercato/skills' }])), other: { source: 'acme/skills' } } };
+      const raw = JSON.stringify(lock);
+      const { home, repo } = await fixture(undefined, raw);
+      return { home, repo, raw, lockPath: join(home, '.agents', '.skill-lock.json') };
+    };
+
+    it('applies in bounded chunks with the apply timeout, never touching other sources', async () => {
+      const { home, repo, raw, lockPath } = await mk();
+      const timeouts: Array<[string, number]> = []; const chunks: string[][] = []; let pending = true;
+      const run = vi.fn(async (_f: string, args: readonly string[], _c: string, timeoutMs: number) => {
+        timeouts.push([String(args[2]), timeoutMs]);
+        if (args[2] === 'update') { chunks.push(args.slice(3, -2) as string[]); if (chunks.length === 4) pending = false; }
+        return { stdout: args[2] === 'check' && pending ? names.map((n) => `${n} update available`).join('\n') : '', stderr: '' };
+      });
+      const service = new SkillsUpdateService({ homeDir: home, timeoutMs: 111, applyTimeoutMs: 999, resolveNpx: async () => 'npx', run });
+      await service.check(repo);
+      const state = await service.update(repo);
+      expect(chunks.map((c) => c.length)).toEqual([20, 20, 20, 14]);
+      expect(chunks.flat()).toEqual(names);
+      expect(chunks.flat()).not.toContain('other');
+      expect(timeouts.filter(([k]) => k === 'update').every(([, t]) => t === 999)).toBe(true);
+      expect(timeouts.filter(([k]) => k === 'check').every(([, t]) => t === 111)).toBe(true);
+      expect(state).toMatchObject({ status: 'current', available: false });
+      expect(await readFile(lockPath, 'utf8')).toBe(raw);
+    });
+
+    it('reports an apply timeout as apply, keeps finished chunks and refreshes the catalog', async () => {
+      const { home, repo } = await mk(); const invalidateCatalog = vi.fn(); let updates = 0;
+      const run = vi.fn(async (_f: string, args: readonly string[]) => {
+        if (args[2] === 'update' && ++updates === 2) throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' });
+        return { stdout: args[2] === 'check' ? names.map((n) => `${n} update available`).join('\n') : '', stderr: '' };
+      });
+      const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run, invalidateCatalog });
+      await service.check(repo);
+      const state = await service.update(repo);
+      expect(updates).toBe(2);
+      expect(state.status).toBe('error');
+      expect(state.scopes[1]).toMatchObject({ status: 'error', reason: 'update apply timed out' });
+      expect(invalidateCatalog).toHaveBeenCalledOnce();
+    });
   });
 
   it('deduplicates concurrent update calls and dry-run never executes', async () => {

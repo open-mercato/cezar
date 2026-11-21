@@ -92,6 +92,10 @@ function toolsOf(key: string, grants: ManagerConnectors | undefined, observed: O
   return [...tools];
 }
 
+/** Any connector not switched off: its turns must load the servers, or their tools stay unseen. */
+export const hasConnectorGrant = (grants: ManagerConnectors | undefined): boolean =>
+  Object.values(grants ?? {}).some((grant) => grant?.level !== 'off');
+
 /** Exact `mcp__<key>__<tool>` names whose mode is `allow`. Never a wildcard: a tool that appears
  *  later is allowed only when the grant's level or an override already covers it by name. */
 export function connectorAllowRules(grants: ManagerConnectors | undefined, observed: ObservedConnectors | undefined): string[] {

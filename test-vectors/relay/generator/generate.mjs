@@ -42,6 +42,8 @@ const posts = [
   ['/v1/push-grants', phoneEd, { platform: 'android', token: 'fcm-token', cezarKey: w.b64u(cezarKey) }],
   ['/v1/push-grants/revoke', phoneEd, { grant: 'opaque-grant' }],
   ['/v1/push', cezarEd, { v: 1, grant: 'opaque-grant', kind: 'attention', count: 3, id: w.b64u(seed('push-id').subarray(0, 16)), ts: TIME }],
+  // A silent badge update (spec 2026-11-20-phone-notifications-inbox): the same six fields, and 0 is allowed.
+  ['/v1/push', cezarEd, { v: 1, grant: 'opaque-grant', kind: 'count', count: 0, id: w.b64u(seed('count-push-id').subarray(0, 16)), ts: TIME }],
 ]
 out['proof.json'] = {
   description: 'Ed25519 relay proofs. A randomized signer verifies `sig`; a deterministic one must reproduce it.',

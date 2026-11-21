@@ -49,11 +49,14 @@ import {
   type QuestionClosed,
   type QuestionStale,
   type UpdateManagerInput,
+  type ManagerMemoryResponse,
+  type PutManagerMemoryInput,
+  MANAGER_MEMORY_LIMITS,
   supersededAskIds,
   questionCardPartlyReasked,
   questionCardSharedHeaders,
 } from '@open-mercato/cezar-contract';
-import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
+import type { AttentionKind, AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { actionOp, actionOpsFor, actionPin, seenRefusal, actionProject, actionKey, actionReplacedBy, actionSubject, CONNECTORS_CLAUDE_ONLY, describeAction, type ActionContext } from './actions.ts';
 import { evaluateAutoApproval } from './auto-approve.ts';
 import { ManagerChangeLog } from './change-log.ts';
@@ -102,11 +105,14 @@ import {
   connectorInfos,
   connectorPromptSection,
   connectorToolName,
+  hasConnectorGrant,
   observeConnectors,
   type ObservedConnectors,
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
-import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
+import { TurnStatsCollector } from './turn-stats.ts';
+import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, sessionPreamble, watchPrompt } from './prompts.ts';
+import { claudeAutoMemory, memoryBytes, readMemory, removeMemoryEntry, renderMemory, setMemoryEntry, writeMemory, type MemoryFile } from './memory.ts';
 import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
 import {
   ageLabel,
@@ -117,6 +123,8 @@ import {
   namesWork,
   openAsk,
   openCardsBlock,
+  openCardsDigest,
+  openCardsUnchanged,
   aboutPrProjects,
   prRefs,
   replaces,
@@ -160,8 +168,9 @@ export interface ManagerEngineDeps {
   autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
-  /** Wakes a sleeping phone (spec relay R5). Takes the manager's id only: no text reaches a push. */
-  pushSignal?: (managerId: string) => void;
+  /** Wakes a sleeping phone (spec relay R5). The manager's id and the kind, which each phone's
+   *  settings filter on (spec 2026-11-20-phone-notifications-inbox); no text reaches a push. */
+  pushSignal?: (managerId: string, kind: AttentionKind) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   /** Usage telemetry (docs/telemetry.md); absent sends nothing. Consent is the sender's to check. */
   telemetry?: ManagerTelemetry;
@@ -309,6 +318,8 @@ interface ActiveTurn {
   /** Plan-usage ledger: the reply this turn writes and the account it runs on (design rev 3). */
   ledgerMessageId?: string;
   planAccount?: LedgerAccountRef & { provider: 'claude' | 'codex' };
+  /** The open cards this chat turn shows (`openCards`): `ids` stands in for `full` only in a resumed session. */
+  cards?: { digest: string; full: string; ids?: string };
 }
 
 interface Runtime {
@@ -345,6 +356,13 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_WATCH_BACKOFF = 4;
 /** The pause before the one retry a passing failure (network, busy servers) earns. */
 const RETRY_BACKOFF_MS = 5_000;
+/** A chat resumes its transcript only while the prompt cache is warm (1 h), the context is small and
+ *  the session young; otherwise it starts over from memory and live state (spec 2026-11-21 § 2.2). */
+export const SESSION_IDLE_MS = 55 * 60_000;
+export const SESSION_CONTEXT_MAX = 100_000;
+export const SESSION_AGE_MS = 12 * 60 * 60_000;
+/** Followed tasks a new session is told about. */
+const PREAMBLE_TASKS = 15;
 /** Failed watch checks in a row before the chat hears about them; fewer are logged quietly. */
 const WATCH_NOTICE_AFTER = 3;
 const OUTPUT_LIMIT = 4_000;
@@ -401,6 +419,7 @@ const CONNECTOR_CALL_LIMIT_MS = 5 * 60_000;
 
 type ConnectorCall = Extract<ManagerActionRequest, { type: 'connector-call' }>;
 
+const MEMORY_DURING_WATCH = 'Memory cannot change while a background check runs (it is read-only). Try again in a moment.';
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -497,6 +516,12 @@ const judgedFields = ({ important, headline, ask }: Judged) => ({
   ...(headline ? { headline } : {}),
   ...(ask ? { ask } : {}),
 });
+
+/** A task report's push kind; any other headline is an important message. */
+const reportKind = (fields: unknown): AttentionKind => {
+  const state = (fields as { taskReport?: { state?: string } } | undefined)?.taskReport?.state;
+  return state === 'failed' ? 'failed' : state === 'needs-you' ? 'task' : 'message';
+};
 
 /** A question always waits on the user, so it interrupts like an approval does. */
 const alertBody = ({ important, headline, ask, text }: Judged): string | undefined =>
@@ -1380,7 +1405,7 @@ export class ManagerEngine {
       // Task events still owed a follow-up ride along: the user asking first answers them too.
       const { notes, followups } = store.state(id);
       turn.sourceTasks = [...item.messageIds.flatMap((messageId) => store.message(id, messageId)?.sourceTasks ?? []), ...taskSources([item.text, ...notes, ...followups.map((entry) => entry.line)].join('\n'))];
-      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line), this.openCards(id)), 'chat', turn, undefined, item)) === 'heard';
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line), this.openCards(id, turn)), 'chat', turn, undefined, item)) === 'heard';
       if (heard) this.consumeNotes(id, notes, followups);
       return;
     }
@@ -1389,7 +1414,7 @@ export class ManagerEngine {
       // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
       if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
       turn.sourceTasks = taskSources(followups.map((entry) => entry.line).join('\n'));
-      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes, this.openCards(id)), 'chat', turn);
+      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes, this.openCards(id, turn)), 'chat', turn);
       if (outcome === 'heard') this.consumeNotes(id, notes, followups);
       // Failed: no retry that could bill in a loop; the next chat hears them instead.
       else if (outcome === 'failed' && store.get(id)) {
@@ -1529,7 +1554,7 @@ export class ManagerEngine {
       return 'limited';
     }
     const body = alertBody(judgement);
-    if (body) this.alert(id, base, body);
+    if (body) this.alert(id, base, body, judgement.important ? 'message' : 'question');
     const heard = !result.error && !turn.stopped;
     // A turn that got through proves the limit lifted (or the account changed).
     if (heard && kind === 'chat') this.clearResume(id, false);
@@ -1596,7 +1621,7 @@ export class ManagerEngine {
       }));
     }
     this.emitChange(id);
-    if (post.headline) this.alert(id, written, post.headline);
+    if (post.headline) this.alert(id, written, post.headline, reportKind(post.fields));
     return written;
   }
 
@@ -1730,8 +1755,17 @@ export class ManagerEngine {
     if (written.kind === 'assistant') this.askChanged(id, written, false);
   }
 
-  private openCards(id: string): string {
-    return openCardsBlock(this.deps.store.messages(id).filter(openAsk), this.now());
+  /** A chat resuming a session that already saw these cards gets their ids; `drive` restores the list for a fresh one. */
+  private openCards(id: string, turn?: ActiveTurn): string {
+    const { store } = this.deps;
+    const cards = store.messages(id).filter(openAsk);
+    const full = openCardsBlock(cards, this.now());
+    if (turn?.kind !== 'chat') return full;
+    const meta = store.state(id).sessions.chat;
+    const digest = openCardsDigest(cards);
+    const ids = this.resumes('chat', meta) && meta?.cardsDigest === digest ? openCardsUnchanged(cards) : '';
+    turn.cards = { digest, full, ...(ids ? { ids } : {}) };
+    return ids || full;
   }
 
   /** Waiting tasks' open questions, so a relayed card can name the one it copies (`about.ask`). */
@@ -2032,7 +2066,7 @@ export class ManagerEngine {
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
-  private alert(id: string, message: { id: string; seq: number }, body: string): void {
+  private alert(id: string, message: { id: string; seq: number }, body: string, kind: AttentionKind): void {
     const { notifySystem, pushSignal, store } = this.deps;
     // An inactive manager raises nothing: its tasks' own surfaces (Questions, Now) still show them.
     if ((!notifySystem && !pushSignal) || this.inactive(id)) return;
@@ -2041,7 +2075,7 @@ export class ManagerEngine {
       const manager = store.get(id);
       if (!manager || manager.notify === false || manager.inactive || !unseen(store.state(id), message)) return;
       notifySystem?.(manager.name, body);
-      pushSignal?.(id);
+      pushSignal?.(id, kind);
     }, SYSTEM_NOTIFY_DELAY_MS));
     timer.unref?.();
     this.alerts.add(timer);
@@ -2057,7 +2091,7 @@ export class ManagerEngine {
     // Only keys still fresh are worth remembering; the rest were reported and will not come back.
     this.pushedAttention.set(id, new Set(waiting));
     if (newKeys.length === 0 || store.get(id)?.notify === false) return;
-    pushSignal(id);
+    pushSignal(id, 'task');
   }
 
   private async watchTurn(
@@ -2144,7 +2178,7 @@ export class ManagerEngine {
     }, true);
     this.settleAsks(id, written, closes);
     const body = alertBody(judgement);
-    if (body) this.alert(id, written, body);
+    if (body) this.alert(id, written, body, judgement.important ? 'message' : 'question');
   }
 
   /** `manager_turn_completed`, and the turn's duration as a timing (stopped turns time nothing). */
@@ -2203,7 +2237,7 @@ export class ManagerEngine {
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
-    const resumeId = state.sessionKey === sessionKey ? state[field] : undefined;
+    const resumeId = state.sessionKey === sessionKey && this.resumes(turn.kind, state.sessions[turn.kind]) ? state[field] : undefined;
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
@@ -2239,16 +2273,25 @@ export class ManagerEngine {
     const bashHook = runner === 'claude' ? managerBashHookCommand() : undefined;
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
+    // A new chat session hears what it would otherwise have remembered; a watch or job is self-contained.
+    // A fresh session never saw the cards a resumed one would get by id.
+    const unseen = turn.cards?.ids ? prompt.replace(turn.cards.ids, () => turn.cards!.full) : prompt;
+    const freshPrompt = turn.kind === 'chat' ? `${this.preamble(id, sources)}${unseen}` : prompt;
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
+    // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
+    const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
         connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
         // Only where the turn can Write the file it would pass.
-        { textInFiles: runner === 'claude' && writable !== undefined },
+        {
+          textInFiles: runner === 'claude' && writable !== undefined,
+          memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
+        },
       ),
-      userPrompt: prompt,
+      userPrompt: resumeId ? prompt : freshPrompt,
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
@@ -2266,6 +2309,8 @@ export class ManagerEngine {
         CEZ_MANAGER_ID: id,
         CEZ_MANAGER_TURN: turn.kind,
         ...(turn.token ? { [MANAGER_TURN_ENV]: turn.token } : {}),
+        // One memory, cezar's: Claude's own would split it per runner and grow unseen.
+        ...(runner === 'claude' ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
         ...(manager.bashAllow?.length ? { [MANAGER_BASH_ALLOW_ENV]: JSON.stringify(manager.bashAllow) } : {}),
         ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
         ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
@@ -2273,6 +2318,7 @@ export class ManagerEngine {
         ...(readOnlyWatch ? readOnlyEnv() : {}),
       },
       ...(readOnlyWatch ? { enforceReadOnly: true } : {}),
+      ...(noMcpServers ? { noMcpServers: true } : {}),
       ...(planAccount ? { onUsageWindows: (observation) => recordUsageObservation(planAccount, observation) } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
@@ -2289,11 +2335,7 @@ export class ManagerEngine {
       const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    // Only a chat gets the transcript back: it holds what watches read.
-    const recap = turn.kind === 'chat'
-      ? recapPrompt(store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming)))
-      : '';
-    const fresh = await this.session(id, { ...base, userPrompt: `${recap}${prompt}` }, sessionKey, runner, undefined, turn, onProgress);
+    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress);
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
@@ -2318,6 +2360,9 @@ export class ManagerEngine {
     const commands: ManagerCommand[] = [];
     const bashCommands = new Map<string, string>();
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
+    const turnStats = new TurnStatsCollector();
+    const turnStartedAt = this.now();
+    const priorSession = resumeId ? store.state(id).sessions[turn.kind] : undefined;
     // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
     const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
     const progress = () => onProgress(snapshot);
@@ -2334,6 +2379,7 @@ export class ManagerEngine {
       }));
     };
     const onEvent = (event: AgentEvent) => {
+      turnStats.event(event);
       // An error first means no transcript exists; resuming it would only fail again.
       if (sessionId && event.type !== 'error') saveSession(sessionId);
       switch (event.type) {
@@ -2372,7 +2418,8 @@ export class ManagerEngine {
           error ??= event.message;
           break;
         case 'mcp-servers':
-          this.observeConnectors(id, event);
+          // A turn that loaded none would report every server gone; the probe still sees them.
+          if (!base.noMcpServers) this.observeConnectors(id, event);
           break;
         default:
           break;
@@ -2403,8 +2450,34 @@ export class ManagerEngine {
     } catch (cause) {
       error ??= cause instanceof Error ? cause.message : String(cause);
     }
+    const sessionTurn = (priorSession?.turns ?? 0) + 1;
+    const stats = turnStats.stats({
+      fresh: !resumeId,
+      sessionTurn,
+      ...(priorSession ? { idleMs: turnStartedAt - msOf(priorSession.lastAt) } : {}),
+    });
     // A watch that reported nothing new is "quiet": the hint weighs its cadence against that.
-    planUsage?.close(turn.kind === 'watch' ? { quiet: !judged(text().replace(QUIET_LINE, '').trim()).text } : {});
+    planUsage?.close({ ...(turn.kind === 'watch' ? { quiet: !judged(text().replace(QUIET_LINE, '').trim()).text } : {}), turn: stats });
+    if (saved && store.get(id)) {
+      const at = this.iso();
+      store.updateState(id, (state) => {
+        const cardsDigest = !error && turn.cards ? turn.cards.digest : resumeId ? state.sessions[turn.kind]?.cardsDigest : undefined;
+        return {
+          ...state,
+          sessions: {
+            ...state.sessions,
+            [turn.kind]: {
+              // Seen only once the turn ran; a failed one keeps what the resumed transcript had.
+              ...(cardsDigest !== undefined ? { cardsDigest } : {}),
+              startedAt: priorSession?.startedAt ?? new Date(turnStartedAt).toISOString(),
+              lastAt: at,
+              turns: sessionTurn,
+              ...(turnStats.context > 0 ? { contextTokens: turnStats.context } : priorSession?.contextTokens !== undefined ? { contextTokens: priorSession.contextTokens } : {}),
+            },
+          },
+        };
+      });
+    }
     return { text: committed || draft, commands, costUsd, ...(error ? { error } : {}) };
   }
 
@@ -2459,6 +2532,98 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
+  }
+
+  // ---- sessions and memory (spec 2026-11-21-manager-short-sessions-and-memory) ---------------
+
+  /** Watches and jobs always start over; a chat resumes only a warm, small, young transcript. */
+  private resumes(kind: ActiveTurn['kind'], meta: ManagerState['sessions']['chat']): boolean {
+    if (kind !== 'chat' || !meta) return false;
+    const now = this.now();
+    return now - msOf(meta.lastAt) < SESSION_IDLE_MS
+      && now - msOf(meta.startedAt) < SESSION_AGE_MS
+      && (meta.contextTokens ?? 0) < SESSION_CONTEXT_MAX;
+  }
+
+  /** What a new chat session starts from besides memory: recent exchanges and followed tasks. */
+  private preamble(id: string, sources: ManagerProjectSource[]): string {
+    const { store } = this.deps;
+    const messages = store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming));
+    const tasks = Object.entries(store.state(id).follows)
+      .sort(([, a], [, b]) => msOf(b.at) - msOf(a.at))
+      .slice(0, PREAMBLE_TASKS)
+      .flatMap(([key]) => {
+        const [projectId, runId] = key.split('/');
+        const run = projectId && runId ? findRun(sources.find((source) => source.id === projectId)?.runs() ?? [], runId) : undefined;
+        return run ? [`- [[task:${projectId}/${run.id}]] ${run.status}${run.prNumber !== undefined ? `, PR #${run.prNumber}` : ''}: ${run.title ?? run.task.slice(0, 80)}`] : [];
+      });
+    return sessionPreamble(messages, tasks);
+  }
+
+  /** The manager's memory, importing Claude Code's auto-memory for its workdir once. */
+  private memoryFor(id: string, claudeConfigDir?: string): MemoryFile {
+    const { store } = this.deps;
+    const dir = store.dir(id);
+    const current = readMemory(dir, (message) => console.warn(`[cezar] ${message}`)) ?? { entries: [] };
+    if (current.imported) return current;
+    const at = this.iso();
+    const imported = claudeAutoMemory(store.workdir(id), claudeConfigDir, at).filter((entry) => !current.entries.some((other) => other.key === entry.key));
+    let entries = current.entries;
+    for (const entry of imported) {
+      const next = setMemoryEntry({ entries }, entry.key, { kind: entry.kind, text: entry.text, ...(entry.why ? { why: entry.why } : {}) }, at, 'import');
+      if ('error' in next) continue;
+      entries = next.entries;
+    }
+    const file: MemoryFile = { entries, imported: { at, count: entries.length - current.entries.length } };
+    try {
+      writeMemory(dir, file);
+    } catch (error) {
+      console.warn(`[cezar] manager ${id} memory: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return file;
+  }
+
+  private memoryResponse(file: MemoryFile): ManagerMemoryResponse {
+    return { entries: file.entries, limits: { entries: MANAGER_MEMORY_LIMITS.entries, bytes: MANAGER_MEMORY_LIMITS.bytes }, usedBytes: memoryBytes(file.entries) };
+  }
+
+  /** Memory reaches every later system prompt unfenced, and a watch reads untrusted text: no write
+   *  lands while one runs. The route cannot tell the cockpit from the agent, so the user's waits too. */
+  private watching(id: string): boolean {
+    return this.runtimes.get(id)?.active?.kind === 'watch';
+  }
+
+  /** The Claude config dir a turn would import from: the manager's account, not the server's own. */
+  private async claudeConfigDir(manager: Manager): Promise<string | undefined> {
+    const runner = await this.runnerOf(manager);
+    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
+    return (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR;
+  }
+
+  async memory(id: string): Promise<ManagerMemoryResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    return this.memoryResponse(this.memoryFor(id, await this.claudeConfigDir(manager)));
+  }
+
+  async setMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
+    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso());
+    if ('error' in next) return next;
+    writeMemory(this.deps.store.dir(id), next);
+    return this.memoryResponse(next);
+  }
+
+  async removeMemory(id: string, key: string): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
+    const next = removeMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key);
+    if ('error' in next) return next;
+    writeMemory(this.deps.store.dir(id), next);
+    return this.memoryResponse(next);
   }
 
   // ---- connectors (spec 2026-11-12-manager-connectors) --------------------------------------
@@ -2967,7 +3132,7 @@ export class ManagerEngine {
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
-    this.alert(id, message, `Needs your approval: ${describeAction(action)}`);
+    this.alert(id, message, `Needs your approval: ${describeAction(action)}`, 'approval');
     return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
   }
 

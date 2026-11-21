@@ -8,6 +8,10 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const CHECK_TTL_MS = 6 * 60 * 60 * 1_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+// `skills update` clones the source once per name (~0.7s each, 53s for 74 names, #2369), so apply
+// gets its own larger bound and works in chunks: each chunk is bounded and keeps what it finished.
+const APPLY_TIMEOUT_MS = 120_000;
+const APPLY_CHUNK_SIZE = 20;
 const OUTPUT_CAP = 64 * 1_024;
 const LOCK_STALE_MS = 2 * 60 * 1_000;
 
@@ -42,6 +46,8 @@ export interface SkillsUpdateServiceOptions {
   homeDir?: string;
   now?: () => number;
   timeoutMs?: number;
+  /** Bound for each `skills update` chunk; the check keeps `timeoutMs`. */
+  applyTimeoutMs?: number;
   run?: (file: string, args: readonly string[], cwd: string, timeoutMs: number) => Promise<CommandResult>;
   resolveNpx?: () => Promise<string | null>;
   invalidateCatalog?: (repoRoot: string) => Promise<unknown> | unknown;
@@ -94,14 +100,14 @@ function blankScope(scope: SkillsUpdateScope): SkillsUpdateScopeState {
   return { scope, status: 'idle', available: false, skills: [], checkedAt: null, updatedAt: null };
 }
 
-function reasonFor(error: unknown): string {
+function reasonFor(error: unknown, phase: 'check' | 'apply' = 'check'): string {
   const err = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string };
   const text = String(err.message ?? '').toLowerCase();
   if (err.code === 'ENOENT') return 'npx is unavailable';
   if (err.code === 'EINVAL' || err.code === 'EACCES') return 'npx could not be launched';
-  if (err.killed || err.signal === 'SIGTERM' || text.includes('timed out')) return 'update check timed out';
-  if (/(enotfound|eai_again|network|offline|fetch failed)/.test(text)) return 'update check is offline';
-  return 'update check failed';
+  if (err.killed || err.signal === 'SIGTERM' || text.includes('timed out')) return `update ${phase} timed out`;
+  if (/(enotfound|eai_again|network|offline|fetch failed)/.test(text)) return `update ${phase} is offline`;
+  return `update ${phase} failed`;
 }
 
 /** Node refuses to spawn `npx.cmd` without a shell (CVE-2024-27980), so on Windows run npm's
@@ -149,6 +155,7 @@ export class SkillsUpdateService {
   private readonly home: string;
   private readonly now: () => number;
   private readonly timeoutMs: number;
+  private readonly applyTimeoutMs: number;
   private readonly runCommand: NonNullable<SkillsUpdateServiceOptions['run']>;
   private readonly resolveNpx: NonNullable<SkillsUpdateServiceOptions['resolveNpx']>;
   private readonly invalidateCatalog: NonNullable<SkillsUpdateServiceOptions['invalidateCatalog']>;
@@ -162,6 +169,7 @@ export class SkillsUpdateService {
     this.home = options.homeDir ?? homedir();
     this.now = options.now ?? Date.now;
     this.timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
+    this.applyTimeoutMs = options.applyTimeoutMs ?? APPLY_TIMEOUT_MS;
     this.runCommand = options.run ?? defaultRun;
     this.resolveNpx = options.resolveNpx ?? defaultResolveNpx;
     this.invalidateCatalog = options.invalidateCatalog ?? (() => undefined);
@@ -291,17 +299,23 @@ export class SkillsUpdateService {
           outcomes.push({ ...prior, status: 'unavailable', reason: 'installation metadata is unsupported' });
           continue;
         }
+        let applied = 0;
         try {
-          await this.runCommand(npx, ['--yes', 'skills', 'update', ...names, scope === 'project' ? '-p' : '-g', '-y'], repoRoot, this.timeoutMs);
+          for (let i = 0; i < names.length; i += APPLY_CHUNK_SIZE) {
+            await this.runCommand(npx, ['--yes', 'skills', 'update', ...names.slice(i, i + APPLY_CHUNK_SIZE), scope === 'project' ? '-p' : '-g', '-y'], repoRoot, this.applyTimeoutMs);
+            applied += Math.min(APPLY_CHUNK_SIZE, names.length - i);
+          }
           completed.add(scope);
           outcomes.push({ ...prior, status: 'current', available: false, skills: [], updatedAt: new Date(this.now()).toISOString(), reason: undefined });
         } catch (error) {
-          outcomes.push({ ...prior, status: 'error', reason: reasonFor(error) });
+          // Earlier chunks already rewrote the lock; refresh the catalog and let the recheck list the rest.
+          if (applied > 0) completed.add(scope);
+          outcomes.push({ ...prior, status: 'error', reason: reasonFor(error, 'apply') });
         }
       }
     } catch (error) {
       if (error instanceof SkillsUpdateConflictError) throw error;
-      const reason = reasonFor(error);
+      const reason = reasonFor(error, 'apply');
       for (const scope of ['project', 'global'] as const) {
         const prior = current.scopes.find((entry) => entry.scope === scope) ?? blankScope(scope);
         outcomes.push({ ...prior, status: prior.available ? 'error' : prior.status, reason: prior.available ? reason : prior.reason });
