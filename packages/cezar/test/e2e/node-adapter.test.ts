@@ -1,6 +1,7 @@
 import { createAdaptorServer } from '@hono/node-server';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { request } from 'node:http';
 import test from 'node:test';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
@@ -48,5 +49,42 @@ test('the Node adapter preserves JSON bodies, cookies and SSE over loopback', { 
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
+  }
+});
+
+test('the Node adapter rejects raw backslash paths over HTTP without rejecting encoded/query values', { timeout: 15_000 }, async () => {
+  const paths: string[] = [];
+  const server = createAdaptorServer({ fetch: (incoming) => {
+    paths.push(incoming.url);
+    return new Response('public response');
+  } });
+  try {
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    for (const [path, status] of [
+      ['/public\\..\\admin/secret', 400],
+      ['/admin\\secret', 400],
+      ['/admin%5Csecret', 200],
+      ['/public?value=\\admin', 200],
+    ] as const) {
+      // fetch/URL would normalize the attacker-controlled request target first.
+      // http.request's path sends the exact target to the real loopback adapter.
+      const actual = await new Promise<number | undefined>((resolve, reject) => {
+        const req = request({ hostname: '127.0.0.1', port: address.port, path, agent: false }, (res) => {
+          res.resume();
+          res.once('end', () => resolve(res.statusCode));
+        });
+        req.setTimeout(5_000, () => req.destroy(new Error('request timeout')));
+        req.once('error', reject);
+        req.end();
+      });
+      assert.equal(actual, status, path);
+    }
+    assert.deepEqual(paths.map((url) => new URL(url).pathname), ['/admin%5Csecret', '/public']);
+  } finally {
+    if ('closeAllConnections' in server) server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
