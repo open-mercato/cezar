@@ -92,11 +92,13 @@ const CONTENT_HELP = `
   --file <path> | --stdin      append the text of a file, or of stdin
   --allow-placeholder          send text holding a marker such as [transcript here] or PASTE anyway`;
 
-const SNAPSHOT_HELP = (command: string, what: string) => `cez manager ${command} [--project <id>] [--json]
+const SNAPSHOT_HELP = (command: string, what: string) => `cez manager ${command} [--project <id>] [--all] [--json]
 
 ${what}
+Compact by default: finished tasks the user has not opened, and all but the 20 newest finished tasks per project, are counted, not listed, and the output stops at 8000 characters.
   --project <id>   only this project
-  --json           the data, as JSON`;
+  --all            list everything
+  --json           the data, as JSON (always everything)`;
 
 /** `--help` per command; `task create` adds the project's workflow names when it can reach them. */
 const HELP: Record<string, string> = {
@@ -225,6 +227,37 @@ function parse<O extends Options>(key: string, args: string[], options: O, allow
     if (/Unexpected argument/.test(message)) fail(`'${key}' takes no arguments besides its flags (${flags}). See: cez manager ${key} --help`);
     fail(`${message.split('. ')[0]}. See: cez manager ${key} --help`);
   }
+}
+
+/** Finished tasks a compact listing still shows per project, newest first. */
+const RECENT_FINISHED = 20;
+/** A compact listing's size: past it, the rest is counted, not printed. */
+const OUTPUT_CHARS = 8_000;
+const FINISHED = new Set(['done', 'cancelled']);
+
+/** Every unfinished task, plus the newest finished ones. */
+export function recentTasks<T extends { status: string; lastActivityAt?: string }>(tasks: T[]): { shown: T[]; hidden: number } {
+  const finished = tasks.filter((task) => FINISHED.has(task.status))
+    .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
+  const kept = new Set(finished.slice(0, RECENT_FINISHED));
+  const shown = tasks.filter((task) => !FINISHED.has(task.status) || kept.has(task));
+  return { shown, hidden: tasks.length - shown.length };
+}
+
+/** Lines up to `limit` characters, then one line counting the rest. */
+export function capped(lines: string[], limit: number | undefined): string[] {
+  if (limit === undefined) return lines;
+  const out: string[] = [];
+  let size = 0;
+  for (const [index, line] of lines.entries()) {
+    if (size + line.length + 1 > limit) {
+      out.push(`… ${lines.length - index} more line${lines.length - index === 1 ? '' : 's'}: narrow with --project, or use --all or --json`);
+      break;
+    }
+    out.push(line);
+    size += line.length + 1;
+  }
+  return out;
 }
 
 /** `30m`, `2h`, `1d` before `now`, or an ISO time; undefined when it is neither. */
@@ -430,7 +463,7 @@ export async function runManagerCommand(
       case 'attention':
       case 'tasks':
       case 'prs': {
-        const { values } = parse(command, rest, { json: { type: 'boolean' }, project: { type: 'string' } });
+        const { values } = parse(command, rest, { json: { type: 'boolean' }, project: { type: 'string' }, all: { type: 'boolean' } });
         const data = await snapshot();
         const projects = data.projects.filter((project) => !values.project || project.projectId === values.project);
         if (values.json) {
@@ -440,27 +473,37 @@ export async function runManagerCommand(
           else printJson(projects.flatMap((project) => project.prs.map((pr) => ({ projectId: project.projectId, ...pr }))));
           return 0;
         }
+        // Compact by default (spec 2026-11-21 § 2.4): finished work is history, read on demand.
+        const lines: string[] = [];
         if (command === 'status' || command === 'attention') {
-          if (data.attention.length === 0) io.log('Nothing needs attention.');
-          for (const item of data.attention) io.log(`${item.kind}  ${item.projectId}  ${item.runId ?? (item.number !== undefined ? `#${item.number}` : '')}  ${item.title}${item.detail ? ` — ${item.detail}` : ''}`);
+          const attention = values.all ? data.attention : data.attention.filter((item) => item.kind !== 'task-finished');
+          const hidden = data.attention.length - attention.length;
+          if (attention.length === 0) lines.push(hidden > 0 ? 'Nothing needs attention besides finished tasks.' : 'Nothing needs attention.');
+          for (const item of attention) lines.push(`${item.kind}  ${item.projectId}  ${item.runId ?? (item.number !== undefined ? `#${item.number}` : '')}  ${item.title}${item.detail ? ` — ${item.detail}` : ''}`);
+          if (hidden > 0) lines.push(`(${hidden} finished task${hidden === 1 ? '' : 's'} the user has not opened yet: --all lists them)`);
         }
         if (command === 'status' || command === 'tasks') {
-          for (const project of projects) for (const task of project.tasks) {
-            const facts = [
-              task.startedBy === 'manager' ? `by ${task.startedByManager ?? 'a manager'}` : 'by the user',
-              (task.model || task.actualModel) && `${taskModelLabel(task.model, task.actualModel)}${task.effort ? `/${task.effort}` : ''}`,
-              task.prNumber !== undefined && `PR #${task.prNumber}`,
-              task.childCount > 0 && `${task.childCount} dispatched`,
-            ].filter(Boolean).join(', ');
-            io.log(`${project.projectId}  ${task.runId}  ${task.status}  ${task.title}  (${facts})`);
+          for (const project of projects) {
+            const { shown, hidden } = values.all ? { shown: project.tasks, hidden: 0 } : recentTasks(project.tasks);
+            for (const task of shown) {
+              const facts = [
+                task.startedBy === 'manager' ? `by ${task.startedByManager ?? 'a manager'}` : 'by the user',
+                (task.model || task.actualModel) && `${taskModelLabel(task.model, task.actualModel)}${task.effort ? `/${task.effort}` : ''}`,
+                task.prNumber !== undefined && `PR #${task.prNumber}`,
+                task.childCount > 0 && `${task.childCount} dispatched`,
+              ].filter(Boolean).join(', ');
+              lines.push(`${project.projectId}  ${task.runId}  ${task.status}  ${task.title}  (${facts})`);
+            }
+            if (hidden > 0) lines.push(`${project.projectId}: ${hidden} older finished task${hidden === 1 ? '' : 's'} not shown (--all lists them)`);
           }
         }
         if (command === 'status' || command === 'prs') {
           for (const project of projects) {
-            if (project.prsUnavailable) io.log(`${project.projectId}: pull requests unavailable — ${project.prsUnavailable}`);
-            for (const pr of project.prs) io.log(`${project.projectId}  #${pr.number}  ${pr.draft ? 'draft' : (pr.status ?? 'open')}  ${pr.title}`);
+            if (project.prsUnavailable) lines.push(`${project.projectId}: pull requests unavailable — ${project.prsUnavailable}`);
+            for (const pr of project.prs) lines.push(`${project.projectId}  #${pr.number}  ${pr.draft ? 'draft' : (pr.status ?? 'open')}  ${pr.title}`);
           }
         }
+        for (const line of capped(lines, values.all ? undefined : OUTPUT_CHARS)) io.log(line);
         return 0;
       }
 
