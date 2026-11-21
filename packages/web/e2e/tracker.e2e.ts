@@ -43,8 +43,8 @@ afterAll(async () => {
 
 describe('read-only tracker complete flow', () => {
   it('connects a Jira candidate beyond page one from Settings', async () => {
-    browser.goto(page('/settings/tracker'))
-    browser.waitForFunction("document.body.textContent.includes('No tracker connected')")
+    browser.goto(page('/settings/integrations?integration=jira'))
+    browser.waitForFunction("document.body.textContent.includes('Jira is not connected.')")
     browser.screenshot(artifacts + '/01-setup.png')
     clickText('Browse Jira')
     browser.waitForFunction("document.body.textContent.includes('Project 50')")
@@ -108,7 +108,7 @@ describe('read-only tracker complete flow', () => {
     browser.setViewport(1440, 1000)
   })
   it('switches to Linear and disconnects through the UI', async () => {
-    browser.goto(page('/settings/tracker'))
+    browser.goto(page('/settings/integrations?integration=linear'))
     browser.waitForFunction("document.body.textContent.includes('Browse Linear')")
     clickText('Browse Linear')
     browser.waitForFunction("document.body.textContent.includes('Team 1')")
@@ -119,10 +119,10 @@ describe('read-only tracker complete flow', () => {
     browser.waitForFunction("document.body.textContent.includes('ENG1-1')")
     expect(browser.evaluate("document.querySelector('main').textContent.includes('DEMO51-')")).toBe(false)
     browser.screenshot(artifacts + '/05-linear-list.png')
-    browser.goto(page('/settings/tracker'))
+    browser.goto(page('/settings/integrations?integration=linear'))
     browser.waitForFunction("document.body.textContent.includes('Disconnect')")
     clickText('Disconnect')
-    browser.waitForFunction("document.body.textContent.includes('No tracker connected')")
+    browser.waitForFunction("document.body.textContent.includes('Linear is not connected.')")
     expect(await fetch(baseUrl + '/api/v1/tracker/association').then(r => r.json())).toEqual({ association: null })
   })
 })

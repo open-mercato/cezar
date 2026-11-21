@@ -2,7 +2,7 @@
 
 Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL.
+Each destination has its own tile in the project's Settings → **Integrations**: **Slack** (an Incoming Webhook), **Discord** (a channel Webhook URL) and **Webhooks** (signed cezar JSON to your own endpoint). A tile's **Add receiver** form is locked to its destination, and a receiver is listed under the tile of its destination.
 
 ## Supported server platforms
 
@@ -31,9 +31,9 @@ enabled. An ownership or storage failure reports the existing storage/coordinato
 ## Enable and connect
 
 1. Start cezar with `CEZ_WEBHOOKS=1` in its server environment. Restart after changing the flag.
-   Without the flag, the Webhooks settings page explains how to enable delivery; it creates no
+   Without the flag, the Webhooks, Slack and Discord tiles explain how to enable delivery; it creates no
    webhook storage, capture observers, timers or requests.
-2. Open your project's **Settings → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
+2. Open your project's **Settings → Integrations → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
    Paths and query strings may contain credentials: cezar masks them in lists and delivery history.
 3. Keep **Minimal** initially. For a custom receiver, save and copy the signing key into its secret storage.
    The cockpit shows that key once. If you lose it, use **Rotate key** in the receiver's **⋯** menu. Slack and Discord use their secret URL instead.
@@ -215,7 +215,7 @@ Select the Minimal or Standard profile deliberately: the automation service rece
 
 Create or use a Slack app, enable Incoming Webhooks, and install a webhook into the desired channel
 ([Slack setup guide](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)).
-In Settings → Webhooks choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
+In Settings → Integrations → Slack choose **Add receiver**, paste its URL, Save, Test, then
 Activate. This requires no bot process, relay or OAuth flow in cezar. Only `hooks.slack.com/services/…`
 URLs are supported; GovSlack is outside this scope.
 
@@ -229,7 +229,7 @@ disables an active receiver. Fixed Slack error codes appear in delivery diagnost
 
 In Discord Server Settings → Integrations → Webhooks, create a channel webhook and copy its URL
 ([Discord setup guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
-Choose **Discord channel (Webhook URL)**, paste the URL, Save, Test, then Activate. No bot is needed.
+In Settings → Integrations → Discord choose **Add receiver**, paste the URL, Save, Test, then Activate. No bot is needed.
 Cezar asks Discord to confirm that the message was saved before marking a delivery successful.
 The returned message content is discarded.
 The `discordapp.com`, `ptb.discord.com` and `canary.discord.com` hosts and `/api/v10/webhooks/…`
@@ -243,8 +243,7 @@ receiver; only a fixed vocabulary of Discord diagnostics is retained.
 
 Both services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
 Retained delivery storage keeps the canonical cezar event; history exposes metadata only.
-The provider-specific message is rendered when sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
-receiver, rotate its signing key and copy it before testing/activating.
+The provider-specific message is rendered when sending.
 Treat each chat webhook URL as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
