@@ -43,6 +43,8 @@ const sessionMetaSchema = z
     lastAt: z.string(),
     turns: z.number().int().min(0),
     contextTokens: z.number().int().min(0).optional(),
+    /** The open cards this transcript was last shown in full (`openCardsDigest`). */
+    cardsDigest: z.string().optional(),
   })
   .optional()
   .catch(undefined);
