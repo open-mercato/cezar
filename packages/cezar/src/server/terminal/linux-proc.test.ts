@@ -123,7 +123,20 @@ describe.skipIf(process.platform !== 'linux')('Linux terminal proc access (#2349
     expect(access).not.toContain(`/proc/${elevated}/cmdline`);
     expect(access).not.toContain(`/proc/${elevated}/task`);
     files.delete(`/proc/${elevated}/stat`);
+    files.set(`/proc/${shell}/task/${shell}/children`, '');
     expect(readLinuxProcessesSync()?.map((row) => row.pid)).toEqual([root, shell]);
+  });
+
+  it('keeps a live hidepid=2 child unknown when its stat looks missing', async () => {
+    const { files } = fixture();
+    // hidepid=2 reports ENOENT for an elevated child that remains in its
+    // visible parent's children list. It has not exited and must not look idle.
+    files.delete(`/proc/${elevated}/stat`);
+    expect(await processSnapshot()).toBeNull();
+    expect(readLinuxProcessesSync()).toBeNull();
+    expect(readProcessTreeSync()).toBeNull();
+    expect(io.ps).not.toHaveBeenCalled();
+    expect(io.psSync.mock.calls.some(([file]) => file === 'ps')).toBe(false);
   });
 
   it('fails unknown for missing root, missing children support and malformed stats', async () => {

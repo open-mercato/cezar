@@ -46,3 +46,11 @@ Both production reader regressions fail on actual ps invocations when only routi
 All five configured npm commands have passing local results: typecheck0 after a test-only typing correction; npm test0 with command-local CEZ_INSTANCE_ID removal (17831 passed /8 skipped,1093 files passed/3 skipped,875.90s); test:unit0(54); build0 including check:pack; test:package0(35). Prior two full tests reached600s and exited124; the inherited health-key mismatch passes after command-local isolation, without editing health source/config. Source CI at afc46dd91:14 checks complete(12success2skip),11 observed workflow runs complete(2success9skip). Parent independently reported4 files/28 tests passing and inspected the diff.
 
 Remaining step2.2 is gated on native setuid/hidepid QA and independent approval. Parent directs a partial handoff, draft/no-automerge despite passing code gates. The run publishes evidence and releases only its own PR lock after this commit; tracker claim comments record final release. Spec stays design-only on #2370; implementation is #2371. No source changed after afc46dd91. See .ai/analysis/2026-11-21-issue-2349-validation.md and cockpit Assets for exact logs and limits. No further full reruns are planned.
+
+## Root completion after autonomous continuation
+
+- [x] Independently reproduce native setuid ancestry and hidden proc semantics in network-disabled Linux containers. hidepid=0 retains the elevated child and user grandchild. hidepid=1 returns unknown. hidepid=2 exposed a false-idle bug: ENOENT was mistaken for process exit.
+- [x] Prove the new hidepid=2 regression red on the previous source, then recheck the parent's children link before ignoring a missing child; actual exits remain skippable and live hidden descendants return unknown.
+- [ ] Re-run all five configured gates and scoped terminal/native verification on the corrected source, complete terminal QA and independent root review, then publish evidence and restore appropriate ready/automerge state.
+
+The root owns atomic PR2371 claim under run bab16231-b24e-4b5b-a184-ac255f19a607. Existing #2005 fix PR2007 is the second security candidate; Windows #2368 remains unchanged because a native Windows environment is unavailable. No additional workers were dispatched.

@@ -46,7 +46,7 @@ function vanished(error: unknown): boolean {
 /** One traversal for both drivers; no /proc enumeration or UID filter (#2349). */
 function* traverse(commands: boolean, root: number): Generator<Request, ProcRow[] | null, string> {
   const rows: ProcRow[] = [];
-  const queue = [{ pid: root, parent: undefined as number | undefined }];
+  const queue = [{ pid: root, parent: undefined as number | undefined, childrenPath: undefined as string | undefined }];
   const seen = new Set<number>();
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i];
@@ -56,7 +56,13 @@ function* traverse(commands: boolean, root: number): Generator<Request, ProcRow[
     try {
       row = parseProcStat(yield { kind: 'read', path: `/proc/${entry.pid}/stat` });
     } catch (error) {
-      if (entry.parent !== undefined && vanished(error)) continue;
+      if (entry.childrenPath && vanished(error)) {
+        // hidepid=2 also reports ENOENT for live elevated descendants. Only
+        // discard a missing child once its visible parent's link is gone.
+        const siblings = ids(yield { kind: 'read', path: entry.childrenPath });
+        if (siblings.includes(entry.pid)) return null;
+        continue;
+      }
       throw error;
     }
     if (!row || row.pid !== entry.pid) return null;
@@ -80,8 +86,9 @@ function* traverse(commands: boolean, root: number): Generator<Request, ProcRow[
     }
     if (threads.length === 0) return null;
     for (const tid of threads) {
-      const children = ids(yield { kind: 'read', path: `/proc/${row.pid}/task/${tid}/children` });
-      for (const pid of children) queue.push({ pid, parent: row.pid });
+      const childrenPath = `/proc/${row.pid}/task/${tid}/children`;
+      const children = ids(yield { kind: 'read', path: childrenPath });
+      for (const pid of children) queue.push({ pid, parent: row.pid, childrenPath });
     }
   }
   return rows;
