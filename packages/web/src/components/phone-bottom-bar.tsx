@@ -16,12 +16,17 @@ const ITEM =
 const CURRENT = 'font-semibold text-foreground'
 
 /**
+<<<<<<< HEAD
  * Now, Tasks, New task, Manager and More for a phone PWA (spec 2026-10-31-managers, Phones; the
  * redesign's one-sidebar items). The bar mounts only with managers on and the PWA opens on
  * Manager, so Manager is a tab; Git stays one tap away in More. `md:hidden`: a phone wide enough
  * in landscape has the real sidebar instead. Mounted only there, which is what lets it read the
  * query cache from the QueryClient-free shell. Project items point into the last project's
  * index, so they never restore the page inside it.
+=======
+ * Compact navigation (spec 2026-10-31-managers, Phones). Project links use the current or last
+ * project; a task opened from Manager keeps its originating chat as the Manager destination.
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
  */
 export function PhoneBottomBar({
   menuOpen,
@@ -37,6 +42,13 @@ export function PhoneBottomBar({
   attention?: ManagerAttention | null
   /** Where Manager leads from a project; inside Manager it goes back to the list, like a tab bar. */
   managerTo?: string
+<<<<<<< HEAD
+=======
+  /** In a manager chat: Tasks opens the tasks it started, not the project's. */
+  managerTasks?: ManagerTasksTab | null
+  /** The shell selected compact navigation, including inside a narrow desktop container. */
+  everyWidth?: boolean
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
 }) {
   const keyboardOpen = useKeyboardOpen()
   const health = useHealth()

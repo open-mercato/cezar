@@ -15,7 +15,12 @@ function device({ standalone = true, userAgent = 'Mozilla/5.0' } = {}) {
     addEventListener: () => {},
     removeEventListener: () => {},
   }))
+<<<<<<< HEAD
   vi.stubGlobal('screen', { width: 390, height: 844 })
+=======
+  vi.stubGlobal('screen', { width, height })
+  vi.stubGlobal('innerWidth', width)
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
   vi.stubGlobal('navigator', { ...navigator, userAgent })
 }
 
@@ -104,10 +109,10 @@ describe('PhoneBottomBar', () => {
     expect(items).toHaveLength(5)
   })
 
-  it('stays out of a phone browser tab', () => {
+  it('appears in a narrow browser tab', () => {
     device({ standalone: false })
     renderShell('/manager')
-    expect(bar()).toBeNull()
+    expect(bar()).not.toBeNull()
   })
 
   it('reserves its height for the New-task FAB only while it is there', () => {
@@ -205,4 +210,99 @@ describe('PhoneBottomBar', () => {
     renderShell('/p/boot/', { managerAttention: 'unread' })
     expect(bar()!.querySelector('[data-slot="bottom-bar-attention"] span')?.className).toContain('bg-violet')
   })
+<<<<<<< HEAD
+=======
+
+  describe('on an iPad in CezarBot', () => {
+    const IPAD = { standalone: false, userAgent: 'x CezarMobile/0.1 (ios)', width: 834, height: 1194 }
+    const sidebar = () => document.querySelector('[data-slot="sidebar"], [data-slot="sidebar-rail"]')
+    const column = () => document.querySelector<HTMLElement>('[data-slot="main-column"]')!
+
+    it('is the navigation at every width: no sidebar, and More opens the drawer', () => {
+      device(IPAD)
+      renderShell('/manager/m-1', { managerSidebar: <p>manager rows</p> })
+      expect(bar()).not.toBeNull()
+      expect(bar()!.className).not.toContain('md:hidden')
+      expect(sidebar()).toBeNull()
+      expect(document.querySelector('[data-slot="app-shell"]')!.hasAttribute('data-phone-nav')).toBe(true)
+      fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
+      const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
+      expect(drawer.className).not.toContain('md:hidden')
+      expect(within(drawer).getByText('manager rows')).toBeTruthy()
+    })
+
+    it('pads the status bar once in the visible top header', () => {
+      device(IPAD)
+      renderShell('/manager/m-1')
+      expect(column().className).not.toContain('md:pt-[env(safe-area-inset-top)]')
+      expect(document.querySelector('[data-slot="mobile-top-bar"]')!.className).not.toContain('md:hidden')
+    })
+
+    it('keeps the bar in a thread, with no top menu bar', () => {
+      device(IPAD)
+      renderShell(['/manager/m-1', { pathname: '/p/boot/tasks/run-1', state: { manager: { id: 'm-1', name: 'Ops' } } }])
+      expect(bar()).not.toBeNull()
+      expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
+      expect(document.querySelector('[data-slot="mobile-top-bar"]')).toBeNull()
+      expect(column().className).toContain(' pt-[env(safe-area-inset-top)]')
+    })
+
+    it("a manager chat's Tasks opens its own tasks, with the count", () => {
+      device(IPAD)
+      const open = vi.fn()
+      function Chat() {
+        const publish = useShellTasksTab()
+        React.useEffect(() => {
+          publish?.publish({ count: 4, expanded: false, open })
+          return () => publish?.publish(null)
+        }, [publish])
+        return null
+      }
+      renderShell('/manager/m-1', { children: <Chat /> })
+      const tasks = within(bar()!).getByRole('button', { name: 'Tasks, 4 started by this manager' })
+      expect(tasks.textContent).toContain('4')
+      expect(within(bar()!).queryByRole('link', { name: 'Tasks' })).toBeNull()
+      fireEvent.click(tasks)
+      expect(open).toHaveBeenCalledOnce()
+    })
+  })
+
+  it.each([600, 834, 1023])('uses mobile navigation with a fine pointer at %spx', (width) => {
+    device({ width, standalone: false })
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    renderShell('/manager')
+    expect(bar()).not.toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+  })
+
+  it('responds to container resizing inside a wide viewport', () => {
+    device({ width: 1440, standalone: false })
+    let width = 700
+    let observeResize = () => {}
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width }) as DOMRect)
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { observeResize = callback }
+      observe() {}
+      disconnect() {}
+    })
+    renderShell('/manager')
+    expect(bar()).not.toBeNull()
+    act(() => { width = 1024; observeResize() })
+    expect(bar()).toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).not.toBeNull()
+    act(() => { width = 800; observeResize() })
+    expect(bar()).not.toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+    vi.restoreAllMocks()
+  })
+
+  it('a desktop browser keeps the sidebar and no bar', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
+    vi.stubGlobal('screen', { width: 1280, height: 800 })
+    renderShell('/manager/m-1')
+    expect(bar()).toBeNull()
+    expect(document.querySelector('[data-slot="sidebar"], [data-slot="sidebar-rail"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="app-shell"]')!.hasAttribute('data-phone-nav')).toBe(false)
+  })
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
 })
