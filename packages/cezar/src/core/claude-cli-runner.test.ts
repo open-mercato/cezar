@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
@@ -23,6 +23,7 @@ import {
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
 import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
+import { ClaudeSessionCost, resetClaudeSessionCosts } from './claude-session-cost.ts';
 import type { UiEvent } from './ui-events.ts';
 import { connectorCallFence, connectorCallPrompt } from '../managers/connectors.ts';
 
@@ -600,4 +601,44 @@ describe('ClaudeCliRunner connectors (spec 2026-11-12-manager-connectors)', () =
     expect(result).toMatchObject({ isError: true });
     expect(result?.type === 'tool-result' && result.result).toContain('differs from the one the user approved');
   });
+});
+
+// Claude's result totals are session-wide running sums; each turn reports only its own share.
+describe('per-turn cost from a session running total', () => {
+  let dir = '';
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-claude-turn-cost-'));
+  });
+  afterEach(() => {
+    resetClaudeSessionCosts();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reports each result as an increment, in v1 cost and v2 turn usage alike', async () => {
+    const stubBin = join(dir, 'claude-two-turns.mjs');
+    const result = (total: number, input: number) => JSON.stringify({
+      type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 'unpinned-1',
+      total_cost_usd: total, usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: { 'claude-opus-5-5': { inputTokens: input, outputTokens: 2, costUSD: total, contextWindow: 200000 } },
+    });
+    writeFileSync(stubBin, `#!/usr/bin/env node
+console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'unpinned-1', model: 'claude-opus-5-5' }));
+console.log(${JSON.stringify(result(0.5, 10))});
+console.log(${JSON.stringify(result(1.25, 30))});
+`, { mode: 0o700 });
+    const events: AgentEvent[] = [];
+    const uiEvents: UiEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'go', cwd: dir },
+      (event) => events.push(event),
+      { onUiEvent: (event) => uiEvents.push(event) },
+    );
+    await session.result;
+
+    expect(events.flatMap((e) => (e.type === 'cost' ? [e.usd] : []))).toEqual([0.5, 0.75]);
+    // This line's turn.completed carries no per-model usage (#2317), only costUsd.
+    expect(uiEvents.flatMap((e) => (e.type === 'turn.completed' ? [e.costUsd] : []))).toEqual([0.5, 0.75]);
+    // The session is now known: a resume in this process diffs against its last total.
+    expect(new ClaudeSessionCost('unpinned-1', true, dir, undefined).increment(2)).toBeCloseTo(0.75);
+  }, 15_000);
 });

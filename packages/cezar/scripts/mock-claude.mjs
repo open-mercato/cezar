@@ -7,7 +7,8 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
@@ -35,7 +36,43 @@ function streamedBlocks(obj) {
   });
 }
 
+// Like the real CLI, `total_cost_usd` is the session's running total, carried over `--resume`.
+const MOCK_SESSION = (() => {
+  for (const flag of ['--session-id', '--resume']) {
+    const at = process.argv.indexOf(flag);
+    if (at >= 0 && process.argv[at + 1]) return process.argv[at + 1];
+  }
+  return undefined;
+})();
+const mockCostFile = MOCK_SESSION && process.env.CEZ_HOME && /^[A-Za-z0-9-]+$/.test(MOCK_SESSION)
+  ? join(process.env.CEZ_HOME, 'mock-claude-costs', `${MOCK_SESSION}.json`)
+  : undefined;
+const mockTotals = (() => {
+  try {
+    const saved = mockCostFile ? JSON.parse(readFileSync(mockCostFile, 'utf8')) : {};
+    return { total: Number(saved.total) || 0, input: Number(saved.input) || 0, output: Number(saved.output) || 0 };
+  } catch {
+    return { total: 0, input: 0, output: 0 };
+  }
+})();
+function runningCost(obj) {
+  if (obj?.type !== 'result' || typeof obj.total_cost_usd !== 'number') return obj;
+  mockTotals.total += obj.total_cost_usd;
+  mockTotals.input += obj.usage?.input_tokens ?? 0;
+  mockTotals.output += obj.usage?.output_tokens ?? 0;
+  if (mockCostFile) {
+    try {
+      mkdirSync(dirname(mockCostFile), { recursive: true });
+      writeFileSync(mockCostFile, JSON.stringify(mockTotals));
+    } catch {
+      // a read-only home: the total stays per process
+    }
+  }
+  return { ...obj, total_cost_usd: mockTotals.total };
+}
+
 function emit(obj) {
+  obj = runningCost(obj);
   const blocks = streamedBlocks(obj);
   const envelope = { session_id: obj?.session_id, parent_tool_use_id: obj?.parent_tool_use_id ?? null };
   for (const block of blocks) {

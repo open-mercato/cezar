@@ -26,6 +26,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
 import { claudeUsageStatus } from './claude-usage-status.ts';
+import { ClaudeSessionCost } from './claude-session-cost.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
@@ -139,8 +140,10 @@ export class ClaudeCliRunner implements AgentRunner {
     const startedAt = Date.now();
 
     let child: ChildProcessWithoutNullStreams;
+    let sessionCost: ClaudeSessionCost;
     try {
       const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      sessionCost = new ClaudeSessionCost(spec.sessionId, spec.resume === true, spec.cwd, env.CLAUDE_CONFIG_DIR);
       const [file, argv] = disclaimedCommand(this.bin, args, env);
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
@@ -304,11 +307,14 @@ export class ClaudeCliRunner implements AgentRunner {
           // describes the intentional stop rather than an agent failure.
           // Normalize only this precise wire shape so genuine result errors
           // (authentication, limits, malformed sessions) stay authoritative.
-          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
+          const normalized = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
+          const raw = normalized as { type?: unknown; subtype?: unknown; model?: unknown; session_id?: unknown };
+          const isInit = raw.type === 'system' && raw.subtype === 'init';
+          if (isInit && typeof raw.session_id === 'string') sessionCost.identify(raw.session_id);
+          // Both v1 and v2 read this turn's own cost, never the session's running total.
+          const mappedMessage = raw.type === 'result' ? sessionCost.result(normalized) : normalized;
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
-          const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
-          const isInit = raw.type === 'system' && raw.subtype === 'init';
           if (isInit && typeof raw.model === 'string') initModel = raw.model;
           if (isInit) {
             const servers = claudeMcpServers(mappedMessage);
@@ -336,9 +342,10 @@ export class ClaudeCliRunner implements AgentRunner {
             onEvent?.({ type: 'token-usage', tokensUsed });
           }
 
-          if (msg.type === 'result') {
-            if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
-              onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
+          if (mappedMessage.type === 'result') {
+            const usd = mappedMessage.total_cost_usd;
+            if (typeof usd === 'number' && Number.isFinite(usd) && usd >= 0) {
+              onEvent?.({ type: 'cost', usd });
             }
             onEvent?.({ type: 'turn-end' });
             if (opts.autoEndAfterFirstTurn && stdinOpen && !autoEndTimer) {
