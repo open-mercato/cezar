@@ -1,6 +1,6 @@
 # Manager plan usage: short sessions, cezar-owned memory, work in tasks
 
-Status: **design, awaiting the owner's pick** (task 605750b7). Nothing here is implemented.
+Status: **approved 2026-11-21: all three steps, in order; session rule 55-min idle / 100k.** Step 1 = #2384 (cost fix) + #2385 (connectors, per-turn stats); step 2 = memory, short sessions and `cez-manager history` (implemented as specified; watches and jobs always start fresh); step 3 = output and boilerplate trims, popover.
 Report with charts: task Assets → `manager-plan-usage-report.html`.
 Builds on: `2026-10-31-managers.md`, `2026-11-12-manager-connectors.md`,
 `2026-11-20-manager-plan-usage-popover.md` (PR #2363).

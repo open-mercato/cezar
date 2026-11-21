@@ -835,3 +835,36 @@ export const managerDeltaEventSchema = z.object({
   commands: z.array(managerCommandSchema).optional(),
 });
 export type ManagerDeltaEvent = z.infer<typeof managerDeltaEventSchema>;
+
+// ---- memory (spec 2026-11-21-manager-short-sessions-and-memory § 2.1) ----------------------
+
+/** What every new manager session starts from: small on purpose, so a size budget, not a log. */
+export const MANAGER_MEMORY_LIMITS = { entries: 40, bytes: 6144, text: 280, why: 200 } as const;
+export const managerMemoryKindSchema = z.enum(['preference', 'feedback', 'decision', 'pointer']);
+export type ManagerMemoryKind = z.infer<typeof managerMemoryKindSchema>;
+export const managerMemoryKeySchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'a key is 1–64 lowercase letters, digits or dashes');
+export const managerMemoryEntrySchema = z.object({
+  key: managerMemoryKeySchema,
+  kind: managerMemoryKindSchema,
+  text: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.text),
+  why: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.why).optional(),
+  updatedAt: z.string(),
+  source: z.enum(['user', 'manager', 'import']),
+});
+export type ManagerMemoryEntry = z.infer<typeof managerMemoryEntrySchema>;
+export const managerMemoryResponseSchema = z.object({
+  entries: z.array(managerMemoryEntrySchema),
+  limits: z.object({ entries: z.number().int(), bytes: z.number().int() }),
+  /** Size of the block every new session's system prompt carries. */
+  usedBytes: z.number().int().nonnegative(),
+});
+export type ManagerMemoryResponse = z.infer<typeof managerMemoryResponseSchema>;
+export const managerMemoryParamSchema = z.object({ id: managerIdSchema, key: managerMemoryKeySchema });
+export const putManagerMemoryInputSchema = z.object({
+  kind: managerMemoryKindSchema,
+  text: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.text),
+  why: z.string().trim().max(MANAGER_MEMORY_LIMITS.why).optional(),
+  /** Who wrote it: the cockpit sends `user`, `cez-manager memory set` sends `manager`. */
+  source: z.enum(['user', 'manager']).optional(),
+});
+export type PutManagerMemoryInput = z.infer<typeof putManagerMemoryInputSchema>;
