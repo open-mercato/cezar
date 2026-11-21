@@ -40,6 +40,8 @@ import {
   managerActionParamSchema,
   managerCreateTaskInputSchema,
   managerIdParamSchema,
+  managerMemoryParamSchema,
+  putManagerMemoryInputSchema,
   managerJobParamSchema,
   managerMessagesQuerySchema,
   managerProposeActionInputSchema,
@@ -9311,6 +9313,23 @@ export function createApp(deps: ServerDeps) {
       const connectors = await managerEngine.refreshConnectors(c.req.valid('param').id);
       if (connectors && 'error' in connectors) return c.json({ error: connectors.error }, connectors.status);
       return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    // Memory (spec 2026-11-21-manager-short-sessions-and-memory § 2.1): what every new session starts from.
+    .get('/workspace/managers/:id/memory', paramZodValidator(managerIdParamSchema), (c) => {
+      const memory = managerEngine.memory(c.req.valid('param').id);
+      return memory ? c.json(memory) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .put('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), jsonZodValidator(putManagerMemoryInputSchema), (c) => {
+      const { id, key } = c.req.valid('param');
+      const memory = managerEngine.setMemory(id, key, c.req.valid('json'));
+      if (!memory) return c.json(MANAGER_NOT_FOUND, 404);
+      return 'error' in memory ? c.json({ error: memory.error }, memory.status) : c.json(memory);
+    })
+    .delete('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), (c) => {
+      const { id, key } = c.req.valid('param');
+      const memory = managerEngine.removeMemory(id, key);
+      if (!memory) return c.json(MANAGER_NOT_FOUND, 404);
+      return 'error' in memory ? c.json({ error: memory.error }, memory.status) : c.json(memory);
     })
     // The one route that performs a proposal. The agent's tools below can only create them.
     .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {

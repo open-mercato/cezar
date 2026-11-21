@@ -17,7 +17,7 @@ export function managerSystemPrompt(
   manager: Manager,
   projects: Array<{ id: string; name: string; access: ManagerAccess }>,
   connectors = '',
-  options: { textInFiles?: boolean } = {},
+  options: { textInFiles?: boolean; memory?: string } = {},
 ): string {
   const connected = projects.map((project) => `- ${project.id} (${project.name}${project.access === 'read' ? ', READ-ONLY' : ''})`).join('\n') || '- none yet';
   return `You are "${manager.name}", a cezar manager: a long-lived agent the user talks to instead of visiting each repository. You watch the repositories below, tell the user what needs them, start and steer cezar tasks, set up workflows and automations, and propose merges. Tasks do the work; you are the point of contact above them. Keep replies short and specific.
@@ -48,7 +48,12 @@ The cez-manager commands:
   cez-manager job add --name <n> --every <minutes> "<prompt>"                    PROPOSES a saved job
   cez-manager job list | job remove <id>
   cez-manager rename "<role>"                         your name in the sidebar
+  cez-manager memory list | memory set <key> --kind preference|feedback|decision|pointer "<text>" [--why "…"] | memory remove <key>
+                                                      what you carry into every new session (same key replaces)
+  cez-manager history [--since 2h|<iso>] [--grep <text>] [--limit n]   earlier messages of this chat
 ${connectors ? `\n${connectors}\n` : ''}
+Your session starts over regularly: after an idle hour, a long conversation or half a day, you begin again with only your memory, open cards, notes and the tasks you follow. Keep in memory what the user wants remembered and only that: a preference, feedback on how you work ("open full PRs, not drafts"), a standing decision, or a pointer to ongoing work. Save it with \`cez-manager memory set\` when the user tells you, and remove it when it no longer holds. Never put task output, summaries or transcripts there: cezar keeps those, and you can read them with \`cez-manager history\` and \`cez-manager task <run>\`. Look things up rather than guess.
+
 How you reach the user: ${manager.cronMinutes > 0 ? `a scheduled check wakes you every ${manager.cronMinutes} minutes when something new needs attention` : 'scheduled checks are off'}. Tasks you start, and tasks you follow, report to you as soon as they finish, fail, are cancelled or need the user: cezar posts a status card for each in this chat itself${manager.followUp === false ? ', and you hear about them in your next turn' : ', then wakes you once to act on the result'}. Follow a task the user started only when they ask you to keep an eye on it, or when your next step depends on its result; unfollow it when that no longer holds. Everything you write lands in this chat with an unread dot. ${manager.notify === false ? 'The user turned system notifications off for you.' : `A reply also raises a system notification (macOS, Windows, Linux or the browser) when its first line is exactly "${MANAGER_IMPORTANT} <one short headline>". The cockpit strips that line.`} Save it for what should interrupt someone away from the screen: a task blocked on them, a failure they must act on, big work finishing. Routine progress, and anything they can read later, stays unmarked.
 
 When asking about task work or proposing an action originating from a task, identify every source with its exact [[task:<projectId>/<runId>]] reference in the reply or proposal reason. Include referenced report/asset filenames.
@@ -68,7 +73,7 @@ Rules:
 - Before starting work, check \`cez-manager tasks\`: tasks the user started themselves are there too, and a task's prNumber means that work already has a pull request.
 - ${manager.taskAgents?.length ? `The user limited new tasks to these agent accounts: ${manager.taskAgents.map((agent) => `--runner ${agent.runner}${agent.agentProfile ? ` --account ${agent.agentProfile}` : " (automatic account)"}`).join("; ")}. Choose one of these pairs for each task. Other runners and accounts are refused. These choices are independent of your own agent and account.` : manager.taskRunner ? `The user selected ${manager.taskRunner} for new tasks. That backend is enforced even if you pass a different --runner. Choose models and effort for ${manager.taskRunner}.` : `New tasks use Automatic agent selection: choose --runner and --account for each task when the user requests a backend or another backend suits the work. Without --runner a task uses your own agent backend. Honor a user's requested agent, and choose its model and effort rather than carrying over another agent's settings.`}
 - Use --model and --effort only when the user asks or the work needs it; a refusal lists the valid choices. Cancel only what you started, unless the user allowed more in your settings; say why with --reason.
-- Dispatched tasks read as a tree: report the root, and open it with \`cez-manager task\` when the user asks.${manager.instructions.trim() ? `\n\nWhat the user wants from you:\n${manager.instructions.trim()}` : ''}`;
+- Dispatched tasks read as a tree: report the root, and open it with \`cez-manager task\` when the user asks.${manager.instructions.trim() ? `\n\nWhat the user wants from you:\n${manager.instructions.trim()}` : ''}${options.memory ? `\n\n${options.memory}` : ''}`;
 }
 
 /** `questions` is `openCardsBlock`'s text: the manager's own cards still waiting (Questions inbox spec). */
@@ -137,14 +142,33 @@ ${fence}
 Tell the user, briefly, what deserves their attention and why, with [[task:…]] and [[pr:…]] cards. This check is read-only: you cannot start tasks, message tasks or propose anything from it, so ask the user instead. Judge how much it matters: start with the ${MANAGER_IMPORTANT} line only if it should interrupt them. If nothing deserves them, reply with exactly ${MANAGER_QUIET} and nothing else, after any CEZ:ASK-CLOSE lines.${taskQuestions.length > 0 ? ' openTaskQuestions gives the id of each waiting task\'s open question: a card relaying one declares "about":[{"task":"<task>","ask":"<ask>"}].' : ''}`;
 }
 
-/** A session that cannot be resumed restarts from this, not from nothing. */
-export function recapPrompt(messages: ManagerMessage[]): string {
-  const lines = messages.slice(-20).flatMap((message) => {
-    if (message.kind === 'user') return [`User: ${message.text}`];
-    if (message.kind === 'assistant' && message.text) return [`You: ${message.text}`];
-    if (message.kind === 'notice') return [`(${message.text})`];
-    return [];
+const PREAMBLE_EXCHANGES = 6;
+const PREAMBLE_MESSAGE_CHARS = 600;
+const PREAMBLE_CHARS = 3_000;
+
+/**
+ * What a new chat session starts from besides its memory (spec 2026-11-21 § 2.2): the tasks it
+ * follows and the last few exchanges, so "yes, do that" still lands. Messages after the last reply
+ * are this turn's own input, which the prompt already carries.
+ */
+export function sessionPreamble(messages: ManagerMessage[], tasks: string[]): string {
+  // Only the user's words and the manager's own replies: a status card carries a task's words,
+  // which reach a prompt only fenced (#2162).
+  const own = messages.filter((message) => message.kind === 'user'
+    || (message.kind === 'assistant' && message.turn === 'chat' && !message.taskReport && !message.automationReport));
+  let lastReply = -1;
+  own.forEach((message, index) => {
+    if (message.kind === 'assistant' && message.text) lastReply = index;
   });
-  if (lines.length === 0) return '';
-  return `Your previous session could not be resumed. The end of that conversation, for context:\n\n${lines.join('\n\n').slice(-12_000)}\n\n---\n\n`;
+  const clipped = (text: string) => (text.length > PREAMBLE_MESSAGE_CHARS ? `${text.slice(0, PREAMBLE_MESSAGE_CHARS)}…` : text);
+  const exchanges = own.slice(0, lastReply + 1).flatMap((message) => {
+    if (message.kind === 'user') return [`User: ${clipped(message.text)}`];
+    if (message.kind === 'assistant' && message.text) return [`You: ${clipped(message.text)}`];
+    return [];
+  }).slice(-PREAMBLE_EXCHANGES).join('\n\n').slice(-PREAMBLE_CHARS);
+  return `This is a new session: earlier conversation is not in your context. Your memory, the open cards and the notes carry over; read older chat with \`cez-manager history\` and a task's state with \`cez-manager task <run>\`.
+${tasks.length > 0 ? `\nTasks you follow:\n${tasks.join('\n')}\n` : ''}${exchanges ? `\nThe end of the conversation so far:\n\n${exchanges}\n` : ''}
+---
+
+`;
 }

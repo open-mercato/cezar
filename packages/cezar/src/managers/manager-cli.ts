@@ -5,8 +5,8 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
-import { managerAccessOf, managerTaskEffortSchema, type Manager } from '@open-mercato/cezar-contract';
+import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerMemoryResponse, ManagerMessage, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
+import { managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
@@ -75,9 +75,13 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-const COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename'] as const;
+const COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
 const TASK_SUBCOMMANDS = ['create', 'say', 'cancel', 'retry', 'follow', 'unfollow'] as const;
 const JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
+const MEMORY_SUBCOMMANDS = ['list', 'set', 'remove'] as const;
+/** `history` prints at most this much: older chat is a lookup, not a reload. */
+const HISTORY_CHARS = 8_000;
+const HISTORY_MESSAGE_CHARS = 800;
 /** A full run id or its first eight hex digits: anything else after `task` is a mistyped subcommand. */
 const RUN_ID_LIKE = /^[0-9a-f]{8}(?:-[0-9a-f-]+)?$/i;
 const EFFORTS = managerTaskEffortSchema.options;
@@ -176,12 +180,27 @@ Proposes one connector call; the user approves it in the chat and cezar runs exa
   --args '<json>'    the tool's input, a JSON object
   --reason "…"       why, shown on the card`,
   rename: 'cez manager rename "<role>"\n\nA short role the user recognizes this manager by, e.g. "Coding Manager".',
+  memory: `cez manager memory list | set | remove   (each takes --help)
+
+What you carry into every new session: the user's preferences, feedback on how you work, standing decisions and pointers to ongoing work. Never task output or transcripts. ${MANAGER_MEMORY_LIMITS.entries} entries and ${MANAGER_MEMORY_LIMITS.bytes} bytes at most.`,
+  'memory list': 'cez manager memory list [--json]\n\nEvery entry: key, kind, text, why.',
+  'memory set': `cez manager memory set <key> --kind preference|feedback|decision|pointer [--why "…"] "<text>"
+
+Saves one entry; the same key replaces it. <key> is lowercase-with-dashes, e.g. full-prs-not-drafts.
+Text up to ${MANAGER_MEMORY_LIMITS.text} characters, why up to ${MANAGER_MEMORY_LIMITS.why}. A text another key already says, or a full memory, is refused with what to replace.`,
+  'memory remove': 'cez manager memory remove <key>\n\nDrops an entry that no longer holds.',
+  history: `cez manager history [--since 2h|1d|<iso>] [--grep <text>] [--limit <n>]
+
+Earlier messages of this chat, oldest first, ${HISTORY_CHARS} characters at most.
+  --since    only messages after this: a duration (30m, 2h, 1d) or an ISO time
+  --grep     only messages containing this text (case-insensitive)
+  --limit    the newest n messages that match (default 20, at most 200)`,
 };
 
 /** The help key for `args`: `task create` when the subcommand is known, else the command. */
 function helpKey(command: string, rest: string[]): string {
   const sub = rest[0];
-  const subs: readonly string[] = command === 'task' ? TASK_SUBCOMMANDS : command === 'job' ? JOB_SUBCOMMANDS : [];
+  const subs: readonly string[] = command === 'task' ? TASK_SUBCOMMANDS : command === 'job' ? JOB_SUBCOMMANDS : command === 'memory' ? MEMORY_SUBCOMMANDS : [];
   return sub && subs.includes(sub) ? `${command} ${sub}` : command;
 }
 
@@ -206,6 +225,24 @@ function parse<O extends Options>(key: string, args: string[], options: O, allow
     if (/Unexpected argument/.test(message)) fail(`'${key}' takes no arguments besides its flags (${flags}). See: cez manager ${key} --help`);
     fail(`${message.split('. ')[0]}. See: cez manager ${key} --help`);
   }
+}
+
+/** `30m`, `2h`, `1d` before `now`, or an ISO time; undefined when it is neither. */
+export function sinceOf(value: string, now: number): number | undefined {
+  const match = /^(\d+)\s*([mhd])$/.exec(value.trim());
+  if (match) return now - Number(match[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2] as 'm' | 'h' | 'd'];
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : undefined;
+}
+
+/** One chat message as `history` prints it; notices and streaming drafts are skipped. */
+function historyLine(message: ManagerMessage): string | undefined {
+  const clip = (text: string) => (text.length > HISTORY_MESSAGE_CHARS ? `${text.slice(0, HISTORY_MESSAGE_CHARS)}…` : text);
+  const at = message.at.slice(0, 16).replace('T', ' ');
+  if (message.kind === 'user') return `${at}  user (message id: ${message.id}): ${clip(message.text)}`;
+  if (message.kind === 'assistant' && message.text && !message.streaming) return `${at}  you: ${clip(message.text)}`;
+  if (message.kind === 'action') return `${at}  card ${message.action.type}: ${message.status}`;
+  return undefined;
 }
 
 function effortOf(value: string | undefined): (typeof EFFORTS)[number] | undefined {
@@ -609,6 +646,79 @@ export async function runManagerCommand(
           : `unknown subcommand '${sub}' for 'job'. Valid: ${JOB_SUBCOMMANDS.join(', ')}. See: cez manager job --help`);
       }
       // falls through: `fail` never returns
+
+      case 'memory': {
+        const [sub, ...memoryArgs] = rest;
+        if (sub === 'list') {
+          const { values } = parse('memory list', memoryArgs, { json: { type: 'boolean' } });
+          const memory = await call<ManagerMemoryResponse>('/memory');
+          if (values.json) printJson(memory);
+          else if (memory.entries.length === 0) io.log('Memory is empty.');
+          else for (const entry of memory.entries) io.log(`${entry.key}  [${entry.kind}]  ${entry.text}${entry.why ? `  (why: ${entry.why})` : ''}`);
+          return 0;
+        }
+        if (sub === 'set' || sub === 'remove') {
+          if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
+        }
+        if (sub === 'set') {
+          const { values, positionals } = parse('memory set', memoryArgs, { kind: { type: 'string' }, why: { type: 'string' } }, true);
+          const [key, ...words] = positionals;
+          const text = words.join(' ').trim();
+          const kind = managerMemoryKindSchema.safeParse(values.kind);
+          if (!key || !text || !kind.success) fail('usage: cez manager memory set <key> --kind preference|feedback|decision|pointer [--why "…"] "<text>"');
+          if (!managerMemoryKeySchema.safeParse(key).success) fail(`'${key}' is not a key: use lowercase letters, digits and dashes, e.g. full-prs-not-drafts`);
+          const memory = await call<ManagerMemoryResponse>(`/memory/${encodeURIComponent(key)}`, {
+            method: 'PUT',
+            body: { kind: kind.data, text, ...(values.why ? { why: values.why } : {}), source: 'manager' },
+          });
+          io.log(`remembered ${key} (${memory.entries.length}/${memory.limits.entries} entries, ${memory.usedBytes}/${memory.limits.bytes} bytes)`);
+          return 0;
+        }
+        if (sub === 'remove') {
+          if (!memoryArgs[0]) fail('usage: cez manager memory remove <key>');
+          await call(`/memory/${encodeURIComponent(memoryArgs[0])}`, { method: 'DELETE' });
+          io.log(`forgot ${memoryArgs[0]}`);
+          return 0;
+        }
+        fail(sub === undefined
+          ? `usage: cez manager memory ${MEMORY_SUBCOMMANDS.join('|')}`
+          : `unknown subcommand '${sub}' for 'memory'. Valid: ${MEMORY_SUBCOMMANDS.join(', ')}. See: cez manager memory --help`);
+      }
+      // falls through: `fail` never returns
+
+      case 'history': {
+        const { values } = parse('history', rest, { since: { type: 'string' }, grep: { type: 'string' }, limit: { type: 'string' } });
+        const limit = values.limit === undefined ? 20 : Number(values.limit);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail('--limit must be a whole number from 1 to 200');
+        const since = values.since === undefined ? undefined : sinceOf(values.since, Date.now());
+        if (values.since !== undefined && since === undefined) fail(`--since takes a duration such as 30m, 2h or 1d, or an ISO time, not '${values.since}'`);
+        const needle = values.grep?.toLowerCase();
+        const lines: string[] = [];
+        let before: number | undefined;
+        // Newest pages first, until enough matches or the start of the chat.
+        for (let page = 0; page < 20 && lines.length < limit; page++) {
+          const query = new URLSearchParams({ limit: '200', ...(before !== undefined ? { before: String(before) } : {}) });
+          const { messages } = await call<{ messages: ManagerMessage[] }>(`/messages?${query}`);
+          if (messages.length === 0) break;
+          before = Math.min(...messages.map((message) => message.seq));
+          for (const message of [...messages].reverse()) {
+            if (lines.length >= limit) break;
+            if (since !== undefined && Date.parse(message.at) < since) continue;
+            const line = historyLine(message);
+            if (!line || (needle && !line.toLowerCase().includes(needle))) continue;
+            lines.push(line);
+          }
+          if (since !== undefined && messages.every((message) => Date.parse(message.at) < since)) break;
+        }
+        if (lines.length === 0) {
+          io.log('No messages match.');
+          return 0;
+        }
+        let out = lines.reverse().join('\n\n');
+        if (out.length > HISTORY_CHARS) out = `… (older matches cut; narrow with --since or --grep)\n${out.slice(-HISTORY_CHARS)}`;
+        io.log(out);
+        return 0;
+      }
 
       case 'propose-action': {
         const { values } = parseArgs({
