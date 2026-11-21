@@ -54,12 +54,14 @@ describe('health attention counts', () => {
   it('counts only the failed runs the cockpit still flags, in a relay scope', async () => {
     const app = build();
     const body = await runInRelayScope({ deviceId: 'phone' }, () => read(app));
-    expect(body.attention).toEqual({ waiting: 0, failed: 2 });
+    // `waiting` is the attention list: the run awaiting an answer is a task that needs you
+    // (spec 2026-11-20-phone-notifications-inbox).
+    expect(body.attention).toEqual({ waiting: 1, failed: 2 });
   });
 
   it('is present on a hosted cockpit', async () => {
     process.env.CEZ_REMOTE = '1';
-    expect((await read(build())).attention).toEqual({ waiting: 0, failed: 2 });
+    expect((await read(build())).attention).toEqual({ waiting: 1, failed: 2 });
   });
 
   // Spec 2026-11-20-phone-notifications-inbox, B2: what raises a push is what the badge counts.
@@ -70,11 +72,12 @@ describe('health attention counts', () => {
     expect(created.status).toBe(201);
     const { id } = (await created.json()) as { id: string };
     const managers = new ManagerStore();
+    const waiting = async () => (await runInRelayScope({ deviceId: 'phone' }, () => read(app))).attention?.waiting ?? 0;
+    const before = await waiting();
     managers.persistMessage(id, { id: 'm1', seq: managers.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', text: 'Blocked', turn: 'watch', streaming: false, important: true, headline: 'Blocked', commands: [] });
-    const waiting = async () => (await runInRelayScope({ deviceId: 'phone' }, () => read(app))).attention?.waiting;
-    expect(await waiting()).toBe(1);
+    expect(await waiting()).toBe(before + 1);
     expect((await post(`/api/v1/workspace/managers/${id}/read`)).status).toBe(200);
-    expect(await waiting()).toBe(0);
+    expect(await waiting()).toBe(before);
   }, 30_000);
 
   it('never rides the shared health topic, even on a hosted cockpit', async () => {

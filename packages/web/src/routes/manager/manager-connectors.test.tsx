@@ -102,11 +102,9 @@ describe('ConnectorsDialog', () => {
     expect(onSave).toHaveBeenCalledWith({ claude_ai_Google_Calendar: { level: 'write', tools: { create_event: 'allow' } } })
   })
 
-  it('discovers on Refresh from the empty state', async () => {
+  it('discovers once on its own when nothing was seen yet (manager turns load no unused connector)', async () => {
     const calls = stubRoutes({ available: true, servers: [] }, { available: true, servers: [calendar] })
     renderDialog()
-    expect(await screen.findByText('No connectors seen yet — Refresh to discover')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     expect(await screen.findByText('claude.ai Google Calendar')).toBeTruthy()
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       'GET /api/v1/workspace/managers/global/connectors',

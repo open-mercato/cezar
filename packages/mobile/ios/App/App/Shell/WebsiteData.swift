@@ -62,6 +62,15 @@ enum WebsiteData {
         UserDefaults.standard.set(left, forKey: owedKey)
     }
 
+    /// Every server store's HTTP caches, cookies and storage kept: an update must not pin an old cockpit.
+    @MainActor
+    static func clearHttpCaches() async {
+        let types: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache]
+        for id in await WKWebsiteDataStore.allDataStoreIdentifiers {
+            await WKWebsiteDataStore(forIdentifier: id).removeData(ofTypes: types, modifiedSince: .distantPast)
+        }
+    }
+
     /// A dismissed web view lets go of its store a moment later, so a few short retries cover the usual case.
     @MainActor
     private static func remove(_ id: UUID) async -> Bool {

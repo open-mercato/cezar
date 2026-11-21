@@ -306,8 +306,8 @@ BACKWARD_COMPATIBILITY.md §2.
 | Field | Rule |
 | --- | --- |
 | `v` | `1` |
-| `kind` | `attention` is the only value in v1 |
-| `count` | Integer 0 to 99, the badge |
+| `kind` | `attention`, an alert, or `count`, a silent badge update |
+| `count` | Integer 0 to 99, the badge. An `attention` push carries at least 1: its own item counts, even a kind the phone keeps off its icon |
 | `id` | `base64url` of 16 random bytes. Refused if seen in the last 10 minutes |
 | `ts` | Unix seconds within ±120 s |
 
@@ -324,6 +324,26 @@ paired-server list.
   "android": { "priority": "high", "ttl": "3600s", "collapse_key": "<cezarId>" } }`. `count` is a
   decimal string, because FCM data values are strings. An Android build without that messaging
   service shows nothing.
+- **`kind: "count"`** (spec 2026-11-20-phone-notifications-inbox): what waits changed while the app
+  was closed: answered, approved or read elsewhere. Nothing is shown:
+  - **APNs**: `{ "aps": { "content-available": 1 }, "s": "<cezarId>", "c": count }`, with
+    `apns-push-type: background`, priority 5, collapse id `cezarId` and expiry 1 hour. There is no `badge`
+    field; the app reads `c` and sums the badge over its computers itself. iOS may delay or drop
+    background pushes, so the app still refreshes the badge whenever it opens.
+  - **FCM**: data-only, normal priority, `ttl` 3600 s, `collapse_key` `cezarId`:
+    `{ "s": "<cezarId>", "count": "N", "t": "count" }`. The app reads `count` when `t` is `count`.
+  - **Limits**: 6 per grant per rolling hour and 500 per room per day; extras get 429
+    `rate-limited` with `Retry-After`. cezar coalesces: it keeps only the latest count per phone,
+    sends at most one every 10 minutes, and after a 429 sends the then-current count, with a new id,
+    once `Retry-After` has passed. The relay remembers a count push's `id` for an hour, so an id is
+    never reused. A relay that predates `count` answers 400; cezar then stops sending count pushes until it restarts.
+  - **Who gets one**: only a phone whose app declared it, with `understands: ["attention", "count"]` on
+    `PUT /api/v1/workspace/phone/push/prefs`. An app that predates `count` builds a notification from every FCM
+    data message, so it would show one as an alert; cezar sends it none. A count push is owed once the phone
+    knows a number (an `attention` push, or its app opening a session), and follows the icon count up as well
+    as down, so a kind counted on the icon but not pushed still moves the icon. The number last told is kept
+    on the device row across restarts. An alert's floor of 1 is never recorded as told, so no count push takes
+    that alert's badge away.
 
 | Answer | Meaning | cezar does |
 | --- | --- | --- |
@@ -333,7 +353,7 @@ paired-server list.
 | 403 `grant-denied` | On the denylist | **Deletes the grant** |
 | 409 `replay` | `id` already seen | Nothing |
 | 410 `grant-gone` | Expired, unreadable, or the token is dead | **Deletes the grant** |
-| 429 `rate-limited`, with `Retry-After` | Over a push limit | Drops this signal, keeps the grant |
+| 429 `rate-limited`, with `Retry-After` | Over a push limit | Drops this signal, keeps the grant. A `count` push is sent again, with the latest count, after `Retry-After` |
 | 503, no body | APNs, FCM or the relay failed, or a seal key is missing | Drops this signal, **keeps the grant** |
 
 Only 403 and 410 delete a grant. Delivery is best effort. Neither side retries a dropped signal, and

@@ -1,18 +1,28 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
-import type { ManagerMessage, PlanUsageConsumer, PlanUsageConsumerWindow } from '@open-mercato/cezar-api-client'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { MemoryRouter } from 'react-router'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ManagerMessage, PlanUsageConsumer, PlanUsageConsumerWindow, PlanUsageTurnStats, PlanUsageWindow } from '@open-mercato/cezar-api-client'
 import {
+  limitLevel,
+  managerAccountKey,
+  managerPlanUsage,
   managerStartedTasks,
-  managerUsageToday,
+  ManagerLimitStrip,
   ManagerUsageChip,
-  replyUsageById,
-  ReplyUsageNote,
+  turnReasons,
+  turnShape,
+  type AccountNow,
 } from './manager-plan-usage'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const NOW = new Date('2026-11-19T14:21:00')
 const account = { key: 'claude:default', provider: 'claude' as const, accountId: 'default', label: 'Claude · default' }
+const KEY = account.key
 
 const consumer = (over: Partial<PlanUsageConsumer> & Pick<PlanUsageConsumer, 'id' | 'kind' | 'estimatePp'>): PlanUsageConsumer => ({
   title: over.id,
@@ -35,20 +45,42 @@ const entry = (c: PlanUsageConsumer, over: Partial<PlanUsageConsumerWindow> = {}
   ...over,
 })
 
+const turn = (messageId: string, part: 'chat' | 'watch' | 'job', estimatePp: number, aloneInferredPp: number) =>
+  ({ messageId, part, at: new Date('2026-11-19T12:30:00').toISOString(), estimatePp, aloneInferredPp, sharedEstimatePp: estimatePp - aloneInferredPp })
+
 const manager = consumer({
   id: 'mgr:m1',
   kind: 'manager',
   estimatePp: 5,
+  aloneInferredPp: 2,
+  sharedEstimatePp: 3,
+  ranTogetherWith: { tasks: 2, managers: 0, internal: 0 },
   parts: { chat: 4, watch: 0.6, job: 0.4 },
   turns: { chat: 3, watch: 6, job: 1 },
   quietWatchTurns: 6,
-  messages: [{ messageId: 'a1', part: 'chat', estimatePp: 1 }, { messageId: 'a2', part: 'watch', estimatePp: 0.1 }],
+  messages: [turn('a2', 'watch', 0.1, 0.1), turn('a1', 'chat', 3, 1), turn('a3', 'chat', 0.5, 0), turn('a4', 'job', 0.4, 0.4)],
 })
+const STARTED = [{ projectId: 'p1', runId: 'r1' }, { projectId: 'p1', runId: 'r2' }]
+const task = (runId: string, pp: number, over: Partial<PlanUsageConsumerWindow> = {}) =>
+  entry(consumer({ id: `run:p1/${runId}`, kind: 'task', runId, title: `Task ${runId}`, estimatePp: pp }), over)
 
 const assistant = (id: string, commands: Array<{ summary: string; output?: string }>): ManagerMessage => ({
   id, seq: 1, at: NOW.toISOString(), kind: 'assistant', text: 'ok', turn: 'chat', streaming: false,
   commands: commands.map((c, i) => ({ id: `${id}-${i}`, tool: 'Bash', ...c })),
 })
+
+const window = (kind: 'five-hour' | 'weekly', last: number, over: Partial<PlanUsageWindow> = {}): PlanUsageWindow => ({
+  id: `claude:default:${kind}:x`, account, kind,
+  startsAt: new Date('2026-11-19T10:00:00').toISOString(),
+  resetsAt: new Date(kind === 'weekly' ? '2026-11-25T09:00:00' : '2026-11-19T15:00:00').toISOString(),
+  current: true, usedPercent: { first: 0, last }, readings: [], consumers: [],
+  beforeTrackingPp: 0, outsideCezarPp: 0, unsplitPp: 0, untrackedPp: 0, trackingGaps: [], correctionPp: 0, leftPp: 100 - last,
+  ...over,
+})
+const accountNow = (five: number | null, week: number | null = 29): AccountNow => {
+  const fiveHour = five === null ? undefined : window('five-hour', five)
+  return { key: KEY, fiveHour, week: week === null ? undefined : window('weekly', week), level: limitLevel(fiveHour) }
+}
 
 describe('managerStartedTasks', () => {
   it('reads only task create commands, once each', () => {
@@ -60,69 +92,185 @@ describe('managerStartedTasks', () => {
   })
 })
 
-describe('managerUsageToday', () => {
-  it('is null when the manager has no entry today — unknown, never 0', () => {
-    const old = entry(manager, { current: false, startsAt: '2026-11-17T10:00:00Z', resetsAt: '2026-11-17T15:00:00Z' })
-    expect(managerUsageToday([old], 'm1', [], NOW)).toBeNull()
-    expect(managerUsageToday(undefined, 'm1', [], NOW)).toBeNull()
-  })
-
-  it('sums today\'s 5-hour windows and the tasks it started, ignoring weekly entries and other tasks', () => {
-    const earlier = entry({ ...manager, estimatePp: 2 }, {
-      windowId: 'w-early', current: false,
-      startsAt: new Date('2026-11-19T04:00:00').toISOString(), resetsAt: new Date('2026-11-19T09:00:00').toISOString(),
-    })
-    const weekly = entry(manager, { kind: 'weekly', windowId: 'wk' })
-    const task = entry(consumer({ id: 'run:p1/r1', kind: 'task', runId: 'r1', estimatePp: 35 }))
-    const other = entry(consumer({ id: 'run:p1/r9', kind: 'task', runId: 'r9', estimatePp: 50 }))
-    const usage = managerUsageToday([entry(manager), earlier, weekly, task, other], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)!
-    expect(usage.totalPp).toBe(7)
-    expect(usage.windows.map((w) => w.windowId)).toEqual(['w-early', 'w-today'])
-    expect(usage.tasks).toEqual({ count: 1, pp: 35 })
-  })
-
-  it('counts a started task the ledger filed under the `default` project alias', () => {
-    const task = entry(consumer({ id: 'run:default/r1', kind: 'task', runId: 'r1', estimatePp: 35 }))
-    expect(managerUsageToday([entry(manager), task], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)!.tasks).toEqual({ count: 1, pp: 35 })
-  })
-
-  it('skips the tasks row when no started task has an estimate', () => {
-    expect(managerUsageToday([entry(manager)], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)!.tasks).toBeNull()
+describe('managerAccountKey', () => {
+  it('prefers the pinned account, then the one it last ran on, then the runner default', () => {
+    const codex = entry(manager, { account: { ...account, key: 'codex:work', provider: 'codex', accountId: 'work' } })
+    expect(managerAccountKey([entry(manager)], 'm1', 'claude', 'work')).toBe('claude:work')
+    expect(managerAccountKey([entry(manager, { account: { ...account, key: 'claude:alt', accountId: 'alt' } }), codex], 'm1', 'claude', undefined)).toBe('claude:alt')
+    expect(managerAccountKey([], 'm1', 'codex', undefined)).toBe('codex:default')
   })
 })
+
+describe('managerPlanUsage', () => {
+  it('is null when neither the manager nor its tasks have an entry today — unknown, never 0', () => {
+    const old = entry(manager, { current: false, startsAt: '2026-11-17T10:00:00Z', resetsAt: '2026-11-17T15:00:00Z' })
+    expect(managerPlanUsage([old], 'm1', [], KEY, NOW)).toBeNull()
+    expect(managerPlanUsage(undefined, 'm1', [], KEY, NOW)).toBeNull()
+  })
+
+  it('adds the tasks it started to the manager in the latest window, and keeps earlier windows and other work apart', () => {
+    const earlier = { windowId: 'w-early', current: false, startsAt: new Date('2026-11-19T04:00:00').toISOString(), resetsAt: new Date('2026-11-19T09:00:00').toISOString() }
+    const u = managerPlanUsage([
+      entry(manager), task('r1', 12), task('r2', 6),
+      entry({ ...manager, estimatePp: 2 }, earlier), task('r1', 1, earlier),
+      entry(manager, { kind: 'weekly', windowId: 'wk' }), task('r1', 2, { kind: 'weekly', windowId: 'wk' }),
+      task('r9', 50),
+      task('r2', 9, { account: { ...account, key: 'claude:alt', accountId: 'alt' }, windowId: 'alt' }),
+    ], 'm1', STARTED, KEY, NOW)!
+    expect(u.windowId).toBe('w-today')
+    expect(u.totalPp).toBe(23)
+    expect(u.tasks.map((t) => [t.title, t.pp])).toEqual([['Task r1', 12], ['Task r2', 6]])
+    expect(u.earlierTodayPp).toBe(3)
+    expect(u.weekPp).toBe(7)
+    expect(u.otherAccountTasks).toBe(1)
+    expect(u.topTurns.map((t) => t.messageId)).toEqual(['a1', 'a3', 'a4'])
+  })
+
+  it('counts a started task the ledger filed under the `default` project alias, even before the manager spent anything', () => {
+    const t = entry(consumer({ id: 'run:default/r1', kind: 'task', runId: 'r1', title: 'Fix', estimatePp: 35 }))
+    const u = managerPlanUsage([t], 'm1', STARTED, KEY, NOW)!
+    expect(u.manager).toBeNull()
+    expect(u.totalPp).toBe(35)
+  })
+})
+
+describe('limitLevel', () => {
+  it('is amber from 80 %, red from 95 % or once the provider blocks', () => {
+    expect(limitLevel(undefined)).toBeNull()
+    expect(limitLevel(window('five-hour', 63))).toBe('ok')
+    expect(limitLevel(window('five-hour', 80))).toBe('warning')
+    expect(limitLevel(window('five-hour', 95))).toBe('critical')
+    expect(limitLevel(window('five-hour', 70, { limitReachedAt: NOW.toISOString() }))).toBe('critical')
+  })
+})
+
+const renderIn = (ui: ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>)
+const row = (slot: string) => document.querySelector(`[data-slot="${slot}"]`)
+const rowText = (slot: string) => {
+  const dd = row(slot)!
+  return `${dd.previousElementSibling!.textContent} ${dd.textContent}`
+}
 
 describe('ManagerUsageChip', () => {
-  it('renders the chip and the breakdown with every share marked ≈ and the window named', () => {
-    const usage = managerUsageToday([entry(manager), entry(consumer({ id: 'run:p1/r1', kind: 'task', runId: 'r1', estimatePp: 35 }))], 'm1', [{ projectId: 'p1', runId: 'r1' }], NOW)
-    render(<ManagerUsageChip name="Release manager" usage={usage} />)
-    const chip = document.querySelector('[data-slot="manager-usage-chip"]')!
-    expect(chip.textContent).toBe('Today ≈ 5% of 5h')
+  const usage = () => managerPlanUsage([entry(manager), task('r1', 12), task('r2', 6), entry(manager, { kind: 'weekly', windowId: 'wk' })], 'm1', STARTED, KEY, NOW)
+
+  it('shows the account meter and manager + tasks, and opens the shared breakdown', () => {
+    renderIn(<ManagerUsageChip usage={usage()} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
+    const chip = row('manager-usage-chip')!
+    expect(chip.textContent).toBe('63% of 5h · manager + tasks ≈ 23%')
+    expect(chip.getAttribute('data-level')).toBe('ok')
+    expect(chip.getAttribute('aria-label')).toMatch(/^Plan limit: 63% of the 5-hour limit used, resets .+; this manager and its tasks ≈ 23%$/)
     fireEvent.click(chip)
-    expect(screen.getByText('Release manager — today')).toBeTruthy()
-    expect(screen.getByText(/^Claude · default · 5-hour limit .+–.+$/)).toBeTruthy()
-    expect(screen.getByText('≈ 5% of the 5-hour limit')).toBeTruthy()
-    const row = (slot: string) => document.querySelector(`[data-slot="${slot}"]`)!.textContent
-    expect(row('manager-usage-chat')).toBe('Chat (3 replies)≈ 4%')
-    expect(row('manager-usage-watch')).toBe('Watch checks (6, nothing new found)≈ 0.6%')
-    expect(row('manager-usage-job')).toBe('Jobs (1)≈ 0.4%')
-    expect(row('manager-usage-tasks-row')).toBe('Tasks it started (1), counted on those tasks≈ 35%')
-    expect(screen.getByText(/^Never counted twice/)).toBeTruthy()
+    const details = within(screen.getByRole('dialog'))
+    expect(details.getByText(/^Account now · Claude · default$/)).toBeTruthy()
+    expect(row('manager-usage-account-five')!.textContent).toMatch(/63% used.*resets .+ · in 39 min/)
+    expect(row('manager-usage-account-week')!.textContent).toMatch(/^Week29% used/)
+    expect(details.getByText('Plan limit used by this manager and its tasks')).toBeTruthy()
+    expect(row('plan-usage-window')!.textContent).toMatch(/^Claude · default · 5-hour limit .+–.+$/)
+    expect(row('plan-usage-total')!.textContent).toBe('≈ 23% of the 5-hour limit · ≈ 5% of the week')
+    expect(rowText('manager-usage-self')).toBe('The manager itself ≈ 5%')
+    expect(rowText('manager-usage-chat')).toBe('Chat (3 replies) ≈ 4%')
+    expect(rowText('manager-usage-watch')).toBe('Watch checks (6, nothing new found) ≈ 0.6%')
+    expect(rowText('manager-usage-job')).toBe('Jobs (1) ≈ 0.4%')
+    expect(rowText('manager-usage-alone')).toBe('While it was the only cezar work ≈ 2%')
+    expect(rowText('manager-usage-shared')).toBe('Its share while 2 other tasks ran ≈ 3%')
+    expect(rowText('manager-usage-tasks')).toBe('Tasks it started (2) ≈ 18%')
+    expect(rowText('manager-usage-task-0')).toBe('Task r1 ≈ 12%')
+    expect(rowText('manager-usage-turn-0')).toMatch(/^Chat reply · .+ · partly shared ≈ 3%$/)
+    expect(rowText('manager-usage-turn-2')).toMatch(/^Job · .+ · ran alone ≈ 0.4%$/)
+    expect(details.getByText(/^Approximate: Claude reports usage per account, so busy periods are split by each task's and manager's cost/)).toBeTruthy()
+    const link = details.getByRole('link', { name: 'See all tasks and managers on this account' })
+    expect(link.getAttribute('href')).toBe('/dashboard?view=costs&planAccount=claude%3Adefault&planWindow=w-today')
   })
 
-  it('renders nothing without usage', () => {
-    const { container } = render(<ManagerUsageChip name="M" usage={null} />)
+  it('is a real button: focusable, and Escape closes the breakdown', () => {
+    renderIn(<ManagerUsageChip usage={usage()} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
+    const chip = row('manager-usage-chip') as HTMLButtonElement
+    expect(chip.tagName).toBe('BUTTON')
+    expect(chip.getAttribute('aria-haspopup')).toBe('dialog')
+    chip.focus()
+    fireEvent.click(chip)
+    expect(chip.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('opens a bottom sheet with the same breakdown on a phone', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(max-width: 767px)', addEventListener() {}, removeEventListener() {} }))
+    renderIn(<ManagerUsageChip usage={usage()} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
+    fireEvent.click(row('manager-usage-chip')!)
+    const sheet = screen.getByRole('dialog')
+    expect(sheet.getAttribute('data-slot')).toBe('manager-usage-popover')
+    expect(sheet.className).toContain('bottom-0')
+    expect(within(sheet).getByRole('heading', { name: 'Plan limit used by this manager and its tasks' })).toBeTruthy()
+    expect(rowText('manager-usage-tasks')).toBe('Tasks it started (2) ≈ 18%')
+  })
+
+  it('still shows the account when the manager spent nothing today, and nothing at all with neither', () => {
+    const { unmount } = renderIn(<ManagerUsageChip usage={null} account={accountNow(40)} provider="claude" now={NOW.getTime()} />)
+    expect(row('manager-usage-chip')!.textContent).toBe('40% of 5h')
+    fireEvent.click(row('manager-usage-chip')!)
+    expect(row('manager-usage-none')!.textContent).toBe('Nothing measured for this manager today.')
+    unmount()
+    const { container } = renderIn(<ManagerUsageChip usage={null} account={accountNow(null)} provider="claude" now={NOW.getTime()} />)
     expect(container.innerHTML).toBe('')
+  })
+
+  it('falls back to manager + tasks when the account has no reading', () => {
+    renderIn(<ManagerUsageChip usage={usage()} account={accountNow(null)} provider="claude" now={NOW.getTime()} />)
+    expect(row('manager-usage-chip')!.textContent).toBe('Manager + tasks ≈ 23% of 5h')
   })
 })
 
-describe('reply footnote', () => {
-  it('maps each assistant message to its estimate and window, and only those with an entry', () => {
-    const replies = replyUsageById([entry(manager), entry(manager, { kind: 'weekly' })], 'm1')
-    expect([...replies.keys()]).toEqual(['a1', 'a2'])
-    expect(replies.get('a1')!.pp).toBe(1)
-    expect(replies.get('a1')!.where).toMatch(/^Claude · default · 5-hour limit/)
-    expect(replies.has('missing')).toBe(false)
-    render(<ReplyUsageNote usage={replies.get('a2')!} />)
-    expect(document.querySelector('[data-slot="manager-reply-usage"]')!.textContent).toMatch(/^This reply ≈ 0.1% of 5h \(Claude · default/)
+describe('ManagerLimitStrip', () => {
+  it('stays away below 80 %', () => {
+    const { container } = renderIn(<ManagerLimitStrip usage={null} account={accountNow(79)} provider="claude" now={NOW.getTime()} />)
+    expect(container.innerHTML).toBe('')
+  })
+
+  it('warns near the limit and opens the same breakdown', () => {
+    renderIn(<ManagerLimitStrip usage={null} account={accountNow(86, 41)} provider="claude" now={NOW.getTime()} />)
+    const strip = row('manager-limit-strip')!
+    expect(strip.getAttribute('data-level')).toBe('warning')
+    expect(strip.textContent).toMatch(/^5-hour limit 86% used · resets .+ \(in 39 min\) · week 41%$/)
+    fireEvent.click(strip)
+    expect(within(screen.getByRole('dialog')).getByText('Plan limit used by this manager and its tasks')).toBeTruthy()
+  })
+
+  it('says the limit is reached once the provider blocks', () => {
+    const fiveHour = window('five-hour', 100, { limitReachedAt: NOW.toISOString() })
+    renderIn(<ManagerLimitStrip usage={null} account={{ key: KEY, fiveHour, week: undefined, level: limitLevel(fiveHour) }} provider="claude" now={NOW.getTime()} />)
+    expect(row('manager-limit-strip')!.getAttribute('data-level')).toBe('critical')
+    expect(row('manager-limit-strip')!.textContent).toMatch(/^5-hour limit reached · resets/)
+  })
+})
+
+describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)', () => {
+  const stats = (over: Partial<PlanUsageTurnStats> = {}): PlanUsageTurnStats => ({
+    requests: 2, contextFirst: 30_000, contextPeak: 35_000, toolResultChars: 500,
+    tools: { route: 1, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 3, idleMs: 60_000, ...over,
+  })
+
+  it('names why a turn was expensive', () => {
+    expect(turnReasons(stats())).toEqual([])
+    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cache expired after 10 h idle', 'large context (942k)'])
+    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['7 requests', 'big tool output', 'new session'])
+  })
+
+  it('sums routing against its own work and counts turns a task could have done', () => {
+    expect(turnShape([{ turn: stats() }, { turn: stats({ requests: 8, contextPeak: 45_000, tools: { route: 0, look: 2, own: 5, write: 1 } }) }, {}])).toEqual({
+      turns: 2, avgContext: 40_000, avgRequests: 5, tools: { route: 1, look: 2, own: 5, write: 1 }, couldBeTasks: 1,
+    })
+    expect(turnShape([{}])).toBeNull()
+  })
+
+  it('shows the reason under a largest turn and the window’s turn shape', () => {
+    const withStats = consumer({ ...manager, messages: [{ ...turn('a1', 'chat', 5, 1), turn: stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }) }] })
+    const u = managerPlanUsage([entry(withStats)], 'm1', [], KEY, NOW)!
+    renderIn(<ManagerUsageChip usage={u} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cache expired after 10 h idle, large context (942k)')
+    expect(row('manager-usage-shape')!.textContent).toContain('942k context · 5.0 requests per turn (1 turn)')
+    expect(row('manager-usage-shape')!.textContent).toContain('Tool calls: 1 routing work to tasks, 0 looking up state, 0 its own work')
   })
 })

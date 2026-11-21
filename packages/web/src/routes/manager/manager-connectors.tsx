@@ -1,5 +1,5 @@
 import { ChevronRightIcon, RefreshCwIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { useManagerConnectors, useRefreshManagerConnectors } from '@/api/managers'
 import { StatusDot } from '@/components/status-dot'
@@ -168,6 +168,13 @@ export function ConnectorsDialog({
   }
   const runRefresh = () => refresh.mutate(undefined, { onError: (error) => toast(errorMessage(error), { tone: 'danger' }) })
   const unavailable = data?.available === false
+  // Manager turns load no connector they cannot call, so a new manager has seen none: probe once.
+  const probed = useRef(false)
+  useEffect(() => {
+    if (!open || probed.current || !data || data.available === false || data.observedAt) return
+    probed.current = true
+    refresh.mutate(undefined)
+  }, [open, data, refresh])
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent

@@ -37,7 +37,17 @@ The native app keeps the bottom navigation at every width. Settings has its own 
 
 Your computer's avatar sits in the cockpit's header: a circle with its initials, in a colour picked from its name. On a wide screen the sidebar's top shows it with the computer's name. Tap it and the app shows a plain list of your computers, like an account switcher: each with its avatar, its name, a word for its state (Online, Offline since 14:02, Email not confirmed, Suspended) and how many tasks need you there, with a tick on the current one. Tap another computer to open it. **Add a device** and **Manage devices** are at the bottom. The list stays in the app: the cockpit page never learns about your other computers.
 
-A notification names the computer that needs you, and tapping it opens that computer. The app icon's badge shows the total across your computers: open questions, approvals and unread important manager messages. The app re-reads every computer's count when it comes to the front and every minute while a computer's page is open, and once a computer has nothing waiting its notifications are removed. A computer with nothing to count sends no notification.
+A notification names the computer that needs you, and tapping it opens that computer. The app icon's badge shows the total across your computers. The app re-reads every computer's count when it comes to the front and every minute while a computer's page is open, and once a computer has nothing waiting its notifications are removed.
+
+## What needs you
+
+**Now** is the one list of what waits on you: questions, approvals, tasks that need you, tasks ready for review, failed tasks and important manager messages. The Now tab's badge counts it, and each computer's share of the app icon's badge is the same list. **This project** shows the project's own tasks plus the managers connected to it; **All** shows everything on that computer, grouped by manager and project. Answer a one-question card or approve a merge in place, or **Mark read** a message, a review or a failure. **Mark all read** never answers a question or decides an approval.
+
+When you handle something anywhere, on the computer or another phone, it leaves the list, and the app's count follows the next time it opens.
+
+## Notification settings
+
+On the phone, **Settings → Notifications → This phone** chooses which kinds send a push, which count on the icon, and quiet hours. On the computer, the same settings sit under **Settings → Connect a phone → Notifications**, one set per phone. They are kept on the computer: the relay never learns what a push is about. By default everything pushes, and failed tasks do not count on the icon. Quiet hours follow the phone's own time zone: no alert arrives during them, and one comes when they end if something still waits.
 
 The server must run in hosted mode. Links that leave your server open in the system browser.
 
@@ -54,6 +64,10 @@ The server must run in hosted mode. Links that leave your server open in the sys
 Older iOS builds, including CezarBot 0.1.1 (10104), can return the same cached cockpit on every reload. Close and reopen the server from the app's **Devices** list to start a new cache check after the computer reconnects. If the banner persists, close and reopen CezarBot. Avoid **Forget**, which removes pairing and website data.
 
 The reliable reload fix requires an iOS app update as well as the cockpit update: the old app's native relay cache controls which HTML a page reload receives. A server update alone cannot replace that native code. The separate **restart to finish** banner means the server process needs restarting; reloading the phone page does not restart the computer's service.
+
+### When the cockpit cannot start
+
+The app never leaves you on a blank screen. If the cockpit loads but draws nothing, for example because cezar was updated under a page the phone had cached, the app reloads it once from the computer, past its caches. If that fails too, **Connection problem** offers **Retry** and **Your cezars**. A page that does not come back after the app returns from the background is reloaded the same way. After an app update, the first start fetches the cockpit from the computer again instead of from the phone's cache. In a browser, the cockpit itself shows **cezar could not start** with **Reload** when its files are gone.
 
 ## Relay terms on the phone
 

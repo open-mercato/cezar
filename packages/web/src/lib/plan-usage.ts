@@ -1,4 +1,4 @@
-import { formatPlanPp, type PlanUsageConsumerWindow, type PlanUsageWindowKind } from '@open-mercato/cezar-api-client'
+import { formatPlanPp, type PlanUsageConsumer, type PlanUsageConsumerWindow, type PlanUsageWindowKind } from '@open-mercato/cezar-api-client'
 
 /** Ids spelled exactly as the server's ledger writes them (`usage-ledger/report.ts`). */
 export const taskConsumerId = (projectId: string, runId: string) => `run:${projectId}/${runId}`
@@ -56,4 +56,21 @@ export function taskWindows(entries: PlanUsageConsumerWindow[] | undefined, runI
 export function planWindowHref(accountKey: string, windowId: string): string {
   const query = new URLSearchParams({ view: 'costs', planAccount: accountKey, planWindow: windowId })
   return `/dashboard?${query.toString()}`
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/** "2 other tasks", "1 other task and 1 manager". */
+export function ranTogetherLabel(c: Pick<PlanUsageConsumer, 'ranTogetherWith'>): string {
+  const { tasks, managers } = c.ranTogetherWith
+  const parts = [tasks > 0 ? plural(tasks, 'other task') : '', managers > 0 ? plural(managers, 'manager') : '']
+  return parts.filter(Boolean).join(' and ') || 'other cezar work'
+}
+
+/** "2 h 10 min", "45 min": how long until a window resets. */
+export function untilLabel(iso: string, now: number): string {
+  const minutes = Math.max(0, Math.round((Date.parse(iso) - now) / 60_000))
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return h > 0 ? `${h} h${m > 0 ? ` ${m} min` : ''}` : `${m} min`
 }
