@@ -636,11 +636,8 @@ console.log(${JSON.stringify(result(1.25, 30))});
     await session.result;
 
     expect(events.flatMap((e) => (e.type === 'cost' ? [e.usd] : []))).toEqual([0.5, 0.75]);
-    const models = uiEvents.flatMap((e) => (e.type === 'turn.completed' ? [e.models?.[0]] : []));
-    expect(models).toEqual([
-      { model: 'claude-opus-5-5', inputTokens: 10, outputTokens: 2, costUsd: 0.5 },
-      { model: 'claude-opus-5-5', inputTokens: 20, outputTokens: 0, costUsd: 0.75 },
-    ]);
+    // This line's turn.completed carries no per-model usage (#2317), only costUsd.
+    expect(uiEvents.flatMap((e) => (e.type === 'turn.completed' ? [e.costUsd] : []))).toEqual([0.5, 0.75]);
     // The session is now known: a resume in this process diffs against its last total.
     expect(new ClaudeSessionCost('unpinned-1', true, dir, undefined).increment(2)).toBeCloseTo(0.75);
   }, 15_000);

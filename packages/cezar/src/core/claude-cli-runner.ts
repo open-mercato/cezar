@@ -143,12 +143,7 @@ export class ClaudeCliRunner implements AgentRunner {
     let sessionCost: ClaudeSessionCost;
     try {
       const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
-<<<<<<< HEAD
-=======
       sessionCost = new ClaudeSessionCost(spec.sessionId, spec.resume === true, spec.cwd, env.CLAUDE_CONFIG_DIR);
-      // Mock auth replays share one marker directory across worktrees.
-      if (this.bin === mockClaudePath()) env.CEZ_HOME = resolvePath(cezarHomeDir(env));
->>>>>>> c043cff (fix(claude): report each resumed turn's own cost, not the session's running total (#2384))
       const [file, argv] = disclaimedCommand(this.bin, args, env);
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
