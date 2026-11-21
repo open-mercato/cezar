@@ -27,6 +27,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
 import { claudeUsageStatus } from './claude-usage-status.ts';
+import { ClaudeSessionCost } from './claude-session-cost.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
@@ -140,8 +141,10 @@ export class ClaudeCliRunner implements AgentRunner {
     const startedAt = Date.now();
 
     let child: ChildProcessWithoutNullStreams;
+    let sessionCost: ClaudeSessionCost;
     try {
       const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      sessionCost = new ClaudeSessionCost(spec.sessionId, spec.resume === true, spec.cwd, env.CLAUDE_CONFIG_DIR);
       // Mock auth replays share one marker directory across worktrees.
       if (this.bin === mockClaudePath()) env.CEZ_HOME = resolvePath(cezarHomeDir(env));
       const [file, argv] = disclaimedCommand(this.bin, args, env);
@@ -313,6 +316,7 @@ export class ClaudeCliRunner implements AgentRunner {
           const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
           const isInit = raw.type === 'system' && raw.subtype === 'init';
           if (isInit && typeof raw.model === 'string') initModel = raw.model;
+          if (isInit && typeof (raw as { session_id?: unknown }).session_id === 'string') sessionCost.identify((raw as { session_id: string }).session_id);
           if (isInit) {
             const servers = claudeMcpServers(mappedMessage);
             if (servers) onEvent?.(servers);
@@ -341,7 +345,7 @@ export class ClaudeCliRunner implements AgentRunner {
 
           if (msg.type === 'result') {
             if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
-              onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
+              onEvent?.({ type: 'cost', usd: sessionCost.increment(msg.total_cost_usd) });
             }
             onEvent?.({ type: 'turn-end' });
             if (opts.autoEndAfterFirstTurn && stdinOpen && !autoEndTimer) {

@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -47,7 +47,40 @@ const MOCK_MODEL = (() => {
   return alias ? `claude-${alias}-5-5` : requested;
 })();
 
+// Like the real CLI, `total_cost_usd` is the session's running total, carried over `--resume`.
+const MOCK_SESSION = (() => {
+  for (const flag of ['--session-id', '--resume']) {
+    const at = process.argv.indexOf(flag);
+    if (at >= 0 && process.argv[at + 1]) return process.argv[at + 1];
+  }
+  return undefined;
+})();
+const mockCostFile = MOCK_SESSION && process.env.CEZ_HOME && /^[A-Za-z0-9-]+$/.test(MOCK_SESSION)
+  ? join(process.env.CEZ_HOME, 'mock-claude-costs', `${MOCK_SESSION}.json`)
+  : undefined;
+let mockCostTotal = (() => {
+  try {
+    return mockCostFile ? Number(JSON.parse(readFileSync(mockCostFile, 'utf8')).total) || 0 : 0;
+  } catch {
+    return 0;
+  }
+})();
+function runningCost(obj) {
+  if (obj?.type !== 'result' || typeof obj.total_cost_usd !== 'number') return obj;
+  mockCostTotal += obj.total_cost_usd;
+  if (mockCostFile) {
+    try {
+      mkdirSync(dirname(mockCostFile), { recursive: true });
+      writeFileSync(mockCostFile, JSON.stringify({ total: mockCostTotal }));
+    } catch {
+      // a read-only home: the total stays per process
+    }
+  }
+  return { ...obj, total_cost_usd: mockCostTotal };
+}
+
 function emit(obj) {
+  obj = runningCost(obj);
   if (obj?.type === 'result' && !obj.is_error && !obj.modelUsage && !process.env.CEZ_MANAGER_ID) {
     const usage = obj.usage ?? {};
     obj = {
