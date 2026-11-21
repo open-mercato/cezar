@@ -91,6 +91,7 @@ import {
   connectorInfos,
   connectorPromptSection,
   connectorToolName,
+  hasConnectorGrant,
   observeConnectors,
   type ObservedConnectors,
 } from './connectors.ts';
@@ -2225,6 +2226,8 @@ export class ManagerEngine {
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
+    // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
+    const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(
         manager,
@@ -2257,6 +2260,7 @@ export class ManagerEngine {
         ...(readOnlyWatch ? readOnlyEnv() : {}),
       },
       ...(readOnlyWatch ? { enforceReadOnly: true } : {}),
+      ...(noMcpServers ? { noMcpServers: true } : {}),
       ...(planAccount ? { onUsageWindows: (observation) => recordUsageObservation(planAccount, observation) } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
@@ -2356,7 +2360,8 @@ export class ManagerEngine {
           error ??= event.message;
           break;
         case 'mcp-servers':
-          this.observeConnectors(id, event);
+          // A turn that loaded none would report every server gone; the probe still sees them.
+          if (!base.noMcpServers) this.observeConnectors(id, event);
           break;
         default:
           break;

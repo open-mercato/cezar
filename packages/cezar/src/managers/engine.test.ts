@@ -2208,6 +2208,31 @@ describe('ManagerEngine', () => {
       expect(backend.specs.at(-1)?.allowedTools).toContain(LIST);
     });
 
+    it('loads no connector for a manager with nothing granted, and keeps what was seen (spec 2026-11-21 § 2.4)', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ play: init(), hold: true });
+      await engine.refreshConnectors(id);
+      const seenBefore = store.state(id).connectors?.servers.map((server) => server.key);
+      backend.scripts.push({ play: (emit) => { emit({ type: 'mcp-servers', servers: [], tools: ['Read'] }); emit({ type: 'text', text: 'ok' }); } });
+      engine.send(id, 'hi');
+      await settled(engine);
+      const chat = backend.specs.at(-1)!;
+      expect(chat.noMcpServers).toBe(true);
+      expect(buildClaudeArgs(chat, {})).toContain('--strict-mcp-config');
+      expect(store.state(id).connectors?.servers.map((server) => server.key)).toEqual(seenBefore);
+      expect(seenBefore).toEqual([CAL, 'claude_ai_Gmail']);
+    });
+
+    it('a granted manager loads its connectors in chat turns, never in a watch', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'read' } });
+      expect(backend.specs.at(-1)?.noMcpServers).toBeUndefined();
+      engine.check(id);
+      await settled(engine);
+      expect(backend.specs.at(-1)?.noMcpServers).toBe(true);
+    });
+
     it('a revoke applies from the next turn', async () => {
       const engine = makeEngine();
       const id = await granted(engine, { [CAL]: { level: 'read' } });
