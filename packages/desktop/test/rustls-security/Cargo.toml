@@ -1,0 +1,10 @@
+[package]
+name = "cezar-rustls-security-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+# The runner replaces this range with the exact desktop lockfile resolution.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring"] }
