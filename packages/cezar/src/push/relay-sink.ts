@@ -62,7 +62,8 @@ export function pushBody(grant: string, count: number, id: string, ts: number): 
   return JSON.stringify({ v: 1, grant, kind: 'attention', count, id, ts });
 }
 
-export const badgeCount = (count: number): number => Math.min(99, Math.max(1, Math.floor(Number.isFinite(count) ? count : 1)));
+/** 0 means nothing waits: no push goes out (spec 2026-11-20-phone-notifications-inbox, B2). */
+export const badgeCount = (count: number): number => Math.min(99, Math.max(0, Math.floor(Number.isFinite(count) ? count : 0)));
 
 export class RelayPushSink {
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -130,10 +131,12 @@ export class RelayPushSink {
     }
     if (delivered) this.lastSentAt = this.now();
     if (targets.length === 0 || !origin) return;
+    // Read before the send: a push for what no list counts would leave a badge nothing clears.
+    const count = badgeCount(await this.deps.count().catch(() => 0));
+    if (count === 0) return;
     const seed = await this.deps.seed().catch(() => null);
     if (!seed) return;
     this.lastSentAt = this.now();
-    const count = badgeCount(await this.deps.count().catch(() => 1));
     await Promise.all(targets.map((device) => this.sendOne(origin, seed, device.deviceId, device.push!, count)));
   }
 

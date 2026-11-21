@@ -9121,12 +9121,13 @@ export function createApp(deps: ServerDeps) {
   deps.onDispose?.(() => questionInbox.dispose());
   // Trusted-only like `host`: attention counts are never readable by a foreign local page (BACKWARD_COMPATIBILITY.md).
   deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox));
-  // The badge, read when a push goes out: approvals across managers that notify, plus the live questions
-  // (spec § Counts: one live count everywhere).
+  // The badge, read when a push goes out: approvals and unread important messages across managers that
+  // notify, plus the live questions. It counts everything that raises a push (spec 2026-11-20-phone-notifications-inbox, B2).
   waitingOnUser = async () => {
-    const approvals = (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0);
+    const managed = (await managerEngine.list()).reduce((sum, manager) =>
+      sum + (manager.notify === false ? 0 : manager.pendingActions + (manager.inactive ? 0 : manager.important)), 0);
     const { live } = await questionInbox.counts().catch(() => ({ live: 0 }));
-    return approvals + live;
+    return managed + live;
   };
   phonePairing.attachPush(waitingOnUser);
 

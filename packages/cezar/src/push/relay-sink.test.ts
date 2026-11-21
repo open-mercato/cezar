@@ -11,7 +11,7 @@ const NOW = 1_793_491_200_000;
 
 interface Sent { url: string; headers: Record<string, string>; body: string }
 
-function setup(over: { devices?: PushGrantRow[]; live?: string[]; streams?: string[]; status?: number; enabled?: boolean } = {}) {
+function setup(over: { devices?: PushGrantRow[]; live?: string[]; streams?: string[]; status?: number; enabled?: boolean; count?: () => Promise<number> } = {}) {
   let now = NOW;
   const sent: Sent[] = [];
   const dropped: string[] = [];
@@ -30,7 +30,7 @@ function setup(over: { devices?: PushGrantRow[]; live?: string[]; streams?: stri
     },
     hasStreams: () => (over.streams ?? []).length > 0,
     dropGrant: (id, grantId) => { dropped.push(`${id}:${grantId}`); },
-    count: async () => 3,
+    count: over.count ?? (async () => 3),
     post: async (url, { headers, body }) => {
       sent.push({ url, headers, body: Buffer.from(body).toString('utf8') });
       return { status: over.status ?? 202 };
@@ -169,8 +169,29 @@ describe('RelayPushSink', () => {
     expect(dropped).toEqual([`phone-a:${GRANT_ID}`]);
   });
 
-  it('keeps the badge in the protocol range', () => {
-    expect([badgeCount(0), badgeCount(5), badgeCount(500), badgeCount(Number.NaN)]).toEqual([1, 5, 99, 1]);
+  it('sends nothing when nothing is counted, and the next signal is not held back by it (B2)', async () => {
+    vi.useFakeTimers();
+    let count = 0;
+    const { sink, sent, advance } = setup({ count: async () => count });
+    sink.signal('m');
+    await advance(PUSH_DEBOUNCE_MS);
+    expect(sent).toHaveLength(0);
+    count = 2;
+    sink.signal('m');
+    await advance(PUSH_DEBOUNCE_MS);
+    expect(sent.map((one) => (JSON.parse(one.body) as { count: number }).count)).toEqual([2]);
+  });
+
+  it('sends nothing when the count cannot be read', async () => {
+    vi.useFakeTimers();
+    const { sink, sent, advance } = setup({ count: async () => { throw new Error('down'); } });
+    sink.signal('m');
+    await advance(PUSH_DEBOUNCE_MS);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('keeps the badge in the protocol range, down to 0', () => {
+    expect([badgeCount(0), badgeCount(-3), badgeCount(5), badgeCount(500), badgeCount(Number.NaN)]).toEqual([0, 0, 5, 99, 0]);
     expect(JSON.parse(pushBody('g', 1, 'i', 2))).toEqual({ v: 1, grant: 'g', kind: 'attention', count: 1, id: 'i', ts: 2 });
   });
 });

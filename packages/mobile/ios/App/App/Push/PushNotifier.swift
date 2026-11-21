@@ -102,11 +102,23 @@ final class PushNotifier {
 
     /// The saved list's names, then the sum, as the app comes to the front.
     func refreshBadge() {
+        settle()
+    }
+
+    /// The badge from the book, and a computer whose count is 0 loses its delivered notifications
+    /// (spec 2026-11-20-phone-notifications-inbox, B3).
+    func settle() {
         let servers = servers()
-        showBadge(book.update { book -> Int in
+        let (badge, settled) = book.update { book -> (Int, Set<String>) in
             book.sync(servers)
-            return book.badge
-        })
+            return (book.badge, book.settled)
+        }
+        showBadge(badge)
+        guard !settled.isEmpty else { return }
+        center.getDeliveredNotifications { [center] delivered in
+            let ids = DeviceBook.toRemove(delivered.map { ($0.request.identifier, $0.request.content.userInfo[PushTap.extra] as? String) }, settled: settled)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
     }
 
     private func store(_ value: UNAuthorizationStatus) {

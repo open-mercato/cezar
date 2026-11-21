@@ -3,7 +3,9 @@ package com.openmercato.cezar.mobile.shell;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.webkit.CookieManager;
 import com.openmercato.cezar.mobile.BuildConfig;
+import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
 import com.openmercato.cezar.mobile.shell.push.CezarPush;
 import com.openmercato.cezar.mobile.shell.push.GrantClient;
 import com.openmercato.cezar.mobile.shell.push.OkHttpPushRelay;
@@ -24,8 +26,16 @@ import com.openmercato.cezar.mobile.shell.relay.TunnelSession;
 import java.io.File;
 import java.io.IOException;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /** One connector per process, kept where Android backup never looks. */
@@ -40,6 +50,12 @@ public final class ShellServices {
     private static TokenSource tokens = TokenSource.NONE;
     private static PushCoordinator push;
     private static StartupLog startupLog;
+    private static BadgeRefresh badges;
+    private static final Object PROBE_LOCK = new Object();
+    private static final ExecutorService PROBE_WORK = Executors.newCachedThreadPool();
+    private static final ScheduledExecutorService PROBE_BOUNDS = Executors.newSingleThreadScheduledExecutor();
+    private static final Map<String, DeviceProbes.Reading> PROBE_READINGS = new ConcurrentHashMap<>();
+    private static List<Consumer<RuntimeException>> probeWaiters;
 
     private ShellServices() {}
 
@@ -70,6 +86,72 @@ public final class ShellServices {
         }, "cezar-prewarm");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    /** Set by the application, which owns the notifications the rounds clear. */
+    public static synchronized void setBadges(BadgeRefresh refresh) {
+        badges = refresh;
+    }
+
+    /** Null before the application set it. */
+    public static synchronized BadgeRefresh badges() {
+        return badges;
+    }
+
+    /** The last probe round's readings, by server id: what Your cezars draws. */
+    public static Map<String, DeviceProbes.Reading> probeReadings() {
+        return PROBE_READINGS;
+    }
+
+    /**
+     * One probe round over every saved cezar at a time; a call during one joins it. Your cezars and the badge rounds
+     * share it, because a round's end cools every warm link and would cut another round's probes short (B1).
+     * `done` gets null, or the error that stopped the round.
+     */
+    public static void probeRound(Context context, Consumer<RuntimeException> done) {
+        synchronized (PROBE_LOCK) {
+            if (probeWaiters != null) {
+                probeWaiters.add(done);
+                return;
+            }
+            probeWaiters = new ArrayList<>();
+            probeWaiters.add(done);
+        }
+        Context app = context.getApplicationContext();
+        PROBE_WORK.execute(() -> {
+            try {
+                ShellConnector shell = connector(app);
+                RelayConnections relay = relay(app);
+                DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, PROBE_WORK),
+                        DeviceProbes.directProbe(shell, server -> server.url == null ? null : CookieManager.getInstance().getCookie(server.url), PROBE_WORK),
+                        relay::cool, (ms, work) -> PROBE_BOUNDS.schedule(work, ms, TimeUnit.MILLISECONDS),
+                        (id, answer) -> shell.sawHealth(id, answer, System.currentTimeMillis()), PROBE_READINGS::put);
+                probes.whenSettled(() -> {
+                    probes.stop(null);
+                    endProbeRound(null);
+                });
+                probes.start(shell.list());
+            } catch (RuntimeException e) {
+                endProbeRound(e);
+            }
+        });
+    }
+
+    private static void endProbeRound(RuntimeException error) {
+        List<Consumer<RuntimeException>> waiters;
+        synchronized (PROBE_LOCK) {
+            waiters = probeWaiters;
+            probeWaiters = null;
+        }
+        if (waiters == null) return;
+        // One caller's failure must not skip the next: a badge round left unanswered never runs again.
+        for (Consumer<RuntimeException> each : waiters) {
+            try {
+                each.accept(error);
+            } catch (RuntimeException ignored) {
+                // The failing caller's own problem.
+            }
+        }
     }
 
     public static synchronized RelayConnections relay(Context context) {
