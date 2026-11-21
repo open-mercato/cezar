@@ -357,6 +357,11 @@ function AskQuestionBlock({
 
   const pick = (label: string) => {
     if (!multiSelect) {
+      // A held (multi-question) pick toggles off on a second click (#1509); a one-tap card sends.
+      if (!oneTap && answer.labels.includes(label)) {
+        onChange(EMPTY_ANSWER)
+        return
+      }
       settle({ labels: [label] })
       return
     }
