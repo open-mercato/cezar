@@ -1500,6 +1500,26 @@ describe('/manager/:id', () => {
       expect(calls.some((call) => call.path.includes('pending=1'))).toBe(false)
     })
 
+    it('a pointer jump shows the card: header in view and a visible mark, not only focus', async () => {
+      server.managers = [managerFixture({ pendingQuestions: 1 })]
+      server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
+      renderAt('/manager/global')
+      await screen.findByRole('button', { name: 'Send answer' })
+      vi.useFakeTimers({ toFake: ['setTimeout'] })
+      try {
+        vi.mocked(Element.prototype.scrollIntoView).mockClear()
+        fireEvent.click(jump()!)
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+        const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0] as HTMLElement
+        expect(target.hasAttribute('data-revealed')).toBe(true)
+        expect(target.className).toContain('data-revealed:ring-[3px]')
+        vi.advanceTimersByTime(2_000)
+        expect(target.hasAttribute('data-revealed')).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('a `#needs-you` link (a manager head) jumps to the waiting card on arrival', async () => {
       server.managers = [managerFixture({ pendingQuestions: 1 })]
       server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
