@@ -7,6 +7,7 @@ import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/man
 import { __clearRememberedStatusesForTests, queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 import { runnerSchema } from '@open-mercato/cezar-api-client'
+import { LIVE_USAGE_STORAGE_KEY } from '@/lib/live-usage-pref'
 
 import { AppShell } from '@/components/app-shell'
 import { ThemeProvider } from '@/components/theme-provider'
@@ -410,6 +411,49 @@ describe('/manager/:id', () => {
     renderAt('/manager/global')
     fireEvent.click(await screen.findByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
+  })
+
+  it('shows the manager account usage indicator in the chat header', async () => {
+    localStorage.setItem(LIVE_USAGE_STORAGE_KEY, '1')
+    const resetsAt = new Date(Date.now() + 2 * 3_600_000).toISOString()
+    seedChat({ runner: 'claude', agentProfile: 'work' })
+    renderAt('/manager/global', (client) => {
+      client.setQueryData(queryKeys.health, {
+        capabilities: { managers: true, localHandoff: true },
+        defaultRunner: 'claude',
+        bootProject: 'alpha',
+        checks: [],
+      })
+      client.setQueryData(workspaceQueryKeys.accountUsage, {
+        accounts: [
+          {
+            id: 'work',
+            provider: 'claude',
+            label: 'Work Team',
+            isDefault: false,
+            routeId: 'claude:work',
+            usage: {
+              at: new Date().toISOString(),
+              limits: [{ window: 'five_hour', utilization: 0.4, resetsAt }],
+            },
+          },
+        ],
+      })
+      client.setQueryData(workspaceQueryKeys.agentProfiles, {
+        editable: true,
+        profiles: [{ id: 'work', provider: 'claude', label: 'Work Team', isDefault: false, configDir: '' }],
+        profileCapableProviders: ['claude'],
+        selections: {},
+        defaults: {},
+      })
+    })
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const header = document.querySelector('[data-route="manager-chat"] header')!
+    const chip = header.querySelector('[data-slot="account-usage-chip"]')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain('Work Team')
+    expect(chip?.textContent).toContain('5h 40%')
+    expect(document.querySelectorAll('[data-slot="account-usage-chip"]')).toHaveLength(1)
   })
 
   describe('the Watching panel', () => {

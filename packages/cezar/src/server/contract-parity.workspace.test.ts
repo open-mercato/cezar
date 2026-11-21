@@ -34,6 +34,7 @@ import type {
   configResponseSchema,
   diskGuardStatusSchema,
   hostUsageSchema,
+  accountUsageResponseSchema,
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
@@ -144,6 +145,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type StageUploadBody = InferRequestType<typeof client.api.v1.workspace.uploads.$post>['json'];
   type DeleteUpload200 = InferResponseType<(typeof client.api.v1.workspace.uploads)[':uploadId']['$delete'], 200>;
   type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
+  type AccountUsage200 = InferResponseType<(typeof client.api.v1.workspace)['account-usage']['$get'], 200>;
   type DiskGuard200 = InferResponseType<(typeof client.api.v1.workspace)['disk-guard']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
@@ -277,6 +279,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // the request half: a real `File`, not whatever `parseBody()` used to hand the handler
     Assert<Exact<z.input<typeof brandingLogoUploadSchema>, BrandingLogoUploadBody>>,
     Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
+    Assert<Exact<z.infer<typeof accountUsageResponseSchema>, AccountUsage200>>,
     Assert<Exact<z.infer<typeof diskGuardStatusSchema>, DiskGuard200>>,
     // the two open GUI-pref bags — GET and the merged answer the PUT sends back
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, UiState200>>,

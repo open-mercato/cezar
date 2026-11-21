@@ -20,6 +20,8 @@ import { rememberTasksLocation, tasksHref } from '@/lib/manager-location'
 import { isCezarShell } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
+import { QueryClientContext } from '@tanstack/react-query'
+import { AccountUsageWidget } from '@/components/account-usage-widget'
 import { AddProjectMenu } from '@/components/add-project-menu'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
 import { DeviceAvatarLink, DeviceChip } from '@/components/device-avatar'
@@ -961,6 +963,8 @@ function SidebarContent({
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
   const workspace = items.filter((item) => item.group === 'workspace')
+  // The widget needs a QueryClient; the shell can render without one.
+  const hasQueryClient = React.useContext(QueryClientContext) !== undefined
   return (
     <div
       data-slot="sidebar-content"
@@ -1056,6 +1060,7 @@ function SidebarContent({
         </>
       )}
 
+      {hasQueryClient ? <AccountUsageWidget /> : null}
       <SidebarStatusLine
         health={healthStatus}
         runningCount={runningCount}
