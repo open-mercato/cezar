@@ -1001,6 +1001,23 @@ async function respond(userText, imageCount) {
   });
 }
 
+// The model-discovery probe's control channel (#841, #869): `list_models` gets a small fixed
+// catalog, or a refusal when CEZ_MOCK_CLAUDE_NO_LIST_MODELS=1 (what an older CLI answers).
+const MOCK_MODELS = [
+  { value: 'default', displayName: 'Default (recommended)', description: 'Use the default model' },
+  { value: 'sonnet', displayName: 'Mock Sonnet', description: 'Mock tier alias', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] },
+  { value: 'opus', displayName: 'Mock Opus', description: 'Mock tier alias' },
+  { value: 'opus[1m]', displayName: 'Mock Opus (1M context)', description: 'Mock long-context variant' },
+];
+function answerControlRequest(msg) {
+  const request_id = msg.request_id;
+  if (msg.request?.subtype === 'list_models' && process.env.CEZ_MOCK_CLAUDE_NO_LIST_MODELS !== '1') {
+    emit({ type: 'control_response', response: { subtype: 'success', request_id, response: { models: MOCK_MODELS } } });
+    return;
+  }
+  emit({ type: 'control_response', response: { subtype: 'error', request_id, error: `Unsupported control request subtype: ${msg.request?.subtype}` } });
+}
+
 const rl = createInterface({ input: process.stdin });
 let queue = Promise.resolve();
 rl.on('line', (line) => {
@@ -1010,6 +1027,10 @@ rl.on('line', (line) => {
   let imageCount = 0;
   try {
     const msg = JSON.parse(trimmed);
+    if (msg?.type === 'control_request') {
+      answerControlRequest(msg);
+      return;
+    }
     const blocks = msg?.message?.content ?? [];
     userText = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n') || '(no text)';
     imageCount = blocks.filter((b) => b.type === 'image').length;
