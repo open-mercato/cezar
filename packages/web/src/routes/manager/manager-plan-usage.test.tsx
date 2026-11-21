@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ManagerMessage, PlanUsageConsumer, PlanUsageConsumerWindow, PlanUsageWindow } from '@open-mercato/cezar-api-client'
+import type { ManagerMessage, PlanUsageConsumer, PlanUsageConsumerWindow, PlanUsageTurnStats, PlanUsageWindow } from '@open-mercato/cezar-api-client'
 import {
   limitLevel,
   managerAccountKey,
@@ -10,6 +10,8 @@ import {
   managerStartedTasks,
   ManagerLimitStrip,
   ManagerUsageChip,
+  turnReasons,
+  turnShape,
   type AccountNow,
 } from './manager-plan-usage'
 
@@ -240,5 +242,35 @@ describe('ManagerLimitStrip', () => {
     renderIn(<ManagerLimitStrip usage={null} account={{ key: KEY, fiveHour, week: undefined, level: limitLevel(fiveHour) }} provider="claude" now={NOW.getTime()} />)
     expect(row('manager-limit-strip')!.getAttribute('data-level')).toBe('critical')
     expect(row('manager-limit-strip')!.textContent).toMatch(/^5-hour limit reached · resets/)
+  })
+})
+
+describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)', () => {
+  const stats = (over: Partial<PlanUsageTurnStats> = {}): PlanUsageTurnStats => ({
+    requests: 2, contextFirst: 30_000, contextPeak: 35_000, toolResultChars: 500,
+    tools: { route: 1, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 3, idleMs: 60_000, ...over,
+  })
+
+  it('names why a turn was expensive', () => {
+    expect(turnReasons(stats())).toEqual([])
+    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cache expired after 10 h idle', 'large context (942k)'])
+    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['7 requests', 'big tool output', 'new session'])
+  })
+
+  it('sums routing against its own work and counts turns a task could have done', () => {
+    expect(turnShape([{ turn: stats() }, { turn: stats({ requests: 8, contextPeak: 45_000, tools: { route: 0, look: 2, own: 5, write: 1 } }) }, {}])).toEqual({
+      turns: 2, avgContext: 40_000, avgRequests: 5, tools: { route: 1, look: 2, own: 5, write: 1 }, couldBeTasks: 1,
+    })
+    expect(turnShape([{}])).toBeNull()
+  })
+
+  it('shows the reason under a largest turn and the window’s turn shape', () => {
+    const withStats = consumer({ ...manager, messages: [{ ...turn('a1', 'chat', 5, 1), turn: stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }) }] })
+    const u = managerPlanUsage([entry(withStats)], 'm1', [], KEY, NOW)!
+    renderIn(<ManagerUsageChip usage={u} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cache expired after 10 h idle, large context (942k)')
+    expect(row('manager-usage-shape')!.textContent).toContain('942k context · 5.0 requests per turn (1 turn)')
+    expect(row('manager-usage-shape')!.textContent).toContain('Tool calls: 1 routing work to tasks, 0 looking up state, 0 its own work')
   })
 })

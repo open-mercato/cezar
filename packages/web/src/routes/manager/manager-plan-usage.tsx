@@ -7,6 +7,7 @@ import type {
   PlanUsageConsumerWindow,
   PlanUsageManagerPart,
   PlanUsageProvider,
+  PlanUsageTurnStats,
   PlanUsageWindow,
 } from '@open-mercato/cezar-api-client'
 import { usePlanUsage, usePlanUsageConsumers } from '@/api/plan-usage'
@@ -26,6 +27,47 @@ export interface ManagerTurnUsage {
   at: string
   pp: number
   alonePp: number
+  /** What the turn was made of, when the ledger recorded it (spec 2026-11-21 § 2.3). */
+  turn?: PlanUsageTurnStats
+}
+
+/** The window's manager turns in aggregate: how big they ran, and routing versus its own work. */
+export interface ManagerTurnShape {
+  turns: number
+  avgContext: number
+  avgRequests: number
+  tools: PlanUsageTurnStats['tools']
+  /** Turns heavy enough that a task might have done them: many requests or much of its own work. */
+  couldBeTasks: number
+}
+
+/** The prompt cache lasts an hour: a resume after that re-reads the whole history at the write price. */
+const CACHE_TTL_MS = 60 * 60_000
+
+export const couldBeTask = (turn: PlanUsageTurnStats): boolean => turn.requests >= 6 || turn.tools.own >= 4
+
+/** Why a turn cost what it did, most telling first; empty when nothing stands out. */
+export function turnReasons(turn: PlanUsageTurnStats): string[] {
+  const reasons: string[] = []
+  if (!turn.fresh && turn.idleMs !== undefined && turn.idleMs >= CACHE_TTL_MS) reasons.push(`cache expired after ${Math.round(turn.idleMs / 3_600_000)} h idle`)
+  if (turn.contextPeak >= 100_000) reasons.push(`large context (${Math.round(turn.contextPeak / 1000)}k)`)
+  if (turn.requests >= 6) reasons.push(`${turn.requests} requests`)
+  if (turn.toolResultChars >= 20_000) reasons.push('big tool output')
+  if (turn.fresh) reasons.push('new session')
+  return reasons
+}
+
+export function turnShape(messages: ReadonlyArray<{ turn?: PlanUsageTurnStats }>): ManagerTurnShape | null {
+  const turns = messages.flatMap((m) => (m.turn ? [m.turn] : []))
+  if (turns.length === 0) return null
+  const sum = (pick: (t: PlanUsageTurnStats) => number) => turns.reduce((s, t) => s + pick(t), 0)
+  return {
+    turns: turns.length,
+    avgContext: sum((t) => t.contextPeak) / turns.length,
+    avgRequests: sum((t) => t.requests) / turns.length,
+    tools: { route: sum((t) => t.tools.route), look: sum((t) => t.tools.look), own: sum((t) => t.tools.own), write: sum((t) => t.tools.write) },
+    couldBeTasks: turns.filter(couldBeTask).length,
+  }
 }
 
 export interface ManagerPlanUsage {
@@ -45,6 +87,7 @@ export interface ManagerPlanUsage {
   otherAccountTasks: number
   /** This window's costliest turns, kept so a spike can be traced to the reply that made it. */
   topTurns: ManagerTurnUsage[]
+  shape: ManagerTurnShape | null
 }
 
 /** A 5-hour window counts as today's when it holds a moment of today (local) up to now. */
@@ -118,7 +161,7 @@ export function managerPlanUsage(
   const topTurns = [...(manager?.messages ?? [])]
     .sort((a, b) => b.estimatePp - a.estimatePp)
     .slice(0, 3)
-    .map((m) => ({ messageId: m.messageId, part: m.part, at: m.at, pp: m.estimatePp, alonePp: m.aloneInferredPp }))
+    .map((m) => ({ messageId: m.messageId, part: m.part, at: m.at, pp: m.estimatePp, alonePp: m.aloneInferredPp, ...(m.turn ? { turn: m.turn } : {}) }))
   return {
     account: latest.account,
     windowId: latest.windowId,
@@ -132,6 +175,7 @@ export function managerPlanUsage(
     earlierTodayPp: onAccount.filter((e) => e.windowId !== latest.windowId).reduce((s, e) => s + e.consumer.estimatePp, 0),
     otherAccountTasks: new Set(today.filter((e) => e.account.key !== accountKey && e.consumer.id !== id).map((e) => e.consumer.id)).size,
     topTurns,
+    shape: turnShape(manager?.messages ?? []),
   }
 }
 
@@ -236,6 +280,40 @@ function usageRows(u: ManagerPlanUsage): PlanUsageRow[] {
   return rows
 }
 
+function TurnLabel({ t }: { t: ManagerTurnUsage }) {
+  const reasons = t.turn ? turnReasons(t.turn) : []
+  return (
+    <span className="block">
+      <span className="block">{PART_LABEL[t.part]} · {clockTime(t.at)} · {t.alonePp >= t.pp ? 'ran alone' : t.alonePp > 0 ? 'partly shared' : 'shared'}</span>
+      {t.turn ? (
+        <span data-slot="manager-usage-turn-detail" className="block text-meta text-muted-foreground">
+          {plural(t.turn.requests, 'request', 'requests')} · {Math.round(t.turn.contextPeak / 1000)}k context{reasons.length > 0 ? ` · ${reasons.join(', ')}` : ''}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+function TurnShapeSection({ shape }: { shape: ManagerTurnShape }) {
+  const { route, look, own, write } = shape.tools
+  return (
+    <section data-slot="manager-usage-shape" className="mt-2 border-t border-border pt-2">
+      <p className="eyebrow text-muted-foreground">Turn shape</p>
+      <p className="mt-1 tabular-nums">
+        {Math.round(shape.avgContext / 1000)}k context · {shape.avgRequests.toFixed(1)} requests per turn ({plural(shape.turns, 'turn', 'turns')})
+      </p>
+      <p className="text-meta text-muted-foreground tabular-nums">
+        Tool calls: {route} routing work to tasks, {look} looking up state, {own} its own work{write > 0 ? `, ${write} writing files` : ''}
+      </p>
+      {shape.couldBeTasks > 0 ? (
+        <p data-slot="manager-usage-could-be-task" className="text-meta text-muted-foreground">
+          {plural(shape.couldBeTasks, 'turn', 'turns')} did enough work that a task could have done it.
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
 /** The popover / sheet body; the chip and the near-limit strip open the same one. */
 function ManagerUsageDetails({ usage, account, provider, now }: { usage: ManagerPlanUsage | null; account: AccountNow; provider: PlanUsageProvider; now: number }) {
   const label = usage?.account.label ?? account.fiveHour?.account.label
@@ -270,12 +348,13 @@ function ManagerUsageDetails({ usage, account, provider, now }: { usage: Manager
                 className="mt-1"
                 rows={usage.topTurns.map((t, i) => ({
                   slot: `manager-usage-turn-${i}`,
-                  label: `${PART_LABEL[t.part]} · ${clockTime(t.at)} · ${t.alonePp >= t.pp ? 'ran alone' : t.alonePp > 0 ? 'partly shared' : 'shared'}`,
+                  label: <TurnLabel t={t} />,
                   value: approxPp(t.pp),
                 }))}
               />
             </section>
           ) : null}
+          {usage.shape ? <TurnShapeSection shape={usage.shape} /> : null}
         </>
       ) : (
         <p data-slot="manager-usage-none" className="mt-1 text-muted-foreground">Nothing measured for this manager today.</p>
