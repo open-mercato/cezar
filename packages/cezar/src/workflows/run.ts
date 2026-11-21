@@ -9088,6 +9088,7 @@ export class RunManager {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
+      this.clearDeadNativeAsk(runId, state);
       return message;
     } finally {
       planUsage?.close();
@@ -9118,6 +9119,16 @@ export class RunManager {
       persist: (event) => this.store.appendEvent(runId, { ...event, stepId }),
       emitLive: (event) => this.store.emitEphemeral(runId, { ...event, stepId }),
     });
+  }
+
+  /** A session that died on an unanswered native ask (#2296): the node is about to retry or fail
+   *  on its own, so drop the stale `waiting` + card — nobody can answer a session that is gone. */
+  private clearDeadNativeAsk(runId: string, state: ActiveRun): void {
+    if (this.active.get(runId) !== state || state.cancelled) return;
+    const run = this.store.getRun(runId);
+    if (run?.status !== 'waiting' || run.askParked || !run.attentionRequest) return;
+    this.waiting.delete(runId);
+    this.store.updateRun(runId, { status: 'running', activity: undefined, attentionRequest: undefined });
   }
 
   /** Native backend asks arrive before turn-end. Persist and park immediately
