@@ -333,13 +333,42 @@ function useNeedsYouJump(
 
   // After the commit that rendered the page: a fetch resolves before its rows exist.
   useEffect(() => {
-    if (target && reveal((box) => [...box.querySelectorAll<HTMLElement>(PENDING_CARD)].find((card) => card.dataset.actionId === target))) setTarget(undefined)
+    if (!target) return
+    const found = reveal((box) =>
+      [...box.querySelectorAll<HTMLElement>(`${PENDING_CARD}, ${OPEN_QUESTION}`)].find(
+        (card) => card.dataset.actionId === target || card.dataset.messageId === target,
+      ),
+    )
+    if (found) setTarget(undefined)
   }, [chat.messages, reveal, target])
 
   const jump = async () => {
     if (busy.current) return
     if (pendingActions === 0) {
-      reveal((box) => box.querySelector<HTMLElement>(OPEN_QUESTION) ?? undefined)
+      if (reveal((box) => box.querySelector<HTMLElement>(OPEN_QUESTION) ?? undefined)) return
+      busy.current = true
+      setJumping(true)
+      try {
+        let loaded: Pick<typeof chat, 'data' | 'hasNextPage'> = chat
+        while (
+          ref.current &&
+          loaded.hasNextPage &&
+          !managerChat(loaded.data).some(
+            (m) => m.kind === 'assistant' && m.ask !== undefined && m.askAnswer === undefined,
+          )
+        ) {
+          loaded = await chat.fetchNextPage({ throwOnError: true })
+        }
+        const oldest = managerChat(loaded.data).find(
+          (m) => m.kind === 'assistant' && m.ask !== undefined && m.askAnswer === undefined,
+        )
+        if (oldest) setTarget(oldest.id)
+      } catch (error) {
+        toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+      } finally {
+        busy.current = false
+        setJumping(false)
+      }
       return
     }
     busy.current = true
