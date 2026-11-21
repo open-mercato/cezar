@@ -354,6 +354,7 @@ import {
   sameProfileDir,
   type ResolvedAgentProfile,
 } from '../workspace/agent-profiles.ts';
+import { listAccountUsage } from '../workspace/account-usage.ts';
 import { PROFILE_CAPABLE_PROVIDERS, profileEnv, supportsProfiles } from '../core/agent-profiles.ts';
 import { withEnvPrefix } from '../core/shell-env.ts';
 import {
@@ -3971,6 +3972,12 @@ export function createApp(deps: ServerDeps) {
       const config = await workspaceConfig.load();
       const { minFreePercent, minFreeGb, maxWorktreesGb } = config.resources.diskGuard;
       return c.json(diskGuardStatusBody(diskGuard.status(), { minFreePercent, minFreeGb, maxWorktreesGb }));
+    })
+
+    // Last plan-window readings per claude/codex account (#1625 cockpit extension).
+    .get('/workspace/account-usage', async (c) => {
+      if (!agentAccountsEnabled(process.env, bindHost)) return c.json({ accounts: [] });
+      return c.json({ accounts: await listAccountUsage() });
     })
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
