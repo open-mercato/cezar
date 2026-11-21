@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runManagerCommand, SANDBOX_BLOCKED_HINT, sinceOf, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { capped, runManagerCommand, SANDBOX_BLOCKED_HINT, sinceOf, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { recentTasks } from './snapshot.ts';
 
 const snapshot = {
   generatedAt: '',
@@ -475,5 +476,48 @@ describe('memory and history (spec 2026-11-21-manager-short-sessions-and-memory)
     expect(sinceOf('1d', now)).toBe(now - 86_400_000);
     expect(sinceOf('2026-11-21T10:00:00Z', now)).toBe(Date.parse('2026-11-21T10:00:00Z'));
     expect(sinceOf('soon', now)).toBeUndefined();
+  });
+});
+
+describe('compact listings (spec 2026-11-21-manager-short-sessions-and-memory § 2.4)', () => {
+  const busy = {
+    generatedAt: '',
+    attention: [
+      { key: 'w', kind: 'task-needs-you', projectId: 'alpha', title: 'Gate', runId: 'r0' },
+      ...Array.from({ length: 3 }, (_, i) => ({ key: `f${i}`, kind: 'task-finished', projectId: 'alpha', title: `Done ${i}`, runId: `d${i}` })),
+    ],
+    projects: [{
+      projectId: 'alpha', name: 'alpha', available: true, prs: [],
+      tasks: [
+        { runId: 'live', title: 'Live', status: 'running', workflow: 'w', childCount: 0, startedBy: 'user' },
+        ...Array.from({ length: 25 }, (_, i) => ({ runId: `d${i}`, title: `Done ${i}`, status: 'done', workflow: 'w', childCount: 0, startedBy: 'user', lastActivityAt: `2026-11-${String(i + 1).padStart(2, '0')}T00:00:00Z` })),
+      ],
+    }],
+  };
+  const fetchBusy = vi.fn(async () => Response.json(busy)) as typeof fetch;
+
+  it('hides finished tasks from attention unless --all', async () => {
+    const { run, logs } = harness({}, {}, [], { fetch: fetchBusy });
+    expect(await run('attention')).toBe(0);
+    expect(logs).toEqual(['task-needs-you  alpha  r0  Gate', '(3 finished tasks the user has not opened yet: --all lists them)']);
+    logs.length = 0;
+    expect(await run('attention', '--all')).toBe(0);
+    expect(logs).toHaveLength(4);
+  });
+
+  it('lists unfinished tasks and the 20 newest finished ones', async () => {
+    const { run, logs } = harness({}, {}, [], { fetch: fetchBusy });
+    expect(await run('tasks')).toBe(0);
+    expect(logs).toHaveLength(22);
+    expect(logs[0]).toContain('live  running');
+    expect(logs.join('\n')).toContain('d24  done');
+    expect(logs.join('\n')).not.toContain('d4  done');
+    expect(logs.at(-1)).toBe('alpha: 5 older finished tasks not shown (--all lists them)');
+  });
+
+  it('caps a listing and counts what it cut', () => {
+    expect(capped(['aaaa', 'bbbb', 'cccc'], 10)).toEqual(['aaaa', 'bbbb', '… 1 more line: narrow with --project, or use --all or --json']);
+    expect(capped(['aaaa'], undefined)).toEqual(['aaaa']);
+    expect(recentTasks([{ status: 'cancelled' }, { status: 'failed' }]).hidden).toBe(0);
   });
 });

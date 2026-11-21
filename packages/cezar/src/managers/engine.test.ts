@@ -11,7 +11,7 @@ import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
 import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { followupPrompt, MANAGER_QUIET, managerSystemPrompt } from './prompts.ts';
+import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
@@ -1882,7 +1882,9 @@ describe('ManagerEngine', () => {
         engine.send(id, 'Base: B', [], 'plain');
         await settled(engine);
         expect(backend.specs[1]?.userPrompt).not.toContain('already delivers');
-        expect(followupPrompt(['x'], [])).toContain('Only for a card without that "ask" link, pass the answers on with `cez-manager task say`.');
+        // The follow-up rules live in the system prompt once, not in every wake (spec 2026-11-21 § 2.4).
+        expect(backend.specs[0]?.systemPrompt).toContain('Only for a card without that "ask" link, pass the answers on with `cez-manager task say`.');
+        expect(followupPrompt(['x'], [])).toContain('Act on it now, following your follow-up rules.');
       });
 
       it('answers as the card would, and a closed card answers 409', async () => {
@@ -2175,6 +2177,54 @@ describe('ManagerEngine', () => {
       expect(cold.userPrompt).toContain('You: On it.');
       expect(cold.userPrompt).toContain('cez-manager history');
       expect(store.state(id).sessions.chat).toMatchObject({ turns: 1 });
+    });
+
+    it('tells a resumed session its unchanged open cards by id only, and the full list when they change', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await create(engine, 0);
+      const card = (cardId: string): Script => ({ play: (emit) => { emit({ type: 'usage-status', status: { contextTokens: 30_000 } }); emit({ type: 'text', text: `Pick one.\nCEZ:ASK {"id":"${cardId}","questions":[{"header":"Base","question":"Which base?","multiSelect":false,"options":[{"label":"main"},{"label":"next"}]}]}` }); } });
+      await turn(engine, id, 'ask me', card('base'));
+      clock += 60_000;
+      expect((await turn(engine, id, 'hi', reply('Hi.'))).userPrompt).toContain('Your questions still waiting on the user:\n- base');
+      clock += 60_000;
+      const again = await turn(engine, id, 'and now?', reply('Same.'));
+      expect(again.resume).toBe(true);
+      expect(again.userPrompt).toContain('Your questions still waiting on the user, unchanged since your last turn: base.');
+      expect(again.userPrompt).not.toContain('asked');
+      clock += 56 * 60_000;
+      expect((await turn(engine, id, 'later', reply('Back.'))).userPrompt).toContain('Your questions still waiting on the user:\n- base');
+    });
+
+    it('gives a fresh session the full card list even when a resume would have had ids only', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await create(engine, 0);
+      const card: Script = { play: (emit) => { emit({ type: 'usage-status', status: { contextTokens: 30_000 } }); emit({ type: 'text', text: 'Pick one.\nCEZ:ASK {"id":"base","questions":[{"header":"Base","question":"Which base?","multiSelect":false,"options":[{"label":"main"},{"label":"next"}]}]}' }); } };
+      await turn(engine, id, 'ask me', card);
+      clock += 60_000;
+      await turn(engine, id, 'hi', reply('Hi.'));
+      clock += 60_000;
+      // The resume fails: the retry starts a fresh transcript that has never seen the card.
+      backend.scripts.push({ fail: 'No conversation found with session ID' });
+      const fresh = await turn(engine, id, 'and now?', reply('Back.'));
+      expect(backend.specs.at(-2)?.userPrompt).toContain('unchanged since your last turn: base.');
+      expect(fresh.resume).toBeUndefined();
+      expect(fresh.userPrompt).toContain('Your questions still waiting on the user:\n- base');
+      expect(fresh.userPrompt).not.toContain('unchanged since your last turn');
+    });
+
+    it('gives a watch only unfinished and recent tasks, and finished items only when they are new', () => {
+      const done = (i: number) => ({ runId: `d${i}`, title: `Done ${i}`, status: 'done', workflow: 'w', childCount: 0, startedBy: 'user' as const, lastActivityAt: `2026-11-${String(i + 1).padStart(2, '0')}T00:00:00Z` });
+      const finished = (i: number) => ({ key: `f${i}`, kind: 'task-finished' as const, projectId: 'alpha', title: `Done ${i}`, runId: `d${i}` });
+      const prompt = watchPrompt({
+        generatedAt: '',
+        attention: [finished(0), finished(1)],
+        projects: [{ projectId: 'alpha', name: 'alpha', available: true, prs: [], tasks: [{ ...done(0), runId: 'live', status: 'running' }, ...Array.from({ length: 25 }, (_, i) => done(i))] }],
+      }, [finished(1)]);
+      const data = JSON.parse(prompt.split('\n').find((line) => line.startsWith('{'))!) as { newItems: Array<{ key: string }>; snapshot: { attention: unknown[]; projects: Array<{ tasks: Array<{ runId: string }> }> } };
+      expect(data.newItems.map((item) => item.key)).toEqual(['f1']);
+      expect(data.snapshot.attention).toEqual([]);
+      expect(data.snapshot.projects[0]!.tasks.map((task) => task.runId)).toContain('live');
+      expect(data.snapshot.projects[0]!.tasks).toHaveLength(21);
     });
 
     it('starts over once the context passes 100k tokens, and the first turn after an upgrade starts over too', async () => {
@@ -3806,7 +3856,7 @@ describe('ManagerEngine', () => {
       const fence = /\n(TASKS-[0-9a-f]{12})\n/.exec(prompt)?.[1];
       expect(fence).toBeTruthy();
       expect(prompt.split(`\n${fence}\n`)[1]).toContain('Alina and Maciek: give me their surnames.');
-      expect(prompt).toContain('end your reply with the CEZ:ASK line');
+      expect(backend.specs[0]?.systemPrompt).toContain('end your reply with the CEZ:ASK line');
       expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The notes are filed.', ask, sourceTasks: [{ projectId: 'alpha', runId: 'new-run' }] });
       // The chat note stays short: the excerpt rides only the follow-up.
       expect(store.state(id).notes).toEqual([]);
