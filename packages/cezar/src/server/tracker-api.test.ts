@@ -202,3 +202,68 @@ it('keeps credential HTTP responses write-only and aliases connection routes to 
     expect(fetcher).not.toHaveBeenCalled();
   } finally { store.flush(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); rmSync(root, { recursive: true, force: true }); }
 });
+
+// Spec 2026-11-18-shared-tracker-connections.
+it('shares credentials across projects only after an explicit pick, without exposing secrets', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tracker-shared-api-'));
+  vi.stubEnv('CEZ_HOME', join(root, 'home'));
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubEnv('CEZ_SINGLE_PROJECT', '0');
+  mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+  const store = RunStore.open(join(root, '.ai/cezar'));
+  const fetcher = vi.fn(() => { throw new Error('No vendor access during credential storage'); });
+  vi.stubGlobal('fetch', fetcher);
+  try {
+    const instance = createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test' });
+    const otherRoot = join(root, 'other-project');
+    mkdirSync(otherRoot);
+    const other = await registerProject(otherRoot);
+    const json = (method: string, body?: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const token = 'shared-api-token-never-in-response';
+    // Absent `shared` keeps today's project-only save.
+    const own = await (await apiRequest(instance, '/api/v1/tracker/connection', json('PUT', { kind: 'linear', key: 'own-key' }))).json() as { connection: { id: string; shared?: true } };
+    expect(own.connection).not.toHaveProperty('shared');
+    expect(await (await apiRequest(instance, '/api/v1/tracker/connection/shared')).json()).toEqual({ connections: [], demo: false });
+    const saved = await apiRequest(instance, '/api/v1/tracker/connection', json('PUT', { kind: 'jira', origin: 'https://acme.atlassian.net', email: 'dev@acme.test', token, shared: true }));
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ connection: { kind: 'jira', shared: true }, demo: false });
+    const listed = await (await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection/shared`)).json() as { connections: Array<{ id: string; label: string; current: boolean }> };
+    expect(listed.connections).toEqual([{ id: expect.any(String), kind: 'jira', label: expect.stringMatching(/^acme\.atlassian\.net — d…@acme\.test · [0-9a-f]{4}$/), createdAt: expect.any(String), current: false }]);
+    expect(JSON.stringify(listed)).not.toMatch(/shared-api-token|dev@acme/);
+    // The other project has nothing until it picks the shared connection.
+    expect(await (await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection`)).json()).toEqual({ connection: null, demo: false });
+    const sharedId = listed.connections[0]!.id;
+    expect((await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection/shared`, json('PUT', { id: '00000000-0000-4000-8000-000000000000' }))).status).toBe(404);
+    expect((await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection/shared`, json('PUT', { id: 'nope' }))).status).toBe(400);
+    const linked = await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection/shared`, json('PUT', { id: sharedId }));
+    expect(linked.status).toBe(200);
+    const linkedBody = await linked.json() as { connection: { id: string } };
+    expect(linkedBody).toMatchObject({ connection: { kind: 'jira', shared: true } });
+    expect(JSON.stringify(linkedBody)).not.toContain(token);
+    expect((await (await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection/shared`)).json() as typeof listed).connections[0]!.current).toBe(true);
+    // DELETE on a linked project only unlinks it.
+    expect((await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection`, { method: 'DELETE' })).status).toBe(200);
+    expect(await (await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection`)).json()).toEqual({ connection: null, demo: false });
+    expect((await (await apiRequest(instance, '/api/v1/tracker/connection/shared')).json() as typeof listed).connections).toHaveLength(1);
+    // Promote: a project's own record becomes shared and keeps its revision.
+    const otherOwn = await (await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection`, json('PUT', { kind: 'linear', key: 'other-key' }))).json() as { connection: { id: string } };
+    const promoted = await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection/promote`, { method: 'POST' });
+    expect(await promoted.json()).toEqual({ connection: { id: otherOwn.connection.id, kind: 'linear', shared: true }, demo: false });
+    expect((await apiRequest(instance, `/api/v1/p/${other.id}/tracker/connection/promote`, { method: 'POST' })).status).toBe(409);
+    expect(fetcher).not.toHaveBeenCalled();
+  } finally { store.flush(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); rmSync(root, { recursive: true, force: true }); }
+});
+
+it('answers the shared-connection routes without credentials in demo mode', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tracker-shared-demo-'));
+  vi.stubEnv('CEZ_HOME', join(root, 'home'));
+  vi.stubEnv('CEZ_DRY_RUN', '1');
+  mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+  const store = RunStore.open(join(root, '.ai/cezar'));
+  try {
+    const instance = createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test' });
+    expect(await (await apiRequest(instance, '/api/v1/tracker/connection/shared')).json()).toEqual({ connections: [], demo: true });
+    expect((await apiRequest(instance, '/api/v1/tracker/connection/promote', { method: 'POST' })).status).toBe(409);
+    expect((await apiRequest(instance, '/api/v1/tracker/connection/shared', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: '00000000-0000-4000-8000-000000000000' }) })).status).toBe(409);
+  } finally { store.flush(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
+});

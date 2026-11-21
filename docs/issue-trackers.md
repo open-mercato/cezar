@@ -29,9 +29,26 @@ to inventory retained records and `cez tracker-connections remove <id>` to delet
 running server or vendor access and never print secrets. Credentials are not
 copied when a repository is copied or moved to a new path.
 
+### Shared connections
+
+To reuse the same credentials in several projects, uncheck **Visible only for this project** when
+saving them. They are stored once as a shared connection. In another project's
+**Settings → Issue tracker**, pick it under **Use a shared connection**, then Browse and Connect a
+scope as usual. A project uses a shared connection only after you pick it there; nothing is linked
+automatically, and a copied or moved repository is not linked. Using one replaces that project's
+own credentials. **Share with other projects** turns a project's existing credentials into a
+shared connection without reconnecting its scope.
+
+**Stop using shared connection** removes only that project's link. To delete a shared connection,
+run `cez tracker-connections list` and `cez tracker-connections remove shared-<uuid>`; projects that
+used it then ask you to pick another or save credentials. Picking a shared connection again
+requires reconnecting the scope, as replacing credentials does. Shared credentials are encrypted
+like project ones, in `shared-<uuid>.vault` beside them. Prefer narrowly scoped tokens: a shared
+token can read whatever its vendor permissions allow in every project that picks it.
+
 ### Storage and isolation
 
-Secrets are write-only through the API: read responses expose only connection ID/provider.
+Secrets are write-only through the API: read responses expose only connection ID/provider, and the shared-connection list adds a label (Jira site and a masked email, or a Linear save date).
 They are stored as encrypted managed records in
 `~/.cezar/tracker-connections/<sha256(canonical-project-path)>.vault` (or the selected
 `CEZ_HOME`), with directory mode `0700` and file mode `0600` on POSIX. The whole credential
@@ -125,6 +142,9 @@ The [GraphQL API](https://linear.app/developers/graphql) describes key authentic
 [rate limits](https://linear.app/developers/rate-limiting).
 
 Rotate or renew an expired token using Replace credentials in project Settings, then reconnect the scope.
+A shared connection cannot be edited. To rotate its token, save the new token as a new shared connection
+(untick **Visible only for this project**), pick it under **Use a shared connection** in each project that
+used the old one, then delete the old one with `cez tracker-connections remove shared-<uuid>`.
 Changing the Jira site or Linear organization requires explicitly reconnecting the project;
 saved IDs are never silently retargeted.
 

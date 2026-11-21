@@ -195,7 +195,7 @@ import type {
   TrackerClearedResponse,
   TrackerItemResponse,
   TrackerItemsResponse,
-  TrackerKind, TrackerCredentials, TrackerConnectionResponse,
+  TrackerKind, TrackerConnectionInput, TrackerConnectionResponse, TrackerSharedConnectionsResponse,
   SecretsList, SecretValueInput,
   E2eStatus, E2eSetupInput, E2eSetupResponse,
 } from '@open-mercato/cezar-api-client'
@@ -1078,9 +1078,22 @@ export async function getTrackerConnection(opts?: ReadOptions): Promise<TrackerC
   return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$get(
     { param: { projectId: queryScope() } }, init(opts)), '/tracker/connection')
 }
-export async function saveTrackerConnection(input: TrackerCredentials): Promise<TrackerConnectionResponse> {
+export async function saveTrackerConnection(input: TrackerConnectionInput): Promise<TrackerConnectionResponse> {
   return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$put(
     { param: { projectId: queryScope() }, json: input }), '/tracker/connection')
+}
+/** Shared connections (spec 2026-11-18-shared-tracker-connections): metadata only. */
+export async function getTrackerSharedConnections(opts?: ReadOptions): Promise<TrackerSharedConnectionsResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.shared.$get(
+    { param: { projectId: queryScope() } }, init(opts)), '/tracker/connection/shared')
+}
+export async function linkTrackerSharedConnection(id: string): Promise<TrackerConnectionResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.shared.$put(
+    { param: { projectId: queryScope() }, json: { id } }), '/tracker/connection/shared')
+}
+export async function promoteTrackerConnection(): Promise<TrackerConnectionResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.promote.$post(
+    { param: { projectId: queryScope() } }), '/tracker/connection/promote')
 }
 export async function removeTrackerConnection(): Promise<TrackerClearedResponse> {
   return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$delete(

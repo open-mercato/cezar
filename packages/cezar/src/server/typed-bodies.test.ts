@@ -41,6 +41,7 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/deferred-start', '$post'>>,
     Assert<HasTypedBody<'/api/v1/tracker/association', '$put'>>,
     Assert<HasTypedBody<'/api/v1/tracker/connection', '$put'>>,
+    Assert<HasTypedBody<'/api/v1/tracker/connection/shared', '$put'>>,
     Assert<HasTypedBody<'/api/v1/plan', '$post'>>,
     Assert<HasTypedBody<'/api/v1/automations', '$post'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id', '$put'>>,

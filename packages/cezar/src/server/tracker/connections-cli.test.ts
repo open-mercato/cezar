@@ -38,3 +38,23 @@ it('dry-run cannot list or remove real files, and inaccessible storage reports f
   await writeFile(join(root, 'tracker-connections'), 'not a directory');
   expect(await runTrackerConnectionsCommand(['list'], { CEZ_HOME: root }, output)).toBe(1);
 });
+it('lists shared connections and the projects linked to them, and removes one by its id', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tracker-cli-')); roots.push(root);
+  const env = { CEZ_HOME: join(root, 'home') };
+  const a = join(root, 'a'); const b = join(root, 'b'); await mkdir(a); await mkdir(b);
+  const store = new TrackerConnections(env);
+  await store.saveCredentials(a, { kind: 'jira', origin: 'https://acme.atlassian.net', email: 'dev@acme.test', token: 'cli-shared-secret' }, { shared: true });
+  const [shared] = await store.listShared();
+  await store.link(b, shared!.id);
+  const output = { log: vi.fn(), error: vi.fn() };
+  expect(await runTrackerConnectionsCommand(['list'], env, output)).toBe(0);
+  const lines = output.log.mock.calls.map(call => String(call[0]));
+  expect(lines).toContain(`shared-${shared!.id}\t"(shared)"\tjira\tvalid`);
+  expect(lines.filter(line => line.endsWith('\tjira\tvalid'))).toHaveLength(3);
+  expect(JSON.stringify(lines)).not.toMatch(/cli-shared-secret|dev@acme/);
+  output.log.mockClear();
+  expect(await runTrackerConnectionsCommand(['remove', `shared-${shared!.id}`], env, output)).toBe(0);
+  expect(output.log).toHaveBeenCalledWith(expect.stringContaining('2 project(s)'));
+  expect(await store.listShared()).toEqual([]);
+  expect(await runTrackerConnectionsCommand(['remove', 'shared-not-a-uuid'], env, output)).toBe(1);
+});

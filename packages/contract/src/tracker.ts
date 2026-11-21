@@ -330,17 +330,37 @@ export type TrackerAssociationSavedResponse = z.infer<typeof trackerAssociationS
 
 /** Write-only project credentials. Never return this shape from an HTTP handler. */
 const trackerSecretSchema = z.string().trim().min(1).max(8192);
+const trackerJiraCredentialsShape = { kind: z.literal('jira'), origin: z.string().max(512).regex(/^https:\/\/[a-z0-9][a-z0-9-]*\.atlassian\.net\/?$/i, 'Use an HTTPS Jira Cloud site origin'), email: z.email().max(320), token: trackerSecretSchema };
+const trackerLinearCredentialsShape = { kind: z.literal('linear'), key: trackerSecretSchema };
 export const trackerCredentialsSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('jira'), origin: z.string().max(512).regex(/^https:\/\/[a-z0-9][a-z0-9-]*\.atlassian\.net\/?$/i, 'Use an HTTPS Jira Cloud site origin'), email: z.email().max(320), token: trackerSecretSchema }).strict(),
-  z.object({ kind: z.literal('linear'), key: trackerSecretSchema }).strict(),
+  z.object(trackerJiraCredentialsShape).strict(),
+  z.object(trackerLinearCredentialsShape).strict(),
 ]);
 export type TrackerCredentials = z.infer<typeof trackerCredentialsSchema>;
-export const trackerConnectionSchema = z.object({ id: z.uuid(), kind: trackerKindSchema }).strict();
+/** PUT body: credentials plus `shared` (spec 2026-11-18-shared-tracker-connections); absent = project-only. */
+export const trackerConnectionInputSchema = z.discriminatedUnion('kind', [
+  z.object({ ...trackerJiraCredentialsShape, shared: z.boolean().optional() }).strict(),
+  z.object({ ...trackerLinearCredentialsShape, shared: z.boolean().optional() }).strict(),
+]);
+export type TrackerConnectionInput = z.infer<typeof trackerConnectionInputSchema>;
+/** `shared` is present only when the project uses a shared connection. */
+export const trackerConnectionSchema = z.object({ id: z.uuid(), kind: trackerKindSchema, shared: z.literal(true).optional() }).strict();
 export type TrackerConnection = z.infer<typeof trackerConnectionSchema>;
 export const trackerConnectionResponseSchema = z.object({
   connection: trackerConnectionSchema.nullable(), demo: z.boolean(), error: z.string().optional(),
 }).strict();
 export type TrackerConnectionResponse = z.infer<typeof trackerConnectionResponseSchema>;
+/** A shared connection as the picker shows it: metadata only, never a secret. */
+export const trackerSharedConnectionSchema = z.object({
+  id: z.uuid(), kind: trackerKindSchema, label: z.string().max(1024), createdAt: z.iso.datetime(), current: z.boolean(),
+}).strict();
+export type TrackerSharedConnection = z.infer<typeof trackerSharedConnectionSchema>;
+export const trackerSharedConnectionsResponseSchema = z.object({
+  connections: z.array(trackerSharedConnectionSchema), demo: z.boolean(),
+}).strict();
+export type TrackerSharedConnectionsResponse = z.infer<typeof trackerSharedConnectionsResponseSchema>;
+export const trackerSharedConnectionLinkSchema = z.object({ id: z.uuid() }).strict();
+export type TrackerSharedConnectionLink = z.infer<typeof trackerSharedConnectionLinkSchema>;
 
 /** Visible-list observation: bounded first page, explicit project association. */
 export const trackerWatchInputSchema = z.object({
