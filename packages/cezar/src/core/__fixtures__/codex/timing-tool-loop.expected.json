@@ -1,0 +1,138 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "th_t",
+    "backend": "codex"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_t"
+  },
+  {
+    "type": "timing",
+    "phase": "start",
+    "turnId": "turn_t",
+    "callIndex": 0,
+    "startInferred": true
+  },
+  {
+    "type": "timing",
+    "phase": "first-delta",
+    "turnId": "turn_t",
+    "callIndex": 0
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "item_a",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran bash -lc ls",
+      "status": "running",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "ls"
+        ]
+      }
+    }
+  },
+  {
+    "type": "timing",
+    "phase": "end",
+    "turnId": "turn_t",
+    "callIndex": 0,
+    "output_tokens": 120
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 100,
+      "output": 120,
+      "total": 220
+    }
+  },
+  {
+    "type": "timing",
+    "phase": "start",
+    "turnId": "turn_t",
+    "callIndex": 1,
+    "startInferred": true
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "item_a",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran bash -lc ls",
+      "status": "completed",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "ls"
+        ]
+      },
+      "exitCode": 0
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_b",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "timing",
+    "phase": "first-delta",
+    "turnId": "turn_t",
+    "callIndex": 1
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_b",
+    "field": "text",
+    "delta": "Listed."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_b",
+      "role": "assistant",
+      "text": "Listed."
+    }
+  },
+  {
+    "type": "timing",
+    "phase": "end",
+    "turnId": "turn_t",
+    "callIndex": 1,
+    "output_tokens": 40
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 240,
+      "output": 160,
+      "total": 400
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_t",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 140,
+      "output": 40,
+      "total": 180
+    }
+  }
+]

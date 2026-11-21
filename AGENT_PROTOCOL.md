@@ -346,8 +346,33 @@ type UiEvent =
   | UiAskRequestedEvent      // 'ask.requested'    — requestId, questions[] (AskUser; the cockpit renders option chips)
   | UiAskClosedEvent         // 'ask.closed'       — requestId, reason, detail?, replacedBy?, answer? (the card closes)
   | UiUsageUpdatedEvent      // 'usage.updated'    — usage: TokenUsage, costUsd? (cumulative-for-session)
+  | UiTimingEvent           // 'timing'           — phase, per-API-call timing (#1543; ndjson-only, never rendered)
   | UiImageEvent;            // 'image'            — itemId?, mediaType, data (base64; manager re-emits URL)
 ```
+
+**Per-call timing (`timing`, #1543).** One model API call writes `start`, `first-delta` and
+exactly one terminal `end` or `aborted`, each stamped with receive time by the store (`ts`). It is
+optional and additive: it is the one undotted v2 type, routed on the `ui-event` SSE name
+(`isV2WireEventType`), rendered nowhere, and a reader that does not know it skips it. Missing
+phases stay absent — a timestamp the stream did not produce is never synthesized. A reader derives
+time-to-first-token = `first-delta.ts − start.ts`, generation time = `end.ts − first-delta.ts`
+and speed = `output_tokens / generation time` (output includes thinking tokens). `start` with
+neither `end` nor `aborted` is a lost event (a cezar bug); `aborted` calls are skipped in speed
+stats and counted by `reason`: `error` (stream/API error — `errorType` is the API error type only,
+never message text — or a retry that opened a new call), `cancelled` (stopped by the user or
+cezar) or `stream-ended` (`result` or exit without `end`).
+
+| Phase | claude (`--include-partial-messages`) | codex (app-server) |
+|---|---|---|
+| `start` | `message_start` (`messageId`, `model`) | inferred (`startInferred: true`): `turn/started` for the first call, the `item/completed` of a tool item for each later one |
+| `first-delta` | first `content_block_delta` of any type, `input_json_delta` included | first `item/agentMessage/delta`, `item/reasoning/*Delta`, or `item/started` of a model-issued tool item |
+| `end` | `message_delta` with `usage` (`output_tokens`, `stop_reason`) | `thread/tokenUsage/updated`, `output_tokens` from `tokenUsage.last` (already includes reasoning) |
+| `aborted` | `error` stream event, a second `message_start`, `result`/exit without `end`, cancel | `turn/completed`/`turn/failed` before `end` (interrupted → `cancelled`, failed → `error`, else `stream-ended`), or a new `turn/started` |
+
+Claude events carry `messageId` (and `parentToolUseId` on sub-agent calls); codex has no message
+id, so its events carry `turnId` and a per-turn `callIndex`. Codex's `start` includes cezar/codex
+local overhead between the tool result and the request — hence `startInferred`. Only the main
+thread's calls are timed. Other runners emit none.
 
 **AskUser (`ask.requested`, #473, #565).** The portable path remains
 backend-neutral: the agent asks a structured

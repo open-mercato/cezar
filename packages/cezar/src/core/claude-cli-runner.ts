@@ -32,6 +32,7 @@ import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-de
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
   claudeTurnStarted,
+  closeOpenCalls,
   createClaudeUiState,
   mapClaudeMessage,
   stringifyToolResultContent,
@@ -378,6 +379,12 @@ export class ClaudeCliRunner implements AgentRunner {
       if (eofKillTimer) clearTimeout(eofKillTimer);
 
       if (spawnFailed) throw spawnFailed;
+
+      // API calls still open now never got their usage frame: cezar stopped the child (cancel,
+      // EOF watchdog, inactivity kill), it crashed, or it simply ended (#1543).
+      emitUi((state) =>
+        closeOpenCalls(state, terminatedByCezar || timedOut ? 'cancelled' : exitCode !== 0 && exitCode !== null ? 'error' : 'stream-ended'),
+      );
 
       const text = textChunks.join('\n').trim();
 

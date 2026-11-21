@@ -21,6 +21,17 @@
     "turnId": "turn_1"
   },
   {
+    "type": "timing",
+    "phase": "start",
+    "messageId": "msg_011CfYXhEKnUSAP3cberp7Tv",
+    "model": "claude-haiku-4-5-20251001"
+  },
+  {
+    "type": "timing",
+    "phase": "first-delta",
+    "messageId": "msg_011CfYXhEKnUSAP3cberp7Tv"
+  },
+  {
     "type": "item.started",
     "item": {
       "kind": "message",
@@ -49,6 +60,13 @@
       "role": "assistant",
       "text": "hello there friend"
     }
+  },
+  {
+    "type": "timing",
+    "phase": "end",
+    "messageId": "msg_011CfYXhEKnUSAP3cberp7Tv",
+    "output_tokens": 87,
+    "stop_reason": "end_turn"
   },
   {
     "type": "turn.completed",

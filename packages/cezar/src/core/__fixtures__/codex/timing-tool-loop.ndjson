@@ -1,0 +1,10 @@
+{"method":"thread/started","params":{"thread":{"id":"th_t"}}}
+{"method":"turn/started","params":{"threadId":"th_t","turn":{"id":"turn_t","status":"inProgress","items":[]}}}
+{"method":"item/started","params":{"threadId":"th_t","turnId":"turn_t","item":{"type":"commandExecution","id":"item_a","command":["bash","-lc","ls"],"cwd":"/repo","status":"inProgress"}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"th_t","tokenUsage":{"total":{"totalTokens":220,"inputTokens":100,"outputTokens":120},"last":{"totalTokens":220,"inputTokens":100,"outputTokens":120,"reasoningOutputTokens":80}}}}
+{"method":"item/completed","params":{"threadId":"th_t","turnId":"turn_t","item":{"type":"commandExecution","id":"item_a","command":["bash","-lc","ls"],"cwd":"/repo","status":"completed","exitCode":0}}}
+{"method":"item/started","params":{"threadId":"th_t","turnId":"turn_t","item":{"type":"agentMessage","id":"item_b","text":""}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"th_t","turnId":"turn_t","itemId":"item_b","delta":"Listed."}}
+{"method":"item/completed","params":{"threadId":"th_t","turnId":"turn_t","item":{"type":"agentMessage","id":"item_b","text":"Listed."}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"th_t","tokenUsage":{"total":{"totalTokens":400,"inputTokens":240,"outputTokens":160},"last":{"totalTokens":180,"inputTokens":140,"outputTokens":40}}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn_t","status":"completed"}}}

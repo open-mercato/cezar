@@ -8,6 +8,8 @@
     "type": "turn.started",
     "turnId": "turn_01J8ZCRV9A"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_01J8ZCRV9A", "callIndex": 0, "startInferred": true },
+  { "type": "timing", "phase": "first-delta", "turnId": "turn_01J8ZCRV9A", "callIndex": 0 },
   {
     "type": "item.started",
     "item": {
@@ -54,9 +56,11 @@
       "status": "completed"
     }
   },
+  { "type": "timing", "phase": "aborted", "turnId": "turn_01J8ZCRV9A", "callIndex": 0, "reason": "stream-ended" },
   {
     "type": "turn.completed",
     "turnId": "turn_01J8ZCRV9A",
     "stopReason": "end_turn"
   }
+
 ]

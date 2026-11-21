@@ -3,6 +3,7 @@
     "type": "turn.started",
     "turnId": "turn_activity"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_activity", "callIndex": 0, "startInferred": true },
   {
     "type": "item.started",
     "item": {
@@ -18,4 +19,5 @@
       }
     }
   }
+
 ]

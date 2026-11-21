@@ -8,6 +8,7 @@
     "type": "turn.started",
     "turnId": "turn_01J8ZC0WXP"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_01J8ZC0WXP", "callIndex": 0, "startInferred": true },
   {
     "type": "item.started",
     "item": {
@@ -18,6 +19,7 @@
       "phase": "commentary"
     }
   },
+  { "type": "timing", "phase": "first-delta", "turnId": "turn_01J8ZC0WXP", "callIndex": 0 },
   {
     "type": "item.delta",
     "itemId": "item_msg_1",
@@ -88,6 +90,7 @@
       "phase": "final"
     }
   },
+  { "type": "timing", "phase": "end", "turnId": "turn_01J8ZC0WXP", "callIndex": 0, "output_tokens": 410 },
   {
     "type": "usage.updated",
     "usage": {
@@ -111,4 +114,5 @@
       "reasoning": 120
     }
   }
+
 ]
