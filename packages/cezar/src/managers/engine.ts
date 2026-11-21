@@ -96,6 +96,7 @@ import {
   type ObservedConnectors,
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
+import { TurnStatsCollector } from './turn-stats.ts';
 import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
 import {
@@ -2306,6 +2307,9 @@ export class ManagerEngine {
     const commands: ManagerCommand[] = [];
     const bashCommands = new Map<string, string>();
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
+    const turnStats = new TurnStatsCollector();
+    const turnStartedAt = this.now();
+    const priorSession = resumeId ? store.state(id).sessions[turn.kind] : undefined;
     // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
     const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
     const progress = () => onProgress(snapshot);
@@ -2322,6 +2326,7 @@ export class ManagerEngine {
       }));
     };
     const onEvent = (event: AgentEvent) => {
+      turnStats.event(event);
       // An error first means no transcript exists; resuming it would only fail again.
       if (sessionId && event.type !== 'error') saveSession(sessionId);
       switch (event.type) {
@@ -2392,8 +2397,29 @@ export class ManagerEngine {
     } catch (cause) {
       error ??= cause instanceof Error ? cause.message : String(cause);
     }
+    const sessionTurn = (priorSession?.turns ?? 0) + 1;
+    const stats = turnStats.stats({
+      fresh: !resumeId,
+      sessionTurn,
+      ...(priorSession ? { idleMs: turnStartedAt - msOf(priorSession.lastAt) } : {}),
+    });
     // A watch that reported nothing new is "quiet": the hint weighs its cadence against that.
-    planUsage?.close(turn.kind === 'watch' ? { quiet: !judged(text().replace(QUIET_LINE, '').trim()).text } : {});
+    planUsage?.close({ ...(turn.kind === 'watch' ? { quiet: !judged(text().replace(QUIET_LINE, '').trim()).text } : {}), turn: stats });
+    if (saved && store.get(id)) {
+      const at = this.iso();
+      store.updateState(id, (state) => ({
+        ...state,
+        sessions: {
+          ...state.sessions,
+          [turn.kind]: {
+            startedAt: priorSession?.startedAt ?? new Date(turnStartedAt).toISOString(),
+            lastAt: at,
+            turns: sessionTurn,
+            ...(turnStats.context > 0 ? { contextTokens: turnStats.context } : priorSession?.contextTokens !== undefined ? { contextTokens: priorSession.contextTokens } : {}),
+          },
+        },
+      }));
+    }
     return { text: committed || draft, commands, costUsd, ...(error ? { error } : {}) };
   }
 

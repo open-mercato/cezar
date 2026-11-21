@@ -2149,6 +2149,24 @@ describe('ManagerEngine', () => {
     });
   });
 
+  describe('turn stats (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)', () => {
+    it('keeps each transcript’s start, last turn, turn count and context', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const reply = (contextTokens: number): Script => ({ play: (emit) => { emit({ type: 'usage-status', status: { contextTokens } }); emit({ type: 'text', text: 'ok' }); } });
+      backend.scripts.push(reply(30_000));
+      engine.send(id, 'one');
+      await settled(engine);
+      const first = store.state(id).sessions.chat!;
+      expect(first).toMatchObject({ turns: 1, contextTokens: 30_000 });
+      backend.scripts.push(reply(38_000));
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(store.state(id).sessions.chat).toMatchObject({ turns: 2, contextTokens: 38_000, startedAt: first.startedAt });
+      expect(backend.specs.at(-1)?.resume).toBe(true);
+    });
+  });
+
   describe('connectors (spec 2026-11-12-manager-connectors)', () => {
     const CAL = 'claude_ai_Google_Calendar';
     const LIST = `mcp__${CAL}__list_events`;

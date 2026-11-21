@@ -37,6 +37,16 @@ import { atomicWriteJsonSync } from '../workspace/config.ts';
  * write must show up here without an event.
  */
 
+const sessionMetaSchema = z
+  .object({
+    startedAt: z.string(),
+    lastAt: z.string(),
+    turns: z.number().int().min(0),
+    contextTokens: z.number().int().min(0).optional(),
+  })
+  .optional()
+  .catch(undefined);
+
 const stateSchema = z
   .object({
     sessionId: z.string().optional().catch(undefined),
@@ -45,6 +55,9 @@ const stateSchema = z
     jobSessionId: z.string().optional().catch(undefined),
     /** `runner|account` the session belongs to: a transcript does not follow either change. */
     sessionKey: z.string().optional().catch(undefined),
+    /** Per transcript: when it started, its last turn, how many turns and how much context it holds
+     *  (spec 2026-11-21-manager-short-sessions-and-memory § 2.2–2.3). */
+    sessions: z.object({ chat: sessionMetaSchema, watch: sessionMetaSchema, job: sessionMetaSchema }).catch({}),
     lastCheckAt: z.string().optional().catch(undefined),
     /** Attention keys already spoken about, → when. A key that disappears is forgotten. */
     reported: z.record(z.string(), z.string()).catch({}),
