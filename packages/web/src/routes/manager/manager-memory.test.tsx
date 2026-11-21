@@ -2,12 +2,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import type { ManagerMemoryResponse } from '@open-mercato/cezar-api-client'
+import type { ManagerMemoryEntry, ManagerMemoryResponse } from '@open-mercato/cezar-api-client'
 
 import { MemoryDialog } from './manager-memory'
 import { managerFixture } from './manager-fixtures'
 
-const entry = { key: 'full-prs', kind: 'feedback' as const, text: 'Open full PRs, not drafts', why: 'reviews start sooner', updatedAt: 't', source: 'import' as const }
+const entry: ManagerMemoryEntry = { key: 'full-prs', kind: 'feedback', text: 'Open full PRs, not drafts', why: 'reviews start sooner', updatedAt: 't', source: 'import' }
 const memory = (entries = [entry]): ManagerMemoryResponse => ({ entries, limits: { entries: 40, bytes: 6144 }, usedBytes: 180 })
 
 function stub(responses: { get: ManagerMemoryResponse; write?: ManagerMemoryResponse }) {
