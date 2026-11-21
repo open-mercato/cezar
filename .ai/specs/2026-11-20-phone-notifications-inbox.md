@@ -87,16 +87,30 @@ Add `kind: "count"` to `POST /v1/push` (protocol `v` stays 1; the relay already 
 **Only phones that understand it.** Released Android builds post a notification for *every* data push
 (`CezarMessagingService.onMessageReceived` reads only `s` and `count`), so a `count` push would show them
 "Cezar needs you", even for a count of 0. The phone therefore declares the push kinds it understands when
-it hands over its grant, through the prefs route below (`kinds: ["attention", "count"]`). cezar sends `count` only to a
+it hands over its grant, through the prefs route below (`understands: ["attention", "count"]`). cezar sends `count` only to a
 device that declared it. A device that has not declared it gets no `count` push and relies on the on-open
 refresh. Released iOS builds have no background handler and drop the push, but they are gated the same way.
 
-cezar sends one only after an `attention` push went to that grant and the count has since gone down. It sends
-at most one per 10 minutes per grant, which fits the relay's 6 an hour. Changes in between are merged, and
+**Up as well as down (decided 2026-11-21).** A count push is owed once the phone knows a number: an
+`attention` push to that grant, or its app opening a session (which reads health and records what the phone
+shows). From then on it follows the icon count in both directions. A kind that is on for the icon but off for
+push therefore still moves the icon while the app is closed; a lowering-only push would leave the phone
+unaware of it until the app opens. Rises are rare without an alert of their own, so the relay budget holds.
+
+**An alert's own kind counts.** An `attention` push carries at least 1, even when the only thing waiting is a
+kind the phone keeps off its icon (failed tasks, by default): otherwise the "Failed tasks" push switch would do
+nothing. cezar records the phone's icon count, not that floor, as what it was told, so no later count push
+takes the alert's badge (and, with #2361, its notification) away; the app's own refresh on open corrects it.
+
+**Demand-driven.** cezar recounts the list on a change only while some phone has a grant and understands
+`count`. Without one, a change only drops the cached list, which health and Now read lazily (AGENTS.md:
+publishers run on demand).
+
+cezar sends at most one per 10 minutes per grant, which fits the relay's 6 an hour. Changes in between are merged, and
 the newest count goes out at the next free slot, so the final 0 always gets sent and is never rate-limited
-away. A 429 moves the next slot to the `Retry-After` time and leaves the pending value in place. The highest count a grant was last pushed is stored on its device row in `devices.json`, so after a restart cezar still knows it owes that phone a lower number. Tests pin
-the gate (no `count` push to a device that did not declare it) and the cadence (a falling count ends with one
-push of 0). The app, on receipt: store the count, set the badge, remove the delivered notification if 0.
+away. A 429 moves the next slot to the `Retry-After` time and leaves the pending value in place. The count a grant was last told is stored on its device row in `devices.json`, so after a restart cezar still knows what that phone shows. Tests pin
+the gate (no `count` push to a device that did not declare it), the cadence (a falling count ends with one
+push of 0), a rise, and the failed-task alert under the default prefs. The app, on receipt: store the count, set the badge, remove the delivered notification if 0.
 
 ## Design
 
@@ -112,9 +126,9 @@ no list shows:
 | `task` | sub-kind `needs-you`: waits on the user with no question card; `review`: at the review gate; `failed`: failed and not yet seen | open, mark seen |
 | `message` | a manager's important message is unread | open, mark read |
 
-On the wire a `Kind` is flat: `question`, `approval`, `task` (needs-you), `review`, `failed`, `message`. Each switch in § Settings filters one of these: Questions → `question`, Approvals → `approval`, Tasks that
-need me → `task/needs-you`, Tasks ready for review → `task/review`, Failed tasks → `task/failed`, Important
-manager messages → `message`. "Mark seen" on a task reuses the run's existing read receipt (`RunRecord.seenAt`,
+On the wire a `Kind` is flat, and the table's `task` sub-kinds are kinds of their own. Each switch in § Settings
+filters one: Questions → `question`, Approvals → `approval`, Tasks that need me → `task`, Tasks ready for
+review → `review`, Failed tasks → `failed`, Important manager messages → `message`. "Mark seen" on a task reuses the run's existing read receipt (`RunRecord.seenAt`,
 `isUnread()` in `lib/read-state.ts`) and needs no new store.
 
 - Desktop Questions badge = `question`; Approvals = `approval`; Needs you total = all four.
@@ -202,12 +216,15 @@ Where the per-cezar **Notify me** switch is today (*Your cezars → cezar → No
 
 The choice must live on the server, because the relay carries no kind. It has **its own route**,
 `GET`/`PUT /api/v1/workspace/phone/push/prefs`, stored per device in `devices.json`:
-`{ push: Kind[], icon: Kind[], quiet?: { from: "HH:MM", to: "HH:MM", timeZone: <IANA zone> }, kinds: PushKind[] }`.
+`{ push: Kind[], icon: Kind[], quiet?: { from: "HH:MM", to: "HH:MM", timeZone: <IANA zone> }, understands: PushKind[] }`.
+`push` and `icon` are what the user chose; `understands` is what the phone's app can read (`attention`, `count`),
+named apart so the two are not mistaken for each other. The computer's own edit,
+`PUT /api/v1/workspace/phones/:deviceId/prefs`, takes `{ push, icon, quiet? }` and never changes `understands`.
 Same scope rules as its siblings: 403 outside a relay scope, and it acts only on the device that scope proved.
 The time zone is the phone's own, sent with each `PUT`, because the cezar host's clock is wrong for a phone
 that is travelling. Prefs do not go on `PUT /workspace/phone/push`: that body is `.strict()` (BACKWARD_COMPATIBILITY.md
 §2, "takes exactly `{grant, grantId, expiresAt}`"), so a new phone sending `prefs` to an older cezar would get
-a 400 and lose its push grant. On the separate route, an older cezar answers 404. A cezar that has the route never answers 404 to a paired device: `GET` returns the defaults (with `kinds: ["attention"]`) until the phone first `PUT`s, so a 404 can only mean an older cezar. `PUT` rejects a `timeZone` that `Intl.DateTimeFormat` does not know with 400, and the phone keeps its previous prefs. The phone then shows the
+a 400 and lose its push grant. On the separate route, an older cezar answers 404. A cezar that has the route never answers 404 to a paired device: `GET` returns the defaults (with `understands: ["attention"]`) until the phone first `PUT`s, so a 404 can only mean an older cezar. `PUT` rejects a `timeZone` that `Intl.DateTimeFormat` does not know with 400, and the phone keeps its previous prefs. The phone then shows the
 settings page read-only with the defaults and keeps its grant. The route gets its BACKWARD_COMPATIBILITY.md §2
 line in the code PR. Per-manager "Notify me when important" stays as it is and still gates `message`.
 
@@ -218,7 +235,7 @@ line in the code PR. Per-manager "Notify me when important" stays as it is and s
 3. Relay `kind: "count"`: task `rome/a753ea6e`. cezar's sender lands once the relay accepts the kind.
 4. D, in the code PR: the server attention list and its route; Now's Needs you reads it, with a From-managers
    group and the This project · All switch; the Now tab's count badge; the per-phone prefs (push kinds, icon kinds,
-   quiet hours, declared push kinds) on `PUT /api/v1/workspace/phone/push/prefs` and their settings page; the count
+   quiet hours, `understands`) on `PUT /api/v1/workspace/phone/push/prefs` and their settings page; the count
    chips on *Your cezars*. Code PR #2367.
 5. App follow-up, after #2361: read `c` (iOS) and `t: "count"` (Android), store the count, call #2361's `settle()`,
-   and declare `kinds: ["attention", "count"]` on the prefs route.
+   and declare `understands: ["attention", "count"]` on the prefs route.
