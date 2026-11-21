@@ -68,6 +68,15 @@ export interface AgentRunSpec {
   allowedTools?: string[];
   /** When `Bash` is allowed, restrict it to commands starting with one of these. */
   bashAllowlist?: string[];
+<<<<<<< HEAD
+=======
+  /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
+   *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
+  bashHookCommand?: string;
+  /** Claude only: `sandbox.excludedCommands` patterns, for a command that must reach the loopback
+   *  cockpit the user's Bash sandbox blocks (a manager's `cez-manager`). Other backends ignore it. */
+  sandboxExcludedCommands?: string[];
+>>>>>>> 0440ed0 (fix(manager): let cez-manager out of Claude's Bash sandbox so it reaches the cockpit (#2258))
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control
