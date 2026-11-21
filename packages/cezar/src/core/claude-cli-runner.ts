@@ -310,13 +310,15 @@ export class ClaudeCliRunner implements AgentRunner {
           // describes the intentional stop rather than an agent failure.
           // Normalize only this precise wire shape so genuine result errors
           // (authentication, limits, malformed sessions) stay authoritative.
-          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
+          const normalized = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
+          const raw = normalized as { type?: unknown; subtype?: unknown; model?: unknown; session_id?: unknown };
+          const isInit = raw.type === 'system' && raw.subtype === 'init';
+          if (isInit && typeof raw.session_id === 'string') sessionCost.identify(raw.session_id);
+          // Both v1 and v2 read this turn's own cost, never the session's running total.
+          const mappedMessage = raw.type === 'result' ? sessionCost.result(normalized) : normalized;
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
-          const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
-          const isInit = raw.type === 'system' && raw.subtype === 'init';
           if (isInit && typeof raw.model === 'string') initModel = raw.model;
-          if (isInit && typeof (raw as { session_id?: unknown }).session_id === 'string') sessionCost.identify((raw as { session_id: string }).session_id);
           if (isInit) {
             const servers = claudeMcpServers(mappedMessage);
             if (servers) onEvent?.(servers);
@@ -343,9 +345,10 @@ export class ClaudeCliRunner implements AgentRunner {
             onEvent?.({ type: 'token-usage', tokensUsed });
           }
 
-          if (msg.type === 'result') {
-            if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
-              onEvent?.({ type: 'cost', usd: sessionCost.increment(msg.total_cost_usd) });
+          if (mappedMessage.type === 'result') {
+            const usd = mappedMessage.total_cost_usd;
+            if (typeof usd === 'number' && Number.isFinite(usd) && usd >= 0) {
+              onEvent?.({ type: 'cost', usd });
             }
             onEvent?.({ type: 'turn-end' });
             if (opts.autoEndAfterFirstTurn && stdinOpen && !autoEndTimer) {

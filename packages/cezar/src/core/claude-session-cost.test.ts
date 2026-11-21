@@ -50,3 +50,43 @@ describe('ClaudeSessionCost', () => {
     expect(new ClaudeSessionCost('s3', true, '/w', config).increment(1)).toBe(1);
   });
 });
+
+describe('ClaudeSessionCost.result', () => {
+  let config: string;
+  beforeEach(() => {
+    resetClaudeSessionCosts();
+    config = mkdtempSync(join(tmpdir(), 'cez-claude-cost-'));
+  });
+  afterEach(() => rmSync(config, { recursive: true, force: true }));
+
+  const frame = (total: number, inputTokens: number, costUSD = total) => ({
+    type: 'result',
+    total_cost_usd: total,
+    modelUsage: { opus: { inputTokens, costUSD, contextWindow: 200000, maxOutputTokens: 64000 } },
+  });
+
+  it('turns modelUsage counters into increments and leaves the limits alone', () => {
+    const cost = new ClaudeSessionCost('m1', false, '/w', config);
+    expect(cost.result(frame(1, 100))).toEqual(frame(1, 100));
+    expect(cost.result(frame(1.5, 160))).toEqual({
+      type: 'result',
+      total_cost_usd: 0.5,
+      modelUsage: { opus: { inputTokens: 60, costUSD: 0.5, contextWindow: 200000, maxOutputTokens: 64000 } },
+    });
+  });
+
+  it('reads the per-model baseline from the transcript’s cost-state', () => {
+    const dir = join(config, 'projects', claudeProjectSlug('/w'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'm2.jsonl'), `${JSON.stringify({ type: 'cost-state', sessionId: 'm2', totalCostUSD: 4, modelUsage: { opus: { inputTokens: 400, costUSD: 4 } } })}\n`);
+    const out = new ClaudeSessionCost('m2', true, '/w', config).result(frame(5, 450));
+    expect(out.total_cost_usd).toBeCloseTo(1);
+    expect(out.modelUsage.opus.inputTokens).toBe(50);
+    expect(out.modelUsage.opus.costUSD).toBeCloseTo(1);
+  });
+
+  it('passes a frame with no total through untouched', () => {
+    const msg = { type: 'result', modelUsage: { opus: { costUSD: 3 } } };
+    expect(new ClaudeSessionCost('m3', true, '/w', config).result(msg)).toBe(msg);
+  });
+});
