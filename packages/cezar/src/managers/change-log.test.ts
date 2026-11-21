@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ManagerChange } from '@open-mercato/cezar-contract';
 import { changeLogPath, ManagerChangeLog } from './change-log.ts';
@@ -62,6 +63,23 @@ describe('the manager change log (spec 2026-11-20-manager-admin-actions § 3.3)'
     for (let n = 1; n <= 3; n += 1) log.append(entry(n));
     expect(warnings).toHaveLength(1);
     expect(log.list().map((change) => change.id)).toEqual(['c3', 'c2', 'c1']);
+  });
+
+  it('rotates only under its lock: a log another process holds keeps every entry and is not copied', () => {
+    const log = new ManagerChangeLog(() => undefined, 1);
+    log.append(entry(1));
+    const held = lockfile.lockSync(changeLogPath(), { realpath: false });
+    try {
+      log.append(entry(2));
+      expect(existsSync(join(home, 'admin-audit.1.ndjson'))).toBe(false);
+      expect(log.list().map((change) => change.id)).toEqual(['c2', 'c1']);
+    } finally {
+      held();
+    }
+    log.append(entry(3));
+    expect(existsSync(join(home, 'admin-audit.1.ndjson'))).toBe(true);
+    expect(log.list().map((change) => change.id)).toEqual(['c3', 'c2', 'c1']);
+    expect(existsSync(`${changeLogPath()}.lock`)).toBe(false);
   });
 
   it('never writes a secret value from the environment', () => {

@@ -257,13 +257,13 @@ export const actionReplacedBy = (action: ManagerActionRequest): string => action
 export const describeAction = (action: ManagerActionRequest): string => actionOp(action).describe(action);
 
 /** What this manager may propose now, for `cez manager propose --help` and the `action-ops` route. */
-export function actionOpsFor(manager: Manager, runner: string): ManagerActionOp[] {
-  const anyWrite = manager.projects === 'all'
-    ? manager.access !== 'read' || Object.values(manager.projectAccess ?? {}).some((access) => access === 'write')
-    : manager.projects.some((projectId) => managerAccessOf(manager, projectId) === 'write');
+export function actionOpsFor(manager: Manager, runner: string, connectedProjectIds: readonly string[]): ManagerActionOp[] {
+  // The projects it is connected to now, judged one by one: an `all` manager whose every project is
+  // read-only has nothing to merge or enable, whatever its default access says.
+  const anyWrite = connectedProjectIds.some((projectId) => managerAccessOf(manager, projectId) === 'write');
   const grantedConnector = Object.values(manager.connectors ?? {}).some((grant) => grant.level === 'write' || Object.values(grant.tools ?? {}).some((mode) => mode === 'ask'));
   const unavailable = (op: ActionOp<ManagerActionType>): string | undefined => {
-    if (op.scope === 'project' && !anyWrite) return 'every project is read-only for this manager';
+    if (op.scope === 'project' && !anyWrite) return connectedProjectIds.length ? 'every connected project is read-only for this manager' : 'this manager is connected to no project';
     if (op.type === 'connector-call') {
       if (runner !== 'claude') return CONNECTORS_CLAUDE_ONLY;
       if (!grantedConnector) return 'no connector grants write calls to this manager: the user can grant one in its settings under Connectors';

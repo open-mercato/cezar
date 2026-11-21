@@ -3087,7 +3087,9 @@ export class ManagerEngine {
   /** What this manager may propose now (`cez manager propose --help`, spec 2026-11-20 § 5.3). */
   async actionOps(id: string): Promise<ManagerActionOp[] | undefined> {
     const manager = this.deps.store.get(id);
-    return manager ? actionOpsFor(manager, await this.runnerOf(manager)) : undefined;
+    if (!manager) return undefined;
+    const sources = await this.sources(manager);
+    return actionOpsFor(manager, await this.runnerOf(manager), sources.map((source) => source.id));
   }
 
   async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus; replaced?: string[]; alsoWaitingIn?: string[] } | ManagerRefusal> {

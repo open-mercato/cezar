@@ -46,13 +46,22 @@ describe('the proposal registry (spec 2026-11-20-manager-admin-actions § 2.1)',
   });
 
   describe('actionOpsFor', () => {
-    const available = (m: Manager, runner = 'claude') => Object.fromEntries(actionOpsFor(m, runner).map((op) => [op.type, op.available]));
+    const available = (m: Manager, runner = 'claude', connected: string[] = ['alpha']) => Object.fromEntries(actionOpsFor(m, runner, connected).map((op) => [op.type, op.available]));
 
     it('offers project proposals only with a write project', () => {
       expect(available(manager())).toMatchObject({ 'merge-pr': true, 'enable-automation': true, 'add-job': true });
       expect(available(manager({ access: 'read' }))).toMatchObject({ 'merge-pr': false, 'enable-automation': false, 'add-job': true });
       expect(available(manager({ access: 'read', projectAccess: { alpha: 'write' } }))).toMatchObject({ 'merge-pr': true });
-      expect(available(manager({ projects: 'all', access: 'read', projectAccess: { beta: 'write' } }))).toMatchObject({ 'merge-pr': true });
+      expect(available(manager({ projects: 'all', access: 'read', projectAccess: { beta: 'write' } }), 'claude', ['alpha', 'beta'])).toMatchObject({ 'merge-pr': true });
+    });
+
+    it('judges the projects it is connected to, not its default access (review nit on #2358)', () => {
+      // `all` with write by default, yet every connected project set to read: nothing to merge or enable.
+      const allRead = manager({ projects: 'all', access: 'write', projectAccess: { alpha: 'read', beta: 'read' } });
+      expect(available(allRead, 'claude', ['alpha', 'beta'])).toMatchObject({ 'merge-pr': false, 'enable-automation': false });
+      // An unlisted connected project falls back to write.
+      expect(available(allRead, 'claude', ['alpha', 'beta', 'gamma'])).toMatchObject({ 'merge-pr': true });
+      expect(actionOpsFor(manager(), 'claude', []).find((op) => op.type === 'merge-pr')).toMatchObject({ available: false, reason: 'this manager is connected to no project' });
     });
 
     it('offers connector calls only to a Claude manager with a grant that asks', () => {
@@ -64,8 +73,8 @@ describe('the proposal registry (spec 2026-11-20-manager-admin-actions § 2.1)',
     });
 
     it('says why an op is unavailable', () => {
-      const merge = actionOpsFor(manager({ access: 'read' }), 'claude').find((op) => op.type === 'merge-pr');
-      expect(merge).toMatchObject({ available: false, reason: 'every project is read-only for this manager' });
+      const merge = actionOpsFor(manager({ access: 'read' }), 'claude', ['alpha']).find((op) => op.type === 'merge-pr');
+      expect(merge).toMatchObject({ available: false, reason: 'every connected project is read-only for this manager' });
     });
   });
 
