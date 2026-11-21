@@ -11,7 +11,6 @@ import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
 import { recentTasks } from './snapshot.ts';
-export { recentTasks };
 import { sameModel } from '../runs/reported-model.ts';
 
 export interface ManagerCliEnv {

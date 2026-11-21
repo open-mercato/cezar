@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { capped, recentTasks, runManagerCommand, SANDBOX_BLOCKED_HINT, sinceOf, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { capped, runManagerCommand, SANDBOX_BLOCKED_HINT, sinceOf, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { recentTasks } from './snapshot.ts';
 
 const snapshot = {
   generatedAt: '',

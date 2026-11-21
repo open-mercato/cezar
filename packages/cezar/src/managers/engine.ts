@@ -303,6 +303,8 @@ interface ActiveTurn {
   /** Plan-usage ledger: the reply this turn writes and the account it runs on (design rev 3). */
   ledgerMessageId?: string;
   planAccount?: LedgerAccountRef & { provider: 'claude' | 'codex' };
+  /** The open cards this chat turn shows (`openCards`): `ids` stands in for `full` only in a resumed session. */
+  cards?: { digest: string; full: string; ids?: string };
 }
 
 interface Runtime {
@@ -1381,7 +1383,7 @@ export class ManagerEngine {
       // Task events still owed a follow-up ride along: the user asking first answers them too.
       const { notes, followups } = store.state(id);
       turn.sourceTasks = [...item.messageIds.flatMap((messageId) => store.message(id, messageId)?.sourceTasks ?? []), ...taskSources([item.text, ...notes, ...followups.map((entry) => entry.line)].join('\n'))];
-      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line), this.openCards(id, 'chat')), 'chat', turn, undefined, item)) === 'heard';
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line), this.openCards(id, turn)), 'chat', turn, undefined, item)) === 'heard';
       if (heard) this.consumeNotes(id, notes, followups);
       return;
     }
@@ -1390,7 +1392,7 @@ export class ManagerEngine {
       // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
       if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
       turn.sourceTasks = taskSources(followups.map((entry) => entry.line).join('\n'));
-      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes, this.openCards(id, 'chat')), 'chat', turn);
+      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes, this.openCards(id, turn)), 'chat', turn);
       if (outcome === 'heard') this.consumeNotes(id, notes, followups);
       // Failed: no retry that could bill in a loop; the next chat hears them instead.
       else if (outcome === 'failed' && store.get(id)) {
@@ -1731,17 +1733,17 @@ export class ManagerEngine {
     if (written.kind === 'assistant') this.askChanged(id, written, false);
   }
 
-  /** A chat that resumes a session which already saw these cards gets their ids, not the list again. */
-  private openCards(id: string, kind: ActiveTurn['kind'] = 'job'): string {
+  /** A chat resuming a session that already saw these cards gets their ids; `drive` restores the list for a fresh one. */
+  private openCards(id: string, turn?: ActiveTurn): string {
     const { store } = this.deps;
     const cards = store.messages(id).filter(openAsk);
+    const full = openCardsBlock(cards, this.now());
+    if (turn?.kind !== 'chat') return full;
     const meta = store.state(id).sessions.chat;
     const digest = openCardsDigest(cards);
-    if (kind === 'chat' && this.resumes('chat', meta) && meta?.cardsDigest === digest) return openCardsUnchanged(cards);
-    if (kind === 'chat' && meta && cards.length > 0) {
-      store.updateState(id, (state) => (state.sessions.chat ? { ...state, sessions: { ...state.sessions, chat: { ...state.sessions.chat, cardsDigest: digest } } } : state));
-    }
-    return openCardsBlock(cards, this.now());
+    const ids = this.resumes('chat', meta) && meta?.cardsDigest === digest ? openCardsUnchanged(cards) : '';
+    turn.cards = { digest, full, ...(ids ? { ids } : {}) };
+    return ids || full;
   }
 
   /** Waiting tasks' open questions, so a relayed card can name the one it copies (`about.ask`). */
@@ -2250,7 +2252,9 @@ export class ManagerEngine {
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
     // A new chat session hears what it would otherwise have remembered; a watch or job is self-contained.
-    const freshPrompt = turn.kind === 'chat' ? `${this.preamble(id, sources)}${prompt}` : prompt;
+    // A fresh session never saw the cards a resumed one would get by id.
+    const unseen = turn.cards?.ids ? prompt.replace(turn.cards.ids, () => turn.cards!.full) : prompt;
+    const freshPrompt = turn.kind === 'chat' ? `${this.preamble(id, sources)}${unseen}` : prompt;
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
     // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
     const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
@@ -2433,20 +2437,23 @@ export class ManagerEngine {
     planUsage?.close({ ...(turn.kind === 'watch' ? { quiet: !judged(text().replace(QUIET_LINE, '').trim()).text } : {}), turn: stats });
     if (saved && store.get(id)) {
       const at = this.iso();
-      store.updateState(id, (state) => ({
-        ...state,
-        sessions: {
-          ...state.sessions,
-          [turn.kind]: {
-            // A resumed transcript keeps what it was shown; a new one has seen nothing yet.
-            ...(resumeId && state.sessions[turn.kind]?.cardsDigest ? { cardsDigest: state.sessions[turn.kind]!.cardsDigest } : {}),
-            startedAt: priorSession?.startedAt ?? new Date(turnStartedAt).toISOString(),
-            lastAt: at,
-            turns: sessionTurn,
-            ...(turnStats.context > 0 ? { contextTokens: turnStats.context } : priorSession?.contextTokens !== undefined ? { contextTokens: priorSession.contextTokens } : {}),
+      store.updateState(id, (state) => {
+        const cardsDigest = !error && turn.cards ? turn.cards.digest : resumeId ? state.sessions[turn.kind]?.cardsDigest : undefined;
+        return {
+          ...state,
+          sessions: {
+            ...state.sessions,
+            [turn.kind]: {
+              // Seen only once the turn ran; a failed one keeps what the resumed transcript had.
+              ...(cardsDigest !== undefined ? { cardsDigest } : {}),
+              startedAt: priorSession?.startedAt ?? new Date(turnStartedAt).toISOString(),
+              lastAt: at,
+              turns: sessionTurn,
+              ...(turnStats.context > 0 ? { contextTokens: turnStats.context } : priorSession?.contextTokens !== undefined ? { contextTokens: priorSession.contextTokens } : {}),
+            },
           },
-        },
-      }));
+        };
+      });
     }
     return { text: committed || draft, commands, costUsd, ...(error ? { error } : {}) };
   }

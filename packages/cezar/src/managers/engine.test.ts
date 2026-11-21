@@ -2195,6 +2195,23 @@ describe('ManagerEngine', () => {
       expect((await turn(engine, id, 'later', reply('Back.'))).userPrompt).toContain('Your questions still waiting on the user:\n- base');
     });
 
+    it('gives a fresh session the full card list even when a resume would have had ids only', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await create(engine, 0);
+      const card: Script = { play: (emit) => { emit({ type: 'usage-status', status: { contextTokens: 30_000 } }); emit({ type: 'text', text: 'Pick one.\nCEZ:ASK {"id":"base","questions":[{"header":"Base","question":"Which base?","multiSelect":false,"options":[{"label":"main"},{"label":"next"}]}]}' }); } };
+      await turn(engine, id, 'ask me', card);
+      clock += 60_000;
+      await turn(engine, id, 'hi', reply('Hi.'));
+      clock += 60_000;
+      // The resume fails: the retry starts a fresh transcript that has never seen the card.
+      backend.scripts.push({ fail: 'No conversation found with session ID' });
+      const fresh = await turn(engine, id, 'and now?', reply('Back.'));
+      expect(backend.specs.at(-2)?.userPrompt).toContain('unchanged since your last turn: base.');
+      expect(fresh.resume).toBeUndefined();
+      expect(fresh.userPrompt).toContain('Your questions still waiting on the user:\n- base');
+      expect(fresh.userPrompt).not.toContain('unchanged since your last turn');
+    });
+
     it('gives a watch only unfinished and recent tasks, and finished items only when they are new', () => {
       const done = (i: number) => ({ runId: `d${i}`, title: `Done ${i}`, status: 'done', workflow: 'w', childCount: 0, startedBy: 'user' as const, lastActivityAt: `2026-11-${String(i + 1).padStart(2, '0')}T00:00:00Z` });
       const finished = (i: number) => ({ key: `f${i}`, kind: 'task-finished' as const, projectId: 'alpha', title: `Done ${i}`, runId: `d${i}` });

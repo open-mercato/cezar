@@ -121,7 +121,6 @@ export function snapshotTasks(runs: RunRecord[]): ManagerSnapshotTask[] {
   return open.slice(0, TASK_LIMIT).map((run) => taskRow(run, counts.get(run.id) ?? 0));
 }
 
-/** A run by its id, or by a prefix of at least eight characters that names only it (the branch's `cez/<id8>`). */
 /** Finished tasks a compact listing still shows per project, newest first. */
 const RECENT_FINISHED = 20;
 const FINISHED = new Set(['done', 'cancelled']);
@@ -135,6 +134,7 @@ export function recentTasks<T extends { status: string; lastActivityAt?: string 
   return { shown, hidden: tasks.length - shown.length };
 }
 
+/** A run by its id, or by a prefix of at least eight characters that names only it (the branch's `cez/<id8>`). */
 export function findRun(runs: RunRecord[], runId: string): RunRecord | undefined {
   const exact = runs.find((candidate) => candidate.id === runId);
   if (exact || runId.length < 8) return exact;
