@@ -55,6 +55,10 @@ Older iOS builds, including CezarBot 0.1.1 (10104), can return the same cached c
 
 The reliable reload fix requires an iOS app update as well as the cockpit update: the old app's native relay cache controls which HTML a page reload receives. A server update alone cannot replace that native code. The separate **restart to finish** banner means the server process needs restarting; reloading the phone page does not restart the computer's service.
 
+### When the cockpit cannot start
+
+The app never leaves you on a blank screen. If the cockpit loads but draws nothing, for example because cezar was updated under a page the phone had cached, the app reloads it once from the computer, past its caches. If that fails too, **Connection problem** offers **Retry** and **Your cezars**. A page that does not come back after the app returns from the background is reloaded the same way. After an app update, the first start fetches the cockpit from the computer again instead of from the phone's cache. In a browser, the cockpit itself shows **cezar could not start** with **Reload** when its files are gone.
+
 ## Relay terms on the phone
 
 A phone paired through the Cezar relay accepts the relay's terms once. Right after pairing, and the first time a server opens while the phone has not accepted them, the app shows **Accept the relay terms**: the Terms and Privacy Policy links, an **I accept** box and **Continue**. **Not now** opens the server anyway; after 48 hours the relay refuses the phone until it accepts, and the app shows the same sheet without **Not now**. Accepting reconnects at once, with no new pairing.
