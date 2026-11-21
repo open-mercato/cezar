@@ -36,8 +36,13 @@ Initial five-command gate executed before dependencies existed: typecheck 127, n
 - [x] 1.1 Add shared bounded descendant traversal and tests
 - [x] 1.2 Route Linux foreground and shutdown reads
 ### Phase 2: verification
-- [ ] 2.1 Prove red/green and run all validation commands
+- [x] 2.1 Prove red/green and run all validation commands
 - [ ] 2.2 Review, publish and release owned claims
 
 ## Implementation evidence
 Both production reader regressions fail on actual ps invocations when only routing source files are stashed; restored helper tests pass. Terminal suite: 14 files, 160 tests passed. Source typecheck passed after fixing the live test to keep command rows separate from shutdown rows. Live strace: no ps execution or global /proc listing; numeric process paths limited to root and its descendants. Full first gate: typecheck0, npm test124 (600-second timeout; projects-api protected-shape failure seen before implementation), test:unit0, build0, test:package0 (35 tests). Final rerun underway; the draft must remain until its evidence is complete and blockers resolved.
+
+## Final handoff
+All five configured npm commands have passing local results: typecheck0 after a test-only typing correction; npm test0 with command-local CEZ_INSTANCE_ID removal (17831 passed /8 skipped,1093 files passed/3 skipped,875.90s); test:unit0(54); build0 including check:pack; test:package0(35). Prior two full tests reached600s and exited124; the inherited health-key mismatch passes after command-local isolation, without editing health source/config. Source CI at afc46dd91:14 checks complete(12success2skip),11 observed workflow runs complete(2success9skip). Parent independently reported4 files/28 tests passing and inspected the diff.
+
+Remaining step2.2 is gated on native setuid/hidepid QA and independent approval. Parent directs a partial handoff, draft/no-automerge despite passing code gates. The run publishes evidence and releases only its own PR lock after this commit; tracker claim comments record final release. Spec stays design-only on #2370; implementation is #2371. No source changed after afc46dd91. See .ai/analysis/2026-11-21-issue-2349-validation.md and cockpit Assets for exact logs and limits. No further full reruns are planned.
