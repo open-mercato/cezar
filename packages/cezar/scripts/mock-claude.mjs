@@ -7,7 +7,14 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
+<<<<<<< HEAD
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+=======
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+>>>>>>> c043cff (fix(claude): report each resumed turn's own cost, not the session's running total (#2384))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
@@ -35,7 +42,68 @@ function streamedBlocks(obj) {
   });
 }
 
+<<<<<<< HEAD
 function emit(obj) {
+=======
+// The model a real CLI reports in `init` and `result.modelUsage`: an alias (or no --model at
+// all, "auto") resolves to a full id, so the cockpit's "auto → <model>" badge is testable.
+const MOCK_MODEL = (() => {
+  const at = process.argv.indexOf('--model');
+  const requested = at >= 0 ? process.argv[at + 1] ?? '' : '';
+  const alias = { '': 'opus', default: 'opus', opus: 'opus', sonnet: 'sonnet', haiku: 'haiku' }[requested];
+  return alias ? `claude-${alias}-5-5` : requested;
+})();
+
+// Like the real CLI, `total_cost_usd` is the session's running total, carried over `--resume`.
+const MOCK_SESSION = (() => {
+  for (const flag of ['--session-id', '--resume']) {
+    const at = process.argv.indexOf(flag);
+    if (at >= 0 && process.argv[at + 1]) return process.argv[at + 1];
+  }
+  return undefined;
+})();
+const mockCostFile = MOCK_SESSION && process.env.CEZ_HOME && /^[A-Za-z0-9-]+$/.test(MOCK_SESSION)
+  ? join(process.env.CEZ_HOME, 'mock-claude-costs', `${MOCK_SESSION}.json`)
+  : undefined;
+const mockTotals = (() => {
+  try {
+    const saved = mockCostFile ? JSON.parse(readFileSync(mockCostFile, 'utf8')) : {};
+    return { total: Number(saved.total) || 0, input: Number(saved.input) || 0, output: Number(saved.output) || 0 };
+  } catch {
+    return { total: 0, input: 0, output: 0 };
+  }
+})();
+function runningCost(obj) {
+  if (obj?.type !== 'result' || typeof obj.total_cost_usd !== 'number') return obj;
+  mockTotals.total += obj.total_cost_usd;
+  mockTotals.input += obj.usage?.input_tokens ?? 0;
+  mockTotals.output += obj.usage?.output_tokens ?? 0;
+  if (mockCostFile) {
+    try {
+      mkdirSync(dirname(mockCostFile), { recursive: true });
+      writeFileSync(mockCostFile, JSON.stringify(mockTotals));
+    } catch {
+      // a read-only home: the total stays per process
+    }
+  }
+  return { ...obj, total_cost_usd: mockTotals.total };
+}
+
+function emit(obj) {
+  obj = runningCost(obj);
+  if (obj?.type === 'result' && !obj.is_error && !obj.modelUsage && !process.env.CEZ_MANAGER_ID) {
+    const usage = obj.usage ?? {};
+    obj = {
+      ...obj,
+      modelUsage: {
+        // Session running totals, like the real CLI's.
+        [MOCK_MODEL]: typeof obj.total_cost_usd === 'number'
+          ? { inputTokens: mockTotals.input, outputTokens: mockTotals.output, costUSD: mockTotals.total }
+          : { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, costUSD: 0 },
+      },
+    };
+  }
+>>>>>>> c043cff (fix(claude): report each resumed turn's own cost, not the session's running total (#2384))
   const blocks = streamedBlocks(obj);
   const envelope = { session_id: obj?.session_id, parent_tool_use_id: obj?.parent_tool_use_id ?? null };
   for (const block of blocks) {
