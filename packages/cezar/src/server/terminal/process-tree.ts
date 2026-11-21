@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readLinuxProcessTreeSync } from './linux-proc.ts';
 
 /**
  * The process groups under a shell (spec `.ai/specs/2026-10-07-task-workspace.md` §6: "stops its
@@ -61,6 +62,7 @@ export function descendantGroups(rows: readonly TreeRow[], rootPid: number, self
  */
 export function readProcessTreeSync(): TreeRow[] | null {
   if (process.platform === 'win32') return null;
+  if (process.platform === 'linux') return readLinuxProcessTreeSync();
   try {
     const text = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid='], {
       encoding: 'utf8',

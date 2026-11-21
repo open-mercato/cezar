@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readLinuxProcesses } from './linux-proc.ts';
 
 /**
  * What a terminal session is RUNNING right now (spec `.ai/specs/2026-10-07-task-workspace.md`
@@ -14,9 +15,9 @@ import { execFile } from 'node:child_process';
  * shell have a child" — so one mechanism serves both and the two can never disagree.
  *
  * Same constraints as `core/process-usage.ts`, which samples the same table for the runs table:
- * a missing or failing `ps` (Windows, exotic containers) degrades silently to "nothing running",
+ * a missing or failing process reader degrades silently to unknown,
  * never an error; parsing and the tree walk are pure and table-testable; and one snapshot serves
- * every session rather than one `ps` per tab.
+ * every session rather than one read per tab. Linux follows only cezar descendants (#2349).
  */
 
 /** One parsed `ps` row. */
@@ -105,7 +106,7 @@ let snapshot: { at: number; rows: ProcessRow[] } | undefined;
 let inFlight: Promise<ProcessRow[] | null> | undefined;
 
 /**
- * One shared, cached `ps` snapshot, or `null` when this host's process table cannot be read.
+ * One shared, cached process snapshot, or `null` when this host's process table cannot be read.
  *
  * Cached as the PROMISE while in flight so four tabs asking at once cost one `ps`, not four.
  *
@@ -138,6 +139,8 @@ export function resetProcessSnapshot(): void {
 }
 
 function readProcessTable(): Promise<ProcessRow[] | null> {
+  // ps UID filters still open unrelated users' proc files on Linux (#2349).
+  if (process.platform === 'linux') return readLinuxProcesses();
   return new Promise((resolve) => {
     // Windows has no `ps`, and a hardened container can hide the table; both land on `null`,
     // which says "unknown" rather than "nothing running".

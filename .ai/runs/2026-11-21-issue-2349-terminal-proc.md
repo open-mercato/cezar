@@ -17,7 +17,7 @@ Avoid unrelated Linux proc accesses from terminal foreground/shutdown readers wi
 4. Review through om-auto-review-pr/om-code-review; publish draft on incomplete evidence, preserve QA gates and release owned locks.
 
 ## Risks and decisions
-No UID filter: elevated descendants are in scope because of ancestry. No global ps fallback on Linux. Missing relationship reads return unknown; existing shutdown fallback remains. Preserve macOS ps path. Local sync proc calls are bounded between operations, not preemptible within a syscall. Other all-user scanners remain. Live privileged/hidepid evidence unavailable until explicitly tested. Parent forbids extra workers, so independent-agent review is unavailable and must be disclosed.
+No UID filter: elevated descendants are in scope because of ancestry. No global ps fallback on Linux. Missing relationship reads return unknown; existing shutdown fallback remains. Preserve macOS ps path. Shutdown wraps sync proc calls in a killable Node helper with the existing 1.5-second subprocess bound and validates JSON through Zod. Other all-user scanners remain. Live privileged/hidepid evidence unavailable until explicitly tested. Parent forbids extra workers, so independent-agent review is unavailable and must be disclosed.
 
 ## Claim and validation state
 Claim-Run: 3b137dce-0c30-43f0-a1f5-ec9378d2aec7
@@ -33,8 +33,11 @@ Initial five-command gate executed before dependencies existed: typecheck 127, n
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: scoped Linux reads
-- [ ] 1.1 Add shared bounded descendant traversal and tests
-- [ ] 1.2 Route Linux foreground and shutdown reads
+- [x] 1.1 Add shared bounded descendant traversal and tests
+- [x] 1.2 Route Linux foreground and shutdown reads
 ### Phase 2: verification
 - [ ] 2.1 Prove red/green and run all validation commands
 - [ ] 2.2 Review, publish and release owned claims
+
+## Implementation evidence
+Both production reader regressions fail on actual ps invocations when only routing source files are stashed; restored helper tests pass. Terminal suite: 14 files, 160 tests passed. Source typecheck passed after fixing the live test to keep command rows separate from shutdown rows. Live strace: no ps execution or global /proc listing; numeric process paths limited to root and its descendants. Full first gate: typecheck0, npm test124 (600-second timeout; projects-api protected-shape failure seen before implementation), test:unit0, build0, test:package0 (35 tests). Final rerun underway; the draft must remain until its evidence is complete and blockers resolved.
