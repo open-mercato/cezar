@@ -51,6 +51,6 @@ Remaining step2.2 is gated on native setuid/hidepid QA and independent approval.
 
 - [x] Independently reproduce native setuid ancestry and hidden proc semantics in network-disabled Linux containers. hidepid=0 retains the elevated child and user grandchild. hidepid=1 returns unknown. hidepid=2 exposed a false-idle bug: ENOENT was mistaken for process exit.
 - [x] Prove the new hidepid=2 regression red on the previous source, then recheck the parent's children link before ignoring a missing child; actual exits remain skippable and live hidden descendants return unknown.
-- [ ] Re-run all five configured gates and scoped terminal/native verification on the corrected source, complete terminal QA and independent root review, then publish evidence and restore appropriate ready/automerge state.
+- [x] Re-run all five configured gates (17,832 Vitest / 54 core / 35 package), native privilege/access checks and real-browser QA on corrected source d868b7b52. Root review resolves the native-QA and hidepid=2 findings. Controlled publication/labels and exact-head CI handoff are recorded in PR comments; formal approval remains protected.
 
 The root owns atomic PR2371 claim under run bab16231-b24e-4b5b-a184-ac255f19a607. Existing #2005 fix PR2007 is the second security candidate; Windows #2368 remains unchanged because a native Windows environment is unavailable. No additional workers were dispatched.

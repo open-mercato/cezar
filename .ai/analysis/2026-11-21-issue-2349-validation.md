@@ -1,61 +1,51 @@
-# #2349 terminal proc hardening — validation
+# #2349 terminal proc hardening — final verification
 
 Issue: https://github.com/open-mercato/cezar/issues/2349
 Implementation: https://github.com/open-mercato/cezar/pull/2371
-Spec: https://github.com/open-mercato/cezar/pull/2370
-Review: https://github.com/open-mercato/cezar/pull/2371#pullrequestreview-6001200419
-Implementation branch: `fix/issue-2349-terminal-proc`
-Source commit: `afc46dd91358d696639aa0f5cdc96f9fee36e809`
-Spec branch/head: `spec/issue-2349-linux-descendants` / `a5f8f3a91`
-Engine: om-auto-create-pr (steps: 4, --loop: no)
+Design-only spec: https://github.com/open-mercato/cezar/pull/2370
+Verified production source: `d868b7b523fefa6736caefb0a69dd0db944018a7`. The final evidence commit changes Markdown only.
 
-## Outcome
-Linux terminal readers no longer execute ps or enumerate the global proc directory. They follow only cezar descendants using every thread's children list, without UID filtering. This retains elevated-child links and reachable ordinary-user grandchildren. Foreground remains asynchronous and cached; shutdown uses a Node helper under the old 1.5-second subprocess timeout with SIGKILL and an 8 MiB output cap, and validates JSON using Zod. Existing root/PPID guards, group exclusions and lifecycle signaling remain. macOS/Windows paths are unchanged.
+## Result
+Linux terminal foreground and shutdown readers follow cezar descendants through every thread's children links. They do not enumerate the global proc directory or invoke ps. The asynchronous foreground cache, validated shutdown root/group checks, 1.5-second killable Node helper, SIGKILL/8 MiB bound, and failure warning/fallback remain. No application startup, configuration, dependency, HTTP/CLI or persisted-format changes. Other process scanners remain explicitly outside scope.
 
-The work is **not fully verified against native privilege/hidepid conditions**. All five local npm commands pass, with command-local CEZ_INSTANCE_ID isolation for npm test. Keep both PRs draft and omit automerge pending native QA/independent approval. Other all-user scanners named by maintainer triage are outside this terminal-only assignment and remain unchanged.
+The root independently inspected the complete diff and found a native hidepid=2 defect during continuation: a live elevated child hidden by proc permissions reports ENOENT, so the initial code falsely treated it as exited/idle. The correction rechecks its visible parent's children link. A missing child is skipped only when the link is gone; a still-linked hidden child makes the snapshot unknown. The same shared traversal handles async polling, sync testing and the compiled shutdown helper.
 
-## Regression and runtime evidence
-- `git stash push -- packages/cezar/src/server/terminal/foreground.ts packages/cezar/src/server/terminal/process-tree.ts`, then `timeout 30 npm test -- packages/cezar/src/server/terminal/linux-proc.test.ts -t 'production reader through'`: exit 1; **both** tests failed on actual legacy `ps -axo` calls. Helper and tests remained present. `git stash pop` restored the source; no stash remains from this work.
-- `timeout 60 npm test -- packages/cezar/src/server/terminal/linux-proc.test.ts`: exit 0, 12/12 tests passed after restoration.
-- `timeout 120 npm test -- packages/cezar/src/server/terminal`: exit 0, 14 files / 160 tests passed. Includes real PTY background/nohup/ignored-HUP shutdown, live ordinary child/grandchild independent groups and real bounded-helper execution. Synthetic fixtures cover non-leader threads, inaccessible cmdline/relationships, mixed/elevated ancestry, PID reuse, missing proc/kernel support, deadlines and malformed helper output.
-- `timeout 30 strace -f -e trace=openat,getdents64,newfstatat,statx,execve ...` against both production readers: exit 0; foreground 2 rows, tree 3 rows, no ps execution and no `/proc` root enumeration. Numeric proc directories were the root and its descendants (3837739, 3837795, 3837845). Node also reads its own/system proc metadata. This is access-boundary evidence, not a privileged/hidepid test.
-- Compiled `.js` shutdown helper smoke: exit 0, `{rows:2,containsSelf:true}`. The published path needs no tsx loader; source tests use the repo's installed loader.
+## Red-before-green proof
+- Both original routing regressions fail on actual legacy ps calls when only foreground/process-tree routing is removed; they pass with scoped routing.
+- The root's new `live hidepid=2 child` regression fails on the previous helper, then passes with the link recheck. The true-exit guard removes the parent link, retaining ordinary exit tolerance.
+- The full terminal scope passes **14 files / 161 tests**, including real PTY group teardown, background/nohup jobs, a foreground job ignoring HUP, the killable helper, non-leader threads, stale/recycled IDs, denied relationships, missing support and output validation.
 
-## Full configured npm gate
-The five commands were run in the configured order, each under a 600-second timeout. The initial no-dependencies attempt failed (127/127/1/127/1); `npm ci` then completed. Dependency files were unchanged.
+## Native privilege and access evidence
+A network-disabled Linux container uses a real setuid-root C bridge (real UID 1001 / effective UID 0) and an ordinary-user grandchild, plus an unrelated root process:
+- hidepid=0: async/sync/compiled readers retain the elevated bridge and ordinary-user grandchild and exclude the unrelated root process.
+- hidepid=1: the independent control read is denied with EPERM; all readers return unknown.
+- hidepid=2: the independent control read is denied with ENOENT; all readers return unknown. The old helper reproduced false idle before the correction.
 
-| Command | First installed-dependency run | Latest evidence |
-| --- | --- | --- |
-| `npm run typecheck` | exit 0 | Latest explicit source rerun exit 0. The second sequential attempt initially caught a test-only `TreeRow`/`ProcessRow` mismatch; it was corrected and rerun successfully. |
-| `npm test` | exit 124 (600s bound); health-shape failure observed before implementation | Final sequential attempt exit 124 (600s); same inherited-environment failure reproduced. Command-local removal of CEZ_INSTANCE_ID makes that isolated test pass (0). Full normalized npm test exited 0 under the 1800s bound: 1093 files passed / 3 skipped; 17831 tests passed / 8 skipped, duration 875.90s. |
-| `npm run test:unit` | exit 0, 54/54 | Final sequential attempt exit 0 (54/54). |
-| `npm run build` | exit 0; check:pack passed | Final sequential attempt exit 0; check:pack passed. All CI checks on source head succeeded/skipped. |
-| `npm run test:package` | exit 0, 35/35 | Final sequential attempt exit 0 (35/35). |
+Container proc mounts and temporary credentials/UID transitions are isolated; no host security setting changed. Fixture code, commands and logs are in the root cockpit Assets under `terminal-native/`.
 
-The inherited-environment test failure is `packages/cezar/src/server/projects-api.test.ts:1011`: its expected health key set omits `instanceId`, which server.ts:2093 includes when CEZ_INSTANCE_ID is inherited. `timeout 40 npm test -- packages/cezar/src/server/projects-api.test.ts -t 'keeps the protected shape'` exits 1 and shows that exact difference. It was observed before source changes. With only CEZ_INSTANCE_ID removed for the command, that isolated test passes (exit 0). No source or configuration fix is needed for this terminal PR; the earlier review suggestion to edit the health source/expectation is superseded by this evidence. The file was not edited. A timeout is incomplete verification, never a pass. All 14 CI checks on source afc46dd91 are success/skipped (12 success, 2 skipped), and all 11 workflow runs observed at that SHA are completed (2 success, 9 skipped). Full normalized local suite passed as above; its command was env -u CEZ_INSTANCE_ID timeout 1800 npm test. No application configuration was changed. Final results are posted on the PR and task report.
+The corrected compiled-reader strace asserts that numeric proc paths name only root, ordinary child and bounded helper; there is no ps execution or global proc-root open/enumeration. Native permission denial is not claimed to make hidden relationships readable: existing unknown-state warning and shutdown fallback deliberately apply.
 
-## Review, QA and merge gates
-Review used the exact installed `om-auto-fix-issue` feature route: `om-auto-write-spec` → `om-spec-writing --autonomous` → `om-open-pr`; then `om-auto-implement-spec` → `om-auto-create-pr` → `om-open-pr` → `om-auto-review-pr --autofix` / `om-code-review`. No extra worker was spawned because the parent explicitly forbids it; spec cohesion and this code review are author self-review, not independent approval. The parent later reported independently inspecting afc46dd91 and running linux-proc.test.ts, linux-proc-real.test.ts, process-tree-real.test.ts and foreground.test.ts: 4 files / 28 tests passed in 5.96s. This is attributed parent evidence, not native setuid/hidepid QA or formal merge approval. Review found and corrected the load-bearing shutdown timeout before publication. No other actionable source finding was identified in the scoped diff.
+## Root full configured gate
+Every command ran in configured order on the frozen corrected source:
 
-Remaining verification status: **request changes / not approved** until native setuid/hidepid QA and independent approval. The earlier local npm-gate blocker was resolved by command-local environment isolation; all five configured npm commands now have passing results. GitHub rejected a formal changes-requested review by the PR's own author; the full report was submitted as a COMMENTED review instead. This is not an approval. `changes-requested` and `needs-qa` remain. No `qa-approved`, `qa-self-verified` or automerge was applied.
+| Command | Result | Duration |
+|---|---|---|
+| `npm run typecheck` | PASS (0) | 20.75 s |
+| `npm test` | PASS (0) | 869.56 s |
+| `npm run test:unit` | PASS (0) | 12.1 s |
+| `npm run build` | PASS (0) | 11.0 s |
+| `npm run test:package` | PASS (0) | 19.45 s |
 
-No actual privileged setuid fixture, hardened hidepid mount or non-Linux runtime test was run. If proc permissions deny relationship reads, or the kernel lacks children support, readers return unknown; the existing close warning and shell-group/binding shutdown fallback apply. Other process scanners remain. Manual QA instructions are on the PR. Required CI and QA approval still gate any merge; no further CI follow-up is promised by this run after handoff.
+Vitest: **17,832 passed / 8 skipped**, 1093 files passed / 3 skipped. Node unit: **54/54**. Packaged CLI: **35/35**; build includes check:pack. Only inherited CEZ_INSTANCE_ID and CEZ_ARTIFACTS_DIR were removed for test subprocesses, with TMPDIR=/tmp. No product source/configuration or assertions were weakened. Earlier 600-second attempts and inherited-environment health-key mismatch are historical limits resolved by the full normalized run; no health fix belongs in this PR.
 
-Automerge is omitted because privileged/hidepid QA and independent approval remain outstanding. The configured local npm gate now passes; parent explicitly directs a partial handoff and retains draft until native verification is complete. The diff changes no app startup/configuration/public architecture contract. The guarded `backport release/v0.20.x` label was applied because both original ps call sites are present on the newest release line. No release/base branch was pushed or merged.
+## Real-browser QA
+`om-auto-qa-pr` used the configured agent-browser provider and repository test-env entrypoint on a disposable local dry-run cockpit. **Ten** live start/busy/Stop/idle cycles pass. The busy-close dialog appears, Cancel retains the tab, idle close removes it, policy-disabled rendering is respected, and a 390×844 viewport stays usable. Screenshots, scenario JSON and logs are in the root Assets under `terminal-native/`; the PR evidence comment is authoritative for the published head and requested self-QA signoff.
 
-## Ownership and artifacts
-Atomic operations came from the inherited installed tracker descriptor; the descriptor and configuration are not in either PR. Run `3b137dce-0c30-43f0-a1f5-ec9378d2aec7` acquired issue ref SHA `922418d9da5bb252b5969dfe1498bfa325c4e8e5` (comment 7053717226). It acquired PR ref SHA `83f74fb63b3cc07474769c50081b59e4f14d6b44` (comment 7053960756) before withdrawing the issue claim and lease-deleting its exact ref. PR cleanup follows evidence publication: remove only owned label, mark original comment released, then delete only the expected PR SHA by lease. Tracker comments are the final cleanup audit. Bot assignment was explicitly forbidden (403); no assignee changed. No force claim or foreign lock release was attempted.
+No UI source changed. Auth/session/token, business-record edits, shared-record stale writes, money and locale-entry checks are inapplicable to this internal reader change. Non-Linux runtime is unchanged and not claimed as locally re-exercised. Existing cross-platform CI and all final-head checks continue to gate merge. A follow-up browser automation scenario is recorded with the evidence; no extra tracking issue was opened.
 
-Full private command logs, red/green output, terminal output, syscall trace and compiled-helper smoke are copied to the task's cockpit Assets as `issue-2349-*` artifacts. They are execution evidence; this summary does not claim the incomplete full suite passed.
+## Review and publication
+The root applied om-auto-review-pr/om-code-review against AGENTS, CODE_REVIEW, BACKWARD_COMPATIBILITY, consumers and the full checklist. The inherited native-QA blocker and newly observed hidepid=2 false-idle defect are resolved. No remaining actionable code or QA finding was identified in this scope. Root verification is separate from the worker's initial self-review; GitHub still treats the authenticated bot as PR author, so its COMMENT verdict does not supply formal approval.
 
+Automerge is eligible under the user's instruction because no application startup/configuration/architecture change ships. Requested QA self-signoff is backed by actual runtime evidence; formal GitHub approval/protection and exact-head CI remain enforced. The newest release/v0.20.x contains the original scans, so its backport request remains. No PR or base branch is merged by this task.
 
-## Final command results
-| Configured command | Final result |
-| --- | --- |
-| npm run typecheck | exit 0 after correcting a test-only row-type error caught by the preceding attempt (exit 1) |
-| npm test | exit 0 with command-local CEZ_INSTANCE_ID removal; 17831 passed / 8 skipped in 875.90s; prior two 600s attempts exit 124 |
-| npm run test:unit | exit 0; 54 passed |
-| npm run build | exit 0, including check:pack |
-| npm run test:package | exit 0; 35 passed |
-
-Source code remains afc46dd91; the final commit adds only run/analysis evidence. No additional full rerun followed the parent's instruction to finish the current bounded run. Native setuid/hidepid and non-Linux runtime QA remain unperformed. Parent asked for a partial handoff; no formal author approval or merge readiness is claimed.
+Atomic PR ownership uses root run bab16231-b24e-4b5b-a184-ac255f19a607; tracker comments record controlled label/claim cleanup and leased ref release. All initial worker issue/PR claims were released before root acquisition. No extra workers were dispatched.
