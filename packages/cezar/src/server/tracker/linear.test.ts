@@ -53,6 +53,14 @@ describe('Linear read-only adapter', () => {
     expect(requests).toHaveLength(1);
     expect(await client.driver(association).getItem('ENG-1')).toMatchObject({ code: 'not_found' });
   });
+  it('maps Linear priority to its label and omits "No priority" (#2287)', async () => {
+    const { client, requests } = mock(() => json({ data: { result: { nodes: [issue({ priority: 2, priorityLabel: 'High' }), issue({ identifier: 'ENG-2', priority: 0, priorityLabel: 'No priority' })], pageInfo } } }));
+    const result = await client.driver(association).listIssues({ state: 'all', limit: 50 });
+    if (!result.available) throw new Error('expected items');
+    expect(result.items[0]).toMatchObject({ priority: 'High' });
+    expect(result.items[1]).not.toHaveProperty('priority');
+    expect(requests.at(-1)?.query).toContain('priorityLabel');
+  });
   it.each([200, 400])('rejects GraphQL partial data and honours RATELIMITED at HTTP%s', async status => {
     const { client, requests } = mock(() => json({ data: { result: { nodes: [issue()], pageInfo } }, errors: [{ message: 'linear-secret', extensions: { code: 'RATELIMITED' } }] }, status, { 'x-ratelimit-requests-reset': String(Date.now() + 90_000) }));
     const result = await client.driver(association).listIssues({ state: 'all', limit: 50 });

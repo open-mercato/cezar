@@ -304,6 +304,30 @@ describe('Jira Cloud adapter', () => {
     });
   });
 
+  it('requests priority and issuetype and maps them as plain strings, omitting absent ones (#2287)', async () => {
+    const urls: string[] = [];
+    const withFields = (extra: Record<string, unknown>) => {
+      const base = issue() as { fields: object };
+      return { ...base, fields: { ...base.fields, ...extra } };
+    };
+    let row: unknown = withFields({ priority: { id: '2', name: 'High' }, issuetype: { id: '1', name: 'Bug' } });
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      return url.endsWith('/_edge/tenant_info') ? json({ cloudId: 'cloud-1' }) : json(row);
+    }) as unknown as typeof fetch;
+    const driver = createJiraClient(credentials, fetcher).driver(association());
+    const full = trackerItemResultSchema.parse(await driver.getItem('PROJ-1'));
+    expect(full).toMatchObject({ available: true, item: { priority: 'High', type: 'Bug', status: 'In Progress' } });
+    expect(decodeURIComponent(urls.find(u => u.includes('/issue/'))!)).toMatch(/fields=.*priority.*issuetype/);
+
+    row = withFields({ priority: null });
+    const bare = trackerItemResultSchema.parse(await driver.getItem('PROJ-1'));
+    if (!bare.available) throw new Error('expected a successful detail');
+    expect(bare.item).not.toHaveProperty('priority');
+    expect(bare.item).not.toHaveProperty('type');
+  });
+
   it('returns controlled invalid-response failures for malformed vendor data', async () => {
     const fetcher = vi.fn(async () => json({ cloudId: '' })) as unknown as typeof fetch;
     const result = trackerCandidatesResultSchema.parse(await createJiraClient(credentials, fetcher).listCandidates({

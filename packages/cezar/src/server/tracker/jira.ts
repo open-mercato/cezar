@@ -53,6 +53,9 @@ const issueSchema = z.object({
     labels: z.array(z.string()),
     description: z.unknown().nullable(),
     status: z.object({ name: z.string() }),
+    // Admins can drop these from a project's field configuration (#2287).
+    priority: z.object({ name: z.string() }).nullish(),
+    issuetype: z.object({ name: z.string() }).nullish(),
   }),
 });
 const issuePageSchema = z.object({
@@ -65,7 +68,7 @@ type JiraIssue = z.infer<typeof issueSchema>;
 type CachedResult = TrackerCandidatesResult | TrackerAssociationResult | TrackerItemsResult | TrackerItemResult;
 type Transport = 'gateway' | 'site';
 
-const issueFields = ['project', 'summary', 'creator', 'created', 'updated', 'labels', 'description', 'status'] as const;
+const issueFields = ['project', 'summary', 'creator', 'created', 'updated', 'labels', 'description', 'status', 'priority', 'issuetype'] as const;
 const issueKeyPattern = /^[A-Z][A-Z0-9_]*-[1-9]\d*$/;
 
 function invalidResponse(reason = 'Jira returned an invalid response. Try again later.'): never {
@@ -120,6 +123,8 @@ function mapIssue(raw: JiraIssue, origin: string, expectedProjectId: string, max
     ...body,
     url: `${origin}/browse/${encodeURIComponent(raw.key)}`,
     status: raw.fields.status.name,
+    ...(raw.fields.priority?.name ? { priority: raw.fields.priority.name } : {}),
+    ...(raw.fields.issuetype?.name ? { type: raw.fields.issuetype.name } : {}),
   };
 }
 
