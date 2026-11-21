@@ -9,7 +9,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
@@ -46,13 +47,52 @@ const MOCK_MODEL = (() => {
   return alias ? `claude-${alias}-5-5` : requested;
 })();
 
+// Like the real CLI, `total_cost_usd` is the session's running total, carried over `--resume`.
+const MOCK_SESSION = (() => {
+  for (const flag of ['--session-id', '--resume']) {
+    const at = process.argv.indexOf(flag);
+    if (at >= 0 && process.argv[at + 1]) return process.argv[at + 1];
+  }
+  return undefined;
+})();
+const mockCostFile = MOCK_SESSION && process.env.CEZ_HOME && /^[A-Za-z0-9-]+$/.test(MOCK_SESSION)
+  ? join(process.env.CEZ_HOME, 'mock-claude-costs', `${MOCK_SESSION}.json`)
+  : undefined;
+const mockTotals = (() => {
+  try {
+    const saved = mockCostFile ? JSON.parse(readFileSync(mockCostFile, 'utf8')) : {};
+    return { total: Number(saved.total) || 0, input: Number(saved.input) || 0, output: Number(saved.output) || 0 };
+  } catch {
+    return { total: 0, input: 0, output: 0 };
+  }
+})();
+function runningCost(obj) {
+  if (obj?.type !== 'result' || typeof obj.total_cost_usd !== 'number') return obj;
+  mockTotals.total += obj.total_cost_usd;
+  mockTotals.input += obj.usage?.input_tokens ?? 0;
+  mockTotals.output += obj.usage?.output_tokens ?? 0;
+  if (mockCostFile) {
+    try {
+      mkdirSync(dirname(mockCostFile), { recursive: true });
+      writeFileSync(mockCostFile, JSON.stringify(mockTotals));
+    } catch {
+      // a read-only home: the total stays per process
+    }
+  }
+  return { ...obj, total_cost_usd: mockTotals.total };
+}
+
 function emit(obj) {
+  obj = runningCost(obj);
   if (obj?.type === 'result' && !obj.is_error && !obj.modelUsage && !process.env.CEZ_MANAGER_ID) {
     const usage = obj.usage ?? {};
     obj = {
       ...obj,
       modelUsage: {
-        [MOCK_MODEL]: { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, costUSD: obj.total_cost_usd ?? 0 },
+        // Session running totals, like the real CLI's.
+        [MOCK_MODEL]: typeof obj.total_cost_usd === 'number'
+          ? { inputTokens: mockTotals.input, outputTokens: mockTotals.output, costUSD: mockTotals.total }
+          : { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, costUSD: 0 },
       },
     };
   }
@@ -108,20 +148,28 @@ emit(process.env.CEZ_MANAGER_ID
     }
   : { type: 'system', subtype: 'init', model: MOCK_MODEL });
 
-// Plan usage windows, so the dry-run header shows its live gauges (real wire shape). Sent once,
-// on the first ordinary turn: a `mock:limit` session must report only its terminal limit.
-let planWindowsSent = false;
+// Plan usage windows, so the dry-run header shows its live gauges (real wire shape), and the
+// plan-usage ledger sees a rising account (spec 2026-11-19-plan-usage). Every ordinary turn
+// reads the shared mock account: a stable 5-hour window, +2% per turn across all mock processes.
+// A `mock:limit` session returns before this and reports only its terminal limit.
 function emitPlanWindows() {
-  if (planWindowsSent) return;
-  planWindowsSent = true;
-  const nowSec = Math.floor(Date.now() / 1000);
+  const now = Date.now();
+  const fiveHours = 5 * 3600_000;
+  const start = Math.floor(now / fiveHours) * fiveHours;
+  // The cezar home, never the shared temp dir: a predictable world-writable path is a planting target.
+  const stateDir = join(process.env.CEZ_HOME || join(homedir(), '.cezar'), 'mock');
+  const stateFile = join(stateDir, `plan-${start}.json`);
+  let used = 0.15;
+  try { used = JSON.parse(readFileSync(stateFile, 'utf8')).used; } catch { /* first turn of this window */ }
+  used = Math.min(0.99, Math.round((used + 0.02) * 100) / 100);
+  try { mkdirSync(stateDir, { recursive: true, mode: 0o700 }); writeFileSync(stateFile, JSON.stringify({ used }), { mode: 0o600 }); } catch { /* read-only tmp: a flat reading */ }
   emit({
     type: 'rate_limit_event',
     rate_limit_info: {
       status: 'allowed',
       unifiedWindows: {
-        five_hour: { utilization: 0.17, resetsAt: nowSec + 2 * 3600 + 19 * 60 },
-        seven_day: { utilization: 0.2, resetsAt: nowSec + 3 * 86400 },
+        five_hour: { utilization: used, resetsAt: Math.floor((start + fiveHours) / 1000) },
+        seven_day: { utilization: Math.min(0.99, used / 4 + 0.1), resetsAt: Math.floor((Math.floor(now / 604_800_000) + 1) * 604_800) },
       },
     },
   });
@@ -234,6 +282,7 @@ async function managerTurn(userText) {
     emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.', usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 });
     return;
   }
+  emitPlanWindows();
   const tool = (args) => {
     const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cez-manager ${args.join(' ')}` } }], usage: { input_tokens: 90, output_tokens: 30 } } });

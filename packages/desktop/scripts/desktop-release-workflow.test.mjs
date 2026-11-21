@@ -56,11 +56,68 @@ describe('desktop release workflow signing path', () => {
     expect(upload).toBeGreaterThan(authenticode)
   })
 
-  it('refreshes manifest signatures from release assets before publishing desktop-latest.json', () => {
-    const publishRun = step(workflow().jobs.publish.steps, 'Rename the updater manifest and publish').run
+  it('falls back to the unsigned installer only when a non-release SignPath policy fails', () => {
+    const buildSteps = workflow().jobs.build.steps
+    const signPathStep = step(buildSteps, 'Sign the installer with SignPath')
+    const fallback = step(buildSteps, 'Report the unsigned Windows fallback')
+    const replaceStep = step(buildSteps, 'Put the signed installer in place')
 
+    // v2's deprecated connector failed 2 of 3 desktop-v0.1.12 attempts ("Invalid URL for GitHub API").
+    expect(signPathStep.uses).toMatch(/^signpath\/github-action-submit-signing-request@[0-9a-f]{40}$/)
+    expect(readFileSync(workflowPath, 'utf8')).toMatch(/submit-signing-request@[0-9a-f]{40} # v3/)
+    expect(signPathStep.with['connector-url']).toBeUndefined()
+    expect(signPathStep['continue-on-error']).toBe("${{ (vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing') != 'release-signing' }}")
+    expect(fallback.if).toContain("steps.signpath.outcome == 'failure'")
+    expect(fallback.run).toContain('GITHUB_STEP_SUMMARY')
+    expect(replaceStep.if).toContain("steps.signpath.outcome == 'success'")
+  })
+
+  it('writes desktop-latest.json once, in the publish job, never from the parallel build legs', () => {
+    const doc = workflow()
+    const tauri = step(doc.jobs.build.steps, 'Build and upload with tauri-action')
+    const checkout = step(doc.jobs.publish.steps, 'Check out repository')
+    const publishRun = step(doc.jobs.publish.steps, 'Write the updater manifest and publish').run
+
+    // Every leg read-merge-replaced the same latest.json: desktop-v0.1.12's Intel leg 404'd.
+    expect(tauri.with.includeUpdaterJson).toBe(false)
+    expect(doc.jobs.publish.steps.indexOf(checkout)).toBe(0)
+    expect(checkout.with['sparse-checkout']).toContain('packages/desktop/scripts')
     expect(publishRun).toContain("gh release download \"$TAG\" --repo \"$REPO\" --pattern '*.sig' --dir sigs")
-    expect(publishRun).toContain('node packages/desktop/scripts/refresh-updater-manifest.mjs desktop-latest.json sigs')
+    expect(publishRun).toContain('node packages/desktop/scripts/build-updater-manifest.mjs desktop-latest.json sigs "$VERSION"')
     expect(publishRun).toContain('gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"')
+    expect(publishRun.indexOf('delete-asset "$TAG" latest.json')).toBeLessThan(publishRun.indexOf('--draft=false'))
+  })
+
+  it('bumps the Homebrew tap only after a real publish, with a tap-scoped release-app token, and skips with a warning without one', () => {
+    const doc = workflow()
+    const job = doc.jobs['homebrew-tap']
+    const mint = step(job.steps, 'Mint the tap token')
+    const status = step(job.steps, 'Homebrew tap status')
+    const bump = step(job.steps, 'Bump Casks/cezar.rb')
+    const releasePin = readFileSync(path.join(root, '.github/workflows/release.yml'), 'utf8').match(/uses: (actions\/create-github-app-token@\S+)/)[1]
+
+    expect(job.needs).toEqual(['prepare', 'publish'])
+    expect(job.if).toBe('${{ !inputs.dry_run }}')
+    expect(job.permissions).toEqual({ contents: 'read' })
+    expect(mint.uses).toBe(releasePin)
+    expect(mint['continue-on-error']).toBe(true)
+    expect(mint.with).toEqual({
+      'client-id': '${{ vars.RELEASE_APP_CLIENT_ID }}',
+      'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}',
+      owner: 'open-mercato',
+      repositories: 'homebrew-tap',
+      'permission-contents': 'write',
+    })
+    expect(status.env.MINTED).toBe("${{ steps.app-token.outputs.token != '' }}")
+    expect(status.run).toContain('install the release app on open-mercato/homebrew-tap')
+    for (const s of job.steps.slice(2)) expect(s.if).toBe("steps.tap.outputs.token == 'true'")
+    expect(bump.env.TAP_TOKEN).toBe('${{ steps.app-token.outputs.token }}')
+    expect(readFileSync(workflowPath, 'utf8')).not.toContain('HOMEBREW_TAP_TOKEN')
+    expect(bump.run).toContain('--branch main')
+    expect(bump.run).toContain('open-mercato/homebrew-tap.git')
+    expect(bump.run).toContain('node packages/desktop/scripts/bump-homebrew-cask.mjs tap/Casks/cezar.rb "$VERSION" "$ARM" "$INTEL" $BINARIES')
+    expect(bump.run).toContain('[ -x packages/desktop/src-tauri/resources/bin/cez ] && BINARIES="--binaries"')
+    expect(step(job.steps, 'Check out repository').with['sparse-checkout']).toContain('packages/desktop/src-tauri/resources/bin')
+    expect(bump.run).toContain('git push origin HEAD:main')
   })
 })

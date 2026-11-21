@@ -1,0 +1,34 @@
+#!/bin/sh
+# cezar's command line, shipped in Cezar.app/Contents/Resources/bin (as `cez` and `cezar`). Runs the
+# cezar the app manages in $CEZ_HOME/versions/current on Node 20+ from PATH, else the app's own
+# Node in $CEZ_HOME/node. Arguments and exit status pass through untouched (exec).
+home="${CEZ_HOME:-$HOME/.cezar}"
+entry="$home/versions/current/node_modules/@open-mercato/cezar/dist/index.js"
+if [ ! -f "$entry" ]; then
+  echo "cez: cezar is not set up yet. Open Cezar once to finish setup." >&2
+  exit 1
+fi
+
+node_ok() {
+  major=$("$1" -p 'process.versions.node.split(".")[0]' 2>/dev/null) || return 1
+  [ "${major:-0}" -ge 20 ] 2>/dev/null
+}
+
+node=""
+if command -v node >/dev/null 2>&1 && node_ok node; then
+  node=node
+else
+  # The runtime the app downloads when the machine has no Node 20+ (newest complete one first).
+  for version in $(ls -1 "$home/node" 2>/dev/null | sort -t. -k1,1nr -k2,2nr -k3,3nr); do
+    candidate="$home/node/$version/bin/node"
+    if [ -f "$home/node/$version/.cezar-node.json" ] && [ -x "$candidate" ] && node_ok "$candidate"; then
+      node="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$node" ]; then
+  echo "cez: Node.js 20 or newer was not found on PATH. Open Cezar once to finish setup." >&2
+  exit 1
+fi
+exec "$node" "$entry" "$@"

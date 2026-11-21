@@ -143,7 +143,8 @@ jobs:
     name: iOS plain classes and simulator build
     needs: changes
     if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-latest
+    # The same image and Xcode as mobile-release.yml's iOS job, so CI meets Xcode 27 errors first.
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - name: Check out repository
@@ -155,6 +156,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: packages/mobile/package-lock.json
+
+      - name: Select Xcode 27 or later
+        run: sh scripts/select-xcode.sh 27
 
       - run: npm ci --no-audit --no-fund
       - name: Swift plain-class tests
