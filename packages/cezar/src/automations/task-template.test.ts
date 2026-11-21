@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
-import type { RunManager } from '../workflows/run.ts';
+import { RunManager } from '../workflows/run.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { REVIEW_CHILD_SUFFIX, dispatchIntentOf, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, renderAutomationTask, renderScheduleTask, renderTrackerTask, validateAutomationPrompt } from './task-template.ts';
 import { AutomationStore } from './store.ts';
 import type { GithubAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
@@ -127,6 +128,25 @@ describe('scheduled automation task templates (spec 2026-09-14)', () => {
     createdAt: '2026-09-14T00:00:00.000Z', updatedAt: '2026-09-14T00:00:00.000Z',
   };
   const occurrence = { at: '2026-09-14T02:00:00.000Z', trigger: 'schedule' as const };
+
+  it.each([1, 2, 3] as const)('snapshots Dispatch off/on before GitHub and schedule variants=%i can start (#2382)', async (variants) => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-auth-launch-'));
+    const store = RunStore.open(join(root, '.ai/cezar'));
+    const manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
+    try {
+      for (const dispatch of [undefined, {}]) {
+        const task = { prompt: 'use subagents', workflow: 'quick-task', variants, ...(dispatch ? { dispatch } : {}) };
+        await launchAutomationRun({ root, manager, store, definition: { ...definition, task }, candidate, receiptId: 'github', dispatchEnabled: true });
+        await launchScheduledRun({ root, manager, store, definition: { ...nightly, task }, occurrence, receiptId: 'schedule', projectName: 'p', timeZone: 'UTC', dispatchEnabled: true });
+        const launched = store.listRuns().filter((r) => r.dispatchAuthorized === (dispatch !== undefined));
+        expect(launched).toHaveLength(variants * 2);
+        for (const run of launched) {
+          expect(RunStore.open(join(root, '.ai/cezar')).getRun(run.id)?.dispatchAuthorized).toBe(dispatch !== undefined);
+          if (dispatch === undefined) expect(manager.dispatch(run.id, { objective: 'child' })).toEqual({ refused: expect.stringContaining('disabled for this automation run') });
+        }
+      }
+    } finally { manager.dispose(); store.flush(); await rm(root, { recursive: true, force: true }); }
+  });
 
   it('validates placeholders per kind', () => {
     expect(validateAutomationPrompt('{{date}} {{project}}', 'schedule')).toBeNull();
@@ -317,6 +337,21 @@ describe('tracker automation task templates (2026-09-19)', () => {
     expect(instructions).toContain('tracker read');
     expect(instructions).not.toContain('API_TOKEN');
 
+  });
+
+  it.each([1, 2, 3] as const)('snapshots tracker Dispatch off/on before variants=%i can start (#2382)', async (variants) => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-auth-tracker-'));
+    const store = RunStore.open(join(root, '.ai/cezar'));
+    const manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
+    try {
+      for (const dispatch of [undefined, {}]) {
+        const task = { prompt: 'use subagents', workflow: 'quick-task', variants, ...(dispatch ? { dispatch } : {}) };
+        await launchTrackerAutomationRun({ root, manager, store, definition: { ...trackerDefinition, task }, candidate: trackerCandidate, receiptId: 'tracker', dispatchEnabled: true });
+        const launched = store.listRuns().filter((r) => r.dispatchAuthorized === (dispatch !== undefined));
+        expect(launched).toHaveLength(variants);
+        for (const run of launched) expect(RunStore.open(join(root, '.ai/cezar')).getRun(run.id)?.dispatchAuthorized).toBe(dispatch !== undefined);
+      }
+    } finally { manager.dispose(); store.flush(); await rm(root, { recursive: true, force: true }); }
   });
 
   it('launches through the ordinary manager and persists tracker provenance', async () => {

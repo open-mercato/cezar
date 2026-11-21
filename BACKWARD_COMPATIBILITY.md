@@ -255,6 +255,24 @@ Breaking: removing/renaming a route; making a previously optional body field req
 
 ## 3. `.ai/cezar/` state files (`packages/cezar/src/runs/store.ts` and friends)
 
+Automation dispatch authorization (#2382, security correction): runs may carry an optional
+`dispatchAuthorized` boolean, recorded durably before queue admission for every automation
+trigger and variant. `false` refuses agent-created cezar children through the engine, HTTP
+(`409 { error }`) and CLI (exit 1), including Continue and restart recovery. It omits child-creation
+instructions; shared transport for tracker commands, automations and existing child reports
+remains available. Graph-workflow fan-out remains an internal workflow operation.
+
+Old records remain readable. An ordinary task without the field keeps default-on dispatch.
+A legacy automation root without the field is allowed only if its saved `dispatch.intent`
+proves Dispatch was on; otherwise it fails closed, including its existing descendants.
+A retained legacy child whose root is missing also fails closed for creation while keeping reports.
+The current automation definition is never consulted to reconstruct a past grant. To authorize
+new work, launch a new run from an automation with Dispatch on; editing the definition does
+not grant an existing run permission. A malformed stored authorization is treated as false.
+This corrects the off switch's missing enforcement; it adds no flag, required configuration,
+new endpoint or startup behavior. Downgrading to a version without this fix removes enforcement
+of the field and must not be used for automation runs that require Dispatch off.
+
 - The model that actually ran (additive). `runs.json` steps gain optional `actualModel` (the
   latest main model the agent reported) and `modelsUsed` (`{ model, inputTokens?, outputTokens?,
   costUsd? }[]`, first-seen order); run records gain optional `actualModel` and `modelsUsed`

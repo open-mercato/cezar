@@ -9,6 +9,12 @@ sources:
     path: packages/web/src/routes/automations/editor-dispatch-row.tsx
     line: 35
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Launch authorization"
+    path: packages/cezar/src/automations/task-template.ts
+    line: 159
+  - label: "Runtime enforcement"
+    path: packages/cezar/src/workflows/run.ts
+    line: 3162
 ---
 The Dispatch switch lets an automated task create subtasks with cez task create. Beside it, set the maximum number of subtasks and the review child option.
 
@@ -25,3 +31,7 @@ Automations → editor → Dispatch
 > **Good to know**: The setting is hidden if the server has disabled Dispatch. Subtasks work in their own worktrees and report results to the parent task.
 
 > **Good to know**: Review child depends on Dispatch. Turning Dispatch off also turns Review child off, and re-enabling Dispatch leaves it off. If the server has disabled Dispatch, an automation saved with Review child launches as a plain task with no review instruction.
+
+> **Good to know**: Dispatch off prevents the automated task from creating cezar subtasks, including when the prompt asks for subagents. The choice stays with the task through Continue and a server restart. Editing the rule later applies to new tasks. Tracker commands, automation commands and existing subtask reports remain available. Backend-native subagents and graph-workflow fan-out are separate from this switch.
+
+Older automation tasks without a saved Dispatch choice need a recorded dispatch intent to create cezar subtasks. Otherwise, start a new task from the rule with Dispatch on. Ordinary tasks keep dispatch on by default.

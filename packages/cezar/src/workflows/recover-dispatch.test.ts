@@ -89,6 +89,21 @@ describe('recover() and the dispatch field', () => {
     return seen;
   };
 
+  it('restores a durable denied authorization in queued recovery (#2382)', async () => {
+    const first = new RunManager(store, repoRoot, { semaphore: frozen() });
+    const record = first.startRun(WORKFLOW_DEF, { task: 'use subagents', dispatchAuthorized: false });
+    first.dispose();
+    const reopened = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    const rebuilt = captureRebuiltInput();
+    const recovered = new RunManager(reopened, repoRoot, { semaphore: frozen() });
+    try {
+      await recovered.recover();
+      expect(rebuilt[0]?.dispatchAuthorized).toBe(false);
+      expect(recovered.dispatch(record.id, { objective: 'child' })).toEqual({ refused: expect.stringContaining('disabled for this automation run') });
+      expect(reopened.listRuns()).toHaveLength(1);
+    } finally { recovered.dispose(); reopened.flush(); }
+  });
+
   it('keeps the dispatch on the record across a restart', async () => {
     const { id, dispatch } = queuedDispatchedRun();
     await new RunManager(store, repoRoot, { semaphore: frozen() }).recover();
