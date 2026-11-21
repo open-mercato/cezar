@@ -401,6 +401,7 @@ const CONNECTOR_CALL_LIMIT_MS = 5 * 60_000;
 
 type ConnectorCall = Extract<ManagerActionRequest, { type: 'connector-call' }>;
 
+const MEMORY_DURING_WATCH = 'Memory cannot change while a background check runs (it is read-only). Try again in a moment.';
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -2543,6 +2544,12 @@ export class ManagerEngine {
     return { entries: file.entries, limits: { entries: MANAGER_MEMORY_LIMITS.entries, bytes: MANAGER_MEMORY_LIMITS.bytes }, usedBytes: memoryBytes(file.entries) };
   }
 
+  /** Memory reaches every later system prompt unfenced, and a watch reads untrusted text: no write
+   *  lands while one runs. The route cannot tell the cockpit from the agent, so the user's waits too. */
+  private watching(id: string): boolean {
+    return this.runtimes.get(id)?.active?.kind === 'watch';
+  }
+
   /** The Claude config dir a turn would import from: the manager's account, not the server's own. */
   private async claudeConfigDir(manager: Manager): Promise<string | undefined> {
     const runner = await this.runnerOf(manager);
@@ -2559,8 +2566,7 @@ export class ManagerEngine {
   async setMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
-    // Memory reaches every later system prompt unfenced, so a watch (which reads untrusted text) never writes it.
-    if (input.source !== 'user' && this.runtimes.get(id)?.active?.kind === 'watch') return { error: WATCH_REFUSAL, status: 409 };
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
     const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso());
     if ('error' in next) return next;
     writeMemory(this.deps.store.dir(id), next);
@@ -2570,6 +2576,7 @@ export class ManagerEngine {
   async removeMemory(id: string, key: string): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
     const next = removeMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key);
     if ('error' in next) return next;
     writeMemory(this.deps.store.dir(id), next);
