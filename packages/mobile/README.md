@@ -241,7 +241,7 @@ carries it; `check-release.mjs` proves both on the built APK.
 
 ## Build for iOS, on a Mac with Xcode
 
-This path has not been run yet. Expect to fix compile errors the first time. Xcode 26 or later, an
+This path has not been run yet. Expect to fix compile errors the first time. Xcode 27 or later (App Store uploads need the iOS 27 SDK), an
 iOS 17 or later simulator or iPhone.
 
 ```bash

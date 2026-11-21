@@ -185,9 +185,9 @@ export function createManagerQuestionProvider(engine: ManagerEngine): QuestionPr
         .filter((item) => !item.closed || msOf(item.closed.at) >= cutoff);
     },
     owns: (key) => target(key) !== undefined,
-    answer: async (key, text) => {
+    answer: async (key, text, options) => {
       const parsed = target(key);
-      return parsed ? result(engine.answerAsk(parsed.managerId, parsed.messageId, text)) : notFound;
+      return parsed ? result(engine.answerAsk(parsed.managerId, parsed.messageId, text, options?.reactivate === true)) : notFound;
     },
     dismiss: async (key) => {
       const parsed = target(key);

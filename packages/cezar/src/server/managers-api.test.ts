@@ -20,6 +20,7 @@ vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal
 
 const JSON_HEADERS = { 'content-type': 'application/json', host: '127.0.0.1' };
 const BASE = '/api/v1/workspace/managers';
+const managerStore = () => new ManagerStore(() => undefined);
 
 describe('the managers routes', () => {
   let root: string;
@@ -307,6 +308,53 @@ describe('the managers routes', () => {
     const refused = await send('closed');
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({ error: 'question already closed' });
+  });
+
+  it('an inactive manager refuses chat, Check now and a connector probe until reactivated (spec 2026-11-19-manager-deactivate)', async () => {
+    const { id } = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const off = await request(`${BASE}/${id}`, { method: 'PATCH', body: { active: false } });
+    expect(off.status).toBe(200);
+    expect(((await off.json()) as { inactive?: { since: string } }).inactive?.since).toBeDefined();
+    for (const [path, body] of [[`${BASE}/${id}/messages`, { text: 'hi' }], [`${BASE}/${id}/check`, undefined], [`${BASE}/${id}/connectors/refresh`, undefined]] as const) {
+      const refused = await request(path, { method: 'POST', ...(body ? { body } : {}) });
+      expect(refused.status, path).toBe(409);
+      expect(await refused.json()).toEqual({ error: 'manager inactive' });
+    }
+    expect(managerStore().messages(id).filter((message) => message.kind === 'user')).toEqual([]);
+    const sent = await request(`${BASE}/${id}/messages`, { method: 'POST', body: { text: 'hi', reactivate: true } });
+    expect(sent.status).toBe(200);
+    expect(managerStore().get(id)?.inactive).toBeUndefined();
+    await vi.waitFor(() => expect(engine.inFlight()).toBe(0), { timeout: 15_000 });
+    expect(managerStore().messages(id).filter((message) => message.kind === 'user').map((message) => 'text' in message && message.text)).toEqual(['hi']);
+  });
+
+  it('deactivates and reactivates every manager at once, answering the ids that changed', async () => {
+    const one = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const two = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    await request(`${BASE}/${two.id}`, { method: 'PATCH', body: { active: false } });
+    const off = await request(`${BASE}/activity`, { method: 'POST', body: { active: false } });
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ ok: true, changed: [one.id] });
+    const on = await request(`${BASE}/activity`, { method: 'POST', body: { active: true } });
+    expect(((await on.json()) as { changed: string[] }).changed.sort()).toEqual([one.id, two.id].sort());
+    expect((await request(`${BASE}/activity`, { method: 'POST', body: { active: true, extra: 1 } })).status).toBe(400);
+  });
+
+  it('keeps an inactive manager\'s question listed but out of the count, and answers it only with reactivate', async () => {
+    const { id } = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const ask = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'next' }] }] };
+    managerStore().persistMessage(id, { id: 'card', seq: 0, at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '', streaming: false, commands: [], ask } as ManagerMessage);
+    await request(`${BASE}/${id}`, { method: 'PATCH', body: { active: false } });
+    const listed = (await (await request('/api/v1/workspace/questions')).json()) as { open: Array<{ key: string }>; counts: { live: number; older: number } };
+    expect(listed.open.map((item) => item.key)).toEqual([`m:${id}:card`]);
+    expect(listed.counts).toEqual({ live: 0, older: 0 });
+    const answer = (body: unknown) => request(`/api/v1/workspace/questions/${encodeURIComponent(`m:${id}:card`)}/answer`, { method: 'POST', body });
+    const refused = await answer({ text: 'Base: main' });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'manager inactive' });
+    expect((await answer({ text: 'Base: main', reactivate: true })).status).toBe(200);
+    expect(managerStore().get(id)?.inactive).toBeUndefined();
+    await vi.waitFor(() => expect(engine.inFlight()).toBe(0), { timeout: 15_000 });
   });
 
   it('pages history oldest-first within the page, newest page by default', async () => {

@@ -1,12 +1,15 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 
-import { managerKeys, updateManager, useManagers } from '@/api/managers'
+import { managerKeys, orderManagers, updateManager, useManagers } from '@/api/managers'
 import { useWorkspaceUiState } from '@/api/queries'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
-import { actionConfirms, MANAGER_CONFIRM_TYPES, managerConfirmOf } from '@/lib/managers'
+import { actionConfirms, inactiveSinceLabel, isInactive, MANAGER_CONFIRM_TYPES, managerConfirmOf, splitByActivity } from '@/lib/managers'
+import { useManagerActivityActions } from '@/routes/manager/manager-activity'
+import { ManagerAvatar } from '@/routes/manager/manager-avatar'
 import type { ManagerConfirm, ManagerListResponse } from '@open-mercato/cezar-api-client'
 import { CardNote, FormRow, SettingsCard, useSavedFlash } from './form-row'
 
@@ -79,6 +82,43 @@ export function ManagerSection() {
           ))}
         </>
       ) : null}
+    </SettingsCard>
+  )
+}
+
+/**
+ * Settings → Manager's on/off list (spec 2026-11-19-manager-deactivate): a switch per manager and
+ * the bulk pair. Each switch opens the same confirm the gear does.
+ */
+export function ManagerActivitySection() {
+  const managers = useManagers()
+  const list = orderManagers(managers.data?.managers ?? [])
+  const activity = useManagerActivityActions()
+  const { active, inactive } = splitByActivity(list)
+  if (list.length === 0) return null
+  return (
+    <SettingsCard
+      slot="manager-activity-settings"
+      title="Active managers"
+      description="An inactive manager keeps its chat, memory and jobs, but runs nothing and makes no model calls until you switch it back on."
+      action={
+        <>
+          <Button variant="outline" size="sm" data-slot="settings-deactivate-all" disabled={active.length === 0} onClick={() => void activity.deactivateAll(list)}>Deactivate all…</Button>
+          <Button variant="outline" size="sm" data-slot="settings-reactivate-all" disabled={inactive.length === 0} onClick={() => void activity.reactivateAll(list)}>Reactivate all</Button>
+        </>
+      }
+    >
+      {list.map((manager) => (
+        <FormRow
+          key={manager.id}
+          slot="manager-activity-row"
+          label={<span className="flex items-center gap-2.5"><ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} inactive={isInactive(manager)} className="size-7" sizes="28px" />{manager.name}</span>}
+          description={isInactive(manager) ? inactiveSinceLabel(manager) : 'Active'}
+        >
+          <Switch aria-label={`${manager.name} active`} checked={!isInactive(manager)} onCheckedChange={() => void activity.toggle(manager)} />
+        </FormRow>
+      ))}
+      {activity.dialog}
     </SettingsCard>
   )
 }

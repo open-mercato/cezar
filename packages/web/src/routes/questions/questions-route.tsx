@@ -1,13 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronRightIcon, MessageCircleQuestionIcon, SquareTerminalIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { CheckIcon, ChevronRightIcon, MessageCircleQuestionIcon, PauseIcon, SquareTerminalIcon } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { ApiError, putWorkspaceUiState } from '@/api/client'
-import { useManagers } from '@/api/managers'
+import { managerKeys, refreshManagerChat, useManagers } from '@/api/managers'
 import { useHealth, useProjects, workspaceQueryKeys } from '@/api/queries'
 import {
   answerQuestion,
+  markAnswering,
   pauseDismiss,
   questionKeys,
   resumeDismiss,
@@ -15,6 +16,9 @@ import {
   scheduleDismiss,
   settleQuestion,
   undoDismiss,
+  useAnsweringQuestions,
+  useInactiveManagerIds,
+  useInactiveQuestionCount,
   useLiveQuestionCount,
   usePendingDismissals,
   useQuestions,
@@ -30,17 +34,21 @@ import { Button } from '@/components/ui/button'
 import { shortAge } from '@/lib/format'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { useLinger, type LeaveMode } from '@/routes/manager/approvals-linger'
 import { DecisionSourceList } from '@/routes/manager/decision-sources'
+import { LingerCollapse } from '@/routes/manager/linger-collapse'
 import { ManagerAvatar } from '@/routes/manager/manager-avatar'
+import { useActivityConfirm } from '@/routes/manager/manager-activity'
 import { ManagerAskText, ManagerProjectsContext, ManagerReferenceText } from '@/routes/manager/manager-reference'
 import { taskPath } from '@/routes/manager/manager-session-card'
 import { AskForm } from '@/routes/task-thread/ask-card'
 
-import { StaleNote } from './question-states'
+import { DismissingNote, StaleNote } from './question-states'
 import {
   parseQuestionKey,
   QUESTIONS_OLDER_DEFAULT_DAYS,
   type ManagerAsk,
+  type ManagerListResponse,
   type ManagerSummary,
   type QuestionClosed,
   type QuestionItem,
@@ -63,6 +71,12 @@ const firstHeader = (item: QuestionItem) => item.questions[0]?.header ?? 'Questi
 const firstOption = (key: string) =>
   document.querySelector<HTMLElement>(`[data-question-key="${key.replace(/["\\]/g, '\\$&')}"] [aria-pressed]`)
 
+/** Where focus lands on a card: its first option, else its outcome or Undo note. */
+const cardFocusTarget = (key: string) => {
+  const card = `[data-question-key="${key.replace(/["\\]/g, '\\$&')}"]`
+  return firstOption(key) ?? document.querySelector<HTMLElement>(`${card} [data-slot="question-outcome"], ${card} [data-slot="question-dismissing-wrap"]`)
+}
+
 /** Where the card lives: the chat's `#decision-<id>` anchor, or the task thread's open ask. */
 export function questionContextHref(item: Pick<QuestionItem, 'key' | 'source'>): string {
   const key = parseQuestionKey(item.key)
@@ -73,6 +87,41 @@ export function questionContextHref(item: Pick<QuestionItem, 'key' | 'source'>):
 
 function sourceHref(source: QuestionSource): string {
   return source.kind === 'manager' ? `/manager/${encodeURIComponent(source.managerId)}` : `${taskPath(source.projectId, source.runId)}/chat`
+}
+
+/**
+ * A card that finished while this page showed it stays in place, locked, then lingers 30 s like a
+ * decided approval (#2316). Page-scoped on purpose: coming back shows it gone, under Closed.
+ */
+type Outcome =
+  | { kind: 'sending' | 'answered'; text: string }
+  /** Closed some other way: a dismissal that landed, or the system (replaced, expired, …). */
+  | { kind: 'closed'; note?: string }
+interface Finished {
+  item: QuestionItem
+  outcome: Outcome
+  closed?: QuestionClosed
+  /** When this mount saw it finish; unset while the answer is still on its way. */
+  finishedAt?: number
+}
+
+/** The sidebar's "Waiting for N answers" drops on the click; the next list read corrects it. */
+function dropManagerQuestion(queryClient: ReturnType<typeof useQueryClient>, item: QuestionItem): void {
+  if (item.source.kind !== 'manager') return
+  const id = item.source.managerId
+  queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => list && {
+    ...list,
+    managers: list.managers.map((row) => (row.id === id ? { ...row, pendingQuestions: Math.max(0, row.pendingQuestions - 1) } : row)),
+  })
+}
+
+const ANSWER_SHOWN_MAX = 140
+
+/** "Design: Yes" reads back as "Yes" on a one-question card; long free text is cut. */
+export function answerShown(item: Pick<QuestionItem, 'questions'>, text: string): string {
+  const only = item.questions.length === 1 ? item.questions[0] : undefined
+  const words = only && text.startsWith(`${only.header}: `) ? text.slice(only.header.length + 2) : text.split('\n').join(' · ')
+  return words.length > ANSWER_SHOWN_MAX ? `${words.slice(0, ANSWER_SHOWN_MAX - 1).trimEnd()}…` : words
 }
 
 /** Stale ones last, then oldest first: the group reads in the order it was asked (design § 04). */
@@ -118,8 +167,9 @@ export function closedLabel(closed: QuestionClosed, managerName?: (id: string) =
   return REASON_LABEL[closed.reason]
 }
 
-function summaryLine(open: readonly QuestionItem[]): string {
-  const live = open.filter((item) => !item.older)
+/** The header count matches the sidebar badge: an inactive manager's cards are not counted (spec 2026-11-19-manager-deactivate). */
+function summaryLine(open: readonly QuestionItem[], inactive: ReadonlySet<string>): string {
+  const live = open.filter((item) => !item.older && !(item.source.kind === 'manager' && inactive.has(item.source.managerId)))
   if (live.length === 0) return 'Nothing waiting on you'
   const managers = new Set(live.filter((item) => item.source.kind === 'manager').map((item) => sourceKey(item.source))).size
   const tasks = new Set(live.filter((item) => item.source.kind === 'task').map((item) => sourceKey(item.source))).size
@@ -137,6 +187,7 @@ export function QuestionsRoute() {
   const query = useQuestions()
   const managers = useManagers(managersOn)
   const pending = usePendingDismissals()
+  const inFlight = useAnsweringQuestions()
   const queryClient = useQueryClient()
   const heading = useRef<HTMLHeadingElement>(null)
   const [filter, setFilter] = useState<Filter>('all')
@@ -145,40 +196,118 @@ export function QuestionsRoute() {
   const [announcement, setAnnouncement] = useState('')
   const now = useNow(60_000)
 
-  const open = useMemo(() => visibleOpen(query.data, pending), [query.data, pending])
-  const shown = open.filter((item) => filter === 'all' || item.source.kind === filter)
+  const [finished, setFinished] = useState<Finished[]>([])
+  // A card that leaves the open list while shown (answered elsewhere, replaced, expired, a
+  // dismissal that landed) is kept with its reason; set during render so it never blinks out.
+  const [seen, setSeen] = useState(query.data)
+  if (query.data !== seen) {
+    setSeen(query.data)
+    const still = new Set((query.data?.open ?? []).map((item) => item.key))
+    const left = query.data ? (seen?.open ?? []).filter((item) => !still.has(item.key)) : []
+    if (left.length > 0) {
+      const at = Date.now()
+      setFinished((rows) => [...rows, ...left.filter((item) => !rows.some((row) => row.item.key === item.key)).map((item) => ({ item, outcome: { kind: 'closed' as const }, finishedAt: at }))])
+    }
+  }
+  const finishedByKey = new Map(finished.map((row) => [row.item.key, row]))
+  const dismissing = new Map(pending.filter((entry) => !entry.error).map((entry) => [entry.key, entry]))
+
+  // What counts: open, not inside an undo window, not answered or finished here.
+  const open = useMemo(() => visibleOpen(query.data, pending).filter((item) => !inFlight.has(item.key) && !finished.some((row) => row.item.key === item.key)), [query.data, pending, inFlight, finished])
+  // What shows: the open list, with a finished card held where it was.
+  const displayed = [...(query.data?.open ?? []).filter((item) => !finishedByKey.has(item.key)), ...finished.map((row) => row.item)]
+  const shown = displayed.filter((item) => filter === 'all' || item.source.kind === filter)
   const live = shown.filter((item) => !item.older)
   const older = shown.filter((item) => item.older)
   const closed = (query.data?.closed ?? []).filter((item) => filter === 'all' || item.source.kind === filter)
-  const groups = useMemo(() => groupQuestions(live), [live])
+  const groups = groupQuestions(live)
   const managerById = useCallback((id: string) => managers.data?.managers.find((manager) => manager.id === id), [managers.data])
   const approvals = (managers.data?.managers ?? []).reduce((sum, manager) => sum + manager.pendingActions, 0)
+  const fromInactive = useInactiveQuestionCount()
+  const inactiveIds = useInactiveManagerIds()
 
-  // When a card leaves, focus goes to the next card's first option, else the heading (design § E).
+  // When a lingering card leaves, focus goes to its nearest surviving neighbour, next then previous,
+  // else the heading (design § E).
   const order = useRef<string[]>([])
   order.current = [...groups.flatMap((group) => group.items.map((item) => item.key)), ...(olderOpen ? older.map((item) => item.key) : [])]
   const handOffFocus = useCallback((leaving: string) => {
+    // Read the order now: by the time the timer fires the leaving card is no longer in it.
     const keys = order.current
     const at = keys.indexOf(leaving)
-    const next = keys.slice(at + 1).find((key) => key !== leaving) ?? keys.slice(0, Math.max(0, at)).reverse()[0]
-    const focusNext = () => {
-      const target = next ? firstOption(next) : null
-      ;(target ?? heading.current)?.focus({ preventScroll: false })
-    }
-    setTimeout(focusNext, 0)
+    const candidates = at < 0 ? keys : [...keys.slice(at + 1), ...keys.slice(0, at).reverse()]
+    setTimeout(() => {
+      const target = candidates.filter((key) => key !== leaving).map(cardFocusTarget).find(Boolean)
+      ;(target ?? heading.current)?.focus({ preventScroll: true })
+    }, 0)
   }, [])
 
-  const dismiss = useCallback((item: QuestionItem) => {
-    const inside = document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key') === item.key
-    scheduleDismiss(queryClient, item.key, firstHeader(item))
-    setAnnouncement(`Dismissed «${firstHeader(item)}». Undo available for 6 seconds.`)
-    if (inside || document.activeElement === document.body) handOffFocus(item.key)
-  }, [queryClient, handOffFocus])
-
-  const answered = useCallback((item: QuestionItem) => {
-    setAnnouncement(`Answered «${firstHeader(item)}».`)
-    handOffFocus(item.key)
+  const remove = useCallback((keys: ReadonlySet<string>) => {
+    const holder = document.activeElement?.closest('[data-question-key]')?.getAttribute('data-question-key')
+    if (holder && keys.has(holder)) handOffFocus(holder)
+    setFinished((rows) => rows.filter((row) => !keys.has(row.item.key)))
   }, [handOffFocus])
+  const list = useRef<HTMLDivElement>(null)
+  const leaving = useLinger(finished.map((row) => ({ key: row.item.key, ...(row.finishedAt === undefined ? {} : { finishedAt: row.finishedAt }) })), remove, list)
+
+  const dismiss = useCallback((item: QuestionItem) => {
+    scheduleDismiss(queryClient, item.key, firstHeader(item))
+    dropManagerQuestion(queryClient, item)
+    setAnnouncement(`Dismissed «${firstHeader(item)}». Undo available for 6 seconds.`)
+  }, [queryClient])
+
+  const undo = useCallback((item: QuestionItem) => {
+    undoDismiss(item.key)
+    setFinished((rows) => rows.filter((row) => row.item.key !== item.key))
+    void queryClient.invalidateQueries({ queryKey: managerKeys.list })
+    setAnnouncement(`Kept «${firstHeader(item)}».`)
+    setTimeout(() => {
+      const back = firstOption(item.key)
+      ;(back ?? heading.current)?.focus()
+    }, 0)
+  }, [queryClient])
+
+  const answer = useMemo<AnswerHandlers>(() => ({
+    start: (item, text) => {
+      markAnswering(item.key, true)
+      dropManagerQuestion(queryClient, item)
+      setFinished((rows) => [...rows.filter((row) => row.item.key !== item.key), { item, outcome: { kind: 'sending', text } }])
+    },
+    done: (item, text, settled) => {
+      const at = Date.now()
+      setFinished((rows) => [...rows.filter((row) => row.item.key !== item.key), { item, outcome: { kind: 'answered', text }, ...(settled.closed ? { closed: settled.closed } : {}), finishedAt: at }])
+      settleQuestion(queryClient, settled)
+      markAnswering(item.key, false)
+      setAnnouncement(`Answered «${firstHeader(item)}».`)
+      void queryClient.invalidateQueries({ queryKey: managerKeys.list })
+      // The chat's copy of the card turns answered too, without waiting for its next frame.
+      if (item.source.kind === 'manager') void refreshManagerChat(queryClient, item.source.managerId)
+    },
+    failed: (item, message, closedMeanwhile) => {
+      markAnswering(item.key, false)
+      setAnnouncement(closedMeanwhile ? `«${firstHeader(item)}» closed before your answer arrived.` : `Your answer to «${firstHeader(item)}» was not delivered: ${message}`)
+      void queryClient.invalidateQueries({ queryKey: managerKeys.list })
+      // Never dropped silently: a delivery that failed hands the card back with its error.
+      setFinished((rows) => [
+        ...rows.filter((row) => row.item.key !== item.key),
+        ...(closedMeanwhile ? [{ item, outcome: { kind: 'closed' as const, note: message }, finishedAt: Date.now() }] : []),
+      ])
+    },
+  }), [queryClient])
+
+  const cardState = (item: QuestionItem): CardState => {
+    const row = finishedByKey.get(item.key)
+    const entry = dismissing.get(item.key)
+    // The live counts can take a card off the list while its dismissal is pending (questions.ts,
+    // applyQuestionCounts): it still shows Undo until the dismissal lands. A card closed for
+    // another reason is in the closed list already and shows why.
+    const closedElsewhere = query.data?.closed.some((closed) => closed.key === item.key) === true
+    if (row && !(entry && row.outcome.kind === 'closed' && !row.closed && !closedElsewhere)) {
+      const closed = row.closed ?? query.data?.closed.find((entry) => entry.key === item.key)?.closed
+      return { kind: 'finished', row: closed ? { ...row, closed } : row, fading: leaving.has(item.key), leaving: leaving.get(item.key) }
+    }
+    return entry ? { kind: 'dismissing', label: entry.label } : { kind: 'open' }
+  }
+  const groupProps = { now, managerById, cardState, onDismiss: dismiss, onUndo: undo, answer }
 
   const olderAfterDays = query.data?.olderAfterDays ?? QUESTIONS_OLDER_DEFAULT_DAYS
 
@@ -192,9 +321,12 @@ export function QuestionsRoute() {
               {approvals} {approvals === 1 ? 'approval' : 'approvals'} waiting<ChevronRightIcon aria-hidden="true" className="size-3.5" />
             </Link>
           ) : null}
+          {fromInactive > 0 ? (
+            <span data-slot="questions-inactive-note" className="text-meta text-muted-foreground md:ml-auto">+{fromInactive} from inactive managers, not counted</span>
+          ) : null}
         </div>
         <p data-slot="questions-status" className="text-sm text-muted-foreground">
-          {query.data ? summaryLine(open) : query.isError ? 'Questions from your managers and tasks' : 'Loading questions…'}
+          {query.data ? summaryLine(open, inactiveIds) : query.isError ? 'Questions from your managers and tasks' : 'Loading questions…'}
         </p>
       </header>
       <p aria-live="polite" data-slot="questions-announcer" className="sr-only">{announcement}</p>
@@ -232,17 +364,20 @@ export function QuestionsRoute() {
         />
       ) : null}
 
-      {groups.map((group) => (
-        <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} now={now} managerById={managerById} onDismiss={dismiss} onAnswered={answered} />
-      ))}
+      {/* The cards region: the pointer or focus in here holds a lingering card back (useLinger). */}
+      <div ref={list} data-slot="questions-list" className="contents">
+        {groups.map((group) => (
+          <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} {...groupProps} />
+        ))}
 
-      {query.data && older.length > 0 ? (
-        <Fold slot="questions-older" label={`Older · ${older.length}`} hint={`Open longer than ${olderAfterDays} ${olderAfterDays === 1 ? 'day' : 'days'}, not counted`} open={olderOpen} onToggle={() => setOlderOpen((value) => !value)}>
-          {groupQuestions(older).map((group) => (
-            <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} now={now} managerById={managerById} onDismiss={dismiss} onAnswered={answered} />
-          ))}
-        </Fold>
-      ) : null}
+        {query.data && older.length > 0 ? (
+          <Fold slot="questions-older" label={`Older · ${older.length}`} hint={`Open longer than ${olderAfterDays} ${olderAfterDays === 1 ? 'day' : 'days'}, not counted`} open={olderOpen} onToggle={() => setOlderOpen((value) => !value)}>
+            {groupQuestions(older).map((group) => (
+              <QuestionGroupSection key={group.key} group={group} manager={group.source.kind === 'manager' ? managerById(group.source.managerId) : undefined} {...groupProps} />
+            ))}
+          </Fold>
+        ) : null}
+      </div>
 
       {query.data && closed.length > 0 ? (
         <Fold slot="questions-closed" label={`Closed · ${closed.length}`} hint="Last 7 days" open={closedOpen} onToggle={() => setClosedOpen((value) => !value)}>
@@ -252,7 +387,7 @@ export function QuestionsRoute() {
         </Fold>
       ) : null}
 
-      <DismissToasts pending={pending} heading={heading} />
+      <DismissToasts pending={pending} />
     </div>
   )
 }
@@ -309,66 +444,118 @@ function Fold({ slot, label, hint, open, onToggle, children }: { slot: string; l
 
 function SourceGlyph({ source, manager }: { source: QuestionSource; manager?: ManagerSummary | undefined }) {
   if (source.kind === 'manager') {
-    return manager ? <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} className="size-8" sizes="32px" /> : <span aria-hidden="true" className="flex size-8 items-center justify-center rounded-full bg-muted"><MessageCircleQuestionIcon className="size-4" /></span>
+    return manager ? <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} inactive={manager.inactive !== undefined} className="size-8" sizes="32px" /> : <span aria-hidden="true" className="flex size-8 items-center justify-center rounded-full bg-muted"><MessageCircleQuestionIcon className="size-4" /></span>
   }
   return <span aria-hidden="true" data-slot="question-task-glyph" className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-card"><SquareTerminalIcon className="size-4 text-muted-foreground" /></span>
 }
 
-function QuestionGroupSection({ group, manager, now, managerById, onDismiss, onAnswered }: {
-  group: QuestionGroup
-  manager?: ManagerSummary | undefined
+type CardState =
+  | { kind: 'open' }
+  | { kind: 'dismissing'; label: string }
+  | { kind: 'finished'; row: Finished; fading: boolean; leaving: LeaveMode | undefined }
+
+interface AnswerHandlers {
+  start: (item: QuestionItem, text: string) => void
+  done: (item: QuestionItem, text: string, settled: QuestionItem) => void
+  /** `closedMeanwhile`: the server says it closed first (409), so the card finishes with `message`. */
+  failed: (item: QuestionItem, message: string, closedMeanwhile: boolean) => void
+}
+
+interface CardProps {
   now: number
   managerById: (id: string) => ManagerSummary | undefined
+  cardState: (item: QuestionItem) => CardState
   onDismiss: (item: QuestionItem) => void
-  onAnswered: (item: QuestionItem) => void
-}) {
+  onUndo: (item: QuestionItem) => void
+  answer: AnswerHandlers
+}
+
+function QuestionGroupSection({ group, manager, ...card }: CardProps & { group: QuestionGroup; manager?: ManagerSummary | undefined }) {
   const projects = useProjects()
   const { source } = group
   const name = source.kind === 'manager' ? source.name : source.title
   const project = source.kind === 'task' ? projects.data?.projects.find((entry) => entry.id === source.projectId)?.name ?? source.projectId : undefined
+  const inactive = manager?.inactive !== undefined
+  // Its last card leaving takes the heading along, so nothing below jumps when the group goes.
+  const modes = group.items.map((item) => { const state = card.cardState(item); return state.kind === 'finished' ? state.leaving : undefined })
+  const leaving = modes.every((mode) => mode !== undefined) ? modes[0] : undefined
   return (
-    <section aria-label={name} data-slot="question-group" data-source={source.kind} className="flex flex-col gap-3">
-      <div className="flex items-center gap-2.5">
-        <SourceGlyph source={source} manager={manager} />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate font-semibold">{name}</h2>
-          <p className="truncate text-meta text-muted-foreground">{source.kind === 'manager' ? 'Manager' : `${project} · ${source.status}`}</p>
+    <LingerCollapse leaving={leaving}>
+      <section aria-label={name} data-slot="question-group" data-source={source.kind} data-inactive={inactive || undefined} className="flex flex-col gap-3">
+        <div className="flex items-center gap-2.5">
+          <SourceGlyph source={source} manager={manager} />
+          <div className="min-w-0 flex-1">
+            <h2 className={cn('truncate font-semibold', inactive && 'text-muted-foreground')}>{name}</h2>
+            <p className="truncate text-meta text-muted-foreground">{source.kind === 'manager' ? (inactive ? 'Manager · inactive' : 'Manager') : `${project} · ${source.status}`}</p>
+          </div>
+          <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
+            <Link to={sourceHref(source)} aria-label={`${source.kind === 'manager' ? 'Open chat with' : 'Open task'} ${name}`}>{source.kind === 'manager' ? 'Open chat' : 'Open task'}</Link>
+          </Button>
         </div>
-        <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
-          <Link to={sourceHref(source)} aria-label={`${source.kind === 'manager' ? 'Open chat with' : 'Open task'} ${name}`}>{source.kind === 'manager' ? 'Open chat' : 'Open task'}</Link>
-        </Button>
-      </div>
-      {group.items.map((item) => <QuestionCard key={item.key} item={item} now={now} managerById={managerById} onDismiss={onDismiss} onAnswered={onAnswered} />)}
-    </section>
+        {group.items.map((item) => {
+          const state = card.cardState(item)
+          return (
+            <LingerCollapse key={item.key} lingerKey={item.key} leaving={state.kind === 'finished' ? state.leaving : undefined}>
+              <QuestionCard item={item} state={state} {...card} />
+            </LingerCollapse>
+          )
+        })}
+      </section>
+    </LingerCollapse>
   )
 }
 
-function QuestionCard({ item, now, managerById, onDismiss, onAnswered }: {
-  item: QuestionItem
-  now: number
-  managerById: (id: string) => ManagerSummary | undefined
-  onDismiss: (item: QuestionItem) => void
-  onAnswered: (item: QuestionItem) => void
-}) {
+function QuestionCard({ item, state, now, managerById, onDismiss, onUndo, answer }: CardProps & { item: QuestionItem; state: CardState }) {
   const queryClient = useQueryClient()
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const card = useMemo(() => ({ id: item.key, questions: item.questions }), [item.key, item.questions])
   const key = parseQuestionKey(item.key)
+  const root = useRef<HTMLDivElement>(null)
+  // Focus was inside when the chips or the Undo it sat on unmounted: hand it to what replaced them.
+  const focusedInside = useRef(false)
+  // The chip a one-tap answer was sent from, by position: the chips remount, and Enter on it retries.
+  const sentFrom = useRef(-1)
+  const phase = state.kind === 'finished' ? `finished:${state.row.outcome.kind}` : state.kind
+  useEffect(() => {
+    const from = sentFrom.current
+    if (state.kind === 'open') sentFrom.current = -1
+    if (!focusedInside.current || (document.activeElement && document.activeElement !== document.body && document.activeElement.isConnected)) return
+    // Back to answerable (a failed delivery, an Undo): the pick it was sent with, else the first chip.
+    const target = state.kind === 'open'
+      ? root.current?.querySelectorAll<HTMLElement>('[aria-pressed]')[from]
+        ?? root.current?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? root.current?.querySelector<HTMLElement>('[aria-pressed]')
+      : root.current?.querySelector<HTMLElement>('[data-slot="question-outcome"], [data-slot="question-dismissing-wrap"]')
+    target?.focus({ preventScroll: true })
+  }, [phase])
+  // An inactive manager's answer is a chat turn: confirm waking it first (spec 2026-11-19-manager-deactivate).
+  const owner = item.source.kind === 'manager' ? managerById(item.source.managerId) : undefined
+  const inactive = owner?.inactive !== undefined
+  const { confirmActivity, dialog } = useActivityConfirm()
   const send = async (text: string) => {
+    // Read before the inactive-manager confirm: its dialog takes the focus.
+    const chips = [...(root.current?.querySelectorAll<HTMLElement>('[aria-pressed]') ?? [])]
+    const from = chips.indexOf(document.activeElement as HTMLElement)
+    if (owner && inactive && !(await confirmActivity({ kind: 'answer', manager: owner, answer: text }))) {
+      const message = `Not sent: ${owner.name} is still inactive. Dismiss closes the question without waking it.`
+      setError(message)
+      return message
+    }
     setPending(true)
     setError(undefined)
+    sentFrom.current = from
+    answer.start(item, text)
     try {
-      const closed = await answerQuestion(item.key, text)
-      onAnswered(item)
-      settleQuestion(queryClient, closed)
+      answer.done(item, text, await answerQuestion(item.key, text, inactive ? { reactivate: true } : undefined))
       return undefined
     } catch (failure) {
-      const message = failure instanceof ApiError && failure.status === 409
+      const gone = failure instanceof ApiError && failure.status === 409
+      const message = gone
         ? 'This question closed before your answer arrived.'
         : failure instanceof Error ? failure.message : 'Your answer was not delivered.'
       setError(message)
-      if (failure instanceof ApiError && failure.status === 409) void queryClient.invalidateQueries({ queryKey: questionKeys.all })
+      answer.failed(item, message, gone)
+      if (gone) void queryClient.invalidateQueries({ queryKey: questionKeys.all })
       return message
     } finally {
       setPending(false)
@@ -376,16 +563,36 @@ function QuestionCard({ item, now, managerById, onDismiss, onAnswered }: {
   }
   const linked = item.linked
   const linkedManager = linked?.source.kind === 'manager' ? linked.source : undefined
+  const finished = state.kind === 'finished' ? state.row : undefined
+  const fading = state.kind === 'finished' && state.fading
   return (
     <div
+      ref={root}
       role="group"
       // Named by its headers: each question inside is a group of its own, named by its text.
       aria-label={item.questions.map((question) => question.header).join(', ')}
       data-slot="question-card"
       data-question-key={item.key}
       data-stale={item.stale ? true : undefined}
-      className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5"
+      data-state={state.kind}
+      data-inactive={inactive || undefined}
+      data-lingering={finished?.finishedAt === undefined ? undefined : fading ? 'leaving' : 'shown'}
+      onFocus={() => { focusedInside.current = true }}
+      onBlur={(event) => {
+        // A focused node that unmounts blurs with no target: that focus is still "inside".
+        if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) focusedInside.current = false
+      }}
+      className={cn(
+        'flex flex-col gap-2.5 rounded-xl border border-border p-3.5',
+        state.kind !== 'open' ? 'bg-card/60' : inactive ? 'bg-card-2' : 'bg-card',
+      )}
     >
+      {inactive ? (
+        <p data-slot="question-inactive-flag" className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
+          <PauseIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          Manager inactive — answering reactivates it; dismissing does not
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-muted-foreground">
         <time dateTime={item.askedAt} title={new Date(item.askedAt).toLocaleString()}>asked {shortAge(item.askedAt, now) || 'just now'} ago</time>
         {linkedManager && linked ? (
@@ -397,12 +604,14 @@ function QuestionCard({ item, now, managerById, onDismiss, onAnswered }: {
           <Button asChild variant="ghost" size="sm" className="pointer-coarse:min-h-11">
             <Link to={questionContextHref(item)} data-slot="question-open-context">Open in context</Link>
           </Button>
-          <Button variant="ghost" size="sm" data-slot="question-dismiss" aria-label={`Dismiss «${firstHeader(item)}»`} className="pointer-coarse:min-h-11" disabled={isPending} onClick={() => onDismiss(item)}>
-            Dismiss
-          </Button>
+          {state.kind === 'open' ? (
+            <Button variant="ghost" size="sm" data-slot="question-dismiss" aria-label={`Dismiss «${firstHeader(item)}»`} className="pointer-coarse:min-h-11" disabled={isPending} onClick={() => onDismiss(item)}>
+              Dismiss
+            </Button>
+          ) : null}
         </span>
       </div>
-      {item.stale ? <StaleNote detail={item.stale.detail} onDismiss={() => onDismiss(item)} disabled={isPending} /> : null}
+      {item.stale && state.kind === 'open' ? <StaleNote detail={item.stale.detail} onDismiss={() => onDismiss(item)} disabled={isPending} /> : null}
       {key?.kind === 'manager' && item.sourceTasks?.length && item.source.kind === 'manager' ? (
         <DecisionSourceList
           sources={item.sourceTasks}
@@ -414,9 +623,75 @@ function QuestionCard({ item, now, managerById, onDismiss, onAnswered }: {
       ) : null}
       <div>
         <QuestionText item={item} managerById={managerById} ask={card}>
-          <AskForm ask={card} ownerId="questions" delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }} asker="Your decision" composerBelow={false} framed={false} />
+          {state.kind === 'open' ? (
+            <AskForm ask={card} ownerId="questions" delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }} asker="Your decision" composerBelow={false} framed={false} />
+          ) : (
+            <LockedQuestion item={item}>
+              {state.kind === 'dismissing' ? (
+                <div
+                  tabIndex={-1}
+                  data-slot="question-dismissing-wrap"
+                  className="rounded-lg outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  // The undo window pauses while Undo has focus, as the toast's did (design § E).
+                  onFocus={(event) => { if (event.target !== event.currentTarget) pauseDismiss(item.key) }}
+                  onBlur={(event) => { if (event.target !== event.currentTarget && !event.currentTarget.contains(event.relatedTarget as Node | null)) resumeDismiss(item.key) }}
+                >
+                  <DismissingNote label={state.label} onUndo={() => onUndo(item)} />
+                </div>
+              ) : <QuestionOutcome item={item} row={state.row} managerById={managerById} />}
+            </LockedQuestion>
+          )}
         </QuestionText>
       </div>
+      {dialog}
+    </div>
+  )
+}
+
+/** The asked words, read-only: the chips are gone once the card is answered, dismissed or closed. */
+function LockedQuestion({ item, children }: { item: QuestionItem; children: ReactNode }) {
+  const origin = item.source.kind === 'manager' ? { id: item.source.managerId, name: item.source.name } : undefined
+  return (
+    <div className="flex flex-col gap-2">
+      {item.questions.map((question, index) => (
+        <p key={index} className="break-words text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{question.header}</span>{' '}
+          {origin ? <ManagerReferenceText text={question.question} origin={origin} /> : question.question}
+        </p>
+      ))}
+      {children}
+    </div>
+  )
+}
+
+/** What happened to a finished card, in place: the answer and where it went, or why it closed. */
+function QuestionOutcome({ item, row, managerById }: { item: QuestionItem; row: Finished; managerById: (id: string) => ManagerSummary | undefined }) {
+  const { outcome, closed } = row
+  const target = item.source.kind === 'manager' ? managerById(item.source.managerId)?.name ?? item.source.name : item.source.title
+  const base = 'flex flex-col gap-1 rounded-lg border border-border px-3 py-2 text-label text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50'
+  if (outcome.kind !== 'closed') {
+    const delivered = outcome.kind === 'answered'
+    return (
+      <div tabIndex={-1} data-slot="question-outcome" data-outcome={outcome.kind} className={base}>
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="min-w-0 flex-1 break-words text-foreground" title={outcome.text}>
+            <span className="font-medium">Answered:</span> {answerShown(item, outcome.text)}
+          </span>
+          {delivered ? <CheckIcon role="img" aria-label="Delivered" data-slot="question-delivered" className="size-3.5 shrink-0 self-center text-success" /> : null}
+        </span>
+        <span data-slot="question-sent-to">{delivered ? `Sent to ${target}` : `Sending to ${target}…`}</span>
+      </div>
+    )
+  }
+  const label = closed ? closedLabel(closed, (id) => managerById(id)?.name) : 'Closed'
+  const detail = outcome.note
+    ?? closed?.detail
+    ?? (closed?.reason === 'replaced' ? `A newer “${firstHeader(item)}” question replaced this one.` : undefined)
+  return (
+    <div tabIndex={-1} data-slot="question-outcome" data-outcome="closed" data-reason={closed?.reason} className={cn(base, 'border-dashed')}>
+      <span data-slot="question-outcome-reason" className="font-medium text-soft-foreground">{label}</span>
+      {closed?.reason === 'answered' && closed.answer ? <span className="break-words text-foreground" title={closed.answer}>{answerShown(item, closed.answer)}</span> : null}
+      {detail ? <span className="break-words">{detail}</span> : null}
     </div>
   )
 }
@@ -480,12 +755,14 @@ function ClosedRow({ item, now, managerById }: { item: QuestionItem; now: number
 }
 
 /**
- * The undo toasts (design § E): Undo is reachable by keyboard, and the timeout pauses while focus
- * is inside. A dismissal that failed stays here with Retry until the user decides.
+ * A dismissal that failed stays here with Retry until the user decides; one inside its undo window
+ * shows its Undo on the card itself.
  */
-function DismissToasts({ pending, heading }: { pending: readonly PendingDismissal[]; heading: RefObject<HTMLHeadingElement | null> }) {
+function DismissToasts({ pending: all }: { pending: readonly PendingDismissal[] }) {
   const queryClient = useQueryClient()
+  // Leaving the page with focus on a card's Undo fires no blur: restart those clocks.
   useEffect(() => resumePausedDismissals, [])
+  const pending = all.filter((entry) => entry.error)
   if (pending.length === 0) return null
   return (
     <div data-slot="questions-toasts" className="pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-50 flex flex-col items-center gap-2 px-4">
@@ -494,37 +771,11 @@ function DismissToasts({ pending, heading }: { pending: readonly PendingDismissa
           key={entry.key}
           data-slot="questions-toast"
           data-key={entry.key}
-          onFocus={() => pauseDismiss(entry.key)}
-          onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) resumeDismiss(entry.key) }}
           className="pointer-events-auto flex max-w-md flex-wrap items-center gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md"
         >
-          {entry.error ? (
-            <>
-              <span role="alert" className="min-w-0 flex-1">Couldn’t dismiss «{entry.label}»: {entry.error}</span>
-              <Button size="sm" variant="outline" className="pointer-coarse:min-h-11" onClick={() => scheduleDismiss(queryClient, entry.key, entry.label)}>Retry</Button>
-              <Button size="sm" variant="ghost" className="pointer-coarse:min-h-11" onClick={() => undoDismiss(entry.key)}>Keep it</Button>
-            </>
-          ) : (
-            <>
-              <span className="min-w-0 flex-1">Dismissed «{entry.label}»</span>
-              <Button
-                size="sm"
-                variant="outline"
-                data-slot="questions-undo"
-                className="pointer-coarse:min-h-11"
-                onClick={() => {
-                  undoDismiss(entry.key)
-                  // The card is back: hand it the focus the toast held.
-                  setTimeout(() => {
-                    const back = firstOption(entry.key)
-                    ;(back ?? heading.current)?.focus()
-                  }, 0)
-                }}
-              >
-                Undo
-              </Button>
-            </>
-          )}
+          <span role="alert" className="min-w-0 flex-1">Couldn’t dismiss «{entry.label}»: {entry.error}</span>
+          <Button size="sm" variant="outline" className="pointer-coarse:min-h-11" onClick={() => scheduleDismiss(queryClient, entry.key, entry.label)}>Retry</Button>
+          <Button size="sm" variant="ghost" className="pointer-coarse:min-h-11" onClick={() => undoDismiss(entry.key)}>Keep it</Button>
         </div>
       ))}
     </div>

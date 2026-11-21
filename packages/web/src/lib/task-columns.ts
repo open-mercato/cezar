@@ -8,6 +8,7 @@ export const TASK_COLUMN_IDS = [
   'reference',
   'tokens',
   'cost',
+  'planLimit',
   'cpu',
   'memory',
   'started',
@@ -21,6 +22,7 @@ export type TaskColumnIcon =
   | 'reference'
   | 'tokens'
   | 'cost'
+  | 'planLimit'
   | 'cpu'
   | 'memory'
   | 'started'
@@ -35,6 +37,8 @@ export interface TaskColumnDefinition {
   width?: string
   icon?: TaskColumnIcon
   capability?: 'tokens' | 'cost'
+  /** One-line explanation behind an ⓘ beside the expanded header. */
+  hint?: string
 }
 
 /**
@@ -93,6 +97,17 @@ export const TASK_COLUMNS = [
     width: '76px',
     icon: 'cost',
     capability: 'cost',
+  },
+  // Optional (plan-usage design, screen 4): folded until chosen, and only then is the ledger asked.
+  {
+    id: 'planLimit',
+    label: 'Plan limit',
+    canFold: true,
+    defaultExpanded: false,
+    align: 'right',
+    width: '144px',
+    icon: 'planLimit',
+    hint: "Each task's estimated share of its Claude or Codex account's 5-hour limit. Providers report usage per account, so busy periods are split by each task's cost.",
   },
   { id: 'cpu', label: 'CPU', canFold: true, defaultExpanded: true, align: 'right', width: '68px', icon: 'cpu' },
   {

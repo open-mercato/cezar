@@ -49,11 +49,12 @@ import {
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
   updateManagerInputSchema,
+  managerActivityInputSchema,
   workspaceEventsQuerySchema,
   workspaceLayoutsResponseSchema,
   workspaceLayoutsSchema,
 } from '@open-mercato/cezar-contract';
-import { ManagerEngine, type ManagerEngineDeps } from '../managers/engine.ts';
+import { ManagerEngine, MANAGER_INACTIVE, type ManagerEngineDeps } from '../managers/engine.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { watchAutomationReports } from '../managers/automation-reports.ts';
@@ -197,6 +198,7 @@ import { setNamerModelCatalog } from '../runs/namer-model.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
+import { planUsageRoutes } from './plan-usage.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import { workflowCapabilities } from '../workflows/capabilities.ts';
 import {
@@ -9090,6 +9092,8 @@ export function createApp(deps: ServerDeps) {
     pushSignal: (managerId) => phonePairing.signalPush(managerId),
     // An open card older than this stops counting (spec 2026-11-17-questions-inbox, Older).
     olderAfterDays: async () => (await readWorkspaceUiState()).questions?.olderAfterDays,
+    // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
+    onActivityChange: () => refreshQuestions(),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
@@ -9117,6 +9121,7 @@ export function createApp(deps: ServerDeps) {
     task: deps.questionProviders?.task ?? taskQuestions,
     manager: deps.questionProviders?.manager ?? createManagerQuestionProvider(managerEngine),
     managersEnabled: () => capabilities().managers !== false,
+    managerInactive: (managerId) => managerStore.get(managerId)?.inactive !== undefined,
     olderAfterDays: async () => (await readWorkspaceUiState()).questions?.olderAfterDays,
   });
   refreshQuestions = () => questionInbox.refresh();
@@ -9137,7 +9142,8 @@ export function createApp(deps: ServerDeps) {
   const questionsRoutes = new Hono()
     .get('/workspace/questions', async (c) => c.json(await questionInbox.list()))
     .post('/workspace/questions/:key/answer', paramZodValidator(questionKeyParamSchema), jsonZodValidator(answerQuestionInputSchema), async (c) => {
-      const result = await questionInbox.answer(c.req.valid('param').key, c.req.valid('json').text);
+      const { text, reactivate } = c.req.valid('json');
+      const result = await questionInbox.answer(c.req.valid('param').key, text, { reactivate: reactivate === true });
       return result.ok ? c.json({ ok: true as const, item: result.item }) : c.json({ error: result.error }, result.status);
     })
     .post('/workspace/questions/:key/dismiss', paramZodValidator(questionKeyParamSchema), async (c) => {
@@ -9196,6 +9202,9 @@ export function createApp(deps: ServerDeps) {
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
     .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
+    // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
+    .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
+      c.json({ ok: true as const, changed: await managerEngine.setActivity(c.req.valid('json').active) }))
     .post('/workspace/managers', jsonZodValidator(createManagerInputSchema), async (c) => {
       const created = await managerEngine.create(c.req.valid('json'), { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
@@ -9215,8 +9224,10 @@ export function createApp(deps: ServerDeps) {
       return managerStore.get(id) ? c.json(managerEngine.messages(id, c.req.valid('query'))) : c.json(MANAGER_NOT_FOUND, 404);
     })
     .post('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), jsonZodValidator(sendManagerMessageInputSchema), async (c) => {
-      const { text, images, askId, idempotencyKey } = c.req.valid('json');
+      const { text, images, askId, idempotencyKey, reactivate } = c.req.valid('json');
       const { id } = c.req.valid('param');
+      // A message is a model turn: an inactive manager takes one only once the user confirmed reactivating it.
+      if (managerStore.get(id)?.inactive && reactivate !== true) return c.json({ error: MANAGER_INACTIVE }, 409);
       // Claimed before the uploads are read: a landed send consumed them, so its resend would 400.
       const receipt = idempotencyKey ? await managerSendReceipts.claim(`${id}:${idempotencyKey}`) : undefined;
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
@@ -9229,6 +9240,7 @@ export function createApp(deps: ServerDeps) {
           const card = managerStore.message(id, askId);
           if (card && !openAsk(card)) return c.json({ error: 'question already closed' }, 409);
         }
+        if (reactivate === true && managerStore.get(id)?.inactive) await managerEngine.update(id, { active: true });
         if (!managerEngine.send(id, text, attachments, askId)) return c.json(MANAGER_NOT_FOUND, 404);
         return c.json((answered = { ok: true as const, attachments: attachments.length }));
       } finally {
@@ -9242,8 +9254,10 @@ export function createApp(deps: ServerDeps) {
     })
     .post('/workspace/managers/:id/stop', paramZodValidator(managerIdParamSchema), (c) =>
       managerEngine.stop(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
-    .post('/workspace/managers/:id/check', paramZodValidator(managerIdParamSchema), (c) =>
-      managerEngine.check(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    .post('/workspace/managers/:id/check', paramZodValidator(managerIdParamSchema), (c) => {
+      const checked = managerEngine.check(c.req.valid('param').id);
+      return 'error' in checked ? c.json({ error: checked.error }, checked.status) : c.json({ ok: true as const });
+    })
     .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) =>
       managerEngine.read(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
     // Connectors (spec 2026-11-12-manager-connectors): the last observed servers, judged by the grants.
@@ -9253,6 +9267,7 @@ export function createApp(deps: ServerDeps) {
     })
     .post('/workspace/managers/:id/connectors/refresh', paramZodValidator(managerIdParamSchema), async (c) => {
       const connectors = await managerEngine.refreshConnectors(c.req.valid('param').id);
+      if (connectors && 'error' in connectors) return c.json({ error: connectors.error }, connectors.status);
       return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
     })
     // The one route that performs a proposal. The agent's tools below can only create them.
@@ -9502,6 +9517,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', phonesRoutes)
     .route('/', phonePushRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
+    .route('/', planUsageRoutes())
     .route('/', workspaceEventsRoutes)
     .route('/', telemetryRoutes);
 
