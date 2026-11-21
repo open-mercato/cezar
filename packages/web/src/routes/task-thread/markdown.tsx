@@ -371,6 +371,9 @@ export const Markdown = memo(function Markdown({
       {...(urlTransform ? { urlTransform } : {})}
       controls={CONTROLS}
       lineNumbers={false}
+      // Preserve the full-height transcript layout when Streamdown adds scroll limits.
+      codeBlockMaxHeight={0}
+      tableMaxHeight={0}
       {...(growing
         ? { remend: GROWING_REMEND, translations: GROWING_TRANSLATIONS }
         : { parseMarkdownIntoBlocksFn: cachedParseBlocks })}
