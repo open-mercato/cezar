@@ -42,6 +42,9 @@ import {
   type QuestionClosed,
   type QuestionStale,
   type UpdateManagerInput,
+  type ManagerMemoryResponse,
+  type PutManagerMemoryInput,
+  MANAGER_MEMORY_LIMITS,
   supersededAskIds,
   questionCardPartlyReasked,
   questionCardSharedHeaders,
@@ -97,7 +100,8 @@ import {
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
 import { TurnStatsCollector } from './turn-stats.ts';
-import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
+import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, sessionPreamble, watchPrompt } from './prompts.ts';
+import { claudeAutoMemory, memoryBytes, readMemory, removeMemoryEntry, renderMemory, setMemoryEntry, writeMemory, type MemoryFile } from './memory.ts';
 import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
 import {
   ageLabel,
@@ -333,6 +337,13 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_WATCH_BACKOFF = 4;
 /** The pause before the one retry a passing failure (network, busy servers) earns. */
 const RETRY_BACKOFF_MS = 5_000;
+/** A chat resumes its transcript only while the prompt cache is warm (1 h), the context is small and
+ *  the session young; otherwise it starts over from memory and live state (spec 2026-11-21 § 2.2). */
+export const SESSION_IDLE_MS = 55 * 60_000;
+export const SESSION_CONTEXT_MAX = 100_000;
+export const SESSION_AGE_MS = 12 * 60 * 60_000;
+/** Followed tasks a new session is told about. */
+const PREAMBLE_TASKS = 15;
 /** Failed watch checks in a row before the chat hears about them; fewer are logged quietly. */
 const WATCH_NOTICE_AFTER = 3;
 const OUTPUT_LIMIT = 4_000;
@@ -390,6 +401,7 @@ const CONNECTOR_CALL_LIMIT_MS = 5 * 60_000;
 
 type ConnectorCall = Extract<ManagerActionRequest, { type: 'connector-call' }>;
 
+const MEMORY_DURING_WATCH = 'Memory cannot change while a background check runs (it is read-only). Try again in a moment.';
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -2190,7 +2202,7 @@ export class ManagerEngine {
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
-    const resumeId = state.sessionKey === sessionKey ? state[field] : undefined;
+    const resumeId = state.sessionKey === sessionKey && this.resumes(turn.kind, state.sessions[turn.kind]) ? state[field] : undefined;
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
@@ -2226,6 +2238,8 @@ export class ManagerEngine {
     const bashHook = runner === 'claude' ? managerBashHookCommand() : undefined;
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
+    // A new chat session hears what it would otherwise have remembered; a watch or job is self-contained.
+    const freshPrompt = turn.kind === 'chat' ? `${this.preamble(id, sources)}${prompt}` : prompt;
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
     // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
     const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
@@ -2235,9 +2249,12 @@ export class ManagerEngine {
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
         connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
         // Only where the turn can Write the file it would pass.
-        { textInFiles: runner === 'claude' && writable !== undefined },
+        {
+          textInFiles: runner === 'claude' && writable !== undefined,
+          memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
+        },
       ),
-      userPrompt: prompt,
+      userPrompt: resumeId ? prompt : freshPrompt,
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
@@ -2254,6 +2271,8 @@ export class ManagerEngine {
         ...profile.env,
         CEZ_MANAGER_ID: id,
         CEZ_MANAGER_TURN: turn.kind,
+        // One memory, cezar's: Claude's own would split it per runner and grow unseen.
+        ...(runner === 'claude' ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
         ...(manager.bashAllow?.length ? { [MANAGER_BASH_ALLOW_ENV]: JSON.stringify(manager.bashAllow) } : {}),
         ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
         ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
@@ -2278,11 +2297,7 @@ export class ManagerEngine {
       const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    // Only a chat gets the transcript back: it holds what watches read.
-    const recap = turn.kind === 'chat'
-      ? recapPrompt(store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming)))
-      : '';
-    const fresh = await this.session(id, { ...base, userPrompt: `${recap}${prompt}` }, sessionKey, runner, undefined, turn, onProgress);
+    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress);
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
@@ -2474,6 +2489,98 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
+  }
+
+  // ---- sessions and memory (spec 2026-11-21-manager-short-sessions-and-memory) ---------------
+
+  /** Watches and jobs always start over; a chat resumes only a warm, small, young transcript. */
+  private resumes(kind: ActiveTurn['kind'], meta: ManagerState['sessions']['chat']): boolean {
+    if (kind !== 'chat' || !meta) return false;
+    const now = this.now();
+    return now - msOf(meta.lastAt) < SESSION_IDLE_MS
+      && now - msOf(meta.startedAt) < SESSION_AGE_MS
+      && (meta.contextTokens ?? 0) < SESSION_CONTEXT_MAX;
+  }
+
+  /** What a new chat session starts from besides memory: recent exchanges and followed tasks. */
+  private preamble(id: string, sources: ManagerProjectSource[]): string {
+    const { store } = this.deps;
+    const messages = store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming));
+    const tasks = Object.entries(store.state(id).follows)
+      .sort(([, a], [, b]) => msOf(b.at) - msOf(a.at))
+      .slice(0, PREAMBLE_TASKS)
+      .flatMap(([key]) => {
+        const [projectId, runId] = key.split('/');
+        const run = projectId && runId ? findRun(sources.find((source) => source.id === projectId)?.runs() ?? [], runId) : undefined;
+        return run ? [`- [[task:${projectId}/${run.id}]] ${run.status}${run.prNumber !== undefined ? `, PR #${run.prNumber}` : ''}: ${run.title ?? run.task.slice(0, 80)}`] : [];
+      });
+    return sessionPreamble(messages, tasks);
+  }
+
+  /** The manager's memory, importing Claude Code's auto-memory for its workdir once. */
+  private memoryFor(id: string, claudeConfigDir?: string): MemoryFile {
+    const { store } = this.deps;
+    const dir = store.dir(id);
+    const current = readMemory(dir, (message) => console.warn(`[cezar] ${message}`)) ?? { entries: [] };
+    if (current.imported) return current;
+    const at = this.iso();
+    const imported = claudeAutoMemory(store.workdir(id), claudeConfigDir, at).filter((entry) => !current.entries.some((other) => other.key === entry.key));
+    let entries = current.entries;
+    for (const entry of imported) {
+      const next = setMemoryEntry({ entries }, entry.key, { kind: entry.kind, text: entry.text, ...(entry.why ? { why: entry.why } : {}) }, at, 'import');
+      if ('error' in next) continue;
+      entries = next.entries;
+    }
+    const file: MemoryFile = { entries, imported: { at, count: entries.length - current.entries.length } };
+    try {
+      writeMemory(dir, file);
+    } catch (error) {
+      console.warn(`[cezar] manager ${id} memory: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return file;
+  }
+
+  private memoryResponse(file: MemoryFile): ManagerMemoryResponse {
+    return { entries: file.entries, limits: { entries: MANAGER_MEMORY_LIMITS.entries, bytes: MANAGER_MEMORY_LIMITS.bytes }, usedBytes: memoryBytes(file.entries) };
+  }
+
+  /** Memory reaches every later system prompt unfenced, and a watch reads untrusted text: no write
+   *  lands while one runs. The route cannot tell the cockpit from the agent, so the user's waits too. */
+  private watching(id: string): boolean {
+    return this.runtimes.get(id)?.active?.kind === 'watch';
+  }
+
+  /** The Claude config dir a turn would import from: the manager's account, not the server's own. */
+  private async claudeConfigDir(manager: Manager): Promise<string | undefined> {
+    const runner = await this.runnerOf(manager);
+    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
+    return (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR;
+  }
+
+  async memory(id: string): Promise<ManagerMemoryResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    return this.memoryResponse(this.memoryFor(id, await this.claudeConfigDir(manager)));
+  }
+
+  async setMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
+    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso());
+    if ('error' in next) return next;
+    writeMemory(this.deps.store.dir(id), next);
+    return this.memoryResponse(next);
+  }
+
+  async removeMemory(id: string, key: string): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
+    const next = removeMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key);
+    if ('error' in next) return next;
+    writeMemory(this.deps.store.dir(id), next);
+    return this.memoryResponse(next);
   }
 
   // ---- connectors (spec 2026-11-12-manager-connectors) --------------------------------------
