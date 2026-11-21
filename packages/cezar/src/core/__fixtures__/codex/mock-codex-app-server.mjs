@@ -9,6 +9,17 @@
 // server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
 // and handles SIGTERM itself, exiting 143 rather than dying from the signal.
 import { appendFileSync } from 'node:fs';
+
+// Optional capture (#1225): CEZ_MOCK_STDIN_FILE appends the inbound user text of every turn/start and
+// turn/steer as one `{ userText }` JSON line. Unset, nothing changes.
+const captureInbound = (parts) => {
+  if (!process.env.CEZ_MOCK_STDIN_FILE) return;
+  try {
+    appendFileSync(process.env.CEZ_MOCK_STDIN_FILE, `${JSON.stringify({ userText: (parts ?? []).map((part) => part.text ?? '').join('\n') })}\n`);
+  } catch {
+    // best effort
+  }
+};
 import { createInterface } from 'node:readline';
 
 // The same fixture can stand in for the executable at provider-auth time.
@@ -158,6 +169,7 @@ rl.on('line', (line) => {
       emit({ id: msg.id, result: { thread: { id: msg.params?.threadId }, model: 'gpt-mock-resumed' } });
     }
   } else if (msg.method === 'turn/steer') {
+    captureInbound(msg.params?.input);
     // A follow-up delivered INTO a live turn. `mock:steer-reject` refuses it after stdin
     // already accepted the message — the second half of #955's silent-zombie shape.
     // `mock:steer-silent` never answers at all, so the request is still in flight when
@@ -171,6 +183,7 @@ rl.on('line', (line) => {
     // `mock:hold-turn` stays open until a follow-up steers it, so the session can end.
     if (heldTurnId) emit({ method: 'turn/completed', params: { turn: { id: heldTurnId, status: 'completed' } } });
   } else if (msg.method === 'turn/start') {
+    captureInbound(msg.params?.input);
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
     turnSeq += 1;
     if (turnSeq === 1) {
