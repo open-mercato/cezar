@@ -57,7 +57,7 @@ export async function setMyPushPrefs(prefs: PhonePushPrefs): Promise<PhonePushPr
 }
 
 /** From the computer: a paired phone's settings. What its app understands stays the phone's to say. */
-export async function setPhoneSettings(deviceId: string, { kinds: _kinds, ...settings }: PhonePushPrefs): Promise<PhonePushPrefs> {
+export async function setPhoneSettings(deviceId: string, { understands: _understands, ...settings }: PhonePushPrefs): Promise<PhonePushPrefs> {
   const path = '/workspace/phones/:deviceId/prefs'
   return checked(phonePushPrefsSchema, path, await unwrap(await cez.api.v1.workspace.phones[':deviceId'].prefs.$put({ param: { deviceId }, json: settings }), path))
 }

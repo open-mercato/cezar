@@ -9138,7 +9138,8 @@ export function createApp(deps: ServerDeps) {
     const projects = sources.filter((source) => source.available).map((source) => ({ id: source.id, runs: source.runs() }));
     return buildAttentionList({ questions, managers, approvals, projects, now: Date.now() });
   };
-  const attention = createAttentionService({ read: readAttention });
+  // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
+  const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
   deps.onDispose?.(() => attention.dispose());
   attention.onChange(() => phonePairing.noteAttentionChange());
   questionInbox.onChange(() => attention.poke());

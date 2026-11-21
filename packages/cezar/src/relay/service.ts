@@ -210,6 +210,13 @@ export class RelayService {
     this.push.signal(managerId, kind);
   }
 
+  /** Some phone could hear a count push: a grant, an app that understands `count`, and push not blocked.
+   *  With none, a changed list has nobody to tell, so cezar does not recount it (spec § Relay change). */
+  wantsCounts(): boolean {
+    if (pushBlocked(this.env)) return false;
+    return this.devices.list().some((device) => device.push !== undefined && (device.prefs ?? DEFAULT_PHONE_PUSH_PREFS).understands.includes('count'));
+  }
+
   /** The attention list changed: phones that are not open get their new count silently. */
   noteAttentionChange(): void {
     this.push.noteChange();
@@ -234,7 +241,7 @@ export class RelayService {
   setPhoneSettings(deviceId: string, settings: PhonePushSettings): PhonePushPrefs | null {
     const current = this.phonePrefs(deviceId);
     if (!current) return null;
-    return this.setPhonePrefs(deviceId, { ...settings, kinds: current.kinds });
+    return this.setPhonePrefs(deviceId, { ...settings, understands: current.understands });
   }
 
   /**
@@ -977,6 +984,8 @@ export class RelayService {
   async phonePush(deviceId: string): Promise<PhonePushState | null> {
     const device = this.devices.get(deviceId);
     if (!device) return null;
+    // A session just came up: the app reads its counts, so what it shows now is what it was told.
+    void this.push.noteOpened(deviceId);
     const identity = pushBlocked(this.env) ? null : this.identity ?? (await this.identityStore.load().catch(() => null));
     if (!identity) return { available: false };
     const target = this.push.latestManager();

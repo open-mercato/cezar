@@ -69,4 +69,29 @@ describe('createAttentionService', () => {
     expect(heard).toEqual(['a', 'b']);
     service.dispose();
   });
+
+  // Review of #2367: a run event every 2 s must not recount when no phone could hear the result.
+  it('recounts only while someone could hear it, though a poke still drops the cache', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    let wanted = false;
+    const service = createAttentionService({ read: async () => listOf(`r${++reads}`), settleMs: 100, wanted: () => wanted });
+    const heard: string[] = [];
+    service.poke();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads).toBe(0);
+    service.onChange((list) => heard.push(list.revision));
+    service.poke();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads).toBe(0);
+    expect((await service.list()).revision).toBe('r1');
+    service.poke();
+    expect((await service.list()).revision).toBe('r2');
+    wanted = true;
+    service.poke();
+    await vi.advanceTimersByTimeAsync(100);
+    await service.idle();
+    expect(heard).toEqual(['r3']);
+    service.dispose();
+  });
 });

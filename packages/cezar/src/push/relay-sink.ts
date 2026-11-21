@@ -107,6 +107,7 @@ export function quietUntil(quiet: PhonePushPrefs['quiet'], now: number): number 
   const inside = start < end ? minute >= start && minute < end : minute >= start || minute < end;
   if (!inside) return null;
   const left = (end - minute + 1440) % 1440;
+  // Minutes on the wall clock: a DST shift inside the window moves the release by up to an hour.
   return now + left * 60_000 - clock.second * 1000 - (now % 1000);
 }
 
@@ -119,9 +120,10 @@ export class RelayPushSink {
   private target: string | undefined;
   /** What the signals since the last flush were about; each phone pushes only for kinds it chose. */
   private kinds = new Set<AttentionKind>();
-  /** Phones a signal reached during their quiet hours: one push when the hours end, if anything still waits. */
-  private held = new Set<string>();
+  /** Phones a signal reached during their quiet hours, with its kinds: one push when the hours end. */
+  private held = new Map<string, Set<AttentionKind>>();
   private heldTimer: ReturnType<typeof setTimeout> | undefined;
+  private heldUntil = Infinity;
   /** The count each phone was last told, by an attention or a count push. Unknown after a restart. */
   private told = new Map<string, number>();
   /** Per phone: no count push before this (our 10-minute pace, or the relay's Retry-After). */
@@ -187,13 +189,14 @@ export class RelayPushSink {
     for (const device of this.deps.devices()) {
       // An open app reads its counts itself; an expired grant would only earn a 410.
       // Only an app that declared it: a released one shows every data push as an alert.
-      if (!prefsOf(device).kinds.includes('count')) continue;
+      if (!prefsOf(device).understands.includes('count')) continue;
       if (!device.push || device.push.expiresAt <= now / 1000 || this.deps.live(device.deviceId)) continue;
-      // Owed only after an alert told it a number, and only a lower one: a rise comes with its own alert.
+      // Owed once the phone knows a number (an alert, or its app opened), and in both directions: a kind
+      // counted on the icon but not pushed still moves the icon (spec § Relay change).
       const told = this.told.get(device.deviceId) ?? device.countTold;
       if (told === undefined) continue;
       const count = badgeCount(await this.deps.count(prefsOf(device).icon).catch(() => NaN));
-      if (Number.isNaN(count) || count >= told) continue;
+      if (Number.isNaN(count) || count === told) continue;
       const notBefore = this.countNotBefore.get(device.deviceId) ?? 0;
       if (notBefore > now) {
         later = Math.min(later ?? notBefore, notBefore);
@@ -216,6 +219,19 @@ export class RelayPushSink {
         this.armCounts(at);
       }
     }));
+  }
+
+  /**
+   * The phone's app just opened and read its counts itself: what it shows now is what it was told, so
+   * a later change, up or down, is owed to it (spec § Relay change).
+   */
+  async noteOpened(deviceId: string): Promise<void> {
+    const device = this.deps.devices().find((row) => row.deviceId === deviceId);
+    if (!device) return;
+    const count = badgeCount(await this.deps.count(prefsOf(device).icon).catch(() => NaN));
+    if (Number.isNaN(count)) return;
+    this.told.set(deviceId, count);
+    this.deps.setCountTold?.(deviceId, count);
   }
 
   /** Tests wait on this; nothing else needs to. */
@@ -242,13 +258,13 @@ export class RelayPushSink {
     const kinds = this.kinds;
     this.kinds = new Set();
     const now = this.now();
-    const targets: PushGrantRow[] = [];
+    const targets: Array<{ device: PushGrantRow; kinds: ReadonlySet<AttentionKind> }> = [];
     let delivered = false;
     for (const device of this.deps.devices()) {
       if (!wants(device, kinds)) continue;
       const quiet = quietUntil(prefsOf(device).quiet, now);
       if (quiet !== null) {
-        this.hold(device.deviceId, quiet);
+        this.hold(device.deviceId, kinds, quiet);
         continue;
       }
       // One path per phone: its session if it has one, the relay only if it has none.
@@ -256,41 +272,50 @@ export class RelayPushSink {
         if (this.deps.deliver?.(device.deviceId, this.target)) delivered = true;
         continue;
       }
-      if (device.push) targets.push(device);
+      if (device.push) targets.push({ device, kinds });
     }
     if (delivered) this.lastSentAt = now;
     await this.sendAll(targets, now);
   }
 
-  /** Relay pushes, each with its own phone's count; a phone whose count is 0 gets none. */
-  private async sendAll(devices: readonly PushGrantRow[], now: number): Promise<void> {
+  /**
+   * Relay pushes, each with its own phone's count. The alert's own kind counts at least 1, so a kind the
+   * phone pushes but leaves off its icon (failed tasks, by default) still arrives. The phone is told only
+   * its icon count, so no count push takes that alert's badge away again.
+   */
+  private async sendAll(entries: ReadonlyArray<{ device: PushGrantRow; kinds: ReadonlySet<AttentionKind> }>, now: number): Promise<void> {
     const origin = this.deps.origin();
-    const targets: Array<{ device: PushGrantRow; count: number }> = [];
-    for (const device of devices) {
+    const targets: Array<{ device: PushGrantRow; count: number; icon: number }> = [];
+    for (const { device, kinds } of entries) {
       if (!device.push) continue;
       // The relay would answer 410 for it; nothing is gained by asking.
       if (device.push.expiresAt <= now / 1000) {
         this.deps.dropGrant(device.deviceId, device.push.grantId);
         continue;
       }
-      // Read before the send: a push for what this phone does not count would leave a badge nothing clears.
-      const count = badgeCount(await this.deps.count(prefsOf(device).icon).catch(() => 0));
-      if (count > 0) targets.push({ device, count });
+      // Read before the send: an alert about nothing this phone chose would leave a badge nothing clears.
+      const icon = badgeCount(await this.deps.count(prefsOf(device).icon).catch(() => 0));
+      const count = wants(device, kinds) ? Math.max(1, icon) : icon;
+      if (count > 0) targets.push({ device, count, icon });
     }
     if (targets.length === 0 || !origin) return;
     const seed = await this.deps.seed().catch(() => null);
     if (!seed) return;
     this.lastSentAt = now;
-    await Promise.all(targets.map(({ device, count }) => this.sendOne(origin, seed, device.deviceId, device.push!, count)));
+    await Promise.all(targets.map(({ device, count, icon }) => this.sendOne(origin, seed, device.deviceId, device.push!, count, 'attention', icon)));
     // A count that changed while the alert was in flight follows as a count push.
     this.noteChange();
   }
 
-  private hold(deviceId: string, until: number): void {
-    this.held.add(deviceId);
-    if (this.heldTimer) return;
+  private hold(deviceId: string, kinds: ReadonlySet<AttentionKind>, until: number): void {
+    this.held.set(deviceId, new Set([...(this.held.get(deviceId) ?? []), ...kinds]));
+    // One timer, at the earliest end: a phone whose quiet hours end sooner re-arms it.
+    if (this.heldTimer && until >= this.heldUntil) return;
+    if (this.heldTimer) clearTimeout(this.heldTimer);
+    this.heldUntil = until;
     this.heldTimer = outsideRelayScope(() => setTimeout(() => {
       this.heldTimer = undefined;
+      this.heldUntil = Infinity;
       this.sending = this.releaseHeld().finally(() => { this.sending = undefined; });
     }, Math.max(1_000, until - this.now())));
     this.heldTimer.unref?.();
@@ -301,13 +326,14 @@ export class RelayPushSink {
     if (this.disposed || !this.deps.enabled()) return;
     const now = this.now();
     const held = this.held;
-    this.held = new Set();
-    const due: PushGrantRow[] = [];
+    this.held = new Map();
+    const due: Array<{ device: PushGrantRow; kinds: ReadonlySet<AttentionKind> }> = [];
     for (const device of this.deps.devices()) {
-      if (!held.has(device.deviceId)) continue;
+      const kinds = held.get(device.deviceId);
+      if (!kinds) continue;
       const quiet = quietUntil(prefsOf(device).quiet, now);
-      if (quiet !== null) this.hold(device.deviceId, quiet);
-      else if (!this.deps.live(device.deviceId)) due.push(device);
+      if (quiet !== null) this.hold(device.deviceId, kinds, quiet);
+      else if (!this.deps.live(device.deviceId)) due.push({ device, kinds });
     }
     await this.sendAll(due, now);
   }
@@ -319,6 +345,8 @@ export class RelayPushSink {
     push: NonNullable<PushGrantRow['push']>,
     count: number,
     kind: 'attention' | 'count' = 'attention',
+    /** What the phone's icon counts, when the alert's floor raised `count` above it. */
+    told: number = count,
   ): Promise<{ status: number; retryAfter?: number } | undefined> {
     const ts = Math.floor(this.now() / 1000);
     // A fresh id every time: the relay remembers a count push's id for an hour.
@@ -331,8 +359,8 @@ export class RelayPushSink {
     }
     const { status } = answer;
     if (status === 202) {
-      this.told.set(deviceId, count);
-      this.deps.setCountTold?.(deviceId, count);
+      this.told.set(deviceId, told);
+      this.deps.setCountTold?.(deviceId, told);
     }
     if (status === 403 || status === 410) {
       this.deps.dropGrant(deviceId, push.grantId);

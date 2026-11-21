@@ -226,7 +226,7 @@ describe('/workspace/phone/signals (spec R5, stage 1)', () => {
   });
 
   describe('push prefs (spec 2026-11-20-phone-notifications-inbox)', () => {
-    const PREFS = { push: ['question', 'approval'], icon: ['question'], quiet: { from: '22:00', to: '07:00', timeZone: 'Europe/Warsaw' }, kinds: ['attention', 'count'] };
+    const PREFS = { push: ['question', 'approval'], icon: ['question'], quiet: { from: '22:00', to: '07:00', timeZone: 'Europe/Warsaw' }, understands: ['attention', 'count'] };
     const put = (body: unknown): RequestInit => ({ method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(body) });
     const phoneCall = (app: ReturnType<typeof makeApp>, init?: RequestInit, deviceId = DEVICE) =>
       Promise.resolve(runInRelayScope({ deviceId }, () => app.request('/api/v1/workspace/phone/push/prefs', init)));
@@ -239,7 +239,7 @@ describe('/workspace/phone/signals (spec R5, stage 1)', () => {
       expect(await (await phoneCall(app())).json()).toEqual({
         push: ['question', 'approval', 'task', 'review', 'failed', 'message'],
         icon: ['question', 'approval', 'task', 'review', 'message'],
-        kinds: ['attention'],
+        understands: ['attention'],
       });
       expect((await phoneCall(app(), put(PREFS))).status).toBe(200);
       expect(await (await phoneCall(app())).json()).toEqual(PREFS);
@@ -256,7 +256,7 @@ describe('/workspace/phone/signals (spec R5, stage 1)', () => {
 
     it('lets the computer edit a phone’s settings but not what its app understands, and lists them', async () => {
       await phoneCall(app(), put(PREFS));
-      const { kinds: _kinds, ...settings } = PREFS;
+      const { understands: _understands, ...settings } = PREFS;
       const edited = await local(`/api/v1/workspace/phones/${DEVICE}/prefs`, put({ ...settings, push: ['message'] }));
       expect(edited.status).toBe(200);
       expect(await edited.json()).toEqual({ ...PREFS, push: ['message'] });

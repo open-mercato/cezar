@@ -307,7 +307,7 @@ BACKWARD_COMPATIBILITY.md §2.
 | --- | --- |
 | `v` | `1` |
 | `kind` | `attention`, an alert, or `count`, a silent badge update |
-| `count` | Integer 0 to 99, the badge. An `attention` push is never sent with 0 |
+| `count` | Integer 0 to 99, the badge. An `attention` push carries at least 1: its own item counts, even a kind the phone keeps off its icon |
 | `id` | `base64url` of 16 random bytes. Refused if seen in the last 10 minutes |
 | `ts` | Unix seconds within ±120 s |
 
@@ -337,11 +337,13 @@ paired-server list.
     sends at most one every 10 minutes, and after a 429 sends the then-current count, with a new id,
     once `Retry-After` has passed. The relay remembers a count push's `id` for an hour, so an id is
     never reused. A relay that predates `count` answers 400; cezar then stops sending count pushes until it restarts.
-  - **Who gets one**: only a phone whose app declared it, with `kinds: ["attention", "count"]` on
+  - **Who gets one**: only a phone whose app declared it, with `understands: ["attention", "count"]` on
     `PUT /api/v1/workspace/phone/push/prefs`. An app that predates `count` builds a notification from every FCM
-    data message, so it would show one as an alert; cezar sends it none. A count push follows an `attention`
-    push to that grant and only lowers the number; the number last pushed is kept on the device row, so a
-    restart still owes the phone its lower count.
+    data message, so it would show one as an alert; cezar sends it none. A count push is owed once the phone
+    knows a number (an `attention` push, or its app opening a session), and follows the icon count up as well
+    as down, so a kind counted on the icon but not pushed still moves the icon. The number last told is kept
+    on the device row across restarts. An alert's floor of 1 is never recorded as told, so no count push takes
+    that alert's badge away.
 
 | Answer | Meaning | cezar does |
 | --- | --- | --- |

@@ -41,6 +41,27 @@ describe('PhoneNotificationsForm', () => {
     fireEvent.click(document.querySelector('[data-slot="phone-quiet-hours"]')!)
     expect(onChange.mock.lastCall?.[0]).not.toHaveProperty('quiet')
     // What the app understands is never the form's to change.
-    expect(onChange.mock.lastCall?.[0].kinds).toEqual(['attention'])
+    expect(onChange.mock.lastCall?.[0].understands).toEqual(['attention'])
+  })
+})
+
+describe('usePhoneNotificationsEditor', () => {
+  it('keeps the newest choice when an older save answers last', async () => {
+    const { renderHook, act, waitFor } = await import('@testing-library/react')
+    const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+    const { usePhoneNotificationsEditor } = await import('./phone-notifications')
+    const answers: Array<(value: PhonePushPrefs) => void> = []
+    const save = (next: PhonePushPrefs) => new Promise<PhonePushPrefs>((resolve) => { answers.push(() => resolve(next)) })
+    const client = new QueryClient()
+    const { result } = renderHook(() => usePhoneNotificationsEditor(DEFAULT_PHONE_PUSH_PREFS, save), {
+      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    })
+    const first = { ...DEFAULT_PHONE_PUSH_PREFS, push: [] }
+    const second = { ...DEFAULT_PHONE_PUSH_PREFS, push: ['question' as const] }
+    act(() => result.current.change(first))
+    act(() => result.current.change(second))
+    await waitFor(() => expect(answers).toHaveLength(2))
+    await act(async () => { answers[1]!(second); answers[0]!(first) })
+    await waitFor(() => expect(result.current.value).toEqual(second))
   })
 })

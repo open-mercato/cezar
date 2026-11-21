@@ -122,14 +122,26 @@ export function usePhoneNotificationsEditor(
   const [value, setValue] = React.useState(initial)
   const [saved, flash] = useSavedFlash()
   React.useEffect(() => { if (initial) setValue((current) => current ?? initial) }, [initial])
+  // Rapid toggles overlap their PUTs: only the newest answer may set the form, so an older one
+  // landing last never shows a value the user already changed.
+  const latest = React.useRef(0)
   const mutation = useMutation({
-    mutationFn: save,
-    onSuccess: (next) => { setValue(next); flash(); onSaved?.() },
-    onError: (error: Error) => { setValue(initial); toast(error.message, { tone: 'danger' }) },
+    mutationFn: ({ next }: { next: PhonePushPrefs; seq: number }) => save(next),
+    onSuccess: (next, { seq }) => {
+      if (seq !== latest.current) return
+      setValue(next)
+      flash()
+      onSaved?.()
+    },
+    onError: (error: Error, { seq }) => {
+      if (seq === latest.current) setValue(initial)
+      toast(error.message, { tone: 'danger' })
+    },
   })
   const change = (next: PhonePushPrefs) => {
+    latest.current += 1
     setValue(next)
-    mutation.mutate(next)
+    mutation.mutate({ next, seq: latest.current })
   }
   return { value, change, saved }
 }
@@ -138,7 +150,7 @@ export function usePhoneNotificationsEditor(
 export function ThisPhoneNotificationsCard() {
   const queryClient = useQueryClient()
   const query = useQuery({ queryKey: attentionKeys.phone, queryFn: ({ signal }) => getMyPushPrefs(signal), retry: false })
-  // The page saves the settings; `kinds` is what the app declared and passes through untouched.
+  // The page saves the settings; `understands` is what the app declared and passes through untouched.
   const editor = usePhoneNotificationsEditor(query.data, setMyPushPrefs, () => {
     void queryClient.invalidateQueries({ queryKey: attentionKeys.phone })
   })

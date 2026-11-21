@@ -13,7 +13,7 @@ const NOW = 1_793_491_200_000;
 interface Sent { url: string; headers: Record<string, string>; body: string }
 
 /** An app that declared it reads count pushes (spec 2026-11-20-phone-notifications-inbox). */
-const COUNTING = { ...DEFAULT_PHONE_PUSH_PREFS, kinds: ['attention', 'count'] as Array<'attention' | 'count'> };
+const COUNTING = { ...DEFAULT_PHONE_PUSH_PREFS, understands: ['attention', 'count'] as Array<'attention' | 'count'> };
 
 function setup(over: {
   devices?: PushGrantRow[]; live?: string[]; streams?: string[]; status?: number; enabled?: boolean;
@@ -228,6 +228,40 @@ describe('RelayPushSink', () => {
       expect(kinds(sent)).toEqual(['attention']);
     });
 
+    // Review of #2367: under the default prefs a failed task pushes but is not on the icon.
+    it('alerts for a failed task under the default prefs, with a badge of 1 that no count push takes back', async () => {
+      vi.useFakeTimers();
+      const row: PushGrantRow = { deviceId: 'phone-a', push: { grant: GRANT, grantId: GRANT_ID, expiresAt: NOW / 1000 + 86_400 }, prefs: COUNTING };
+      const { sink, sent, advance, told } = setup({ devices: [row], count: async (icon) => (icon.includes('failed') ? 1 : 0) });
+      sink.signal('m', 'failed');
+      await advance(PUSH_DEBOUNCE_MS);
+      expect(sent.map((one) => JSON.parse(one.body) as { kind: string; count: number }).map(({ kind, count }) => [kind, count])).toEqual([['attention', 1]]);
+      // The phone is told its icon count, 0, so the next count push does not clear the alert's badge.
+      expect(told).toEqual([['phone-a', 0]]);
+      await advance(COUNT_MIN_INTERVAL_MS);
+      expect(sent).toHaveLength(1);
+    });
+
+    it('releases a phone whose quiet hours end first, even when another phone was held before it', async () => {
+      vi.useFakeTimers();
+      const clock = (minutes: number) => `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+      const start = new Date(NOW);
+      const minute = start.getUTCHours() * 60 + start.getUTCMinutes();
+      const quiet = (minutes: number) => ({ from: clock(minute), to: clock(minute + minutes), timeZone: 'UTC' });
+      const late = grant('late', { push: ['message'], quiet: quiet(120) });
+      const soon = grant('soon', { push: ['approval'], quiet: quiet(30) });
+      const { sink, sent, advance } = setup({ devices: [late, soon] });
+      sink.signal('m', 'message');
+      await advance(PUSH_MIN_INTERVAL_MS);
+      sink.signal('m', 'approval');
+      await advance(PUSH_MIN_INTERVAL_MS);
+      expect(sent).toHaveLength(0);
+      await advance(30 * 60_000 - 2 * PUSH_MIN_INTERVAL_MS);
+      expect(sent.map((one) => (JSON.parse(one.body) as { grant: string }).grant)).toEqual([`${GRANT}-soon`]);
+      await advance(90 * 60_000);
+      expect(sent.map((one) => (JSON.parse(one.body) as { grant: string }).grant)).toEqual([`${GRANT}-soon`, `${GRANT}-late`]);
+    });
+
     it('reads quiet hours in the phone’s own time zone, across midnight', () => {
       const at = (h: number, m = 0) => Date.UTC(2026, 10, 20, h, m);
       const night = { from: '22:00', to: '07:00', timeZone: 'UTC' };
@@ -263,18 +297,34 @@ describe('RelayPushSink', () => {
       expect(told).toEqual([['phone-a', 3], ['phone-a', 1]]);
     });
 
-    it('owes nothing before an alert told a number, and never a higher one', async () => {
+    it('owes nothing until the phone knows a number, then follows it up as well as down', async () => {
       vi.useFakeTimers();
       let count = 2;
       const { sink, sent, advance } = setup({ count: async () => count });
       sink.noteChange();
       await advance(COUNT_DEBOUNCE_MS);
       expect(sent).toHaveLength(0);
+      // A kind counted on the icon but not pushed still moves the icon (spec § Relay change).
       const after = setup({ count: async () => count, told: 1 });
       count = 4;
       after.sink.noteChange();
       await after.advance(COUNT_DEBOUNCE_MS);
-      expect(after.sent).toHaveLength(0);
+      expect(after.sent.map((one) => JSON.parse(one.body) as { kind: string; count: number }).map(({ kind, count: n }) => [kind, n])).toEqual([['count', 4]]);
+    });
+
+    it('takes what the phone shows when its app opens as what it was told', async () => {
+      vi.useFakeTimers();
+      let count = 3;
+      const { sink, sent, advance, told } = setup({ count: async () => count });
+      await sink.noteOpened('phone-a');
+      expect(told).toEqual([['phone-a', 3]]);
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      expect(sent).toHaveLength(0);
+      count = 1;
+      sink.noteChange();
+      await advance(COUNT_DEBOUNCE_MS);
+      expect(sent.map((one) => (JSON.parse(one.body) as { count: number }).count)).toEqual([1]);
     });
 
     it('sends 0 when everything was handled, never to a phone whose app is open, nor to an app that cannot read it', async () => {

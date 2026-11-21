@@ -87,18 +87,18 @@ export const phonePushPrefsSchema = z.object({
   /** Kinds counted on the app icon. */
   icon: z.array(attentionKindSchema),
   quiet: quietHoursSchema.optional(),
-  /** What the app understands; cezar sends `count` only to a phone that declared it. */
-  kinds: z.array(pushKindSchema),
+  /** The push kinds the phone's app understands; cezar sends `count` only to one that declared it. */
+  understands: z.array(pushKindSchema),
 }).strict();
 export type PhonePushPrefs = z.infer<typeof phonePushPrefsSchema>;
 
 /** `PUT /workspace/phones/:deviceId/prefs`: the computer edits the settings, never what the app understands. */
-export const phonePushSettingsSchema = phonePushPrefsSchema.omit({ kinds: true });
+export const phonePushSettingsSchema = phonePushPrefsSchema.omit({ understands: true });
 export type PhonePushSettings = z.infer<typeof phonePushSettingsSchema>;
 
 /** Owner decision 2026-11-20: everything pushes; failed tasks do not count on the icon. */
 export const DEFAULT_PHONE_PUSH_PREFS: PhonePushPrefs = {
   push: [...ATTENTION_KINDS],
   icon: ATTENTION_KINDS.filter((kind) => kind !== 'failed'),
-  kinds: ['attention'],
+  understands: ['attention'],
 };

@@ -21,6 +21,8 @@ export interface AttentionService {
 
 export function createAttentionService(deps: {
   read: () => Promise<AttentionResponse>;
+  /** Someone would hear a change; without one a poke only drops the cache and nothing recounts. */
+  wanted?: () => boolean;
   settleMs?: number;
   maxAgeMs?: number;
   now?: () => number;
@@ -66,7 +68,8 @@ export function createAttentionService(deps: {
     poke() {
       if (disposed) return;
       generation += 1;
-      if (timer) return;
+      // Demand-driven: a recount exists only for its listeners, and only while one of them can act on it.
+      if (timer || listeners.size === 0 || deps.wanted?.() === false) return;
       timer = setTimeout(() => {
         timer = undefined;
         running = recount().finally(() => { running = undefined; });

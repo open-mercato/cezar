@@ -14,9 +14,9 @@ type _SetMine = Assert<Exact<PhonePushPrefs, InferResponseType<typeof workspace.
 type _SetOne = Assert<Exact<PhonePushPrefs, InferResponseType<(typeof workspace.phones)[':deviceId']['prefs']['$put'], 200>>>;
 // Never invoked: compile-time guarantees that the body validators reached AppType.
 function typedInputs() {
-  workspace.phone.push.prefs.$put({ json: { push: ['question'], icon: [], kinds: ['attention', 'count'] } });
+  workspace.phone.push.prefs.$put({ json: { push: ['question'], icon: [], understands: ['attention', 'count'] } });
   // @ts-expect-error an unknown kind
-  workspace.phone.push.prefs.$put({ json: { push: ['everything'], icon: [], kinds: ['attention'] } });
+  workspace.phone.push.prefs.$put({ json: { push: ['everything'], icon: [], understands: ['attention'] } });
   // The computer edits the settings, never what the app understands.
   workspace.phones[':deviceId'].prefs.$put({ param: { deviceId: 'x' }, json: { push: [], icon: [] } });
 }
