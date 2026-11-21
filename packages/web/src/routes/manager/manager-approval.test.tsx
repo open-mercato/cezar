@@ -7,7 +7,7 @@ import { managerKeys } from '@/api/managers'
 import { workspaceQueryKeys } from '@/api/queries'
 import type { ManagerActionRequest, ManagerConfirm, ManagerMessage } from '@open-mercato/cezar-api-client'
 
-import { ActionCard, forgetStaleChecks, useDismissStaleMerges, type DecideAction } from './manager-approval'
+import { ActionCard, forgetStaleChecks, seenOf, useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { actionMessage } from './manager-fixtures'
 
 const merge: ManagerActionRequest = { type: 'merge-pr', projectId: 'alpha', number: 12, title: 'Fix the thing', method: 'squash', headSha: '3fa9c1d2e4b5a69788' }
@@ -522,5 +522,24 @@ describe('ActionCard tasks behind the PR', () => {
     renderWithRuns([task('other', { prNumber: 99 })])
     expect(tasksRow()).toBeNull()
     expect(screen.queryByText(/^Tasks?$/)).toBeNull()
+  })
+})
+
+describe('what this device showed (spec 2026-11-20 § 2.2)', () => {
+  it('sends the card\'s pin with an approve, and nothing with a reject', async () => {
+    const { onDecide } = renderCard(actionMessage(1, { pin: 'p1' }), undefined, { 'merge-pr': false })
+    approve()
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'approve', { seen: 'p1' }))
+    cleanup()
+    const rejecting = renderCard(actionMessage(1, { pin: 'p1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    await waitFor(() => expect(rejecting.onDecide).toHaveBeenCalledWith('a1', 'reject'))
+  })
+
+  it('sends the pin only for a type this cockpit can show', () => {
+    expect(seenOf(actionMessage(1, { pin: 'p1' }))).toBe('p1')
+    expect(seenOf(actionMessage(1))).toBeUndefined()
+    const unknown = { ...actionMessage(1, { pin: 'p1' }), action: { type: 'project-config.default-models' } } as unknown as Parameters<typeof seenOf>[0]
+    expect(seenOf(unknown)).toBeUndefined()
   })
 })

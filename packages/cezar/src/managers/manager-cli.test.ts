@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runManagerCommand, SANDBOX_BLOCKED_HINT, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { automationWritesVia, runManagerCommand, SANDBOX_BLOCKED_HINT, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
 
 const snapshot = {
   generatedAt: '',
@@ -28,6 +28,10 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       if (String(url).endsWith('/task-cancel')) return Response.json({ runId: body?.runId, cancelled: true, status: 'cancelled', children: ['c1', 'c2'] });
       if (String(url).endsWith('/task-retry')) return Response.json({ projectId: 'alpha', runId: 'retried' }, { status: 201 });
       if (String(url).endsWith('/workflows')) return Response.json(workflows);
+      if (String(url).endsWith('/action-ops')) return Response.json({ ops: [
+        { type: 'merge-pr', category: 'pull-requests', risk: 'high', pinnedAsk: true, scope: 'project', summary: 'Merge a pull request', usage: 'cez manager merge --project <id> <number>', available: true },
+        { type: 'connector-call', category: 'connectors', risk: 'high', pinnedAsk: true, scope: 'manager', summary: 'Make one connector call', usage: 'cez manager propose-action …', available: false, reason: 'no connector grants write calls' },
+      ] });
       if (/\/automations\/[^/]+(\/report)?$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
       return Response.json({ automations: [], ok: true });
     }) as typeof fetch,
@@ -131,9 +135,11 @@ describe('cez manager', () => {
       const { run, calls } = harness();
       await run('automation', '--project', 'alpha', 'create', '--json', json);
       const post = calls.find((call) => call.method === 'POST');
-      expect(post?.url).toMatch(/\/automations$/);
-      expect(post?.body).not.toHaveProperty('enable');
-      expect(post?.body).not.toHaveProperty('enabled');
+      // Through the manager's own route, which checks it on the server (spec 2026-11-20 § 3.6).
+      expect(post?.url).toMatch(/\/workspace\/managers\/m1\/automations$/);
+      expect(post?.body).toMatchObject({ projectId: 'alpha' });
+      expect((post?.body as { definition: object }).definition).not.toHaveProperty('enable');
+      expect((post?.body as { definition: object }).definition).not.toHaveProperty('enabled');
     });
 
     it('links what it creates to the calling manager, unless told otherwise', async () => {
@@ -141,18 +147,18 @@ describe('cez manager', () => {
       await run('automation', '--project', 'alpha', 'create', '--json', '{"name":"n","report":{"managerId":"someone-else","mode":"none"}}');
       await run('automation', '--project', 'alpha', 'add', '--name', 'Brief', '--cron', '45 7 * * *', '--prompt', 'brief', '--report-mode', 'failure-only');
       await run('automation', '--project', 'alpha', 'add', '--name', 'Quiet', '--cron', '45 7 * * *', '--prompt', 'brief', '--no-report');
-      const posts = calls.filter((call) => call.method === 'POST' && /\/automations$/.test(call.url)).map((call) => (call.body as { report?: unknown }).report);
+      const posts = calls.filter((call) => call.method === 'POST' && /\/automations$/.test(call.url)).map((call) => (call.body as { definition: { report?: unknown } }).definition.report);
       expect(posts).toEqual([{ managerId: 'm1', mode: 'none' }, { managerId: 'm1', mode: 'notify-on-failure' }, undefined]);
-      expect(calls.every((call) => !(call.body as { enable?: unknown } | undefined)?.enable)).toBe(true);
+      expect(calls.every((call) => !(call.body as { definition?: { enable?: unknown } } | undefined)?.definition?.enable)).toBe(true);
     });
 
     it('changes the link of an existing automation, to itself only', async () => {
       const { run, calls, errors } = harness();
       expect(await run('automation', '--project', 'alpha', 'report', 'a1', '--mode', 'failure-only')).toBe(0);
-      expect(calls.at(-1)).toMatchObject({ method: 'PUT', body: { report: { managerId: 'm1', mode: 'notify-on-failure' } } });
-      expect(calls.at(-1)?.url).toMatch(/\/p\/alpha\/automations\/a1\/report$/);
+      expect(calls.at(-1)).toMatchObject({ method: 'PUT', body: { projectId: 'alpha', report: { managerId: 'm1', mode: 'notify-on-failure' } } });
+      expect(calls.at(-1)?.url).toMatch(/\/workspace\/managers\/m1\/automations\/a1\/report$/);
       expect(await run('automation', '--project', 'alpha', 'report', 'a1', '--unlink')).toBe(0);
-      expect(calls.at(-1)).toMatchObject({ method: 'PUT', body: { report: null } });
+      expect(calls.at(-1)).toMatchObject({ method: 'PUT', body: { projectId: 'alpha', report: null } });
       expect(await run('automation', '--project', 'alpha', 'report', 'a1', '--manager', 'other')).toBe(1);
       expect(errors.at(-1)).toContain('itself only');
     });
@@ -161,7 +167,8 @@ describe('cez manager', () => {
       const { run, calls } = harness();
       await run('automation', '--project', 'alpha', 'update', 'a1', '--json', json);
       const put = calls.find((call) => call.method === 'PUT');
-      expect(put?.body).toMatchObject({ enabled: false });
+      expect(put?.url).toMatch(/\/workspace\/managers\/m1\/automations\/a1$/);
+      expect(put?.body).toMatchObject({ projectId: 'alpha', definition: { enabled: false } });
     });
 
     it.each([[['check', 'a1', '--execute']], [['run', 'a1']], [['delete', 'a1']], [['create', '--enable', '--json', '{}']]])('refuses %j in any turn', async (sub) => {
@@ -182,10 +189,104 @@ describe('cez manager', () => {
     });
   });
 
+  it('sends its turn token on every manager route it calls (spec 2026-11-20 § 3.1)', async () => {
+    const seen: Array<{ url: string; token: string | null }> = [];
+    const { run } = harness({ CEZ_MANAGER_TURN_TOKEN: 't-1' }, {}, [], {
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        seen.push({ url: String(url), token: new Headers(init?.headers).get('x-cez-manager-turn') });
+        if (String(url).endsWith('/snapshot')) return Response.json({ projects: [{ projectId: 'alpha', name: 'alpha', available: true, attention: [], tasks: [], prs: [] }] });
+        if (String(url).includes('/messages?pending=1')) return Response.json({ messages: [], hasMore: false });
+        return Response.json({ actionId: 'a1', status: 'pending', automation: { id: 'a1', name: 'n', revision: 1, enabled: false } }, { status: 201 });
+      }) as typeof fetch,
+    });
+    await run('merge', '--project', 'alpha', '12');
+    await run('rename', 'Scout');
+    await run('automation', '--project', 'alpha', 'create', '--json', '{"name":"n"}');
+    const managerCalls = seen.filter((call) => call.url.includes('/workspace/managers/'));
+    expect(managerCalls.length).toBeGreaterThan(4);
+    expect(managerCalls.every((call) => call.token === 't-1')).toBe(true);
+  });
+
+  describe('propose (spec 2026-11-20-manager-admin-actions)', () => {
+    it('proposes any kind through the one route, with the project pinned from the snapshot', async () => {
+      const { run, calls, logs } = harness();
+      expect(await run('propose', 'merge-pr', '--project', 'alpha', '--json', '{"number":12,"method":"squash"}', '--reason', 'green')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ method: 'POST', url: 'http://x/api/v1/workspace/managers/m1/actions', body: { action: { type: 'merge-pr', projectId: 'alpha', number: 12, method: 'squash' }, reason: 'green' } });
+      expect(logs.at(-1)).toContain('proposed a1');
+    });
+
+    it('the type comes from the argument, never from --json', async () => {
+      const { run, calls } = harness();
+      expect(await run('propose', 'add-job', '--json', '{"type":"merge-pr","name":"n","prompt":"p","everyMinutes":60}')).toBe(0);
+      expect(calls.at(-1)?.body).toMatchObject({ action: { type: 'add-job' } });
+    });
+
+    it('refuses a missing type, extra words and non-object JSON', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('propose')).toBe(1);
+      expect(await run('propose', 'merge-pr', 'extra')).toBe(1);
+      expect(await run('propose', 'merge-pr', '--json', '[1]')).toBe(1);
+      expect(await run('propose', 'merge-pr', '--json', '{nope')).toBe(1);
+      expect(errors.at(-1)).toContain('JSON object');
+      expect(calls.filter((call) => call.method !== 'GET')).toEqual([]);
+    });
+
+    it('--help lists what this manager may propose, from the server', async () => {
+      const { run, logs } = harness();
+      expect(await run('propose', '--help')).toBe(0);
+      const text = logs.join('\n');
+      expect(text).toContain('merge-pr');
+      expect(text).toContain('always asks');
+      expect(text).toContain('unavailable: no connector grants write calls');
+    });
+  });
+
+  describe('automationWritesVia', () => {
+    const recorded: Array<{ url: string; method: string; body?: unknown }> = [];
+    const fake = (async (url: string | URL | Request, init?: RequestInit) => {
+      recorded.push({ url: String(url), method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const via = automationWritesVia(fake, 'http://x', 'http://x/api/v1/workspace/managers/m1', 'alpha');
+    const scope = 'http://x/api/v1/p/alpha/automations';
+
+    it('passes reads through untouched', async () => {
+      recorded.length = 0;
+      await via(`${scope}/a1`);
+      expect(recorded).toEqual([{ url: `${scope}/a1`, method: 'GET' }]);
+    });
+
+    it('refuses every write the manager routes do not offer, without sending it', async () => {
+      recorded.length = 0;
+      for (const [path, method, body] of [['/a1', 'DELETE', undefined], ['/a1/run', 'POST', undefined], ['/a1/enable', 'POST', undefined], ['/a1/check', 'POST', { mode: 'execute' }], ['/import', 'POST', {}]] as const) {
+        const response = await via(`${scope}${path}`, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
+        expect(response.status).toBe(403);
+      }
+      const other = await via('http://x/api/v1/p/beta/automations', { method: 'POST', body: '{}' });
+      expect(other.status).toBe(403);
+      expect(recorded).toEqual([]);
+    });
+
+    it('sends a preview check to the manager route', async () => {
+      recorded.length = 0;
+      await via(`${scope}/a1/check`, { method: 'POST', body: JSON.stringify({ mode: 'preview' }) });
+      expect(recorded).toEqual([{ url: 'http://x/api/v1/workspace/managers/m1/automations/a1/check', method: 'POST', body: { projectId: 'alpha' } }]);
+    });
+
+    it('sends a pause to the manager route, as `cez manager automation pause` worked before the routes', async () => {
+      recorded.length = 0;
+      const response = await via(`${scope}/a1/pause`, { method: 'POST' });
+      expect(response.status).toBe(200);
+      expect(recorded).toEqual([{ url: 'http://x/api/v1/workspace/managers/m1/automations/a1/pause', method: 'POST', body: { projectId: 'alpha' } }]);
+    });
+  });
+
   it('renames, but not from a watch check', async () => {
     const { run, calls } = harness();
     expect(await run('rename', 'Mobile', 'Manager')).toBe(0);
-    expect(calls.at(-1)).toMatchObject({ method: 'PATCH', body: { name: 'Mobile Manager' } });
+    // Its own route, never the general PATCH that also changes access (spec 2026-11-20 § 3.1).
+    expect(calls.at(-1)).toMatchObject({ method: 'POST', url: 'http://x/api/v1/workspace/managers/m1/rename', body: { name: 'Mobile Manager' } });
+    expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
     const watching = harness({ CEZ_MANAGER_TURN: 'watch' });
     expect(await watching.run('rename', 'Pwned')).toBe(1);
     expect(watching.calls).toEqual([]);
@@ -194,7 +295,8 @@ describe('cez manager', () => {
   it('cannot switch a manager off or on: rename sends the name alone, and nothing reaches the activity route', async () => {
     const { run, calls } = harness();
     expect(await run('rename', '{"active":false}')).toBe(0);
-    expect(calls.at(-1)).toEqual(expect.objectContaining({ method: 'PATCH', body: { name: '{"active":false}' } }));
+    expect(calls.at(-1)).toEqual(expect.objectContaining({ method: 'POST', body: { name: '{"active":false}' } }));
+    expect(calls.at(-1)?.url).toMatch(/\/rename$/);
     expect(calls.some((call) => call.url.includes('/activity'))).toBe(false);
   });
 

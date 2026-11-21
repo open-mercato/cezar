@@ -5,15 +5,18 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
+import type { ManagerActionOpsResponse, ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
 import { managerAccessOf, managerTaskEffortSchema, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { MANAGER_TURN_ENV, MANAGER_TURN_HEADER } from './turn-token.ts';
 import { sameModel } from '../runs/reported-model.ts';
 
 export interface ManagerCliEnv {
   CEZ_API_URL?: string;
+  /** The live turn's token (spec 2026-11-20 § 3.1); the tool routes refuse a call without it. */
+  CEZ_MANAGER_TURN_TOKEN?: string;
   CEZ_MANAGER_ID?: string;
   CEZ_MANAGER_TURN?: string;
   CEZ_TASK_ID?: string;
@@ -62,6 +65,10 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
                                                  proposes one connector call (--tool may also be the full
                                                  mcp__<key>__<tool>); the user approves it in the chat and
                                                  cezar runs exactly that call
+  cez manager propose --help                     every kind of proposal this manager may make
+  cez manager propose <type> [--project <id>] --json '<fields>' [--reason "…"]
+                                                 the one way to propose any of them; the commands above
+                                                 are shorthands for the same cards
   cez manager rename "<role>"                    a short role the user recognizes it by
 
   Every command and subcommand takes --help.`;
@@ -75,7 +82,7 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-const COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename'] as const;
+const COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'propose', 'rename'] as const;
 const TASK_SUBCOMMANDS = ['create', 'say', 'cancel', 'retry', 'follow', 'unfollow'] as const;
 const JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
 /** A full run id or its first eight hex digits: anything else after `task` is a mistyped subcommand. */
@@ -176,6 +183,15 @@ Proposes one connector call; the user approves it in the chat and cezar runs exa
   --args '<json>'    the tool's input, a JSON object
   --reason "…"       why, shown on the card`,
   rename: 'cez manager rename "<role>"\n\nA short role the user recognizes this manager by, e.g. "Coding Manager".',
+  propose: `cez manager propose <type> [--project <id>] --json '<fields>' [--reason "…"]
+
+Proposes one change as a card; the user approves it in the chat, and only then cezar makes it.
+The card shows what cezar read for itself (a PR's title and head, an automation's definition),
+not what you wrote. Repeating a proposal answers the card already waiting.
+  <type>            one of the kinds listed below
+  --project <id>    the project, for a kind that acts in one (merge-pr, enable-automation)
+  --json '<fields>' the card's fields as a JSON object, e.g. '{"number": 12, "method": "squash"}'
+  --reason "…"      why, shown on the card as your words`,
 };
 
 /** The help key for `args`: `task create` when the subcommand is known, else the command. */
@@ -222,7 +238,7 @@ async function workflowNames(url: string | undefined, env: ManagerCliEnv, io: Ma
   try {
     if (!url || !env.CEZ_MANAGER_ID) throw new Error('run it inside a manager turn to list them');
     if (!project) {
-      const response = await io.fetch(`${url}/api/v1/workspace/managers/${encodeURIComponent(env.CEZ_MANAGER_ID)}/snapshot`);
+      const response = await io.fetch(`${url}/api/v1/workspace/managers/${encodeURIComponent(env.CEZ_MANAGER_ID)}/snapshot`, { headers: turnHeaders(env) });
       const projects = response.ok ? ((await response.json()) as ManagerSnapshot).projects : [];
       if (projects.length !== 1) throw new Error('add --project <id> to list them');
       project = projects[0]?.projectId;
@@ -296,6 +312,53 @@ async function contentOf(words: string[], values: ContentValues, io: ManagerCliI
   };
 }
 
+/** The turn token as a header, on every call to a manager route. */
+const turnHeaders = (env: ManagerCliEnv): Record<string, string> => {
+  const token = env[MANAGER_TURN_ENV];
+  return token ? { [MANAGER_TURN_HEADER]: token } : {};
+};
+
+/** `propose --help`'s list, from the server: what THIS manager may propose now, and why not otherwise. */
+async function actionOpsList(url: string | undefined, env: ManagerCliEnv, io: ManagerCliIo): Promise<string> {
+  try {
+    if (!url || !env.CEZ_MANAGER_ID) throw new Error('run it inside a manager turn to list them');
+    const response = await io.fetch(`${url}/api/v1/workspace/managers/${encodeURIComponent(env.CEZ_MANAGER_ID)}/action-ops`, { headers: turnHeaders(env) });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const { ops } = (await response.json()) as ManagerActionOpsResponse;
+    const lines = ops.map((op) => `  ${op.type.padEnd(18)} ${op.summary} [${op.risk}${op.pinnedAsk ? ', always asks' : ''}]${op.available ? '' : ` (unavailable: ${op.reason ?? 'not now'})`}\n  ${' '.repeat(18)} ${op.usage}`);
+    return `\nWhat you may propose:\n${lines.join('\n') || '  nothing'}`;
+  } catch (error) {
+    return `\nProposal kinds: unavailable (${error instanceof Error ? error.message : String(error)})`;
+  }
+}
+
+/**
+ * `cez automation` reads as before, but sends every write to the manager's own routes, which check
+ * scope, read-only and always-paused on the server (spec 2026-11-20 § 3.6). Any other write is refused.
+ */
+export function automationWritesVia(fetcher: typeof fetch, url: string, managerBase: string, projectId: string, headers: Record<string, string> = {}): typeof fetch {
+  const scope = `${url}/api/v1/p/${encodeURIComponent(projectId)}/automations`;
+  return (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (method === 'GET') return fetcher(input, init);
+    const rest = target.startsWith(scope) ? target.slice(scope.length) : undefined;
+    const parts = rest === undefined ? undefined : rest.split('?')[0]!.split('/').filter(Boolean);
+    const body = typeof init?.body === 'string' && init.body ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+    const send = (path: string, sendMethod: string, payload: unknown) => fetcher(`${managerBase}${path}`, {
+      method: sendMethod,
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (parts && method === 'POST' && parts.length === 0) return send('/automations', 'POST', { projectId, definition: body });
+    if (parts && method === 'PUT' && parts.length === 1) return send(`/automations/${parts[0]}`, 'PUT', { projectId, definition: body });
+    if (parts && method === 'PUT' && parts.length === 2 && parts[1] === 'report') return send(`/automations/${parts[0]}/report`, 'PUT', { projectId, report: body.report ?? null });
+    if (parts && method === 'POST' && parts.length === 2 && parts[1] === 'pause') return send(`/automations/${parts[0]}/pause`, 'POST', { projectId });
+    if (parts && method === 'POST' && parts.length === 2 && parts[1] === 'check' && body.mode !== 'execute') return send(`/automations/${parts[0]}/check`, 'POST', { projectId });
+    return new Response(JSON.stringify({ error: 'a manager cannot do that to an automation: ask the user to do it in the cockpit' }), { status: 403, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+}
+
 const forwardedLine = (forwarded: ManagerForwarded): string =>
   `forwarded the user's message ${forwarded.messageId} verbatim: ${forwarded.chars} characters, ${forwarded.attachments} attachment${forwarded.attachments === 1 ? '' : 's'}`
   + (forwarded.skipped?.length ? `. Too large to forward, tell the user: ${forwarded.skipped.join(', ')}` : '');
@@ -324,6 +387,7 @@ export async function runManagerCommand(
     const key = helpKey(command, rest);
     io.log(HELP[key] ?? USAGE);
     if (key === 'task create') io.log(await workflowNames(url, env, io, rest));
+    if (key === 'propose') io.log(await actionOpsList(url, env, io));
     return 0;
   }
   if (!url) {
@@ -343,7 +407,8 @@ export async function runManagerCommand(
   const call = async <T>(path: string, init?: { method: string; body?: unknown }): Promise<T> => {
     const response = await io.fetch(`${base}${path}`, {
       method: init?.method ?? 'GET',
-      ...(init?.body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(init.body) } : {}),
+      headers: { ...turnHeaders(env), ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}) },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: unknown };
@@ -522,7 +587,8 @@ export async function runManagerCommand(
         const name = rest.join(' ').trim();
         if (!name) fail('usage: cez manager rename "<role>"');
         if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
-        await call('', { method: 'PATCH', body: { name } });
+        // Its own route, name only: the general PATCH is the cockpit's (spec 2026-11-20 § 3.1).
+        await call('/rename', { method: 'POST', body: { name } });
         io.log(`renamed to ${name}`);
         return 0;
       }
@@ -580,7 +646,8 @@ export async function runManagerCommand(
           fail(`${project.projectId} is read-only for this manager: it cannot set up automations there`);
         }
         // What it creates reports its results to this chat unless it passes --no-report.
-        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io, { neverEnable: true, reportTo: env.CEZ_MANAGER_ID });
+        const managerFetch = automationWritesVia(io.fetch, url, base, project.projectId, turnHeaders(env));
+        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, { ...io, fetch: managerFetch }, { neverEnable: true, reportTo: env.CEZ_MANAGER_ID });
       }
 
       case 'job': {
@@ -633,6 +700,25 @@ export async function runManagerCommand(
         }
         if (args === null || typeof args !== 'object' || Array.isArray(args)) fail('--args must be a JSON object, the tool\'s input');
         await propose({ action: { type: 'connector-call', connector, tool, args }, ...(values.reason ? { reason: values.reason } : {}) }, `calling ${tool} on ${connector}`);
+        return 0;
+      }
+
+      case 'propose': {
+        const { values, positionals } = parse('propose', rest, { project: { type: 'string' }, json: { type: 'string' }, reason: { type: 'string' } }, true);
+        const [type, ...extra] = positionals;
+        if (!type || extra.length) fail('usage: cez manager propose <type> [--project <id>] --json \'<fields>\' [--reason "…"]. See: cez manager propose --help');
+        let fields: unknown = {};
+        if (values.json !== undefined) {
+          try {
+            fields = JSON.parse(values.json);
+          } catch {
+            fail('--json must be a JSON object of the card\'s fields');
+          }
+        }
+        if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) fail('--json must be a JSON object of the card\'s fields');
+        const project = values.project !== undefined ? await projectOf(values.project) : undefined;
+        const action = { ...(fields as Record<string, unknown>), type, ...(project ? { projectId: project.projectId } : {}) };
+        await propose({ action, ...(values.reason ? { reason: values.reason } : {}) }, `this ${type} proposal`);
         return 0;
       }
 

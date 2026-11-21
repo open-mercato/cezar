@@ -45,6 +45,14 @@ import {
   managerFollowTaskInputSchema,
   managerCancelTaskInputSchema,
   managerRetryTaskInputSchema,
+  managerRenameInputSchema,
+  managerAutomationCreateInputSchema,
+  managerAutomationUpdateInputSchema,
+  managerAutomationReportInputSchema,
+  managerAutomationCheckInputSchema,
+  managerAutomationPauseInputSchema,
+  managerAutomationParamSchema,
+  managerChangesQuerySchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -55,6 +63,7 @@ import {
   workspaceLayoutsSchema,
 } from '@open-mercato/cezar-contract';
 import { ManagerEngine, MANAGER_INACTIVE, type ManagerEngineDeps } from '../managers/engine.ts';
+import { MANAGER_TURN_HEADER, MANAGER_TURN_REFUSED, MANAGER_TURN_REQUIRED } from '../managers/turn-token.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { watchAutomationReports } from '../managers/automation-reports.ts';
@@ -9190,10 +9199,43 @@ export function createApp(deps: ServerDeps) {
     await next();
   };
   const MANAGER_NOT_FOUND = { error: 'manager not found' } as const;
+  // Spec 2026-11-20 § 3.1: the agent's tools answer only to the live turn's token, and the cockpit's own
+  // writes (decisions, settings, activity, chat) refuse any request that carries one.
+  const requireManagerTurn = async (c: Context, next: Next) => {
+    const turn = managerEngine.turnOfToken(c.req.header(MANAGER_TURN_HEADER));
+    if (!turn || turn.managerId !== c.req.param('id')) return c.json({ error: MANAGER_TURN_REQUIRED }, 403);
+    await next();
+  };
+  const refuseManagerTurn = async (c: Context, next: Next) => {
+    if (c.req.method !== 'GET' && c.req.header(MANAGER_TURN_HEADER) !== undefined) return c.json({ error: MANAGER_TURN_REFUSED }, 403);
+    await next();
+  };
 
   const managersRoutes = new Hono()
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
+    .use('/workspace/managers', refuseManagerTurn)
+    .use('/workspace/managers/activity', refuseManagerTurn)
+    .use('/workspace/managers/:id', refuseManagerTurn)
+    .use('/workspace/managers/:id/messages', refuseManagerTurn)
+    .use('/workspace/managers/:id/stop', refuseManagerTurn)
+    .use('/workspace/managers/:id/check', refuseManagerTurn)
+    .use('/workspace/managers/:id/read', refuseManagerTurn)
+    .use('/workspace/managers/:id/connectors/refresh', refuseManagerTurn)
+    .use('/workspace/managers/:id/actions/:actionId/decision', refuseManagerTurn)
+    .use('/workspace/managers/:id/snapshot', requireManagerTurn)
+    .use('/workspace/managers/:id/task', requireManagerTurn)
+    .use('/workspace/managers/:id/tasks', requireManagerTurn)
+    .use('/workspace/managers/:id/task-message', requireManagerTurn)
+    .use('/workspace/managers/:id/follows', requireManagerTurn)
+    .use('/workspace/managers/:id/task-cancel', requireManagerTurn)
+    .use('/workspace/managers/:id/task-retry', requireManagerTurn)
+    .use('/workspace/managers/:id/actions', requireManagerTurn)
+    .use('/workspace/managers/:id/jobs/*', requireManagerTurn)
+    .use('/workspace/managers/:id/action-ops', requireManagerTurn)
+    .use('/workspace/managers/:id/rename', requireManagerTurn)
+    .use('/workspace/managers/:id/automations', requireManagerTurn)
+    .use('/workspace/managers/:id/automations/*', requireManagerTurn)
     .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
     // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
     .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
@@ -9266,8 +9308,8 @@ export function createApp(deps: ServerDeps) {
     // The one route that performs a proposal. The agent's tools below can only create them.
     .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {
       const { id, actionId } = c.req.valid('param');
-      const { decision, onlyIfStale } = c.req.valid('json');
-      const outcome = await managerEngine.decide(id, actionId, decision, { sid: deviceSid(c.req.header('x-cezar-sid')) }, onlyIfStale === true);
+      const { decision, onlyIfStale, seen } = c.req.valid('json');
+      const outcome = await managerEngine.decide(id, actionId, decision, { sid: deviceSid(c.req.header('x-cezar-sid')) }, onlyIfStale === true, seen);
       return 'error' in outcome ? c.json({ error: outcome.error }, outcome.status) : c.json(outcome);
     })
     // The agent's tools (`cez manager`): scope and the watch refusal live in the engine.
@@ -9308,7 +9350,46 @@ export function createApp(deps: ServerDeps) {
       const { id, jobId } = c.req.valid('param');
       const removed = await managerEngine.removeJob(id, jobId);
       return 'error' in removed ? c.json({ error: removed.error }, removed.status) : c.json(removed);
-    });
+    })
+    // What this manager may propose (spec 2026-11-20-manager-admin-actions § 5.3): `cez manager propose --help`.
+    .get('/workspace/managers/:id/action-ops', paramZodValidator(managerIdParamSchema), async (c) => {
+      const ops = await managerEngine.actionOps(c.req.valid('param').id);
+      return ops ? c.json({ ops }) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    // `cez manager rename`: its name only. The general PATCH stays the cockpit's (spec 2026-11-20 § 3.1).
+    .post('/workspace/managers/:id/rename', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerRenameInputSchema), async (c) => {
+      const renamed = await managerEngine.rename(c.req.valid('param').id, c.req.valid('json').name);
+      return 'error' in renamed ? c.json({ error: renamed.error }, renamed.status) : c.json(renamed);
+    })
+    // `cez manager automation …` writes: scope, read-only and always-paused checked here, not in the CLI (spec 2026-11-20 § 3.6).
+    .post('/workspace/managers/:id/automations', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerAutomationCreateInputSchema), async (c) => {
+      const created = await managerEngine.createAutomation(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
+    })
+    .put('/workspace/managers/:id/automations/:automationId', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationUpdateInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const updated = await managerEngine.updateAutomation(id, automationId, c.req.valid('json'));
+      return 'error' in updated ? c.json({ error: updated.error }, updated.status) : c.json(updated);
+    })
+    .put('/workspace/managers/:id/automations/:automationId/report', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationReportInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const set = await managerEngine.setAutomationReport(id, automationId, c.req.valid('json'));
+      return 'error' in set ? c.json({ error: set.error }, set.status) : c.json(set);
+    })
+    .post('/workspace/managers/:id/automations/:automationId/pause', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationPauseInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const paused = await managerEngine.pauseAutomation(id, automationId, c.req.valid('json'));
+      return 'error' in paused ? c.json({ error: paused.error }, paused.status) : c.json(paused);
+    })
+    .post('/workspace/managers/:id/automations/:automationId/check', paramZodValidator(managerAutomationParamSchema), jsonZodValidator(managerAutomationCheckInputSchema), async (c) => {
+      const { id, automationId } = c.req.valid('param');
+      const queued = await managerEngine.checkAutomation(id, automationId, c.req.valid('json'));
+      return 'error' in queued ? c.json({ error: queued.error }, queued.status) : c.json(queued, 202);
+    })
+    // The change log (spec 2026-11-20 § 3.3): every decided proposal and every direct manager write, newest first.
+    .use('/workspace/admin-audit', requireManagers)
+    .get('/workspace/admin-audit', queryZodValidator(managerChangesQuerySchema), (c) =>
+      c.json({ changes: managerEngine.changeLogEntries(c.req.valid('query')) }));
 
   // ---- chained family: phones (workspace-level, spec 2026-11-01-relay-qr-pairing) ----
   // A phone never reaches this family, so it cannot pair another phone, remove one or move the

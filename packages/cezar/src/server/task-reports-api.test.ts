@@ -13,6 +13,9 @@ import { createApp, WorkspaceEventBus } from './server.ts';
 const JSON_HEADERS = { 'content-type': 'application/json', host: '127.0.0.1' };
 
 /** Spec 2026-10-31-managers § Followed tasks: through the real routes and a real run store. */
+/** Manager tool routes answer only to a live turn's token (spec 2026-11-20 § 3.1): tests call them as that turn would. */
+const MANAGER_TOOL_PATH = /\/workspace\/managers\/([^/?]+)\/(?:snapshot|task|tasks|task-message|follows|task-cancel|task-retry|actions$|actions\?|jobs\/|action-ops|rename|automations)/;
+
 describe('a manager hears about its tasks', () => {
   let root: string;
   let home: string;
@@ -35,11 +38,15 @@ describe('a manager hears about its tasks', () => {
     },
   } as unknown as AgentRunner;
 
-  const request = (path: string, init?: { method?: string; body?: unknown }) => app.request(`/api/v1${path}`, {
-    method: init?.method ?? 'GET',
-    headers: JSON_HEADERS,
-    ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-  });
+  const request = (path: string, init?: { method?: string; body?: unknown }) => {
+    const managerId = MANAGER_TOOL_PATH.exec(path)?.[1];
+    const turn: Record<string, string> = managerId ? { 'x-cez-manager-turn': engine.issueTurnToken(managerId, 'chat').token } : {};
+    return app.request(`/api/v1${path}`, {
+      method: init?.method ?? 'GET',
+      headers: { ...JSON_HEADERS, ...turn },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    });
+  };
   const createManager = async () => {
     const response = await request('/workspace/managers', { method: 'POST', body: { instructions: 'Watch', projects: 'all', cronMinutes: 0 } });
     expect(response.status).toBe(201);
