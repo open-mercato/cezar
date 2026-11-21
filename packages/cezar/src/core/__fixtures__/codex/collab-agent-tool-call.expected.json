@@ -3,6 +3,8 @@
     "type": "turn.started",
     "turnId": "turn_collab"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_collab", "callIndex": 0, "startInferred": true },
+  { "type": "timing", "phase": "first-delta", "turnId": "turn_collab", "callIndex": 0 },
   {
     "type": "item.started",
     "item": {
@@ -66,4 +68,5 @@
       }
     }
   }
+
 ]

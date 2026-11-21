@@ -69,6 +69,8 @@ const GOLDEN_FIXTURES = [
   'collab-agent-tool-call',
   'collab-tool-call',
   'sub-agent-activity',
+  // #1543: a tool loop (two model responses) → two timing calls, each start/first-delta/end.
+  'timing-tool-loop',
 ] as const;
 
 describe('codex → v2 golden fixtures', () => {
@@ -80,6 +82,44 @@ describe('codex → v2 golden fixtures', () => {
       expect(actual).toStrictEqual(expectedEvents(fixture));
     });
   }
+});
+
+describe('codex per-call timing (#1543)', () => {
+  const run = (frames: unknown[]) => {
+    let st = createCodexUiState();
+    const out: UiEvent[] = [];
+    for (const f of frames) {
+      const m = mapCodexNotification(f, st);
+      st = m.state;
+      out.push(...m.events);
+    }
+    return out.flatMap((e) => (e.type === 'timing' ? [e.reason ? `${e.phase}:${e.reason}` : e.phase] : []));
+  };
+  const turn = (status: string, method = 'turn/completed') => ({ method, params: { turn: { id: 't1', status } } });
+  const begin = [
+    { method: 'thread/started', params: { thread: { id: 'th' } } },
+    { method: 'turn/started', params: { threadId: 'th', turn: { id: 't1' } } },
+  ];
+  const delta = { method: 'item/agentMessage/delta', params: { threadId: 'th', turnId: 't1', itemId: 'm', delta: 'x' } };
+
+  it('a turn that completes without a usage frame aborts as stream-ended', () => {
+    expect(run([...begin, delta, turn('completed')])).toEqual(['start', 'first-delta', 'aborted:stream-ended']);
+  });
+  it('an interrupted turn aborts as cancelled, a failed one as error, before the first delta too', () => {
+    expect(run([...begin, turn('interrupted')])).toEqual(['start', 'aborted:cancelled']);
+    expect(run([...begin, delta, turn('failed', 'turn/failed')])).toEqual(['start', 'first-delta', 'aborted:error']);
+  });
+  it('a new turn/started before end closes the open call as error', () => {
+    expect(run([...begin, ...begin.slice(1)])).toEqual(['start', 'aborted:error', 'start']);
+  });
+  it('a child thread never starts or ends a call', () => {
+    const child = { method: 'turn/started', params: { threadId: 'th_child', turn: { id: 'tc' } } };
+    expect(run([...begin, child, { ...delta, params: { ...delta.params, threadId: 'th_child' } }])).toEqual(['start']);
+  });
+  it('a usage frame without `last` does not end the call', () => {
+    const total = { method: 'thread/tokenUsage/updated', params: { threadId: 'th', tokenUsage: { total: { inputTokens: 1, outputTokens: 1 } } } };
+    expect(run([...begin, delta, total])).toEqual(['start', 'first-delta']);
+  });
 });
 
 describe('mapCodexNotification edge cases', () => {
@@ -274,11 +314,11 @@ describe('mapCodexNotification edge cases', () => {
   it('mints deterministic fallback turn ids when frames carry none', () => {
     let s = createCodexUiState();
     const started = mapCodexNotification({ method: 'turn/started', params: {} }, s);
-    expect(started.events).toEqual([{ type: 'turn.started', turnId: 'turn_1' }]);
+    expect(started.events.filter((e) => e.type !== 'timing')).toEqual([{ type: 'turn.started', turnId: 'turn_1' }]);
     s = started.state;
     // The close pairs with the open it tracked.
     const done = mapCodexNotification({ method: 'turn/completed', params: {} }, s);
-    expect(done.events).toEqual([{ type: 'turn.completed', turnId: 'turn_1', stopReason: 'end_turn' }]);
+    expect(done.events.filter((e) => e.type !== 'timing')).toEqual([{ type: 'turn.completed', turnId: 'turn_1', stopReason: 'end_turn' }]);
   });
 
   it('never fabricates a cost: codex usage and turn events carry no costUsd', () => {
@@ -316,7 +356,7 @@ describe('mapCodexNotification edge cases', () => {
     ).state;
     s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, s).state;
     const noFreshUsage = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s);
-    expect(noFreshUsage.events).toEqual([{ type: 'turn.completed', turnId: 't1', stopReason: 'end_turn' }]);
+    expect(noFreshUsage.events.filter((e) => e.type !== 'timing')).toEqual([{ type: 'turn.completed', turnId: 't1', stopReason: 'end_turn' }]);
 
     s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, noFreshUsage.state).state;
     s = mapCodexNotification(
@@ -377,7 +417,7 @@ describe('mapCodexNotification edge cases', () => {
     const map = (method: string, params: Record<string, unknown>) => {
       const result = mapCodexNotification({ method, params }, state);
       state = result.state;
-      return result.events;
+      return result.events.filter((e) => e.type !== 'timing');
     };
     const start = (id: string) => map('turn/started', { threadId: 'main', turn: { id } });
     const complete = (id: string) => map('turn/completed', { threadId: 'main', turn: { id } });

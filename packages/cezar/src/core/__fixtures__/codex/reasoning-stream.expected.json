@@ -8,6 +8,7 @@
     "type": "turn.started",
     "turnId": "turn_01J9RSN01"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_01J9RSN01", "callIndex": 0, "startInferred": true },
   {
     "type": "item.started",
     "item": {
@@ -16,6 +17,7 @@
       "text": "Checking the sink"
     }
   },
+  { "type": "timing", "phase": "first-delta", "turnId": "turn_01J9RSN01", "callIndex": 0 },
   {
     "type": "item.delta",
     "itemId": "item_rsn_1",
@@ -62,9 +64,11 @@
       "phase": "final"
     }
   },
+  { "type": "timing", "phase": "aborted", "turnId": "turn_01J9RSN01", "callIndex": 0, "reason": "stream-ended" },
   {
     "type": "turn.completed",
     "turnId": "turn_01J9RSN01",
     "stopReason": "end_turn"
   }
+
 ]

@@ -36,6 +36,7 @@ import type {
   UiModelUsage,
   UiReasoningItem,
   UiSessionStartedEvent,
+  UiTimingEvent,
   UiToolItem,
   UiTurnCompletedEvent,
   UiUsageUpdatedEvent,
@@ -74,6 +75,15 @@ export interface ClaudeUiMapperState {
   /** Text/thinking blocks already opened by `stream_event` deltas whose
    *  whole-block `assistant` frame has not arrived yet, oldest first. */
   readonly streaming: readonly StreamingBlock[];
+  /** API calls (#1543) whose `start` went out and whose terminal phase has not, keyed by
+   *  `parent_tool_use_id` ('' for the main thread — a thread runs one call at a time). */
+  readonly calls: ReadonlyMap<string, OpenCall>;
+}
+
+interface OpenCall {
+  readonly messageId?: string;
+  readonly model?: string;
+  readonly firstDelta: boolean;
 }
 
 /** A block being streamed. `index` is the wire `content_block` index, which
@@ -105,6 +115,7 @@ export function createClaudeUiState(opts: { fallbackSessionId?: string } = {}): 
     tasks: new Map(),
     pendingTaskCreates: new Map(),
     streaming: [],
+    calls: new Map(),
   };
 }
 
@@ -133,8 +144,12 @@ export function mapClaudeMessage(msg: unknown, state: ClaudeUiMapperState): Clau
       return mapAssistant(msg, state);
     case 'user':
       return mapToolResults(msg, state);
-    case 'result':
-      return mapResult(msg, state);
+    case 'result': {
+      // A call still open when the turn's result lands never saw its usage frame (#1543).
+      const closed = closeOpenCalls(state, msg.is_error === true ? 'error' : 'stream-ended');
+      const mapped = mapResult(msg, closed.state);
+      return { events: [...closed.events, ...mapped.events], state: mapped.state };
+    }
     case 'stream_event':
       return mapStreamEvent(msg, state);
     default:
@@ -170,6 +185,88 @@ function mapInit(msg: Record<string, unknown>, state: ClaudeUiMapperState): Clau
  *  Tool-input JSON deltas and signatures are skipped — the tool item comes
  *  from the whole `tool_use` block, as before. */
 function mapStreamEvent(msg: Record<string, unknown>, state: ClaudeUiMapperState): ClaudeUiMapping {
+  const timed = mapCallTiming(msg, state);
+  if (timed.events.length === 0) return mapStreamDelta(msg, timed.state);
+  const rendered = mapStreamDelta(msg, timed.state);
+  return { events: [...timed.events, ...rendered.events], state: rendered.state };
+}
+
+// ---- stream_event → per-API-call timing (#1543) ----------------------------
+
+const callKey = (parent: string | undefined): string => parent ?? '';
+
+function timingEvent(phase: UiTimingEvent['phase'], parent: string | undefined, call: OpenCall | undefined, extra: Partial<UiTimingEvent> = {}): UiTimingEvent {
+  const event: UiTimingEvent = { type: 'timing', phase };
+  if (call?.messageId !== undefined) event.messageId = call.messageId;
+  if (phase === 'start' && call?.model !== undefined) event.model = call.model;
+  if (parent !== undefined) event.parentToolUseId = parent;
+  return Object.assign(event, extra);
+}
+
+/** `start` on `message_start`, `first-delta` on the first content delta of any type,
+ *  `end` on the `message_delta` carrying usage, `aborted` on a stream `error` or a retry. */
+function mapCallTiming(msg: Record<string, unknown>, state: ClaudeUiMapperState): ClaudeUiMapping {
+  const event = isRecord(msg.event) ? msg.event : undefined;
+  if (event === undefined) return { events: [], state };
+  const parent = str(msg.parent_tool_use_id);
+  const key = callKey(parent);
+  const open = state.calls.get(key);
+  const events: UiEvent[] = [];
+  const calls = new Map(state.calls);
+  switch (event.type) {
+    case 'message_start': {
+      if (open) events.push(timingEvent('aborted', parent, open, { reason: 'error' }));
+      const message = isRecord(event.message) ? event.message : {};
+      const call: OpenCall = { firstDelta: false };
+      const messageId = str(message.id);
+      const model = str(message.model);
+      const next: OpenCall = { ...call, ...(messageId !== undefined ? { messageId } : {}), ...(model !== undefined ? { model } : {}) };
+      calls.set(key, next);
+      events.push(timingEvent('start', parent, next));
+      break;
+    }
+    case 'content_block_delta':
+      if (!open || open.firstDelta) return { events: [], state };
+      calls.set(key, { ...open, firstDelta: true });
+      events.push(timingEvent('first-delta', parent, open));
+      break;
+    case 'message_delta': {
+      const usage = isRecord(event.usage) ? event.usage : undefined;
+      if (!open || usage === undefined) return { events: [], state };
+      const extra: Partial<UiTimingEvent> = {};
+      const outputTokens = num(usage.output_tokens);
+      if (outputTokens !== undefined) extra.output_tokens = outputTokens;
+      const stopReason = isRecord(event.delta) ? str(event.delta.stop_reason) : undefined;
+      if (stopReason !== undefined) extra.stop_reason = stopReason;
+      calls.delete(key);
+      events.push(timingEvent('end', parent, open, extra));
+      break;
+    }
+    case 'error': {
+      if (!open) return { events: [], state };
+      const errorType = isRecord(event.error) ? str(event.error.type) : undefined;
+      calls.delete(key);
+      events.push(timingEvent('aborted', parent, open, { reason: 'error', ...(errorType !== undefined ? { errorType } : {}) }));
+      break;
+    }
+    default:
+      return { events: [], state };
+  }
+  return { events, state: { ...state, calls } };
+}
+
+/** Close every still-open call as `aborted` — the runner calls this when the process ends or
+ *  is stopped (`cancelled`), the mapper itself on `result`. A no-op when none is open. */
+export function closeOpenCalls(state: ClaudeUiMapperState, reason: NonNullable<UiTimingEvent['reason']>): ClaudeUiMapping {
+  if (state.calls.size === 0) return { events: [], state };
+  const events: UiEvent[] = [];
+  for (const [key, call] of state.calls) {
+    events.push(timingEvent('aborted', key === '' ? undefined : key, call, { reason }));
+  }
+  return { events, state: { ...state, calls: new Map() } };
+}
+
+function mapStreamDelta(msg: Record<string, unknown>, state: ClaudeUiMapperState): ClaudeUiMapping {
   const event = isRecord(msg.event) ? msg.event : undefined;
   if (event?.type !== 'content_block_delta' || typeof event.index !== 'number' || !isRecord(event.delta)) {
     return { events: [], state };

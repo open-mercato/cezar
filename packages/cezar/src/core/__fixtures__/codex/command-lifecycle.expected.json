@@ -8,6 +8,8 @@
     "type": "turn.started",
     "turnId": "turn_01J8ZCMD9A"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_01J8ZCMD9A", "callIndex": 0, "startInferred": true },
+  { "type": "timing", "phase": "first-delta", "turnId": "turn_01J8ZCMD9A", "callIndex": 0 },
   {
     "type": "item.started",
     "item": {
@@ -102,6 +104,7 @@
       "exitCode": 1
     }
   },
+  { "type": "timing", "phase": "end", "turnId": "turn_01J8ZCMD9A", "callIndex": 0, "output_tokens": 300 },
   {
     "type": "usage.updated",
     "usage": {
@@ -122,4 +125,5 @@
       "cacheRead": 800
     }
   }
+
 ]

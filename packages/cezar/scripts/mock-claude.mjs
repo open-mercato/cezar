@@ -59,6 +59,15 @@ function emit(obj) {
   }
   const blocks = streamedBlocks(obj);
   const envelope = { session_id: obj?.session_id, parent_tool_use_id: obj?.parent_tool_use_id ?? null };
+  // One assistant frame is one API call: message_start, a first delta of any type (a tool-use-only
+  // reply streams its input JSON), then message_delta carrying usage (#1543).
+  const isCall = partialMessages && obj?.type === 'assistant';
+  if (isCall) {
+    write({ type: 'stream_event', event: { type: 'message_start', message: { id: obj.message?.id ?? 'msg_mock', model: obj.message?.model ?? MOCK_MODEL } }, ...envelope });
+    if (blocks.length === 0 && Array.isArray(obj.message?.content) && obj.message.content.some((b) => b?.type === 'tool_use')) {
+      write({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } }, ...envelope });
+    }
+  }
   for (const block of blocks) {
     write({ type: 'stream_event', event: { type: 'content_block_start', index: block.index, content_block: block.start }, ...envelope });
     for (const piece of block.text.match(/\S+\s*|\s+/g) ?? [block.text]) {
@@ -68,6 +77,10 @@ function emit(obj) {
   write(obj);
   for (const block of blocks) {
     write({ type: 'stream_event', event: { type: 'content_block_stop', index: block.index }, ...envelope });
+  }
+  if (isCall) {
+    write({ type: 'stream_event', event: { type: 'message_delta', delta: { stop_reason: obj.message?.stop_reason ?? 'end_turn' }, usage: { output_tokens: obj.message?.usage?.output_tokens ?? 1 } }, ...envelope });
+    write({ type: 'stream_event', event: { type: 'message_stop' }, ...envelope });
   }
 }
 

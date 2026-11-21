@@ -8,6 +8,7 @@
     "type": "turn.started",
     "turnId": "turn_snapshot"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_snapshot", "callIndex": 0, "startInferred": true },
   {
     "type": "item.started",
     "item": {
@@ -44,9 +45,11 @@
       "phase": "final"
     }
   },
+  { "type": "timing", "phase": "aborted", "turnId": "turn_snapshot", "callIndex": 0, "reason": "stream-ended" },
   {
     "type": "turn.completed",
     "turnId": "turn_snapshot",
     "stopReason": "end_turn"
   }
+
 ]

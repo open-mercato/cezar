@@ -242,10 +242,13 @@ describe('golden-fixture replay through a real RunStore', () => {
       expect(lines.map((l) => l.type)).toEqual([
         'session.started',
         'turn.started',
+        'timing', // #1543: start + first-delta of the call (persisted, ts-stamped)
+        'timing',
         'item.started',
         'item.completed',
         'item.started',
         'item.completed',
+        'timing', // the aborted close: this fixture has no usage.last
         'usage.updated',
         'turn.completed',
         'session.ended',
@@ -321,7 +324,7 @@ describe('live-vs-disk equivalence', () => {
 
 describe('isV2WireEventType (the SSE event-name router)', () => {
   it('routes dotted v2 types to ui-event and every v1 type to run-event', () => {
-    for (const t of ['session.started', 'session.ended', 'session.error', 'turn.started', 'turn.completed', 'item.started', 'item.updated', 'item.completed', 'plan.updated', 'usage.updated', 'permission.requested']) {
+    for (const t of ['session.started', 'session.ended', 'session.error', 'turn.started', 'turn.completed', 'item.started', 'item.updated', 'item.completed', 'plan.updated', 'usage.updated', 'permission.requested', 'timing']) {
       expect(isV2WireEventType(t), t).toBe(true);
     }
     for (const t of ['text', 'tool-call', 'tool-result', 'image', 'token-usage', 'cost', 'session', 'turn-end', 'note', 'done', 'error', 'lifecycle', 'step-start', 'step-end', 'check-output', 'user-message']) {
