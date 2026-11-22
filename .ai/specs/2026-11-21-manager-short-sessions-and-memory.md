@@ -122,10 +122,12 @@ the history into every call.
   280-character limit enforces it.
 * **Writing it:** `cez-manager memory list|set <key> --kind … "<text>"|remove <key>`. This goes
   through the same CLI and approval-free route family the manager already uses on every runner,
-  so Claude, Codex, OpenCode and Pi behave the same. The user's own edits come from **Manager
+  so every runner that can run a manager writes it the same way (a Codex manager turn is refused
+  before it starts since #2330). The user's own edits come from **Manager
   settings → Memory**: a list with inline edit, delete, add, and a budget meter.
 * **Reading it:** the memory is rendered into the system prompt of every new session, as a short
-  "What the user asked you to remember" block. It is not re-sent on resumed turns.
+  "What the user asked you to remember" block. As built (#2386), the system prompt carries it on
+  every turn, resumed ones included (`engine.ts` `managerSystemPrompt(… memory)`).
 * **Migrating Claude auto-memory:** today the manager's memory is Claude Code's own: `MEMORY.md`
   plus one file per fact under
   `~/.claude/projects/<manager workdir slug>/memory/`. For this manager that is 7 feedback
@@ -133,15 +135,15 @@ the history into every call.
   when a manager first runs after the upgrade. It parses each file's frontmatter (`name` →
   `key`, `type` → `kind`, `description` + body → `text`/`why`, truncated with a note), writes
   `source: import`, and leaves the Claude files untouched. After that, a Claude manager's turns
-  turn Claude auto-memory **off**, so there is one store. The exact CLI/env switch has to be
-  checked against the installed Claude Code before implementation. If none exists, the import
-  re-runs per new session and merges by key.
+  turn Claude auto-memory **off**, so there is one store. As built (#2386), the switch is
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in a Claude manager turn's env, and the import runs once
+  (`memory.json` `imported`).
 
 ### 2.2 Short sessions by default
 
 * **The rule.** A manager turn resumes its session only when all three hold:
   * the last request was **under 55 minutes ago**, so the cache is still warm (it lasts 1 hour);
-  * the context after the last turn is **under 120k tokens**;
+  * the context after the last turn is **under 100k tokens**;
   * the session is **under 12 hours old**.
 
   Otherwise the turn starts a new session. This matters because a resume after more than 1 hour
@@ -157,7 +159,9 @@ the history into every call.
        line each: ref, status, title, PR);
      * the open PRs the manager is tracking;
      * notes since the last turn;
-  3. the last 3 user↔manager exchanges, trimmed to 2k characters, so "yes, do that" still lands;
+  3. the end of the conversation, so "yes, do that" still lands. As built (#2386): the last 6
+     user and manager messages, each clipped to 600 characters, 3,000 characters in all
+     (`prompts.ts` `PREAMBLE_*`);
   4. one line naming the history command.
 
   The current `recapPrompt` (the last 20 messages, 12k characters, used only when a resume
@@ -267,6 +271,10 @@ Ship in this order:
 Expected result: ≈ −70% manager plan use, and no single reply above ≈ 0.5 pp.
 
 ## 5. Open decisions for the owner
+
+Decided 2026-11-21 (see Status) and built in #2386: all three steps in order, the 55-min idle /
+100k rule, a 40-entry / 6 KB memory (`MANAGER_MEMORY_LIMITS`) that both the manager and the user
+write. The list is kept as the record of what was asked.
 
 1. Which options go in, and in what order.
 2. The session rule: 55-min idle + 100k cap (recommended), or a fresh session on every wake.

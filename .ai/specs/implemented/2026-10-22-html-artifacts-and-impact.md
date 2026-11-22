@@ -75,6 +75,7 @@ Design review round 2 (2026-10-22). The owner and the team asked for these on th
 - **No "assess" entry point.** The GitHub detail pane offers `HandToAgent` (a free prompt) and the
   merge box. Files views have no actions at all (`repo-files.tsx`, `file-preview.tsx`). No built-in
   workflow reviews an existing PR; `implement-review-pr` and `review-council` implement first.
+  (True when written; the read-only `review-pr` template arrived in #2113.)
 
 ## 📝 Proposed Solution
 
@@ -163,7 +164,8 @@ placed on top. The next HTML-producing skill needs none of it.
     `sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox;`,
     `x-content-type-options: nosniff`, `referrer-policy: no-referrer`,
     `cross-origin-resource-policy: same-origin`, `cache-control: no-store`. The CSP string is built
-    in ONE helper (`artifactCsp(cdnEnabled)`) that both the route and its test read.
+    in ONE helper (`artifactCsp(cdnEnabled, ownBase?)`, where `ownBase` is the run's own artifacts URL
+    images and media may load from) that both the route and its test read.
   - Markdown, JSON and images: the existing image/text header set.
   - `other`: `content-disposition: attachment`.
 - `GET /artifacts?subject=pr:<n>|spec:<path>` (project-scoped) → the newest run with that subject

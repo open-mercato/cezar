@@ -12,8 +12,10 @@ process start + boot id + PID namespace), **macOS** (`ps` start time + `sysctl k
 delivery stays off until explicitly enabled. Ownership is fenced by an OS-verified process start
 token and, where stable, a boot-session identity, so a lock left by a crashed or rebooted process is recovered,
 while a process the OS still reports as live keeps it. If the OS cannot verify an identity (an
-unopenable process on Windows, a changed hostname, an unreadable owner file), cezar keeps webhooks
-unavailable instead of stealing the lock; after confirming no cezar process is running, an operator
+unopenable process on Windows, a changed hostname with a different boot identity, an unreadable owner
+file), cezar keeps webhooks unavailable instead of stealing the lock. A renamed host that keeps the same
+random boot ID (a DHCP or VPN toggle, #2398) is the same kernel, so the PID namespace and pid + start
+check decide as usual; after confirming no cezar process is running, an operator
 may remove the stale `.ai/cezar/webhooks/owner.lock`. Windows boot timestamps are diagnostic only:
 a changed timestamp never proves a live owner has died. Linux owners from another PID namespace
 or locks without namespace evidence remain unverifiable. On macOS, safe ownership recovery

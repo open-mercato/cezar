@@ -1,6 +1,6 @@
 # Slack receivers for outbound webhooks
 
-Provider contract extending [outbound webhooks](2026-10-12-outbound-webhooks.md).
+Provider contract extending [outbound webhooks](implemented/2026-10-12-outbound-webhooks.md).
 
 ## Goal
 

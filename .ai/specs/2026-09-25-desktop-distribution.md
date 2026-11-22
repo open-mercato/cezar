@@ -1,6 +1,8 @@
 # Desktop distribution — where cezar desktop is published and how it updates
 
-**Status:** design + workflow in place, no release cut yet. 2026-09-25. Companion to
+**Status:** partially implemented. 2026-09-25; status updated 2026-11-22. Releases are cut (`desktop-v0.1.12`,
+the Homebrew cask and SignPath signing are wired, #2350, #2352, #2355); the landing page, winget and Flathub are not
+built yet. Companion to
 `2026-09-25-self-update-and-desktop.md` (the shell itself and the managed install).
 
 ## TLDR
@@ -9,8 +11,8 @@ The desktop shell (`packages/desktop`, Tauri 2) is published as **signed install
 Releases**, one release per shell version under a `desktop-v<version>` tag, built by
 `.github/workflows/desktop-release.yml`. Everything downstream — the landing page's Download
 button, a Homebrew cask, winget, the shell's own auto-update — is a pointer to that release
-page. The shell ships **rarely and on its own version** (`0.1.1` today, decoupled from cezar's
-`0.11.x`): it contains no cezar code, because the cockpit and server come from
+page. The shell ships **rarely and on its own version** (`0.1.12` on 2026-11-22, decoupled from cezar's
+version): it contains no cezar code, because the cockpit and server come from
 `~/.cezar/versions` and update from inside the cockpit.
 
 ## Two things update on two cadences
@@ -90,7 +92,10 @@ to anyone but maintainers.
 fetches `desktop-latest.json`, verifies the minisign signature against the embedded public key,
 and installs silently — the new shell takes over on the **next** launch. It never restarts under
 the user (only the cockpit's own updater does that, after asking), never blocks startup, and is
-disabled in debug builds and by `CEZ_DESKTOP_NO_UPDATE=1`.
+disabled in debug builds and by `CEZ_DESKTOP_NO_UPDATE` set to any value (even `0`).
+
+The shell's Cezar menu also offers "Install 'cez' command in PATH…", which links the bundle's
+`Contents/Resources/bin/{cez,cezar}` shim into `/usr/local/bin` or `~/.local/bin` (`cli_command.rs`, #2350).
 
 ## Shipping a shell change — what the maintainer does, what the user sees
 
@@ -104,7 +109,7 @@ Maintainer, per shell release:
 
 1. Bump the shell version in all three manifests: `packages/desktop/package.json`,
    `packages/desktop/src-tauri/Cargo.toml`, `packages/desktop/src-tauri/tauri.conf.json`.
-   The shell is versioned on its own (`0.1.1` today), never in step with cezar.
+   The shell is versioned on its own (`0.1.12` on 2026-11-22), never in step with cezar.
 2. `git tag desktop-v<version> && git push --tags`. `desktop-release.yml` builds, signs, uploads
    the installers under stable names and publishes `desktop-latest.json`. (Or run the
    workflow by hand: it reads the version from `tauri.conf.json`.)
@@ -224,13 +229,14 @@ the signing checklist above, not a packaging gap.
 
 `packages/desktop` is outside the npm workspaces, so the main CI job never compiles it.
 `.github/workflows/desktop-check.yml` does, on every pull request and push that touches
-`packages/desktop/**`: `cargo check --locked --all-targets` and `cargo test --locked` on Linux,
-with no bundling, signing or secrets. Platform-gated code (`cfg(target_os = "macos")`, the
+`packages/desktop/**`: `cargo check --locked --all-targets` and `cargo test --locked` on Linux and
+`windows-latest`, with no bundling, signing or secrets. Platform-gated code (`cfg(target_os = "macos")`, the
 overlay title bar) is only compiled by the release build.
 
 ## Who may call the shell's commands
 
-The capability file grants the three app commands to `http://127.0.0.1:*` and
+The capability file grants the shell's app commands (six on 2026-11-22: update, restart, the versions
+menu, the error report and the notch toggle's read and write) to `http://127.0.0.1:*` and
 `http://localhost:*`, because its URL patterns are static and the sidecar's port is picked at
 launch. The narrowing is in the code: every command starts with `caller_is_trusted`, which
 admits the splash and the cockpit **on the port this shell spawned** and nothing else, and
@@ -312,7 +318,8 @@ of them is the one case where the shell must ship BEFORE the cezar version that 
   health, npm installs into a prefix with a space in it. What NO automated run covers is the
   window itself — nobody has clicked through the installed app on Windows. Do that once,
   from the first release's installer, before the download link goes public.
-- Windows signing, Flathub, universal macOS binary (two dmgs today).
+- Windows signing is wired through SignPath (#2355); until its secrets are set the installer ships
+  unsigned. Flathub, universal macOS binary (two dmgs today).
 - A `cezar desktop` version chip somewhere in the cockpit (the sidecar knows `CEZ_DESKTOP`,
   the shell version could ride along in an env var) so a bug report names both versions.
 - Windows/Linux title bar: native today; the macOS overlay treatment needs a custom bar there.

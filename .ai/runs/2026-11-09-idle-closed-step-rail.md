@@ -2,7 +2,7 @@
 
 Goal: on an idle-closed run, the step that closed it reads "closed · idle" orange in the run header's step rail, matching the run's own dot, instead of a red failure.
 Issue: open-mercato/cezar#2022
-Source doc: .ai/specs/2026-11-04-idle-closed-attention-state.md (the idle-closed state, #1934/#1935).
+Source doc: .ai/specs/implemented/2026-11-04-idle-closed-attention-state.md (the idle-closed state, #1934/#1935).
 
 ## Scope
 UI only (`packages/web`): a step-picking helper in `lib/attention.ts` next to `isIdleClosed`, an `'idle'` rail visual in `routes/task-thread/step-rail.tsx`, and the one-prop wiring in `run-header.tsx`.

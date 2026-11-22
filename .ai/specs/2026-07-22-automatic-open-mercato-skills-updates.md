@@ -140,9 +140,9 @@ Workspace configuration is extended additively:
 
 Workspace-level update routes are single-mounted, not project aliases:
 
-- `GET /api/workspace/skills-update?projectId=<id>` returns the cached `SkillsUpdateState` immediately and may schedule a stale detection-only check. Unknown/gone projects follow the existing 404/409 registry contract. Automatic apply is owned exclusively by the protected background coordinator, never by GET handling.
-- `POST /api/workspace/skills-update/check` validates `{ projectId }`, forces a bounded check, and returns state.
-- `POST /api/workspace/skills-update/apply` validates `{ projectId }`, returns `409` if another update owns the lock, applies eligible updates, and returns final state.
+- `GET /api/v1/workspace/skills-update?projectId=<id>` returns the cached `SkillsUpdateState` immediately and may schedule a stale detection-only check. Unknown/gone projects follow the existing 404/409 registry contract. Automatic apply is owned exclusively by the protected background coordinator, never by GET handling.
+- `POST /api/v1/workspace/skills-update/check` validates `{ projectId }`, forces a bounded check, and returns state.
+- `POST /api/v1/workspace/skills-update/apply` validates `{ projectId }`, returns `409` if another update owns the lock, applies eligible updates, and returns final state.
 
 All bodies use zod `safeParse`; all failures return `{ error }` plus the latest safe state where useful. Mutations remain behind the global `/api/*` origin/CSRF guard. The endpoints never accept commands, paths, repository URLs, skill names, or scope from the browser.
 

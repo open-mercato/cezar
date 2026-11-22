@@ -1,6 +1,6 @@
 # Manager plan-limit popover and current-session usage
 
-Status: **design, awaiting the owner's pick** (2026-11-20). Follows the plan-limit usage feature (#2337).
+Status: **implemented** (#2363) as the owner's [Decisions](#decisions-owner-2026-11-20) below; where Part 1 and the Decisions differ, the Decisions are what shipped. Follows the plan-limit usage feature (#2337).
 Mock: the task's Assets page `manager-plan-usage-design.html`.
 
 ## What exists today
@@ -22,8 +22,9 @@ Mock: the task's Assets page `manager-plan-usage-design.html`.
 - Manager popover = shared body for the newest 5-hour window + "Earlier 5-hour limits today", then a
   manager-only section (chat / watch checks / jobs, tasks it started) below the breakdown.
 - The manager chip stops hiding on phones: icon + % only below `md`.
-- **API (additive, optional):** `consumer.messages[]` items gain `aloneInferredPp`, `sharedEstimatePp`
-  and `ranTogetherWith`, computed in `usage-ledger/compute.ts` from the same shares. Weekly entries
+- **API (additive, optional):** `consumer.messages[]` items gain `aloneInferredPp` and `sharedEstimatePp`,
+  computed in `usage-ledger/compute.ts` from the same shares. As built, `ranTogetherWith` stays on the
+  consumer only, not on each message (`packages/contract/src/plan-usage.ts`). Weekly entries
   already carry `messages`, so a reply's week share needs nothing new. Per-manager figures already exist.
 
 ## Part 1b — manager + the tasks it started (owner feedback, 2026-11-20)
@@ -51,8 +52,8 @@ Hybrid recommended: **A**, plus B's strip appearing only at ≥ 80 % as a warnin
 Data: `usePlanUsage({ kind, window: 'current', account })` already returns `usedPercent.last`, `resetsAt`,
 `leftPp`, `limitReachedAt`. The manager's account comes from its runner + account profile.
 
-Non-plan runners (OpenCode, Cursor, Pi, …): no chip, no footnote, no strip — as today; the manager
-settings line says "OpenCode doesn't report plan limits". Codex: same as Claude, wording "tokens"
+Non-plan runners (OpenCode, Cursor, Pi, …): no chip, no footnote, no strip — as today. As built there
+is no "doesn't report plan limits" line in the manager settings. Codex: same as Claude, wording "tokens"
 instead of "cost".
 
 ## Open questions for the owner

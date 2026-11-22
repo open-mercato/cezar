@@ -4,7 +4,8 @@ Refs `.ai/specs/2026-10-31-mobile-apps-manager-first.md` (the parent spec), PR #
 
 Stacked on PR #1879. The spec itself builds nothing; the stack above it (#1895, #1900, #1906, #1883, #1901) implements it.
 
-Status: draft. **The wire contract now lives in [`RELAY_PROTOCOL.md`](../../RELAY_PROTOCOL.md)**, which
+Status: R1–R5 implemented (#1893, #1895, #1900, #1906, #1883, #1901); R6 (public-release gates: QR3,
+QR8, QR9 follow-ups, the published policy) not recorded as done. **The wire contract now lives in [`RELAY_PROTOCOL.md`](../../RELAY_PROTOCOL.md)**, which
 wins over this file. Any change to it is a separate commit and a line in the [changelog](#changelog).
 
 ## TLDR
@@ -518,6 +519,8 @@ New routes, contract first, in one chained workspace-level family and listed in 
 | `PUT /workspace/phones/computer-name` | The name sent to the relay as `label` ([Relay accounts](#relay-accounts)) |
 | `GET /workspace/phones/account` | Account status, asking the relay only once relay keys exist |
 | `POST /workspace/phones/account`, `/account/resend`, `/account/check`, `/account/delete`, `/account/dismiss` | Attach an email, send a new link, Check now, delete the account, dismiss the grace notice |
+| `PUT /workspace/phones/:deviceId/prefs` | The computer edits a phone's push settings (spec `2026-11-20-phone-notifications-inbox`, #2367) |
+| `GET/PUT /workspace/phone/push/prefs` | The calling phone reads and declares its push settings and what its app `understands`, inside a relay scope (#2367) |
 
 A `phone-pairing` event on `/workspace/events` drives the screen. `capabilities.phonePairing`, false only
 under `CEZ_RELAY=0`, hides the section, and it lives in Settings' global side, since a phone reaches the
@@ -782,7 +785,7 @@ queues work for a phone, and neither does the relay.**
 A Manual hosted server sends the same `POST /v1/push` with no socket. See
 [QR4](#qr4-may-manual-servers-use-the-relay-for-push).
 
-### R5 as built (Android, relay-paired servers)
+### R5 as built (relay-paired servers; Android first, iOS since #2261)
 
 **The route that hands a grant to cezar** is one workspace-level resource, `/api/v1/workspace/phone/push`,
 answered only inside a relay scope and only for the calling `deviceId`. Outside a relay scope it is 403,
@@ -821,11 +824,13 @@ row's `grants`, so `device-remove` on **Remove** denies every grant the phone ev
 | Important reply, question card, approval card | `alert`, after its delay and its read check, as for the OS notification |
 | A task newly needing the user | A watch check's fresh `task-needs-you` attention items, before the model is asked. Latency is the manager's watch interval |
 
-**The sink** (`packages/cezar/src/push/`) coalesces: a signal arms one send per device, at least 10 s out
-and at least 60 s after that device's last send, so a burst is one push. At send time it skips a
+**The sink** (`packages/cezar/src/push/`) coalesces: a signal arms one send, at least 10 s out
+and at least 60 s after the sink's last alert to any device (one `lastSentAt` per sink), so a burst is one push. At send time it skips a
 device with a proven session, which is a phone in the foreground (its socket closes on stop). The
-body is the protocol's six fields and nothing else; `count` is the sum of `pendingActions` over
-managers with `notify` on, at least 1 and at most 99. 403 and 410 delete the grant, everything else
+body is the protocol's six fields and nothing else; since #2367 `count` is what that phone counts on its icon
+(the attention list filtered by its push settings, spec `2026-11-20-phone-notifications-inbox`), at most
+99, and at least 1 only when the alert is about a kind that phone pushes; a phone whose count would be 0
+gets no push. 403 and 410 delete the grant, everything else
 drops the signal. `CEZ_PUSH=0` makes the sink inert and the route report `available: false`.
 
 **The tap.** The relay forwards only `s`, the `cezarId`. The app opens that server and asks `GET
@@ -834,8 +839,8 @@ when there is none. The id never leaves the encrypted session.
 
 **The app.** FCM registration, a grant per server through `POST /v1/push-grants` signed by that
 server's device key, one notification channel, the Android 13+ permission asked when the user turns
-notifications on for a server (the switch on the Servers list, on by default after the first pairing
-asks), renewal on app open under 30 days, and `POST /v1/push-grants/revoke` on Forget and on the
+notifications on for a server (the switch on the server list, "Your cezars" since #2340, on by default
+after the first pairing asks), renewal on app open under 30 days, and `POST /v1/push-grants/revoke` on Forget and on the
 switch going off, retried on app open per § 7. Without `google-services.json` the build still
 succeeds and push is off. Tests use a fake token source and a fake relay transport.
 

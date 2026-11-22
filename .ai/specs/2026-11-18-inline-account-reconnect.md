@@ -1,6 +1,6 @@
 # Reconnect an agent account where the error appears
 
-Status: approved 2026-11-18 (`80ec33628`), implementation in progress · Date: 2026-11-18 · Design page: `2026-11-18-inline-account-reconnect.html`
+Status: approved 2026-11-18; implemented in #2314 for Claude, Codex, Cursor, Copilot and OpenCode, except the "Finish on my computer" hand-off, which is not built · Date: 2026-11-18 · Design page: `2026-11-18-inline-account-reconnect.html`
 (interactive; deep links such as `?runner=copilot&phase=signing&mode=remote`)
 
 ## Problem
@@ -44,7 +44,7 @@ It reuses `resolveWorkspaceProfile`, `loginCommand`, the account folder and `wat
 | Cursor | `agent login`, URL printed, Cursor polls (spike: suppress browser) | same link |
 | Copilot | `copilot login` device flow | same |
 | OpenCode | `opencode serve` auth API (key; provider OAuth: spike) | key paste |
-| Kimi | `kimi login` (spike) | terminal |
+| Kimi | terminal (the `kimi login` spike was not confirmed, below) | terminal |
 | pi, Gemini, Antigravity, Junie, OMP | terminal hand-off (no headless login) | command + Check again |
 
 Success means the login exits 0 **and** a fresh `profileStatus` for that account answers connected **and**

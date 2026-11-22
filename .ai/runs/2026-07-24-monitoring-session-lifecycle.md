@@ -1,7 +1,7 @@
 # Implement durable monitoring sessions and periodic wake-up
 
 Source doc: `.ai/specs/2026-07-24-long-running-waiting-sessions.md`
-Related source doc: `.ai/specs/2026-07-24-monitoring-session-auto-wake.md`
+Related source doc: `.ai/specs/implemented/2026-07-24-monitoring-session-auto-wake.md`
 Spec PR: #655
 Issue: #654
 

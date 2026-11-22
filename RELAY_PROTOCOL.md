@@ -42,7 +42,8 @@ a session.
 | `grantId` | `base64url` of 16 random bytes chosen by the relay | Yes |
 | Command `id` | Any string of 1 to 64 characters chosen by cezar | Yes |
 
-Ids are self-certifying, so no account or registry exists. Ed25519 keys are for the relay only. X25519
+Ids are self-certifying, so pairing and tunnels need no account or registry; the optional accounts of
+[§18](#18-accounts) never touch tunnel traffic, keys or sessions. Ed25519 keys are for the relay only. X25519
 keys are end-to-end, and the relay never receives one as an identifier. A relay that joins a rendezvous
 sees public static keys in the handshake (§9), never a private one. A phone
 SHOULD generate a fresh pair of each for each server it pairs with, so that two cezars cannot
@@ -308,11 +309,12 @@ BACKWARD_COMPATIBILITY.md §2.
 | `v` | `1` |
 | `kind` | `attention`, an alert, or `count`, a silent badge update |
 | `count` | Integer 0 to 99, the badge. An `attention` push carries at least 1: its own item counts, even a kind the phone keeps off its icon |
-| `id` | `base64url` of 16 random bytes. Refused if seen in the last 10 minutes |
+| `id` | `base64url` of 16 random bytes. Refused if seen in the last 10 minutes (an hour for a `count` push, below) |
 | `ts` | Unix seconds within ±120 s |
 
-The relay forwards nothing from the request except `count`. Neither payload carries more than the
-fixed text, `s` (the `cezarId`) and `count`; the phone names the computer itself, from its own
+The relay forwards nothing from the request except `count`. No payload carries more than the
+fixed text, `s` (the `cezarId`), the count (`count`, or `c` in a silent APNs push) and, in a silent FCM
+push, the marker `t`; the phone names the computer itself, from its own
 paired-server list.
 
 - **APNs**: `{ "aps": { "alert": { "title": "Cezar", "body": "Cezar needs you" }, "badge": count,

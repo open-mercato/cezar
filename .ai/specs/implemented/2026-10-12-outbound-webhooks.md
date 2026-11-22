@@ -1,9 +1,9 @@
 # Outbound webhooks — task notifications beyond the cockpit
 
 Technical specification for project-scoped outbound task notifications. Provider-specific
-contracts: [Slack](2026-10-19-slack-webhook-receivers.md) and
-[Discord](2026-10-19-discord-webhook-receivers.md).
-Setup and operating limits: [receiver guide](../../packages/cezar/docs/webhooks.md).
+contracts: [Slack](../2026-10-19-slack-webhook-receivers.md) and
+[Discord](../2026-10-19-discord-webhook-receivers.md).
+Setup and operating limits: [receiver guide](../../../packages/cezar/docs/webhooks.md).
 
 ## Overview
 
@@ -26,7 +26,7 @@ be running to send anything.
 
 Users can connect a Slack Incoming Webhook or Discord channel Webhook
 URL directly, or send signed JSON to their own endpoint/automation workflow such as Make or n8n.
-The [receiver guide](../../packages/cezar/docs/webhooks.md) documents setup and the receiver contract.
+The [receiver guide](../../../packages/cezar/docs/webhooks.md) documents setup and the receiver contract.
 Native destinations need no cezar bot, OAuth flow or relay; Slack setup still requires the user
 to install an Incoming Webhook app. Notifications remain one-way, with no replies or approvals
 from chat and no guarantee that a phone displays them.
@@ -887,8 +887,9 @@ project questions after restart are suppressed rather than guessed fresh. The re
 
 Ownership is deliberately fail-closed. On Windows, a dead owner whose PID was reused by a process
 this user cannot open reports an unreadable start time, so acquisition keeps waiting until the
-stale `owner.lock` is removed; a changed hostname with a different boot ID (another machine or a
-recreated container on a bind mount) or any unreadable identity behaves the same way. A changed
+stale `owner.lock` is removed; a changed hostname with a different boot ID (another machine on a
+shared directory) or any unreadable identity behaves the same way. A recreated container on the same
+host shares the host's `boot_id`; its different PID namespace keeps it fail-closed. A changed
 hostname with the SAME stable boot ID is a renamed host on one kernel (#2398): pid+start decide. Windows boot-time changes do not authorize takeover;
 PID and process-start evidence are required. Linux locks from a different PID namespace, or
 locks with no namespace evidence, remain fail-closed on the same boot. The macOS
@@ -1079,8 +1080,8 @@ by that receiver; it does not prove downstream Slack/Discord delivery. A workflo
 before completing its actions owns their retries and failure reporting.
 
 Native cezar-to-Slack/Discord notifications follow the
-[Slack](2026-10-19-slack-webhook-receivers.md) and
-[Discord](2026-10-19-discord-webhook-receivers.md) contracts. Those specs define provider formatting, response classification, rate handling, URL
+[Slack](../2026-10-19-slack-webhook-receivers.md) and
+[Discord](../2026-10-19-discord-webhook-receivers.md) contracts. Those specs define provider formatting, response classification, rate handling, URL
 validation and setup UX. They share the queue and privacy profiles, and require no
 cezar bot, OAuth flow or relay. They do not accept replies or approvals, and HTTP acceptance
 is not a phone display/read receipt. Dry-run checks send no receiver traffic and cannot

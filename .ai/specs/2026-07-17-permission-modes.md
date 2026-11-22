@@ -1,6 +1,9 @@
 # Permission modes: non-skip-all and non-auto agent permissions (#475)
 
-> Status: **approved — spec PR #477 merged**
+> Status: **approved — spec PR #477 merged; presets not implemented.** As of 2026-11-22 the contract has no
+> `permissionMode` field, and Claude's default is `--permission-mode dontAsk` with the allowlist
+> (`acceptEdits` under `CEZ_APPROVAL_GATE=1`); `bypassPermissions` only behind the per-project switch from
+> #2259, which is off by default and never applies to read-only tasks (`core/claude-cli-runner.ts`).
 > Issue: https://github.com/open-mercato/cezar/issues/475
 > Mockups: [settings block](assets/permission-modes/settings-permissions.html) ·
 > [composer guard](assets/permission-modes/composer-autonomous-guard.html) ·
@@ -112,7 +115,7 @@ presets plus optional advanced rules:
 
 | Preset | Meaning (UI copy) | claude | codex | opencode |
 | --- | --- | --- | --- | --- |
-| `auto` *(default)* | Full permissions; run without asking | `bypassPermissions` / dangerously-skip permissions | `danger-full-access` + `never` | all permissions allowed |
+| `auto` *(default)* | Full permissions; run without asking | `bypassPermissions` / dangerously-skip permissions (as built today: `dontAsk` + allowlist, see Status) | `danger-full-access` + `never` | all permissions allowed |
 | `guarded` | Edits run; shell & network ask | `acceptEdits`, `Bash` moved from allowlist to `ask` | `workspace-write` + `on-request` | `edit: allow`, `bash: ask`, `webfetch: ask` |
 | `read-only` | Reads run; any change asks | `manual` + allowlist `Read,Grep,Glob`; writes/exec ask | `read-only` sandbox + `on-request` | `edit: ask`, `bash: ask` |
 | `manual` | Everything asks | `--permission-mode manual`, empty allowlist | `untrusted` | all tools `ask` |

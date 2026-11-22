@@ -38,7 +38,7 @@ Add nullable workspace resource `monitoringWakeIntervalMinutes`:
 - after 40 automatic wakeups in the current monitoring epoch, emit a lifecycle note and hand the run to the user as an ordinary `waiting` park (idle timer armed if enabled, session left open for a reply); a run with a dispatched child still in flight stays parked for that child's report instead. A real user follow-up starts a new epoch; a child's report does not;
 - while a dispatched child is `queued` or `running`, a due wake-up is skipped (not counted) and re-armed: the child's settle report wakes the run on its own. A child parked `waiting` on a human does not defer it (spec 2026-09-10-dispatch, A15), so the commander can still notice it;
 - a monitoring park with nothing in flight that hears nothing for four times the configured `resources.idleTimeoutMinutes` (default 15 minutes; `MONITORING_LIVENESS_MS` = 4 × `DEFAULT_IDLE_TIMEOUT_MINUTES` = 60 minutes is the fallback for `null` or `0`) is handed to the user as `waiting` the same way, which is the bound when the interval is null. At the wake-up cap the same bound is armed as a fallback; if a dispatched child is still in flight when it expires, it re-arms and waits for that child;
-- a hand-off is parked like a mid-workflow `CEZ:ASK` (`askParked`): the second half of the fuse follows the configured idle timeout. When enabled, the idle timer closes the session without a reply and the run stays `waiting` as an idle park (`idleClosedAt`, no process), never `done`/`review` on work the agent said was still pending; the next message reopens it (spec 2026-11-04-idle-closed-attention-state § Revision). With idle timeout `null` or `0`, no idle timer closes it: the hand-off raises attention and rests at `waiting` with the session open rather than settling. A cezar restart still settles a handed-off run `failed` the same way. With no dispatched child in flight, the default total fuse is 40 × 5 + 15 = 215 minutes; explicitly selecting park mode with interval `null` gives 60 + 15 = 75 minutes at the default idle timeout.
+- a hand-off is parked like a mid-workflow `CEZ:ASK` (`askParked`): the second half of the fuse follows the configured idle timeout. When enabled, the idle timer closes the session without a reply and the run stays `waiting` as an idle park (`idleClosedAt`, no process), never `done`/`review` on work the agent said was still pending; the next message reopens it (spec 2026-11-04-idle-closed-attention-state § Revision). With idle timeout `null` or `0`, no idle timer closes it: the hand-off raises attention and rests at `waiting` with the session open rather than settling. A cezar restart still settles a handed-off run with an open session `failed` the same way; an idle park (no process) rests at `waiting` until a message reopens it (`recover`). With no dispatched child in flight, the default total fuse is 40 × 5 + 15 = 215 minutes; explicitly selecting park mode with interval `null` gives 60 + 15 = 75 minutes at the default idle timeout.
 
 Immediate autonomous mode keeps precedence and existing behavior. The timed mode starts only after the run actually parks as monitoring, including after immediate autonomous continuation reaches its own cap.
 
@@ -99,7 +99,7 @@ child report, cancel, cap hand-off, liveness in park mode and at the cap.
 
 ## UI/UX
 
-Add a Settings → Resources field below Extra monitoring sessions:
+Add a Settings → Resources field below Extra monitoring sessions (Resources is now a card on Settings → Behaviour):
 
 - title: **Monitoring wake-up**;
 - mode select: **Park until resumed** or **Re-check on an interval**;
@@ -138,7 +138,7 @@ The same deadline should appear in the compact run status/header when space perm
 
 ## Risks & Impact Review
 
-- **Cost/network:** each tick is a model request. Default null, explicit UI copy, one-minute floor, and 40-wakeup cap bound surprise.
+- **Cost/network:** each tick is a model request. Explicit UI copy, the one-minute floor and the 40-wakeup cap bound surprise (the default interval is 5 minutes, below).
 - **Race risk:** timer/turn lifecycle can double-send if cleanup is scattered. One coordinator/helper and fake-timer tests are mandatory.
 - **Cost/network:** each wake creates a model turn. The default is a 5-minute interval; explicit `null` selects park mode with no automatic model turns. UI copy explains the cost, the one-minute floor, the 40-wakeup cap, and skipped wakeups while a dispatched child is in flight.
 - **Rollback:** reverting removes timers and ignores the passthrough config key; durable parked monitoring from the foundational spec remains functional.
