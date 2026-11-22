@@ -235,7 +235,7 @@ describe('RunManager repository-root lease scheduling', () => {
         () =>
           store
             .readEvents(blocked.id)
-            .some((event) => event.type === 'note' && String(event.message).includes('exclusive access')),
+            .some((event) => event.type === 'note' && /exclusive access|release the repository working tree/.test(String(event.message))),
         'the blocked run to reach the lease',
       );
 
