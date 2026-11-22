@@ -84,6 +84,22 @@ describe('plan usage attribution', () => {
     }]);
   });
 
+  it('gives a retried reply the answering attempt’s shape before any reading has split it', () => {
+    const shape = (requests: number) => ({
+      requests, contextFirst: 30_000, contextPeak: 30_000, toolResultChars: 0,
+      tools: { route: 0, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 4,
+    });
+    const begin = (session: string, at: string): LedgerRecord => ({ t: 'begin', at: T(at), account: ACC, session, consumer: { id: 'mgr:rel', kind: 'manager', title: 'Release manager' }, part: 'chat', messageId: 'msg1' });
+    const w = only([
+      reading('10:40', 10),
+      begin('a1', '10:40'), sample('a1', '10:40', '10:41', 0.5), { t: 'end', at: T('10:41'), session: 'a1', turn: shape(1) },
+      reading('10:42', 11),
+      // The retry answered after the last reading: no share of its own yet.
+      begin('a2', '10:43'), sample('a2', '10:43', '10:45', 1.5), { t: 'end', at: T('10:45'), session: 'a2', turn: shape(3) },
+    ]);
+    expect(w.consumers[0]!.messages![0]!.turn).toEqual({ ...shape(3), usd: 2 });
+  });
+
   it('gives a retried reply its last attempt’s shape and the cost of both attempts', () => {
     const shape = (requests: number) => ({
       requests, contextFirst: 30_000, contextPeak: 30_000, toolResultChars: 0,
@@ -457,6 +473,17 @@ describe('a turn that re-cached its history (the 2026-11-22 07:11 report, spec 2
     const w = window([span('t', '11:12:24', '11:16:05', 6.11)]);
     expect(manager(w).estimatePp).toBe(5);
     expect(manager(w).aloneInferredPp).toBe(5);
+  });
+
+  it('a non-Claude reading keeps the 20-second rule, per-request spans or not', () => {
+    const codex = (hhmmss: string, used: number): LedgerRecord => ({ ...read(hhmmss, used), source: 'codex-notification' } as LedgerRecord);
+    const w = only([
+      codex('11:12:02', 0),
+      begin('m', 'mgr:mobile', '11:11:59', { part: 'chat', messageId: 'msg-0711' }), span('m', '11:11:59', '11:12:21', 0.314), { t: 'end', at: at('11:12:21'), session: 'm' },
+      begin('t', 'run:cezar/605750b7', '11:12:24'), span('t', '11:12:24', '11:12:38', 5.9), span('t', '11:12:38', '11:12:55', 0.05), span('t', '11:12:55', '11:16:05', 0.16), { t: 'end', at: at('11:16:05'), session: 't' },
+      codex('11:12:40', 5), codex('11:14:45', 6),
+    ]);
+    expect(manager(w).estimatePp).toBe(5);
   });
 
   it('after: per-request samples put the jump on the turn that re-cached', () => {

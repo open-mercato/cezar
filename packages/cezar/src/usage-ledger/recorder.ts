@@ -153,12 +153,14 @@ export class PlanUsageTracker {
     readonly account: LedgerAccountRef,
     readonly consumer: LedgerConsumer,
     private readonly options: { part?: 'chat' | 'watch' | 'job'; messageId?: string; endOnClose?: boolean } = {},
+    /** The clock a turn's spans read; a test seam. */
+    private readonly now: () => number = Date.now,
   ) {}
 
   private open(): LedgerSession {
     if (!this.turn) {
       const { endOnClose: _endOnClose, ...session } = this.options;
-      this.turn = new LedgerSession(this.account, this.consumer, session);
+      this.turn = new LedgerSession(this.account, this.consumer, { ...session, now: this.now() });
       this.last = this.turn;
       this.marks = [];
       this.outputTokens = undefined;
@@ -171,15 +173,15 @@ export class PlanUsageTracker {
   event(event: { type: string; usd?: number; status?: AgentUsageStatus }): void {
     if (event.type === 'usage-status' && event.status) {
       const { contextTokens, cacheWriteTokens, turnTokens } = event.status;
-      if (contextTokens !== undefined) this.marks.push({ at: Date.now(), context: contextTokens, ...(cacheWriteTokens !== undefined ? { write: cacheWriteTokens } : {}) });
+      if (contextTokens !== undefined) this.marks.push({ at: this.now(), context: contextTokens, ...(cacheWriteTokens !== undefined ? { write: cacheWriteTokens } : {}) });
       if (turnTokens) this.outputTokens = turnTokens.outputTokens;
       return;
     }
     if (event.type !== 'cost' || this.provider !== 'claude' || typeof event.usd !== 'number') return;
     const session = this.turn ?? this.last ?? this.open();
     const requests = requestWeights(this.marks, this.outputTokens);
-    if (requests) session.requestSamples(event.usd, requests);
-    else session.sample({ usd: event.usd }, Date.now(), true);
+    if (requests) session.requestSamples(event.usd, requests, this.now());
+    else session.sample({ usd: event.usd }, this.now(), true);
     this.marks = [];
     this.outputTokens = undefined;
   }
@@ -191,18 +193,18 @@ export class PlanUsageTracker {
       if (this.provider === 'codex') {
         const input = typeof event.usage?.input === 'number' ? event.usage.input : 0;
         const output = typeof event.usage?.output === 'number' ? event.usage.output : 0;
-        this.open().sample({ tokens: input + output });
+        this.open().sample({ tokens: input + output }, this.now());
       }
       // A one-turn session (a manager turn) ends on close, where its outcome is known.
       if (this.options.endOnClose) return;
-      this.turn?.end();
+      this.turn?.end({ now: this.now() });
       this.turn = undefined;
     }
   }
 
   /** The session settled: close a turn that never completed (a crash stays unweighted, hence unsplit). */
   close(options: { quiet?: boolean; turn?: LedgerTurnStats } = {}): void {
-    this.turn?.end(options);
+    this.turn?.end({ now: this.now(), ...options });
     this.turn = undefined;
   }
 }

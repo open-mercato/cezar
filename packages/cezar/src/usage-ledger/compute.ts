@@ -476,12 +476,11 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
   const consumers = new Map<string, PlanUsageConsumer & { _partners: Set<string> }>();
   const failuresBy = new Map<string, Ledger['failures']>();
   for (const f of ledger.failures) failuresBy.set(f.consumerId, [...(failuresBy.get(f.consumerId) ?? []), f]);
+  // Every attempt of a reply in this window, shares or not: until the next reading the answering
+  // attempt has none, yet its shape and spend are the reply's.
   const attemptsOf = new Map<string, Session[]>();
-  for (const share of shares) {
-    const s = share.session!;
-    if (!s.messageId) continue;
-    const seen = attemptsOf.get(s.messageId) ?? [];
-    if (!seen.includes(s)) attemptsOf.set(s.messageId, [...seen, s]);
+  for (const s of sessions) {
+    if (s.messageId) attemptsOf.set(s.messageId, [...(attemptsOf.get(s.messageId) ?? []), s]);
   }
   for (const share of shares) {
     const s = share.session!;

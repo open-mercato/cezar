@@ -5,6 +5,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ManagerConnectors, ManagerConnectorsResponse } from '@open-mercato/cezar-api-client'
 
 import { ConnectorsDialog, savedConnectors, setConnectorLevel, setConnectorToolOverride } from './manager-connectors'
+
+const { toast } = vi.hoisted(() => ({ toast: vi.fn() }))
+vi.mock('@/components/ui/toaster', () => ({ toast }))
 import { managerFixture } from './manager-fixtures'
 
 const calendar = {
@@ -119,6 +122,21 @@ describe('ConnectorsDialog', () => {
     await waitFor(() => expect(calls).toHaveLength(2))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(calls.map((call) => call.method)).toEqual(['GET', 'POST', 'POST']))
+  })
+
+  it('says so when its own lookup fails, and Refresh still works', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET' })
+      return url.endsWith('/refresh')
+        ? new Response(JSON.stringify({ error: 'Claude Code is not signed in' }), { status: 502 })
+        : new Response(JSON.stringify({ available: true, servers: [] }), { status: 200 })
+    }))
+    toast.mockClear()
+    renderDialog()
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('Claude Code is not signed in'), { tone: 'danger' }))
+    expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(1)
   })
 
   it('explains that only Claude Code managers can use connectors', async () => {

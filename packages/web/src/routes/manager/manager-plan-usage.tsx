@@ -53,9 +53,12 @@ export function turnTokens(turn: PlanUsageTurnStats): TurnTokens | null {
 
 /** 950 · 13k · 3.7M: token counts at a glance. */
 export function tokenCount(n: number): string {
-  if (n < 1000) return String(Math.round(n))
-  if (n < 1_000_000) return `${Math.round(n / 1000)}k`
-  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`
+  // Round first, then pick the unit: 999,600 is 1.0M, never 1000k.
+  if (Math.round(n) < 1000) return String(Math.round(n))
+  const k = Math.round(n / 1000)
+  if (k < 1000) return `${k}k`
+  const tenths = Math.round(n / 100_000) / 10
+  return tenths < 10 ? `${tenths.toFixed(1)}M` : `${Math.round(n / 1_000_000)}M`
 }
 
 /** "3.7M cache read · 942k cache written · 3k output". */

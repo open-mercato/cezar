@@ -279,6 +279,9 @@ describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)'
     expect(turnShape([{ turn: stats(tokens) }, { turn: stats({ cacheReadTokens: 56_657, cacheWriteTokens: 1_782, outputTokens: 506 }) }, { turn: stats() }])?.tokens)
       .toEqual({ cacheRead: 3_800_000, cacheWrite: 944_000, output: 4000 })
     expect([950, 13_400, 942_218, 3_743_343, 12_500_000].map(tokenCount)).toEqual(['950', '13k', '942k', '3.7M', '13M'])
+    // Rounded first, so a unit never shows its own upper bound.
+    expect([999.4, 999.6, 999_499, 999_500, 999_999, 9_949_999, 9_950_000, 9_999_999].map(tokenCount))
+      .toEqual(['999', '1k', '999k', '1.0M', '1.0M', '9.9M', '10M', '10M'])
   })
 
   it('shows the reason under a largest turn and the window’s turn shape', () => {
