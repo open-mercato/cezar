@@ -150,10 +150,10 @@ export function MemoryDialog({ manager, open, onOpenChange, onCloseAutoFocus }: 
               </li>
             ) : (
               <li key={entry.key} data-slot="manager-memory-entry" className="flex items-start gap-2 rounded-md border p-2.5">
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <div className="flex items-center gap-2">
+                <div className="flex min-w-0 flex-1 flex-col gap-1 wrap-anywhere">
+                  <div className="flex min-w-0 items-center gap-2">
                     <Badge variant="secondary">{KIND_LABEL[entry.kind]}</Badge>
-                    <span className="truncate font-mono text-xs text-muted-foreground">{entry.key}</span>
+                    <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{entry.key}</span>
                   </div>
                   <p className="text-sm">{entry.text}</p>
                   {entry.why ? <p className="text-xs text-muted-foreground">Why: {entry.why}</p> : null}

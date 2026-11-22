@@ -51,11 +51,11 @@ export function AttentionRow({ item, actions, source }: { item: AttentionItem; a
     >
       <StatusDot tone={TONE[item.kind]} className="mt-1.5 md:mt-0" aria-label={KIND_LABEL[item.kind]} />
       <div className="min-w-0">
-        <Link to={href} className="line-clamp-2 text-ui font-medium text-foreground">
+        <Link to={href} className="line-clamp-2 text-ui font-medium text-foreground wrap-anywhere">
           {item.title}
         </Link>
         <div data-slot="now-why" className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-muted-foreground">
-          <span>
+          <span className="min-w-0 wrap-anywhere">
             {why} · <RelativeAge at={item.since} />
           </span>
           {item.detail ? <span className="min-w-0 truncate">{item.detail}</span> : null}
@@ -66,6 +66,7 @@ export function AttentionRow({ item, actions, source }: { item: AttentionItem; a
         {item.kind === 'question' && item.options?.length ? (
           item.options.slice(0, 4).map((label) => (
             <Button key={label} size="sm" variant="outline" disabled={busy} data-slot="now-answer-option"
+              className="h-auto min-h-[30px] max-w-full py-1 text-left whitespace-normal wrap-anywhere"
               onClick={() => run(() => actions.answer(item, optionAnswer(item, label)), 'Could not send the answer')}>
               {label}
             </Button>

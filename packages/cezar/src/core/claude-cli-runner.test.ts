@@ -104,6 +104,14 @@ describe('buildClaudeArgs noMcpServers', () => {
   it('keeps the configured servers on an ordinary run', () => {
     expect(buildClaudeArgs(spec)).not.toContain('--strict-mcp-config');
   });
+
+  it('also switches claude.ai connectors off in the child, and only then', async () => {
+    const bin = fileURLToPath(new URL('./__fixtures__/claude/stub-reports-mcp-switches.mjs', import.meta.url));
+    const run = (noMcpServers: boolean) => new ClaudeCliRunner({ bin, timeoutMs: 0 })
+      .run({ ...spec, cwd: process.cwd(), env: { ENABLE_CLAUDEAI_MCP_SERVERS: 'kept' }, ...(noMcpServers ? { noMcpServers } : {}) });
+    expect((await run(true)).text).toBe('claudeai=false strict=true');
+    expect((await run(false)).text).toBe('claudeai=kept strict=false');
+  });
 });
 
 describe('buildClaudeArgs bashHookCommand', () => {

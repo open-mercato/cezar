@@ -247,8 +247,12 @@ export interface AgentUsageWindow {
 export interface AgentUsageStatus {
   /** Tokens in the main agent's context after its latest message. */
   contextTokens?: number;
+  /** Of `contextTokens`, what that request wrote to the prompt cache (Claude only). */
+  cacheWriteTokens?: number;
   contextWindow?: number;
   limits?: AgentUsageWindow[];
+  /** A finished turn's own totals (Claude's result frame): what a manager turn's stats record. */
+  turnTokens?: { cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number };
 }
 
 export interface AgentToolCallRecord {

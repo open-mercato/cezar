@@ -1762,7 +1762,10 @@ export class RunStore extends EventEmitter {
   setLiveUsage(runId: string, status: AgentUsageStatus): void {
     const run = this.runs.get(runId);
     if (!run) return;
-    run.liveUsage = { ...run.liveUsage, ...status, at: new Date().toISOString() };
+    // Per-request and per-turn token splits feed manager turn stats, not a task's header gauges.
+    const { cacheWriteTokens: _write, turnTokens: _turn, ...gauges } = status;
+    if (Object.keys(gauges).length === 0) return;
+    run.liveUsage = { ...run.liveUsage, ...gauges, at: new Date().toISOString() };
     this.touch(run);
   }
 

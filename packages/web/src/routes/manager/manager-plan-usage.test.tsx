@@ -14,8 +14,11 @@ import {
   ReplyUsageNote,
   replyUsageById,
   replyUsageDetail,
+  couldBeTask,
+  tokenCount,
   turnReasons,
   turnShape,
+  turnTokens,
   type AccountNow,
 } from './manager-plan-usage'
 
@@ -257,25 +260,44 @@ describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)'
 
   it('names why a turn was expensive', () => {
     expect(turnReasons(stats())).toEqual([])
-    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cache expired after 10 h idle', 'large context (942k)'])
-    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['7 requests', 'big tool output', 'new session'])
+    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cold start after 10 h idle', 'large context'])
+    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['many requests', 'big tool output', 'new session'])
+    // The recorded flag wins over the idle-gap guess: a short gap can still miss the cache, a long one hit it.
+    expect(turnReasons(stats({ cold: true, idleMs: 120_000 }))).toEqual(['cold start'])
+    expect(turnReasons(stats({ cold: false, idleMs: 2 * 3_600_000 }))).toEqual([])
   })
 
   it('sums routing against its own work and counts turns a task could have done', () => {
     expect(turnShape([{ turn: stats() }, { turn: stats({ requests: 8, contextPeak: 45_000, tools: { route: 0, look: 2, own: 5, write: 1 } }) }, {}])).toEqual({
-      turns: 2, avgContext: 40_000, avgRequests: 5, tools: { route: 1, look: 2, own: 5, write: 1 }, couldBeTasks: 1,
+      turns: 2, avgContext: 40_000, avgRequests: 5, tools: { route: 1, look: 2, own: 5, write: 1 }, couldBeTasks: 1, tokens: null,
     })
     expect(turnShape([{}])).toBeNull()
+    // Files a manager writes carry text to a task: routing, never a reason to call it a task.
+    expect(couldBeTask(stats({ tools: { route: 1, look: 0, own: 0, write: 9 } }))).toBe(false)
+  })
+
+  it('reads a turn’s token split, and sums it only over the turns that reported one', () => {
+    const tokens = { cacheReadTokens: 3_743_343, cacheWriteTokens: 942_218, outputTokens: 3494 }
+    expect(turnTokens(stats())).toBeNull()
+    expect(turnTokens(stats(tokens))).toEqual({ cacheRead: 3_743_343, cacheWrite: 942_218, output: 3494 })
+    expect(turnShape([{ turn: stats(tokens) }, { turn: stats({ cacheReadTokens: 56_657, cacheWriteTokens: 1_782, outputTokens: 506 }) }, { turn: stats() }])?.tokens)
+      .toEqual({ cacheRead: 3_800_000, cacheWrite: 944_000, output: 4000 })
+    expect([950, 13_400, 942_218, 3_743_343, 12_500_000].map(tokenCount)).toEqual(['950', '13k', '942k', '3.7M', '13M'])
+    // Rounded first, so a unit never shows its own upper bound.
+    expect([999.4, 999.6, 999_499, 999_500, 999_999, 9_949_999, 9_950_000, 9_999_999].map(tokenCount))
+      .toEqual(['999', '1k', '999k', '1.0M', '1.0M', '9.9M', '10M', '10M'])
   })
 
   it('shows the reason under a largest turn and the window’s turn shape', () => {
-    const withStats = consumer({ ...manager, messages: [{ ...turn('a1', 'chat', 5, 1), turn: stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }) }] })
+    const withStats = consumer({ ...manager, messages: [{ ...turn('a1', 'chat', 5, 1), turn: stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5, cacheReadTokens: 3_743_343, cacheWriteTokens: 942_218, outputTokens: 3494 }) }] })
     const u = managerPlanUsage([entry(withStats)], 'm1', [], KEY, NOW)!
     renderIn(<ManagerUsageChip usage={u} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
     fireEvent.click(screen.getByRole('button'))
-    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cache expired after 10 h idle, large context (942k)')
+    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cold start after 10 h idle, large context')
     expect(row('manager-usage-shape')!.textContent).toContain('942k context · 5.0 requests per turn (1 turn)')
     expect(row('manager-usage-shape')!.textContent).toContain('Tool calls: 1 routing work to tasks, 0 looking up state, 0 its own work')
+    expect(row('manager-usage-turn-tokens')!.textContent).toBe('3.7M cache read · 942k cache written · 3k output')
+    expect(row('manager-usage-shape-tokens')!.textContent).toBe('Tokens: 3.7M cache read · 942k cache written · 3k output')
   })
 })
 
