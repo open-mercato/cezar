@@ -24,9 +24,6 @@ export const ACCOUNT_PATHS = {
   delete: '/v1/accounts/delete',
 } as const;
 
-/** The header that carries the token on `GET /v1/cezar/{cezarId}`. */
-export const ACCOUNT_HEADER = 'X-Cezar-Relay-Account';
-
 const fileSchema = z.looseObject({
   /** The relay the token came from: another relay never saw it. */
   origin: z.string().max(300).optional().catch(undefined),
