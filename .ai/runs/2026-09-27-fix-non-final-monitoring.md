@@ -1,7 +1,7 @@
 # Fix non-final workflow monitoring
 
 Issue: #1076
-Source doc: `.ai/specs/2026-07-24-monitoring-session-auto-wake.md`
+Source doc: `.ai/specs/implemented/2026-07-24-monitoring-session-auto-wake.md`
 
 ## Goal
 

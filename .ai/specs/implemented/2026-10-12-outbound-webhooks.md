@@ -1,9 +1,9 @@
 # Outbound webhooks — task notifications beyond the cockpit
 
 Technical specification for project-scoped outbound task notifications. Provider-specific
-contracts: [Slack](2026-10-19-slack-webhook-receivers.md) and
-[Discord](2026-10-19-discord-webhook-receivers.md).
-Setup and operating limits: [receiver guide](../../packages/cezar/docs/webhooks.md).
+contracts: [Slack](../2026-10-19-slack-webhook-receivers.md) and
+[Discord](../2026-10-19-discord-webhook-receivers.md).
+Setup and operating limits: [receiver guide](../../../packages/cezar/docs/webhooks.md).
 
 ## Overview
 
@@ -26,7 +26,7 @@ be running to send anything.
 
 Users can connect a Slack Incoming Webhook or Discord channel Webhook
 URL directly, or send signed JSON to their own endpoint/automation workflow such as Make or n8n.
-The [receiver guide](../../packages/cezar/docs/webhooks.md) documents setup and the receiver contract.
+The [receiver guide](../../../packages/cezar/docs/webhooks.md) documents setup and the receiver contract.
 Native destinations need no cezar bot, OAuth flow or relay; Slack setup still requires the user
 to install an Incoming Webhook app. Notifications remain one-way, with no replies or approvals
 from chat and no guarantee that a phone displays them.
@@ -1080,8 +1080,8 @@ by that receiver; it does not prove downstream Slack/Discord delivery. A workflo
 before completing its actions owns their retries and failure reporting.
 
 Native cezar-to-Slack/Discord notifications follow the
-[Slack](2026-10-19-slack-webhook-receivers.md) and
-[Discord](2026-10-19-discord-webhook-receivers.md) contracts. Those specs define provider formatting, response classification, rate handling, URL
+[Slack](../2026-10-19-slack-webhook-receivers.md) and
+[Discord](../2026-10-19-discord-webhook-receivers.md) contracts. Those specs define provider formatting, response classification, rate handling, URL
 validation and setup UX. They share the queue and privacy profiles, and require no
 cezar bot, OAuth flow or relay. They do not accept replies or approvals, and HTTP acceptance
 is not a phone display/read receipt. Dry-run checks send no receiver traffic and cannot

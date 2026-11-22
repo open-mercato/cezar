@@ -361,7 +361,7 @@ scrollable card rather than for parity with that tool's 4 and 4), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
 chips; the user's pick rides the normal reply seam (`POST /api/v1/runs/:id/messages`
 with `askRequestId`). A `CEZ:ASK` card closes only with an **`ask.closed`** event in the
-run's NDJSON (Questions inbox spec, `.ai/specs/2026-11-17-questions-inbox.md`), so a replay
+run's NDJSON (Questions inbox spec, `.ai/specs/implemented/2026-11-17-questions-inbox.md`), so a replay
 draws the same closed card: `answered` (a message carrying its `askRequestId`), `dismissed`
 (the Questions inbox), `replaced` (a newer card with the same top-level `id`, or one whose
 headers cover every header of the old one; `replacedBy` names it), `retracted` (the agent's

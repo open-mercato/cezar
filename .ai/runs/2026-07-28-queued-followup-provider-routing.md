@@ -4,7 +4,7 @@
 
 Allow users to append prompt messages to an already-queued run without requiring an unrelated provider to be authorized, while preserving provider authorization gates for live messages and session continuations.
 
-Source doc: `.ai/specs/2026-07-22-provider-authentication.md`
+Source doc: `.ai/specs/implemented/2026-07-22-provider-authentication.md`
 
 ## Scope
 

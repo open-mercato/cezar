@@ -1,6 +1,6 @@
 # Jump between your own messages (task thread + manager chat)
 
-Status: **implemented** (#2290), revision 4. Design page: [`assets/2026-11-17-my-message-navigation/design.html`](assets/2026-11-17-my-message-navigation/design.html).
+Status: **implemented** (#2290), revision 4. Design page: [`assets/2026-11-17-my-message-navigation/design.html`](../assets/2026-11-17-my-message-navigation/design.html).
 
 ## Problem
 

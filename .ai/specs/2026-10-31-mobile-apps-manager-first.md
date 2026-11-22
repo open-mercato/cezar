@@ -83,7 +83,7 @@ This spec depends on exactly these items from that branch, re-checked at `a1ebb4
 | Components | `ManagerIndexRoute`, `ManagerListScreen`, `ManagerChat`, `ActionCard`, `Composer` `compact` and `footerEnd`, `ModeSwitch`, the Back to manager link | Layout work |
 | Lib | `diffManagerAttention`, `describeManagerNotification`, `orderManagers` | Notifications, list order |
 | Engine | `ManagerEngine.alert` (`engine.ts:719`), called for proposals and important replies | The push sink |
-| Design | `.ai/specs/2026-10-31-managers.md`, including its approval guard and the rule that only the `decision` route performs a proposal | Safety |
+| Design | `.ai/specs/implemented/2026-10-31-managers.md`, including its approval guard and the rule that only the `decision` route performs a proposal | Safety |
 
 Manager's own "Not in v1" list stands: no attachments in the composer, no autonomous merges.
 
