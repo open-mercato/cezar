@@ -1,5 +1,6 @@
 import type { PlanUsageTurnStats } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentUsageStatus } from '../core/agent-runner.ts';
+import { isManagerCommand, MANAGER_ROUTES, MANAGER_SUBCOMMANDS } from './cli-vocabulary.ts';
 
 /**
  * What one manager turn is made of (spec 2026-11-21-manager-short-sessions-and-memory § 2.3): the
@@ -9,35 +10,22 @@ import type { AgentEvent, AgentUsageStatus } from '../core/agent-runner.ts';
 
 type ToolKind = keyof PlanUsageTurnStats['tools'];
 
-/** `cez-manager` subcommands that act; every other one only reads. */
-const ROUTE = new Set(['merge', 'propose-action', 'rename']);
-const ROUTE_TASK = new Set(['create', 'say', 'follow', 'unfollow', 'cancel', 'retry']);
-const ROUTE_SUB = new Set(['add', 'remove', 'set', 'enable', 'disable', 'pause']);
-/** `cez automation` subcommands that change something; list, show, check and schema only read. */
-const ROUTE_AUTOMATION = new Set(['create', 'add', 'update', 'enable', 'pause', 'delete', 'run', 'report', 'unlink']);
-/** Flags that take a value, so the value is never read as a subcommand. */
-const VALUE_FLAGS = new Set([
-  '--project', '--runner', '--account', '--model', '--effort', '--title', '--workflow', '--kind', '--why', '--reason',
-  '--name', '--every', '--file', '--from-message', '--since', '--grep', '--limit', '--method', '--connector', '--tool',
-  '--args', '--mode', '--report-mode', '--prompt', '--cron', '--at', '--on', '--label', '--author',
-]);
-
-/** The words after `cez-manager`, flags and their values skipped: `[subcommand, next]`. */
-function managerWords(command: string): string[] | undefined {
-  const match = /(?:^|[\s;&|(])cez-manager\s+([^;&|)\n]*)/.exec(command);
+/**
+ * The command and subcommand of a `cez-manager` call: the first word the CLI knows as a command,
+ * then the first later word that command knows as a subcommand. Matching the CLI's own words, not a
+ * list of flags, keeps a flag's value from being read as the subcommand, unless the value is itself
+ * one of those words.
+ */
+function managerWords(command: string): { sub?: string; next?: string } | undefined {
+  const match = /(?:^|[\s;&|(])cez-manager(?:\s+([^;&|)\n]*))?/.exec(command);
   if (!match) return undefined;
-  const words: string[] = [];
-  const tokens = match[1]!.trim().split(/\s+/);
-  for (let i = 0; i < tokens.length && words.length < 2; i++) {
-    const token = tokens[i]!;
-    if (token.startsWith('-')) {
-      if (VALUE_FLAGS.has(token)) i++;
-      continue;
-    }
-    if (!/^[a-z-]+$/.test(token)) break;
-    words.push(token);
-  }
-  return words;
+  const tokens = (match[1] ?? '').trim().split(/\s+/);
+  const at = tokens.findIndex(isManagerCommand);
+  if (at < 0) return {};
+  const sub = tokens[at]!;
+  const known = MANAGER_SUBCOMMANDS[sub as keyof typeof MANAGER_SUBCOMMANDS] ?? [];
+  const next = tokens.slice(at + 1).find((token) => known.includes(token));
+  return { sub, ...(next ? { next } : {}) };
 }
 
 export function managerToolKind(tool: string, input: unknown): ToolKind {
@@ -47,13 +35,9 @@ export function managerToolKind(tool: string, input: unknown): ToolKind {
     : '';
   const words = managerWords(command);
   if (!words) return 'own';
-  const [sub, next] = words;
-  if (!sub) return 'look';
-  if (ROUTE.has(sub)) return 'route';
-  if (sub === 'automation') return next && ROUTE_AUTOMATION.has(next) ? 'route' : 'look';
-  if (sub === 'task') return next && ROUTE_TASK.has(next) ? 'route' : 'look';
-  if (sub === 'job' || sub === 'memory') return next && ROUTE_SUB.has(next) ? 'route' : 'look';
-  return 'look';
+  const route = words.sub ? MANAGER_ROUTES[words.sub as keyof typeof MANAGER_ROUTES] : undefined;
+  if (route === true) return 'route';
+  return route && words.next && route.has(words.next) ? 'route' : 'look';
 }
 
 export class TurnStatsCollector {

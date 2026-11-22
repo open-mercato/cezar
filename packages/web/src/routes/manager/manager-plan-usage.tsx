@@ -39,7 +39,28 @@ export interface ManagerTurnShape {
   tools: PlanUsageTurnStats['tools']
   /** Turns heavy enough that a task might have done them: many requests or much of its own work. */
   couldBeTasks: number
+  /** Summed over the turns that reported them (Claude); null when none did. */
+  tokens: TurnTokens | null
 }
+
+export interface TurnTokens { cacheRead: number; cacheWrite: number; output: number }
+
+/** A turn's own cache reads, writes and output, when its runner reported them. */
+export function turnTokens(turn: PlanUsageTurnStats): TurnTokens | null {
+  if (turn.cacheReadTokens === undefined && turn.cacheWriteTokens === undefined && turn.outputTokens === undefined) return null
+  return { cacheRead: turn.cacheReadTokens ?? 0, cacheWrite: turn.cacheWriteTokens ?? 0, output: turn.outputTokens ?? 0 }
+}
+
+/** 950 · 13k · 3.7M: token counts at a glance. */
+export function tokenCount(n: number): string {
+  if (n < 1000) return String(Math.round(n))
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`
+}
+
+/** "3.7M cache read · 942k cache written · 3k output". */
+export const tokensLabel = (t: TurnTokens): string =>
+  `${tokenCount(t.cacheRead)} cache read · ${tokenCount(t.cacheWrite)} cache written · ${tokenCount(t.output)} output`
 
 /** The prompt cache lasts an hour: a turn recorded before `cold` existed is judged by its idle gap. */
 const CACHE_TTL_MS = 60 * 60_000
@@ -74,6 +95,11 @@ export function turnShape(messages: ReadonlyArray<{ turn?: PlanUsageTurnStats }>
     avgRequests: sum((t) => t.requests) / turns.length,
     tools: { route: sum((t) => t.tools.route), look: sum((t) => t.tools.look), own: sum((t) => t.tools.own), write: sum((t) => t.tools.write) },
     couldBeTasks: turns.filter(couldBeTask).length,
+    tokens: turns.reduce<TurnTokens | null>((acc, t) => {
+      const own = turnTokens(t)
+      if (!own) return acc
+      return acc ? { cacheRead: acc.cacheRead + own.cacheRead, cacheWrite: acc.cacheWrite + own.cacheWrite, output: acc.output + own.output } : own
+    }, null),
   }
 }
 
@@ -289,6 +315,7 @@ function usageRows(u: ManagerPlanUsage): PlanUsageRow[] {
 
 function TurnLabel({ t }: { t: ManagerTurnUsage }) {
   const reasons = t.turn ? turnReasons(t.turn) : []
+  const tokens = t.turn ? turnTokens(t.turn) : null
   return (
     <span className="block">
       <span className="block">{PART_LABEL[t.part]} · {clockTime(t.at)} · {t.alonePp >= t.pp ? 'ran alone' : t.alonePp > 0 ? 'partly shared' : 'shared'}</span>
@@ -296,6 +323,9 @@ function TurnLabel({ t }: { t: ManagerTurnUsage }) {
         <span data-slot="manager-usage-turn-detail" className="block text-meta text-muted-foreground">
           {plural(t.turn.requests, 'request', 'requests')} · {Math.round(t.turn.contextPeak / 1000)}k context{reasons.length > 0 ? ` · ${reasons.join(', ')}` : ''}
         </span>
+      ) : null}
+      {tokens ? (
+        <span data-slot="manager-usage-turn-tokens" className="block text-meta text-muted-foreground tabular-nums">{tokensLabel(tokens)}</span>
       ) : null}
     </span>
   )
@@ -312,6 +342,9 @@ function TurnShapeSection({ shape }: { shape: ManagerTurnShape }) {
       <p className="text-meta text-muted-foreground tabular-nums">
         Tool calls: {route} routing work to tasks, {look} looking up state, {own} its own work{write > 0 ? `, ${write} writing files` : ''}
       </p>
+      {shape.tokens ? (
+        <p data-slot="manager-usage-shape-tokens" className="text-meta text-muted-foreground tabular-nums">Tokens: {tokensLabel(shape.tokens)}</p>
+      ) : null}
       {shape.couldBeTasks > 0 ? (
         <p data-slot="manager-usage-could-be-task" className="text-meta text-muted-foreground">
           {plural(shape.couldBeTasks, 'turn', 'turns')} did enough work that a task could have done it.

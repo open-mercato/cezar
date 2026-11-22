@@ -21,6 +21,15 @@ describe('managerToolKind', () => {
     expect(bash('cez-manager --help')).toBe('look');
   });
 
+  it('finds the subcommand behind any flag, even one whose value the CLI may add later', () => {
+    expect(bash('cez-manager task --project cezar --some-new-flag value create "x"')).toBe('route');
+    expect(bash('cez-manager --project cezar task say abc "go"')).toBe('route');
+    expect(bash('cez-manager task --project alpha abc123')).toBe('look');
+    expect(bash('cez-manager memory --kind feedback set full-prs "x"')).toBe('route');
+    expect(bash('cez-manager automation --project cezar --json list')).toBe('look');
+    expect(bash('cez-manager')).toBe('look');
+  });
+
   it('counts reads of cezar state as looking', () => {
     expect(bash('cez-manager attention')).toBe('look');
     expect(bash('cez-manager task abc123 --project cezar')).toBe('look');
