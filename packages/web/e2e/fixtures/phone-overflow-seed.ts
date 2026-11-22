@@ -149,6 +149,14 @@ export async function bootOverflowFixture(): Promise<OverflowFixture> {
 
   server = boot(dataRoot, port)
   await healthy()
+  // A memory entry with the longest key the schema allows and an unbroken token in its text.
+  const key = `branch-${UNBROKEN.replace(/[^a-z0-9]/g, '-')}`.slice(0, 64)
+  const memory = await fetch(`${baseUrl}/api/v1/workspace/managers/${managerId}/memory/${key}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'decision', text: `Merge ${UNBROKEN} into main`, why: LONG_URL.slice(0, 200), source: 'user' }),
+  })
+  if (!memory.ok) throw new Error(`cezar e2e: seeding memory answered ${memory.status}: ${await memory.text()}`)
   return { baseUrl, projectId, managerId, runIds, stop: () => stopFixtureServer(server, dataRoot) }
 }
 
