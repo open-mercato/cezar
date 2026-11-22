@@ -1,6 +1,6 @@
 # Jump between your own messages (task thread + manager chat)
 
-Status: **design, revision 4: awaiting approval** (phase 1). Design page: [`assets/2026-11-17-my-message-navigation/design.html`](assets/2026-11-17-my-message-navigation/design.html).
+Status: **implemented** (#2290), revision 4. Design page: [`assets/2026-11-17-my-message-navigation/design.html`](assets/2026-11-17-my-message-navigation/design.html).
 
 ## Problem
 
@@ -45,9 +45,10 @@ only estimates sizes, they can't be tapped, and iOS hides the scrollbar).
 
 - **Task**: `useRunHistory` retains at most 5 pages, so the client cannot list every user
   message. Add `GET /api/v1/runs/:id/user-messages` (zod schema in `packages/contract`, chained
-  into the runs family, aliased under `/p/:projectId`). It returns `{ seq, ts, preview,
-  attachments: { images, files } }[]`, built from the NDJSON (`user-message` lines and the
-  initial task), with `preview` capped at 240 chars server-side. A jump to an unloaded `seq`
+  into the runs family, aliased under `/p/:projectId`). It returns `{ messages: [{ seq, ts?, text,
+  images, files }] }` (`runUserMessagesSchema`), oldest first, built from the NDJSON (`user-message`
+  lines and the initial task), with `text` capped at 400 chars server-side
+  (`RUN_USER_MESSAGE_PREVIEW_CHARS`). A jump to an unloaded `seq`
   pages back through the existing #1909 refill until that `seq` is loaded, then reveals it.
 - **Manager**: `?kind=user` on the messages route (same paging shape). A jump runs the
   #2218 `fetchNextPage` loop until the id is loaded.
@@ -64,10 +65,11 @@ through resizes (`useChatScroll`'s anchor, the thread's WebKit anchoring polyfil
 scroll racing those corrections lands short. The wash marks the landing; with reduced motion it
 is off and the ring alone marks the target.
 
-## Phase 2 plan (after approval)
+## Phase 2 plan (done in #2290)
 
 1. Contract + routes: task `user-messages` index; manager `kind=user` filter (+ parity tests).
-2. `packages/web`: one shared `MyMessagesNav` (pill + popover/sheet + listbox) fed by a
+2. `packages/web`: one shared navigator (as built: `MyMessagesPill` and `MyMessagesList` with the
+   `useMyMessagesNav` hook, in `components/my-messages/`; pill + popover/sheet + listbox) fed by a
    per-view adapter (`items`, `isLoaded(id)`, `ensureLoaded(id)`, `elementFor(id)`).
    Mounted in `task-thread.tsx` and `manager-chat.tsx`.
 3. Tests: unit tests (nav state math, the list's keyboard handling, hidden when there are no

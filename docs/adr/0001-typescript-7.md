@@ -13,7 +13,9 @@ package. None of the blockers apply to us, so we took 7.0 directly rather than p
 
 Two config changes are not obvious from reading the tsconfigs:
 
-- **`"types": ["node"]` is now mandatory in `tsconfig.json`.** TypeScript 7 defaults `types` to
+- **A Node package's `tsconfig.json` must list its types explicitly** (`"types": ["node"]` in
+  `packages/cezar`, `["vite/client", "node"]` in `packages/web`; the Node-free `contract` and
+  `api-client` keep `"types": []` on purpose). TypeScript 7 defaults `types` to
   `[]` instead of "every package under `@types`". Without it the build fails with `TS2591:
   Cannot find name 'process'` even though `@types/node` is installed.
 - **`baseUrl` was removed from `packages/web/tsconfig.json`.** TypeScript 7 removed the option

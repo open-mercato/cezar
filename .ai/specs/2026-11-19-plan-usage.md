@@ -75,8 +75,9 @@ estimates and quiet-watch counts.
   panel (chart of readings, consumer table, hints).
 - Task page: chip in the usage line "This task ≈ N% of 5h" with a breakdown popover.
 - Tasks list: optional "Plan limit" column; "not reported" for tools without limits.
-- Manager chat: header chip "Today ≈ N% of 5h" (chat/watch/job, tasks it started counted on
-  them) and a per-reply footnote.
+- Manager chat: header chip; since #2363 it reads "Manager + tasks ≈ N% of 5h" (the manager plus the
+  tasks it started, latest 5-hour window). The per-reply footnote follows spec
+  `2026-11-20-manager-plan-usage-popover` § Decisions.
 - Settings → Agent accounts: 5-hour and weekly lines and the tracking switch.
 - `cez usage [--json]`: human summary or the versioned JSON (`schema: cezar.usage-ledger`,
   `version: 1.0.0`), the same report `GET /api/v1/workspace/plan-usage` returns.

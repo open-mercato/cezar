@@ -1,6 +1,8 @@
 # Phone notifications: a stuck icon badge, and a place to handle what it counts
 
-Status: accepted 2026-11-20. Design page: `2026-11-20-phone-notifications-inbox.html`, beside this file.
+Status: accepted 2026-11-20. Server side implemented in #2367 (step 4) and the app's badge fixes in #2361; step 5 (the app
+reading count pushes and declaring `understands`) is still open. The Root cause table below describes the code before
+#2367 (for example `Math.max(1, …)` is gone from `badgeCount`). Design page: `2026-11-20-phone-notifications-inbox.html`, beside this file.
 
 ## Decisions (owner, 2026-11-20)
 

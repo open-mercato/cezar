@@ -30,7 +30,7 @@ one replaced, or whose task moved on, still counts: "Waiting for 3 answers" when
 | Reason | Trigger |
 | --- | --- |
 | answered | an answer from a card (today's `askId` path) |
-| answered elsewhere | a manager card relaying a task's question declares `"about": [{"task": "<project>/<runId>", "ask": "<card id>"}]` (the snapshot gives the id). The two are one question: answering either closes both ("Answered in task X" / "in <manager>'s chat"). An answer on the manager card is delivered to the task by cezar directly; an answer in the task reaches the manager as a note on its next turn. Any other close of the task's question closes the copy too |
+| answered elsewhere (stored as `answered` with `answeredIn`) | a manager card relaying a task's question declares `"about": [{"task": "<project>/<runId>", "ask": "<card id>"}]` (the snapshot gives the id). The two are one question: answering either closes both ("Answered in task X" / "in <manager>'s chat"). An answer on the manager card is delivered to the task by cezar directly; an answer in the task reaches the manager as a note on its next turn. Any other close of the task's question closes the copy too |
 | dismissed | `POST /api/v1/workspace/questions/:key/dismiss`; undo is a client-side delay before the POST |
 | replaced | a newer `CEZ:ASK` in the same chat/run with the same card `id` (prompts ask agents for a stable id and to reuse it when re-asking), or, for an older card without an id, ONE newer card re-asking every one of its headers (case and spacing aside). A partial overlap stays open and is flagged `partly-reasked`. One definition, `questionCardReplaces` in `packages/contract/src/questions.ts`, serves managers, tasks and #2307's `supersededAskIds` (decided 2026-11-18) |
 | retracted | `CEZ:ASK-CLOSE <id\|header> [reason]` marker, same source only, parsed next to `CEZ:ASK` |
@@ -57,8 +57,10 @@ mention a PR or task, often "task X done, what next?" (hence only a declared `ab
 
 ## Data model
 
-- Manager: `assistant` message gains `askClosed?: { reason, at, replacedBy?, note? }`; `openAsk` excludes it.
-- Task: capped `RunRecord.asks[]` (`requestId, askedAt, questions, answeredAt?, closed?`), plus an `ask.closed`
+- Manager: `assistant` message gains `askClosed?: { reason, at, detail?, replacedBy?, answer?, answeredIn? }`
+  (`questionClosedSchema`) and `askStale?` for a card flagged out of date; `openAsk` excludes a closed one.
+- Task: capped `RunRecord.asks[]` (`requestId, askedAt, cardId?, about?, questions, closed?, stale?`,
+  `taskAskRecordSchema`), plus an `ask.closed`
   UiEvent in the run NDJSON so replays draw the quiet card (AGENT_PROTOCOL.md updated).
 - Read: `GET /api/v1/workspace/questions` → `{ open[], closed[] }`, keys `m:<managerId>:<messageId>` /
   `r:<projectId>:<runId>:<requestId>`, zod in `packages/contract`, chained single-mount route.
@@ -74,9 +76,14 @@ mention a PR or task, often "task X done, what next?" (hence only a declared `ab
 
 ## Counts
 
-One `liveQuestions()` (open and not Older; flagged cards count) feeds `pendingQuestions`, the Questions badge, needs-you, the notch,
-native notifications and the push badge. One `questions` WebSocket topic publishes `{ live, older, revision }` on change (`revision` digests the open list, so a re-ask at equal counts still refreshes it).
+Open questions that are not Older (flagged cards count) feed `pendingQuestions` and the Questions badge; the macOS notch
+reads `pendingQuestions` (manager questions only). As built, there is no single `liveQuestions()`: since #2367 needs-you,
+Now's count and the phone push badge read the server attention list (`attention/list.ts`), whose question items are
+these same open questions. One `questions` WebSocket topic publishes `{ live, older, revision }` on change (`revision` digests the open list, so a re-ask at equal counts still refreshes it).
 Remote mode reconciles over SSE.
+
+A card decided on the Approvals or Questions page stays visible for 30 s (`LINGER_MS`), then collapses once the
+reader has been still for 3 s (#2335, #2351, #2353).
 
 ## Phase 2 tests
 

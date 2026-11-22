@@ -493,7 +493,10 @@ and must stop being able to once the user says so. That is why the relay cannot 
 revocation and per-grant rate limits both need a store.
 
 1. The toggle is a native switch per server on the shell's server list. It cannot live on a server
-   page, which has no bridge.
+   page, which has no bridge. As built (#2367), only the on/off switch is native: which kinds a phone
+   is alerted about and counts on its icon is a cockpit card (Settings → Notifications, "This phone",
+   shown inside the app) that the phone's own relay session saves (spec
+   `2026-11-20-phone-notifications-inbox`).
 2. The shell registers with the server over its own native authenticated connection. The server
    answers with a public key from a keypair it generates and keeps in `~/.cezar/`.
 3. The shell asks the relay for a grant, sending the device token and that public key. The grant is
@@ -530,6 +533,9 @@ and nothing else.
 telemetry rule. The tap opens that server's `/manager`, where the real content loads over the
 user's own authenticated connection. The badge shows the sending server's total of `pendingActions`, and
 the shell clears it on open. v1 has no sum across servers, because the shell does not read Manager data.
+As built since #2367 and #2361, each server's number is what that phone counts on its icon (its
+attention list filtered by its push settings), and the app's badge is the sum over its computers
+(`DeviceBook.badge`); it reaches 0 and clears handled notifications.
 
 **Never approve from a notification.** A lock-screen action skips the pinned card the guard relies on.
 
@@ -692,7 +698,8 @@ Native push is required before M12 on both stores. Platform order is Android fir
 ## Open questions for the maintainer
 
 All three were decided on 2026-11-02 and are recorded in the [Decisions](#decisions) table. The relay spec's
-open questions (QR1, QR2, QR4, QR6, QR10) are still open.
+open questions are tracked there: QR1 was resolved on 2026-11-12, QR2 is an owner-approved exception in
+AGENTS.md, and QR4, QR6 and QR10 are open.
 
 ### Q2: Accept Capacitor?
 
@@ -789,3 +796,4 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 - 2026-11-10: Restacked on `main` after Manager mode landed as #2038. Carries the 2026-11-02 decisions (#1908) and the privacy-policy draft in `.ai/specs/drafts/` (#1913).
 - 2026-11-15: The app's server list reads Devices in user-facing text (title, buttons, the cockpit row, which the folded rail now shows too); `cezar://servers` and the code names stay.
 - 2026-11-15: A native device switcher answers `cezar://servers` from a server page (list, status dots, switch to /manager or /tasks, Add a device, Manage devices). While it is up, the one-relay-link rule relaxes to warm links beside the page's own, stopped when it closes; the cockpit's Devices row names the computer (`workspace/config` `computerName`).
+- 2026-11-19: The list's user-facing name is now "Your cezars" (#2340, spec `2026-11-19-mobile-devices-screen`), replacing Devices.

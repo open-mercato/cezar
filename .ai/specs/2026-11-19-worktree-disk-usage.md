@@ -62,7 +62,8 @@ Customer report: `<project>/.ai/cezar/worktrees` grew to 17 GB on a VPS while th
      tell for a task that opened one), or has commits that are neither merged into the default
      branch nor pushed.
    - It never touches an unarchived, live, running, queued or pinned task, nor a tree with
-     uncommitted work.
+     uncommitted work, nor a tree whose removal would run worktree lifecycle scripts; such a task
+     is skipped and stays archived (`runs/archived-cleanup.ts`).
    - It runs with every retention pass (queued off the boot path) and the hourly sweep, and logs a summary. The 500-archived cap stays as
      the backstop.
    - CLI: `cez worktrees prune --archived-older-than 90d [--dry-run]`.

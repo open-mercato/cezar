@@ -1,6 +1,17 @@
 # Provider authentication discovery and setup
 
-Status: approved in design review · Date: 2026-07-22
+Status: implemented (approved in design review 2026-07-22) · Date: 2026-07-22
+
+> **As built (2026-11-22).** The design below is what shipped for four providers; the code has grown since:
+> - Every route answers under `/api/v1` (`/api/v1/providers/status`, `/connect`, `/:provider/enabled`,
+>   `/:provider/retry`), and a provider id is any of `RUNNER_IDS` (eleven runners), not only
+>   `claude | codex | opencode | pi`; the 400 message lists them.
+> - `POST /api/v1/providers/connect` also takes `profileId?` and `reconnect?: boolean`. With `reconnect: true`
+>   an already-connected provider still opens its sign-in instead of answering `opened: false` (#2251).
+> - Inline sign-in (`POST /api/v1/providers/login`, spec `2026-11-18-inline-account-reconnect`) reads the
+>   signed-in account's email to check it is the expected account, an exception to the non-goal below.
+> - The explicit retry endpoint the Cursor paragraph mentions is `POST /api/v1/providers/:provider/retry`
+>   (§ HTTP API, below).
 
 ## Summary
 
@@ -136,7 +147,7 @@ an agent can discover that a token has been revoked after the vendor CLI reporte
 in. The status service keeps an in-memory latch per provider for that condition and reports the
 latched provider as disconnected with a safe, fixed reconnect hint.
 
-Cursor’s Accounts → **Verify connection** also uses this explicit retry endpoint for the incident observed at the click, then refreshes discovery and models. It updates both account and task-picker status caches without replacing a newer streamed incident.
+Cursor’s Accounts → **Verify connection** also uses the explicit retry endpoint (**Try again**, below) for the incident observed at the click, then refreshes discovery and models. It updates both account and task-picker status caches without replacing a newer streamed incident.
 
 Ordinary 30-second polling and **Check again** preserve a latch, even when the vendor's
 stored-login probe still finds credentials. Check again (`?refresh=1`) refreshes discovery only;

@@ -1,6 +1,6 @@
 # CezarBot: a clearer Devices screen
 
-Status: **design, awaiting approval** (phase 1). Interactive mockup: [2026-11-19-mobile-devices-screen.html](2026-11-19-mobile-devices-screen.html).
+Status: **implemented** (#2340), as the [Decisions (approved 2026-11-19)](#decisions-approved-2026-11-19) below. Interactive mockup: [2026-11-19-mobile-devices-screen.html](2026-11-19-mobile-devices-screen.html).
 Builds on `2026-10-31-mobile-apps-manager-first.md` and `2026-11-01-relay-qr-pairing.md`.
 
 ## Problem

@@ -1,6 +1,6 @@
 # Workflow graphs & node editor
 
-Status: DRAFT (2026-09-30) · Supersedes the builder UI of spec 012 (its portable `skills:` format stays) · Touches: `workflows/types.ts`, `workflows/load.ts`, `workflows/run.ts`, `packages/contract/src/workflows.ts`, `packages/web/src/routes/workflows/`
+Status: implemented, phases 1–3 and the 2026-10-01 follow-ups (2026-09-30; status updated 2026-11-22) · Supersedes the builder UI of spec 012 (its portable `skills:` format stays) · Touches: `workflows/types.ts`, `workflows/load.ts`, `workflows/run.ts`, `packages/contract/src/workflows.ts`, `packages/web/src/routes/workflows/`
 
 ## Goal
 
@@ -119,7 +119,7 @@ Rules:
 | Agents | `ask-user` | question | `answered` | `answer` |
 | Scripts | `check` | `command`, `timeoutMs` | `pass`, `fail` | `exitCode`, `output` (tail-capped) |
 | Git | `git.commit` | message template | `done`, `nothing`, `failed` | `sha` |
-| Git | `github.draft-pr` | title/body templates | `created`, `failed` | `url`, `number` |
+| Git | `github.draft-pr` | title/body templates | `created`, `nothing` (no commits ahead of the base: no PR), `failed` | `url`, `number` |
 | Git | `github.wait-ci` | `timeoutMs` (required, default 60 min) | `green`, `red`, `timeout`, `failed` | `status` |
 | Git | `github.pr-comment` | body template | `done`, `failed` | — |
 

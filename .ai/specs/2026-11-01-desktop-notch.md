@@ -116,6 +116,7 @@ Everything is lazy: no panel and no web process until a manager is first active.
 | Nothing active | one loopback GET every 30s; pointer thread parked; panel ordered out, animations off |
 | Someone active | one loopback GET every 4s; pointer sample every 70ms; face animations |
 | `CEZ_MANAGERS=0` or an older sidecar | one GET every 5 minutes |
+| Sidecar still starting (no port yet) | no request; the poller wakes every 2s until the port is known (`BOOT_POLL`) |
 
 Polling, not `/workspace/events`: that stream carries every task's frames and usage, so it would wake
 the shell constantly for nothing. Two failed polls are tolerated so a busy sidecar does not blink

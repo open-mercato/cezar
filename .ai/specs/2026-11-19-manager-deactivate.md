@@ -16,7 +16,7 @@ a VPS saving cost, a manager they only need during a release.
 - `Manager.inactive?: { since: string }` in `managers.json` (a user setting, like `notify`; shared
   by every cockpit on the machine). Absent = active, so every existing manager is unchanged.
 - `Manager.activeSince?: string`: written on reactivation, the floor for every due time (below).
-- Nothing else is touched: chat, memory (`state.json`), jobs, `cronMinutes`, `followUp`,
+- Nothing else is touched: chat, memory (`memory.json` since #2386), jobs, `cronMinutes`, `followUp`,
   connectors and automation links all stay as they were, so reactivating restores them exactly.
 - `PATCH /api/v1/workspace/managers/:id { active, catchUp?: true }`; workspace route
   `POST /api/v1/workspace/managers/activity { active }` for the bulk action. Both are cockpit-only: no
@@ -43,7 +43,9 @@ a VPS saving cost, a manager they only need during a release.
   the manager's chat (server-written, no model), and anything waiting on the user surfaces through
   the task's own Questions inbox group and Now, as for any task.
 - **Approvals** stay answerable and keep counting in the Approvals badge: `decide` performs the merge
-  or enable itself and only leaves a note, so it costs nothing. The card says "Manager inactive — it
+  or enable itself and only leaves a note, so it costs nothing. One exception as built: approving a
+  `connector-call` card answers 409 while the manager is inactive, because that call needs the
+  manager's own turn (`engine.ts` `MANAGER_INACTIVE`). The card says "Manager inactive — it
   hears your decision when reactivated."
 - **Questions** stay visible, marked "manager inactive", but drop out of the Questions badge. Two
   ways out: **Dismiss** works as is — `dismissAsk` closes the card and leaves a note, no model call,

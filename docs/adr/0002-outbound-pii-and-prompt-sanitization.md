@@ -54,7 +54,7 @@ To avoid false-positive deadlocks when developing tests that deliberately contai
 ### 5. Rollout, Migration & Compatibility Plan
 Under `BACKWARD_COMPATIBILITY.md` rules, rejecting previously accepted task inputs constitutes a behavior change that requires explicit transition handling:
 - **Phase 1 (Audit & Warn):** The gate logs violations to the audit trail with a visible composer warning without blocking dispatch.
-- **Phase 2 (Fail-Closed Default with Named Opt-Out):** The gate fails closed by default. A dedicated opt-out flag `CEZ_OUTBOUND_GUARD=0` (following the precedent of `CEZ_AGENT_TMPDIR` in `BACKWARD_COMPATIBILITY.md:24`) is provided for workflows needing legacy behavior.
+- **Phase 2 (Fail-Closed Default with Named Opt-Out):** The gate fails closed by default. A dedicated opt-out flag `CEZ_OUTBOUND_GUARD=0` (following the precedent of `CEZ_AGENT_TMPDIR` in `BACKWARD_COMPATIBILITY.md` §1, the env-var list) is provided for workflows needing legacy behavior.
 - **Acceptance Criteria & Test Matrix:**
   1. Raw OpenAI key / GitHub PAT -> `REJECT` under all flag combinations.
   2. Matched email/phone with `CEZ_REDACT_PII=1` -> `REJECT` (`reasonCode: 'pii'`).

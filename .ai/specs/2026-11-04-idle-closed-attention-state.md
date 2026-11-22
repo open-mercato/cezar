@@ -2,7 +2,7 @@
 
 Tracking issue: #1933 · Precedent: #1290 (`awaitingAnswerSince`), #690, #992
 
-> **Superseded in part by the [2026-11-17 revision](#-revision-2026-11-17-an-idle-close-is-invisible-housekeeping).** An idle close no longer settles the run: the record keeps its pre-close state and the orange "closed · idle" presentation is gone. The sections below describe what #1935 shipped and still apply to older records and dispatched children.
+> **Superseded in part by the [2026-11-17 revision](#-revision-2026-11-17-an-idle-close-is-invisible-housekeeping).** An idle close no longer settles the run: the record keeps its pre-close state and the orange "closed · idle" presentation is gone. The sections below describe what #1935 shipped. The cockpit no longer draws that presentation for older records either: `web/src/lib/attention.ts` shows every idle-closed record as a neutral idle state, with no orange `bg-conflict` and no "Continue to pick it up" (#2286).
 
 ## 📝 TLDR
 
