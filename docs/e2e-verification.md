@@ -245,7 +245,10 @@ for follow-ups.
 
 ## What cezar gives the check, and what it does not
 
-- **cwd** is the task's worktree, and the command runs under `bash -lc`.
+- **cwd** is the task's worktree, and the command runs under `bash -lc`. On Windows, cezar
+  automatically uses an installed Git Bash executable when the default `bash.exe` may be the WSL
+  launcher; Git for Windows does not need to be added to PATH for this fallback to work. If Git
+  Bash is not installed, cezar preserves the normal `bash` lookup and reports its spawn failure.
 - **Environment** is the cezar server's own `process.env` plus the **secrets**
   the step may read (below). There is no per-step `env:` — workflow files are
   committed, and a secret's value does not belong in them; a step names the
