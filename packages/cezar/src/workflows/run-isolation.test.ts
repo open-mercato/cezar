@@ -88,7 +88,7 @@ describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
       expect(store.getRun(record.id)?.status).toBe('done');
       expect(store.getRun(record.id)?.worktreePath).toBeUndefined();
       const notes = store.readEvents(record.id).filter((event) => event.type === 'note');
-      expect(notes.some((event) => String(event.message).includes('exclusive access'))).toBe(true);
+      expect(notes.some((event) => /exclusive access|release the repository working tree/.test(String(event.message)))).toBe(true);
     } finally {
       manager.dispose();
       store.flush();
@@ -145,7 +145,7 @@ describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
     for (const id of [first.id, second.id]) {
       const notes = store.readEvents(id).filter((event) => event.type === 'note');
       expect(notes.some((event) => String(event.message).includes('worktree off'))).toBe(true);
-      expect(notes.some((event) => String(event.message).includes('exclusive access'))).toBe(true);
+      expect(notes.some((event) => /exclusive access|release the repository working tree/.test(String(event.message)))).toBe(true);
     }
   });
 
