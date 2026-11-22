@@ -115,6 +115,7 @@
 		0E303DF92B4EE0FA0E475756 /* StartupWatchdog+Relay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C86240E76ECD65D05420E6E /* StartupWatchdog+Relay.swift */; };
 		9ED0A7E559D66D83674C1E75 /* StartupWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9139334FFE0443E6F4A415D8 /* StartupWatchdog.swift */; };
 		ACE532EFD7B448ABEF639A65 /* LaunchCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF301530785A217FACD5C7CE /* LaunchCover.swift */; };
+		9EDAA682235FC0F792BD9FAA /* BadgeRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4849D2ABBE19E843768C20F1 /* BadgeRefresh.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -253,6 +254,7 @@
 		9C86240E76ECD65D05420E6E /* StartupWatchdog+Relay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StartupWatchdog+Relay.swift"; sourceTree = "<group>"; };
 		9139334FFE0443E6F4A415D8 /* StartupWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupWatchdog.swift; sourceTree = "<group>"; };
 		AF301530785A217FACD5C7CE /* LaunchCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchCover.swift; sourceTree = "<group>"; };
+		4849D2ABBE19E843768C20F1 /* BadgeRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeRefresh.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -465,6 +467,7 @@
 				82AB1FD74D5CC322812C7D20 /* DeviceBookKeychain.swift */,
 				4A3F72AABAE006BD697A11F4 /* DeviceIdentity.swift */,
 				1131421F12FEA5067FEF625D /* CezarList.swift */,
+				4849D2ABBE19E843768C20F1 /* BadgeRefresh.swift */,
 			);
 			path = Switcher;
 			sourceTree = "<group>";
@@ -680,6 +683,7 @@
 				0E303DF92B4EE0FA0E475756 /* StartupWatchdog+Relay.swift in Sources */,
 				9ED0A7E559D66D83674C1E75 /* StartupWatchdog.swift in Sources */,
 				ACE532EFD7B448ABEF639A65 /* LaunchCover.swift in Sources */,
+				9EDAA682235FC0F792BD9FAA /* BadgeRefresh.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

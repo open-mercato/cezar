@@ -653,6 +653,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         guard !started else { return }
         started = true
         ForegroundServers.shared.started(serverId)
+        ShellServices.badges.pageStarted(serverId)
         endBackgroundTask()
         guard let proxy, relayServer != nil else { return }
         startLog.step("foreground, link \(link?.status().kind.rawValue ?? "-")")
@@ -719,6 +720,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         started = false
         ForegroundServers.shared.stopped(serverId)
         resume.stop()
+        ShellServices.badges.pageStopped(serverId)
         guard let proxy, let grace else { return }
         startLog.step("background")
         bannerTimer?.cancel()

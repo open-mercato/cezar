@@ -20,6 +20,8 @@ final class DeviceSheetController: UITableViewController {
     private var servers: [ServerRecord] = []
     private var rows: [DeviceSwitch.Row] = []
     private var probes: DeviceProbes?
+    /// Holds the badge rounds off this sheet's warm links until it closes.
+    private var held = false
     private var switching: String?
     private var chosen = false
 
@@ -41,6 +43,7 @@ final class DeviceSheetController: UITableViewController {
 
     deinit {
         probes?.stop()
+        if held { ShellServices.badges.hold(false) }
     }
 
     /// In a navigation controller for the title: medium and large on a phone, a form-sheet card on an iPad.
@@ -70,6 +73,8 @@ final class DeviceSheetController: UITableViewController {
             book.sync(servers)
             book.noted(currentId, online: true, waiting: nil, failed: nil, at: relayNowMs())
         }
+        ShellServices.badges.hold(true)
+        held = true
         let probes = ShellServices.deviceProbes(connector) { [weak self] id, reading in DispatchQueue.main.async { self?.refresh(id, reading) } }
         self.probes = probes
         rows = makeRows([:])
@@ -83,7 +88,14 @@ final class DeviceSheetController: UITableViewController {
             // Swiped away mid-switch: the user stayed on this page, so the switch's answer opens nothing.
             chosen = true
             probes?.stop()
+            release()
         }
+    }
+
+    private func release() {
+        guard held else { return }
+        held = false
+        ShellServices.badges.hold(false)
     }
 
     private func makeRows(_ readings: [String: DeviceSwitch.Reading]) -> [DeviceSwitch.Row] {
@@ -94,7 +106,7 @@ final class DeviceSheetController: UITableViewController {
     private func refresh(_ id: String, _ reading: DeviceSwitch.Reading) {
         guard let probes, !chosen else { return }
         book.update { book in book.noted(id, reading, at: relayNowMs()) }
-        if reading.attention != nil { ShellServices.notifier.showBadge(book.load().badge) }
+        if reading.attention != nil { ShellServices.notifier.settle() }
         rows = makeRows(probes.snapshot())
         tableView.reloadSections(IndexSet(integer: Section.devices.rawValue), with: .none)
     }

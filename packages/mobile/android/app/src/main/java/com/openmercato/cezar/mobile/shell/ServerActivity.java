@@ -48,6 +48,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import com.openmercato.cezar.mobile.push.PushNotifier;
+import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
 import com.openmercato.cezar.mobile.shell.push.ForegroundServers;
 import com.openmercato.cezar.mobile.shell.push.GraceClose;
 import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
@@ -584,6 +585,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     protected void onStart() {
         super.onStart();
         started = true;
+        BadgeRefresh badges = ShellServices.badges();
+        if (badges != null) badges.pageStarted(serverId);
         // The lock answers before anything connects or loads (spec QR3); its shield is over all of this.
         AppLock.get(this).whenUnlocked(this::startUnlocked);
     }
@@ -616,6 +619,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (resume != null) resume.stop();
         main.removeCallbacks(resumeTick);
         main.removeCallbacks(startTick);
+        BadgeRefresh badges = ShellServices.badges();
+        if (badges != null) badges.pageStopped(serverId);
         // "Offline since" counts from the last moment this page was up and connected.
         if (!leaving && currentState().status == DeviceSwitch.Status.CONNECTED) sawCurrent();
         // Off screen, no link stays warm for a switch nobody can tap.
