@@ -205,26 +205,28 @@ export interface ReplyUsage {
   pp: number
   /** Of `pp`, the part measured while no other cezar work ran. */
   alonePp: number
-  /** `Claude · default · 5-hour limit 10:00–15:00`: every estimate names its account and window. */
-  where: string
+  /** `Claude · default · 5-hour limit 10:00–15:00`, one per window the reply's share came from. */
+  windows: string[]
   /** What the reply's turn was made of, when the ledger recorded it. */
   turn?: PlanUsageTurnStats
 }
 
-/** Per assistant message: its estimate in the 5-hour window it ran in. Absent = no entry, never 0.
+/** Per assistant message: its estimate in the 5-hour windows it ran in. Absent = no entry, never 0.
  *  Keyed by the chat message id, which a turn keeps whatever session it ran in. */
 export function replyUsageById(entries: readonly PlanUsageConsumerWindow[] | undefined, managerId: string): ReadonlyMap<string, ReplyUsage> {
   const id = managerConsumerId(managerId)
   const out = new Map<string, ReplyUsage>()
   for (const e of entries ?? []) {
     if (e.kind !== 'five-hour' || e.consumer.id !== id) continue
+    const window = `${e.account.label} · 5-hour limit ${clockTime(e.startsAt)}–${clockTime(e.resetsAt)}`
     for (const m of e.consumer.messages ?? []) {
       const prior = out.get(m.messageId)
       const turn = prior?.turn ?? m.turn
+      const windows = prior?.windows ?? []
       out.set(m.messageId, {
         pp: (prior?.pp ?? 0) + m.estimatePp,
         alonePp: (prior?.alonePp ?? 0) + m.aloneInferredPp,
-        where: prior?.where ?? `${e.account.label} · 5-hour limit ${clockTime(e.startsAt)}–${clockTime(e.resetsAt)}`,
+        windows: windows.includes(window) ? windows : [...windows, window],
         ...(turn ? { turn } : {}),
       })
     }
@@ -232,21 +234,44 @@ export function replyUsageById(entries: readonly PlanUsageConsumerWindow[] | und
   return out
 }
 
+const sharedLabel = (usage: ReplyUsage): string =>
+  usage.alonePp >= usage.pp ? 'ran alone' : usage.alonePp > 0 ? 'partly shared with other work' : 'shared with other work'
+
 /** "Claude · default · 5-hour limit 10:00–15:00 · ran alone · 2 requests · 35k context". */
 export function replyUsageDetail(usage: ReplyUsage): string {
-  const shared = usage.alonePp >= usage.pp ? 'ran alone' : usage.alonePp > 0 ? 'partly shared with other work' : 'shared with other work'
   const t = usage.turn
-  return [usage.where, shared, ...(t ? [plural(t.requests, 'request', 'requests'), `${Math.round(t.contextPeak / 1000)}k context`] : [])].join(' · ')
+  return [usage.windows.join(' and '), sharedLabel(usage), ...(t ? [plural(t.requests, 'request', 'requests'), `${Math.round(t.contextPeak / 1000)}k context`] : [])].join(' · ')
 }
 
-/** The grey line under a reply; rendered only when the ledger has an entry for it. */
+/** The grey line under a reply; rendered only when the ledger has an entry for it. It opens the
+ *  breakdown as a popover, or a bottom sheet on a phone, so touch and keyboard reach it too. */
 export function ReplyUsageNote({ usage }: { usage: ReplyUsage }) {
-  const detail = replyUsageDetail(usage)
+  const label = `This reply ${approxPp(usage.pp)} of 5h`
+  const rows: PlanUsageRow[] = [
+    { slot: 'manager-reply-usage-share', label: usage.windows.length > 1 ? `Share of 5-hour limits (${usage.windows.length} windows)` : 'Share of the 5-hour limit', value: approxPp(usage.pp) },
+    { slot: 'manager-reply-usage-alone', label: 'While no other cezar work ran', value: approxPp(usage.alonePp), indent: true },
+    ...(usage.turn ? [
+      { slot: 'manager-reply-usage-requests', label: 'Model requests', value: String(usage.turn.requests) },
+      { slot: 'manager-reply-usage-context', label: 'Peak context', value: `${Math.round(usage.turn.contextPeak / 1000)}k tokens` },
+    ] : []),
+  ]
+  const trigger = (
+    <button
+      type="button"
+      data-slot="manager-reply-usage"
+      aria-label={`${label}: show what it cost`}
+      className="mt-1 block rounded-sm text-left text-xs text-muted-foreground tabular-nums underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      {label}
+    </button>
+  )
   return (
-    <p data-slot="manager-reply-usage" title={detail} className="mt-1 text-xs text-muted-foreground tabular-nums">
-      This reply {approxPp(usage.pp)} of 5h
-      <span className="sr-only"> ({detail})</span>
-    </p>
+    <PlanUsageSurface slot="manager-reply-usage-details" trigger={trigger} tooltip={replyUsageDetail(usage)}>
+      <PlanUsageTitle>What this reply cost</PlanUsageTitle>
+      {usage.windows.map((window) => <p key={window} data-slot="plan-usage-window" className="text-meta text-muted-foreground">{window}</p>)}
+      <p className="text-meta text-muted-foreground">It {sharedLabel(usage)}.</p>
+      <PlanUsageRows rows={rows} />
+    </PlanUsageSurface>
   )
 }
 

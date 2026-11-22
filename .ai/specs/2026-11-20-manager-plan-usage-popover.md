@@ -64,12 +64,12 @@ instead of "cost".
 ## Decisions (owner, 2026-11-20)
 
 - Chip total: **manager + the tasks it started** (latest 5-hour window on the manager's account).
-- Reply footnote: **removed**. Per-turn usage is still recorded (`messages[]` gains `at`, `aloneInferredPp`,
-  `sharedEstimatePp`), and the popover lists the window's three largest turns to trace a spike.
-- Reply footnote: **restored** (owner, 2026-11-22). Each finished manager reply shows "This reply ≈ N% of 5h"
-  again, as before #2363, from the same `messages[]` entries keyed by the reply's message id, so it holds
-  across short sessions and restarts. Its detail (tooltip and screen-reader text) names the account and
-  window, whether it ran alone or shared, and the turn's requests and context. The popover's largest
-  turns stay as they are.
+- Reply footnote: **removed in #2363, restored (owner, 2026-11-22).** Each finished manager reply
+  shows "This reply ≈ N% of 5h" again, from the same `messages[]` entries keyed by the reply's
+  message id, so it holds across short sessions and restarts. The line is now a button. On desktop
+  it opens the shared popover, and on a phone the bottom sheet (`PlanUsageSurface`). That fixes the
+  `title`-only gap the problem table above names. The breakdown shows the window or windows, whether
+  the reply ran alone, and the turn's requests and peak context. The popover's largest turns are
+  unchanged.
 - Session view: **A + warning strip**. The chip carries the account meter, and a strip above the composer appears from 80 %.
 - Phones: **bottom sheet** for the shared surface (task chip included), via `PlanUsageSurface`.

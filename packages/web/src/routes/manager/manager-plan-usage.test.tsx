@@ -292,20 +292,46 @@ describe('the reply footnote (restored 2026-11-22)', () => {
     ] })
     const earlier = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
     const replies = replyUsageById([entry(mine), entry(earlier, { windowId: 'w-earlier' }), entry(mine, { kind: 'weekly', windowId: 'wk' })], 'm1')
-    expect(replies.get('a2')).toMatchObject({ pp: 0.3, alonePp: 0, turn: { fresh: true } })
+    expect(replies.get('a2')).toMatchObject({ pp: 0.3, alonePp: 0, windows: [expect.stringMatching(/^Claude · default · 5-hour limit /)], turn: { fresh: true } })
     // A reply split across two 5-hour windows adds up; weekly windows never count.
     expect(replies.get('a1')?.pp).toBeCloseTo(1.1)
     expect(replies.has('nope')).toBe(false)
     expect(replyUsageById([entry(consumer({ ...manager, id: 'mgr:other' }))], 'm1').size).toBe(0)
   })
 
-  it('reads as before #2363, with the window, the split and the turn in its detail', () => {
-    const usage = { pp: 0.3, alonePp: 0, where: 'Claude · default · 5-hour limit 10:00–15:00', turn: stats({ fresh: true, sessionTurn: 1, contextPeak: 32_000 }) }
+  it('names every window a split reply came from', () => {
+    const mine = consumer({ ...manager, messages: [turn('a1', 'chat', 0.9, 0.9)] })
+    const earlier = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
+    const replies = replyUsageById([entry(mine), entry(earlier, { windowId: 'w-earlier', startsAt: new Date('2026-11-19T05:00:00').toISOString(), resetsAt: new Date('2026-11-19T10:00:00').toISOString() })], 'm1')
+    expect(replies.get('a1')?.windows).toHaveLength(2)
+    expect(replyUsageDetail(replies.get('a1')!)).toMatch(/^Claude · default · 5-hour limit .+ and Claude · default · 5-hour limit .+ · partly shared with other work$/)
+  })
+
+  it('reads as before #2363, and its breakdown opens on click, with the window, the split and the turn', () => {
+    const usage = { pp: 0.3, alonePp: 0, windows: ['Claude · default · 5-hour limit 10:00–15:00'], turn: stats({ fresh: true, sessionTurn: 1, contextPeak: 32_000 }) }
     expect(replyUsageDetail(usage)).toBe('Claude · default · 5-hour limit 10:00–15:00 · shared with other work · 2 requests · 32k context')
-    expect(replyUsageDetail({ pp: 1, alonePp: 1, where: 'w' })).toBe('w · ran alone')
+    expect(replyUsageDetail({ pp: 1, alonePp: 1, windows: ['w'] })).toBe('w · ran alone')
     render(<ReplyUsageNote usage={usage} />)
-    const note = document.querySelector('[data-slot="manager-reply-usage"]')!
-    expect(note.textContent).toBe('This reply ≈ 0.3% of 5h (Claude · default · 5-hour limit 10:00–15:00 · shared with other work · 2 requests · 32k context)')
-    expect(note.getAttribute('title')).toBe(replyUsageDetail(usage))
+    const note = screen.getByRole('button', { name: 'This reply ≈ 0.3% of 5h: show what it cost' })
+    expect(note.textContent).toBe('This reply ≈ 0.3% of 5h')
+    fireEvent.click(note)
+    const details = within(screen.getByRole('dialog'))
+    expect(details.getByText('What this reply cost')).toBeTruthy()
+    expect(details.getByText('Claude · default · 5-hour limit 10:00–15:00')).toBeTruthy()
+    expect(details.getByText('It shared with other work.')).toBeTruthy()
+    expect(rowText('manager-reply-usage-share')).toBe('Share of the 5-hour limit ≈ 0.3%')
+    expect(rowText('manager-reply-usage-requests')).toBe('Model requests 2')
+    expect(rowText('manager-reply-usage-context')).toBe('Peak context 32k tokens')
+  })
+
+  it('opens the same breakdown as a bottom sheet on a phone', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(max-width: 767px)', addEventListener() {}, removeEventListener() {} }))
+    render(<ReplyUsageNote usage={{ pp: 0.8, alonePp: 0.8, windows: ['Claude · default · 5-hour limit 10:00–15:00'] }} />)
+    fireEvent.click(screen.getByRole('button', { name: /^This reply ≈ 0.8% of 5h/ }))
+    const sheet = screen.getByRole('dialog')
+    expect(sheet.getAttribute('data-slot')).toBe('manager-reply-usage-details')
+    expect(sheet.className).toContain('bottom-0')
+    expect(within(sheet).getByRole('heading', { name: 'What this reply cost' })).toBeTruthy()
+    expect(within(sheet).getByText('It ran alone.')).toBeTruthy()
   })
 })

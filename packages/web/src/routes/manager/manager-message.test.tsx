@@ -809,7 +809,7 @@ describe('ManagerMessageRow — expired login (spec 2026-11-18-inline-account-re
 })
 
 describe('the reply footnote (restored 2026-11-22)', () => {
-  const usage = { pp: 0.8, alonePp: 0.8, where: 'Claude · default · 5-hour limit 10:00–15:00' }
+  const usage = { pp: 0.8, alonePp: 0.8, windows: ['Claude · default · 5-hour limit 10:00–15:00'] }
   const renderWith = (message: ManagerMessage, planUsage?: typeof usage) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
     client.setQueryData(workspaceQueryKeys.projects, { projects: [], bootProject: 'alpha', projectsDir: '' })
@@ -828,11 +828,10 @@ describe('the reply footnote (restored 2026-11-22)', () => {
   })
 
   it('waits for a streaming reply to finish, and shows nothing without a ledger entry', () => {
-    const { rerender, container } = renderWith(assistantMessage(4, { text: 'Work', streaming: true }), usage)
+    const { container } = renderWith(assistantMessage(4, { text: 'Work', streaming: true }), usage)
     expect(container.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
     cleanup()
     renderWith(assistantMessage(5, { text: 'Done.' }))
     expect(document.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
-    void rerender
   })
 })
