@@ -261,8 +261,25 @@ A write produces an approval card, like a merge. The card shows the connector, t
 > - A grant applies from the manager's next turn, and so does a revoke. A card that waits when you revoke its tool fails on approval.
 > - Only Claude managers can use connectors. Other agents have their own MCP configuration.
 > - Watch checks never get connector tools, because they read text anyone can write.
+> - A manager with no connector granted does not load any, so their tool lists never take up its context. The Connectors dialog looks them up when you open it.
 > - Connectors disconnect and reconnect on their own. When one is down, the manager tells you it is temporarily unavailable, and a write card for it fails with the same message.
 > - Cezar does not pass connector grants to tasks the manager starts.
+
+## Memory and sessions
+
+A manager does not keep one endless conversation. A chat continues the same session only while it is active: within 55 minutes of the last turn, under 100,000 tokens of context, and less than 12 hours after the session started. Otherwise the next turn starts a new session. Scheduled checks and jobs always start a new one. Your chat stays one thread; only what the model carries changes.
+
+A new session starts from:
+
+- **Memory**: what you asked the manager to remember, such as "open full PRs, not drafts" or "HTML design before UI work".
+- The open question cards, the notes since its last turn, and the tasks it follows with their status.
+- The last few messages between you and the manager.
+
+The manager can read older messages with `cez-manager history` and a task's details with `cez-manager task`.
+
+Open the manager's gear menu and select **Memory…** to see, edit, add or delete entries. The manager saves an entry when you tell it something it should keep. Memory holds at most 40 entries and 6 KB. A Claude manager's earlier Claude Code memory is imported once, and Claude Code's own memory is then switched off for it, so there is one memory, the same on every agent.
+
+> **Good to know**: Memory is for lasting preferences and decisions, not task results. Tasks keep their own reports, and the manager looks them up when it needs them.
 
 ## Agents, accounts, model and cancelling
 
@@ -308,7 +325,7 @@ A card closes on its own when a newer card asks the same thing again (the same c
 
 ## Questions
 
-Choose **Workspace → Questions** in the Manager sidebar, or open `/manager/questions`, to see every open question from your managers and tasks in one list, grouped by where it was asked. Answer it there, **Dismiss** it (the agent is told you skipped it; **Undo** is offered for a few seconds), or use **Open in context** to jump to the card in its chat. A manager card that relays a task's question appears once, under the task, and answering either copy closes both.
+Choose **Workspace → Questions** in the Manager sidebar, or open `/manager/questions`, to see every open question from your managers and tasks in one list, grouped by where it was asked. Answer it there, **Dismiss** it (the agent is told you skipped it; **Undo** is offered for a few seconds), or use **Open in context** to jump to the card in its chat. A manager card that relays a task's question appears once, under the task, and answering either copy closes both. A card you answer or dismiss there stays in place for 30 seconds with what happened (your answer and where it was sent, or **Dismissed**), then leaves; so does one that closes while you are looking at it, with the reason. It leaves only once you are idle (not while the pointer or keyboard focus is in the list, nor for 3 seconds after you scroll or press a key), and the text you are reading does not move. The count drops as soon as you click.
 
 The count beside **Questions** includes only questions that still need you. A card marked **May be out of date** still counts until you dismiss it or the agent closes it. A question left unanswered for longer than the **Move to Older after** setting (7 days by default) moves to **Older** and stops counting; it is not closed. **Closed** lists the last seven days with the reason each closed. With managers turned off, **Questions** sits in the project sidebar and lists task questions.
 

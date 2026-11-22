@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { PLAN_USAGE_RETENTION_DAYS, type PlanUsageTracking } from '@open-mercato/cezar-contract';
+import { PLAN_USAGE_RETENTION_DAYS, planUsageTurnStatsSchema, type PlanUsageTracking, type PlanUsageTurnStats } from '@open-mercato/cezar-contract';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 
 /**
@@ -42,13 +42,18 @@ export const ledgerRecordSchema = z.discriminatedUnion('t', [
     usd: z.number().finite().nonnegative().optional(), tokens: z.number().finite().nonnegative().optional(),
     quiet: z.boolean().optional(),
   }),
-  z.object({ t: z.literal('end'), at: ms, session: z.string().max(100), quiet: z.boolean().optional() }),
+  z.object({
+    t: z.literal('end'), at: ms, session: z.string().max(100), quiet: z.boolean().optional(),
+    turn: planUsageTurnStatsSchema.omit({ usd: true }).optional().catch(undefined),
+  }),
   z.object({ t: z.literal('attempt-failed'), at: ms, consumerId: z.string().max(400), since: ms }),
   /** Recording boundaries (QA F1): `off`/`on` when an account's switch flips, `start` the first
    *  time a process records an account. Usage across one is never attributed. */
   z.object({ t: z.literal('tracking'), at: ms, account: z.string().max(300), state: z.enum(['off', 'on', 'start']) }),
 ]);
 export type LedgerRecord = z.infer<typeof ledgerRecordSchema>;
+/** A manager turn's shape, as the ledger keeps it; the report adds its cost. */
+export type LedgerTurnStats = Omit<PlanUsageTurnStats, 'usd'>;
 
 const DAY_MS = 86_400_000;
 const warned = new Set<string>();

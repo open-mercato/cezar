@@ -242,7 +242,8 @@ export async function isProcessIdentityAlive(
   own?: ProcessIdentity,
 ): Promise<boolean> {
   const current = own ?? await ownHostedProcessIdentity();
-  if (identity.host !== current.host) throw new Error('Cannot verify foreign owner identity');
+  // Same stable boot ID = same kernel under a renamed host (#2398); see webhooks/ownership.ts `alive()`.
+  if (identity.host !== current.host && !(identity.boot === current.boot && bootIsStableId(current.boot))) throw new Error('Cannot verify foreign owner identity');
   if (identity.boot !== current.boot && bootIsStableId(identity.boot) && bootIsStableId(current.boot)) return false;
   if (identity.pidNamespace !== current.pidNamespace) {
     if (identity.pidNamespace === undefined && (await processStarts([identity.pid])).get(identity.pid) === identity.start) return true;

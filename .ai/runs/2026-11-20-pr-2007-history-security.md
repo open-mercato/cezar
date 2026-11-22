@@ -67,3 +67,17 @@ Claim-Lock-SHA: 9f6546d927ce79789801f18d90e83e47876271a2
 - [x] 3.4 Re-review the complete scope against repository/skill checklists and inherited feedback; no actionable findings. Publish the resumed PR and complete owned-claim cleanup; tracker completion/CI comments are authoritative for release and new-head CI results.
 
 No duplicate PR, API/transcript/startup/configuration/architecture/dependency or default changes. Existing automerge, skip-qa, risk-low and both backport requests retained. Draft is used while new-head remote verification is pending; ready follows when it passes. Formal GitHub approval remains independent of the author COMMENT. No merge.
+
+## Autonomous verification continuation (2026-11-22)
+
+Claim-Run: e137fdec-0e18-4ed4-aad6-74fccc5782ce
+Claim-Comment: 7078924946
+Claim-Lock-SHA: f5aad46c3b15cecb2a8101c7915cc391c7bc5913
+
+- [x] Integrate main 957ef017f without changing the existing descriptor-bound reader behavior.
+- [x] Repeat regression proof: current main fails 7/10 dedicated cases; fixed new/existing history suites pass 41/41.
+- [x] Run the full ordered gate: typecheck PASS; npm test (8 workers) 17,942 passed / 8 existing skips; core tests 54 passed; build/check:pack PASS; packaged CLI tests 35 passed. Only test-process CEZ_INSTANCE_ID and CEZ_ARTIFACTS_DIR are unset; no assertions or application defaults changed.
+- [x] Re-review the complete main-relative diff, API consumer and inherited feedback. No remaining actionable finding; metadata/read cleanup and current cursor bookkeeping remain covered. The existing atomic descriptor upgrade is retained without unrelated tooling changes.
+- [ ] Publish integrated head, wait for its own CI, then promote draft and release owned claim. Tracker evidence is authoritative for those post-commit steps.
+
+Application startup, configuration, architecture, dependencies, APIs and persisted formats remain unchanged. Existing automerge and release/v0.20.x plus v0.18.x backport requests remain eligible. Formal GitHub approval stays separate from an author COMMENT; no merge.

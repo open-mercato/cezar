@@ -56,8 +56,10 @@ nothing), and:
    change when a version ships. `desktop-latest` is a ROLLING release the publish job refreshes;
    GitHub's own `releases/latest/download/…` cannot be used, because the repo's "latest" release
    is cezar's `v*` release, which carries no installers.
-3. **publish** — renames tauri-action's `latest.json` to **`desktop-latest.json`** (the name
-   the shells poll; namespaced so a future cezar manifest on the same page cannot collide),
+3. **publish** — writes **`desktop-latest.json`** (the name the shells poll; namespaced so a
+   future cezar manifest on the same page cannot collide) from the release's `.sig` assets
+   (`scripts/build-updater-manifest.mjs`). The build legs upload no `latest.json`: tauri-action
+   read-merge-replaces it from every leg in parallel, and desktop-v0.1.12 lost that race),
    flips the draft to published with `--latest=false` (cezar's `v*` releases stay the repo's
    "latest"), copies the stable-named installers and `desktop-latest.json` onto the rolling
    `desktop-latest` release (its assets and title change; its tag stays where the first
@@ -240,7 +242,10 @@ admits the splash and the cockpit **on the port this shell spawned** and nothing
 1. **Landing page "Download"** — a static page (Cloudflare/GitHub Pages) with OS detection and
    the stable asset links; optionally reads the release JSON for the version. No backend.
 2. **Homebrew cask** in an `open-mercato/homebrew-tap`: `brew install --cask open-mercato/tap/cezar`,
-   `url` = the stable dmg link, `sha256` from the `.sha256` asset, `livecheck` on GitHub Releases.
+   `url` = the VERSIONED `desktop-v#{version}` dmg (never the rolling `desktop-latest`, whose bytes
+   change under a fixed `sha256`), `sha256` from the `.sha256` asset, `livecheck` on `desktop-v*`
+   releases. The cask lives in `packages/desktop/homebrew/`; the `homebrew-tap` job of
+   desktop-release.yml bumps it in the tap on every real release.
 3. **winget** manifest (community repo), automatable from the publish job.
 4. **Flathub** later; the AppImage covers Linux until then.
 

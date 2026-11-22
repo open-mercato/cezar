@@ -4,6 +4,7 @@ import type {
   PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayAccountLocal, RelayAccountResendResponse, RelayAccountResponse, RelayAccountStatus,
   RelayKeepAwake, RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse, TestRelayAddressResponse,
 } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, type AttentionKind, type PhonePushPrefs, type PhonePushSettings } from '@open-mercato/cezar-contract';
 import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
 import { loadWorkspaceConfigOrThrow, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
@@ -141,7 +142,7 @@ export class RelayService {
   private readonly push: RelayPushSink;
   /** Each phone's open `GET /workspace/phone/signals` streams (stage 1), ended with its session. */
   private readonly signalStreams = new Map<string, Set<(managerId: string | undefined) => void>>();
-  private pushCount: () => Promise<number> = async () => 1;
+  private pushCount: (kinds: readonly AttentionKind[]) => Promise<number> = async () => 0;
   private readonly accountFile: RelayAccountFile;
   private readonly accounts: RelayAccountClient;
   /** Relays that answered `no-route` for accounts: a custom relay older than § 18. */
@@ -185,21 +186,62 @@ export class RelayService {
           // A read-only home sends to a dead grant again, and the relay refuses it again.
         }
       },
-      count: () => this.pushCount(),
+      count: (kinds) => this.pushCount(kinds),
+      setCountTold: (deviceId, count) => {
+        try {
+          this.devices.setCountTold(deviceId, count);
+        } catch {
+          // A read-only home forgets it on restart, and owes that phone nothing until its next alert.
+        }
+      },
       ...(options.pushPost ? { post: options.pushPost } : {}),
       now: this.now,
       warn: (line) => console.warn(line),
     });
   }
 
-  /** The badge: the server's own total of what waits on the user. */
-  attachPush(count: () => Promise<number>): void {
+  /** A phone's badge: the attention list filtered to the kinds that phone counts. */
+  attachPush(count: (kinds: readonly AttentionKind[]) => Promise<number>): void {
     this.pushCount = count;
   }
 
-  /** A manager wants the user. Carries the manager id for the tap, never what it said. */
-  signalPush(managerId: string): void {
-    this.push.signal(managerId);
+  /** A manager wants the user. Carries the manager id for the tap and the kind, never what it said. */
+  signalPush(managerId: string, kind: AttentionKind): void {
+    this.push.signal(managerId, kind);
+  }
+
+  /** Some phone could hear a count push: a grant, an app that understands `count`, and push not blocked.
+   *  With none, a changed list has nobody to tell, so cezar does not recount it (spec § Relay change). */
+  wantsCounts(): boolean {
+    if (pushBlocked(this.env)) return false;
+    return this.devices.list().some((device) => device.push !== undefined && (device.prefs ?? DEFAULT_PHONE_PUSH_PREFS).understands.includes('count'));
+  }
+
+  /** The attention list changed: phones that are not open get their new count silently. */
+  noteAttentionChange(): void {
+    this.push.noteChange();
+  }
+
+  /** `null` for a device with no row; the defaults until the phone first saves. */
+  phonePrefs(deviceId: string): PhonePushPrefs | null {
+    const device = this.devices.get(deviceId);
+    return device ? device.prefs ?? DEFAULT_PHONE_PUSH_PREFS : null;
+  }
+
+  /** The phone's own save, including what its app understands. */
+  setPhonePrefs(deviceId: string, prefs: PhonePushPrefs): PhonePushPrefs | null {
+    if (!this.devices.setPrefs(deviceId, prefs)) return null;
+    this.onChange();
+    // A phone that now counts fewer kinds is owed its lower number.
+    this.push.noteChange();
+    return prefs;
+  }
+
+  /** The computer's edit: the settings only, never what the phone's app understands. */
+  setPhoneSettings(deviceId: string, settings: PhonePushSettings): PhonePushPrefs | null {
+    const current = this.phonePrefs(deviceId);
+    if (!current) return null;
+    return this.setPhonePrefs(deviceId, { ...settings, understands: current.understands });
   }
 
   /**
@@ -617,6 +659,7 @@ export class RelayService {
         ...(device.lastSeenAt ? { lastSeenAt: device.lastSeenAt } : {}),
         connected: this.sessions.get(device.deviceId)?.proven === true,
         ...(device.push ? { push: true as const } : {}),
+        prefs: device.prefs ?? DEFAULT_PHONE_PUSH_PREFS,
       })),
       pairing: this.pairing?.view() ?? null,
       ...(undenied > 0 ? { undeniedGrants: undenied } : {}),
@@ -941,6 +984,8 @@ export class RelayService {
   async phonePush(deviceId: string): Promise<PhonePushState | null> {
     const device = this.devices.get(deviceId);
     if (!device) return null;
+    // A session just came up: the app reads its counts, so what it shows now is what it was told.
+    void this.push.noteOpened(deviceId);
     const identity = pushBlocked(this.env) ? null : this.identity ?? (await this.identityStore.load().catch(() => null));
     if (!identity) return { available: false };
     const target = this.push.latestManager();

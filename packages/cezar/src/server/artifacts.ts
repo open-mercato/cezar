@@ -118,10 +118,23 @@ export async function openArtifact(dir: string, name: string): Promise<ReadableS
   return Readable.toWeb(handle.createReadStream()) as ReadableStream<Uint8Array>;
 }
 
-async function sameFileInside(dir: string, path: string, opened: { dev: number; ino: number }): Promise<boolean> {
+/**
+ * Exported for tests. On win32 `stat().dev` is 0 while a handle's fstat reports the volume
+ * serial (#2359), so `dev` is not comparable there: identity is `ino` plus `size`.
+ */
+export async function sameFileInside(
+  dir: string,
+  path: string,
+  opened: { dev: number; ino: number; size?: number },
+  platform: NodeJS.Platform = process.platform,
+  statFn: (p: string) => Promise<{ dev: number; ino: number; size: number }> = stat,
+): Promise<boolean> {
   const [root, real] = await Promise.all([realpath(dir), realpath(path)]);
   if (dirname(dirname(real)) !== root) return false;
-  const now = await stat(real);
+  const now = await statFn(real);
+  if (platform === 'win32') {
+    return now.ino === opened.ino && (opened.size === undefined || now.size === opened.size);
+  }
   return now.dev === opened.dev && now.ino === opened.ino;
 }
 

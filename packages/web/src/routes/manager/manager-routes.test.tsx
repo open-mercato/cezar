@@ -1816,6 +1816,20 @@ describe('an inactive manager\'s chat (spec 2026-11-19-manager-deactivate)', () 
     await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'wake up', reactivate: true, idempotencyKey: SEND_KEY }))
   })
 
+  it('a cancelled reactivate from a question card puts focus back on the option and says “Not sent”', async () => {
+    server.messages = [assistantMessage(99, { ask: { questions: [{ header: 'Ready', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] } })]
+    renderAt('/manager/global')
+    const no = await screen.findByRole('button', { name: 'No' })
+    no.focus()
+    fireEvent.click(no)
+    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and answer\?/ })
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('No'))
+    expect(screen.getByText(/Not sent: Global Manager is still inactive/)).toBeTruthy()
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
   it('/check asks first, then reactivates with Catch me up instead of a check the server would refuse', async () => {
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })

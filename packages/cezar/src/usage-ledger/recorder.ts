@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
-import { appendLedger, type LedgerConsumer } from './store.ts';
+import { appendLedger, type LedgerConsumer, type LedgerTurnStats } from './store.ts';
 
 /** `claude:default`. The account half is the cezar agent-account id, never an email. */
 export function ledgerAccountKey(provider: 'claude' | 'codex', accountId: string): string {
@@ -88,11 +88,15 @@ export class LedgerSession {
     this.cursor = to;
   }
 
-  end(options: { quiet?: boolean; now?: number } = {}): void {
+  end(options: { quiet?: boolean; now?: number; turn?: LedgerTurnStats } = {}): void {
     if (this.closed) return;
     this.closed = true;
     this.endedAt = Math.max(options.now ?? Date.now(), this.cursor);
-    appendLedger({ t: 'end', at: this.endedAt, session: this.id, ...(options.quiet !== undefined ? { quiet: options.quiet } : {}) }, this.account);
+    appendLedger({
+      t: 'end', at: this.endedAt, session: this.id,
+      ...(options.quiet !== undefined ? { quiet: options.quiet } : {}),
+      ...(options.turn ? { turn: options.turn } : {}),
+    }, this.account);
   }
 }
 
@@ -149,7 +153,7 @@ export class PlanUsageTracker {
   }
 
   /** The session settled: close a turn that never completed (a crash stays unweighted, hence unsplit). */
-  close(options: { quiet?: boolean } = {}): void {
+  close(options: { quiet?: boolean; turn?: LedgerTurnStats } = {}): void {
     this.turn?.end(options);
     this.turn = undefined;
   }
