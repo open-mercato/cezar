@@ -70,6 +70,7 @@ instead of "cost".
   it opens the shared popover, and on a phone the bottom sheet (`PlanUsageSurface`). That fixes the
   `title`-only gap the problem table above names. The breakdown shows the window or windows, whether
   the reply ran alone, and the turn's requests and peak context. The popover's largest turns are
-  unchanged.
+  unchanged. A reply whose share rounds to 0 pp has no line at all, never a "—". A reply split across
+  windows lists them oldest first.
 - Session view: **A + warning strip**. The chip carries the account meter, and a strip above the composer appears from 80 %.
 - Phones: **bottom sheet** for the shared surface (task chip included), via `PlanUsageSurface`.

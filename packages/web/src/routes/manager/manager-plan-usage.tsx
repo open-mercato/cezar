@@ -211,25 +211,33 @@ export interface ReplyUsage {
   turn?: PlanUsageTurnStats
 }
 
-/** Per assistant message: its estimate in the 5-hour windows it ran in. Absent = no entry, never 0.
+/** Per assistant message: its estimate in the 5-hour windows it ran in. Absent = no entry, never 0:
+ *  the ledger rounds a share to 0.01 pp, so a share of 0 is no measurable share and gets no line.
  *  Keyed by the chat message id, which a turn keeps whatever session it ran in. */
 export function replyUsageById(entries: readonly PlanUsageConsumerWindow[] | undefined, managerId: string): ReadonlyMap<string, ReplyUsage> {
   const id = managerConsumerId(managerId)
-  const out = new Map<string, ReplyUsage>()
+  const found = new Map<string, { pp: number; alonePp: number; windows: Array<{ label: string; startsAt: string }>; turn?: PlanUsageTurnStats }>()
   for (const e of entries ?? []) {
     if (e.kind !== 'five-hour' || e.consumer.id !== id) continue
-    const window = `${e.account.label} · 5-hour limit ${clockTime(e.startsAt)}–${clockTime(e.resetsAt)}`
+    const window = { label: `${e.account.label} · 5-hour limit ${clockTime(e.startsAt)}–${clockTime(e.resetsAt)}`, startsAt: e.startsAt }
     for (const m of e.consumer.messages ?? []) {
-      const prior = out.get(m.messageId)
+      if (!(m.estimatePp > 0)) continue
+      const prior = found.get(m.messageId)
       const turn = prior?.turn ?? m.turn
       const windows = prior?.windows ?? []
-      out.set(m.messageId, {
+      found.set(m.messageId, {
         pp: (prior?.pp ?? 0) + m.estimatePp,
         alonePp: (prior?.alonePp ?? 0) + m.aloneInferredPp,
-        windows: windows.includes(window) ? windows : [...windows, window],
+        windows: windows.some((w) => w.label === window.label) ? windows : [...windows, window],
         ...(turn ? { turn } : {}),
       })
     }
+  }
+  const out = new Map<string, ReplyUsage>()
+  for (const [messageId, reply] of found) {
+    // Oldest window first, whatever order the report lists them in.
+    const windows = [...reply.windows].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt)).map((w) => w.label)
+    out.set(messageId, { pp: reply.pp, alonePp: reply.alonePp, windows, ...(reply.turn ? { turn: reply.turn } : {}) })
   }
   return out
 }
@@ -249,7 +257,8 @@ export function ReplyUsageNote({ usage }: { usage: ReplyUsage }) {
   const label = `This reply ${approxPp(usage.pp)} of 5h`
   const rows: PlanUsageRow[] = [
     { slot: 'manager-reply-usage-share', label: usage.windows.length > 1 ? `Share of 5-hour limits (${usage.windows.length} windows)` : 'Share of the 5-hour limit', value: approxPp(usage.pp) },
-    { slot: 'manager-reply-usage-alone', label: 'While no other cezar work ran', value: approxPp(usage.alonePp), indent: true },
+    // Only a measurable part: "It shared with other work" already says when there is none.
+    ...(usage.alonePp > 0 ? [{ slot: 'manager-reply-usage-alone', label: 'While no other cezar work ran', value: approxPp(usage.alonePp), indent: true }] : []),
     ...(usage.turn ? [
       { slot: 'manager-reply-usage-requests', label: 'Model requests', value: String(usage.turn.requests) },
       { slot: 'manager-reply-usage-context', label: 'Peak context', value: `${Math.round(usage.turn.contextPeak / 1000)}k tokens` },

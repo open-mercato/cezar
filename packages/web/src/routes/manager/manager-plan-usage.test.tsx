@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router'
+import { clockTime } from '@/lib/plan-usage'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ManagerMessage, PlanUsageConsumer, PlanUsageConsumerWindow, PlanUsageTurnStats, PlanUsageWindow } from '@open-mercato/cezar-api-client'
 import {
@@ -299,6 +300,30 @@ describe('the reply footnote (restored 2026-11-22)', () => {
     expect(replyUsageById([entry(consumer({ ...manager, id: 'mgr:other' }))], 'm1').size).toBe(0)
   })
 
+  it('gives a reply whose share rounded to 0 no line at all, never "—" or a false "ran alone"', () => {
+    const mine = consumer({ ...manager, messages: [turn('zero', 'chat', 0, 0), turn('some', 'chat', 0.01, 0)] })
+    const other = consumer({ ...manager, messages: [turn('split', 'chat', 0, 0)] })
+    const third = consumer({ ...manager, messages: [turn('split', 'chat', 0.4, 0.4)] })
+    const replies = replyUsageById([entry(mine), entry(other, { windowId: 'w2' }), entry(third, { windowId: 'w3' })], 'm1')
+    expect(replies.has('zero')).toBe(false)
+    expect(replies.get('some')?.pp).toBe(0.01)
+    // A window where it rounded to 0 adds no window name either.
+    expect(replies.get('split')).toMatchObject({ pp: 0.4, alonePp: 0.4, windows: [expect.any(String)] })
+  })
+
+  it('lists a split reply’s windows oldest first, whatever the report’s order', () => {
+    const late = consumer({ ...manager, messages: [turn('a1', 'chat', 0.5, 0)] })
+    const early = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
+    const replies = replyUsageById([
+      entry(late, { windowId: 'late', startsAt: new Date('2026-11-19T15:00:00').toISOString(), resetsAt: new Date('2026-11-19T20:00:00').toISOString() }),
+      entry(early, { windowId: 'early', startsAt: new Date('2026-11-19T10:00:00').toISOString(), resetsAt: new Date('2026-11-19T15:00:00').toISOString() }),
+    ], 'm1')
+    expect(replies.get('a1')!.windows.map((w) => w.replace(/^.*5-hour limit /, ''))).toEqual([
+      `${clockTime(new Date('2026-11-19T10:00:00').toISOString())}–${clockTime(new Date('2026-11-19T15:00:00').toISOString())}`,
+      `${clockTime(new Date('2026-11-19T15:00:00').toISOString())}–${clockTime(new Date('2026-11-19T20:00:00').toISOString())}`,
+    ])
+  })
+
   it('names every window a split reply came from', () => {
     const mine = consumer({ ...manager, messages: [turn('a1', 'chat', 0.9, 0.9)] })
     const earlier = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
@@ -320,8 +345,21 @@ describe('the reply footnote (restored 2026-11-22)', () => {
     expect(details.getByText('Claude · default · 5-hour limit 10:00–15:00')).toBeTruthy()
     expect(details.getByText('It shared with other work.')).toBeTruthy()
     expect(rowText('manager-reply-usage-share')).toBe('Share of the 5-hour limit ≈ 0.3%')
+    expect(document.querySelector('[data-slot="manager-reply-usage-alone"]')).toBeNull()
     expect(rowText('manager-reply-usage-requests')).toBe('Model requests 2')
     expect(rowText('manager-reply-usage-context')).toBe('Peak context 32k tokens')
+  })
+
+  it('shows its detail as the trigger’s tooltip, and the part measured alone', async () => {
+    const usage = { pp: 0.9, alonePp: 0.6, windows: ['Claude · default · 5-hour limit 10:00–15:00'], turn: stats() }
+    render(<ReplyUsageNote usage={usage} />)
+    const note = screen.getByRole('button', { name: /^This reply ≈ 0.9% of 5h/ })
+    fireEvent.pointerMove(note)
+    fireEvent.focus(note)
+    await waitFor(() => expect(document.querySelector('[data-slot="icon-tooltip"]')?.textContent).toContain(replyUsageDetail(usage)))
+    expect(replyUsageDetail(usage)).toContain('partly shared with other work')
+    fireEvent.click(note)
+    expect(rowText('manager-reply-usage-alone')).toBe('While no other cezar work ran ≈ 0.6%')
   })
 
   it('opens the same breakdown as a bottom sheet on a phone', () => {
