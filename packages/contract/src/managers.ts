@@ -988,7 +988,8 @@ export const putManagerMemoryInputSchema = z.object({
   kind: managerMemoryKindSchema,
   text: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.text),
   why: z.string().trim().max(MANAGER_MEMORY_LIMITS.why).optional(),
-  /** Who wrote it: the cockpit sends `user`, `cez-manager memory set` sends `manager`. */
-  source: z.enum(['user', 'manager']).optional(),
+  /** Who wrote it: the cockpit sends `user`, `cez-manager memory set` sends `manager`. Required,
+   *  so a write is never credited to the user by default. */
+  source: z.enum(['user', 'manager']),
 });
 export type PutManagerMemoryInput = z.infer<typeof putManagerMemoryInputSchema>;

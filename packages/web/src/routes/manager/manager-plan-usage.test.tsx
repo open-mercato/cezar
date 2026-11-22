@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router'
+import { clockTime } from '@/lib/plan-usage'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ManagerMessage, PlanUsageConsumer, PlanUsageConsumerWindow, PlanUsageTurnStats, PlanUsageWindow } from '@open-mercato/cezar-api-client'
 import {
@@ -10,8 +11,14 @@ import {
   managerStartedTasks,
   ManagerLimitStrip,
   ManagerUsageChip,
+  ReplyUsageNote,
+  replyUsageById,
+  replyUsageDetail,
+  couldBeTask,
+  tokenCount,
   turnReasons,
   turnShape,
+  turnTokens,
   type AccountNow,
 } from './manager-plan-usage'
 
@@ -253,24 +260,138 @@ describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)'
 
   it('names why a turn was expensive', () => {
     expect(turnReasons(stats())).toEqual([])
-    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cache expired after 10 h idle', 'large context (942k)'])
-    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['7 requests', 'big tool output', 'new session'])
+    expect(turnReasons(stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }))).toEqual(['cold start after 10 h idle', 'large context'])
+    expect(turnReasons(stats({ fresh: true, requests: 7, toolResultChars: 29_000 }))).toEqual(['many requests', 'big tool output', 'new session'])
+    // The recorded flag wins over the idle-gap guess: a short gap can still miss the cache, a long one hit it.
+    expect(turnReasons(stats({ cold: true, idleMs: 120_000 }))).toEqual(['cold start'])
+    expect(turnReasons(stats({ cold: false, idleMs: 2 * 3_600_000 }))).toEqual([])
   })
 
   it('sums routing against its own work and counts turns a task could have done', () => {
     expect(turnShape([{ turn: stats() }, { turn: stats({ requests: 8, contextPeak: 45_000, tools: { route: 0, look: 2, own: 5, write: 1 } }) }, {}])).toEqual({
-      turns: 2, avgContext: 40_000, avgRequests: 5, tools: { route: 1, look: 2, own: 5, write: 1 }, couldBeTasks: 1,
+      turns: 2, avgContext: 40_000, avgRequests: 5, tools: { route: 1, look: 2, own: 5, write: 1 }, couldBeTasks: 1, tokens: null,
     })
     expect(turnShape([{}])).toBeNull()
+    // Files a manager writes carry text to a task: routing, never a reason to call it a task.
+    expect(couldBeTask(stats({ tools: { route: 1, look: 0, own: 0, write: 9 } }))).toBe(false)
+  })
+
+  it('reads a turn’s token split, and sums it only over the turns that reported one', () => {
+    const tokens = { cacheReadTokens: 3_743_343, cacheWriteTokens: 942_218, outputTokens: 3494 }
+    expect(turnTokens(stats())).toBeNull()
+    expect(turnTokens(stats(tokens))).toEqual({ cacheRead: 3_743_343, cacheWrite: 942_218, output: 3494 })
+    expect(turnShape([{ turn: stats(tokens) }, { turn: stats({ cacheReadTokens: 56_657, cacheWriteTokens: 1_782, outputTokens: 506 }) }, { turn: stats() }])?.tokens)
+      .toEqual({ cacheRead: 3_800_000, cacheWrite: 944_000, output: 4000 })
+    expect([950, 13_400, 942_218, 3_743_343, 12_500_000].map(tokenCount)).toEqual(['950', '13k', '942k', '3.7M', '13M'])
+    // Rounded first, so a unit never shows its own upper bound.
+    expect([999.4, 999.6, 999_499, 999_500, 999_999, 9_949_999, 9_950_000, 9_999_999].map(tokenCount))
+      .toEqual(['999', '1k', '999k', '1.0M', '1.0M', '9.9M', '10M', '10M'])
   })
 
   it('shows the reason under a largest turn and the window’s turn shape', () => {
-    const withStats = consumer({ ...manager, messages: [{ ...turn('a1', 'chat', 5, 1), turn: stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5 }) }] })
+    const withStats = consumer({ ...manager, messages: [{ ...turn('a1', 'chat', 5, 1), turn: stats({ idleMs: 9.5 * 3_600_000, contextPeak: 942_220, requests: 5, cacheReadTokens: 3_743_343, cacheWriteTokens: 942_218, outputTokens: 3494 }) }] })
     const u = managerPlanUsage([entry(withStats)], 'm1', [], KEY, NOW)!
     renderIn(<ManagerUsageChip usage={u} account={accountNow(63)} provider="claude" now={NOW.getTime()} />)
     fireEvent.click(screen.getByRole('button'))
-    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cache expired after 10 h idle, large context (942k)')
+    expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cold start after 10 h idle, large context')
     expect(row('manager-usage-shape')!.textContent).toContain('942k context · 5.0 requests per turn (1 turn)')
     expect(row('manager-usage-shape')!.textContent).toContain('Tool calls: 1 routing work to tasks, 0 looking up state, 0 its own work')
+    expect(row('manager-usage-turn-tokens')!.textContent).toBe('3.7M cache read · 942k cache written · 3k output')
+    expect(row('manager-usage-shape-tokens')!.textContent).toBe('Tokens: 3.7M cache read · 942k cache written · 3k output')
+  })
+})
+
+describe('the reply footnote (restored 2026-11-22)', () => {
+  const stats = (over: Record<string, unknown> = {}) => ({
+    requests: 2, contextFirst: 30_000, contextPeak: 35_000, toolResultChars: 0,
+    tools: { route: 1, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 7, ...over,
+  })
+
+  it('finds every recent reply by its message id, the first reply after a session restart included', () => {
+    // a1 ran late in the old session; a2 was the first turn of the new one, after a restart.
+    const mine = consumer({ ...manager, messages: [
+      { ...turn('a1', 'chat', 0.9, 0.9), turn: stats() },
+      { ...turn('a2', 'chat', 0.3, 0), turn: stats({ fresh: true, sessionTurn: 1, contextPeak: 32_000 }) },
+    ] })
+    const earlier = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
+    const replies = replyUsageById([entry(mine), entry(earlier, { windowId: 'w-earlier' }), entry(mine, { kind: 'weekly', windowId: 'wk' })], 'm1')
+    expect(replies.get('a2')).toMatchObject({ pp: 0.3, alonePp: 0, windows: [expect.stringMatching(/^Claude · default · 5-hour limit /)], turn: { fresh: true } })
+    // A reply split across two 5-hour windows adds up; weekly windows never count.
+    expect(replies.get('a1')?.pp).toBeCloseTo(1.1)
+    expect(replies.has('nope')).toBe(false)
+    expect(replyUsageById([entry(consumer({ ...manager, id: 'mgr:other' }))], 'm1').size).toBe(0)
+  })
+
+  it('gives a reply whose share rounded to 0 no line at all, never "—" or a false "ran alone"', () => {
+    const mine = consumer({ ...manager, messages: [turn('zero', 'chat', 0, 0), turn('some', 'chat', 0.01, 0)] })
+    const other = consumer({ ...manager, messages: [turn('split', 'chat', 0, 0)] })
+    const third = consumer({ ...manager, messages: [turn('split', 'chat', 0.4, 0.4)] })
+    const replies = replyUsageById([entry(mine), entry(other, { windowId: 'w2' }), entry(third, { windowId: 'w3' })], 'm1')
+    expect(replies.has('zero')).toBe(false)
+    expect(replies.get('some')?.pp).toBe(0.01)
+    // A window where it rounded to 0 adds no window name either.
+    expect(replies.get('split')).toMatchObject({ pp: 0.4, alonePp: 0.4, windows: [expect.any(String)] })
+  })
+
+  it('lists a split reply’s windows oldest first, whatever the report’s order', () => {
+    const late = consumer({ ...manager, messages: [turn('a1', 'chat', 0.5, 0)] })
+    const early = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
+    const replies = replyUsageById([
+      entry(late, { windowId: 'late', startsAt: new Date('2026-11-19T15:00:00').toISOString(), resetsAt: new Date('2026-11-19T20:00:00').toISOString() }),
+      entry(early, { windowId: 'early', startsAt: new Date('2026-11-19T10:00:00').toISOString(), resetsAt: new Date('2026-11-19T15:00:00').toISOString() }),
+    ], 'm1')
+    expect(replies.get('a1')!.windows.map((w) => w.replace(/^.*5-hour limit /, ''))).toEqual([
+      `${clockTime(new Date('2026-11-19T10:00:00').toISOString())}–${clockTime(new Date('2026-11-19T15:00:00').toISOString())}`,
+      `${clockTime(new Date('2026-11-19T15:00:00').toISOString())}–${clockTime(new Date('2026-11-19T20:00:00').toISOString())}`,
+    ])
+  })
+
+  it('names every window a split reply came from', () => {
+    const mine = consumer({ ...manager, messages: [turn('a1', 'chat', 0.9, 0.9)] })
+    const earlier = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
+    const replies = replyUsageById([entry(mine), entry(earlier, { windowId: 'w-earlier', startsAt: new Date('2026-11-19T05:00:00').toISOString(), resetsAt: new Date('2026-11-19T10:00:00').toISOString() })], 'm1')
+    expect(replies.get('a1')?.windows).toHaveLength(2)
+    expect(replyUsageDetail(replies.get('a1')!)).toMatch(/^Claude · default · 5-hour limit .+ and Claude · default · 5-hour limit .+ · partly shared with other work$/)
+  })
+
+  it('reads as before #2363, and its breakdown opens on click, with the window, the split and the turn', () => {
+    const usage = { pp: 0.3, alonePp: 0, windows: ['Claude · default · 5-hour limit 10:00–15:00'], turn: stats({ fresh: true, sessionTurn: 1, contextPeak: 32_000 }) }
+    expect(replyUsageDetail(usage)).toBe('Claude · default · 5-hour limit 10:00–15:00 · shared with other work · 2 requests · 32k context')
+    expect(replyUsageDetail({ pp: 1, alonePp: 1, windows: ['w'] })).toBe('w · ran alone')
+    render(<ReplyUsageNote usage={usage} />)
+    const note = screen.getByRole('button', { name: 'This reply ≈ 0.3% of 5h: show what it cost' })
+    expect(note.textContent).toBe('This reply ≈ 0.3% of 5h')
+    fireEvent.click(note)
+    const details = within(screen.getByRole('dialog'))
+    expect(details.getByText('What this reply cost')).toBeTruthy()
+    expect(details.getByText('Claude · default · 5-hour limit 10:00–15:00')).toBeTruthy()
+    expect(details.getByText('It shared with other work.')).toBeTruthy()
+    expect(rowText('manager-reply-usage-share')).toBe('Share of the 5-hour limit ≈ 0.3%')
+    expect(document.querySelector('[data-slot="manager-reply-usage-alone"]')).toBeNull()
+    expect(rowText('manager-reply-usage-requests')).toBe('Model requests 2')
+    expect(rowText('manager-reply-usage-context')).toBe('Peak context 32k tokens')
+  })
+
+  it('shows its detail as the trigger’s tooltip, and the part measured alone', async () => {
+    const usage = { pp: 0.9, alonePp: 0.6, windows: ['Claude · default · 5-hour limit 10:00–15:00'], turn: stats() }
+    render(<ReplyUsageNote usage={usage} />)
+    const note = screen.getByRole('button', { name: /^This reply ≈ 0.9% of 5h/ })
+    fireEvent.pointerMove(note)
+    fireEvent.focus(note)
+    await waitFor(() => expect(document.querySelector('[data-slot="icon-tooltip"]')?.textContent).toContain(replyUsageDetail(usage)))
+    expect(replyUsageDetail(usage)).toContain('partly shared with other work')
+    fireEvent.click(note)
+    expect(rowText('manager-reply-usage-alone')).toBe('While no other cezar work ran ≈ 0.6%')
+  })
+
+  it('opens the same breakdown as a bottom sheet on a phone', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(max-width: 767px)', addEventListener() {}, removeEventListener() {} }))
+    render(<ReplyUsageNote usage={{ pp: 0.8, alonePp: 0.8, windows: ['Claude · default · 5-hour limit 10:00–15:00'] }} />)
+    fireEvent.click(screen.getByRole('button', { name: /^This reply ≈ 0.8% of 5h/ }))
+    const sheet = screen.getByRole('dialog')
+    expect(sheet.getAttribute('data-slot')).toBe('manager-reply-usage-details')
+    expect(sheet.className).toContain('bottom-0')
+    expect(within(sheet).getByRole('heading', { name: 'What this reply cost' })).toBeTruthy()
+    expect(within(sheet).getByText('It ran alone.')).toBeTruthy()
   })
 })

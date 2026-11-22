@@ -123,3 +123,12 @@ describe('useLinger keeps what the reader is looking at still', () => {
     expect(document.querySelector('[data-linger-key="a"]')).toBeNull()
   })
 })
+
+describe('LingerCollapse never widens past its list (#2407)', () => {
+  it('pins one shrinkable column and a shrinkable card: an implicit auto track grows to the longest unbroken token', () => {
+    render(<LingerCollapse lingerKey="a" leaving={undefined}><div data-slot="card">cezar/5aeb1ea22d514e8fa5584d0e90c1b7a4</div></LingerCollapse>)
+    const wrapper = document.querySelector('[data-linger-key="a"]')!
+    expect(wrapper.className).toContain('grid-cols-[minmax(0,1fr)]')
+    expect(wrapper.firstElementChild!.className).toContain('min-w-0')
+  })
+})

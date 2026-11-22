@@ -14,15 +14,25 @@ export function claudeUsageStatus(msg: unknown, model: string | undefined): Agen
     if (!isRecord(usage)) return undefined;
     const input = num(usage.input_tokens);
     if (input === undefined) return undefined;
+    const write = num(usage.cache_creation_input_tokens) ?? 0;
     return {
-      contextTokens: input + (num(usage.cache_read_input_tokens) ?? 0) + (num(usage.cache_creation_input_tokens) ?? 0),
+      contextTokens: input + (num(usage.cache_read_input_tokens) ?? 0) + write,
+      cacheWriteTokens: write,
     };
   }
-  if (msg.type === 'result' && isRecord(msg.modelUsage)) {
-    const entries = Object.entries(msg.modelUsage);
-    const main = (model !== undefined ? msg.modelUsage[model] : undefined) ?? entries[0]?.[1];
+  if (msg.type === 'result' && (isRecord(msg.modelUsage) || isRecord(msg.usage))) {
+    const entries = isRecord(msg.modelUsage) ? Object.entries(msg.modelUsage) : [];
+    const main = (model !== undefined && isRecord(msg.modelUsage) ? msg.modelUsage[model] : undefined) ?? entries[0]?.[1];
     const contextWindow = isRecord(main) ? num(main.contextWindow) : undefined;
-    return contextWindow !== undefined && contextWindow > 0 ? { contextWindow } : undefined;
+    // The result's `usage` is this process's own, not the session's running total.
+    const usage = isRecord(msg.usage) ? msg.usage : undefined;
+    const turnTokens = usage ? {
+      cacheReadTokens: num(usage.cache_read_input_tokens) ?? 0,
+      cacheWriteTokens: num(usage.cache_creation_input_tokens) ?? 0,
+      outputTokens: num(usage.output_tokens) ?? 0,
+    } : undefined;
+    if ((contextWindow === undefined || contextWindow <= 0) && !turnTokens) return undefined;
+    return { ...(contextWindow !== undefined && contextWindow > 0 ? { contextWindow } : {}), ...(turnTokens ? { turnTokens } : {}) };
   }
   if (msg.type === 'rate_limit_event' && isRecord(msg.rate_limit_info) && isRecord(msg.rate_limit_info.unifiedWindows)) {
     const limits: AgentUsageWindow[] = [];

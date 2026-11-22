@@ -62,8 +62,9 @@ final class DeviceProbes {
         return statuses
     }
 
-    /// The sheet closed. `keep` is the switch's target: its link is about to be the current one.
-    func stop(keep: String? = nil) {
+    /// The sheet closed. `keep` is the switch's target: its link is about to be the current one. `release: false`
+    /// leaves every warm link to whoever else holds it.
+    func stop(keep: String? = nil, release releasing: Bool = true) {
         lock.lock()
         guard !stopped else {
             lock.unlock()
@@ -72,6 +73,7 @@ final class DeviceProbes {
         stopped = true
         let servers = probed
         lock.unlock()
+        guard releasing else { return }
         for server in servers where server.id != keep { release(server) }
     }
 

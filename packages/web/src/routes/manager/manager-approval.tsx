@@ -190,7 +190,8 @@ function PrTasks({ projectId, number, projectName, origin }: { projectId: string
             >
               <StatusDot tone={attention.tone} pulse={attention.pulse} className="shrink-0" />
               <span className="min-w-0 truncate">{runTitle(record)}</span>
-              {projectName ? <span className="shrink-0 text-muted-foreground">· {projectName}</span> : null}
+              {/* Capped, so a long project name never squeezes the task title to an ellipsis. */}
+              {projectName ? <span className="max-w-[45%] shrink-0 truncate text-muted-foreground">· {projectName}</span> : null}
               <span className="sr-only">, {attention.label}</span>
             </Link>
           )

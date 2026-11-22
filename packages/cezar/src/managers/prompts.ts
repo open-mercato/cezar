@@ -58,7 +58,7 @@ Your session starts over regularly: after an idle hour, a long conversation or h
 
 How you reach the user: ${manager.cronMinutes > 0 ? `a scheduled check wakes you every ${manager.cronMinutes} minutes when something new needs attention` : 'scheduled checks are off'}. Tasks you start, and tasks you follow, report to you as soon as they finish, fail, are cancelled or need the user: cezar posts a status card for each in this chat itself${manager.followUp === false ? ', and you hear about them in your next turn' : ', then wakes you once to act on the result'}. Follow a task the user started only when they ask you to keep an eye on it, or when your next step depends on its result; unfollow it when that no longer holds. Everything you write lands in this chat with an unread dot. ${manager.notify === false ? 'The user turned system notifications off for you.' : `A reply also raises a system notification (macOS, Windows, Linux or the browser) when its first line is exactly "${MANAGER_IMPORTANT} <one short headline>". The cockpit strips that line.`} Save it for what should interrupt someone away from the screen: a task blocked on them, a failure they must act on, big work finishing. Routine progress, and anything they can read later, stays unmarked.
 
-A turn that starts with [cez-manager:followup] means tasks you follow changed state, and cezar already posted a status card for each, so the user has read it. Act on it in a few lines, without restating the card:
+A turn whose prompt carries [cez-manager:followup] means tasks you follow changed state, and cezar already posted a status card for each, so the user has read it. Act on it in a few lines, without restating the card:
 - A task that finished: say what it means for the user, then take the next step yourself (\`task say\` to follow up, \`task create\` for the next piece of work, or a proposal).
 - A task waiting on the user, with questions or asking for approval: do not list them in text. Put every one of them, the approval included, on one question card: end your reply with the CEZ:ASK line, your recommended answer first. When cezar gave a task's open question id, the card declares "about":[{"task":"<projectId>/<runId>","ask":"<that id>"}], and cezar delivers the user's answer to that task itself. Only for a card without that "ask" link, pass the answers on with \`cez-manager task say\`.
 - Start with the ${MANAGER_IMPORTANT} line only if the user must act and you are not asking with a card.
@@ -91,6 +91,7 @@ export function chatPrompt(text: string, notes: string[], attachments: string[] 
   // Before the marker: the mock reads the user's words from it, and the user did not write this.
   const ids = messageIds.length > 0 ? `(message id${messageIds.length > 1 ? 's, oldest first' : ''}: ${messageIds.join(', ')})\n` : '';
   const tasks = followups.length > 0 ? `Tasks you follow changed state; cezar posted a status card for each in this chat. ${fencedTasks(followups)}\n\n` : '';
+  // `questions` must come before the user's text: a fresh session swaps the first match for the full list.
   return `${notesBlock(notes)}${questions}${tasks}${ids}${turnMarker('chat')}\n${text}${files}`;
 }
 
@@ -100,6 +101,7 @@ export function jobPrompt(name: string, prompt: string, questions = ''): string 
 
 /** One turn for every followed-task event that arrived since the last one (spec § Followed tasks). */
 export function followupPrompt(events: string[], notes: string[], questions = ''): string {
+  // `questions` stays ahead of the tasks' words, for the same swap as in `chatPrompt`.
   return `${notesBlock(notes)}${questions}${turnMarker('followup')}
 Tasks you follow changed state. cezar already posted a status card for each in this chat, with the task's final message, so the user has read it. ${fencedTasks(events)}
 

@@ -10,6 +10,7 @@ import { managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, manag
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { MANAGER_COMMANDS, MANAGER_JOB_SUBCOMMANDS, MANAGER_MEMORY_SUBCOMMANDS, MANAGER_TASK_SUBCOMMANDS } from './cli-vocabulary.ts';
 import { recentTasks } from './snapshot.ts';
 import { MANAGER_TURN_ENV, MANAGER_TURN_HEADER } from './turn-token.ts';
 import { sameModel } from '../runs/reported-model.ts';
@@ -83,10 +84,10 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-const COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'propose', 'rename', 'memory', 'history'] as const;
-const TASK_SUBCOMMANDS = ['create', 'say', 'cancel', 'retry', 'follow', 'unfollow'] as const;
-const JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
-const MEMORY_SUBCOMMANDS = ['list', 'set', 'remove'] as const;
+const COMMANDS = MANAGER_COMMANDS;
+const TASK_SUBCOMMANDS = MANAGER_TASK_SUBCOMMANDS;
+const JOB_SUBCOMMANDS = MANAGER_JOB_SUBCOMMANDS;
+const MEMORY_SUBCOMMANDS = MANAGER_MEMORY_SUBCOMMANDS;
 /** `history` prints at most this much: older chat is a lookup, not a reload. */
 const HISTORY_CHARS = 8_000;
 const HISTORY_MESSAGE_CHARS = 800;

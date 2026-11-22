@@ -9,7 +9,12 @@ describe('claudeUsageStatus', () => {
       parent_tool_use_id: null,
       message: { usage: { input_tokens: 2, cache_creation_input_tokens: 39924, cache_read_input_tokens: 11803, output_tokens: 4 } },
     };
-    expect(claudeUsageStatus(msg, undefined)).toEqual({ contextTokens: 51729 });
+    expect(claudeUsageStatus(msg, undefined)).toEqual({ contextTokens: 51729, cacheWriteTokens: 39924 });
+  });
+
+  it('reads a turn’s own cache reads, writes and output from the result (spec 2026-11-21 § 2.3)', () => {
+    const msg = { type: 'result', usage: { input_tokens: 5, cache_creation_input_tokens: 942_218, cache_read_input_tokens: 3_743_343, output_tokens: 3494 } };
+    expect(claudeUsageStatus(msg, undefined)).toEqual({ turnTokens: { cacheReadTokens: 3_743_343, cacheWriteTokens: 942_218, outputTokens: 3494 } });
   });
 
   it('ignores a sub-agent message: its context is not the session one', () => {

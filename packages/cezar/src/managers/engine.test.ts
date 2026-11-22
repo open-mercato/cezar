@@ -2233,6 +2233,30 @@ describe('ManagerEngine', () => {
       expect(fresh.userPrompt).not.toContain('unchanged since your last turn');
     });
 
+    it('keeps a changed card list unseen when the turn that carried it failed', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await create(engine, 0);
+      const ask = (cardId: string): Script => ({ play: (emit) => { emit({ type: 'usage-status', status: { contextTokens: 30_000 } }); emit({ type: 'text', text: `Pick one.\nCEZ:ASK {"id":"${cardId}","questions":[{"header":"${cardId}","question":"Which ${cardId}?","multiSelect":false,"options":[{"label":"a"},{"label":"b"}]}]}` }); } });
+      await turn(engine, id, 'ask me', ask('base'));
+      clock += 60_000;
+      await turn(engine, id, 'and another', ask('next'));
+      clock += 60_000;
+      // Ran a command, then failed: no retry, the transcript stays, and the new list was never answered.
+      backend.scripts.push({
+        play: (emit) => { emit({ type: 'usage-status', status: { contextTokens: 31_000 } }); emit({ type: 'tool-call', id: 't1', tool: 'Bash', input: { command: 'cez-manager status' } }); emit({ type: 'error', message: 'boom' }); },
+        fail: 'claude CLI exited with code 1',
+      });
+      engine.send(id, 'status?');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.userPrompt).toContain('Your questions still waiting on the user:\n- base');
+      clock += 60_000;
+      const after = await turn(engine, id, 'again?', reply('Here.'));
+      expect(after.resume).toBe(true);
+      expect(after.userPrompt).toContain('Your questions still waiting on the user:\n- base');
+      expect(after.userPrompt).toContain('- next');
+      expect(after.userPrompt).not.toContain('unchanged since your last turn');
+    });
+
     it('gives a watch only unfinished and recent tasks, and finished items only when they are new', () => {
       const done = (i: number) => ({ runId: `d${i}`, title: `Done ${i}`, status: 'done', workflow: 'w', childCount: 0, startedBy: 'user' as const, lastActivityAt: `2026-11-${String(i + 1).padStart(2, '0')}T00:00:00Z` });
       const finished = (i: number) => ({ key: `f${i}`, kind: 'task-finished' as const, projectId: 'alpha', title: `Done ${i}`, runId: `d${i}` });
@@ -2276,7 +2300,7 @@ describe('ManagerEngine', () => {
         await engine.removeMemory(id, 'full-prs-not-drafts');
         expect((await engine.memory(id))?.entries).toEqual([]);
         expect(await engine.setMemory(id, 'html-first', { kind: 'feedback', text: 'HTML design before UI work', source: 'manager' })).toMatchObject({ entries: [{ key: 'html-first', source: 'manager' }] });
-        expect(await engine.setMemory(id, 'html-again', { kind: 'feedback', text: 'html design, before UI work!' })).toMatchObject({ status: 409 });
+        expect(await engine.setMemory(id, 'html-again', { kind: 'feedback', text: 'html design, before UI work!', source: 'user' })).toMatchObject({ status: 409 });
       } finally {
         vi.unstubAllEnvs();
         rmSync(config, { recursive: true, force: true });
@@ -2337,6 +2361,24 @@ describe('ManagerEngine', () => {
       await settled(engine);
       expect(store.state(id).sessions.chat).toMatchObject({ turns: 2, contextTokens: 38_000, startedAt: first.startedAt });
       expect(backend.specs.at(-1)?.resume).toBe(true);
+    });
+
+    it('counts a turn retried after a network error once', async () => {
+      const reply = (contextTokens: number): Script => ({ play: (emit) => { emit({ type: 'usage-status', status: { contextTokens } }); emit({ type: 'text', text: 'ok' }); } });
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(reply(30_000));
+      engine.send(id, 'one');
+      await settled(engine);
+      const before = store.state(id).sessions.chat!;
+      backend.scripts.push(
+        { play: (emit) => { emit({ type: 'usage-status', status: { contextTokens: 31_000 } }); emit({ type: 'error', message: 'fetch failed: ECONNRESET' }); }, fail: 'claude CLI exited with code 1' },
+        reply(32_000),
+      );
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(backend.specs.slice(-2).map((spec) => spec.resume)).toEqual([true, true]);
+      expect(store.state(id).sessions.chat).toMatchObject({ turns: 2, startedAt: before.startedAt, contextTokens: 32_000 });
     });
   });
 
