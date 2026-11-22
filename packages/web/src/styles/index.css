@@ -532,6 +532,11 @@
   overflow-x: auto;
   overflow-y: hidden;
 }
+/* Prose wraps a long URL, id or inline code instead of scrolling it sideways on a phone; the
+ * scroll above stays a backstop for what cannot wrap. Tables and fences keep their own scroll. */
+.thread-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) {
+  overflow-wrap: anywhere;
+}
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
   font-size: 1.05em;
