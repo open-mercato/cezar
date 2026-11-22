@@ -36,6 +36,7 @@ import {
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import { noteQuestionsMaybeChanged, questionKeys, useQuestionsSubscription } from './questions'
+import { attentionKeys, noteAttentionMaybeChanged } from './attention'
 import { ApiError, getHealth, getProjectRun } from './client'
 import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
 import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
@@ -492,6 +493,8 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     managerKeys.list,
     // Questions opened or closed while we were away; a remote cockpit has no topic for them.
     questionKeys.all,
+    // Now's Needs you (spec 2026-11-20-phone-notifications-inbox).
+    attentionKeys.all,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
@@ -830,6 +833,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           runsIndexRefresher.onEvent(parsed.event)
           if (parsed.event.type === 'run' || parsed.event.type === 'run-deleted') {
             noteQuestionsMaybeChanged(queryClient)
+            noteAttentionMaybeChanged(queryClient)
             stageDashboardRefresh()
             if (parsed.project) dashboardTransition(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run)
             if (parsed.project && (parsed.event.type === 'run-deleted' || parsed.event.run.status !== 'running')) dashboardLive.remove(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run.id)
@@ -944,7 +948,10 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           if (disposed || source !== current) return
           lastFrameAt = Date.now()
           applyManagerEvent(queryClient, name, (event as MessageEvent<string>).data)
-          if (name !== 'manager-delta') noteQuestionsMaybeChanged(queryClient)
+          if (name !== 'manager-delta') {
+            noteQuestionsMaybeChanged(queryClient)
+            noteAttentionMaybeChanged(queryClient)
+          }
         })
       }
 

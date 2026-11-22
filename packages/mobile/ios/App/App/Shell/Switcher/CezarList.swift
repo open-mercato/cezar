@@ -38,7 +38,8 @@ enum CezarList {
 /// The page's `probe`: `DeviceProbes` once over every saved cezar, done when all answered or at the bound,
 /// each reading noted in the book as the switcher does, then the warm links let go. A relay link reads online
 /// before its counts, so the round waits for them too, as Android's probe does, up to the bound. The readings outlive
-/// it, so the next listed outcome carries them. A probe while one runs joins it.
+/// it, so the next listed outcome carries them. A probe while one runs joins it, unless it lists a cezar the round
+/// does not cover: that one runs again once the round ends.
 final class CezarProbe {
     typealias Make = (@escaping (String, DeviceSwitch.Reading) -> Void) -> DeviceProbes
 
@@ -47,18 +48,23 @@ final class CezarProbe {
     private let clock: () -> Int64
     private let onBadge: (Int) -> Void
     private let schedule: DeviceProbes.Scheduler
+    private let keepLinks: () -> Bool
     private let lock = NSLock()
     private var running: DeviceProbes?
     private var waiters: [() -> Void] = []
+    private var covering: Set<String> = []
+    private var next: [(servers: [ServerRecord], currentId: String?, done: () -> Void)] = []
     private var readings: [String: DeviceSwitch.Reading] = [:]
     private var currentId: String?
     /// The relay cezars of the running round, whose online reading waits for its counts.
     private var relayIds: Set<String> = []
 
-    /// `onBadge`: the icon's sum, when a reading told counts.
+    /// `onBadge`: the icon's sum, when a reading told counts. `keepLinks`: the device sheet is open, so a round that
+    /// ends leaves the warm links for its close to let go.
     init(make: @escaping Make, book: DeviceBookStore, clock: @escaping () -> Int64, onBadge: @escaping (Int) -> Void = { _ in },
-         schedule: @escaping DeviceProbes.Scheduler = DeviceProbes.background) {
+         schedule: @escaping DeviceProbes.Scheduler = DeviceProbes.background, keepLinks: @escaping () -> Bool = { false }) {
         self.make = make
+        self.keepLinks = keepLinks
         self.schedule = schedule
         self.book = book
         self.clock = clock
@@ -69,11 +75,12 @@ final class CezarProbe {
     func probe(_ servers: [ServerRecord], currentId: String?, done: @escaping () -> Void) {
         lock.lock()
         if running != nil {
-            waiters.append(done)
+            if covering.isSuperset(of: servers.map(\.id)) { waiters.append(done) } else { next.append((servers, currentId, done)) }
             lock.unlock()
             return
         }
         waiters = [done]
+        covering = Set(servers.map(\.id))
         self.currentId = currentId
         relayIds = Set(servers.filter { $0.relay != nil }.map(\.id))
         let probes = make { [weak self] id, reading in self?.changed(id, reading) }
@@ -127,9 +134,12 @@ final class CezarProbe {
         readings = atBound ? snapshot.mapValues { $0.status == .checking ? DeviceSwitch.Reading(.offline) : $0 } : snapshot
         running = nil
         let done = waiters
+        let again = next
         waiters = []
+        next = []
         lock.unlock()
-        probes.stop()
+        probes.stop(release: !keepLinks())
         done.forEach { $0() }
+        for call in again { probe(call.servers, currentId: call.currentId, done: call.done) }
     }
 }

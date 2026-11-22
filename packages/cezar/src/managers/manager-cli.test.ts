@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runManagerCommand, SANDBOX_BLOCKED_HINT, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { capped, runManagerCommand, SANDBOX_BLOCKED_HINT, sinceOf, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { recentTasks } from './snapshot.ts';
 
 const snapshot = {
   generatedAt: '',
@@ -422,5 +423,101 @@ describe('cez manager', () => {
       expect(await run('workflows', '--project', 'alpha')).toBe(0);
       expect(JSON.parse(logs.join('\n'))).toEqual(workflows);
     });
+  });
+});
+
+describe('memory and history (spec 2026-11-21-manager-short-sessions-and-memory)', () => {
+  const memory = { entries: [{ key: 'full-prs', kind: 'feedback', text: 'Open full PRs', why: 'reviews start sooner', updatedAt: 't', source: 'user' }], limits: { entries: 40, bytes: 6144 }, usedBytes: 120 };
+  const messages = Array.from({ length: 30 }, (_, i) => ({
+    id: `m${i}`, seq: i, at: new Date(Date.parse('2026-11-21T00:00:00Z') + i * 3_600_000).toISOString(),
+    ...(i % 2 === 0 ? { kind: 'user', text: `question ${i}` } : { kind: 'assistant', text: `answer ${i}`, turn: 'chat', streaming: false, commands: [] }),
+  }));
+  const fetchFor = (calls: Array<{ url: string; method: string; body?: unknown }>) => vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+    calls.push({ url: String(url), method: init?.method ?? 'GET', ...(body !== undefined ? { body } : {}) });
+    if (String(url).includes('/memory')) return Response.json(memory);
+    const before = Number(new URL(String(url)).searchParams.get('before') ?? Infinity);
+    return Response.json({ messages: messages.filter((message) => message.seq < before).slice(-200), hasMore: false });
+  }) as typeof fetch;
+
+  it('lists, sets and removes memory', async () => {
+    const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+    const { run, logs } = harness({}, {}, [], { fetch: fetchFor(calls) });
+    expect(await run('memory', 'list')).toBe(0);
+    expect(logs.at(-1)).toBe('full-prs  [feedback]  Open full PRs  (why: reviews start sooner)');
+    expect(await run('memory', 'set', 'full-prs', '--kind', 'feedback', '--why', 'reviews start sooner', 'Open', 'full', 'PRs')).toBe(0);
+    expect(calls.at(-1)).toMatchObject({ method: 'PUT', url: 'http://x/api/v1/workspace/managers/m1/memory/full-prs', body: { kind: 'feedback', text: 'Open full PRs', why: 'reviews start sooner', source: 'manager' } });
+    expect(await run('memory', 'remove', 'full-prs')).toBe(0);
+    expect(calls.at(-1)).toMatchObject({ method: 'DELETE' });
+  });
+
+  it('refuses a bad key or kind, and any write during a watch', async () => {
+    const { run, errors } = harness({}, {}, [], { fetch: fetchFor([]) });
+    expect(await run('memory', 'set', 'Bad Key', '--kind', 'feedback', 'x')).not.toBe(0);
+    expect(await run('memory', 'set', 'ok', '--kind', 'whim', 'x')).not.toBe(0);
+    const watch = harness({ CEZ_MANAGER_TURN: 'watch' }, {}, [], { fetch: fetchFor([]) });
+    expect(await watch.run('memory', 'set', 'ok', '--kind', 'feedback', 'x')).not.toBe(0);
+    expect(watch.errors.join('\n')).toContain('read-only');
+    expect(errors.join('\n')).toContain('lowercase');
+  });
+
+  it('prints the newest matching messages oldest first, filtered by --since and --grep', async () => {
+    const { run, logs } = harness({}, {}, [], { fetch: fetchFor([]) });
+    expect(await run('history', '--limit', '3')).toBe(0);
+    expect(logs.at(-1)).toMatch(/^[^\n]*answer 27[\s\S]*question 28[\s\S]*answer 29$/);
+    expect(await run('history', '--grep', 'ANSWER 1', '--limit', '200')).toBe(0);
+    expect(logs.at(-1)!.split('\n\n').map((line) => line.replace(/^.*?: /, ''))).toEqual(['answer 1', 'answer 11', 'answer 13', 'answer 15', 'answer 17', 'answer 19']);
+    expect(await run('history', '--since', '2026-11-21T27:00Z')).not.toBe(0);
+  });
+
+  it('reads --since as a duration or an ISO time', () => {
+    const now = Date.parse('2026-11-21T12:00:00Z');
+    expect(sinceOf('2h', now)).toBe(now - 7_200_000);
+    expect(sinceOf('1d', now)).toBe(now - 86_400_000);
+    expect(sinceOf('2026-11-21T10:00:00Z', now)).toBe(Date.parse('2026-11-21T10:00:00Z'));
+    expect(sinceOf('soon', now)).toBeUndefined();
+  });
+});
+
+describe('compact listings (spec 2026-11-21-manager-short-sessions-and-memory § 2.4)', () => {
+  const busy = {
+    generatedAt: '',
+    attention: [
+      { key: 'w', kind: 'task-needs-you', projectId: 'alpha', title: 'Gate', runId: 'r0' },
+      ...Array.from({ length: 3 }, (_, i) => ({ key: `f${i}`, kind: 'task-finished', projectId: 'alpha', title: `Done ${i}`, runId: `d${i}` })),
+    ],
+    projects: [{
+      projectId: 'alpha', name: 'alpha', available: true, prs: [],
+      tasks: [
+        { runId: 'live', title: 'Live', status: 'running', workflow: 'w', childCount: 0, startedBy: 'user' },
+        ...Array.from({ length: 25 }, (_, i) => ({ runId: `d${i}`, title: `Done ${i}`, status: 'done', workflow: 'w', childCount: 0, startedBy: 'user', lastActivityAt: `2026-11-${String(i + 1).padStart(2, '0')}T00:00:00Z` })),
+      ],
+    }],
+  };
+  const fetchBusy = vi.fn(async () => Response.json(busy)) as typeof fetch;
+
+  it('hides finished tasks from attention unless --all', async () => {
+    const { run, logs } = harness({}, {}, [], { fetch: fetchBusy });
+    expect(await run('attention')).toBe(0);
+    expect(logs).toEqual(['task-needs-you  alpha  r0  Gate', '(3 finished tasks the user has not opened yet: --all lists them)']);
+    logs.length = 0;
+    expect(await run('attention', '--all')).toBe(0);
+    expect(logs).toHaveLength(4);
+  });
+
+  it('lists unfinished tasks and the 20 newest finished ones', async () => {
+    const { run, logs } = harness({}, {}, [], { fetch: fetchBusy });
+    expect(await run('tasks')).toBe(0);
+    expect(logs).toHaveLength(22);
+    expect(logs[0]).toContain('live  running');
+    expect(logs.join('\n')).toContain('d24  done');
+    expect(logs.join('\n')).not.toContain('d4  done');
+    expect(logs.at(-1)).toBe('alpha: 5 older finished tasks not shown (--all lists them)');
+  });
+
+  it('caps a listing and counts what it cut', () => {
+    expect(capped(['aaaa', 'bbbb', 'cccc'], 10)).toEqual(['aaaa', 'bbbb', '… 1 more line: narrow with --project, or use --all or --json']);
+    expect(capped(['aaaa'], undefined)).toEqual(['aaaa']);
+    expect(recentTasks([{ status: 'cancelled' }, { status: 'failed' }]).hidden).toBe(0);
   });
 });

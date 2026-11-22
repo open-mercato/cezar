@@ -62,8 +62,23 @@ describe('plan usage attribution', () => {
     expect(by['run:p/a']!.aloneInferredPp).toBe(0);
     expect(by['run:p/a']!.ranTogetherWith).toEqual({ tasks: 1, managers: 1, internal: 0 });
     expect(by['mgr:rel']!.parts).toEqual({ chat: 1.33, watch: 0, job: 0 });
-    expect(by['mgr:rel']!.messages).toEqual([{ messageId: 'msg1', part: 'chat', estimatePp: 1.33 }]);
+    expect(by['mgr:rel']!.messages).toEqual([{ messageId: 'msg1', part: 'chat', at: '2026-11-19T10:40:00.000Z', estimatePp: 1.33, aloneInferredPp: 0, sharedEstimatePp: 1.33 }]);
     expect(invariant(w)).toBeCloseTo(19, 5);
+  });
+
+  it('carries a manager turn’s stats and its cost onto the message (spec 2026-11-21 § 2.3)', () => {
+    const turn = {
+      requests: 5, contextFirst: 928_533, contextPeak: 942_220, toolResultChars: 13_185,
+      tools: { route: 2, look: 1, own: 1, write: 0 }, fresh: false, sessionTurn: 118, idleMs: 34_000_000,
+    };
+    const w = only([
+      reading('10:40', 10),
+      { t: 'begin', at: T('10:40'), account: ACC, session: 'm', consumer: { id: 'mgr:rel', kind: 'manager', title: 'Release manager' }, part: 'chat', messageId: 'msg1' },
+      sample('m', '10:40', '10:45', 8.36),
+      { t: 'end', at: T('10:45'), session: 'm', turn },
+      reading('10:45', 15),
+    ]);
+    expect(w.consumers[0]!.messages).toMatchObject([{ messageId: 'msg1', part: 'chat', estimatePp: 5, turn: { ...turn, usd: 8.36 } }]);
   });
 
   it('leaves time no cost report covers unsplit instead of guessing (a task stopped mid-reply)', () => {
@@ -163,6 +178,10 @@ describe('plan usage attribution', () => {
     const c = report.windows[0]!.consumers[0]!;
     expect(c.turns).toEqual({ chat: 0, watch: 3, job: 0 });
     expect(c.quietWatchTurns).toBe(3);
+    // Each turn keeps its own figure, start and alone share: what the popover's largest turns debug.
+    expect(c.messages?.map((m) => [m.messageId, m.at, m.aloneInferredPp, m.sharedEstimatePp])).toEqual([
+      ['x0', '2026-11-19T10:01:00.000Z', 0.2, 0], ['x1', '2026-11-19T10:16:00.000Z', 0.2, 0], ['x2', '2026-11-19T10:31:00.000Z', 0.2, 0],
+    ]);
     expect(report.hints.map((h) => h.kind)).toEqual(['quiet-watch']);
   });
 });

@@ -91,6 +91,21 @@ describe('buildClaudeArgs enforceReadOnly', () => {
   });
 });
 
+describe('buildClaudeArgs noMcpServers', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read'] };
+  const server = { name: 'docs', command: 'docs-mcp', args: [], env: {} } as never;
+
+  it('loads no MCP server, a private one included', () => {
+    const args = buildClaudeArgs({ ...spec, noMcpServers: true, mcpServers: [server] }, {}, '/tmp/mcp.json');
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).not.toContain('--mcp-config');
+  });
+
+  it('keeps the configured servers on an ordinary run', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--strict-mcp-config');
+  });
+});
+
 describe('buildClaudeArgs bashHookCommand', () => {
   const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr view'] };
 

@@ -25,9 +25,21 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private var cancelButton: UIButton?
     private var provisional = false
     private var leaving = false
-    /// The launch splash, held over the page until it has drawn: never a blank web view.
-    private var cover: UIView?
-    private var coverSince: Int64 = 0
+    /// The launch screen over the page until it has drawn, or the reason it did not: never a black web view.
+    private var cover: LaunchCover?
+    private var watchdog: StartupWatchdog!
+    private var resume: ResumeCheck!
+    /// The last PageCheck answer, nil when none came: a dead content process never answers.
+    private var pageState: PageCheck.State?
+    private var pageAskedAt: Int64 = -1
+    /// A blank cockpit is reloaded once from cezar itself, past both caches, before the panel shows.
+    private var recoveredBlank = false
+    /// Bumped per start, so an answer for an earlier document never counts.
+    private var generation = 0
+    /// The content process ended while the page was off screen.
+    private var restartWhenVisible = false
+    /// The reason on the panel now: logged once, not per tick.
+    private var shownProblem: String?
 
     // Relay servers only. The URL path never touches these.
     private let relayServer: ServerRecord?
@@ -103,6 +115,9 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     override func viewDidLoad() {
         super.viewDidLoad()
         Self.openCount += 1
+        watchdog = StartupWatchdog(serverLabel: relayServer?.label ?? pendingLabel, relay: relayServer != nil)
+        resume = ResumeCheck(expectsRoot: relayServer != nil)
+        watchdog.start(relayNowMs())
         addCover()
         if pendingLogin { addCancelButton() }
         let center = NotificationCenter.default
@@ -118,40 +133,162 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     /// LaunchScreen.storyboard's look, so the launch flows into the page with no blank frame between.
     private func addCover() {
-        let splash = UIImageView(image: UIImage(named: "Splash"))
-        splash.contentMode = .scaleAspectFill
-        splash.backgroundColor = .black
-        splash.clipsToBounds = true
-        // Touches wait for the page under it.
-        splash.isUserInteractionEnabled = true
-        splash.frame = view.bounds
-        splash.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(splash)
-        cover = splash
-        coverSince = relayNowMs()
-        schedulePaintCheck()
-        // The cap runs on its own timer: a paint answer lost with its document must not keep the cover.
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(FirstPaint.maxCoverMs))) { [weak self] in self?.removeCover() }
+        let launch = LaunchCover(retry: { [weak self] in self?.retry() }, servers: { [weak self] in self?.leave(ShellConnector.list) })
+        launch.frame = view.bounds
+        launch.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        if let banner { view.insertSubview(launch, belowSubview: banner) } else { view.addSubview(launch) }
+        // A cover put back by a restart must not hide a pending add's way out.
+        if let cancelButton { view.bringSubviewToFront(cancelButton) }
+        launch.show(status: watchdog.decide(relayNowMs()).text)
+        cover = launch
+        startTicking()
     }
 
-    private func schedulePaintCheck() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(FirstPaint.pollMs))) { [weak self] in self?.checkPainted() }
+    private func startTicking() {
+        generation += 1
+        pageState = nil
+        pageAskedAt = -1
+        shownProblem = nil
+        scheduleTick(generation)
     }
 
-    /// The next check is set before this one asks, so no answer is ever needed to keep polling.
-    private func checkPainted() {
-        guard cover != nil else { return }
-        schedulePaintCheck()
-        webView.evaluateJavaScript(FirstPaint.script) { [weak self] answer, _ in
-            guard let self, self.cover != nil else { return }
-            if FirstPaint.done(answer, coveredMs: relayNowMs() - self.coverSince) { self.removeCover() }
+    /// On a timer, never inside a page answer: an evaluateJavaScript callback is lost with its document.
+    private func scheduleTick(_ generation: Int, after ms: Int64 = 100) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(ms))) { [weak self] in
+            guard let self, self.generation == generation, self.cover != nil, !self.leaving else { return }
+            self.tick(generation)
+        }
+    }
+
+    private func tick(_ generation: Int) {
+        guard let cover else { return }
+        let now = relayNowMs()
+        askPage(now)
+        let decision = watchdog.decide(now)
+        switch decision.kind {
+        case .reveal:
+            removeCover()
+        case .wait:
+            cover.show(status: decision.text)
+            scheduleTick(generation)
+        case .blank where !recoveredBlank:
+            recoveredBlank = true
+            startLog.step("cockpit blank after load, reloads past the caches")
+            restart(fresh: true)
+        case .blank, .problem:
+            if shownProblem != decision.text {
+                shownProblem = decision.text
+                startLog.step("problem: \(decision.text ?? "")")
+                cover.show(problem: decision.text)
+            }
+            // A page that draws after all (a reload when the session came back, a slow sign-in page) still takes the panel's place.
+            if PageCheck.healthy(pageState, expectsRoot: relayServer != nil) {
+                removeCover()
+                return
+            }
+            scheduleTick(generation, after: 1000)
+        }
+    }
+
+    private func askPage(_ now: Int64) {
+        if pageAskedAt >= 0 && now - pageAskedAt < 500 { return }
+        pageAskedAt = now
+        let asked = generation
+        webView.evaluateJavaScript(PageCheck.script) { [weak self] answer, _ in
+            guard let self, self.generation == asked else { return }
+            self.pageAskedAt = -1
+            self.pageState = PageCheck.state(answer)
+            self.watchdog.page(self.pageState)
         }
     }
 
     private func removeCover() {
         guard let gone = cover else { return }
         cover = nil
+        recoveredBlank = false
+        startLog.step("shown")
         UIView.animate(withDuration: 0.15, animations: { gone.alpha = 0 }, completion: { _ in gone.removeFromSuperview() })
+    }
+
+    /// The cover's Retry: the relay asked again, the page loaded again from cezar.
+    private func retry() {
+        guard !leaving else { return }
+        startLog.step("retry")
+        if let link, link.status().kind != .ready { link.retryNow() }
+        restart(fresh: true)
+    }
+
+    /// The cover back over the page and a new start. `fresh`: past the bundle cache and WebKit's HTTP
+    /// cache, which is what a cockpit naming files the server no longer has needs.
+    private func restart(fresh: Bool) {
+        guard !leaving else { return }
+        resume.stop()
+        watchdog.start(relayNowMs())
+        if let link { watchdog.relayStatus(link.status().kind, computer: relayServer?.label, now: relayNowMs()) }
+        if let cover {
+            cover.show(status: watchdog.decide(relayNowMs()).text)
+            startTicking()
+        } else {
+            addCover()
+        }
+        guard fresh else {
+            loadStart(fresh: false)
+            return
+        }
+        if let id = relayServer?.id { ShellServices.relay.bundle(id)?.clear() }
+        let store = webView.configuration.websiteDataStore
+        Task { @MainActor in
+            await store.removeData(ofTypes: [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache], modifiedSince: .distantPast)
+            self.loadStart(fresh: true)
+        }
+    }
+
+    /// The page this view shows, from the top. A relay view still binding loads when its listener is up.
+    private func loadStart(fresh: Bool) {
+        guard !leaving else { return }
+        let current = webView.url.flatMap { origin?.sameOrigin($0.absoluteString) == true ? $0 : nil }
+        let target: URL?
+        if relayServer != nil {
+            guard proxy != nil, let origin else { return }
+            target = current ?? URL(string: origin.url(start))
+        } else {
+            target = current ?? URL(string: start)
+        }
+        guard let target else { return }
+        var request = URLRequest(url: target)
+        if fresh {
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        }
+        webView.load(request)
+    }
+
+    /// After a resume the page must still be there (ResumeCheck); asked once a second until it is.
+    private func checkResumed() {
+        guard cover == nil, watchdog.started, !leaving else { return }
+        resume.start(relayNowMs())
+        pageState = nil
+        generation += 1
+        scheduleResumeCheck(generation)
+    }
+
+    private func scheduleResumeCheck(_ asked: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) { [weak self] in
+            guard let self, self.generation == asked, self.resume.running, self.cover == nil, self.started, !self.leaving else { return }
+            switch self.resume.answer(self.pageState, now: relayNowMs()) {
+            case .healthy:
+                return
+            case .restart:
+                self.startLog.step("page did not come back after resume (\(self.pageState?.rawValue ?? "no answer")), reloads")
+                self.restart(fresh: false)
+            case .wait:
+                self.webView.evaluateJavaScript(PageCheck.script) { [weak self] answer, _ in
+                    guard let self, self.generation == asked else { return }
+                    self.pageState = PageCheck.state(answer)
+                }
+                self.scheduleResumeCheck(asked)
+            }
+        }
     }
 
     /// Android has Back. Without this, a site that is not cezar holds an unsaved add for good.
@@ -174,6 +311,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         // The launch splash under this view may go: the cover is drawn over it now.
         LaunchHold.shared.release()
         becameVisible()
+        afterVisible()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -338,6 +476,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             guard let self, !self.leaving else { return }
             if status.kind == .ready { self.signals?.ensureRunning() }
             self.logStatus(status.kind)
+            self.watchdog.relayStatus(status.kind, computer: self.relayServer?.label, now: relayNowMs())
             // In the grace window only the stream matters: the screen catches up when it starts again.
             guard self.started else { return }
             if let screen = Self.refusedScreen(status.kind) {
@@ -514,6 +653,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         guard !started else { return }
         started = true
         ForegroundServers.shared.started(serverId)
+        ShellServices.badges.pageStarted(serverId)
         endBackgroundTask()
         guard let proxy, relayServer != nil else { return }
         startLog.step("foreground, link \(link?.status().kind.rawValue ?? "-")")
@@ -546,6 +686,15 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         webView.loadHTMLString("", baseURL: nil)
         if let cookie = proxy.gateCookie() { webView.configuration.websiteDataStore.httpCookieStore.delete(cookie) }
         startLog.step("\(why), binds again")
+        // The page is gone until the new listener serves it: the cover says so, and its deadlines run.
+        resume.stop()
+        watchdog.start(relayNowMs())
+        if let cover {
+            cover.show(status: watchdog.decide(relayNowMs()).text)
+            startTicking()
+        } else {
+            addCover()
+        }
         network?.cancel()
         network = nil
         link?.setDiagnostics(nil)
@@ -570,6 +719,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         guard started else { return }
         started = false
         ForegroundServers.shared.stopped(serverId)
+        resume.stop()
+        ShellServices.badges.pageStopped(serverId)
         guard let proxy, let grace else { return }
         startLog.step("background")
         bannerTimer?.cancel()
@@ -589,7 +740,19 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     }
 
     @objc private func appForeground() {
-        if viewIfLoaded?.window != nil { becameVisible() }
+        guard viewIfLoaded?.window != nil else { return }
+        becameVisible()
+        afterVisible()
+    }
+
+    /// Once the page is served again: a page lost while away loads now, and one that was up is checked.
+    private func afterVisible() {
+        if restartWhenVisible {
+            restartWhenVisible = false
+            restart(fresh: false)
+        } else {
+            checkResumed()
+        }
     }
 
     @objc private func appBackground() {
@@ -655,6 +818,9 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         if link != nil, response.isForMainFrame, let http = response.response as? HTTPURLResponse, http.statusCode == 502 || http.statusCode == 503 {
             startLog.step("page \(http.statusCode), reloads when ready")
             reloadWhenReady = true
+            if cover != nil {
+                watchdog.failed(http.statusCode == 503 ? "No connection to cezar came up in time." : "cezar's answer was cut off on the way.")
+            }
         }
         decisionHandler(.allow)
     }
@@ -665,6 +831,12 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         provisional = false
+        if Self.isPage(webView.url) { watchdog.committed(relayNowMs()) }
+    }
+
+    /// The server's page, not the about:blank a rebind or a fresh web view shows.
+    private static func isPage(_ url: URL?) -> Bool {
+        url?.scheme == "http" || url?.scheme == "https"
     }
 
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
@@ -690,6 +862,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         provisional = false
+        if Self.isPage(webView.url) { watchdog.loaded(relayNowMs()) }
         if pendingLogin, origin?.sameOrigin(webView.url?.absoluteString) == true { confirmPendingLogin() }
     }
 
@@ -698,10 +871,10 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let nsError = error as NSError
         // Cancelled, and WebKit's "interrupted by policy change", are our own decisions above.
         if nsError.code == NSURLErrorCancelled || nsError.code == 102 { return }
-        removeCover()
         // The relay's own banner explains an outage; the page reloads when the session is back.
         if link != nil {
             reloadWhenReady = true
+            if cover != nil { watchdog.failed("Loading the cockpit failed: \(nsError.localizedDescription)") }
             return
         }
         let tls = nsError.domain == NSURLErrorDomain && (-1204 ... -1200).contains(nsError.code)
@@ -711,12 +884,20 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         let nsError = error as NSError
         if nsError.code == NSURLErrorCancelled || nsError.code == 102 { return }
-        removeCover()
+        if cover != nil { watchdog.failed("Loading the cockpit failed: \(nsError.localizedDescription)") }
     }
 
-    /// Spec M2 item 2. A reload raises a fresh challenge if WebKit dropped the session.
+    /// Spec M2 item 2. A reload raises a fresh challenge if WebKit dropped the session. Under the cover,
+    /// with its deadlines: a reload into a page that cannot draw must not be the black screen.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if let url = webView.url ?? URL(string: origin?.url("/") ?? start) { webView.load(URLRequest(url: url)) }
+        // In the background the proxy answers 503: the page loads when it is seen again.
+        guard started else {
+            startLog.step("web content process ended in the background")
+            restartWhenVisible = true
+            return
+        }
+        startLog.step("web content process ended, reloads")
+        restart(fresh: false)
     }
 
     private func confirmPendingLogin() {
