@@ -200,6 +200,56 @@ function currentWindow(windows: readonly PlanUsageWindow[] | undefined, key: str
   return windows?.find((w) => w.current && w.account.key === key && w.usedPercent !== null)
 }
 
+/** One reply's share of the 5-hour limit, for the line under it (restored 2026-11-22). */
+export interface ReplyUsage {
+  pp: number
+  /** Of `pp`, the part measured while no other cezar work ran. */
+  alonePp: number
+  /** `Claude · default · 5-hour limit 10:00–15:00`: every estimate names its account and window. */
+  where: string
+  /** What the reply's turn was made of, when the ledger recorded it. */
+  turn?: PlanUsageTurnStats
+}
+
+/** Per assistant message: its estimate in the 5-hour window it ran in. Absent = no entry, never 0.
+ *  Keyed by the chat message id, which a turn keeps whatever session it ran in. */
+export function replyUsageById(entries: readonly PlanUsageConsumerWindow[] | undefined, managerId: string): ReadonlyMap<string, ReplyUsage> {
+  const id = managerConsumerId(managerId)
+  const out = new Map<string, ReplyUsage>()
+  for (const e of entries ?? []) {
+    if (e.kind !== 'five-hour' || e.consumer.id !== id) continue
+    for (const m of e.consumer.messages ?? []) {
+      const prior = out.get(m.messageId)
+      const turn = prior?.turn ?? m.turn
+      out.set(m.messageId, {
+        pp: (prior?.pp ?? 0) + m.estimatePp,
+        alonePp: (prior?.alonePp ?? 0) + m.aloneInferredPp,
+        where: prior?.where ?? `${e.account.label} · 5-hour limit ${clockTime(e.startsAt)}–${clockTime(e.resetsAt)}`,
+        ...(turn ? { turn } : {}),
+      })
+    }
+  }
+  return out
+}
+
+/** "Claude · default · 5-hour limit 10:00–15:00 · ran alone · 2 requests · 35k context". */
+export function replyUsageDetail(usage: ReplyUsage): string {
+  const shared = usage.alonePp >= usage.pp ? 'ran alone' : usage.alonePp > 0 ? 'partly shared with other work' : 'shared with other work'
+  const t = usage.turn
+  return [usage.where, shared, ...(t ? [plural(t.requests, 'request', 'requests'), `${Math.round(t.contextPeak / 1000)}k context`] : [])].join(' · ')
+}
+
+/** The grey line under a reply; rendered only when the ledger has an entry for it. */
+export function ReplyUsageNote({ usage }: { usage: ReplyUsage }) {
+  const detail = replyUsageDetail(usage)
+  return (
+    <p data-slot="manager-reply-usage" title={detail} className="mt-1 text-xs text-muted-foreground tabular-nums">
+      This reply {approxPp(usage.pp)} of 5h
+      <span className="sr-only"> ({detail})</span>
+    </p>
+  )
+}
+
 export function useManagerPlanUsage(
   { managerId, provider, agentProfile }: { managerId: string; provider: PlanUsageProvider | null; agentProfile?: string | undefined },
   messages: readonly ManagerMessage[],
@@ -214,7 +264,8 @@ export function useManagerPlanUsage(
   // `now` ticks every 30 s; the day boundary only needs that resolution.
   const usage = useMemo(() => managerPlanUsage(entries, managerId, started, key, new Date(now)), [entries, managerId, started, key, now])
   const account: AccountNow = { key, fiveHour, week, level: limitLevel(fiveHour) }
-  return { enabled, usage, account }
+  const replies = useMemo(() => replyUsageById(entries, managerId), [entries, managerId])
+  return { enabled, usage, account, replies }
 }
 
 const LEVEL_TEXT: Record<LimitLevel, string> = { ok: '', warning: 'text-warning', critical: 'text-destructive' }

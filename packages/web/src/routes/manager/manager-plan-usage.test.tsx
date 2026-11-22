@@ -10,6 +10,9 @@ import {
   managerStartedTasks,
   ManagerLimitStrip,
   ManagerUsageChip,
+  ReplyUsageNote,
+  replyUsageById,
+  replyUsageDetail,
   turnReasons,
   turnShape,
   type AccountNow,
@@ -272,5 +275,37 @@ describe('turn shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3)'
     expect(row('manager-usage-turn-detail')!.textContent).toBe('5 requests · 942k context · cache expired after 10 h idle, large context (942k)')
     expect(row('manager-usage-shape')!.textContent).toContain('942k context · 5.0 requests per turn (1 turn)')
     expect(row('manager-usage-shape')!.textContent).toContain('Tool calls: 1 routing work to tasks, 0 looking up state, 0 its own work')
+  })
+})
+
+describe('the reply footnote (restored 2026-11-22)', () => {
+  const stats = (over: Record<string, unknown> = {}) => ({
+    requests: 2, contextFirst: 30_000, contextPeak: 35_000, toolResultChars: 0,
+    tools: { route: 1, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 7, ...over,
+  })
+
+  it('finds every recent reply by its message id, the first reply after a session restart included', () => {
+    // a1 ran late in the old session; a2 was the first turn of the new one, after a restart.
+    const mine = consumer({ ...manager, messages: [
+      { ...turn('a1', 'chat', 0.9, 0.9), turn: stats() },
+      { ...turn('a2', 'chat', 0.3, 0), turn: stats({ fresh: true, sessionTurn: 1, contextPeak: 32_000 }) },
+    ] })
+    const earlier = consumer({ ...manager, messages: [turn('a1', 'chat', 0.2, 0)] })
+    const replies = replyUsageById([entry(mine), entry(earlier, { windowId: 'w-earlier' }), entry(mine, { kind: 'weekly', windowId: 'wk' })], 'm1')
+    expect(replies.get('a2')).toMatchObject({ pp: 0.3, alonePp: 0, turn: { fresh: true } })
+    // A reply split across two 5-hour windows adds up; weekly windows never count.
+    expect(replies.get('a1')?.pp).toBeCloseTo(1.1)
+    expect(replies.has('nope')).toBe(false)
+    expect(replyUsageById([entry(consumer({ ...manager, id: 'mgr:other' }))], 'm1').size).toBe(0)
+  })
+
+  it('reads as before #2363, with the window, the split and the turn in its detail', () => {
+    const usage = { pp: 0.3, alonePp: 0, where: 'Claude · default · 5-hour limit 10:00–15:00', turn: stats({ fresh: true, sessionTurn: 1, contextPeak: 32_000 }) }
+    expect(replyUsageDetail(usage)).toBe('Claude · default · 5-hour limit 10:00–15:00 · shared with other work · 2 requests · 32k context')
+    expect(replyUsageDetail({ pp: 1, alonePp: 1, where: 'w' })).toBe('w · ran alone')
+    render(<ReplyUsageNote usage={usage} />)
+    const note = document.querySelector('[data-slot="manager-reply-usage"]')!
+    expect(note.textContent).toBe('This reply ≈ 0.3% of 5h (Claude · default · 5-hour limit 10:00–15:00 · shared with other work · 2 requests · 32k context)')
+    expect(note.getAttribute('title')).toBe(replyUsageDetail(usage))
   })
 })

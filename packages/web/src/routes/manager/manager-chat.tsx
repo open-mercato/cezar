@@ -842,6 +842,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   projects={connected}
                   superseded={superseded.has(message.id)}
                   authLive={authLive.has(message.id)}
+                  {...(usageProvider ? { planUsage: planUsage.replies.get(message.id) } : {})}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
                 />
