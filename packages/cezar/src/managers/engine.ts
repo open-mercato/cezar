@@ -396,6 +396,13 @@ interface Forward {
   forwarded: ManagerForwarded;
 }
 
+/** Where a user turn starts, shared by its retries (spec 2026-11-21 § 2.3). */
+interface TurnOrigin {
+  startedAt: number;
+  /** The session record before this turn, when it resumes one. */
+  prior?: NonNullable<ManagerState['sessions']['chat']>;
+}
+
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
 
 const CONNECTORS_CLAUDE_ONLY = 'Only a Claude Code manager can use connectors: Codex, OpenCode and the others keep their own MCP configuration.';
@@ -2301,7 +2308,9 @@ export class ManagerEngine {
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
-    const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
+    // A retry is the same user turn: it counts once, measured from the session as it stood before.
+    const origin: TurnOrigin = { startedAt: this.now(), ...(resumeId && state.sessions[turn.kind] ? { prior: state.sessions[turn.kind]! } : {}) };
+    const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
     // A turn that ran a command may have acted: running it twice could act twice.
     if (!first.error || turn.stopped || turn.timedOut || first.commands.length > 0) return { ...first, runner };
     const plan = retryPlan(classifyManagerFailure(failureCause(first.error, first.text)), resumable);
@@ -2309,10 +2318,10 @@ export class ManagerEngine {
     if (plan === 'again') {
       await new Promise((resolve) => setTimeout(resolve, this.deps.retryDelayMs ?? RETRY_BACKOFF_MS).unref?.());
       if (turn.stopped || !store.get(id)) return { ...first, runner };
-      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
+      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress);
+    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt });
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
@@ -2324,6 +2333,7 @@ export class ManagerEngine {
     resumeId: string | undefined,
     turn: ActiveTurn,
     onProgress: (progress: Progress) => void,
+    origin: TurnOrigin = { startedAt: this.now() },
   ): Promise<DriveResult> {
     const { store } = this.deps;
     // Claude takes an id we mint; every other backend mints its own and reports it (`session`).
@@ -2338,8 +2348,8 @@ export class ManagerEngine {
     const bashCommands = new Map<string, string>();
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
     const turnStats = new TurnStatsCollector();
-    const turnStartedAt = this.now();
-    const priorSession = resumeId ? store.state(id).sessions[turn.kind] : undefined;
+    const turnStartedAt = origin.startedAt;
+    const priorSession = origin.prior;
     // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
     const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
     const progress = () => onProgress(snapshot);
@@ -2431,6 +2441,7 @@ export class ManagerEngine {
     const stats = turnStats.stats({
       fresh: !resumeId,
       sessionTurn,
+      ...(sessionId ? { session: sessionId.slice(0, 8) } : {}),
       ...(priorSession ? { idleMs: turnStartedAt - msOf(priorSession.lastAt) } : {}),
     });
     // A watch that reported nothing new is "quiet": the hint weighs its cadence against that.
@@ -2587,7 +2598,7 @@ export class ManagerEngine {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
     if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
-    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso());
+    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso(), input.source);
     if ('error' in next) return next;
     writeMemory(this.deps.store.dir(id), next);
     return this.memoryResponse(next);

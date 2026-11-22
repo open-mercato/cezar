@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { planUsageReportSchema, planUsageConsumersResponseSchema, planUsageTrackingSchema } from '@open-mercato/cezar-contract';
 import { PlanUsageTracker, recordUsageObservation } from './recorder.ts';
+import { computeWindows } from './compute.ts';
 import { ledgerDir, readLedger, resetLedgerCaches, setAccountTracking } from './store.ts';
 import { planUsageRoutes } from '../server/plan-usage.ts';
 
@@ -43,6 +44,65 @@ describe('the plan-usage ledger store', () => {
     const end = records.find((r) => r.t === 'end')!;
     const sample = records.find((r) => r.t === 'sample')!;
     expect(sample.t === 'sample' && end.t === 'end' && sample.to).toBe(end.t === 'end' ? end.at : -1);
+  });
+
+  it('splits a Claude turn’s cost per request by what each request cached and read', () => {
+    const t = new PlanUsageTracker('claude', { key: 'claude:default' }, { id: 'run:p/a', kind: 'task', title: 'A' });
+    t.ui({ type: 'turn.started' });
+    t.event({ type: 'usage-status', status: { contextTokens: 900_000, cacheWriteTokens: 900_000 } });
+    t.event({ type: 'usage-status', status: { contextTokens: 905_000, cacheWriteTokens: 5_000 } });
+    t.event({ type: 'usage-status', status: { turnTokens: { cacheReadTokens: 900_000, cacheWriteTokens: 905_000, outputTokens: 2_000 } } });
+    t.ui({ type: 'turn.completed' });
+    t.event({ type: 'cost', usd: 6 });
+    const samples = readLedger(1).filter((r) => r.t === 'sample') as Array<Extract<ReturnType<typeof readLedger>[number], { t: 'sample' }>>;
+    expect(samples).toHaveLength(2);
+    // The re-cache is ~90% of the turn: 900k written vs 5k written + 900k read.
+    expect(samples[0]!.usd! / 6).toBeGreaterThan(0.88);
+    expect(samples[0]!.usd! + samples[1]!.usd!).toBeCloseTo(6);
+    expect(samples[0]!.to).toBeLessThanOrEqual(samples[1]!.from);
+  });
+
+  it('ends each request’s sample at its answer, and the 07:11 case then charges the re-cache to its turn', () => {
+    const t0 = Date.parse('2026-11-22T06:12:24Z');
+    let clock = t0;
+    const task = new PlanUsageTracker('claude', { key: 'claude:default' }, { id: 'run:cezar/t', kind: 'task', title: 'T' }, {}, () => clock);
+    task.ui({ type: 'turn.started' });
+    clock = t0 + 14_000;
+    task.event({ type: 'usage-status', status: { contextTokens: 900_000, cacheWriteTokens: 900_000 } });
+    clock = t0 + 31_000;
+    task.event({ type: 'usage-status', status: { contextTokens: 905_000, cacheWriteTokens: 5_000 } });
+    clock = t0 + 221_000;
+    task.ui({ type: 'turn.completed' });
+    clock = t0 + 222_000;
+    task.event({ type: 'cost', usd: 6.11 });
+    const records = readLedger(1);
+    const samples = records.filter((r) => r.t === 'sample') as Array<Extract<ReturnType<typeof readLedger>[number], { t: 'sample' }>>;
+    const end = records.find((r) => r.t === 'end')!;
+    expect(samples.map((s) => [s.from - t0, s.to - t0])).toEqual([[0, 14_000], [14_000, 221_000]]);
+    expect(samples[0]!.to).toBeLessThan(end.t === 'end' ? end.at : 0);
+    // The manager's cheap fresh turn ended just before; Claude read 0% during it, 5% after the task's first answer.
+    const reading = (at: number, usedPercent: number) => ({ t: 'reading', at, account: 'claude:default', window: 'five-hour', usedPercent, resetsAt: Date.parse('2026-11-22T11:10:00Z'), status: 'allowed', source: 'claude-stream' }) as const;
+    // The 'tracking started' marker carries the real clock; this replay runs on the fake one.
+    const windows = computeWindows([
+      ...records.filter((r) => r.t !== 'tracking'),
+      reading(t0 - 22_000, 0),
+      { t: 'begin', at: t0 - 25_000, account: 'claude:default', session: 'm', consumer: { id: 'mgr:mobile', kind: 'manager', title: 'Mobile app creator' }, part: 'chat', messageId: 'msg-0711' },
+      { t: 'sample', from: t0 - 25_000, to: t0 - 3_000, session: 'm', usd: 0.314 },
+      { t: 'end', at: t0 - 3_000, session: 'm' },
+      reading(t0 + 16_000, 5), reading(t0 + 141_000, 6),
+    ], { now: t0 + 300_000 });
+    const by = Object.fromEntries(windows[0]!.consumers.map((c) => [c.id, c.estimatePp]));
+    expect(by['mgr:mobile']).toBeLessThan(0.3);
+    expect(by['run:cezar/t']).toBeGreaterThan(5.5);
+  });
+
+  it('keeps one sample for a turn whose requests did not say what they cached', () => {
+    const t = new PlanUsageTracker('claude', { key: 'claude:default' }, { id: 'run:p/a', kind: 'task', title: 'A' });
+    t.ui({ type: 'turn.started' });
+    t.event({ type: 'usage-status', status: { contextTokens: 50_000 } });
+    t.ui({ type: 'turn.completed' });
+    t.event({ type: 'cost', usd: 0.4 });
+    expect(readLedger(1).filter((r) => r.t === 'sample').map((r) => r.t === 'sample' && r.usd)).toEqual([0.4]);
   });
 
   it('writes nothing under CEZ_USAGE_LOG=0 or for an opted-out account', () => {

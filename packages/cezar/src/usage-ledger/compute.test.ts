@@ -78,7 +78,42 @@ describe('plan usage attribution', () => {
       { t: 'end', at: T('10:45'), session: 'm', turn },
       reading('10:45', 15),
     ]);
-    expect(w.consumers[0]!.messages).toMatchObject([{ messageId: 'msg1', part: 'chat', estimatePp: 5, turn: { ...turn, usd: 8.36 } }]);
+    expect(w.consumers[0]!.messages).toEqual([{
+      messageId: 'msg1', part: 'chat', at: new Date(T('10:40')).toISOString(), estimatePp: 5, aloneInferredPp: 5, sharedEstimatePp: 0,
+      turn: { ...turn, usd: 8.36 },
+    }]);
+  });
+
+  it('gives a retried reply the answering attempt’s shape before any reading has split it', () => {
+    const shape = (requests: number) => ({
+      requests, contextFirst: 30_000, contextPeak: 30_000, toolResultChars: 0,
+      tools: { route: 0, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 4,
+    });
+    const begin = (session: string, at: string): LedgerRecord => ({ t: 'begin', at: T(at), account: ACC, session, consumer: { id: 'mgr:rel', kind: 'manager', title: 'Release manager' }, part: 'chat', messageId: 'msg1' });
+    const w = only([
+      reading('10:40', 10),
+      begin('a1', '10:40'), sample('a1', '10:40', '10:41', 0.5), { t: 'end', at: T('10:41'), session: 'a1', turn: shape(1) },
+      reading('10:42', 11),
+      // The retry answered after the last reading: no share of its own yet.
+      begin('a2', '10:43'), sample('a2', '10:43', '10:45', 1.5), { t: 'end', at: T('10:45'), session: 'a2', turn: shape(3) },
+    ]);
+    expect(w.consumers[0]!.messages![0]!.turn).toEqual({ ...shape(3), usd: 2 });
+  });
+
+  it('gives a retried reply its last attempt’s shape and the cost of both attempts', () => {
+    const shape = (requests: number) => ({
+      requests, contextFirst: 30_000, contextPeak: 30_000, toolResultChars: 0,
+      tools: { route: 0, look: 0, own: 0, write: 0 }, fresh: false, sessionTurn: 4,
+    });
+    const begin = (session: string, at: string): LedgerRecord => ({ t: 'begin', at: T(at), account: ACC, session, consumer: { id: 'mgr:rel', kind: 'manager', title: 'Release manager' }, part: 'chat', messageId: 'msg1' });
+    const w = only([
+      reading('10:40', 10),
+      begin('a1', '10:40'), sample('a1', '10:40', '10:41', 0.5), { t: 'end', at: T('10:41'), session: 'a1', turn: shape(1) },
+      begin('a2', '10:42'), sample('a2', '10:42', '10:45', 1.5), { t: 'end', at: T('10:45'), session: 'a2', turn: shape(3) },
+      reading('10:45', 12),
+    ]);
+    expect(w.consumers[0]!.messages).toHaveLength(1);
+    expect(w.consumers[0]!.messages![0]!.turn).toEqual({ ...shape(3), usd: 2 });
   });
 
   it('leaves time no cost report covers unsplit instead of guessing (a task stopped mid-reply)', () => {
@@ -414,5 +449,47 @@ describe('quiet time under the grace (QA R3)', () => {
     const w = only([reading('10:00', 10), task('a', 'run:p/a', '10:10'), sample('a', '10:10', '10:20', 1), end('a', '10:20'), reading('10:21', 14)]);
     expect(w.unsplitPp).toBe(0);
     expect(w.consumers).toMatchObject([{ id: 'run:p/a', estimatePp: 4 }]);
+  });
+});
+
+describe('a turn that re-cached its history (the 2026-11-22 07:11 report, spec 2026-11-21 § 1.3)', () => {
+  // Real ledger, 2026-11-22, shifted five hours into this fixture's window: a fresh manager turn ($0.31) ended at 06:12:21; a task resumed a
+  // long session at 06:12:24 and its first request re-cached it ($5.90); Claude read 0% at 06:12:02
+  // and 5% at 06:12:40, from the task's own stream after that first answer.
+  const at = (hhmmss: string) => Date.parse(`2026-11-19T${hhmmss}Z`);
+  const begin = (session: string, id: string, hhmmss: string, extra: Partial<Extract<LedgerRecord, { t: 'begin' }>> = {}): LedgerRecord =>
+    ({ t: 'begin', at: at(hhmmss), account: ACC, session, consumer: { id, kind: id.startsWith('mgr:') ? 'manager' : 'task', title: id }, ...extra });
+  const span = (session: string, from: string, to: string, usd: number): LedgerRecord => ({ t: 'sample', session, from: at(from), to: at(to), usd });
+  const read = (hhmmss: string, used: number): LedgerRecord => ({ ...reading('11:00', used), at: at(hhmmss) } as LedgerRecord);
+  const window = (task: LedgerRecord[]) => only([
+    read('11:12:02', 0),
+    begin('m', 'mgr:mobile', '11:11:59', { part: 'chat', messageId: 'msg-0711' }), span('m', '11:11:59', '11:12:21', 0.314), { t: 'end', at: at('11:12:21'), session: 'm' },
+    begin('t', 'run:cezar/605750b7', '11:12:24'), ...task, { t: 'end', at: at('11:16:05'), session: 't' },
+    read('11:12:40', 5), read('11:14:45', 6),
+  ]);
+  const manager = (w: ReturnType<typeof only>) => w.consumers.find((c) => c.id === 'mgr:mobile')!;
+
+  it('before: one sample for the whole task turn hands the 5% jump to the manager', () => {
+    const w = window([span('t', '11:12:24', '11:16:05', 6.11)]);
+    expect(manager(w).estimatePp).toBe(5);
+    expect(manager(w).aloneInferredPp).toBe(5);
+  });
+
+  it('a non-Claude reading keeps the 20-second rule, per-request spans or not', () => {
+    const codex = (hhmmss: string, used: number): LedgerRecord => ({ ...read(hhmmss, used), source: 'codex-notification' } as LedgerRecord);
+    const w = only([
+      codex('11:12:02', 0),
+      begin('m', 'mgr:mobile', '11:11:59', { part: 'chat', messageId: 'msg-0711' }), span('m', '11:11:59', '11:12:21', 0.314), { t: 'end', at: at('11:12:21'), session: 'm' },
+      begin('t', 'run:cezar/605750b7', '11:12:24'), span('t', '11:12:24', '11:12:38', 5.9), span('t', '11:12:38', '11:12:55', 0.05), span('t', '11:12:55', '11:16:05', 0.16), { t: 'end', at: at('11:16:05'), session: 't' },
+      codex('11:12:40', 5), codex('11:14:45', 6),
+    ]);
+    expect(manager(w).estimatePp).toBe(5);
+  });
+
+  it('after: per-request samples put the jump on the turn that re-cached', () => {
+    const w = window([span('t', '11:12:24', '11:12:38', 5.9), span('t', '11:12:38', '11:12:55', 0.05), span('t', '11:12:55', '11:16:05', 0.16)]);
+    expect(manager(w).estimatePp).toBeLessThan(0.3);
+    expect(manager(w).messages?.[0]?.estimatePp).toBeLessThan(0.3);
+    expect(w.consumers.find((c) => c.id === 'run:cezar/605750b7')!.estimatePp).toBeGreaterThan(5.5);
   });
 });

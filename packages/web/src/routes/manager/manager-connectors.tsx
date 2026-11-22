@@ -173,7 +173,7 @@ export function ConnectorsDialog({
   useEffect(() => {
     if (!open || probed.current || !data || data.available === false || data.observedAt) return
     probed.current = true
-    refresh.mutate(undefined)
+    refresh.mutate(undefined, { onError: (error) => toast(errorMessage(error), { tone: 'danger' }) })
   }, [open, data, refresh])
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
