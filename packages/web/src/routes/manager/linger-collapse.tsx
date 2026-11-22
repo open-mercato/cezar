@@ -27,13 +27,14 @@ export function LingerCollapse({ lingerKey, leaving, className, children, ...res
       data-leaving={leaving}
       style={collapse && gap ? { marginTop: -gap } : undefined}
       className={cn(
-        'grid grid-rows-[1fr] motion-safe:transition-[grid-template-rows,opacity,margin] motion-safe:duration-300',
+        // One minmax(0,1fr) column: an implicit `auto` track grows to its card's longest unbroken token.
+        'grid grid-cols-[minmax(0,1fr)] grid-rows-[1fr] motion-safe:transition-[grid-template-rows,opacity,margin] motion-safe:duration-300',
         leaving && 'opacity-0',
         collapse && 'grid-rows-[0fr]',
         className,
       )}
     >
-      <div className={cn('min-h-0', collapse && 'overflow-hidden')}>{children}</div>
+      <div className={cn('min-h-0 min-w-0', collapse && 'overflow-hidden')}>{children}</div>
     </div>
   )
 }
