@@ -85,6 +85,31 @@ of the 2026-11-20 20:30 window. The watch session shows the same problem in smal
 every 4 hours, every one of them cold, with its context growing from 48k to 240k. That is $8.94
 for 11 requests.
 
+### 1.3a Follow-up: the 2026-11-22 07:11 reply (after #2385–#2388)
+
+The reply was reported at about 5% of a 5-hour window. Its own numbers, from the ledger and its
+transcript:
+* a fresh session (the idle rule fired);
+* 4 requests at 32–34k tokens of context;
+* no connector material, and tool results of 3.4k characters in total;
+* a reported cost of $0.31, mostly the new session's first cache write of 32k.
+
+The 5% was an attribution error in `usage-ledger/compute.ts`:
+* Between the two readings, 0% at 06:12:02 and 5% at 06:12:40, another cezar task re-cached a long
+  session in its first request, which cost $5.90.
+* That 5% reading came from the task's own stream. Claude sends it after the request's answer, so it
+  already counted the re-cache.
+* The rule that drops a turn starting within 20 s of a reading removed that task, leaving the manager
+  "alone" with all 5 points.
+
+Fix (#2401):
+* A Claude turn's cost is written as one ledger sample per request, weighted by what each request
+  cached and read.
+* A Claude reading keeps a turn whose request had already answered by then.
+
+Replaying the real records moves the reply from **5 pp to 0.22 pp**, and the task from 1 pp to
+5.78 pp.
+
 ### 1.4 What the manager actually does
 
 Of 247 tool calls, 82 routed work (`task say/create/follow`, merge, proposals), 70 wrote

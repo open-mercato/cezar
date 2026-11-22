@@ -300,14 +300,17 @@ function windowSeeds(ledger: Ledger): WindowSeed[] {
   return seeds;
 }
 
-function attribute(sessions: Session[], a: number, b0: number, delta: number): { shares: Share[]; outside: number; unsplit: number; interval: Omit<PlanUsageInterval, 'from' | 'to' | 'deltaPp'> } {
+function attribute(sessions: Session[], a: number, b0: number, delta: number, source?: PlanUsageReading['source']): { shares: Share[]; outside: number; unsplit: number; interval: Omit<PlanUsageInterval, 'from' | 'to' | 'deltaPp'> } {
   const b = b0 > a ? b0 : a + 1;
   const active = sessions.map((s) => ({ s, start: Math.max(s.begin, a), stop: Math.min(sessionEnd(s, Number.MAX_SAFE_INTEGER), b) }))
     // Closed overlap: a call that began and answered within one instant still ran in the slice.
     .filter((x) => x.s.begin <= b && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > a)
-    // Claude reads the account when a request starts: the turn whose start produced reading `b`
-    // had spent nothing yet, so it is not a candidate for the slice that reading closes.
-    .filter((x) => !(x.s.begin > b - READING_LEAD && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > b));
+    // A reading taken as a turn starts predates its spend, so that turn is no candidate. Claude
+    // sends its reading after a request's answer, which already counts that request's input: once
+    // a turn has a per-request sample that ended by `b`, the reading includes it (a re-cached
+    // history read 16 s into a turn showed the whole jump, spec 2026-11-21 § 1.3).
+    .filter((x) => !(x.s.begin > b - READING_LEAD && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > b)
+      || (source === 'claude-stream' && x.s.samples.some((sample) => sample.from >= x.s.begin && sample.to <= b && sample.to < sessionEnd(x.s, Number.MAX_SAFE_INTEGER))));
   const consumerIds = new Set(active.map((x) => x.s.consumer.id));
   if (consumerIds.size === 0) {
     return { shares: [], outside: delta, unsplit: 0, interval: { outcome: 'outside', weightUnit: null, allocations: [], outsideCezarPp: round(delta), unsplitPp: 0 } };
@@ -460,7 +463,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
     // The slice since the high-water reading, not since a later flat or lower (corrected) one;
     // turns begun before the last recording gap never carry over it.
     const gapBefore = lastGapBefore(gaps, from);
-    const result = attribute(sessions.filter((x) => carriesOver(x, gapBefore)), from, cur.at, delta);
+    const result = attribute(sessions.filter((x) => carriesOver(x, gapBefore)), from, cur.at, delta, cur.source);
     outside += result.outside;
     unsplit += result.unsplit;
     for (const share of result.shares) shares.push({ ...share, interval: i });

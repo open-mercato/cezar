@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { AgentUsageStatus } from '../core/agent-runner.ts';
+import { CACHE_CREATION_WEIGHT, CACHE_READ_WEIGHT } from '../core/usage.ts';
 import { appendLedger, type LedgerConsumer, type LedgerTurnStats } from './store.ts';
 
 /** `claude:default`. The account half is the cezar agent-account id, never an email. */
@@ -88,6 +90,22 @@ export class LedgerSession {
     this.cursor = to;
   }
 
+  /** A turn's cost as one sample per model request: each spans from the previous request's answer
+   *  to its own, so a costly first request (a re-cached history) lands when it ran, not spread over
+   *  the turn (spec 2026-11-21 § 2.3). The last one runs on to the turn's end. */
+  requestSamples(usd: number, requests: ReadonlyArray<{ at: number; weight: number }>, now = Date.now()): void {
+    const total = requests.reduce((sum, r) => sum + r.weight, 0);
+    if (!(usd > 0) || !(total > 0)) return;
+    const end = this.closed && this.endedAt !== undefined ? Math.max(this.cursor, this.endedAt) : Math.max(now, this.cursor);
+    requests.forEach((request, index) => {
+      const last = index === requests.length - 1;
+      const to = last ? end : Math.min(end, Math.max(this.cursor, request.at));
+      const share = usd * request.weight / total;
+      if (share > 0) appendLedger({ t: 'sample', from: this.cursor, to, session: this.id, usd: share }, this.account);
+      this.cursor = to;
+    });
+  }
+
   end(options: { quiet?: boolean; now?: number; turn?: LedgerTurnStats } = {}): void {
     if (this.closed) return;
     this.closed = true;
@@ -110,9 +128,25 @@ export function recordFailedAttempt(account: string | undefined, consumerId: str
  * between turns (waiting for the user) is never "running" while other work moves the limit.
  * Claude is weighted by reported cost, Codex by tokens — the units each reports per turn.
  */
+/** One model request as the runner reported it: when its answer began, its context, its cache write. */
+interface RequestMark { at: number; context: number; write?: number }
+
+/** A request's relative cost from its tokens, priced like `costWeightedTokens`; undefined when a
+ *  request did not say what it wrote to the cache, so the turn falls back to one sample. */
+export function requestWeights(marks: readonly RequestMark[], outputTokens: number | undefined): Array<{ at: number; weight: number }> | undefined {
+  if (marks.length === 0 || marks.some((mark) => mark.write === undefined)) return undefined;
+  const output = (outputTokens ?? 0) / marks.length;
+  return marks.map((mark) => ({
+    at: mark.at,
+    weight: mark.write! * CACHE_CREATION_WEIGHT + Math.max(0, mark.context - mark.write!) * CACHE_READ_WEIGHT + output,
+  }));
+}
+
 export class PlanUsageTracker {
   private turn: LedgerSession | undefined;
   private last: LedgerSession | undefined;
+  private marks: RequestMark[] = [];
+  private outputTokens: number | undefined;
 
   constructor(
     readonly provider: 'claude' | 'codex',
@@ -126,14 +160,28 @@ export class PlanUsageTracker {
       const { endOnClose: _endOnClose, ...session } = this.options;
       this.turn = new LedgerSession(this.account, this.consumer, session);
       this.last = this.turn;
+      this.marks = [];
+      this.outputTokens = undefined;
     }
     return this.turn;
   }
 
-  /** A v1 agent event. Only `cost` matters; it may land just after the turn closed. */
-  event(event: { type: string; usd?: number }): void {
+  /** A v1 agent event: each request's usage reading, and the turn's `cost`, which may land just
+   *  after the turn closed. */
+  event(event: { type: string; usd?: number; status?: AgentUsageStatus }): void {
+    if (event.type === 'usage-status' && event.status) {
+      const { contextTokens, cacheWriteTokens, turnTokens } = event.status;
+      if (contextTokens !== undefined) this.marks.push({ at: Date.now(), context: contextTokens, ...(cacheWriteTokens !== undefined ? { write: cacheWriteTokens } : {}) });
+      if (turnTokens) this.outputTokens = turnTokens.outputTokens;
+      return;
+    }
     if (event.type !== 'cost' || this.provider !== 'claude' || typeof event.usd !== 'number') return;
-    (this.turn ?? this.last ?? this.open()).sample({ usd: event.usd }, Date.now(), true);
+    const session = this.turn ?? this.last ?? this.open();
+    const requests = requestWeights(this.marks, this.outputTokens);
+    if (requests) session.requestSamples(event.usd, requests);
+    else session.sample({ usd: event.usd }, Date.now(), true);
+    this.marks = [];
+    this.outputTokens = undefined;
   }
 
   /** A v2 UI event: turn boundaries, and Codex's per-turn token usage. */

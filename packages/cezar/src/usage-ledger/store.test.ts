@@ -45,6 +45,31 @@ describe('the plan-usage ledger store', () => {
     expect(sample.t === 'sample' && end.t === 'end' && sample.to).toBe(end.t === 'end' ? end.at : -1);
   });
 
+  it('splits a Claude turn’s cost per request by what each request cached and read', () => {
+    const t = new PlanUsageTracker('claude', { key: 'claude:default' }, { id: 'run:p/a', kind: 'task', title: 'A' });
+    t.ui({ type: 'turn.started' });
+    t.event({ type: 'usage-status', status: { contextTokens: 900_000, cacheWriteTokens: 900_000 } });
+    t.event({ type: 'usage-status', status: { contextTokens: 905_000, cacheWriteTokens: 5_000 } });
+    t.event({ type: 'usage-status', status: { turnTokens: { cacheReadTokens: 900_000, cacheWriteTokens: 905_000, outputTokens: 2_000 } } });
+    t.ui({ type: 'turn.completed' });
+    t.event({ type: 'cost', usd: 6 });
+    const samples = readLedger(1).filter((r) => r.t === 'sample') as Array<Extract<ReturnType<typeof readLedger>[number], { t: 'sample' }>>;
+    expect(samples).toHaveLength(2);
+    // The re-cache is ~90% of the turn: 900k written vs 5k written + 900k read.
+    expect(samples[0]!.usd! / 6).toBeGreaterThan(0.88);
+    expect(samples[0]!.usd! + samples[1]!.usd!).toBeCloseTo(6);
+    expect(samples[0]!.to).toBeLessThanOrEqual(samples[1]!.from);
+  });
+
+  it('keeps one sample for a turn whose requests did not say what they cached', () => {
+    const t = new PlanUsageTracker('claude', { key: 'claude:default' }, { id: 'run:p/a', kind: 'task', title: 'A' });
+    t.ui({ type: 'turn.started' });
+    t.event({ type: 'usage-status', status: { contextTokens: 50_000 } });
+    t.ui({ type: 'turn.completed' });
+    t.event({ type: 'cost', usd: 0.4 });
+    expect(readLedger(1).filter((r) => r.t === 'sample').map((r) => r.t === 'sample' && r.usd)).toEqual([0.4]);
+  });
+
   it('writes nothing under CEZ_USAGE_LOG=0 or for an opted-out account', () => {
     process.env.CEZ_USAGE_LOG = '0';
     recordUsageObservation({ key: 'claude:default' }, obs(10, Date.now()));
