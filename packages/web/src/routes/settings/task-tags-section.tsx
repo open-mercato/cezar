@@ -163,7 +163,7 @@ function TagRow({ tag, onDelete }: { tag: TaskTag; onDelete: () => void }) {
           onChange={(e) => { cancelled.current = false; setName(e.target.value) }}
           onBlur={commitName}
           onKeyDown={(e) => {
-            if (isCommitKey(e)) { e.preventDefault(); commitName() }
+            if (isCommitKey(e)) { e.preventDefault(); commitName(); cancelled.current = true }
             else if (e.key === 'Escape') { cancelled.current = true; setName(tag.name); setError(null); e.currentTarget.blur() }
           }}
         />
