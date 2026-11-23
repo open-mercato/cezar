@@ -801,13 +801,15 @@ export function NowRoute() {
   const pending = usePendingDismissals()
   const pendingQuestions = React.useMemo(() => new Set(pending.map((entry) => entry.key)), [pending])
   const [cancelling, setCancelling] = React.useState<RunRecord | null>(null)
+  // Outlives the triage memo, so writes stay ordered across a managers refresh.
+  const writeQueue = React.useRef(keyedQueue())
   const triage = React.useMemo<TriageActions>(() => {
     const refresh = () => void queryClient.invalidateQueries({ queryKey: attentionKeys.all })
     const failed = (what: string) => (error: unknown) => {
       toast(`${what}: ${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' })
       refresh()
     }
-    const inOrder = keyedQueue()
+    const inOrder = writeQueue.current
     const override = (target: TriageTarget, mode: 'dismiss' | 'keep', until?: string) => {
       applyOverrideLocally(queryClient, { key: target.key, mode })
       return inOrder(target.key, () => setAttentionOverride({ key: target.key, mode, ...(until ? { until } : {}) })).then(refresh, failed('Could not save that'))
