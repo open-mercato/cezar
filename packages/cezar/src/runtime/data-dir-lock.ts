@@ -38,9 +38,8 @@ export async function claimDataDirLock(dataDir: string): Promise<DataDirLockClai
     ownership = await acquireOwnership(directory, true);
   } catch (error) {
     // An owner we cannot verify (another host, a foreign pid namespace) is never declared dead.
-    return ownerPid(directory) !== undefined
-      ? { kind: 'held', pid: ownerPid(directory), reason: message(error) }
-      : { kind: 'degraded', reason: message(error) };
+    const pid = ownerPid(directory);
+    return pid !== undefined ? { kind: 'held', pid, reason: message(error) } : { kind: 'degraded', reason: message(error) };
   }
   if (!ownership) {
     const pid = ownerPid(directory);
@@ -58,10 +57,16 @@ export async function claimDataDirLock(dataDir: string): Promise<DataDirLockClai
   };
 }
 
-/** The refusal line. Only the local boot error names the path; a 409 reaches phones and hosted clients. */
-export function dataDirInUseMessage(claim: { pid?: number }, dataDir?: string): string {
+/**
+ * The refusal line. Only the local boot error names the absolute path; a 409 reaches phones and
+ * hosted clients. An unverifiable owner (`reason`) names the lock file to remove once it is gone.
+ */
+export function dataDirInUseMessage(claim: { pid?: number; reason?: string }, dataDir?: string): string {
   const who = claim.pid === undefined ? 'another cezar' : `another cezar (pid ${claim.pid})`;
-  return dataDir === undefined ? `${who} already serves this project's tasks` : `${who} already serves the tasks in ${dataDir}`;
+  const line = dataDir === undefined ? `${who} already serves this project's tasks` : `${who} already serves the tasks in ${dataDir}`;
+  if (claim.reason === undefined) return line;
+  const lockFile = join(dataDir ?? '.ai/cezar', DATA_DIR_LOCK_DIRNAME, 'owner.lock');
+  return `${line} (${claim.reason}); if that process is gone, remove ${lockFile}`;
 }
 
 function ownerPid(directory: string): number | undefined {

@@ -69,6 +69,28 @@ describe.skipIf(!processIdentityPlatformSupported())('claimDataDirLock', () => {
     if (claim.kind === 'owned') await claim.release();
   });
 
+  it('keeps a live lock recorded under another spelling of the same directory', async () => {
+    const dir = dataDir();
+    const own = await ownProcessIdentity();
+    // Same physical directory reached through a symlink: a case-insensitive spelling or a bind mount
+    // has the same shape. The liveness check must decide, not the string compare.
+    const alias = join(roots[roots.length - 1]!, 'alias');
+    symlinkSync(join(dir, '..', '..'), alias);
+    await writeOwner(dir, { pid: own.pid, start: own.start, directory: dataDirLockDirectory(join(alias, '.ai/cezar')) });
+
+    expect(await claimDataDirLock(dir)).toEqual({ kind: 'held', pid: own.pid });
+  });
+
+  it('names the lock file when the owner cannot be verified', () => {
+    const reason = 'Cannot verify foreign owner identity';
+    expect(dataDirInUseMessage({ pid: 7, reason }, '/r/.ai/cezar')).toBe(
+      `another cezar (pid 7) already serves the tasks in /r/.ai/cezar (${reason}); if that process is gone, remove ${join('/r/.ai/cezar', 'server-lock', 'owner.lock')}`,
+    );
+    expect(dataDirInUseMessage({ pid: 7, reason })).toBe(
+      `another cezar (pid 7) already serves this project's tasks (${reason}); if that process is gone, remove ${join('.ai/cezar', 'server-lock', 'owner.lock')}`,
+    );
+  });
+
   it('degrades instead of throwing when the data dir sits behind a symlink', async () => {
     const real = dataDir();
     const link = join(roots[roots.length - 1]!, 'linked');
