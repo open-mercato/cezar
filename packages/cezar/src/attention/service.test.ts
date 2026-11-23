@@ -6,6 +6,7 @@ const listOf = (revision: string): AttentionResponse => ({
   items: [],
   counts: { total: 0, question: 0, approval: 0, task: 0, review: 0, failed: 0, message: 0 },
   revision,
+  overrides: [],
 });
 
 describe('createAttentionService', () => {

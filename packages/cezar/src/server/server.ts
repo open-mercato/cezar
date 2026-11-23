@@ -7,8 +7,9 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
-import { DEFAULT_PHONE_PUSH_PREFS, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
 import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
+import { createAttentionOverrideStore, type AttentionOverrideStore } from '../attention/overrides.ts';
 import { createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
 import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
@@ -522,6 +523,8 @@ export interface ServerDeps {
   managerRunnerFor?: ManagerEngineDeps['runnerFor'];
   /** Test seam: the Questions inbox's providers (spec 2026-11-17-questions-inbox); default the real ones. */
   questionProviders?: { task?: QuestionProvider; manager?: QuestionProvider };
+  /** Tests inject one off disk; the default lives in `~/.cezar/attention-overrides.json`. */
+  attentionOverrides?: AttentionOverrideStore;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
    *  route's guards, cleanup and error surfacing are exercised for real
@@ -9144,11 +9147,51 @@ export function createApp(deps: ServerDeps) {
       ? managerEngine.messages(manager.id, { pending: '1' }).messages.flatMap((message) =>
         message.kind === 'action' ? [{ managerId: manager.id, message, title: describeAction(message.action) }] : [])
       : []);
-    const questions = (await questionInbox.list().catch(() => undefined))?.open ?? [];
+    const inbox = await questionInbox.list().catch(() => undefined);
     const sources = await workspaceProjectSources();
-    const projects = sources.filter((source) => source.available).map((source) => ({ id: source.id, runs: source.runs() }));
-    return buildAttentionList({ questions, managers, approvals, projects, now: Date.now() });
+    const available = sources.filter((source) => source.available);
+    const projects = available.map((source) => ({ id: source.id, runs: source.runs() }));
+    const roots = new Map(available.map((source) => [source.id, source.root]));
+    const overrides = await attentionOverrides.list().catch(() => []);
+    armSnoozeWake(overrides);
+    return buildAttentionList({
+      questions: inbox?.open ?? [],
+      managers,
+      approvals,
+      projects,
+      now: Date.now(),
+      olderAfterDays: inbox?.olderAfterDays ?? 0,
+      overrides,
+      // The task's own PR (created or declared), as the forge cache already knows it: never a `gh` call.
+      prEnded: (projectId, run) => {
+        const root = roots.get(projectId);
+        if (!root) return undefined;
+        const created = run.pullRequestUrl ? refNumberFromUrl(run.pullRequestUrl) : null;
+        const own = [created, run.markerRefs?.pr, ...(run.prRefs ?? []).filter((ref) => ref.origin === 'created' || ref.origin === 'marker').map((ref) => ref.number)]
+          .filter((number): number is number => typeof number === 'number' && number > 0);
+        if (own.length === 0) return undefined;
+        const { prs } = readCachedRefStatuses(root, own);
+        for (const number of new Set(own)) {
+          const state = prs[number];
+          if (state === 'merged' || state === 'closed') return { number, state };
+        }
+        return undefined;
+      },
+    });
   };
+  // A snooze ends with no event of its own: one timer for the soonest, so the badge and a phone hear it.
+  let snoozeTimer: ReturnType<typeof setTimeout> | undefined;
+  const armSnoozeWake = (overrides: readonly { until?: string }[]) => {
+    const soonest = Math.min(...overrides.map((entry) => (entry.until ? Date.parse(entry.until) : Number.POSITIVE_INFINITY)));
+    if (snoozeTimer) clearTimeout(snoozeTimer);
+    snoozeTimer = undefined;
+    if (!Number.isFinite(soonest)) return;
+    // setTimeout overflows past ~24.8 days; a later wake just re-arms on the next read.
+    snoozeTimer = setTimeout(() => { snoozeTimer = undefined; attention.poke(); }, Math.min(Math.max(0, soonest - Date.now()) + 1_000, 2 ** 31 - 1));
+    snoozeTimer.unref?.();
+  };
+  deps.onDispose?.(() => { if (snoozeTimer) clearTimeout(snoozeTimer); });
+  const attentionOverrides = deps.attentionOverrides ?? createAttentionOverrideStore();
   // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
   const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
   deps.onDispose?.(() => attention.dispose());
@@ -9184,7 +9227,18 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: attention (workspace-level, single-mount) ----
   const attentionRoutes = new Hono()
-    .get('/workspace/attention', async (c) => c.json(await attention.list()));
+    .get('/workspace/attention', async (c) => c.json(await attention.list()))
+    // Spec 2026-11-23-needs-you-triage: dismiss, snooze, "Still needs me", and their undo.
+    .post('/workspace/attention/overrides', jsonZodValidator(attentionOverrideInputSchema), async (c) => {
+      const overrides = await attentionOverrides.set(c.req.valid('json'));
+      attention.poke();
+      return c.json({ overrides });
+    })
+    .post('/workspace/attention/overrides/clear', jsonZodValidator(attentionOverrideClearInputSchema), async (c) => {
+      const overrides = await attentionOverrides.clear(c.req.valid('json').key);
+      attention.poke();
+      return c.json({ overrides });
+    });
 
   // ---- chained family: Questions inbox (workspace-level, single-mount) ----
   // Spec 2026-11-17-questions-inbox. A manager copy folded into its task's item answers the task.
@@ -9203,6 +9257,8 @@ export function createApp(deps: ServerDeps) {
   // A GitHub read that sees a PR merged or closed closes its waiting merge cards (#2241 follow-up).
   const stopPrClosed = onPrClosed((root, number, state, verify) => {
     void managerEngine.pullRequestClosed(root, number, state, verify).catch(() => {});
+    // A paused task on that PR moves to Probably done.
+    attention.poke();
   });
   deps.onDispose?.(stopPrClosed);
 

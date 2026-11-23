@@ -47,17 +47,19 @@ describe('buildAttentionList', () => {
         run('busy', { status: 'running', startedAt: ago(1) }),
       ] }],
     }));
+    // Blocking decisions first, then the review gate, then waits, then failures.
     expect(list.items.map((item) => [item.kind, item.managerName ?? item.projectId])).toEqual([
-      ['question', 'Shop manager'],
       ['approval', 'Shop manager'],
-      ['task', 'app'],
-      ['review', 'app'],
-      ['failed', 'app'],
+      ['question', 'Shop manager'],
       ['message', 'Shop manager'],
+      ['review', 'app'],
+      ['task', 'app'],
+      ['failed', 'app'],
     ]);
-    expect(list.items[0]).toMatchObject({ questionKey: 'm:mgr:q1', options: ['REST', 'GraphQL'], header: 'API' });
-    expect(list.items[1]).toMatchObject({ actionId: 'a1', title: 'Merge of app#12' });
-    expect(list.items.at(-1)).toMatchObject({ title: 'Deploy is blocked', detail: '2 important messages' });
+    expect(list.items[1]).toMatchObject({ questionKey: 'm:mgr:q1', options: ['REST', 'GraphQL'], header: 'API' });
+    expect(list.items[0]).toMatchObject({ actionId: 'a1', title: 'Merge of app#12' });
+    expect(list.items[2]).toMatchObject({ title: 'Deploy is blocked', detail: '2 important messages' });
+    expect(list.overrides).toEqual([]);
     // Failed tasks show but do not count (owner decision 2026-11-20).
     expect(list.counts).toEqual({ total: 5, question: 1, approval: 1, task: 1, review: 1, failed: 1, message: 1 });
   });
@@ -71,9 +73,9 @@ describe('buildAttentionList', () => {
     expect(list.items[0]).toMatchObject({ projectId: 'app', runId: 'wait' });
   });
 
-  it('leaves out Older and closed questions, and an inactive manager’s cards and messages', () => {
+  it('leaves out closed questions, and an inactive manager’s cards and messages', () => {
     const list = buildAttentionList(sources({
-      questions: [question('m:mgr:old', { older: true }), question('m:off:q', { source: { kind: 'manager', managerId: 'off', name: 'Off' } })],
+      questions: [question('m:mgr:shut', { closed: { reason: 'answered', at: ago(1) } }), question('m:off:q', { source: { kind: 'manager', managerId: 'off', name: 'Off' } })],
       managers: [{ id: 'mgr', name: 'Shop manager', important: 0 }, { id: 'off', name: 'Off', important: 3, inactive: { since: ago(100) } }],
     }));
     expect(list.items).toEqual([]);
@@ -94,6 +96,93 @@ describe('buildAttentionList', () => {
     const one = buildAttentionList(sources({ questions: [question('m:mgr:q1')] }));
     expect(buildAttentionList(sources({ questions: [question('m:mgr:q1')] })).revision).toBe(one.revision);
     expect(buildAttentionList(sources({ questions: [question('m:mgr:q2')] })).revision).not.toBe(one.revision);
+  });
+});
+
+describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
+  const DAY = 24 * 60;
+
+  it('lists a question flagged stale as probably done, uncounted and last', () => {
+    const list = buildAttentionList(sources({
+      questions: [
+        question('m:mgr:stale', { askedAt: ago(1), stale: { why: 'mentioned-work-ended', detail: 'PR #2428 it mentions was merged', since: ago(1) } }),
+        question('m:mgr:live', { askedAt: ago(30) }),
+        question('m:mgr:chat', { askedAt: ago(2), stale: { why: 'replied-in-chat', detail: 'you replied 4m after it was asked', since: ago(1) } }),
+      ],
+    }));
+    expect(list.items.map((item) => [item.key, item.settled?.why, item.counted])).toEqual([
+      ['question:m:mgr:live', undefined, true],
+      ['question:m:mgr:stale', 'work-ended', false],
+      ['question:m:mgr:chat', 'overtaken', false],
+    ]);
+    expect(list.items[1]!.settled!.detail).toBe('PR #2428 it mentions was merged');
+    expect(list.counts).toMatchObject({ total: 1, question: 1 });
+  });
+
+  it('folds an Older question and a paused task quiet past the Older days', () => {
+    const list = buildAttentionList(sources({
+      olderAfterDays: 3,
+      questions: [question('m:mgr:old', { older: true, askedAt: ago(4 * DAY) })],
+      projects: [{ id: 'app', runs: [
+        run('old', { status: 'waiting', waitingSince: ago(4 * DAY) }),
+        run('new', { status: 'waiting', waitingSince: ago(2 * DAY) }),
+      ] }],
+    }));
+    expect(list.items.map((item) => [item.runId ?? item.key, item.settled?.detail])).toEqual([
+      ['new', undefined],
+      ['question:m:mgr:old', 'Quiet for 3 days'],
+      ['old', 'Quiet for 3 days'],
+    ]);
+    expect(list.counts.total).toBe(1);
+  });
+
+  it('never folds a task for age when Older is off', () => {
+    const list = buildAttentionList(sources({ olderAfterDays: 0, projects: [{ id: 'app', runs: [run('old', { status: 'waiting', waitingSince: ago(40 * DAY) })] }] }));
+    expect(list.items[0]!.settled).toBeUndefined();
+  });
+
+  it('folds a paused task, and its question, once its own PR merged or closed', () => {
+    const list = buildAttentionList(sources({
+      questions: [question('r:app:asks:req', { source: { kind: 'task', projectId: 'app', runId: 'asks', title: 'Task asks', status: 'waiting' } })],
+      projects: [{ id: 'app', runs: [
+        run('merged', { status: 'waiting', waitingSince: ago(3), markerRefs: { pr: 2317 } }),
+        run('asks', { status: 'waiting', waitingSince: ago(3), pullRequestUrl: 'https://github.com/o/r/pull/9' }),
+        run('open', { status: 'review', finishedAt: ago(4), markerRefs: { pr: 5 } }),
+      ] }],
+      prEnded: (_projectId, r) => (r.id === 'merged' ? { number: 2317, state: 'merged' } : r.id === 'asks' ? { number: 9, state: 'closed' } : undefined),
+    }));
+    expect(list.items.map((item) => [item.runId, item.kind, item.settled?.detail])).toEqual([
+      ['open', 'review', undefined],
+      ['asks', 'question', 'PR #9 closed'],
+      ['merged', 'task', 'PR #2317 merged'],
+    ]);
+    expect(list.items[1]!.settled!.why).toBe('pr-closed');
+    expect(phoneBadgeCount(list.items, ['question', 'task', 'review'])).toBe(1);
+  });
+
+  it('hides a dismissed item until its key changes, and "keep" overrides the detection', () => {
+    const base = {
+      questions: [question('m:mgr:q1', { stale: { why: 'manager-acted' as const, detail: 'the manager acted', since: ago(1) } })],
+      projects: [{ id: 'app', runs: [run('wait', { status: 'waiting', waitingSince: ago(3) })] }],
+    };
+    const first = buildAttentionList(sources(base));
+    const taskKey = first.items.find((item) => item.kind === 'task')!.key;
+    const dismissed = buildAttentionList(sources({ ...base, overrides: [{ key: taskKey, mode: 'dismiss', at: ago(1) }, { key: 'question:m:mgr:q1', mode: 'keep', at: ago(1) }] }));
+    expect(dismissed.items.map((item) => [item.kind, item.settled, item.counted])).toEqual([['question', undefined, true]]);
+    expect(dismissed.counts.total).toBe(1);
+    expect(dismissed.revision).not.toBe(first.revision);
+    // A new wait is a new key: it shows again.
+    const raised = buildAttentionList(sources({ ...base, projects: [{ id: 'app', runs: [run('wait', { status: 'waiting', waitingSince: ago(1) })] }], overrides: [{ key: taskKey, mode: 'dismiss', at: ago(1) }] }));
+    expect(raised.items.some((item) => item.kind === 'task')).toBe(true);
+  });
+
+  it('brings a snoozed item back once its snooze ends', () => {
+    const base = { projects: [{ id: 'app', runs: [run('wait', { status: 'waiting', waitingSince: ago(3) })] }] };
+    const key = buildAttentionList(sources(base)).items[0]!.key;
+    const snoozed = (until: number) => buildAttentionList(sources({ ...base, overrides: [{ key, mode: 'dismiss', at: ago(1), until: new Date(NOW + until * 60_000).toISOString() }] }));
+    expect(snoozed(30).items).toEqual([]);
+    expect(snoozed(-1).items.map((item) => item.key)).toEqual([key]);
+    expect(snoozed(-1).overrides).toEqual([]);
   });
 });
 
