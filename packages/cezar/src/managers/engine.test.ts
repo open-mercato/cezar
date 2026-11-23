@@ -1035,6 +1035,8 @@ describe('ManagerEngine', () => {
       await settled(engine);
       const prompt = backend.specs[0]?.userPrompt ?? '';
       expect(prompt).toContain('New attention items: 150');
+      expect(prompt).toContain('The user created you for this goal');
+      expect(prompt).toContain('Watch');
       expect(prompt).toContain('"newItemsNotShown":50');
       expect(prompt).toContain('Nightly 149');
       expect(prompt).not.toContain('Nightly 10"');
