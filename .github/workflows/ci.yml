@@ -41,13 +41,15 @@ jobs:
 
       # Only paths no suite, build or package step reads. Root `*.md` is NOT here:
       # `bc-route-inventory.test.ts` reads BACKWARD_COMPATIBILITY.md. Any doubt runs the suites.
+      # `--no-renames`: a file MOVED into one of these paths must still list its old path.
+      # codeql.yml's `paths-ignore` repeats this set; change both together.
       - name: Decide whether the suites run
         id: diff
         env:
           EVENT: ${{ github.event_name }}
         run: |
           code=true
-          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
+          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only --no-renames HEAD^1 HEAD) && [ -n "$files" ]; then
             code=false
             while IFS= read -r file; do
               case "$file" in

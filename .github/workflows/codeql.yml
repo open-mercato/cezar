@@ -7,7 +7,8 @@ on:
     branches:
       - main
       - develop
-    # Same docs-only set as ci.yml's `scope` job. Safe at the trigger: no required check here.
+    # Same docs-only set as ci.yml's `scope` job; change both together. Safe at the trigger:
+    # no required check here.
     paths-ignore:
       - '.ai/specs/**'
       - '.ai/plans/**'

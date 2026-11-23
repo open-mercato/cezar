@@ -10,7 +10,8 @@ How cezar reaches npm. Two paths, deliberately separate
 - **Previews** are **CI-driven**: the `publish-snapshot` job in
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
   after fully green `verify`, `vitest` and `webhooks-cross-platform` runs — on `develop`
-  pushes and same-repo PRs only.
+  pushes and same-repo PRs only. A draft PR runs no CI, and a PR that only touches the
+  docs-only paths in `ci.yml`'s `scope` job skips the suites, so neither publishes one.
 - **Nightlies** are **clock-driven**: [`nightly.yml`](../.github/workflows/nightly.yml)
   cuts `main`'s tip every night under the `nightly` dist-tag, so `npx cezar-run@nightly`
   is always the trunk. Also runnable on demand from the Actions tab.
@@ -218,7 +219,7 @@ become the default install.
 
 | Event | Version (example) | dist-tag | Install |
 |---|---|---|---|
-| same-repo PR, CI green | `0.1.5-pr482.123` | `pr-482` | `npx cezar-run@0.1.5-pr482.123` |
+| same-repo PR, ready for review, CI green (not docs-only) | `0.1.5-pr482.123` | `pr-482` | `npx cezar-run@0.1.5-pr482.123` |
 | push to `develop` | `0.1.5-develop.124` | `develop` | `npx cezar-run@develop` |
 | nightly cut of `main` | `0.1.5-nightly.20260813.126` | `nightly` | `npx cezar-run@nightly` |
 
