@@ -655,6 +655,20 @@ describe('session git API routes', () => {
     const behind = await apiRequest(app, `/api/v1/runs/${run.id}/git/status`);
     expect(((await behind.json()) as { behind: number }).behind).toBe(2);
 
+    // With a remote-tracking base the route names the remote it counted against (#2428); the local
+    // answer above carries no `baseRemote` key at all.
+    const bare = mkdtempSync(join(tmpdir(), 'cez-gitstatus-route-remote-'));
+    try {
+      g(bare, 'init', '--bare', '-q');
+      g(worktree, 'remote', 'add', 'origin', bare);
+      g(worktree, 'push', '-q', 'origin', 'main');
+      const remote = await apiRequest(app, `/api/v1/runs/${run.id}/git/status`);
+      expect(await remote.json()).toMatchObject({ behind: 2, baseRemote: 'origin' });
+    } finally {
+      g(worktree, 'remote', 'remove', 'origin');
+      rmSync(bare, { recursive: true, force: true });
+    }
+
     expect((await apiRequest(app, '/api/v1/runs/nope/git/status')).status).toBe(404);
 
     // A run whose isolated worktree is gone answers the server's own 409, like /changes does.

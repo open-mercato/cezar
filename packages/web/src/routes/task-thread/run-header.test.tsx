@@ -1317,8 +1317,9 @@ describe('the facts line', () => {
         jsonResponse(landing
           ? { profile: 'trunk', taskWorkspace: 'in-place', landing, landingBlocked, baseBranch: 'main', defaultRunner: 'claude', requiredChecks: ['npm test'] }
           : { profile: null, taskWorkspace: null, landing: null, landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' }),
-      '/api/v1/repo': () => jsonResponse({ info: { root: '/repo', branch: 'main', remote: 'origin' } }),
-      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0 }),
+      '/api/v1/repo': () => jsonResponse({ info: { root: '/repo', branch: 'main', remote: 'git@github.com:acme/repo.git' } }),
+      // `baseRemote` is the remote NAME the counts read, as the server sends it for an `origin/main` ref.
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin' }),
     })
     const worktreeTask = { worktreePath: '/repo/.ai/cezar/worktrees/r1', branch: 'cez/r1', baseBranch: 'main' }
     const gitButton = (action: string) => document.querySelector(`[data-slot="git-button"] [data-action="${action}"]`)
@@ -1346,7 +1347,8 @@ describe('the facts line', () => {
       )
       const prompt = JSON.stringify(sent.find((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('Commit to main:'))?.body)
       expect(prompt).toContain('npm test')
-      expect(prompt).not.toContain('origin')
+      // The remote git status named (`baseRemote`), not one the prompt assumed.
+      expect(prompt).toContain('git push origin HEAD:main')
     })
 
     it('a read-only worktree task, or a project whose auto-land is blocked, keeps Create PR', async () => {
@@ -1386,6 +1388,32 @@ describe('the facts line', () => {
       await waitFor(() =>
         expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('git push upstream HEAD:main'))).toBe(true),
       )
+    })
+
+    it('a task based on origin/main: no button while git status loads, then Commit to main from the remote name', async () => {
+      let answer: (response: Response) => void = () => {}
+      const pending = new Promise<Response>((resolve) => { answer = resolve })
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => pending as unknown as Response })
+      // The repo's `remote` is a URL — never the name a base ref is spelled with.
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'origin/main' }))
+      expect(primaryRow().getByRole('button', { name: 'Answer' })).toBeTruthy()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(document.querySelector('[data-slot="git-button"]')).toBeNull()
+      await act(async () => answer(jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin' })))
+      await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
+    })
+
+    it('with no base remote (a local-only repo, or a base ref never fetched) the branch keeps its own step', async () => {
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null, behind: 0, ahead: 1 }) })
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'origin/main' }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+      // A local `main` base with no remote: `ahead` reads the main checkout's branch, which no push moves.
+      cleanup()
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null, behind: 0, ahead: 1 }) })
+      renderHeader(run('waiting', worktreeTask))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
     })
 
     it('a failed git status still leaves the branch step (Create PR), not an empty slot', async () => {

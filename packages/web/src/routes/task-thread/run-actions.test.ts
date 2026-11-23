@@ -349,23 +349,16 @@ describe('lifecycle action exclusion', () => {
 })
 
 describe('landBranchPrompt', () => {
-  it('names the required checks, refuses to push on a failure, and names no remote', () => {
-    const prompt = landBranchPrompt('main', ['npm test', 'npm run lint'])
-    expect(prompt).toContain('`npm test`, `npm run lint`')
-    expect(prompt).toContain('stop without pushing if any fails')
-    expect(prompt).toContain('the remote main tracks')
-    expect(prompt).not.toMatch(/\borigin\b/)
-  })
-
-  it('pushes to the remote git status measured ahead against — a fork clone lands upstream', () => {
-    const prompt = landBranchPrompt('main', ['npm test'], 'upstream')
-    expect(prompt).toContain('rebase this branch onto upstream/main')
+  it('rebases onto and pushes to the remote git status measured against, never a literal origin', () => {
+    const prompt = landBranchPrompt('main', 'upstream', ['npm test', 'npm run lint'])
+    expect(prompt).toContain('fetch upstream and rebase this branch onto upstream/main')
     expect(prompt).toContain('`git push upstream HEAD:main`')
-    expect(prompt).toContain('stop without pushing if any fails')
+    expect(prompt).toContain('run the required checks (`npm test`, `npm run lint`) and stop without pushing if any fails')
     expect(prompt).not.toMatch(/\borigin\b/)
   })
 
   it('still asks for the project checks when none are configured', () => {
-    expect(landBranchPrompt('trunk')).toContain("run the project's checks and stop without pushing if any fails")
+    expect(landBranchPrompt('trunk', 'origin')).toContain("run the project's checks and stop without pushing if any fails")
+    expect(landBranchPrompt('trunk', 'origin')).toContain('`git push origin HEAD:trunk`')
   })
 })
