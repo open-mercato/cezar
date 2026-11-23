@@ -82,6 +82,23 @@ describe('prEndLookup', () => {
     expect(ends.dropped).toEqual([prEndKey('/repo', 7)])
   })
 
+  it('without seenAt, a closed end lapses against when it ended; a merged one never (review of #2443, round 4)', () => {
+    const bare = (number: number, state: 'merged' | 'closed', hoursAgo: number) => {
+      const { seenAt: _seen, ...rest } = record(number, { state, endedAt: at(hoursAgo) })
+      return rest
+    }
+    const known = new Map([
+      [prEndKey('/repo', 1), bare(1, 'closed', 25)],
+      [prEndKey('/repo', 2), bare(2, 'closed', 23)],
+      [prEndKey('/repo', 3), bare(3, 'merged', 400)],
+    ])
+    const ends = prEndLookup(known, none, NOW)
+    expect(ends.lookup('/repo', 1)).toBeUndefined()
+    expect(ends.lookup('/repo', 2)).toEqual({ state: 'closed', endedAt: at(23) })
+    expect(ends.lookup('/repo', 3)).toEqual({ state: 'merged', endedAt: at(400) })
+    expect(ends.dropped).toEqual([prEndKey('/repo', 1)])
+  })
+
   it('a fresh read confirming a closed end renews it, at most hourly', () => {
     const known = new Map([
       [prEndKey('/repo', 7), record(7, { state: 'closed', endedAt: at(40), seenAt: at(2) })],

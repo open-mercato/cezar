@@ -1,9 +1,11 @@
 import { QueryClient } from '@tanstack/react-query'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AttentionOverride, RunRecord } from '@open-mercato/cezar-api-client'
 
-import { UNDO_TOAST_MS, createTriageActions, type TriageDeps } from './now-triage-actions'
+import { DISMISS_UNDO_MS, resetDismissals } from '@/api/questions'
+
+import { UNDO_TOAST_MS, createTriageActions, questionCloser, type TriageDeps } from './now-triage-actions'
 import { keyedQueue } from './now-triage-model'
 
 /** Needs you's wiring (spec 2026-11-23-needs-you-triage): what each click calls, in which order. */
@@ -145,3 +147,21 @@ describe('Needs you triage actions', () => {
     expect(deps.refreshAttention).toHaveBeenCalled()
   })
 })
+
+describe('questionCloser (review of #2443, round 4)', () => {
+  afterEach(() => {
+    resetDismissals()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('hands a failed card close back to Now', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'disk full' }, { status: 500 })))
+    const onFailed = vi.fn()
+    questionCloser(new QueryClient())('m:a:1', 'Ship it?', onFailed)
+    await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS)
+    await vi.waitFor(() => expect(onFailed).toHaveBeenCalledWith('disk full'))
+  })
+})
+

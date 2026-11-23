@@ -1,6 +1,7 @@
 import type { AttentionOverride, AttentionOverrideInput, RunRecord } from '@open-mercato/cezar-api-client'
 import type { QueryClient } from '@tanstack/react-query'
 
+import { scheduleDismiss } from '@/api/questions'
 import type { ToastAction, ToastTone } from '@/components/ui/toaster'
 import { runTitle } from '@/lib/task-groups'
 
@@ -39,6 +40,12 @@ export interface TriageDeps {
   /** Override writes for one key in click order (`keyedQueue`). */
   inOrder: <T>(key: string, work: () => Promise<T>) => Promise<T>
   now?: () => number
+}
+
+/** Now's card close: the Questions page's delayed close, its failure handed back to Needs you so the
+ *  row comes back with the reason (review of #2443). One place, so dropping `onFailed` fails a test. */
+export function questionCloser(queryClient: QueryClient): TriageDeps['scheduleClose'] {
+  return (questionKey, label, onFailed) => scheduleDismiss(queryClient, questionKey, label, { onFailed })
 }
 
 /** The card close waits this long; the toast offering its Undo leaves a second earlier, so an Undo

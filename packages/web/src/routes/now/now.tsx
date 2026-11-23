@@ -5,7 +5,7 @@ import * as React from 'react'
 import { archiveFinished, archiveRun, cancelRun, continueRun, finishRun } from '@/api/client'
 import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@/api/queries'
 import type { AttentionItem, AttentionOverride, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
-import { answerQuestion, pauseDismiss, resumeDismiss, scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
+import { answerQuestion, pauseDismiss, resumeDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
 import { applyOverrideLocally, attentionKeys, clearAttentionOverride, setAttentionOverride, useAttention } from '@/api/attention'
 import { decideManagerAction, managerKeys, markManagerRead, updateManager, useManagers } from '@/api/managers'
 import { setProjectRunRead } from '@/api/client'
@@ -53,7 +53,7 @@ import {
   type RunningRow,
 } from './now-model'
 import { AttentionRow, type AttentionActions } from './now-attention'
-import { createTriageActions } from './now-triage-actions'
+import { createTriageActions, questionCloser } from './now-triage-actions'
 import { DismissButton, ProbablyDoneGroup, SettledReason, SwipeRow, TriageMenu, useRowMenu, type TriageActions } from './now-triage'
 import {
   SNOOZE_LABEL,
@@ -810,7 +810,7 @@ export function NowRoute() {
     setOverride: setAttentionOverride,
     clearOverride: clearAttentionOverride,
     applyLocally: (override) => applyOverrideLocally(queryClient, override),
-    scheduleClose: (key, label, onFailed) => scheduleDismiss(queryClient, key, label, { onFailed }),
+    scheduleClose: questionCloser(queryClient),
     holdClose: (key, held) => (held ? pauseDismiss(key) : resumeDismiss(key)),
     undoClose: undoDismiss,
     finishRun,
