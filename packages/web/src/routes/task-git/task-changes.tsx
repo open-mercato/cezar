@@ -13,6 +13,7 @@ import { gitActionPolicy, type GitActionId } from '@/lib/git-actions'
 import { useIsDesktop } from '@/lib/use-desktop'
 
 import { useDiffComments } from '../task-thread/diff-comments'
+import { useMessageQuotes } from '../task-thread/message-quotes-store'
 import { useContinueAction } from '../task-thread/follow-up-engine'
 import { revealFromSearch } from '../task-thread/review-comments-block'
 import { TaskComposer, TaskDock } from '../task-thread/task-composer'
@@ -90,6 +91,7 @@ export function ChangesView({
   // Session tab docks — floated here while there is something to send, so the review can be given
   // a message (or a skill) without leaving the diff. This route is the one host of both drafts.
   const diffComments = useDiffComments(run.id)
+  const messageQuotes = useMessageQuotes(run.id)
   const { add: addDiffComment } = diffComments
   // Counted only once the store accepted it; `start` is set exactly when the comment covers a range.
   const addComment = useCallback(
@@ -360,6 +362,7 @@ export function ChangesView({
             run={run}
             draft={composerDraft}
             diffComments={diffComments}
+            messageQuotes={messageQuotes}
             onSendingChange={setSending}
             onOpenComment={(comment) =>
               revealOrScroll({ path: comment.path, side: comment.side, line: comment.line, commentId: comment.id })

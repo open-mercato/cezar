@@ -39,6 +39,8 @@ import { usePromoteRun, useStartRunNow } from './use-start-run-now'
 import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
 import { useDiffComments } from './diff-comments'
+import { useMessageQuotes } from './message-quotes-store'
+import { useCoarsePointer, useMessageSelection, type QuoteCapture } from '@/components/quote-selection'
 import { TaskComposer, TaskDock } from './task-composer'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
@@ -64,6 +66,9 @@ import {
   buildTranscriptRows,
   mainTranscriptSections,
   placeArtifactRows,
+  firstTurnScopeOf,
+  quoteOwnerOf,
+  useQuoteJump,
   type TranscriptMessageActions,
 } from './session-transcript'
 import {
@@ -289,6 +294,21 @@ export function ThreadView({
   const draft = useDraft(run.id, 'composer')
   // Line comments left on the Changes tab — draft items that ride the next message (self-review).
   const diffComments = useDiffComments(run.id)
+  const messageQuotes = useMessageQuotes(run.id)
+  // One selection listener for the transcript's toolbar and the composer's touch chip (spec § 1).
+  const selection = useMessageSelection()
+  const [quoteHandled, setQuoteHandled] = useState<QuoteCapture | null>(null)
+  const quoteCapture = selection !== null && selection !== quoteHandled && selection.source.dataset.quoteOwner === quoteOwnerOf(run.id, 'main') ? selection : null
+  const quoteCaptureRef = useRef(quoteCapture)
+  quoteCaptureRef.current = quoteCapture
+  const coarsePointer = useCoarsePointer()
+  const onQuote = useCallback((capture: QuoteCapture) => {
+    const { source: _source, ...quote } = capture
+    setQuoteHandled(capture)
+    messageQuotes.add(quote)
+    document.querySelector<HTMLTextAreaElement>('[data-slot="composer"] textarea')?.focus()
+  }, [messageQuotes])
+  const onQuoteDismiss = useCallback(() => setQuoteHandled(quoteCaptureRef.current), [])
 
   // The queued-run affordances (#472), passed only while the run is queued — so the bubbles
   // go read-only on the next `run` SSE frame once it starts. The bubbles await these promises
@@ -364,6 +384,7 @@ export function ThreadView({
   })
   // "Your messages" (spec 2026-11-17-my-message-navigation): the jump pill grows into ▲ · 💬 · ▼.
   const myMessages = useThreadMyMessages({ runId: run.id, sections, rowKeys: rows.map(({ key }) => key), history, scroll })
+  const onJumpToQuote = useQuoteJump({ rows, history, scroll })
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
@@ -417,6 +438,11 @@ export function ThreadView({
           scrollControls={scroll}
           renderMode={mode}
           rowModels={rows}
+          onQuote={onQuote}
+          quoteCapture={quoteCapture}
+          onQuoteDismiss={onQuoteDismiss}
+          onJump={onJumpToQuote}
+          {...(history?.hasOlder || history?.fallbackTruncated ? {} : { firstTurnScope: firstTurnScopeOf(thread.turns.map((turn) => turn.id)) })}
         />
 
         {thread.turns.length === 0 ? (
@@ -492,7 +518,7 @@ export function ThreadView({
             (trunk-based, spec 2026-10-20-trunk-based-projects) gets no panel: corrections go through
             the composer and landing through the header's Commit step. */}
         {run.status === 'review' && !lifecycleGate && run.worktree !== false ? (
-          <ReviewPanel run={run} diffComments={diffComments} />
+          <ReviewPanel run={run} diffComments={diffComments} messageQuotes={messageQuotes} />
         ) : null}
       </div>
 
@@ -592,6 +618,9 @@ export function ThreadView({
           run={run}
           draft={draft}
           diffComments={diffComments}
+          messageQuotes={messageQuotes}
+          quoteSelection={coarsePointer ? quoteCapture : null}
+          onQuoteSelection={onQuote}
           continueAction={continueAction}
           getMentionCandidates={() => threadFilePaths(thread)}
         /> : <p className="px-1 text-xs text-muted-foreground">Resolve the worktree operation above before continuing this task.</p>}

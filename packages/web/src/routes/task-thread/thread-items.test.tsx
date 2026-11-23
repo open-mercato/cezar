@@ -33,6 +33,7 @@ import {
 } from './thread-items'
 import { reduceThread, type ThreadProviderAuthRequired } from './thread-state'
 import { SessionTranscript } from './session-transcript'
+import { withMessageQuotesAndReview } from '@/lib/message-quotes'
 
 afterEach(() => {
   cleanup()
@@ -729,5 +730,40 @@ describe('the thread reading measure (redesign 2026-11, type scale)', () => {
     fireEvent.click(screen.getByRole('button'))
     const body = document.querySelector<HTMLElement>('[data-slot="reasoning"] [data-state="open"] > div')!
     expect(body.className).toContain('max-w-[72ch]')
+  })
+})
+
+describe('UserBubble quotes', () => {
+  const wrap = (child: ReactNode) => (
+    <QueryClientProvider client={createQueryClient()}><MemoryRouter>{child}</MemoryRouter></QueryClientProvider>
+  )
+  const text = withMessageQuotesAndReview(
+    'Please look',
+    [{ id: 'q', role: 'assistant', ref: 4, excerpt: 'keep the column', code: false, body: 'why?' }],
+    [{ id: 'c', path: 'src/a.ts', line: 3, side: 'new', body: 'rename', excerpt: 'const a = 1' }],
+  )
+
+  it('renders the typed text, then the quote cards, then the review, as the wire orders them', () => {
+    render(wrap(<UserBubble text={text} onJump={vi.fn()} />))
+    const order = [...document.querySelectorAll('[data-slot="quote-cards"], [data-slot="review-comments"]')].map((el) => el.getAttribute('data-slot'))
+    expect(order).toEqual(['quote-cards', 'review-comments'])
+    expect(screen.getByText('Please look')).toBeTruthy()
+    // A sent card jumps by its turn, even when that turn is not loaded yet.
+    expect(screen.getByRole('button', { name: 'Jump to message: From assistant message #4' })).toBeTruthy()
+  })
+
+  it('marks the typed text as a quote body only when the transcript takes quotes', () => {
+    render(wrap(<UserBubble text={text} />))
+    expect(document.querySelector('[data-quote-body]')).toBeNull()
+    cleanup()
+    render(wrap(<UserBubble text={text} quoteSource={{ owner: 'r1:main', ref: 4 }} />))
+    const body = document.querySelector<HTMLElement>('[data-quote-body]')!
+    expect(body.textContent).toBe('Please look')
+    expect(body.dataset).toMatchObject({ quoteRole: 'user', quoteOwner: 'r1:main', quoteRef: '4' })
+  })
+
+  it('leaves an assistant message unmarked without a quote source', () => {
+    render(wrap(<AssistantMessage text="hello" />))
+    expect(document.querySelector('[data-quote-body]')).toBeNull()
   })
 })

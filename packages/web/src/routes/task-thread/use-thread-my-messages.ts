@@ -66,6 +66,34 @@ const rowSelector = (key: string) => {
   return `[data-slot="thread-row"][data-row-key="${escaped}"]`
 }
 
+/** The part of the scroller the reader sees: below a sticky run header, above the dock. */
+function threadViewport(box: HTMLElement): { top: number; bottom: number } {
+  const rect = box.getBoundingClientRect()
+  // On md+ the run header sticks to the scroller's top, and the dock always sticks to its bottom.
+  const header = box.querySelector<HTMLElement>('[data-slot="run-header"]')
+  const top = header && getComputedStyle(header).position === 'sticky' ? Math.max(rect.top, header.getBoundingClientRect().bottom) : rect.top
+  const dock = box.querySelector<HTMLElement>('[data-slot="thread-dock"]')
+  const bottom = dock ? Math.min(rect.bottom, dock.getBoundingClientRect().top) : rect.bottom
+  return { top, bottom }
+}
+
+/** Scrolls a LOADED row to the jump band and resolves to it once rendered (#2218, quote jumps). */
+export async function revealThreadRow(
+  scroll: Pick<ThreadScrollControls, 'scrollElRef' | 'revealRow'>,
+  key: string,
+): Promise<HTMLElement | undefined> {
+  const box = scroll.scrollElRef.current
+  if (!box) return undefined
+  const inset = threadViewport(box).top - box.getBoundingClientRect().top + JUMP_OFFSET_PX
+  if (!scroll.revealRow(key, inset)) {
+    // Virtualized: the row exists only once virtua renders it.
+    await untilFrame(() => box.querySelector(rowSelector(key)) !== null)
+    scroll.revealRow(key, inset)
+  }
+  await untilFrame(() => box.querySelector(rowSelector(key)) !== null)
+  return box.querySelector<HTMLElement>(rowSelector(key)) ?? undefined
+}
+
 /**
  * The task thread's side of "your messages" (spec 2026-11-17-my-message-navigation): the list
  * is the server's index of the whole run merged with what is loaded, and a jump to a message in
@@ -104,14 +132,7 @@ export function useThreadMyMessages({
   const scroller = useCallback(() => scrollElRef.current, [scrollElRef])
   const viewport = useCallback(() => {
     const box = scrollElRef.current
-    if (!box) return { top: 0, bottom: 0 }
-    const rect = box.getBoundingClientRect()
-    // On md+ the run header sticks to the scroller's top, and the dock always sticks to its bottom.
-    const header = box.querySelector<HTMLElement>('[data-slot="run-header"]')
-    const top = header && getComputedStyle(header).position === 'sticky' ? Math.max(rect.top, header.getBoundingClientRect().bottom) : rect.top
-    const dock = box.querySelector<HTMLElement>('[data-slot="thread-dock"]')
-    const bottom = dock ? Math.min(rect.bottom, dock.getBoundingClientRect().top) : rect.bottom
-    return { top, bottom }
+    return box ? threadViewport(box) : { top: 0, bottom: 0 }
   }, [scrollElRef])
 
   const place = useCallback((item: MyMessage): MyMessagePlace => {
@@ -147,18 +168,9 @@ export function useThreadMyMessages({
       toast('Could not load that message', { tone: 'danger' })
       return undefined
     }
-    const box = scrollElRef.current
-    if (!box) return undefined
-    const inset = viewport().top - box.getBoundingClientRect().top + JUMP_OFFSET_PX
-    if (!revealRow(item.id, inset)) {
-      // Virtualized: the row exists only once virtua renders it.
-      await untilFrame(() => box.querySelector(rowSelector(item.id)) !== null)
-      revealRow(item.id, inset)
-    }
-    await untilFrame(() => box.querySelector(rowSelector(item.id)) !== null)
-    const row = box.querySelector<HTMLElement>(rowSelector(item.id))
-    return row?.querySelector<HTMLElement>('[data-slot="user-bubble"]') ?? row ?? undefined
-  }, [revealRow, scrollElRef, viewport])
+    const row = await revealThreadRow({ scrollElRef, revealRow }, item.id)
+    return row?.querySelector<HTMLElement>('[data-slot="user-bubble"]') ?? row
+  }, [revealRow, scrollElRef])
 
   const adapter = useMemo<MyMessagesAdapter>(
     () => ({ items, scroller, viewport, place, reveal }),

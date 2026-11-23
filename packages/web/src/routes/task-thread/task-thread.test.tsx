@@ -203,6 +203,41 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="thread-footer"] [data-slot="pr-link"]')).toBeNull()
   })
 
+  it('on touch, the composer offers "Quote selection" for a transcript selection and quotes it', async () => {
+    renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(pointer: coarse)', media: query, addEventListener: () => {}, removeEventListener: () => {},
+    }))
+    const changed = () => act(async () => {
+      document.dispatchEvent(new Event('selectionchange'))
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+    })
+    expect(screen.queryByRole('button', { name: 'Quote selection' })).toBeNull()
+    const body = await waitFor(() => {
+      const found = [...document.querySelectorAll<HTMLElement>('[data-quote-body]')].find((el) => el.textContent?.includes('Summarize'))
+      expect(found).toBeTruthy()
+      return found!
+    })
+    const text = [...body.querySelectorAll('*')].flatMap((el) => [...el.childNodes]).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.includes('Summarize'))!
+    const range = document.createRange()
+    range.setStart(text, 0)
+    range.setEnd(text, 9)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    await changed()
+
+    const chip = await screen.findByRole('button', { name: 'Quote selection' })
+    expect(chip.closest('[data-slot="composer"]')).not.toBeNull()
+    // The tap collapses the selection before click; on touch the capture survives it.
+    fireEvent.pointerDown(chip)
+    window.getSelection()!.removeAllRanges()
+    await changed()
+    fireEvent.click(screen.getByRole('button', { name: 'Quote selection' }))
+    expect(await screen.findByRole('button', { name: /Edit note on quote: Summarize/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Quote selection' })).toBeNull()
+    window.getSelection()!.removeAllRanges()
+  })
+
   it('renders the task as the leading user bubble and the v1 reply as another', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     const bubbles = document.querySelectorAll('[data-slot="user-bubble"]')

@@ -1,5 +1,6 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun, RunEvent, UiToolItem } from '@open-mercato/cezar-api-client'
@@ -15,13 +16,28 @@ import {
   agentTranscriptSections,
   buildTranscriptRows,
   mainTranscriptSections,
+  quoteTargetRowKey,
+  useQuoteJump,
+  type TranscriptRowModel,
   type TranscriptSection,
 } from './session-transcript'
 import { clearThreadScrollCaches } from './thread-scroll'
 import { collectSubagents, subagentChildren } from './subagent-dock'
 import { reduceThread, type ThreadEntry, type ThreadState } from './thread-state'
 
+const quoteMocks = vi.hoisted(() => ({ capture: null as null | { source: HTMLElement; excerpt: string; code: boolean; role: 'assistant' | 'user' }, toast: vi.fn() }))
+vi.mock('@/components/quote-selection', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/quote-selection')>()),
+  useMessageSelection: () => quoteMocks.capture,
+}))
+vi.mock('@/components/ui/toaster', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/ui/toaster')>()),
+  toast: quoteMocks.toast,
+}))
+
 beforeEach(() => {
+  quoteMocks.capture = null
+  quoteMocks.toast.mockClear()
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -69,6 +85,54 @@ const asRunEvents = (events: object[]): RunEvent[] =>
   })) as RunEvent[]
 
 describe('transcript adapters and row building', () => {
+  it('resolves sent quote role/ref metadata to stable rows, including rows outside the virtual DOM', () => {
+    const rows = buildTranscriptRows([
+      { id: 'task', userMessageKey: 'task', userMessage: { text: 'Prompt' }, entries: [] },
+      {
+        id: 'turn-seq-7',
+        userMessage: { text: 'Follow up' },
+        entries: [{ kind: 'message', id: 'answer', role: 'assistant', text: 'Answer' }],
+      },
+    ], 'r1')
+
+    expect(quoteTargetRowKey(rows, { role: 'user', ref: 0 })).toBe('task')
+    expect(quoteTargetRowKey(rows, { role: 'user', ref: 7 })).toBe('turn-seq-7:user')
+    expect(quoteTargetRowKey(rows, { role: 'assistant', ref: 7 })).toBe('turn-seq-7:answer')
+    expect(quoteTargetRowKey(rows, { role: 'assistant', ref: 99 })).toBeUndefined()
+  })
+
+  it('lands an assistant quote on the message holding its first line, else the turn\'s first message', () => {
+    const rows = buildTranscriptRows([{
+      id: 'turn-seq-4',
+      userMessageKey: 'turn-seq-4:user',
+      userMessage: { text: 'Go' },
+      entries: [
+        tool('t1'),
+        { kind: 'message', id: 'm1', role: 'assistant', text: 'First **answer** here.' },
+        { kind: 'message', id: 'm2', role: 'assistant', text: 'The migration keeps the `old` column.\nMore.' },
+      ],
+    }], 'r1')
+
+    expect(quoteTargetRowKey(rows, { role: 'assistant', ref: 4, excerpt: 'keeps the old column.\nMore.' })).toBe('turn-seq-4:m2')
+    expect(quoteTargetRowKey(rows, { role: 'assistant', ref: 4, excerpt: 'First answer' })).toBe('turn-seq-4:m1')
+    expect(quoteTargetRowKey(rows, { role: 'assistant', ref: 4, excerpt: 'edited away' })).toBe('turn-seq-4:m1')
+    // A sent card's locator is the turn scope, not a row: it resolves by ref.
+    expect(quoteTargetRowKey(rows, { role: 'assistant', ref: 4, rowKey: 'turn-seq-4', excerpt: 'old column' })).toBe('turn-seq-4:m2')
+  })
+
+  it('resolves the reply to the task (assistant ref 0) to the first seq-less turn', () => {
+    const rows = buildTranscriptRows([
+      { id: 'task', userMessageKey: 'task', userMessage: { text: 'Do it' }, entries: [] },
+      { id: 'turn-fallback-1', entries: [{ kind: 'message', id: 'a1', role: 'assistant', text: 'Done: the first reply.' }] },
+      { id: 'turn-seq-9', userMessageKey: 'turn-seq-9:user', userMessage: { text: 'More' }, entries: [{ kind: 'message', id: 'a2', role: 'assistant', text: 'Second' }] },
+    ], 'r1')
+    // A sent card's locator matches no row, so the jump resolves it (and pages back first).
+    expect(quoteTargetRowKey(rows, { role: 'assistant', ref: 0, excerpt: 'first reply' })).toBe('turn-fallback-1:a1')
+    expect(quoteTargetRowKey(rows, { role: 'user', ref: 0 })).toBe('task')
+    // A window that starts mid-history has no first turn to land on.
+    expect(quoteTargetRowKey(rows.filter((row) => row.scope !== 'turn-fallback-1'), { role: 'assistant', ref: 0, excerpt: 'x' })).toBeUndefined()
+  })
+
   it('preserves initial images, queued messages, turn messages, and established row keys', () => {
     const state: ThreadState = {
       turns: [
@@ -653,3 +717,204 @@ describe('SessionTranscript', () => {
     expect(document.querySelector('[data-slot="codex-empty"]')?.textContent).toBe('No attributed output')
   })
 })
+
+describe('quoting in the transcript', () => {
+  const quoteSections: TranscriptSection[] = [{
+    id: 'turn-seq-3',
+    userMessageKey: 'turn-seq-3:user',
+    userMessage: { text: 'Question' },
+    entries: [
+      tool('task', { name: 'Task', toolKind: 'task', title: 'Task: audit' }),
+      { kind: 'message', id: 'sub', role: 'assistant', text: 'Sub-agent says hi', parentItemId: 'task' } as ThreadEntry,
+      { kind: 'message', id: 'top', role: 'assistant', text: 'Top-level answer' },
+    ],
+  }]
+  const client = createQueryClient()
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
+
+  it('marks only the main transcript\'s top-level messages as quote bodies', () => {
+    render(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={vi.fn()} />, { wrapper })
+    fireEvent.click(document.querySelector('[data-slot="tool-card"] button')!)
+    expect(document.querySelector('[data-slot="tool-nested"]')?.textContent).toContain('Sub-agent says hi')
+
+    const bodies = [...document.querySelectorAll<HTMLElement>('[data-quote-body]')]
+    expect(bodies.map((body) => body.textContent)).toEqual(['Question', 'Top-level answer'])
+    expect(bodies.every((body) => body.dataset.quoteOwner === 'r1:main' && body.dataset.quoteRef === '3')).toBe(true)
+  })
+
+  it('gives the reply to the task ref 0 only once the oldest page is loaded', () => {
+    const sections: TranscriptSection[] = [{ id: 'turn-fallback-1', entries: [{ kind: 'message', id: 'a1', role: 'assistant', text: 'First reply' }] }]
+    const view = render(<SessionTranscript runId="r1" viewId="main" sections={sections} mode="document" onQuote={vi.fn()} />, { wrapper })
+    expect(document.querySelector<HTMLElement>('[data-quote-body]')?.dataset.quoteRef).toBeUndefined()
+    view.rerender(<SessionTranscript runId="r1" viewId="main" sections={sections} mode="document" onQuote={vi.fn()} firstTurnScope="turn-fallback-1" />)
+    expect(document.querySelector<HTMLElement>('[data-quote-body]')?.dataset.quoteRef).toBe('0')
+  })
+
+  it('marks nothing in a sub-agent panel or a transcript that takes no quotes', () => {
+    render(<SessionTranscript runId="r1" viewId="agent:x" sections={quoteSections} mode="panel" onQuote={vi.fn()} />, { wrapper })
+    expect(document.querySelector('[data-quote-body]')).toBeNull()
+    cleanup()
+    render(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" />, { wrapper })
+    expect(document.querySelector('[data-quote-body]')).toBeNull()
+  })
+
+  it('offers the toolbar only for a selection inside its own transcript', () => {
+    const foreign = document.createElement('div')
+    foreign.dataset.quoteOwner = 'manager'
+    quoteMocks.capture = { source: foreign, excerpt: 'x', code: false, role: 'assistant' }
+    const view = render(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={vi.fn()} />, { wrapper })
+    expect(document.querySelector('[data-slot="quote-selection-toolbar"]')).toBeNull()
+
+    quoteMocks.capture = { source: document.querySelector<HTMLElement>('[data-quote-body]')!, excerpt: 'x', code: false, role: 'user' }
+    view.rerender(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={vi.fn()} />)
+    expect(document.querySelector('[data-slot="quote-selection-toolbar"]')).not.toBeNull()
+  })
+
+  const quoteBody = () => document.querySelector<HTMLElement>('[data-quote-body]')!
+  const placeBody = () => {
+    const body = quoteBody()
+    body.getBoundingClientRect = () => ({ top: 200, bottom: 220, left: 0, right: 100, width: 100, height: 20, x: 0, y: 200, toJSON: () => ({}) })
+    return body
+  }
+  const touch = (coarse: boolean) => vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: coarse && query === '(pointer: coarse)', media: query, addEventListener: () => {}, removeEventListener: () => {},
+  }))
+
+  it('places the toolbar below the selection on touch, above it otherwise', () => {
+    const onQuote = vi.fn()
+    for (const [coarse, top] of [[false, '156px'], [true, '228px']] as const) {
+      touch(coarse)
+      const view = render(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={onQuote} />, { wrapper })
+      quoteMocks.capture = { source: placeBody(), excerpt: 'x', code: false, role: 'user' }
+      view.rerender(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={onQuote} />)
+      expect(document.querySelector<HTMLElement>('[data-slot="quote-selection-toolbar"]')!.style.top).toBe(top)
+      cleanup()
+      quoteMocks.capture = null
+    }
+  })
+
+  it('uses a host-owned capture and reports a dismissal', () => {
+    const onQuoteDismiss = vi.fn()
+    const view = render(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={vi.fn()} quoteCapture={null} />, { wrapper })
+    // The host's capture wins over the transcript's own listener.
+    quoteMocks.capture = { source: quoteBody(), excerpt: 'x', code: false, role: 'user' }
+    view.rerender(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={vi.fn()} quoteCapture={null} />)
+    expect(document.querySelector('[data-slot="quote-selection-toolbar"]')).toBeNull()
+
+    const capture = { source: quoteBody(), excerpt: 'x', code: false, role: 'user' as const }
+    view.rerender(<SessionTranscript runId="r1" viewId="main" sections={quoteSections} mode="document" onQuote={vi.fn()} quoteCapture={capture} onQuoteDismiss={onQuoteDismiss} />)
+    expect(document.querySelector('[data-slot="quote-selection-toolbar"]')).not.toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onQuoteDismiss).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-slot="quote-selection-toolbar"]')).toBeNull()
+  })
+
+  it('does not re-bind the toolbar listeners on a streaming render', () => {
+    const onQuote = vi.fn()
+    const live = (tail: string): TranscriptSection[] => [{ ...quoteSections[0]!, entries: [...quoteSections[0]!.entries, { kind: 'message', id: 'tail', role: 'assistant', text: tail }] }]
+    const view = render(<SessionTranscript runId="r1" viewId="main" sections={live('Wri')} mode="document" onQuote={onQuote} />, { wrapper })
+    quoteMocks.capture = { source: quoteBody(), excerpt: 'x', code: false, role: 'user' }
+    view.rerender(<SessionTranscript runId="r1" viewId="main" sections={live('Writ')} mode="document" onQuote={onQuote} />)
+    expect(document.querySelector('[data-slot="quote-selection-toolbar"]')).not.toBeNull()
+    const bind = vi.spyOn(window, 'addEventListener')
+    view.rerender(<SessionTranscript runId="r1" viewId="main" sections={live('Writing')} mode="document" onQuote={onQuote} />)
+    expect(bind.mock.calls.filter(([type]) => type === 'keydown')).toHaveLength(0)
+    bind.mockRestore()
+  })
+
+  it('keeps settled rows when the caller passes a fresh onJump each render', () => {
+    const renderAsk = vi.fn(() => <p>ask</p>)
+    const live = (tail: string): TranscriptSection[] => [{
+      id: 'turn-seq-1',
+      entries: [
+        { kind: 'ask', id: 'ask-1', resolved: false, questions: [{ id: 'q1', header: 'Choice', question: 'Continue?', options: [{ label: 'Yes' }] }] },
+        { kind: 'message', id: 'm1', role: 'assistant', text: tail },
+      ],
+    }]
+    const view = render(<SessionTranscript runId="r1" viewId="main" sections={live('Wri')} mode="document" renderAsk={renderAsk} onQuote={vi.fn()} onJump={() => {}} />, { wrapper })
+    view.rerender(<SessionTranscript runId="r1" viewId="main" sections={live('Writing')} mode="document" renderAsk={renderAsk} onQuote={vi.fn()} onJump={() => {}} />)
+    expect(renderAsk).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useQuoteJump', () => {
+  const turn = (seq: number, messages: string[]): TranscriptSection => ({
+    id: `turn-seq-${seq}`,
+    userMessageKey: `turn-seq-${seq}:user`,
+    userMessage: { text: `ask ${seq}` },
+    entries: messages.map((text, index) => ({ kind: 'message', id: `m${index + 1}`, role: 'assistant', text })),
+  })
+  const scroller = (keys: readonly string[]) => {
+    const box = document.createElement('div')
+    for (const key of keys) {
+      const row = document.createElement('div')
+      row.dataset.slot = 'thread-row'
+      row.dataset.rowKey = key
+      row.innerHTML = '<div data-slot="assistant-message"></div>'
+      box.append(row)
+    }
+    document.body.append(box)
+    return box
+  }
+
+  it('pages back until the quoted turn is loaded, then lands on the matching message', async () => {
+    const recent = buildTranscriptRows([turn(9, ['latest'])], 'r1')
+    const all = buildTranscriptRows([turn(5, ['first reply', 'the second reply']), turn(9, ['latest'])], 'r1')
+    const box = scroller(all.map((row) => row.key))
+    const revealRow = vi.fn(() => true)
+    let rows: TranscriptRowModel[] = recent
+    const history = { hasOlder: true, loadOlder: vi.fn(async () => { rows = all; history.hasOlder = false; view.rerender() }) }
+    const view = renderHook(() => useQuoteJump({ rows, history, scroll: { scrollElRef: { current: box }, revealRow } }))
+
+    view.result.current({ id: 'q', role: 'assistant', ref: 5, rowKey: 'turn-seq-5', excerpt: 'second reply', code: false, body: '' })
+
+    await waitFor(() => expect(revealRow).toHaveBeenCalledWith('turn-seq-5:m2', expect.any(Number)))
+    expect(history.loadOlder).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(box.querySelector('[data-row-key="turn-seq-5:m2"] [data-slot="assistant-message"]')?.hasAttribute('data-jump-highlight')).toBe(true))
+    expect(quoteMocks.toast).not.toHaveBeenCalled()
+    box.remove()
+  })
+
+  it('toasts and does not scroll when the source is gone', async () => {
+    const rows = buildTranscriptRows([turn(9, ['latest'])], 'r1')
+    const revealRow = vi.fn(() => true)
+    const { result } = renderHook(() => useQuoteJump({ rows, history: { hasOlder: false, loadOlder: vi.fn() }, scroll: { scrollElRef: { current: document.createElement('div') }, revealRow } }))
+
+    result.current({ id: 'q', role: 'assistant', ref: 5, excerpt: 'gone', code: false, body: '' })
+
+    await waitFor(() => expect(quoteMocks.toast).toHaveBeenCalledWith('That message is no longer in this transcript.', { tone: 'danger' }))
+    expect(revealRow).not.toHaveBeenCalled()
+  })
+
+  it('does not take a mid-turn page (its user row as context) for the whole turn', async () => {
+    // The newest page starts inside turn 5: its user row rides along, its first reply does not.
+    const partial = buildTranscriptRows([turn(5, ['the later reply']), turn(9, ['latest'])], 'r1')
+    const all = buildTranscriptRows([turn(3, ['older']), turn(5, ['the quoted reply', 'the later reply']), turn(9, ['latest'])], 'r1')
+    const box = scroller(all.map((row) => row.key))
+    const revealRow = vi.fn(() => true)
+    let rows: TranscriptRowModel[] = partial
+    const history = { hasOlder: true, loadOlder: vi.fn(async () => { rows = all; history.hasOlder = false; view.rerender() }) }
+    const view = renderHook(() => useQuoteJump({ rows, history, scroll: { scrollElRef: { current: box }, revealRow } }))
+
+    view.result.current({ id: 'q', role: 'assistant', ref: 5, excerpt: 'the quoted reply', code: false, body: '' })
+
+    await waitFor(() => expect(revealRow).toHaveBeenCalledWith('turn-seq-5:m1', expect.any(Number)))
+    expect(history.loadOlder).toHaveBeenCalledTimes(1)
+    box.remove()
+  })
+
+  it('stops paging when a page adds nothing, and says the source is gone', async () => {
+    const rows = buildTranscriptRows([turn(9, ['latest'])], 'r1')
+    const revealRow = vi.fn(() => true)
+    // hasOlder stays true and the page never adds rows: the old loop spun here for ever.
+    const history = { hasOlder: true, loadOlder: vi.fn(async () => {}) }
+    const { result } = renderHook(() => useQuoteJump({ rows, history, scroll: { scrollElRef: { current: document.createElement('div') }, revealRow } }))
+
+    result.current({ id: 'q', role: 'assistant', ref: 5, excerpt: 'gone', code: false, body: '' })
+
+    await waitFor(() => expect(quoteMocks.toast).toHaveBeenCalledWith('That message is no longer in this transcript.', { tone: 'danger' }), { timeout: 3000 })
+    expect(history.loadOlder).toHaveBeenCalledTimes(1)
+    expect(revealRow).not.toHaveBeenCalled()
+  })
+})
+
