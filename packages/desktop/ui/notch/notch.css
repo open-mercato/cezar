@@ -231,7 +231,8 @@ body[data-floating] .ear {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- faces: idle blinks, working looks about, needs-you bounces at you, error is crossed out ---- */
+/* ---- faces: idle dims, working bobs, needs-you bounces in a ring, error is ringed and badged ---- */
+/* A legacy persona also blinks, looks about and crosses its eyes out; a mascot portrait is never drawn over. */
 
 .face {
   display: block;
@@ -245,6 +246,20 @@ body[data-floating] .ear {
   fill: none;
   stroke-width: 2;
   opacity: 0;
+}
+.badge {
+  display: none;
+}
+.badge circle {
+  fill: var(--error);
+  stroke: var(--ink);
+  stroke-width: 1.2;
+}
+.badge path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 .cross {
   display: none;
@@ -282,7 +297,8 @@ body[data-floating] .ear {
 .face[data-face='error'] .eyes {
   display: none;
 }
-.face[data-face='error'] .cross {
+.face[data-face='error'] .cross,
+.face[data-face='error'] .badge {
   display: block;
 }
 .face[data-face='error'] .skin {

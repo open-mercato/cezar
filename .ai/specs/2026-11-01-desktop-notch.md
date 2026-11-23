@@ -46,8 +46,8 @@ and four minis with no count; six show `+1`.
 The shape a widget should mirror. `model` is `null` for the third state, where nothing shows.
 
 ```
-primary  { id, name, avatar, face, text, badge? }   pill 1
-minis    [{ id, name, avatar, face }]  (0–4)        pill 2, absent when empty
+primary  { id, name, avatar, mascot?, face, text, badge? }   pill 1
+minis    [{ id, name, avatar, mascot?, face }]  (0–4)        pill 2, absent when empty
 overflow number                                     pill 2's "+N"
 active   [same as primary]                          the open list, primary first
 ```
@@ -70,14 +70,18 @@ Screenshots: `assets/notch/`, one per state.
 
 ## Faces
 
-Built from the cockpit's avatar (`faces.js`; a test fails if it drifts from `manager-avatar.tsx`).
+The same picture the cockpit's `ManagerAvatar` draws. A manager with a `mascot` shows that
+portrait (`ui/notch/mascots/`, the cockpit's `portrait-96.webp`, byte-checked by a test); the shell
+passes only a mascot it bundles, so a newer one falls back rather than breaking. A legacy manager
+with no mascot keeps its persona (`faces.js`, checked against `manager-avatar.tsx`). The state cues
+go around a portrait, never over it.
 
 | State | Pose | Motion |
 | --- | --- | --- |
-| idle | dimmed | a blink every 6s |
-| working | | looks side to side, gentle bob |
-| needs-you | wide eyes, amber ring | bounces, the ring pulses |
-| error | crossed eyes, desaturated, red ring | shudders twice |
+| idle | dimmed (a persona also blinks every 6s) | |
+| working | (a persona also looks side to side) | gentle bob |
+| needs-you | amber ring (a persona also widens its eyes) | bounces, the ring pulses |
+| error | desaturated, red ring, red × badge in the corner (a persona crosses its eyes) | shudders twice |
 
 Reduce Motion stops all of it and keeps every pose, and replaces the spring with a fade.
 

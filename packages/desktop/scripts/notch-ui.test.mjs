@@ -40,6 +40,24 @@ describe('faces', () => {
     expect(avatarParts(63).shape).toBe(PERSONAS[0].shape)
   })
 
+  it('bundles the cockpit\'s own portrait for every mascot, and the shell knows the same set', () => {
+    const contract = read('../../contract/src/managers.ts')
+    const mascots = [...contract.match(/managerMascotSchema = z\.enum\(\[([^\]]+)\]/)[1].matchAll(/'([a-z]+)'/g)].map((match) => match[1])
+    expect(mascots.length).toBeGreaterThan(0)
+    const shell = read('../src-tauri/src/notch_model.rs').match(/pub const MASCOTS: \[&str; \d+\] = \[([^\]]+)\]/)[1]
+    expect([...shell.matchAll(/"([a-z]+)"/g)].map((match) => match[1])).toEqual(mascots)
+    const bytes = (relative) => readFileSync(path.resolve(here, relative))
+    for (const mascot of mascots) {
+      expect(bytes(`../ui/notch/mascots/${mascot}.webp`).equals(bytes(`../../web/src/assets/mascots/${mascot}/portrait-96.webp`)), mascot).toBe(true)
+    }
+  })
+
+  it('never draws a persona\'s eyes or cross over a mascot portrait', () => {
+    const mascot = read('../ui/notch/notch.js').match(/function buildMascot[\s\S]*?\n}/)[0]
+    expect(mascot).not.toMatch(/eyes\(|cross\(|avatarParts/)
+    expect(read('../ui/notch/index.html')).toContain("img-src 'self';")
+  })
+
   it('moves no face under Reduce Motion', () => {
     const css = read('../ui/notch/notch.css')
     expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.face \*[\s\S]*animation: none !important/)
