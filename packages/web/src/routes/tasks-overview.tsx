@@ -39,7 +39,7 @@ import { isCezarShell } from '@/lib/phone-app'
 import { usePlanUsageConsumers } from '@/api/plan-usage'
 import { queryKeys, useConfig, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { PlanUsageConsumerWindow, RunRecord } from '@open-mercato/cezar-api-client'
-import { queryScope } from '@open-mercato/cezar-api-client'
+import { queryScope, RUN_TAGS_MAX } from '@open-mercato/cezar-api-client'
 import { TaskQuickActions, TaskSelectionCheckbox, TasksSelectionToolbar, useTasksOverviewSelection, type TasksOverviewActionHandler } from './tasks-overview-actions'
 import { planLimitCell, planWindowsByRun, PlanLimitCellView } from './tasks-plan-limit'
 import { CenteredState } from '@/components/centered-state'
@@ -1577,7 +1577,8 @@ function TitleCell({
         {quiet ? <StatusDescription id={statusId} attention={deriveAttention(run)} /> : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
-      <RunTagChips tags={run.tags} max={2} className="shrink-0" />
+      {/* One chip plus `+N`: the title keeps the cell's width. */}
+      <RunTagChips tags={run.tags} max={1} className="shrink-0" />
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
           from a task a person typed without opening it. Null on every root. */}
       {dispatchKindLabel(run) ? (
@@ -1779,7 +1780,6 @@ const TaskCard = React.memo(function TaskCard({
           </Pill>
         )}
         {quiet ? title : null}
-        <RunTagChips tags={run.tags} max={2} className="mt-px shrink-0" />
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
         {dispatchKindLabel(run) ? (
           <span
@@ -1859,6 +1859,8 @@ const TaskCard = React.memo(function TaskCard({
         ) : null}
         {selectable ? <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} /> : null}
       </div>
+      {/* Tags get the card's last line, all of them: beside the title they left it one word wide. */}
+      <RunTagChips tags={run.tags} max={RUN_TAGS_MAX} className="mt-2 flex flex-wrap" />
     </div>
   )
 })

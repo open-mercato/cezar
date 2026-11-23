@@ -1207,6 +1207,19 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(card('quiet-title')!.querySelector('[data-slot="task-card-head"]')!.lastElementChild).not.toBe(title)
   })
 
+  it('keeps tags off the card head and the table title: all on the card bottom, one chip + N in the row', () => {
+    const tags = ['hello', 'Review', 'QA'].map((name, i) => ({ id: `tt-tag0000${i}`, name }))
+    renderOverview({ runs: [run({ id: 'tagged', status: 'done', title: 'reviewing task acknowledgment', tags })] })
+    const c = card('tagged')!
+    expect(c.querySelector('[data-slot="task-card-head"] [data-slot="run-tag-chips"]')).toBeNull()
+    const cardChips = c.querySelector('[data-slot="run-tag-chips"]')!
+    expect(c.lastElementChild).toBe(cardChips)
+    expect(cardChips.querySelectorAll('[data-slot="task-tag-chip"]')).toHaveLength(3)
+    const rowChips = tableRow('tagged')!.querySelector('[data-slot="run-tag-chips"]')!
+    expect(rowChips.querySelectorAll('[data-slot="task-tag-chip"]')).toHaveLength(1)
+    expect(rowChips.textContent).toContain('+2')
+  })
+
   it('floats the New task FAB, linking to /new', () => {
     // A non-empty list, so the FAB is the only "New task" link (the empty state carries its own).
     renderOverview({ runs: [run()] })
