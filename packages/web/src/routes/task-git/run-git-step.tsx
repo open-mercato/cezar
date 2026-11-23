@@ -129,11 +129,12 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // A worktree task in that project still lands on the base, through its agent — but not a dispatch
   // child, whose work goes back to its parent (spec 2026-09-10-dispatch).
   const trunkBranchCandidate = Boolean(run.worktreePath) && !run.readOnly && !run.dispatch?.parentRunId && autoLandProject
-  // It lands only by a push to the remote `ahead` is counted against (`baseRemote`, a remote NAME):
-  // with none, `ahead` reads the local base, which the main checkout holds and no push can move —
-  // the branch keeps its own step, as `landInPlace` lands only through an upstream. And only when
+  // It lands only by a push to the remote `ahead` is counted against (`baseRemote`, a remote NAME),
+  // and only when the local base tracks that same remote (`baseTracked`) — where `landInPlace`
+  // pushes; a fork clone counting against the canonical repo keeps Create PR. With no base remote
+  // `ahead` reads the local base, which the main checkout holds and no push can move. And only when
   // the task is based on that base: a task off `develop` would never read as landed on `main`.
-  const baseRemote = status.data?.baseRemote
+  const baseRemote = status.data?.baseTracked === true ? status.data.baseRemote : undefined
   const trunkBranch = trunkBranchCandidate && baseRemote !== undefined && basedOn(run.baseBranch, trunkBase, baseRemote)
   // Until git status answers, which step applies is unknown: no button rather than a wrong one.
   const trunkBranchLoading = trunkBranchCandidate && status.isLoading

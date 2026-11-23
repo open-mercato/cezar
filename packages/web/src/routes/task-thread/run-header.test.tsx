@@ -1319,7 +1319,7 @@ describe('the facts line', () => {
           : { profile: null, taskWorkspace: null, landing: null, landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' }),
       '/api/v1/repo': () => jsonResponse({ info: { root: '/repo', branch: 'main', remote: 'git@github.com:acme/repo.git' } }),
       // `baseRemote` is the remote NAME the counts read, as the server sends it for an `origin/main` ref.
-      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin' }),
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin', baseTracked: true }),
     })
     const worktreeTask = { worktreePath: '/repo/.ai/cezar/worktrees/r1', branch: 'cez/r1', baseBranch: 'main' }
     const gitButton = (action: string) => document.querySelector(`[data-slot="git-button"] [data-action="${action}"]`)
@@ -1377,10 +1377,10 @@ describe('the facts line', () => {
       expect(gitButton('land')).toBeNull()
     })
 
-    it('a fork clone lands on the remote git status measured against, with an `upstream/main` base', async () => {
+    it('a clone whose main tracks upstream lands there, on the remote git status measured against', async () => {
       const sent = stubFetch({
         ...project('auto'),
-        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'upstream' }),
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'upstream', baseTracked: true }),
       })
       renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'upstream/main' }))
       await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
@@ -1388,6 +1388,16 @@ describe('the facts line', () => {
       await waitFor(() =>
         expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('git push upstream HEAD:main'))).toBe(true),
       )
+    })
+
+    it('a fork clone whose main tracks the fork keeps Create PR: landInPlace would push to the fork, not upstream', async () => {
+      stubFetch({
+        ...project('auto'),
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 1, baseRemote: 'upstream', baseTracked: false }),
+      })
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'upstream/main' }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
     })
 
     it('a task based on origin/main: no button while git status loads, then Commit to main from the remote name', async () => {
@@ -1399,7 +1409,7 @@ describe('the facts line', () => {
       expect(primaryRow().getByRole('button', { name: 'Answer' })).toBeTruthy()
       await new Promise((resolve) => setTimeout(resolve, 50))
       expect(document.querySelector('[data-slot="git-button"]')).toBeNull()
-      await act(async () => answer(jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin' })))
+      await act(async () => answer(jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin', baseTracked: true })))
       await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
     })
 

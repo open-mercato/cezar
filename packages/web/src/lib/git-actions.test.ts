@@ -253,8 +253,14 @@ describe('trunkBranchGitActionPolicy — a worktree task in a trunk-based projec
   })
 
   it('measures landed against the base, not the branch upstream a HEAD:main push leaves behind', () => {
-    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 2 })?.id).not.toBe('land')
-    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 2 })).toEqual(gitActionPolicy(withState({ uncommitted: 0, ahead: 0, unpushed: 2 })))
+    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 2 })).toBeNull()
+  })
+
+  it('once landed offers nothing — not the branch policy’s Push or Update branch for work already on main', () => {
+    // No forge: the branch policy alone would offer Push for the branch's own upstream.
+    expect(gitActionPolicy(withState({ forge: null, uncommitted: 0, ahead: 0, unpushed: 2 }))?.id).toBe('push')
+    expect(trunkBranch({ forge: null, uncommitted: 0, ahead: 0, unpushed: 2 })).toBeNull()
+    expect(trunkBranch({ forge: null, uncommitted: 0, ahead: 0, unpushed: null, behind: 3 })).toBeNull()
   })
 
   it('with an unknown base (ahead null) lands only uncommitted work', () => {

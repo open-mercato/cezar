@@ -238,9 +238,11 @@ export function trunkBranchGitActionPolicy(state: GitActionState, base: string):
   // Status unknown (loading, or the request failed): the branch's own step, as `gitActionPolicy`.
   if (state.uncommitted === undefined) return branchAction
   // Landed is measured against the base (`ahead`), never `unpushed`: that counts the branch's own
-  // upstream, which a `HEAD:<base>` push leaves behind. An unknown base (`ahead` null) lands nothing
-  // it cannot see, so a clean tree falls back to the branch's own step.
-  if (state.uncommitted === 0 && (state.ahead ?? 0) === 0) return branchAction
+  // upstream, which a `HEAD:<base>` push leaves behind. Landed means nothing left — not the branch's
+  // Push or Update branch, which would only re-publish work already on the base.
+  if (state.uncommitted === 0 && state.ahead === 0) return null
+  // An unknown base (`ahead` null) lands nothing it cannot see: a clean tree keeps the branch's step.
+  if (state.uncommitted === 0 && (state.ahead === null || state.ahead === undefined)) return branchAction
   const label = `Commit to ${base}`
   const alternatives = branchAction
     ? [{ ...branchAction, alternatives: undefined }, ...(branchAction.alternatives ?? [])]

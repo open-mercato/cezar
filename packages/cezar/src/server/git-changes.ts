@@ -843,7 +843,15 @@ export async function commitAll(dir: string, message: string): Promise<CommitRes
 }
 
 export type GitStatusResult =
-  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null; baseRemote?: string }
+  | {
+      ok: true
+      uncommitted: number
+      unpushed: number | null
+      behind: number | null
+      ahead: number | null
+      baseRemote?: string
+      baseTracked?: boolean
+    }
   | { ok: false; error: string };
 
 /** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
@@ -864,8 +872,8 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
     uncommitted++;
     if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
   }
-  const { behind, ahead, baseRemote } = await baseDivergence(dir, baseBranch);
-  const based = baseRemote ? { baseRemote } : {};
+  const { behind, ahead, baseRemote, baseTracked } = await baseDivergence(dir, baseBranch);
+  const based = baseRemote ? { baseRemote, baseTracked: baseTracked === true } : {};
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead, ...based };
   const count = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
@@ -883,7 +891,7 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
 export async function baseDivergence(
   dir: string,
   baseBranch: string | undefined,
-): Promise<{ behind: number | null; ahead: number | null; baseRemote?: string }> {
+): Promise<{ behind: number | null; ahead: number | null; baseRemote?: string; baseTracked?: boolean }> {
   const unknown = { behind: null, ahead: null };
   if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
   const remotes = await resolveTaskRemotes((args) => git(dir, args));
@@ -896,12 +904,15 @@ export async function baseDivergence(
     const count = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...${ref}`]);
     if (!count.ok) return unknown;
     const [ahead, behind] = count.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
-    return {
+    const counted = {
       behind: Number.isFinite(behind) ? (behind as number) : null,
       ahead: Number.isFinite(ahead) ? (ahead as number) : null,
-      // The remote whose ref was counted: a land must push there, or `ahead` never reaches 0.
-      ...(remote && ref !== split.branch ? { baseRemote: remote } : {}),
     };
+    if (!remote || ref === split.branch) return counted;
+    // The remote whose ref was counted: a land must push there, or `ahead` never reaches 0. Whether
+    // the local base tracks it too: `landInPlace` pushes to that upstream, never anywhere else.
+    const tracked = await git(dir, ['config', '--get', `branch.${split.branch}.remote`]);
+    return { ...counted, baseRemote: remote, baseTracked: tracked.ok && tracked.stdout.trim() === remote };
   }
   return unknown;
 }

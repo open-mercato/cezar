@@ -6375,13 +6375,13 @@ export function createApp(deps: ServerDeps) {
         ? await worktreeGitStatus(worktree, run.baseBranch)
         : await checkoutGitStatus(c.get('project').root);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      const { baseRemote } = result;
+      const { baseRemote, baseTracked } = result;
       const body: GitStatusResponse = {
         uncommitted: result.uncommitted,
         unpushed: result.unpushed,
         behind: result.behind,
         ahead: result.ahead,
-        ...(baseRemote ? { baseRemote } : {}),
+        ...(baseRemote ? { baseRemote, baseTracked: baseTracked === true } : {}),
       };
       return c.json(body);
     })

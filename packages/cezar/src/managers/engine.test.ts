@@ -3397,6 +3397,28 @@ describe('ManagerEngine', () => {
       }
     });
 
+    // Fail open: an unreadable project config never silently drops what the manager asked for.
+    it.each([
+      ['answers an error', async () => Response.json({ error: 'boom' }, { status: 500 })],
+      ['throws', async (): Promise<Response> => { throw new Error('connection refused'); }],
+    ])('keeps --dispatch, with no notice, when reading /config %s', async (_label, configResponse) => {
+      requests.length = 0;
+      const engine = makeEngine({
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+          if (path.endsWith('/config')) return configResponse();
+          if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+          return Response.json({ ok: true });
+        },
+      });
+      const id = await create(engine);
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true });
+      expect(created).toMatchObject({ runId: 'new-run' });
+      expect(created).not.toHaveProperty('notice');
+      expect(requests.some((request) => request.path.endsWith('/config'))).toBe(true);
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ dispatch: {} });
+    });
+
     it('refuses a model or effort the runner cannot use, listing the valid ones', async () => {
       const engine = withRuns([]);
       const id = await create(engine);

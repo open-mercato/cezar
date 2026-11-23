@@ -663,7 +663,7 @@ describe('session git API routes', () => {
       g(worktree, 'remote', 'add', 'origin', bare);
       g(worktree, 'push', '-q', 'origin', 'main');
       const remote = await apiRequest(app, `/api/v1/runs/${run.id}/git/status`);
-      expect(await remote.json()).toMatchObject({ behind: 2, baseRemote: 'origin' });
+      expect(await remote.json()).toMatchObject({ behind: 2, baseRemote: 'origin', baseTracked: false });
     } finally {
       g(worktree, 'remote', 'remove', 'origin');
       rmSync(bare, { recursive: true, force: true });
@@ -1660,8 +1660,42 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       expect(await worktreeGitStatus(dir, 'upstream/main')).toMatchObject({ behind: 2, baseRemote: 'upstream' });
       // An old record that named the fork explicitly still measures against it.
       expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 0, baseRemote: 'origin' });
+      // `baseTracked`: does the local base track the counted remote — where `landInPlace` pushes?
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ baseRemote: 'upstream', baseTracked: false });
+      g(dir, 'config', 'branch.main.remote', 'origin');
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ baseRemote: 'upstream', baseTracked: false });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ baseRemote: 'origin', baseTracked: true });
+      g(dir, 'config', 'branch.main.remote', 'upstream');
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ baseRemote: 'upstream', baseTracked: true });
     } finally {
       for (const d of [fork, canonical, dir]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('a base remote whose <remote>/<base> was never fetched counts the local base and names no remote', async () => {
+    const canonical = mkdtempSync(join(tmpdir(), 'cez-gitstatus-unfetched-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-unfetched-clone-'));
+    try {
+      g(canonical, 'init', '--bare', '-q');
+      initRepo(dir);
+      writeFileSync(join(dir, 'a.txt'), 'a\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'base');
+      g(dir, 'branch', '-M', 'main');
+      g(dir, 'remote', 'add', 'origin', canonical);
+      g(dir, 'config', 'remote.origin.gh-resolved', 'base');
+      g(dir, 'config', 'branch.main.remote', 'origin');
+      g(dir, 'checkout', '-q', '-b', 'task');
+      writeFileSync(join(dir, 't.txt'), 't\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'task');
+      // No `origin/main` ref exists: the counts read the local `main`, and no remote is claimed.
+      const status = await worktreeGitStatus(dir, 'main');
+      expect(status).toMatchObject({ behind: 0, ahead: 1 });
+      expect(status).not.toHaveProperty('baseRemote');
+      expect(status).not.toHaveProperty('baseTracked');
+    } finally {
+      for (const d of [canonical, dir]) rmSync(d, { recursive: true, force: true });
     }
   });
 
