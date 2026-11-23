@@ -15,6 +15,7 @@ import {
   resumeCommand,
   resumeHint,
   runActionFlags,
+  landBranchPrompt,
 } from './run-actions'
 
 const step = (extra: Partial<StepState> = {}): StepState => ({
@@ -344,5 +345,19 @@ describe('lifecycle action exclusion', () => {
     expect(runActionFlags(record)).toMatchObject({finish:false,continueRun:false,terminal:false,cancel:false,deleteRun:false})
     expect(resumeHint(record)).toBeUndefined()
     expect(cliTargetResumes(record, 'claude')).toBe(false)
+  })
+})
+
+describe('landBranchPrompt', () => {
+  it('names the required checks, refuses to push on a failure, and names no remote', () => {
+    const prompt = landBranchPrompt('main', ['npm test', 'npm run lint'])
+    expect(prompt).toContain('`npm test`, `npm run lint`')
+    expect(prompt).toContain('stop without pushing if any fails')
+    expect(prompt).toContain('the remote main tracks')
+    expect(prompt).not.toMatch(/\borigin\b/)
+  })
+
+  it('still asks for the project checks when none are configured', () => {
+    expect(landBranchPrompt('trunk')).toContain("run the project's checks and stop without pushing if any fails")
   })
 })

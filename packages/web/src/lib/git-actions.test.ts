@@ -251,6 +251,21 @@ describe('trunkBranchGitActionPolicy — a worktree task in a trunk-based projec
     expect(trunkBranch({ agentBlocked: 'no session' })).toMatchObject({ id: 'land', enabled: false })
   })
 
+  it('measures landed against the base, not the branch upstream a HEAD:main push leaves behind', () => {
+    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 2 })?.id).not.toBe('land')
+    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 2 })).toEqual(gitActionPolicy(withState({ uncommitted: 0, ahead: 0, unpushed: 2 })))
+  })
+
+  it('with an unknown base (ahead null) lands only uncommitted work', () => {
+    expect(trunkBranch({ uncommitted: 2, ahead: null })).toMatchObject({ id: 'land', enabled: true })
+    expect(trunkBranch({ uncommitted: 0, ahead: null })?.id).toBe('create-pr')
+  })
+
+  it('no worktree → the branch policy; queued → Commit to main disabled', () => {
+    expect(trunkBranch({ hasWorktree: false })).toBeNull()
+    expect(trunkBranch({ status: 'queued' })).toMatchObject({ id: 'land', enabled: false, reason: 'Commit to main unavailable — the agent is still working' })
+  })
+
   it('falls back to the branch policy with nothing to land, an open PR or an assessment', () => {
     expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 0 })).toBeNull()
     expect(trunkBranch({ prUrl: '#7', uncommitted: 1 })?.id).toBe('commit-push')
