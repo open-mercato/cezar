@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -221,3 +221,109 @@ describe('Needs you triage (spec 2026-11-23-needs-you-triage)', () => {
     expect(swipe.getAttribute('data-open')).toBeNull()
   })
 })
+
+describe('Needs you triage, rendered (review test gaps)', () => {
+  const triage = () => ({ dismiss: vi.fn(), dismissAll: vi.fn(), snooze: vi.fn(), keep: vi.fn(), finish: vi.fn(), archive: vi.fn(), cancel: vi.fn() })
+  const asking = { ...waitingRun, id: 'ask', title: 'Asks', status: 'failed', awaitingAnswerSince: ago(1), finishedAt: ago(1) } as unknown as RunRecord
+  const rowIds = () => [...needsYou().querySelectorAll('[data-slot="now-attention-row"], [data-slot="now-row"]')]
+    .filter((row) => !row.closest('[data-slot="now-probably-done"]'))
+    .map((row) => row.getAttribute('data-key') ?? row.getAttribute('data-run-id'))
+
+  it('This project interleaves manager items and task rows in the server’s order', () => {
+    const items = [
+      item({ key: 'a', kind: 'approval', title: 'Merge', managerId: 'notes', managerName: 'Notes', actionId: 'x', since: ago(5 * 24 * 60) }),
+      item({ key: 'q', kind: 'question', title: 'Which API?', managerId: 'shop', managerName: 'Shop', questionKey: 'm:shop:1', since: ago(5) }),
+    ]
+    renderNow({ runs: [waitingRun, asking], attention: { items, total: 2, olderAfterDays: 4 }, scope: 'project', onScope: vi.fn(), managerConnected: () => true, attentionActions: actions(), triage: triage(), projectId: 'cezar' })
+    // Decisions first; the approval waiting 5 of 4 days drops below the fresh questions; waits last.
+    expect(rowIds()).toEqual(['ask', 'q', 'a', 'r1'])
+  })
+
+  it('a question whose close failed shows again', () => {
+    const q = item({ key: 'question:m:shop:1', kind: 'question', title: 'Which API?', managerId: 'shop', managerName: 'Shop', questionKey: 'm:shop:1' })
+    renderNow({ attention: { items: [q], total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage(), pendingQuestions: new Set() })
+    expect(attentionKeysShown()).toEqual(['question:m:shop:1'])
+    cleanup()
+    renderNow({ attention: { items: [q], total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage(), pendingQuestions: new Set(['m:shop:1']) })
+    expect(attentionKeysShown()).toEqual([])
+  })
+
+  it('offers task actions only for this project’s runs, and Archive only for a settled run', async () => {
+    const openMenu = async (selector: string) => {
+      const row = needsYou().querySelector(selector) as HTMLElement
+      fireEvent.pointerDown(within(row).getByRole('button', { name: 'More actions' }), { button: 0, pointerType: 'mouse' })
+      return screen.findByRole('menu')
+    }
+    const queued = { ...waitingRun, id: 'busy', status: 'queued' } as unknown as RunRecord
+    const items = [
+      item({ key: 'here', kind: 'review', title: 'Here', projectId: 'cezar', runId: 'r1' }),
+      item({ key: 'there', kind: 'review', title: 'There', projectId: 'tap', runId: 'r9' }),
+      item({ key: 'queued', kind: 'task', title: 'Busy', projectId: 'cezar', runId: 'busy' }),
+    ]
+    renderNow({ runs: [waitingRun, queued], attention: { items, total: 3 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage(), projectId: 'cezar' })
+    const here = await openMenu('[data-key="here"]')
+    expect(within(here).getByRole('menuitem', { name: /Archive task/ })).toBeTruthy()
+    expect(within(here).getByRole('menuitem', { name: /Stop task/ })).toBeTruthy()
+    fireEvent.keyDown(here, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    const there = await openMenu('[data-key="there"]')
+    expect(within(there).queryByRole('menuitem', { name: /Archive task|Stop task|Mark done/ })).toBeNull()
+    fireEvent.keyDown(there, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    const busy = await openMenu('[data-key="queued"]')
+    expect(within(busy).queryByRole('menuitem', { name: /Archive task/ })).toBeNull()
+  })
+
+  describe('the phone swipe', () => {
+    const surfaceOf = (swipe: HTMLElement) => swipe.lastElementChild as HTMLElement
+    const drag = (surface: HTMLElement, dx: number, dy: number) => {
+      fireEvent.pointerDown(surface, { pointerType: 'touch', clientX: 300, clientY: 100 })
+      fireEvent.pointerMove(surface, { pointerType: 'touch', clientX: 300 + dx, clientY: 100 + dy })
+      fireEvent.pointerUp(surface, { pointerType: 'touch', clientX: 300 + dx, clientY: 100 + dy })
+    }
+
+    it('keeps its buttons out of reach while closed', () => {
+      renderNow({ attention: { items: ITEMS.slice(3, 4), total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage() })
+      const swipe = needsYou().querySelector('[data-slot="now-swipe"]') as HTMLElement
+      const under = swipe.querySelector('[data-slot="now-swipe-actions"]') as HTMLElement
+      expect(under.getAttribute('aria-hidden')).toBe('true')
+      expect([...under.querySelectorAll('button')].map((button) => button.tabIndex)).toEqual([-1, -1])
+    })
+
+    it('ignores a mostly vertical drag (a scroll)', () => {
+      renderNow({ attention: { items: ITEMS.slice(3, 4), total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage() })
+      const swipe = needsYou().querySelector('[data-slot="now-swipe"]') as HTMLElement
+      drag(surfaceOf(swipe), -60, -200)
+      expect(swipe.getAttribute('data-open')).toBeNull()
+    })
+
+    it('a swipe’s release never follows the row link', () => {
+      renderNow({ attention: { items: ITEMS.slice(3, 4), total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage() })
+      const swipe = needsYou().querySelector('[data-slot="now-swipe"]') as HTMLElement
+      drag(surfaceOf(swipe), -200, 0)
+      const link = swipe.querySelector('[data-slot="now-row-link"]') as HTMLElement
+      const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+      link.dispatchEvent(click)
+      expect(click.defaultPrevented).toBe(true)
+      expect(swipe.getAttribute('data-open')).toBe('true')
+    })
+
+    it('the first row peeks once on a touch screen', () => {
+      vi.useFakeTimers()
+      localStorage.removeItem('cez.now.swipeHint')
+      vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(pointer: coarse)', media: query, addEventListener: () => {}, removeEventListener: () => {} }))
+      try {
+        renderNow({ attention: { items: ITEMS.slice(3, 4), total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage() })
+        const surface = surfaceOf(needsYou().querySelector('[data-slot="now-swipe"]') as HTMLElement)
+        act(() => { vi.advanceTimersByTime(800) })
+        expect(surface.style.transform).toBe('translateX(-56px)')
+        act(() => { vi.advanceTimersByTime(800) })
+        expect(surface.style.transform).toBe('')
+        expect(localStorage.getItem('cez.now.swipeHint')).toBe('1')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+})
+

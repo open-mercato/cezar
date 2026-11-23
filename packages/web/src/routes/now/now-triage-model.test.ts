@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { AttentionItem, RunRecord } from '@open-mercato/cezar-api-client'
 
-import { isHidden, itemForRun, itemTarget, keyedQueue, orderNeedsYou, shortLabel, snoozeUntil, taskRowTarget } from './now-triage-model'
+import { isHidden, isRunHidden, itemForRun, itemTarget, keyedQueue, orderNeedsYou, shortLabel, snoozeUntil, taskRowTarget } from './now-triage-model'
 
 /** Needs you triage (spec 2026-11-23-needs-you-triage). */
 
@@ -89,3 +89,14 @@ describe('orderNeedsYou', () => {
     expect(orderNeedsYou(rows, 10, now).map((entry) => entry.id)).toEqual(['old-approval', 'fresh-question', 'review'])
   })
 })
+
+describe('isRunHidden (review finding 3)', () => {
+  it('hides the run’s waits that began before the dismissal, never a later one', () => {
+    const overrides = [{ key: 'question:r:app:r1:q', mode: 'dismiss' as const, at: '2026-11-23T12:00:00.000Z', projectId: 'app', runId: 'r1' }]
+    expect(isRunHidden('app', 'r1', '2026-11-23T11:00:00.000Z', overrides)).toBe(true)
+    expect(isRunHidden('app', 'r1', '2026-11-23T13:00:00.000Z', overrides)).toBe(false)
+    expect(isRunHidden('app', 'r2', '2026-11-23T11:00:00.000Z', overrides)).toBe(false)
+    expect(isRunHidden(undefined, 'r1', '2026-11-23T11:00:00.000Z', overrides)).toBe(false)
+  })
+})
+
