@@ -7,6 +7,7 @@ import {
   TASK_TAGS_MAX,
   taskTagColorSchema,
   taskTagIdSchema,
+  type AutomationTaskTag,
   type RunTag,
   type TaskTag,
   type TaskTagColor,
@@ -354,4 +355,57 @@ export function applyRunTagDelta(current: readonly RunTag[] | undefined, add: re
   }
   if (next.length > RUN_TAGS_MAX) throw new TaskTagError(400, `a task can carry at most ${RUN_TAGS_MAX} tags`);
   return next;
+}
+
+// ---- automation tags (spec § 5a) ------------------------------------------------------------
+
+/** Save time, with the user present: a live id stays, a gone or foreign id falls back to its name,
+ *  and a name with no tag creates one, as `POST /runs` would. Stored as `{id, name}` so the launch
+ *  can fall back to the name. Editing an automation never fails because a tag was deleted since. */
+export async function automationTagsForSave(
+  refs: readonly AutomationTaskTag[] | undefined,
+  projectRoot: string | null,
+  now = new Date(),
+): Promise<AutomationTaskTag[] | undefined> {
+  if (!refs || refs.length === 0) return undefined;
+  let result: { tags: RunTag[]; created: boolean } | undefined;
+  try {
+    await mergeWriteTaskTags((store) => {
+      const visible = new Set(visibleTaskTags(store, projectRoot).map((tag) => tag.id));
+      result = resolveTagRefsIn(store, refs.map((ref) => (ref.id && visible.has(ref.id) ? { id: ref.id } : { name: ref.name })), projectRoot, now);
+    });
+  } catch (error) {
+    if (!(error instanceof TaskTagWriteError) || result === undefined || result.created) throw error;
+  }
+  return result!.tags.map((tag) => ({ id: tag.id, name: tag.name }));
+}
+
+/**
+ * Launch time, unattended: by id, then by name, among tags visible in `projectRoot`. A tag found
+ * neither way is DROPPED, never created and never a refusal — a deleted tag must not stop an
+ * automation, nor come back from the dead. Read-only; never throws.
+ */
+export function resolveAutomationTagsIn(
+  store: TaskTagStore,
+  refs: readonly AutomationTaskTag[] | undefined,
+  projectRoot: string | null,
+): { tags: RunTag[]; dropped: string[] } {
+  const visible = visibleTaskTags(store, projectRoot);
+  const out = new Map<string, StoredTaskTag>();
+  const dropped: string[] = [];
+  for (const ref of refs ?? []) {
+    const key = tagNameKey(ref.name);
+    const tag = (ref.id ? visible.find((t) => t.id === ref.id) : undefined) ?? visible.find((t) => tagNameKey(t.name) === key);
+    if (tag && out.size < RUN_TAGS_MAX) out.set(tag.id, tag);
+    else if (!tag) dropped.push(ref.name);
+  }
+  return { tags: [...out.values()].map(toRunTag), dropped };
+}
+
+export async function resolveAutomationTags(
+  refs: readonly AutomationTaskTag[] | undefined,
+  projectRoot: string | null,
+): Promise<{ tags: RunTag[]; dropped: string[] }> {
+  if (!refs || refs.length === 0) return { tags: [], dropped: [] };
+  return resolveAutomationTagsIn(await loadTaskTags(), refs, projectRoot);
 }

@@ -9,6 +9,8 @@ import {
   automationSchedulesSchema,
   automationScheduleIssue,
   automationReportSchema,
+  automationTaskTagSchema,
+  RUN_TAGS_MAX,
   type AutomationSchedule,
 } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -63,6 +65,8 @@ export const automationTaskSchema = z
     generateFollowups: z.boolean().optional(),
     autonomous: z.boolean().optional(),
     systemPrompt: z.string().max(100_000).optional(),
+    /** Task tags for every launched run (spec 2026-11-23-task-tags § 5a). */
+    tags: z.array(automationTaskTagSchema).max(RUN_TAGS_MAX).optional(),
     /**
      * Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
      * omitted or `'base'` is the configured base branch, exactly as before; `'pr-head'` is the
@@ -84,11 +88,6 @@ export const automationTaskSchema = z
   .passthrough()
   .refine((task) => !(task.workflow && task.steps), {
     message: 'task selects either a named workflow or inline steps, not both',
-  })
-  // `.passthrough()` would keep it and the launch would apply it: tagging an automation's tasks is
-  // a later, separate decision (spec 2026-11-23-task-tags § 5).
-  .refine((task) => !Object.prototype.hasOwnProperty.call(task, 'tags'), {
-    message: 'automation tasks cannot carry task tags',
   });
 
 /**

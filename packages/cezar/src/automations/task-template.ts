@@ -13,6 +13,7 @@ import type { TrackerAutomationCandidate } from './tracker-poller.ts';
 import { resolvePrHead, type CommandRunner } from './pr-head.ts';
 import { automationLabel, automationTaskOrigin } from '../feature-telemetry.ts';
 import { track } from '../telemetry.ts';
+import { resolveAutomationTags } from '../workspace/task-tags.ts';
 import type { AutomationDefinition, GithubAutomationDefinition, ScheduleAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
 
 const GITHUB_PLACEHOLDERS = new Set([
@@ -174,6 +175,19 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
   };
 }
 
+/** Tags resolve at launch, never refuse it (spec 2026-11-23-task-tags § 5a). */
+async function applyAutomationTags(input: StartRunInput, definition: AutomationDefinition, root: string): Promise<{ dropped: string[] }> {
+  const { tags, dropped } = await resolveAutomationTags(definition.task.tags, root);
+  if (tags.length > 0) input.tags = tags;
+  return { dropped };
+}
+
+function noteDroppedTags(store: RunStore, runIds: readonly string[], dropped: readonly string[]): void {
+  if (dropped.length === 0) return;
+  const message = `Task tag${dropped.length > 1 ? 's' : ''} not found, so not applied: ${dropped.map((name) => `"${name}"`).join(', ')}`;
+  for (const runId of runIds) store.appendEvent(runId, { type: 'note', message });
+}
+
 export async function launchAutomationRun(options: {
   root: string;
   manager: RunManager;
@@ -190,6 +204,7 @@ export async function launchAutomationRun(options: {
   const workflow = await resolveWorkflow(options.root, definition);
   const dispatchEnabled = options.dispatchEnabled ?? false;
   const input = startInput(definition, renderAutomationTask(definition, candidate, { dispatchEnabled }), dispatchEnabled);
+  const tagged = await applyAutomationTags(input, definition, options.root);
   // `checkout: 'pr-head'` (spec 2026-10-06-agentic-e2e-checks Phase 3): resolve the PR's head
   // BEFORE any run exists. A closed PR, an unadmitted fork or an unreachable head ends here, as
   // a receipt — never as a run that tests the wrong tree.
@@ -218,9 +233,12 @@ export async function launchAutomationRun(options: {
     if (resolution.note) {
       for (const runId of launched.runIds) options.store.appendEvent(runId, { type: 'note', message: resolution.note });
     }
+    noteDroppedTags(options.store, launched.runIds, tagged.dropped);
     return { runId: launched.runId };
   }
-  return { runId: (await launchRuns(options, workflow, input)).runId };
+  const launched = await launchRuns(options, workflow, input);
+  noteDroppedTags(options.store, launched.runIds, tagged.dropped);
+  return { runId: launched.runId };
 }
 
 /**
@@ -286,6 +304,7 @@ export async function launchScheduledRun(options: {
   }
   const task = renderScheduleTask(definition, occurrence, { projectName: options.projectName, timeZone: options.timeZone, dispatchEnabled: options.dispatchEnabled });
   const input = startInput(definition, task, options.dispatchEnabled ?? false);
+  const tagged = await applyAutomationTags(input, definition, options.root);
   const provenance = {
     automationId: definition.id,
     automationRevision: definition.revision,
@@ -314,6 +333,7 @@ export async function launchScheduledRun(options: {
   for (const run of runs) {
     if (!persisted?.has(run.id)) options.store.updateRun(run.id, { automationTrigger: provenance });
   }
+  noteDroppedTags(options.store, runs.filter((run) => !persisted?.has(run.id)).map((run) => run.id), tagged.dropped);
   // A composer "schedule send" is a task (`task_origin: scheduled_task`), not an automation firing.
   if (!definition.deferredStart) track('automation_fired', { label: automationLabel(definition), value: runs.length });
   const first = runs[0];
@@ -339,6 +359,7 @@ export async function launchTrackerAutomationRun(options: {
   const workflow = await resolveWorkflow(options.root, definition);
   const dispatchEnabled = options.dispatchEnabled ?? false;
   const input = startInput(definition, renderTrackerTask(definition, candidate, { dispatchEnabled }), dispatchEnabled);
+  const tagged = await applyAutomationTags(input, definition, options.root);
   const runs = (definition.task.variants ?? 1) > 1
     ? options.manager.startVariants(workflow, input, definition.task.variants ?? 1)
     : [options.manager.startRun(workflow, input)];
@@ -358,6 +379,7 @@ export async function launchTrackerAutomationRun(options: {
     url: candidate.url,
   };
   for (const [index, run] of runs.entries()) options.store.updateRun(run.id, { automationTracker: { ...provenance, access: index === 0 ? provenance.access : { version: 1, writes: [] } } });
+  noteDroppedTags(options.store, runs.map((run) => run.id), tagged.dropped);
   track('automation_fired', { label: `tracker:${candidate.provider}`, value: runs.length });
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
