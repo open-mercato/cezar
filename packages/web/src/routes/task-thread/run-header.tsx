@@ -11,6 +11,7 @@ import {
 import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { RunTagsEditor } from '@/components/run-tags'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import {
@@ -150,6 +151,7 @@ function RunHeaderView({
   const actions = useRunActions(run, { onMarkedUnread })
   // The ⋯ menu's Rename… opens the title's own editor.
   const beginRename = useRef<() => void>(() => {})
+  const [tagsOpen, setTagsOpen] = useState(false)
 
   // The queue position a parked run shows in its chip ("Queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
@@ -203,9 +205,10 @@ function RunHeaderView({
               {quietWord ? <QuietStatusWord word={quietWord} title={idleClosedDetail(run)} className="max-md:hidden" /> : null}
               {/* In the title row so a folded header still shows it (main had it here). */}
               <ImpactChip run={run} />
+              <RunTagsEditor run={run} open={tagsOpen} onOpenChange={setTagsOpen} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
-              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} />
+              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} onTags={() => setTagsOpen(true)} />
               {/* Desktop: fold the meta row and the step rail away, leaving the title and the
                   tabs — the minimalist view short of full screen. Phones keep every line. */}
               <IconTooltip label={collapsed ? 'Expand header' : 'Collapse header'}>
@@ -375,11 +378,14 @@ function HeaderActions({
   actions,
   changesShowing,
   onRename,
+  onTags,
 }: {
   run: ApiRun
   actions: RunActions
   changesShowing: boolean
   onRename: () => void
+  /** Opens the header's tag picker (spec 2026-11-23-task-tags § 7.3). */
+  onTags: () => void
 }) {
   const git = useRunGitStep(run)
   const canTerminal = useCanOpenTerminal(run)
@@ -417,6 +423,11 @@ function HeaderActions({
       rename: () => {
         intoRename.current = true
         setTimeout(onRename, 0)
+      },
+      tags: () => {
+        // Like rename: keep the menu's close from pulling focus back off the picker.
+        intoRename.current = true
+        setTimeout(onTags, 0)
       },
       finish: () => actions.finish.mutate(),
       confirmStop: () => actions.setConfirming('cancel'),

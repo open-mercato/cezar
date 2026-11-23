@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useContext } from 'react'
+import { QueryClientContext, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { ApiRun, CreateTaskTagInput, PatchTaskTagInput, RunTag, RunsIndexResponse, TaskTagsList } from '@open-mercato/cezar-api-client'
 
 import { createTaskTag, deleteTaskTag, editRunTags, getTaskTags, updateTaskTag } from '@/api/client'
@@ -23,6 +24,18 @@ export function useTaskTags() {
     queryFn: ({ signal }) => getTaskTags({ signal }),
     staleTime: 30_000,
   })
+}
+
+/** Whether a QueryClient is mounted. Stable for a component's lifetime, so it may gate hooks:
+ *  presentational lists (the task table) also render in harnesses without one. */
+export function useHasQueryClient(): boolean {
+  return useContext(QueryClientContext) !== undefined
+}
+
+/** The registry where a client exists, else `undefined` — never throws. */
+export function useOptionalTaskTags(): TaskTagsList | undefined {
+  // eslint-free conditional hook: `useHasQueryClient` never changes between renders.
+  return useHasQueryClient() ? useTaskTags().data : undefined
 }
 
 function useTagMutation<TVariables, TResult>(mutationFn: (variables: TVariables) => Promise<TResult>) {

@@ -626,6 +626,15 @@ export function NewTaskRoute() {
       setRecovering(false)
     }
   }
+  // Task tags (spec 2026-11-23-task-tags § 7.2): real registry entries the moment they are
+  // picked or created; held in the draft, sent as `tags`, never a remembered option.
+  const draftTags = draft.tags ?? []
+  const tagRegistry = useTaskTags()
+  const shownTags = resolveRunTags(draftTags, tagRegistry.data)
+  const setDraftTags = (next: RunTag[]) => update({ tags: next.length > 0 ? next : undefined })
+  const toggleDraftTag = (tag: RunTag, add: boolean) =>
+    setDraftTags(add ? applyTagDelta(draftTags, [tag], []) : draftTags.filter((t) => t.id !== tag.id))
+  const tagStateOf = (id: string) => (draftTags.some((t) => t.id === id) ? 'checked' : 'empty') as TagRowState
   // Trimmed on both sides: the composer submits the trimmed body, so the preview must match it.
   const taskBody = (text: string, submitted: AttachmentEntry[]) => {
     return buildCreateRunBody({
@@ -792,15 +801,6 @@ export function NewTaskRoute() {
       />
     </span>
   )
-  // Task tags (spec 2026-11-23-task-tags § 7.2): real registry entries the moment they are
-  // picked or created; held in the draft, sent as `tags`, never a remembered option.
-  const draftTags = draft.tags ?? []
-  const tagRegistry = useTaskTags()
-  const shownTags = resolveRunTags(draftTags, tagRegistry.data)
-  const setDraftTags = (next: RunTag[]) => update({ tags: next.length > 0 ? next : undefined })
-  const toggleDraftTag = (tag: RunTag, add: boolean) =>
-    setDraftTags(add ? applyTagDelta(draftTags, [tag], []) : draftTags.filter((t) => t.id !== tag.id))
-  const tagStateOf = (id: string) => (draftTags.some((t) => t.id === id) ? 'checked' : 'empty') as TagRowState
   const tagPill = (
     <span className="inline-flex flex-wrap items-center gap-1" data-slot="composer-tags">
       {shownTags.map((tag) => (

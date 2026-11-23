@@ -540,7 +540,7 @@ describe('the ⋯ menu is the palette\'s command list', () => {
     const headings = [...document.querySelectorAll('[data-slot="run-actions-menu"] [data-slot="dropdown-menu-label"]')].map((el) => el.textContent)
     expect(headings).toEqual(['Actions', 'Git', 'Task'])
     expect(menuLabels(menu)).toEqual([
-      'Mark unread', 'Pin', 'Rename…', 'Copy take-over command',
+      'Mark unread', 'Pin', 'Rename…', 'Tags…', 'Copy take-over command',
       'Create PR', 'Create draft PR', 'Update branch', 'Remove worktree…',
       'Archive', 'Delete…',
     ])
