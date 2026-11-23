@@ -73,6 +73,20 @@ for arg in "$@"; do
   esac
 done
 
+# The test cockpit serves $REPO_ROOT/.ai/cezar. In a main checkout cezar already keeps tasks in,
+# that is a live cockpit's data: it would resume those tasks on the mock (PR #2430). A linked
+# worktree has a `.git` FILE and its own empty data dir, so it is always safe; so is CI.
+if [ -d "$REPO_ROOT/.git" ] && [ -f "$REPO_ROOT/.ai/cezar/runs.json" ]; then
+  case "${CI:-}" in
+    true|1) ;;
+    *)
+      echo "[test-env] refusing to start: $REPO_ROOT is a main checkout with live cezar tasks (.ai/cezar/runs.json)." >&2
+      echo "[test-env] a test cockpit here would resume those tasks on the mock. Run it from a task worktree or a 'git worktree add' copy." >&2
+      exit 1
+      ;;
+  esac
+fi
+
 # ---- generic contract logic -------------------------------------------------
 
 mkdir -p "$QA_DIR"
