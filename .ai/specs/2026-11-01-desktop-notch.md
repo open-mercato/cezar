@@ -61,8 +61,10 @@ active   [same as primary]                          the open list, primary first
   badge or status, then scrolls. Pill 2 folds into it.
 - **No notch**: the same shapes float as capsules at top centre, 2pt inside the menu bar strip, so
   the collapsed pills never reach the frontmost app's toolbar below it (a browser's tabs). The strip
-  is `visibleFrame`'s gap, or 24pt when a screen reports none (a hidden bar, or macOS 26 reporting
-  `visibleFrame` up to the top). Only the open list, shown while the pointer is on it, reaches below.
+  is `visibleFrame`'s gap. A screen that reports none has an auto-hidden bar (or is full screen), so
+  its top strip belongs to the app: the panel is ordered out until the pointer reaches the top edge
+  and macOS reveals the bar, then the pills show in that 24pt strip until the pointer leaves it.
+  Only the open list, shown while the pointer is on it, reaches below.
 
 Screenshots: `assets/notch/`, one per state.
 

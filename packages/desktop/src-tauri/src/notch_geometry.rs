@@ -56,6 +56,9 @@ pub struct Placement {
     pub origin_x: f64,
     pub origin_y: f64,
     pub housing: Housing,
+    /// No notch and no menu bar reported (auto-hidden, or full screen): the strip, in AppKit
+    /// coordinates, the bar slides into. The pills show only while it is revealed.
+    pub hidden_bar: Option<Rect>,
 }
 
 /// The classic menu bar, for a screen that reports none: hidden, or `visibleFrame` reaching the top
@@ -77,6 +80,7 @@ pub fn place(screen: &ScreenMetrics, panel: PanelSize) -> Placement {
     let frame = screen.frame;
     let top = frame.y + frame.height;
     let notched = screen.safe_area_top > 0.0 && screen.aux_left_width > 0.0 && screen.aux_right_width > 0.0;
+    let hidden = !notched && top - screen.visible_top <= 0.0;
     let (centre, (width, height, housing_top)) = if notched {
         let width = (frame.width - screen.aux_left_width - screen.aux_right_width).max(0.0);
         (frame.x + screen.aux_left_width + width / 2.0, (width, screen.safe_area_top, 0.0))
@@ -85,7 +89,19 @@ pub fn place(screen: &ScreenMetrics, panel: PanelSize) -> Placement {
         (frame.x + frame.width / 2.0, (0.0, bar - FLOATING_INSET * 2.0, FLOATING_INSET))
     };
     let origin_x = (centre - panel.width / 2.0).min(frame.x + frame.width - panel.width).max(frame.x);
-    Placement { origin_x, origin_y: top - panel.height, housing: Housing { width, height, top: housing_top, centre: centre - origin_x } }
+    let hidden_bar = hidden.then_some(Rect { x: frame.x, y: top - FALLBACK_MENU_BAR, width: frame.width, height: FALLBACK_MENU_BAR });
+    Placement { origin_x, origin_y: top - panel.height, housing: Housing { width, height, top: housing_top, centre: centre - origin_x }, hidden_bar }
+}
+
+/// Whether the collapsed pills may be on screen, given whether they were. Under an auto-hidden bar
+/// the top strip is the app's own (a full-screen browser's tabs): only the pointer reaching the top
+/// edge reveals the bar, and the pills with it, and they stay while it stays in the strip, as the
+/// bar does. An open list stays until it folds. `mouseLocation` reaches `frame.maxY` on the top row.
+pub fn pills_visible(placement: &Placement, revealed: bool, expanded: bool, x: f64, y: f64) -> bool {
+    let Some(strip) = placement.hidden_bar else { return true };
+    let top = strip.y + strip.height;
+    let on_screen = x >= strip.x && x < strip.x + strip.width && y <= top;
+    expanded || (on_screen && (y >= top - 1.0 || (revealed && y >= strip.y)))
 }
 
 /// The display a point is on, or the first one when it is on none (a just-removed display).
@@ -224,6 +240,33 @@ mod tests {
         let placed = place(&full_screen, PANEL);
         assert_eq!((placed.housing.top, placed.housing.height), (2.0, 20.0));
         assert!(pill_bottom(&full_screen) > 1240.0 - 24.0);
+    }
+
+    #[test]
+    fn an_auto_hidden_menu_bar_hides_the_pills_until_it_reveals() {
+        let auto_hidden = ScreenMetrics { visible_top: 1240.0, ..EXTERNAL };
+        let placed = place(&auto_hidden, PANEL);
+        // The app owns the top strip: a pointer on its tabs, below the edge, shows nothing.
+        assert!(!pills_visible(&placed, false, false, 2792.0, 1230.0));
+        assert!(!pills_visible(&placed, false, false, 2792.0, 1000.0));
+        // The pointer at the top edge reveals the bar, and the pills with it.
+        assert!(pills_visible(&placed, false, false, 2792.0, 1240.0));
+        // Revealed, they stay while the pointer stays in the strip, and go when it leaves.
+        assert!(pills_visible(&placed, true, false, 1512.0, 1220.0));
+        assert!(!pills_visible(&placed, true, false, 2792.0, 1215.0));
+        // On the neighbouring display, the same height reveals nothing here.
+        assert!(!pills_visible(&placed, false, false, 1000.0, 1240.0));
+        // An open list stays until it folds.
+        assert!(pills_visible(&placed, false, true, 2792.0, 1000.0));
+    }
+
+    #[test]
+    fn a_visible_menu_bar_or_a_notch_always_shows_the_pills() {
+        assert_eq!(place(&EXTERNAL, PANEL).hidden_bar, None);
+        assert!(pills_visible(&place(&EXTERNAL, PANEL), false, false, 0.0, -5000.0));
+        // A notched screen with its bar hidden still has the camera housing to sit on.
+        let notched_full_screen = ScreenMetrics { visible_top: 982.0, ..NOTCHED };
+        assert_eq!(place(&notched_full_screen, PANEL).hidden_bar, None);
     }
 
     #[test]
