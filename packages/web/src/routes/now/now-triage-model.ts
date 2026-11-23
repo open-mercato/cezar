@@ -1,4 +1,6 @@
-import type { AttentionItem, AttentionOverride, RunRecord } from '@open-mercato/cezar-api-client'
+import type { AttentionItem, AttentionKind, AttentionOverride, RunRecord } from '@open-mercato/cezar-api-client'
+
+import type { NeedsYouReason } from './now-model'
 
 /**
  * Needs you triage (spec 2026-11-23-needs-you-triage): what a row's ✕ and ⋯ act on, and which rows
@@ -71,6 +73,22 @@ export function isHidden(target: TriageTarget, overrides: readonly AttentionOver
 /** Now's own task row: its item left the list when dismissed, so the dismissal names the run it hid. */
 export function isRunHidden(projectId: string | undefined, runId: string, overrides: readonly AttentionOverride[] | undefined): boolean {
   return projectId !== undefined && (overrides?.some((entry) => entry.mode === 'dismiss' && entry.projectId === projectId && entry.runId === runId) ?? false)
+}
+
+/** The server's tiers and kind ranks (`attention/list.ts`): blocking decisions (approvals, questions,
+ *  messages), the review gate, waits, failures. */
+export const KIND_TIER: Record<AttentionKind, number> = { approval: 0, question: 0, message: 0, review: 1, task: 2, failed: 3 }
+export const KIND_RANK: Record<AttentionKind, number> = { approval: 0, question: 1, message: 2, review: 3, task: 4, failed: 5 }
+export const REASON_TIER: Record<NeedsYouReason, number> = { question: 0, review: 1, budget: 2, waiting: 2, lifecycle: 2, failed: 3 }
+export const REASON_RANK: Record<NeedsYouReason, number> = { question: 1, review: 3, budget: 4, waiting: 4, lifecycle: 4, failed: 5 }
+
+const DAY_MS = 24 * 60 * 60_000
+
+/** This project's rows, manager items and tasks together, as the server orders its list: by tier,
+ *  then a row past half the Older days below the fresh ones of its tier, then by kind, newest first. */
+export function orderNeedsYou<T extends { tier: number; rank: number; since: string }>(rows: readonly T[], olderAfterDays: number, now: number): T[] {
+  const aging = (row: T) => Number(olderAfterDays > 0 && now - Date.parse(row.since) > (olderAfterDays * DAY_MS) / 2)
+  return [...rows].sort((a, b) => a.tier - b.tier || aging(a) - aging(b) || a.rank - b.rank || b.since.localeCompare(a.since))
 }
 
 /** One line of toast text: a long title would wrap the toast. */

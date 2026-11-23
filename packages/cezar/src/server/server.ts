@@ -9162,6 +9162,11 @@ export function createApp(deps: ServerDeps) {
       now: Date.now(),
       olderAfterDays: inbox?.olderAfterDays ?? 0,
       overrides,
+      prState: (projectId, number) => {
+        const root = roots.get(projectId);
+        const state = root ? readCachedRefStatuses(root, [number]).prs[number] : undefined;
+        return state === 'merged' || state === 'closed' ? state : undefined;
+      },
       // The task's own PR (created or declared), as the forge cache already knows it: never a `gh` call.
       prEnded: (projectId, run) => {
         const root = roots.get(projectId);

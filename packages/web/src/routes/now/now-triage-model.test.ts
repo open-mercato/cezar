@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { AttentionItem, RunRecord } from '@open-mercato/cezar-api-client'
 
-import { isHidden, itemForRun, itemTarget, shortLabel, snoozeUntil, taskRowTarget } from './now-triage-model'
+import { isHidden, itemForRun, itemTarget, orderNeedsYou, shortLabel, snoozeUntil, taskRowTarget } from './now-triage-model'
 
 /** Needs you triage (spec 2026-11-23-needs-you-triage). */
 
@@ -52,5 +52,20 @@ describe('shortLabel', () => {
   it('names references plainly and stays on one line', () => {
     expect(shortLabel('Send notes on [[pr:cezar/2426]] to [[task:cezar/abc]]')).toBe('Send notes on #2426 to task')
     expect(shortLabel('x'.repeat(60))).toHaveLength(48)
+  })
+})
+
+describe('orderNeedsYou', () => {
+  it('puts a row past half the Older days below the fresh ones of its tier, whatever its kind', () => {
+    const now = Date.parse('2026-11-23T12:00:00.000Z')
+    const row = (id: string, tier: number, rank: number, hours: number) => ({ id, tier, rank, since: new Date(now - hours * 3_600_000).toISOString() })
+    // An approval (rank 0) waiting 100 h, a question (rank 1) 2 h old, a review in the next tier.
+    const rows = [row('review', 1, 3, 1), row('old-approval', 0, 0, 100), row('fresh-question', 0, 1, 2)]
+    // Off: approvals lead their tier, as the kind rank says.
+    expect(orderNeedsYou(rows, 0, now).map((entry) => entry.id)).toEqual(['old-approval', 'fresh-question', 'review'])
+    // Older 7 days: half is 84 h, so the approval is aging and drops below the fresh question, never below its tier.
+    expect(orderNeedsYou(rows, 7, now).map((entry) => entry.id)).toEqual(['fresh-question', 'old-approval', 'review'])
+    // Older 10 days: half is 120 h, the approval is still fresh.
+    expect(orderNeedsYou(rows, 10, now).map((entry) => entry.id)).toEqual(['old-approval', 'fresh-question', 'review'])
   })
 })

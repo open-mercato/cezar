@@ -27,9 +27,15 @@ text showed raw `[[pr:…]]` markers.
   - an Older question → `quiet` (it used to be dropped from the list entirely);
   - a task item, or a task's own question, whose own PR (created, or declared with `CEZ:PR`) the
     forge cache knows is merged or closed → `pr-merged` / `pr-closed`;
+  - a question card whose declared `about: {pr}` or mentioned `[[pr:<project>/N]]` the forge cache knows
+    is merged or closed. A declared `{pr}` is looked up in the project of a mention of the same number,
+    else of the tasks the card is about or came from; a bare `#N` names no project and is not read;
   - a paused task (`kind: task`) waiting longer than the Older days → `quiet`.
   Cards whose declared `about` ended, and replaced cards, already close and leave the list.
-- Order: approvals, questions, messages, review, waiting tasks, failures; newest first within a kind.
+- Order: tiers — blocking decisions (approvals, questions, messages), the review gate, waits, failures.
+  Within a tier an item past half the Older days sorts below the fresh ones, then by kind, newest first.
+  `GET /workspace/attention` returns `olderAfterDays` so Now orders its own task rows, merged with the
+  manager items, the same way.
 - Overrides, `~/.cezar/attention-overrides.json` (`{ key, mode: dismiss|keep, at, until? }`): `dismiss`
   drops the item from `items` (until `until`, a snooze); `keep` clears `settled`. Keyed by item key, so
   a re-raised wait shows again. Entries expire after 30 days, at most 500 are kept, and deleting the
@@ -42,12 +48,16 @@ text showed raw `[[pr:…]]` markers.
 
 - Now's own task rows borrow the server's item (by project and run) for its key, question and
   verdict. A row the server does not list is keyed `now:<project>:<run>:<since>`.
-- Menu: Open, Still needs me (settled only), Dismiss, Snooze ›, and for this project's runs Mark done
-  (`/finish`), Archive task (with undo) and Cancel task (confirm dialog).
+- Menu: Open, Still needs me (settled only), Dismiss, Snooze ›, Mute / Unmute this manager (the
+  manager's own Notify switch, with undo) for a manager's items, Copy link, and for this project's runs
+  Mark done (`/finish`), Archive task (with undo) and Cancel task (confirm dialog).
 - Card titles render `[[pr:…]]`/`[[task:…]]` through the manager chat's reference renderer, against
   the projects health lists.
 
-## Not done
+## Limits
 
-- Within-kind demotion of items past half the Older days, and "Mute this manager" / "Copy link" in the
-  menu, were in the design page and left out to keep the change small.
+- PR state comes only from the in-process forge cache, never a new `gh` call. It is filled whenever
+  anything reads the PR: a chip on screen (Now paints a card's PR chips, so showing the row warms it),
+  the GitHub tab, the per-project PR poller, a manager's merge card. A PR nothing has read is unknown,
+  so its card stays live until something does. A merged answer is kept 24 h, a closed one 10 min, so on
+  a long-idle server with no cockpit open a closed PR's card can come back until the next read.

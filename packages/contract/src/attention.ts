@@ -95,6 +95,8 @@ export const attentionResponseSchema = z.object({
   revision: z.string(),
   /** Active overrides; Now hides its own task rows by them too. Dismissed items are already left out of `items`. */
   overrides: z.array(attentionOverrideSchema),
+  /** The Questions page's Older days (`0` = off): past it an item is quiet, past half it sorts below fresh ones. */
+  olderAfterDays: z.number().int().min(0),
 });
 export type AttentionResponse = z.infer<typeof attentionResponseSchema>;
 

@@ -131,7 +131,14 @@ export function AttentionRow({
         {triage ? (
           <>
             <DismissButton target={target} actions={triage} />
-            <TriageMenu target={target} actions={triage} href={href} run={task} settled={settled} open={menu.open} onOpenChange={menu.setOpen} />
+            <TriageMenu
+              target={target}
+              actions={triage}
+              href={href}
+              copyHref={href}
+              manager={item.managerId ? { id: item.managerId, name: item.managerName ?? 'this manager' } : undefined}
+              run={task}
+              settled={settled} open={menu.open} onOpenChange={menu.setOpen} />
           </>
         ) : null}
       </div>

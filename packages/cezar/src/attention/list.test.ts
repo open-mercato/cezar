@@ -160,6 +160,51 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
     expect(phoneBadgeCount(list.items, ['question', 'task', 'review'])).toBe(1);
   });
 
+  it('folds a question card once its declared or mentioned PR merged or closed', () => {
+    const card = (key: string, text: string, patch: Partial<QuestionItem> = {}) =>
+      question(key, { questions: [{ header: 'Merge', question: text, options: [{ label: 'Yes' }, { label: 'No' }] }], ...patch });
+    const states: Record<string, 'merged' | 'closed'> = { 'cezar/2428': 'merged', 'app/7': 'closed', 'app/8': 'merged' };
+    const list = buildAttentionList(sources({
+      questions: [
+        card('m:mgr:mention', 'Earlier reviews of [[pr:cezar/2428]] read nothing. How now?'),
+        card('m:mgr:about', 'Merge it?', { about: [{ pr: 7 }, { task: 'app/r1' }] }),
+        card('m:mgr:source', 'Ship it?', { about: [{ pr: 8 }], sourceTasks: [{ projectId: 'app', runId: 'r2' }] }),
+        card('m:mgr:open', 'Review [[pr:cezar/5]]?', { about: [{ pr: 5 }] }),
+        // A bare declared PR with no project to look it up in stays open.
+        card('m:mgr:nowhere', 'Merge #8?', { about: [{ pr: 8 }] }),
+      ],
+      prState: (projectId, number) => states[`${projectId}/${number}`],
+    }));
+    const settled = Object.fromEntries(list.items.map((item) => [item.key, item.settled]));
+    expect(settled['question:m:mgr:mention']).toEqual({ why: 'pr-merged', detail: 'PR #2428 it mentions was merged' });
+    expect(settled['question:m:mgr:about']).toEqual({ why: 'pr-closed', detail: 'PR #7 closed' });
+    expect(settled['question:m:mgr:source']).toEqual({ why: 'pr-merged', detail: 'PR #8 merged' });
+    expect(settled['question:m:mgr:open']).toBeUndefined();
+    expect(settled['question:m:mgr:nowhere']).toBeUndefined();
+    expect(list.counts.total).toBe(2);
+  });
+
+  it('sorts an item past half the quiet threshold below fresh ones of its kind', () => {
+    const list = buildAttentionList(sources({
+      olderAfterDays: 4,
+      questions: [
+        question('m:mgr:old', { askedAt: ago(3 * DAY) }),
+        question('m:mgr:new', { askedAt: ago(4 * DAY - 1) }),
+      ],
+      approvals: [{ managerId: 'mgr', message: { ...action('a1'), at: ago(3 * DAY) }, title: 'Merge' }],
+    }));
+    // All three are past half of 4 days: approvals before questions, then newest first.
+    expect(list.items.map((item) => item.key)).toEqual(['approval:mgr:a1', 'question:m:mgr:old', 'question:m:mgr:new']);
+    const mixed = buildAttentionList(sources({
+      olderAfterDays: 4,
+      questions: [question('m:mgr:fresh', { askedAt: ago(DAY) })],
+      approvals: [{ managerId: 'mgr', message: { ...action('a1'), at: ago(3 * DAY) }, title: 'Merge' }],
+    }));
+    // A fresh question goes above an approval waiting 3 of 4 days; the review gate stays below the tier.
+    expect(mixed.items.map((item) => item.key)).toEqual(['question:m:mgr:fresh', 'approval:mgr:a1']);
+    expect(mixed.olderAfterDays).toBe(4);
+  });
+
   it('hides a dismissed item until its key changes, and "keep" overrides the detection', () => {
     const base = {
       questions: [question('m:mgr:q1', { stale: { why: 'manager-acted' as const, detail: 'the manager acted', since: ago(1) } })],

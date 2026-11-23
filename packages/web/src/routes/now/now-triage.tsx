@@ -1,7 +1,9 @@
 import type { AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
 import {
   ArchiveIcon,
+  BellIcon,
   BellOffIcon,
+  LinkIcon,
   CheckCheckIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -49,6 +51,10 @@ export interface TriageActions {
   finish?: (run: RunRecord) => void
   archive?: (run: RunRecord) => void
   cancel?: (run: RunRecord) => void
+  /** The manager's own Notify switch: its items stay listed and leave every count. */
+  mute?: (manager: { id: string; name: string }, muted: boolean) => void
+  managerMuted?: (managerId: string) => boolean
+  copyLink?: (path: string) => void
 }
 
 const SNOOZES: SnoozeChoice[] = ['hour', 'evening', 'tomorrow', 'week']
@@ -78,6 +84,8 @@ export function TriageMenu({
   href,
   run,
   settled,
+  manager,
+  copyHref,
   open,
   onOpenChange,
 }: {
@@ -88,6 +96,10 @@ export function TriageMenu({
   /** This project's run behind the row: enables the task actions. */
   run?: RunRecord | undefined
   settled?: AttentionSettled | undefined
+  /** A manager's item: Mute or Unmute that manager. */
+  manager?: { id: string; name: string } | undefined
+  /** The app path Copy link shares; absent, no Copy link. */
+  copyHref?: string | undefined
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -96,6 +108,7 @@ export function TriageMenu({
   const finish = run && flags?.finish && actions.finish
   const archive = run && !run.archived && actions.archive && run.status !== 'running' && run.status !== 'queued'
   const cancel = run && flags?.cancel && actions.cancel
+  const muted = manager ? actions.managerMuted?.(manager.id) ?? false : false
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <DropdownMenuTrigger asChild>
@@ -128,6 +141,18 @@ export function TriageMenu({
             ))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        {(manager && actions.mute) || (copyHref && actions.copyLink) ? <DropdownMenuSeparator /> : null}
+        {manager && actions.mute ? (
+          <DropdownMenuItem data-slot="now-menu-mute" data-muted={muted || undefined} onSelect={() => actions.mute!(manager, !muted)}>
+            {muted ? <BellIcon aria-hidden="true" /> : <BellOffIcon aria-hidden="true" />}
+            {muted ? 'Unmute this manager' : 'Mute this manager'}
+          </DropdownMenuItem>
+        ) : null}
+        {copyHref && actions.copyLink ? (
+          <DropdownMenuItem data-slot="now-menu-copy" onSelect={() => actions.copyLink!(copyHref)}>
+            <LinkIcon aria-hidden="true" /> Copy link
+          </DropdownMenuItem>
+        ) : null}
         {finish || archive || cancel ? <DropdownMenuSeparator /> : null}
         {finish ? (
           <DropdownMenuItem data-slot="now-menu-finish" onSelect={() => actions.finish!(run)}>

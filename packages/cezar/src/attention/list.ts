@@ -33,15 +33,45 @@ export interface AttentionSources {
   olderAfterDays?: number;
   /** The task's own pull request, when the forge cache already knows it ended. Never asks the forge. */
   prEnded?: (projectId: string, run: RunRecord) => { number: number; state: 'merged' | 'closed' } | undefined;
+  /** Any PR in a project, as the forge cache already knows it: a question card's declared or mentioned PR. */
+  prState?: (projectId: string, number: number) => 'merged' | 'closed' | undefined;
   overrides?: readonly AttentionOverride[];
 }
 
 const DAY_MS = 24 * 60 * 60_000;
 
-/** Blocking decisions first, then the review gate, then waits, then failures (spec 2026-11-23-needs-you-triage). */
+/** Tiers (spec 2026-11-23-needs-you-triage § Order): blocking decisions, the review gate, waits, failures. */
+const TIER: Record<AttentionKind, number> = { approval: 0, question: 0, message: 0, review: 1, task: 2, failed: 3 };
+/** Within a tier: approvals, then questions, then messages. */
 const KIND_RANK: Record<AttentionKind, number> = { approval: 0, question: 1, message: 2, review: 3, task: 4, failed: 5 };
 
 const STALE_REASON: Partial<Record<string, AttentionSettled['why']>> = { 'mentioned-work-ended': 'work-ended' };
+
+const PR_MARKER = /\[\[pr:([^\]/\s]+)\/(\d+)\]\]/g;
+
+/** A card's PRs and the projects each can be in: a mention names its project; a declared `{pr}` takes
+ *  a mention's project, else the tasks the card is about, else its source task (`aboutPrProjects`). */
+function questionPrs(question: QuestionItem): Array<{ number: number; projects: string[]; declared: boolean }> {
+  const texts = question.questions.flatMap((entry) => [entry.question, ...entry.options.flatMap((option) => [option.label, option.description ?? ''])]);
+  const mentions = texts.flatMap((text) => [...text.matchAll(PR_MARKER)].map((match) => ({ projectId: match[1]!, number: Number(match[2]) })));
+  const taskProjects = [
+    ...(question.about ?? []).flatMap((ref) => ('task' in ref ? [ref.task.split('/')[0]!] : [])),
+    ...(question.sourceTasks ?? []).map((task) => task.projectId),
+    ...(question.source.kind === 'task' ? [question.source.projectId] : []),
+  ];
+  const out = new Map<number, { number: number; projects: Set<string>; declared: boolean }>();
+  for (const ref of question.about ?? []) {
+    if (!('pr' in ref)) continue;
+    const named = mentions.filter((mention) => mention.number === ref.pr).map((mention) => mention.projectId);
+    out.set(ref.pr, { number: ref.pr, projects: new Set(named.length > 0 ? named : taskProjects), declared: true });
+  }
+  for (const mention of mentions) {
+    const entry = out.get(mention.number) ?? { number: mention.number, projects: new Set<string>(), declared: false };
+    entry.projects.add(mention.projectId);
+    out.set(mention.number, entry);
+  }
+  return [...out.values()].map((entry) => ({ ...entry, projects: [...entry.projects] }));
+}
 
 const quiet = (days: number): AttentionSettled => ({ why: 'quiet', detail: `Quiet for ${days} ${days === 1 ? 'day' : 'days'}` });
 
@@ -89,8 +119,12 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
     if (question.source.kind === 'manager' && managers.get(question.source.managerId)?.inactive) continue;
     if (question.source.kind === 'task') asked.add(`${question.source.projectId}/${question.source.runId}`);
     const settled = question.source.kind === 'task' ? prSettled(question.source.projectId, question.source.runId) : undefined;
+    const cardPr = settled ? undefined : questionPrs(question).map((pr) => {
+      const state = pr.projects.map((projectId) => sources.prState?.(projectId, pr.number)).find((found) => found !== undefined);
+      return state ? { why: state === 'merged' ? 'pr-merged' as const : 'pr-closed' as const, detail: `PR #${pr.number} ${pr.declared ? '' : 'it mentions was '}${state}` } : undefined;
+    }).find((found) => found !== undefined);
     const stale = question.stale ? { why: STALE_REASON[question.stale.why] ?? 'overtaken', detail: question.stale.detail } : undefined;
-    items.push(questionItem(question, muted, settled ?? stale ?? (question.older ? quiet(days) : undefined)));
+    items.push(questionItem(question, muted, settled ?? cardPr ?? stale ?? (question.older ? quiet(days) : undefined)));
   }
 
   for (const { managerId, message, title } of sources.approvals) {
@@ -159,8 +193,11 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
     const item = hid.get(entry.key);
     return item?.projectId && item.runId ? { ...entry, projectId: item.projectId, runId: item.runId } : entry;
   });
-  shown.sort((a, b) => Number(!!a.settled) - Number(!!b.settled) || KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.since.localeCompare(a.since));
-  return { items: shown, counts: countAttention(shown), revision: revisionOf(shown, overrides), overrides: answered };
+  // Within a tier, an item past half the quiet threshold sorts below the fresh ones (spec § Order).
+  const aging = (item: AttentionItem) => Number(days > 0 && sources.now - Date.parse(item.since) > (days * DAY_MS) / 2);
+  shown.sort((a, b) => Number(!!a.settled) - Number(!!b.settled) || TIER[a.kind] - TIER[b.kind] || aging(a) - aging(b)
+    || KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.since.localeCompare(a.since));
+  return { items: shown, counts: countAttention(shown), revision: revisionOf(shown, overrides), overrides: answered, olderAfterDays: days };
 }
 
 function withoutSettled(item: AttentionItem): AttentionItem {

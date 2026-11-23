@@ -188,6 +188,24 @@ describe('Needs you triage (spec 2026-11-23-needs-you-triage)', () => {
     expect(needsYou().getAttribute('data-count')).toBe('0')
   })
 
+  it('a manager item’s menu mutes or unmutes that manager and copies its link', async () => {
+    const acts = { ...triage(), mute: vi.fn(), copyLink: vi.fn(), managerMuted: (id: string) => id === 'notes' }
+    renderNow({ attention: { items: ITEMS, total: 4 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: acts })
+    const openMenu = async (key: string) => {
+      const row = needsYou().querySelector(`[data-key="${key}"]`) as HTMLElement
+      fireEvent.pointerDown(within(row).getByRole('button', { name: 'More actions' }), { button: 0, pointerType: 'mouse' })
+      return screen.findByRole('menu')
+    }
+    fireEvent.click(within(await openMenu('q')).getByRole('menuitem', { name: 'Mute this manager' }))
+    expect(acts.mute).toHaveBeenCalledWith({ id: 'shop', name: 'Shop manager' }, true)
+    fireEvent.click(within(await openMenu('a')).getByRole('menuitem', { name: 'Unmute this manager' }))
+    expect(acts.mute).toHaveBeenLastCalledWith({ id: 'notes', name: 'Notes manager' }, false)
+    fireEvent.click(within(await openMenu('q')).getByRole('menuitem', { name: 'Copy link' }))
+    expect(acts.copyLink).toHaveBeenCalledWith('/manager/shop#decision-msg1')
+    // A task's item has no manager to mute.
+    expect(within(await openMenu('t')).queryByRole('menuitem', { name: /mute/i })).toBeNull()
+  })
+
   it('the phone reveals Snooze and Dismiss on a swipe; only a tap acts', () => {
     const acts = triage()
     renderNow({ attention: { items: ITEMS.slice(3, 4), total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: acts })

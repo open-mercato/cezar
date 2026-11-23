@@ -7,7 +7,7 @@ import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@
 import type { AttentionItem, AttentionOverride, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
 import { DISMISS_UNDO_MS, answerQuestion, scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
 import { applyOverrideLocally, attentionKeys, clearAttentionOverride, setAttentionOverride, useAttention } from '@/api/attention'
-import { decideManagerAction, managerKeys, markManagerRead, useManagers } from '@/api/managers'
+import { decideManagerAction, managerKeys, markManagerRead, updateManager, useManagers } from '@/api/managers'
 import { setProjectRunRead } from '@/api/client'
 import { Segmented } from '@/components/segmented'
 import { CenteredState } from '@/components/centered-state'
@@ -37,6 +37,7 @@ import { useExistingProviderAvailability } from '@/routes/task-thread/active-pro
 import { resumeAfterIdleTeardown } from '@/routes/task-thread/ask-answer'
 import { runActionFlags } from '@/routes/task-thread/run-actions'
 import { ManagerProjectsContext } from '@/routes/manager/manager-reference'
+import { taskPath } from '@/routes/manager/manager-session-card'
 import type { ManagerReferenceProject } from '@/lib/managers'
 import { RunConfirmDialog } from '@/routes/task-thread/run-confirm-dialog'
 
@@ -55,8 +56,13 @@ import { AttentionRow, type AttentionActions } from './now-attention'
 import { DismissButton, ProbablyDoneGroup, SettledReason, SwipeRow, TriageMenu, useRowMenu, type TriageActions } from './now-triage'
 import {
   SNOOZE_LABEL,
+  KIND_RANK,
+  KIND_TIER,
+  REASON_RANK,
+  REASON_TIER,
   isHidden,
   isRunHidden,
+  orderNeedsYou,
   itemForRun,
   itemTarget,
   shortLabel,
@@ -77,6 +83,7 @@ import {
 const NO_RUNS: RunRecord[] = []
 const NO_KEYS: ReadonlySet<string> = new Set()
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
+const NO_MANAGERS: readonly { id: string; notify?: boolean | undefined }[] = []
 const AGE_TICK_MS = 30_000
 
 /**
@@ -114,7 +121,7 @@ export function NowView({
   /** The projects on this computer: a card's `[[pr:<project>/N]]` paints as a chip only for one of them. */
   referenceProjects?: readonly ManagerReferenceProject[]
   /** The attention list (spec 2026-11-20-phone-notifications-inbox); absent keeps Now's own rows only. */
-  attention?: { items: AttentionItem[]; total: number; overrides?: AttentionOverride[] } | undefined
+  attention?: { items: AttentionItem[]; total: number; overrides?: AttentionOverride[]; olderAfterDays?: number } | undefined
   /** Dismiss, snooze and the ⋯ menu (spec 2026-11-23-needs-you-triage). */
   triage?: TriageActions
   /** This project, for matching its runs to their attention items. */
@@ -309,9 +316,17 @@ export function NowView({
                   ))
                 ) : (
                   <>
-                    {attentionActions ? liveManagerRows.map((item) => <AttentionRow key={item.key} item={item} actions={attentionActions} triage={triage} hint={hintOnce()} />) : null}
-                    {liveTaskRows.map(({ row, target }) => (
-                      <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} target={target} triage={triage} hint={hintOnce()} />
+                    {orderNeedsYou(
+                      [
+                        ...(attentionActions ? liveManagerRows.map((item) => ({ tier: KIND_TIER[item.kind], rank: KIND_RANK[item.kind], since: item.since, item })) : []),
+                        ...liveTaskRows.map((entry) => ({ tier: REASON_TIER[entry.row.reason], rank: REASON_RANK[entry.row.reason], since: entry.row.since, entry })),
+                      ],
+                      attention?.olderAfterDays ?? 0,
+                      at,
+                    ).map((slot) => 'item' in slot ? (
+                      <AttentionRow key={slot.item.key} item={slot.item} actions={attentionActions!} triage={triage} hint={hintOnce()} />
+                    ) : (
+                      <NeedsYouRowView key={slot.entry.row.run.id} row={slot.entry.row} onRetry={onRetry} projectId={projectId} target={slot.entry.target} triage={triage} hint={hintOnce()} />
                     ))}
                   </>
                 )}
@@ -331,7 +346,7 @@ export function NowView({
                       />
                     )) : null}
                     {doneTaskRows.map(({ row, target, settled }) => (
-                      <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} target={target} triage={triage} settled={settled} />
+                      <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} projectId={projectId} target={target} triage={triage} settled={settled} />
                     ))}
                   </ProbablyDoneGroup>
                 ) : null}
@@ -460,6 +475,7 @@ const ROW_CLASS =
 function NeedsYouRowView({
   row,
   onRetry,
+  projectId,
   target,
   triage,
   settled,
@@ -467,6 +483,8 @@ function NeedsYouRowView({
 }: {
   row: NeedsYouRow
   onRetry: (run: RunRecord) => Promise<unknown>
+  /** This project, for the row's shareable link. */
+  projectId?: string | undefined
   target?: TriageTarget
   triage?: TriageActions | undefined
   /** In Probably done: why. */
@@ -532,6 +550,7 @@ function NeedsYouRowView({
               target={triaged.target}
               actions={triaged.triage}
               href={row.action === 'answer' ? `/tasks/${run.id}#ask` : to}
+              {...(projectId ? { copyHref: taskPath(projectId, run.id) } : {})}
               run={run}
               settled={settled}
               open={menu.open}
@@ -777,6 +796,7 @@ export function NowRoute() {
     () => (health.data?.projects ?? []).map((project) => ({ id: project.id, name: project.name })),
     [health.data],
   )
+  const managerList = managers.data?.managers ?? NO_MANAGERS
   const pending = usePendingDismissals()
   const pendingQuestions = React.useMemo(() => new Set(pending.map((entry) => entry.key)), [pending])
   const [cancelling, setCancelling] = React.useState<RunRecord | null>(null)
@@ -831,8 +851,23 @@ export function NowRoute() {
         })
       }, failed('Could not archive')),
       cancel: (run) => setCancelling(run),
+      managerMuted: (id) => managerList.find((manager) => manager.id === id)?.notify === false,
+      mute: (manager, muted) => {
+        const set = (notify: boolean) => updateManager(manager.id, { notify })
+          .then(() => Promise.all([queryClient.invalidateQueries({ queryKey: managerKeys.list }), refresh()]), failed('Could not change the manager'))
+        void set(!muted)
+        toast(muted ? `Muted ${manager.name}: its items stay listed, uncounted` : `Unmuted ${manager.name}`, {
+          durationMs: DISMISS_UNDO_MS,
+          action: { label: 'Undo', onClick: () => void set(muted) },
+        })
+      },
+      copyLink: (path) => {
+        const url = new URL(path, globalThis.location?.origin ?? 'http://127.0.0.1').href
+        void Promise.resolve(globalThis.navigator?.clipboard?.writeText(url))
+          .then(() => toast('Link copied'), () => toast('Could not copy the link', { tone: 'danger', expected: true }))
+      },
     }
-  }, [queryClient, invalidate])
+  }, [queryClient, invalidate, managerList])
   const onMarkAllRead = React.useCallback((items: AttentionItem[]) => {
     void Promise.allSettled(items.map((item) => attentionActions.markRead(item))).then((results) => {
       if (results.some((result) => result.status === 'rejected')) toast('Some items could not be marked read', { tone: 'danger' })
@@ -841,7 +876,7 @@ export function NowRoute() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <NowView
-        attention={attention.data ? { items: attention.data.items, total: attention.data.counts.total, overrides: attention.data.overrides } : undefined}
+        attention={attention.data ? { items: attention.data.items, total: attention.data.counts.total, overrides: attention.data.overrides, olderAfterDays: attention.data.olderAfterDays } : undefined}
         triage={triage}
         projectId={here}
         pendingQuestions={pendingQuestions}
