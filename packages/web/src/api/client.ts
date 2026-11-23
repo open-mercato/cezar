@@ -218,6 +218,7 @@ import type { Ok, OkJson, RunUserMessages } from '@open-mercato/cezar-api-client
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
+import type { CreateTaskTagInput, PatchTaskTagInput, RunTagsDeltaInput, RunTagsResponse, TaskTag, TaskTagsList } from '@open-mercato/cezar-api-client'
 import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
 import { BUILD_HEADER, noteServerBuild } from '@/lib/build-identity'
@@ -3372,4 +3373,40 @@ export async function getGithubAsset(url: string, opts?: ReadOptions, projectSco
   return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
     param: { projectId: projectScope }, json: { url },
   }, init(opts)), '/github/asset')
+}
+
+// ---- task tags (spec 2026-11-23-task-tags) ------------------------------------------------
+
+/** The personal task-tag registry. Workspace-level: one list, whichever project is on screen. */
+export async function getTaskTags(opts?: ReadOptions): Promise<TaskTagsList> {
+  return unwrap(await cez.api.v1.workspace['task-tags'].$get({}, init(opts)), '/workspace/task-tags')
+}
+
+export async function createTaskTag(input: CreateTaskTagInput): Promise<{ tag: TaskTag }> {
+  return unwrap(await cez.api.v1.workspace['task-tags'].$post({ json: input }), '/workspace/task-tags')
+}
+
+export async function updateTaskTag(tagId: string, patch: PatchTaskTagInput): Promise<{ tag: TaskTag }> {
+  return unwrap(
+    await cez.api.v1.workspace['task-tags'][':tagId'].$patch({ param: { tagId }, json: patch }),
+    `/workspace/task-tags/${tagId}`,
+  )
+}
+
+export async function deleteTaskTag(tagId: string): Promise<{ deleted: true }> {
+  return unwrap(
+    await cez.api.v1.workspace['task-tags'][':tagId'].$delete({ param: { tagId } }),
+    `/workspace/task-tags/${tagId}`,
+  )
+}
+
+/** A delta on one run's tags — never a whole-list replacement (D8). */
+export async function editRunTags(id: string, delta: RunTagsDeltaInput): Promise<RunTagsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].tags.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: delta,
+    }),
+    `${runPath(id)}/tags`,
+  )
 }

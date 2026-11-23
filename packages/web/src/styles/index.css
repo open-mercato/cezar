@@ -369,6 +369,16 @@
   --color-device-5: #e05a73;
   --color-device-6: #22b3a0;
   --color-device-ink: #fff;
+  /* Task-tag swatches (spec 2026-11-23-task-tags § 4.1): a closed set, mid-tones that read as a
+   * dot on both themes; the chip's text stays the theme's own ink. */
+  --color-tag-gray: #8b8b8b;
+  --color-tag-red: #e0524f;
+  --color-tag-orange: #e8833a;
+  --color-tag-amber: #d9a520;
+  --color-tag-green: #3fae5f;
+  --color-tag-teal: #22a99a;
+  --color-tag-blue: #3b82d6;
+  --color-tag-violet: #8a6fe0;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
