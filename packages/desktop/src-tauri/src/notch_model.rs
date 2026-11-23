@@ -10,6 +10,9 @@ pub const MAX_MINIS: usize = 4;
 pub const TEXT_LIMIT: usize = 48;
 /// `error` sticks until the manager's next turn, so only a fresh one counts as active.
 pub const ERROR_ACTIVE_MINUTES: u64 = 30;
+/// `managerMascotSchema`: the portraits bundled in `ui/notch/mascots/`. Anything else, including a
+/// newer sidecar's mascot this shell lacks, falls back to the `avatar` face rather than a broken image.
+pub const MASCOTS: [&str; 9] = ["base", "builder", "analyst", "guardian", "dispatcher", "reviewer", "automator", "planner", "scout"];
 
 /// The fields of `ManagerSummary` this module reads. Unknown keys, and fields a newer or older
 /// sidecar lacks, must not lose the row: every field defaults.
@@ -19,6 +22,8 @@ pub struct ManagerRow {
     pub id: String,
     pub name: String,
     pub avatar: u8,
+    /// The cockpit's portrait; absent on legacy managers, which keep their `avatar` face.
+    pub mascot: Option<String>,
     pub status: String,
     pub preview: Option<String>,
     pub pending_actions: u32,
@@ -42,6 +47,8 @@ pub struct Entry {
     pub id: String,
     pub name: String,
     pub avatar: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mascot: Option<String>,
     pub face: Face,
     /// The `preview` line, or a status sentence when there is none.
     pub text: String,
@@ -56,6 +63,8 @@ pub struct Mini {
     pub id: String,
     pub name: String,
     pub avatar: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mascot: Option<String>,
     pub face: Face,
 }
 
@@ -71,6 +80,10 @@ pub struct NotchModel {
     pub overflow: usize,
     /// Everyone active in display order, `primary` first: the expanded list.
     pub active: Vec<Entry>,
+}
+
+fn mascot_of(row: &ManagerRow) -> Option<String> {
+    row.mascot.as_deref().filter(|mascot| MASCOTS.contains(mascot)).map(str::to_string)
 }
 
 fn pending_count(row: &ManagerRow) -> u32 {
@@ -162,7 +175,7 @@ pub fn shape(rows: &[ManagerRow], error_since: &str) -> Option<NotchModel> {
         .iter()
         .map(|row| {
             let face = face_of(row);
-            Entry { id: row.id.clone(), name: row.name.clone(), avatar: row.avatar, face, text: text_of(row, face), badge: badge_of(row) }
+            Entry { id: row.id.clone(), name: row.name.clone(), avatar: row.avatar, mascot: mascot_of(row), face, text: text_of(row, face), badge: badge_of(row) }
         })
         .collect();
     let primary = entries.first()?.clone();
@@ -170,7 +183,7 @@ pub fn shape(rows: &[ManagerRow], error_since: &str) -> Option<NotchModel> {
     let minis = others
         .iter()
         .take(MAX_MINIS)
-        .map(|entry| Mini { id: entry.id.clone(), name: entry.name.clone(), avatar: entry.avatar, face: entry.face })
+        .map(|entry| Mini { id: entry.id.clone(), name: entry.name.clone(), avatar: entry.avatar, mascot: entry.mascot.clone(), face: entry.face })
         .collect();
     Some(NotchModel { primary, minis, overflow: others.len().saturating_sub(MAX_MINIS), active: entries })
 }
@@ -291,6 +304,17 @@ mod tests {
         waiting.pending_questions = 1;
         assert_eq!(badge_of(&waiting).as_deref(), Some("2 approvals · 1 question"));
         assert_eq!(badge_of(&row("1", "idle")), None);
+    }
+
+    #[test]
+    fn the_cockpit_mascot_rides_along_and_an_unknown_one_falls_back_to_the_face() {
+        let mut builder = row("1", "working");
+        builder.mascot = Some("builder".into());
+        let mut unknown = row("2", "working");
+        unknown.mascot = Some("../etc".into());
+        let model = shape(&[builder, unknown, row("3", "working")], SINCE).unwrap();
+        assert_eq!(model.primary.mascot.as_deref(), Some("builder"));
+        assert_eq!(model.minis.iter().map(|m| m.mascot.as_deref()).collect::<Vec<_>>(), [None, None]);
     }
 
     #[test]
