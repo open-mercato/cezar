@@ -18,6 +18,8 @@ export function rememberManagerLocation(location: string): void {
   }
 }
 
+const WORKSPACE_PAGES = new Set(['approvals', 'now'])
+
 /**
  * Where the sidebar's Manager row leads: the chat or list this tab left, else `/manager`. A
  * remembered chat whose manager is gone from a loaded list falls back too, so the row never opens
@@ -32,7 +34,8 @@ export function managerHref(managerIds: readonly string[] | undefined): string {
   }
   if (remembered === null || !/^\/manager(?:[/?]|$)/.test(remembered)) return '/manager'
   const id = /^\/manager\/([^/?#]+)/.exec(remembered)?.[1]
-  if (id !== undefined && id !== 'approvals' && managerIds !== undefined && !managerIds.includes(decodeURIComponent(id))) return '/manager'
+  // Workspace pages under /manager are not manager ids.
+  if (id !== undefined && !WORKSPACE_PAGES.has(id) && managerIds !== undefined && !managerIds.includes(decodeURIComponent(id))) return '/manager'
   return cleanManagerLocation(remembered)
 }
 
