@@ -248,6 +248,16 @@ Add repositories to the workspace, then use All tasks and project tags.
 
 Learn more: [See tasks across projects](/docs/features/settings-and-projects/projects), [Clone a GitHub repository](/docs/features/settings-and-projects/clone-project), [Add a project from disk](/docs/features/settings-and-projects/local-project), [Limit parallel tasks in a project](/docs/features/settings-and-projects/project-concurrency).
 
+## Why does Cezar say another cezar already serves this project's tasks?
+
+Only one Cezar server works on a project's tasks at a time. A second server refuses to start on that project, and a project another server already serves answers with an "in use" error instead of opening.
+
+1. Open the project in the cockpit that already serves it.
+2. Or stop that server (the message names its process ID), then start Cezar again.
+3. If the message says the owner can't be verified and that process is gone, delete the `owner.lock` file it names.
+
+> **Good to know**: Browser tabs, phones and launching Cezar again still reach the one running server. A server that crashed releases the project automatically. A project the running cockpit hasn't opened since it started holds no lock yet.
+
 ## How do I run Cezar without a browser?
 
 Use the run command with a task description.

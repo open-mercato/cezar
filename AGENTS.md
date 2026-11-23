@@ -222,7 +222,7 @@ network), reuses an already-healthy instance instead of double-booting, and writ
 `.ai/qa/test-env.json` so QA skills attach to the same instance. Stop it with
 `.ai/scripts/test-env-down.sh`. Run it from a task worktree: in a main checkout that already holds
 cezar tasks (`.ai/cezar/runs.json`) it refuses outside CI, because the test cockpit would serve that
-checkout's live task data (PR #2430). Exit contract:
+checkout's live task data (PR #2430). Task data the test env created itself there stays allowed. Exit contract:
 
 | Exit     | Marker                    | Meaning                                                                                                           |
 | -------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |

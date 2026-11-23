@@ -273,11 +273,14 @@ fired automations and reclaimed worktrees.
   context (held → that project answers 409 `in-use`, never built). `copiedRoot` keeps a `cp -r` of a
   repo from being fenced by its original; a dead owner is reclaimed by liveness; a lock that cannot be
   taken (symlinked ancestor, unsupported platform, read-only dir) degrades with one warning.
+- The fence is claimed when a context is built, not at registration: a registered project the live
+  cockpit has not opened since it started holds no lock, so another server can still open it.
 - Clients are never fenced: browser tabs, phones and other devices talk to the one server. A repeated
   `npx cezar` still hands off through the slot. Headless `cezar run` takes no lock.
 - Multiplayer stays one server, many clients. Several backend processes on one project would need a
   shared store and an elected scheduler/recovery owner; that design replaces this fence, it does not
   conflict with it.
 - `.ai/scripts/test-env-up.sh` additionally refuses to start in a main checkout that holds cezar
-  tasks (outside CI), because a released cockpit that predates the lock holds none.
+  tasks (outside CI), because a released cockpit that predates the lock holds none. A data dir the
+  test env created itself is marked in its own `CEZ_HOME` (`owns-repo-data`) and stays allowed.
 
