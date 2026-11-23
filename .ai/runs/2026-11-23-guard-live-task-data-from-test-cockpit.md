@@ -87,7 +87,7 @@ main checkout, and the main checkout's `.ai/qa/test-env-app.log` shows "recovere
 - [x] 2.1 Data-dir lock module — 1b41de49d
 - [x] 2.2 Data-dir lock unit tests — 1b41de49d
 - [x] 2.3 Boot project takes the lock — 1b41de49d
-- [ ] 2.4 Lazy project contexts take the lock, 409 when held
+- [x] 2.4 Lazy project contexts take the lock, 409 when held — 286960d41
 - [ ] 2.5 Gitignore entry and compatibility note
 
 ### Phase 3: Docs
