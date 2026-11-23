@@ -470,6 +470,34 @@ describe('sidebar wiring', () => {
       await waitFor(() => expect(now.querySelector('[data-slot="nav-needs-you-badge"]')?.textContent).toBe('1'))
     })
 
+    it('the phone bar\'s Now badge counts managers\' items in Manager mode and the project\'s list outside it (review of #2444)', async () => {
+      vi.stubGlobal('innerWidth', 390)
+      rememberLastProject('shop')
+      const attention = (key: string, over: Record<string, unknown>) => ({ key, kind: 'question', title: key, since: '2026-11-23T10:00:00.000Z', counted: true, ...over })
+      const fixtures = {
+        ...routes,
+        '/api/v1/health': { ...HEALTH, bootProject: 'cezar', capabilities: { ...HEALTH.capabilities, managers: true } },
+        '/api/v1/workspace/managers': { managers: [{ ...managerFixture({ id: 'scout', name: 'Scout' }), followedTasks: [] }] },
+        '/api/v1/workspace/attention': {
+          items: [
+            attention('mine', { managerId: 'scout', managerName: 'Scout' }),
+            attention('project-1', { kind: 'task', projectId: 'shop', runId: 'r1' }),
+            attention('project-2', { kind: 'review', projectId: 'shop', runId: 'r2' }),
+          ],
+          counts: { total: 3, question: 1, approval: 0, task: 1, review: 1, failed: 0, message: 0 },
+          revision: 'r', overrides: [], olderAfterDays: 7,
+        },
+      }
+      const nowBadge = () => document.querySelector('[data-slot="phone-bottom-bar"] [data-slot="bottom-bar-now-count"]')?.textContent
+      serve(fixtures)
+      renderShell('/manager')
+      await waitFor(() => expect(nowBadge()).toBe('1'))
+      cleanup()
+      serve(fixtures)
+      renderShell('/p/shop/')
+      await waitFor(() => expect(nowBadge()).toBe('3'))
+    })
+
     it('remembers the project on screen', async () => {
       serve(routes)
       renderShell('/p/shop/git')

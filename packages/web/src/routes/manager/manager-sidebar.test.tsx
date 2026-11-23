@@ -247,6 +247,18 @@ describe('ManagerSidebar', () => {
     expect(now.textContent).toBe('Now')
   })
 
+  it('marks its Now current on /manager/now (review of #2444)', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
+    client.setQueryData(managerKeys.list, { managers: [managerFixture()] })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/manager/now']}><ManagerSidebar nowCount={1} /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(document.querySelector('[data-slot="manager-sidebar-now"]')?.getAttribute('aria-current')).toBe('page')
+  })
+
   it('keeps Approvals reachable with zero pending actions, and Jobs needs an open chat', () => {
     renderSidebar([managerFixture()], true, '/manager/new')
     expect(within(workspace()).getByRole('link', { name: 'Approvals, 0 pending approvals' }).getAttribute('href')).toBe('/manager/approvals')

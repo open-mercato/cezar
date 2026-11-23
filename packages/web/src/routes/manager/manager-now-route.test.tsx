@@ -89,8 +89,9 @@ describe('ManagerNowRoute', () => {
     const client = renderRoute('/manager/now?manager=mobile', { managersLoaded: false })
     expect(document.querySelector('[data-route="manager-now"]')).toBeNull()
     expect(screen.getByText('Loading managers…')).toBeTruthy()
-    await act(async () => { client.setQueryData(managerKeys.list, { managers }) })
-    expect(document.querySelector('[data-slot="manager-now-filter"]')?.getAttribute('data-filter')).toBe('mobile')
+    act(() => { client.setQueryData(managerKeys.list, { managers }) })
+    // Once the list is in, the requested manager applies: never All managers in between.
+    await vi.waitFor(() => expect(document.querySelector('[data-slot="manager-now-filter"]')?.getAttribute('data-filter')).toBe('mobile'))
     expect(rows()).toEqual(['a'])
   })
 })
