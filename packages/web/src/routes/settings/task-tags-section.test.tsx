@@ -1,11 +1,16 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiScope, type TaskTag } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
 import { TaskTagsSection } from './task-tags-section'
 
+// Radix Select in jsdom: no scrollIntoView, no ResizeObserver.
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
 
 const T = (id: string, name: string, extra: Partial<TaskTag> = {}): TaskTag => ({ id, name, createdAt: '2026-11-01T00:00:00Z', ...extra })
@@ -16,8 +21,8 @@ const TAGS: TaskTag[] = [
   T('tt-dddddddd', 'loose', { projectId: 'nameless' }),
 ]
 
-function setup(options: { tags?: TaskTag[]; patchStatus?: number } = {}) {
-  const { tags = TAGS, patchStatus = 200 } = options
+function setup(options: { tags?: TaskTag[]; patchStatus?: number; postStatus?: number } = {}) {
+  const { tags = TAGS, patchStatus = 200, postStatus = 201 } = options
   const calls: { method: string; url: string; body?: unknown }[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
@@ -27,6 +32,11 @@ function setup(options: { tags?: TaskTag[]; patchStatus?: number } = {}) {
       return new Response(JSON.stringify({ projects: [{ id: 'shop', name: 'Shop', root: '/s', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok' }] }), { status: 200 })
     }
     if (method === 'GET') return new Response(JSON.stringify({ tags, deletedIds: [] }), { status: 200 })
+    if (method === 'POST') {
+      if (postStatus !== 201) return new Response(JSON.stringify({ error: 'a tag named that already exists' }), { status: postStatus })
+      const body = JSON.parse(String(init?.body)) as { name: string; projectId?: string }
+      return new Response(JSON.stringify({ tag: T('tt-eeeeeeee', body.name, body.projectId ? { projectId: body.projectId } : {}) }), { status: 201 })
+    }
     if (method === 'DELETE') return new Response(JSON.stringify({ deleted: true }), { status: 200 })
     if (patchStatus !== 200) return new Response(JSON.stringify({ error: 'a tag named that already exists' }), { status: patchStatus })
     return new Response(JSON.stringify({ tag: tags[0] }), { status: 200 })
@@ -35,6 +45,7 @@ function setup(options: { tags?: TaskTag[]; patchStatus?: number } = {}) {
   return calls
 }
 const patches = (calls: ReturnType<typeof setup>) => calls.filter((c) => c.method === 'PATCH')
+const posts = (calls: ReturnType<typeof setup>) => calls.filter((c) => c.method === 'POST')
 
 describe('Task tags settings', () => {
   it('groups Global, then projects by name, then the unregistered ones', async () => {
@@ -108,5 +119,43 @@ describe('Task tags settings', () => {
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Delete tag' }))
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true))
+  })
+
+  it('adds a global tag from Settings', async () => {
+    const calls = setup()
+    await screen.findByDisplayValue('urgent')
+    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }))
+    fireEvent.change(screen.getByLabelText('New tag name'), { target: { value: '  release  ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(posts(calls)).toHaveLength(1))
+    expect(posts(calls)[0]!.url).toContain('/workspace/task-tags')
+    expect(posts(calls)[0]!.body).toEqual({ name: 'release' })
+    await waitFor(() => expect(screen.queryByLabelText('New tag name')).toBeNull())
+  })
+
+  it('adds a project tag when a project scope is picked', async () => {
+    const calls = setup()
+    await screen.findByDisplayValue('urgent')
+    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }))
+    fireEvent.change(screen.getByLabelText('New tag name'), { target: { value: 'review' } })
+    fireEvent.keyDown(screen.getByLabelText('New tag scope'), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Shop' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(posts(calls)).toHaveLength(1))
+    expect(posts(calls)[0]!.body).toEqual({ name: 'review', projectId: 'shop' })
+  })
+
+  it('offers Add tag in the empty state and keeps the form open on a conflict', async () => {
+    const calls = setup({ tags: [], postStatus: 409 })
+    await screen.findByText('No task tags yet')
+    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }))
+    expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('New tag name'), { target: { value: 'urgent' } })
+    fireEvent.keyDown(screen.getByLabelText('New tag name'), { key: 'Enter' })
+    fireEvent.submit(screen.getByLabelText('New tag name').closest('form')!)
+    await screen.findByRole('alert')
+    expect(posts(calls)).toHaveLength(1)
+    expect(screen.getByRole('alert').textContent).toContain('already exists')
+    expect(screen.getByLabelText('New tag name')).toBeTruthy()
   })
 })

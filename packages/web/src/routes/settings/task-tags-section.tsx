@@ -1,7 +1,7 @@
-import { TagIcon } from 'lucide-react'
+import { PlusIcon, TagIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
 
-import { useDeleteTaskTag, useTaskTags, useUpdateTaskTag } from '@/api/task-tags'
+import { useCreateTaskTag, useDeleteTaskTag, useTaskTags, useUpdateTaskTag } from '@/api/task-tags'
 import { useProjects } from '@/api/queries'
 import {
   TASK_TAG_COLORS,
@@ -25,6 +25,7 @@ import {
 import { Button, buttonVariants } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { tagSwatchClass } from '@/lib/task-tags'
 import { cn } from '@/lib/utils'
 import { CardNote, SettingsCard, isCommitKey } from './form-row'
@@ -40,6 +41,7 @@ export function TaskTagsSection() {
   const tags = useTaskTags()
   const projects = useProjects()
   const [deleting, setDeleting] = useState<TaskTag | null>(null)
+  const [adding, setAdding] = useState(false)
   const remove = useDeleteTaskTag()
 
   if (tags.isPending) {
@@ -62,22 +64,37 @@ export function TaskTagsSection() {
     })),
     { key: 'orphaned', title: 'Unregistered project', tags: all.filter((t) => t.projectId !== undefined && t.orphaned === true) },
   ].filter((g) => g.tags.length > 0)
+  const scopes = (projects.data?.projects ?? []).filter((p) => p.status !== 'missing').map((p) => ({ id: p.id, name: p.name }))
+
+  const addTag = adding ? (
+    <NewTagForm scopes={scopes} onDone={() => setAdding(false)} />
+  ) : (
+    <div className="flex">
+      <Button type="button" variant="outline" size="sm" data-action="task-tags-add" onClick={() => setAdding(true)}>
+        <PlusIcon /> Add tag
+      </Button>
+    </div>
+  )
 
   if (groups.length === 0) {
     return (
       <div data-slot="task-tags-section" className="flex w-full flex-col gap-5">
-        <CenteredState
-          icon={<TagIcon />}
-          title="No task tags yet"
-          subtitle="Create one from the “+ Tag” chip in the new-task composer, or from a task’s tag menu."
-          heading="h2"
-        />
+        {addTag}
+        {adding ? null : (
+          <CenteredState
+            icon={<TagIcon />}
+            title="No task tags yet"
+            subtitle="Add one here, from the “+ Tag” chip in the new-task composer, or from a task’s tag menu."
+            heading="h2"
+          />
+        )}
       </div>
     )
   }
 
   return (
     <div data-slot="task-tags-section" className="flex w-full flex-col gap-5">
+      {addTag}
       {groups.map((group) => (
         <SettingsCard key={group.key} slot={`task-tags-${group.key}`} title={group.title}>
           {group.tags.map((tag) => (
@@ -105,6 +122,64 @@ export function TaskTagsSection() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+const GLOBAL_SCOPE = '__global__' // never a project slug
+
+/** Spec § 7.4: Settings is the one place a tag can be created global outright (inline creates are project-scoped, D7). */
+function NewTagForm({ scopes, onDone }: { scopes: Array<{ id: string; name: string }>; onDone: () => void }) {
+  const create = useCreateTaskTag()
+  const [name, setName] = useState('')
+  const [scope, setScope] = useState(GLOBAL_SCOPE)
+  const [error, setError] = useState<string | null>(null)
+  const trimmed = name.trim()
+
+  const submit = () => {
+    if (trimmed === '' || create.isPending) return
+    setError(null)
+    create.mutate(
+      { name: trimmed, ...(scope === GLOBAL_SCOPE ? {} : { projectId: scope }) },
+      { onSuccess: onDone, onError: (e) => setError(errorMessage(e)) },
+    )
+  }
+
+  return (
+    <SettingsCard slot="task-tags-new" title="New tag">
+      <form
+        className="flex flex-col gap-1.5 px-4 py-3 text-ui"
+        onSubmit={(e) => { e.preventDefault(); submit() }}
+      >
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Input
+            aria-label="New tag name"
+            className="w-48"
+            placeholder="Name"
+            autoFocus
+            value={name}
+            maxLength={TASK_TAG_NAME_MAX}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); onDone() } }}
+          />
+          <Select value={scope} onValueChange={setScope}>
+            <SelectTrigger aria-label="New tag scope" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={GLOBAL_SCOPE}>Global</SelectItem>
+              {scopes.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button type="submit" size="sm" data-action="task-tags-create" disabled={trimmed === '' || create.isPending}>
+            Create
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onDone}>
+            Cancel
+          </Button>
+        </div>
+        {error ? <p role="alert" className="text-meta text-danger">{error}</p> : null}
+      </form>
+    </SettingsCard>
   )
 }
 
