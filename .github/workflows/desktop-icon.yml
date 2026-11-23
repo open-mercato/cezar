@@ -1,0 +1,129 @@
+name: Desktop icon
+
+# The macOS app icon is two icons (scripts/icon.mjs): icon.icns for macOS 15 and older and an
+# Icon Composer document compiled into Assets.car for macOS 26. This compiles the document with
+# Xcode 26 (the Assets.car artifact is what a maintainer without Xcode 26 commits), checks the
+# committed Assets.car names the icon Info.plist will ask for, and has each macOS draw the
+# shipped pair the way its Dock does.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'packages/desktop/src-tauri/icons/**'
+      - 'packages/desktop/scripts/icon.mjs'
+      - 'packages/desktop/scripts/render-app-icon.swift'
+      - '.github/workflows/desktop-icon.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-icon-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ICONS: packages/desktop/src-tauri/icons
+
+jobs:
+  compile:
+    name: Compile the Icon Composer icon
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compile cezar.icon with actool
+        shell: bash
+        run: |
+          xcrun actool --version --output-format human-readable-text < /dev/null
+          mkdir -p out
+          # The same arguments as compileAssetsCar in scripts/icon.mjs.
+          xcrun actool "$ICONS/cezar.icon" --compile out --output-format human-readable-text \
+            --notices --warnings --output-partial-info-plist out/partial.plist --app-icon cezar \
+            --include-all-app-icons --enable-on-demand-resources NO --development-region en \
+            --target-device mac --minimum-deployment-target 12.0 --platform macosx < /dev/null
+          cat out/partial.plist
+          xcrun assetutil --info out/Assets.car | head -80
+
+      - name: Upload the compiled Assets.car
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assets-car
+          path: out/
+          retention-days: 14
+
+      - name: Check the committed Assets.car
+        shell: bash
+        run: |
+          test -f "$ICONS/Assets.car" || { echo "::error::$ICONS/Assets.car is missing: commit the compiled artifact"; exit 1; }
+          xcrun assetutil --info "$ICONS/Assets.car" > committed.json
+          grep -Eq '"Name" ?: ?"cezar"' committed.json || { echo "::error::the committed Assets.car has no icon named cezar"; exit 1; }
+
+  render:
+    name: Render on ${{ matrix.os }}
+    needs: compile
+    # Still draws when only the committed-catalog check failed: the renders are the evidence.
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the compiled Assets.car
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: assets-car
+          path: compiled
+
+      - name: Draw the shipped icon pair the way this macOS does
+        shell: bash
+        run: |
+          sw_vers
+          # A runnable bundle shaped like the one tauri builds: CFBundleIconFile for the .icns,
+          # CFBundleIconName for the icon inside Assets.car.
+          app="$RUNNER_TEMP/Cezar Icon Check.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp /usr/bin/true "$app/Contents/MacOS/check"
+          cp "$ICONS/icon.icns" "$app/Contents/Resources/icon.icns"
+          # The committed catalog; the one just compiled only while none is committed yet.
+          car="$ICONS/Assets.car"; [ -f "$car" ] || car=compiled/Assets.car
+          cp "$car" "$app/Contents/Resources/Assets.car"
+          cat > "$app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>check</string>
+            <key>CFBundleIdentifier</key><string>dev.cezar.icon-check</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>CFBundleIconFile</key><string>icon</string>
+            <key>CFBundleIconName</key><string>cezar</string>
+          </dict></plist>
+          PLIST
+          codesign -f -s - "$app"
+          mkdir -p renders
+          # Without Assets.car too: what this macOS draws from the .icns alone.
+          legacy="$RUNNER_TEMP/Cezar Legacy Check.app"
+          cp -R "$app" "$legacy"
+          rm "$legacy/Contents/Resources/Assets.car"
+          plutil -remove CFBundleIconName "$legacy/Contents/Info.plist"
+          plutil -replace CFBundleIdentifier -string dev.cezar.icon-check-legacy "$legacy/Contents/Info.plist"
+          codesign -f -s - "$legacy"
+          swift packages/desktop/scripts/render-app-icon.swift "$app" "renders/${{ matrix.os }}-shipped.png" 256
+          swift packages/desktop/scripts/render-app-icon.swift "$legacy" "renders/${{ matrix.os }}-icns-only.png" 256
+
+      - name: Upload the renders
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: renders-${{ matrix.os }}
+          path: renders/
+          retention-days: 14
