@@ -20,8 +20,22 @@ const WINDOWS_TOAST = [
   '$n.Dispose()',
 ].join('; ');
 
-const onPath = (binary: string, env: NodeJS.ProcessEnv): boolean =>
-  (env.PATH ?? '').split(delimiter).some((dir) => dir !== '' && existsSync(join(dir, binary)));
+// Probed once per PATH value for a while: capabilities() runs on every /api request and a PATH
+// scan is ~350 ms on WSL (#2413). The TTL keeps a freshly installed notify-send discoverable.
+const ON_PATH_TTL_MS = 60_000;
+const onPathCache = new Map<string, { at: number; found: boolean }>();
+
+const onPath = (binary: string, env: NodeJS.ProcessEnv): boolean => {
+  const path = env.PATH ?? '';
+  const key = `${binary}\0${path}`;
+  const now = Date.now();
+  const hit = onPathCache.get(key);
+  if (hit && now - hit.at < ON_PATH_TTL_MS) return hit.found;
+  const found = path.split(delimiter).some((dir) => dir !== '' && existsSync(join(dir, binary)));
+  if (onPathCache.size > 16) onPathCache.clear();
+  onPathCache.set(key, { at: now, found });
+  return found;
+};
 
 export function systemNotificationsAvailable(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
   if (platform === 'darwin' || platform === 'win32') return true;
