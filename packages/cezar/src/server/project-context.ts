@@ -28,6 +28,9 @@ import { claimDataDirLock, dataDirInUseMessage, type DataDirLockClaim } from '..
  * `unknown-project` to 404).
  */
 
+/** How long a project another server holds answers `in-use` before the lock is probed again. */
+const HELD_RETRY_MS = 5_000;
+
 /** The per-project bundle the routes operate on. */
 export interface ProjectContext {
   /** Registry project id (slug). */
@@ -118,6 +121,9 @@ export class ProjectContexts {
   private readonly dataLocks = new Map<string, () => Promise<void>>();
   /** A degraded lock warns once per data dir, not once per build attempt. */
   private readonly warnedDataDirs = new Set<string>();
+  /** A held project is re-probed at most every HELD_RETRY_MS: each probe can spawn `ps`, and an
+   *  open cockpit tab asks for that project on every refresh. */
+  private readonly heldUntil = new Map<string, { until: number; error: ProjectContextError }>();
 
   constructor(private readonly deps: ProjectContextDeps) {
     this.semaphore = deps.semaphore ?? new WorkspaceSemaphore();
@@ -266,8 +272,15 @@ export class ProjectContexts {
     ensureDataGitignore(project.root);
     const dataDir = join(project.root, '.ai/cezar');
     // Before the store opens: a project another live server owns must not be recovered here.
+    const recent = this.heldUntil.get(projectId);
+    if (recent && recent.until > Date.now()) throw recent.error;
     const lock = await (this.deps.claimDataDir ?? claimDataDirLock)(dataDir);
-    if (lock.kind === 'held') throw new ProjectContextError('in-use', projectId, dataDirInUseMessage(dataDir, lock));
+    if (lock.kind === 'held') {
+      const error = new ProjectContextError('in-use', projectId, dataDirInUseMessage(lock));
+      this.heldUntil.set(projectId, { until: Date.now() + HELD_RETRY_MS, error });
+      throw error;
+    }
+    this.heldUntil.delete(projectId);
     if (lock.kind === 'degraded' && !this.warnedDataDirs.has(dataDir)) {
       this.warnedDataDirs.add(dataDir);
       console.warn(`[cez] project lock unavailable for ${projectId} (${lock.reason}) — opening it without one`);

@@ -58,10 +58,10 @@ export async function claimDataDirLock(dataDir: string): Promise<DataDirLockClai
   };
 }
 
-/** The refusal line both the boot path and the 409 use. */
-export function dataDirInUseMessage(dataDir: string, claim: { pid?: number }): string {
+/** The refusal line. Only the local boot error names the path; a 409 reaches phones and hosted clients. */
+export function dataDirInUseMessage(claim: { pid?: number }, dataDir?: string): string {
   const who = claim.pid === undefined ? 'another cezar' : `another cezar (pid ${claim.pid})`;
-  return `${who} already serves the tasks in ${dataDir}`;
+  return dataDir === undefined ? `${who} already serves this project's tasks` : `${who} already serves the tasks in ${dataDir}`;
 }
 
 function ownerPid(directory: string): number | undefined {

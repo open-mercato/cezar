@@ -38,7 +38,8 @@ describe.skipIf(!processIdentityPlatformSupported())('claimDataDirLock', () => {
 
     const second = await claimDataDirLock(dir);
     expect(second).toEqual({ kind: 'held', pid: process.pid });
-    expect(dataDirInUseMessage(dir, { pid: process.pid })).toBe(`another cezar (pid ${process.pid}) already serves the tasks in ${dir}`);
+    expect(dataDirInUseMessage({ pid: process.pid }, dir)).toBe(`another cezar (pid ${process.pid}) already serves the tasks in ${dir}`);
+    expect(dataDirInUseMessage({ pid: process.pid })).toBe(`another cezar (pid ${process.pid}) already serves this project's tasks`);
 
     if (first.kind === 'owned') await first.release();
     const third = await claimDataDirLock(dir);

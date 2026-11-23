@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
@@ -358,13 +358,19 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       const res = await apiRequest(app, `/api/v1/p/${other.id}/runs`);
       expect(res.status).toBe(409);
       const body = await res.json() as { error: string };
-      expect(body.error).toBe(`project ${other.id} is in use: another cezar (pid ${process.pid}) already serves the tasks in ${join(other.root, '.ai/cezar')}`);
+      expect(body.error).toBe(`project ${other.id} is in use: another cezar (pid ${process.pid}) already serves this project's tasks`);
       expect(contexts.peek(other.id)).toBeUndefined();
     } finally {
       if (held.kind === 'owned') await held.release();
     }
-    // Once the owner lets go, the same project opens normally.
-    expect((await apiRequest(app, `/api/v1/p/${other.id}/runs`)).status).toBe(200);
+    // Once the owner lets go, the same project opens after the short re-probe window.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 6_000);
+      expect((await apiRequest(app, `/api/v1/p/${other.id}/runs`)).status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a non-boot project builds lazily and answers with its own state', async () => {

@@ -191,9 +191,29 @@ describe('ProjectContexts', () => {
     const error = await contexts.context('a').catch((err: unknown) => err);
     expect(error).toBeInstanceOf(ProjectContextError);
     expect((error as ProjectContextError).reason).toBe('in-use');
-    expect((error as Error).message).toBe(`project a is in use: another cezar (pid 4242) already serves the tasks in ${join(rootA, '.ai/cezar')}`);
+    expect((error as Error).message).toBe(`project a is in use: another cezar (pid 4242) already serves this project's tasks`);
     expect(existsSync(join(rootA, '.ai/cezar', 'runs.json'))).toBe(false);
     expect(contexts.ids()).toEqual([]);
+  });
+
+  it('re-probes a held project at most every few seconds, then opens it once free', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let held = true;
+      const claim = vi.fn(async () => (held ? { kind: 'held' as const, pid: 4242 } : { kind: 'owned' as const, release: async () => {} }));
+      const contexts = new ProjectContexts({ listProjects: async () => [{ id: 'a', root: rootA, status: 'not-git' }], claimDataDir: claim });
+      await expect(contexts.context('a')).rejects.toThrow('in use');
+      await expect(contexts.context('a')).rejects.toThrow('in use');
+      expect(claim).toHaveBeenCalledOnce();
+
+      held = false;
+      vi.setSystemTime(Date.now() + 6_000);
+      expect((await contexts.context('a')).id).toBe('a');
+      expect(claim).toHaveBeenCalledTimes(2);
+      contexts.disposeAll();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('releases the data-dir lock on dispose and when the build fails after the claim', async () => {

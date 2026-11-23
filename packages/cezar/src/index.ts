@@ -430,7 +430,7 @@ async function serveCommand(
   const dataLock = await claimDataDirLock(bootDataDir);
   if (dataLock.kind === 'held') {
     await releaseRuntime();
-    throw new Error(`${dataDirInUseMessage(bootDataDir, dataLock)} — cezar will not start a second server on the same tasks. Stop that process, or open this project in its cockpit.`);
+    throw new Error(`${dataDirInUseMessage(dataLock, bootDataDir)} — cezar will not start a second server on the same tasks. Stop that process, or open this project in its cockpit.`);
   }
   if (dataLock.kind === 'degraded') console.warn(`[cez] project lock unavailable (${dataLock.reason}) — starting without it`);
   else releaseDataLock = dataLock.release;
