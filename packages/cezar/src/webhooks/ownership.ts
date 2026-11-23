@@ -56,7 +56,10 @@ class ForeignOwnerError extends Error {
   constructor() { super('Cannot verify foreign owner identity'); }
 }
 async function alive(identity: Identity, own: Identity): Promise<boolean> {
-  if (identity.host !== own.host) throw new ForeignOwnerError();
+  // A renamed host (DHCP/VPN toggle, #2398) keeps its random boot ID: equal stable IDs prove the same
+  // kernel, so the pid namespace and pid+start checks below decide. A different boot ID on another
+  // host stays unverifiable, never a reboot — it may be a second machine sharing this directory.
+  if (identity.host !== own.host && !(identity.boot === own.boot && bootIsStableId(own.boot))) throw new ForeignOwnerError();
   // Only two random boot IDs prove a reboot. The Windows token is a boot INSTANT that moves when the
   // clock is set, so there a mismatch falls through to pid + start: its start ticks are absolute
   // creation times, valid across boots. A Linux start token counts jiffies since boot, so it must not

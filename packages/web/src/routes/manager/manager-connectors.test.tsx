@@ -5,6 +5,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ManagerConnectors, ManagerConnectorsResponse } from '@open-mercato/cezar-api-client'
 
 import { ConnectorsDialog, savedConnectors, setConnectorLevel, setConnectorToolOverride } from './manager-connectors'
+
+const { toast } = vi.hoisted(() => ({ toast: vi.fn() }))
+vi.mock('@/components/ui/toaster', () => ({ toast }))
 import { managerFixture } from './manager-fixtures'
 
 const calendar = {
@@ -102,16 +105,38 @@ describe('ConnectorsDialog', () => {
     expect(onSave).toHaveBeenCalledWith({ claude_ai_Google_Calendar: { level: 'write', tools: { create_event: 'allow' } } })
   })
 
-  it('discovers on Refresh from the empty state', async () => {
+  it('discovers once on its own when nothing was seen yet (manager turns load no unused connector)', async () => {
     const calls = stubRoutes({ available: true, servers: [] }, { available: true, servers: [calendar] })
     renderDialog()
-    expect(await screen.findByText('No connectors seen yet — Refresh to discover')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     expect(await screen.findByText('claude.ai Google Calendar')).toBeTruthy()
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       'GET /api/v1/workspace/managers/global/connectors',
       'POST /api/v1/workspace/managers/global/connectors/refresh',
     ])
+  })
+
+  it('discovers again on Refresh when the probe found nothing', async () => {
+    const calls = stubRoutes({ available: true, servers: [] }, { available: true, servers: [], observedAt: '2026-11-21T08:00:00Z' })
+    renderDialog()
+    expect(await screen.findByText('No connectors seen yet — Refresh to discover')).toBeTruthy()
+    await waitFor(() => expect(calls).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(calls.map((call) => call.method)).toEqual(['GET', 'POST', 'POST']))
+  })
+
+  it('says so when its own lookup fails, and Refresh still works', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET' })
+      return url.endsWith('/refresh')
+        ? new Response(JSON.stringify({ error: 'Claude Code is not signed in' }), { status: 502 })
+        : new Response(JSON.stringify({ available: true, servers: [] }), { status: 200 })
+    }))
+    toast.mockClear()
+    renderDialog()
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('Claude Code is not signed in'), { tone: 'danger' }))
+    expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(1)
   })
 
   it('explains that only Claude Code managers can use connectors', async () => {

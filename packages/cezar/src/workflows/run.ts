@@ -751,6 +751,9 @@ interface ActiveRun {
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
   releaseRepoRoot?: () => void;
+  /** Set while a Continue is waiting for the working tree: it already shows as running, and a
+   *  Stop restores the previous status instead of cancelling (#2396). */
+  continuationWait?: boolean;
   /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
    *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
   autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
@@ -1600,6 +1603,8 @@ export class RunManager {
    *  means the tree is free right now, which is what lets a parked in-place run take it back
    *  synchronously (`claimFreeRepoRoot`) instead of round-tripping through a promise. */
   private repoRootBusy = 0;
+  /** Run ids behind the leases in `repoRootBusy`, oldest first — so a waiter can name who is ahead of it (#2396). */
+  private repoRootOwners: string[] = [];
 
   /** `.ai/cezar` — where the per-task handoff files and todos.json live. */
   private readonly dataDir: string;
@@ -4842,17 +4847,18 @@ export class RunManager {
    * the spot, so the common wake-up (no other in-place task ran meanwhile) resumes the session
    * synchronously — the #347 guarantee that a parked run's resume never queues behind anything.
    */
-  private claimFreeRepoRoot(state: ActiveRun): boolean {
+  private claimFreeRepoRoot(state: ActiveRun, runId?: string): boolean {
     if (this.repoRootBusy > 0 || state.cancelled) return false;
-    state.releaseRepoRoot = this.chainRepoRoot().release;
+    state.releaseRepoRoot = this.chainRepoRoot(runId).release;
     state.repoRootParked = false;
     return true;
   }
 
   /** Chain one more lease onto the tail. `previous` settles when every earlier lease is released;
    *  `release` hands the tree on (idempotent — a lease dropped mid-wait releases exactly once). */
-  private chainRepoRoot(): { previous: Promise<void>; release: () => void } {
+  private chainRepoRoot(owner?: string): { previous: Promise<void>; release: () => void } {
     const previous = this.repoRootTail;
+    if (owner) this.repoRootOwners.push(owner);
     let resolve: () => void = () => undefined;
     this.repoRootTail = new Promise<void>((r) => {
       resolve = r;
@@ -4863,9 +4869,21 @@ export class RunManager {
       if (released) return;
       released = true;
       this.repoRootBusy -= 1;
+      if (owner) {
+        const at = this.repoRootOwners.indexOf(owner);
+        if (at >= 0) this.repoRootOwners.splice(at, 1);
+      }
       resolve();
     };
     return { previous, release };
+  }
+
+  /** The note for a run about to wait on the tree: names the task directly ahead of it (#2396). */
+  private repoRootWaitNote(): string {
+    const ahead = this.repoRootOwners[this.repoRootOwners.length - 1];
+    return ahead
+      ? `waiting for task ${ahead.slice(0, 8)} to release the repository working tree`
+      : 'waiting for exclusive access to the repository working tree';
   }
 
   /**
@@ -4881,7 +4899,7 @@ export class RunManager {
     this.store.appendEvent(runId, {
       type: 'note',
       stepId: state.currentStepId,
-      message: 'resuming — waiting for exclusive access to the repository working tree',
+      message: this.repoRootBusy > 0 ? this.repoRootWaitNote().replace(/^waiting/, 'resuming — waiting') : 'resuming — waiting for exclusive access to the repository working tree',
     });
     try {
       const acquired = await this.acquireRepoRoot(runId, state);
@@ -4896,7 +4914,7 @@ export class RunManager {
     // `cancel()` can land between the run going `running` and reaching here,
     // while `interrupt` is still the default no-op — never enter the chain.
     if (state.cancelled) return false;
-    const { previous, release } = this.chainRepoRoot();
+    const { previous, release } = this.chainRepoRoot(runId);
     // Until `previous` resolves this run does not own the tree yet, so a drop
     // during the wait must not hand the tree to the next waiter — chain our
     // release behind `previous` instead of resolving the tail early.
@@ -5023,6 +5041,9 @@ export class RunManager {
     } catch {
       // Cancellation is terminal even if a provider's interrupt hook is already tearing down.
     }
+    // A Continue still waiting for the tree has touched nothing: `runContinuation` puts the
+    // task back to its settled status when the wait aborts (#2396), so it is not cancelled.
+    if (state.continuationWait) return true;
     const finishedAt = new Date().toISOString();
     for (const step of this.store.getRun(runId)?.steps ?? []) {
       if (step.status === 'running' || step.status === 'waiting') {
@@ -5500,7 +5521,7 @@ export class RunManager {
     // tree again before its session resumes, and the lease is asynchronous — so the message is
     // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
     // delivered once the tree is ours. Every wake-up that lands meanwhile rides the same wait.
-    if (state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state))) {
+    if (state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state, runId))) {
       const resume = (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
       void resume.then((acquired) => {
         if (!acquired) return;
@@ -6037,51 +6058,11 @@ export class RunManager {
     if (state.cwd === this.repoRoot) {
       state.autoLand = await this.landingPolicy(record, continueConfig);
     }
-    if (state.cwd === this.repoRoot && !state.readOnly) {
-      if (repositoryRootLockDisabled()) {
-        this.store.appendEvent(runId, {
-          type: 'note',
-          message: REPOSITORY_ROOT_LOCK_DISABLED_NOTE,
-        });
-      } else {
-        this.store.appendEvent(runId, {
-          type: 'note',
-          message: 'waiting for exclusive access to the repository working tree',
-        });
-        if (!(await this.acquireRepoRoot(runId, state))) {
-          this.store.updateRun(runId, {
-            status: 'cancelled',
-            finishedAt: new Date().toISOString(),
-            currentStepId: undefined,
-          });
-          this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
-          this.dropActive(runId, state);
-          return;
-        }
-      }
-    }
-    this.armAutosave(runId, state);
-    if (record) seedHandoffFile(this.dataDir, record); // idempotent — normally already there
-    // Registry snapshot for `/skill` expansion. `execute` loads this for the workflow's own
-    // sessions; a continuation builds its OWN ActiveRun, and without this the resumed session
-    // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
-    // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
-    state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
-    // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
-    // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
-    // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
-    // a run that quietly degrades into an ordinary task.
-    this.prepareDispatchSession(runId, state);
-    this.prepareAutomationsSession(state);
-    this.prepareArtifactsSession(runId, state);
-
-    // Cancellation may have retired this continuation while its async preparation was running.
-    // Do not let the late promise make a durably cancelled run look active again.
-    if (state.cancelled) {
-      this.dropActive(runId, state);
-      return;
-    }
-
+    // Show the Continue as running and the message in the thread BEFORE any wait for the tree, so
+    // a held message is never invisible (#2396). Keep the settled state for a Stop during the wait.
+    const settledRun = record && { status: record.status, error: record.error, finishedAt: record.finishedAt, currentStepId: record.currentStepId, activity: record.activity };
+    const settledStep = record?.steps.find((step) => step.id === stepId);
+    const settledStepPatch = settledStep && { status: settledStep.status, iterations: settledStep.iterations, startedAt: settledStep.startedAt, finishedAt: settledStep.finishedAt, sessionId: settledStep.sessionId, backend: settledStep.backend };
     this.store.updateRun(runId, {
       status: 'running',
       error: undefined,
@@ -6116,6 +6097,60 @@ export class RunManager {
       imageCount: openingImages.filter((b) => b.type === 'image').length,
       ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
     });
+
+    if (state.cwd === this.repoRoot && !state.readOnly) {
+      if (repositoryRootLockDisabled()) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: REPOSITORY_ROOT_LOCK_DISABLED_NOTE,
+        });
+      } else {
+        const waited = this.repoRootBusy > 0;
+        this.store.appendEvent(runId, { type: 'note', message: this.repoRootWaitNote() });
+        state.continuationWait = waited;
+        const acquired = await this.acquireRepoRoot(runId, state);
+        state.continuationWait = false;
+        if (!acquired) {
+          // Stopped while waiting: nothing ran, so the task goes back to what it was (#2396).
+          if (waited && settledRun) {
+            this.store.updateRun(runId, settledRun);
+            if (settledStepPatch) this.store.updateStep(runId, stepId, settledStepPatch);
+            this.store.appendEvent(runId, { type: 'lifecycle', message: 'stopped while waiting for the repository working tree — nothing was started' });
+          } else {
+            this.store.updateRun(runId, {
+              status: 'cancelled',
+              finishedAt: new Date().toISOString(),
+              currentStepId: undefined,
+            });
+            this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+          }
+          this.dropActive(runId, state);
+          return;
+        }
+        if (waited) this.store.appendEvent(runId, { type: 'note', message: 'repository working tree is free — starting' });
+      }
+    }
+    this.armAutosave(runId, state);
+    if (record) seedHandoffFile(this.dataDir, record); // idempotent — normally already there
+    // Registry snapshot for `/skill` expansion. `execute` loads this for the workflow's own
+    // sessions; a continuation builds its OWN ActiveRun, and without this the resumed session
+    // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
+    // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
+    state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+    // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
+    // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
+    // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
+    // a run that quietly degrades into an ordinary task.
+    this.prepareDispatchSession(runId, state);
+    this.prepareAutomationsSession(state);
+    this.prepareArtifactsSession(runId, state);
+
+    // Cancellation may have retired this continuation while its async preparation was running.
+    // Do not let the late promise make a durably cancelled run look active again.
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
 
     let stepCost = 0;
     let turnText = '';
@@ -6946,10 +6981,7 @@ export class RunManager {
           message: REPOSITORY_ROOT_LOCK_DISABLED_NOTE,
         });
       } else {
-        emit({
-          type: 'note',
-          message: 'waiting for exclusive access to the repository working tree',
-        });
+        emit({ type: 'note', message: this.repoRootWaitNote() });
         // A cancel during the wait leaves the lease ungranted; the step loop
         // below breaks on `cancelled` before touching the tree and settles the
         // run through the usual path.
@@ -8283,7 +8315,7 @@ export class RunManager {
       }
     }
     // Take the working tree back before the graph goes on (the `deliverMessage` twin).
-    if (outcome.kind !== 'cancelled' && state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state))) {
+    if (outcome.kind !== 'cancelled' && state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state, runId))) {
       const acquired = await (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
       if (!acquired) return { kind: 'cancelled' };
     }

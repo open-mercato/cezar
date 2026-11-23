@@ -52,7 +52,7 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
-import { managerAccessOf, supersededAskIds, type ManagerListResponse, type ManagerMessage, type ManagerSummary } from '@open-mercato/cezar-api-client'
+import { managerAccessOf, supersededAskIds, type ManagerListResponse, type ManagerMessage, type ManagerSummary, type PlanUsageProvider } from '@open-mercato/cezar-api-client'
 
 import { useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerCompanion } from './manager-companion'
@@ -67,7 +67,7 @@ import type { ManagerPatch } from './manager-pickers'
 import { ManagerSettings, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
 import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
-import { ManagerUsageChip, useManagerPlanUsage } from './manager-plan-usage'
+import { ManagerLimitStrip, ManagerUsageChip, useManagerPlanUsage } from './manager-plan-usage'
 import { PLAN_LIMIT_RUNNERS } from '@/lib/plan-usage'
 
 /** Older history loads this far before the reader reaches the top. */
@@ -566,7 +566,10 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined && message.askClosed === undefined && !superseded.has(message.id))
   const asking = manager.pendingActions > 0 || questionOpen
   const now = useNow(30_000)
-  const planUsage = useManagerPlanUsage(id, chat.messages, now, PLAN_LIMIT_RUNNERS.has(manager.runner ?? 'claude'))
+  const usageRunner = manager.runner ?? 'claude'
+  const usageProvider = PLAN_LIMIT_RUNNERS.has(usageRunner) ? (usageRunner as PlanUsageProvider) : null
+  const planUsage = useManagerPlanUsage({ managerId: id, provider: usageProvider, agentProfile: manager.agentProfile }, chat.messages, now)
+  const usageProps = usageProvider ? { usage: planUsage.usage, account: planUsage.account, provider: usageProvider, now } : null
   const subline = watchingLine({
     names: connected.map((project) => project.name),
     access: connected.map((project) => managerAccessOf(manager, project.id)),
@@ -705,7 +708,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           {inactive ? <p className="text-xs text-muted-foreground md:hidden">Inactive</p> : null}
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
         </div>
-        <ManagerUsageChip name={manager.name} usage={planUsage.today} />
+        {usageProps ? <ManagerUsageChip {...usageProps} /> : null}
         <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" disabled={inactive} title={inactive ? 'Reactivate to check' : undefined} onClick={checkNow}>
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now
@@ -839,8 +842,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   projects={connected}
                   superseded={superseded.has(message.id)}
                   authLive={authLive.has(message.id)}
+                  {...(usageProvider ? { planUsage: planUsage.replies.get(message.id) } : {})}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
-                  planUsage={planUsage.replies.get(message.id)}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
                 />
               )))}
@@ -900,6 +903,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             ))}
           </div>
         ) : null}
+        {usageProps ? <ManagerLimitStrip {...usageProps} /> : null}
         <Composer
           key={id}
           dictation={false}

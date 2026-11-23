@@ -242,7 +242,10 @@ type AgentEvent =
 usage windows (`limits`: `window`, `utilization` 0..1, ISO `resetsAt`) for the run header. The
 run manager merges it onto `RunRecord.liveUsage` and never writes it to the NDJSON transcript.
 Claude emits it from the main agent's message usage, `result.modelUsage[model].contextWindow`
-and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it.
+and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it. Claude also
+adds two optional token splits that only a manager's turn stats read, and that the run record drops:
+`cacheWriteTokens` on a message's reading (what that request wrote to the prompt cache), and
+`turnTokens` (`cacheReadTokens`, `cacheWriteTokens`, `outputTokens`) from the result's own usage.
 
 `mcp-servers` is Claude's `system/init` `mcp_servers` and `tools`, emitted once per process. Only
 a manager reads it (connectors, spec `2026-11-12-manager-connectors`); the run manager drops it, and

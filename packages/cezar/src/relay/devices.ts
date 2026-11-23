@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { phonePushPrefsSchema, type PhonePushPrefs } from '@open-mercato/cezar-contract';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
 
 /**
@@ -26,6 +27,10 @@ const deviceSchema = z.looseObject({
   grants: z.array(z.string().max(64)).catch([]),
   // The one live push grant (spec R5). Sealed by the relay: cezar cannot read the token inside.
   push: z.object({ grant: z.string().min(1).max(4096), grantId: b64u22, expiresAt: z.number().int() }).optional().catch(undefined),
+  // Absent means the defaults (spec 2026-11-20-phone-notifications-inbox); a bad value reads as absent.
+  prefs: phonePushPrefsSchema.optional().catch(undefined),
+  // The count this phone was last pushed, so a restart still knows it owes the phone a lower one.
+  countTold: z.number().int().min(0).max(99).optional().catch(undefined),
 });
 export type RelayDevice = z.infer<typeof deviceSchema>;
 
@@ -130,6 +135,22 @@ export class RelayDevices {
     device.push = push;
     this.write();
     return true;
+  }
+
+  setPrefs(deviceId: string, prefs: PhonePushPrefs): boolean {
+    const device = this.get(deviceId);
+    if (!device) return false;
+    device.prefs = prefs;
+    this.write();
+    return true;
+  }
+
+  /** Written only when it changes. */
+  setCountTold(deviceId: string, count: number): void {
+    const device = this.get(deviceId);
+    if (!device || device.countTold === count) return;
+    device.countTold = count;
+    this.write();
   }
 
   /** `grantId` guards a send that raced a renewal: only the grant that failed is dropped. */

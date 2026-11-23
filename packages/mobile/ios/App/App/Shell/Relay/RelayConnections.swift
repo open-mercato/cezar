@@ -198,6 +198,12 @@ final class RelayConnections: ShellConnector.RelayPort {
         bundle(server.id)?.saveStartPath(path)
     }
 
+    /// Every server's cached bundle: an app update drops what the old build kept.
+    func clearBundles() {
+        guard let bundles else { return }
+        try? FileManager.default.removeItem(at: bundles)
+    }
+
     func forgetBundle(_ id: String) {
         releaseWarm(id)
         bundle(id)?.clear()
