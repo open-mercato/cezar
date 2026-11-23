@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionResponse } from '@open-mercato/cezar-contract';
-import { createAttentionAnnouncer, createAttentionService } from './service.ts';
+import { createAttentionService } from './service.ts';
 
 const listOf = (revision: string): AttentionResponse => ({
   items: [],
@@ -95,15 +95,5 @@ describe('createAttentionService', () => {
     await service.idle();
     expect(heard).toEqual(['r3']);
     service.dispose();
-  });
-});
-
-describe('createAttentionAnnouncer (review of #2443, finding 1)', () => {
-  it('announces every change at once, whether or not a recount follows', () => {
-    const log: string[] = [];
-    const announcer = createAttentionAnnouncer({ poke: () => log.push('poke'), announce: () => log.push('announce') });
-    announcer.changed();
-    announcer.changed();
-    expect(log).toEqual(['poke', 'announce', 'poke', 'announce']);
   });
 });

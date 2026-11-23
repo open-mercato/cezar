@@ -5,7 +5,7 @@ import { applyOverrideLocally, attentionKeys, clearAttentionOverride, setAttenti
 import { archiveRun, cancelRun, finishRun, setProjectRunRead } from '@/api/client'
 import { decideManagerAction, managerKeys, markManagerRead, updateManager, useManagers } from '@/api/managers'
 import { queryKeys, useHealth } from '@/api/queries'
-import { answerQuestion, pauseDismiss, resumeDismiss, scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
+import { answerQuestion, pauseDismiss, resumeDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
 import { toast } from '@/components/ui/toaster'
 import type { ManagerReferenceProject } from '@/lib/managers'
 import { RunConfirmDialog } from '@/routes/task-thread/run-confirm-dialog'
@@ -13,7 +13,7 @@ import type { RunRecord } from '@open-mercato/cezar-api-client'
 
 import type { AttentionActions } from './now-attention'
 import type { TriageActions } from './now-triage'
-import { createTriageActions } from './now-triage-actions'
+import { createTriageActions, questionCloser } from './now-triage-actions'
 import { keyedQueue } from './now-triage-model'
 
 const NO_MANAGERS: readonly { id: string; notify?: boolean | undefined }[] = []
@@ -71,7 +71,7 @@ export function useNeedsYouActions(): {
     setOverride: setAttentionOverride,
     clearOverride: clearAttentionOverride,
     applyLocally: (override) => applyOverrideLocally(queryClient, override),
-    scheduleClose: (key, label, onFailed) => scheduleDismiss(queryClient, key, label, { onFailed }),
+    scheduleClose: questionCloser(queryClient),
     holdClose: (key, held) => (held ? pauseDismiss(key) : resumeDismiss(key)),
     undoClose: undoDismiss,
     finishRun,
