@@ -123,8 +123,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // 2026-10-20-trunk-based-projects).
   const autoLandProject = config.data?.landing === 'auto' && config.data.landingBlocked === null
   const trunk = !run.worktreePath && run.worktree === false && !run.readOnly && autoLandProject
-  // A worktree task in that project still lands on the base, through its agent.
-  const trunkBranch = Boolean(run.worktreePath) && !run.readOnly && autoLandProject
+  // A worktree task in that project still lands on the base, through its agent — but not a dispatch
+  // child, whose work goes back to its parent (spec 2026-09-10-dispatch).
+  const trunkBranch = Boolean(run.worktreePath) && !run.readOnly && !run.dispatch?.parentRunId && autoLandProject
   const trunkBase = config.data?.baseBranch ?? repo.data?.info?.branch ?? 'main'
   // A trunk task reads the shared checkout, which other tasks land from too: keep it live.
   const status = useRunGitStatus(run.id, (Boolean(run.worktreePath) || trunk) && !finished, isRunActive(run.status) || trunk)

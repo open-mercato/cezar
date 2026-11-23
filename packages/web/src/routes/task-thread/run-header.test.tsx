@@ -1346,6 +1346,13 @@ describe('the facts line', () => {
       )
     })
 
+    it('a dispatch child keeps Create PR: its work goes back to its parent, not to main', async () => {
+      stubFetch(project('auto'))
+      renderHeader(run('waiting', { ...worktreeTask, dispatch: { rootRunId: 'root', parentRunId: 'root', kind: 'implement' } }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
     it('outside a trunk-based project the same worktree task keeps Create PR', async () => {
       stubFetch(project(null))
       renderHeader(run('waiting', worktreeTask))
