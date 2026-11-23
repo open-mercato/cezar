@@ -12,6 +12,8 @@ import {
   XIcon,
 } from 'lucide-react'
 import * as React from 'react'
+import { useOptionalTaskTags } from '@/api/task-tags'
+import { groupTagsByName, NO_TASK_TAG, tagSwatchClass } from '@/lib/task-tags'
 import { Link, useLocation, useNavigationType, useSearchParams } from 'react-router'
 
 import { archiveProjectRun, setProjectRunRead } from '@/api/client'
@@ -69,6 +71,7 @@ import {
   SORT_OPTIONS,
   hasActiveFilters,
   tagValuesOf,
+  taskTagValuesOf,
   tasksExcludingFacet,
   resetCount,
   tasksScroll,
@@ -386,9 +389,10 @@ export function GlobalTasksRoute() {
     if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
   }, [indexedStatuses])
   const registry = React.useMemo(() => projects.data?.projects ?? [], [projects.data])
+  const taskTagRegistry = useOptionalTaskTags()
   const allTasks = React.useMemo(
-    () => toGlobalTasks(index.data?.runs ?? [], registry, managerList),
-    [index.data, registry, managerList],
+    () => toGlobalTasks(index.data?.runs ?? [], registry, managerList, taskTagRegistry),
+    [index.data, registry, managerList, taskTagRegistry],
   )
   // Who started each row (a person, or an automation) — the remembered origin split narrows the
   // list before any facet does, so the facet counts are counts of the list actually on screen.
@@ -687,6 +691,12 @@ function FilterBar({
   originCounts: Record<TaskOrigin, number>
 }) {
   const tags = React.useMemo(() => allProjectTags(projects), [projects])
+  const taskTagRegistry = useOptionalTaskTags()
+  // One chip per case-folded name across projects (spec 2026-11-23-task-tags § 7.5).
+  const taskTagGroups = React.useMemo(() => {
+    const used = new Map((taskTagRegistry?.tags ?? []).map((tag) => [tag.id, tag.lastUsedAt]))
+    return groupTagsByName(tasks.flatMap((task) => task.taskTags.map((tag) => ({ ...tag, lastUsedAt: used.get(tag.id) }))))
+  }, [tasks, taskTagRegistry])
 
   // One `tasksExcludingFacet` per facet: the counts a facet shows must not already assume that
   // facet's own ticks, or unticking a value would promise fewer rows than it delivers.
@@ -695,6 +705,7 @@ function FilterBar({
       facetCounts(tasksExcludingFacet(tasks, filters, view, facet), valueOf)
     return {
       tags: per('tags', tagValuesOf),
+      taskTags: per('taskTags', taskTagValuesOf),
       statuses: per('statuses', (task) => [task.run.status]),
       workflows: per('workflows', (task) => [task.run.workflow]),
       managers: per('managers', (task) => task.managers),
@@ -801,7 +812,7 @@ function FilterBar({
 
       {tags.length > 0 ? (
         <div data-slot="tag-filters" className="flex flex-wrap items-center gap-1.5">
-          <span className="text-meta font-medium text-soft-foreground">Tags</span>
+          <span className="text-meta font-medium text-soft-foreground">Project tags</span>
           {tags.map((tag) => (
             <ToggleChip
               key={tag}
@@ -835,6 +846,29 @@ function FilterBar({
           to group their tasks together here.
         </p>
       )}
+      {taskTagGroups.length > 0 ? (
+        <div data-slot="task-tag-filters" className="flex flex-wrap items-center gap-1.5">
+          <span className="text-meta font-medium text-soft-foreground">Task tags</span>
+          {taskTagGroups.map((group) => (
+            <ToggleChip
+              key={group.key}
+              slot="task-tag-filter"
+              label={group.name}
+              icon={<span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', tagSwatchClass(group.color))} />}
+              count={counts.taskTags.get(group.key) ?? 0}
+              selected={filters.taskTags.includes(group.key)}
+              onToggle={() => onToggle('taskTags', group.key)}
+            />
+          ))}
+          <ToggleChip
+            slot="task-tag-filter"
+            label="No tag"
+            count={counts.taskTags.get(NO_TASK_TAG) ?? 0}
+            selected={filters.taskTags.includes(NO_TASK_TAG)}
+            onToggle={() => onToggle('taskTags', NO_TASK_TAG)}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
