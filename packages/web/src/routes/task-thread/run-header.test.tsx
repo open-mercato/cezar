@@ -1311,11 +1311,11 @@ describe('the facts line', () => {
   // also for a task that got its own worktree there (a manager's --dispatch root, #2426), whose agent
   // lands the branch. A project that is not trunk-based keeps Create PR.
   describe('a trunk-based project with the Answer button showing', () => {
-    const project = (landing: 'auto' | null) => ({
+    const project = (landing: 'auto' | null, landingBlocked: string | null = null) => ({
       '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true }, checks: [{ name: 'gh', available: true }] }),
       '/api/v1/config': () =>
         jsonResponse(landing
-          ? { profile: 'trunk', taskWorkspace: 'in-place', landing, landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' }
+          ? { profile: 'trunk', taskWorkspace: 'in-place', landing, landingBlocked, baseBranch: 'main', defaultRunner: 'claude', requiredChecks: ['npm test'] }
           : { profile: null, taskWorkspace: null, landing: null, landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' }),
       '/api/v1/repo': () => jsonResponse({ info: { root: '/repo', branch: 'main', remote: 'origin' } }),
       '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0 }),
@@ -1342,8 +1342,23 @@ describe('the facts line', () => {
       fireEvent.keyDown(menu, { key: 'Escape' })
       fireEvent.click(gitButton('land')!)
       await waitFor(() =>
-        expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('git push origin HEAD:main'))).toBe(true),
+        expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('Commit to main:'))).toBe(true),
       )
+      const prompt = JSON.stringify(sent.find((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('Commit to main:'))?.body)
+      expect(prompt).toContain('npm test')
+      expect(prompt).not.toContain('origin')
+    })
+
+    it('a read-only worktree task, or a project whose auto-land is blocked, keeps Create PR', async () => {
+      stubFetch(project('auto'))
+      renderHeader(run('waiting', { ...worktreeTask, readOnly: true }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+      cleanup()
+      stubFetch(project('auto', 'auto-land is not honored: .ai/cezar/config.json is tracked by git'))
+      renderHeader(run('waiting', worktreeTask))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
     })
 
     it('outside a trunk-based project the same worktree task keeps Create PR', async () => {

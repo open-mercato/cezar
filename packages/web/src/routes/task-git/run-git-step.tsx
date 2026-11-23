@@ -318,7 +318,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     }
     switch (id) {
       case 'land':
-        if (trunkBranch) void promptAgent(id, () => landBranchPrompt(trunkBase))
+        if (trunkBranch) void promptAgent(id, () => landBranchPrompt(trunkBase, config.data?.requiredChecks ?? []))
         break
       case 'commit':
       case 'commit-push':
