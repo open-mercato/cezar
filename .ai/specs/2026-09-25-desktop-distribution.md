@@ -183,8 +183,8 @@ Dock on macOS 15 and older):
 
 - **Windows `.ico` and Linux PNGs**: the mark full-bleed on the 1024px canvas, filled with `--bg`
   when given, the mark's gradient when it has one, else the brand tile's black, via `tauri icon`.
-- **`icon.icns`, for macOS 15 and older**: those draw the `.icns` as-is and mask nothing, so the
-  rounded tile is baked in, inside Apple's icon grid: an 824px tile with the 185.4px corner centred
+- **`icon.icns`** (`CFBundleIconFile`): macOS before 26 draws an `.icns` as-is and masks nothing,
+  so the rounded tile is baked in, inside Apple's icon grid: an 824px tile with the 185.4px corner centred
   on the 1024px canvas, a transparent margin and a soft shadow (`icons/macos-legacy.svg`).
 - **`cezar.icon` + `Assets.car`, for macOS 26**: an Icon Composer document (the tile colour as
   the fill, the glyph as one glass layer) that Tahoe masks, lights and recolours itself for the
@@ -193,8 +193,9 @@ Dock on macOS 15 and older):
   `.icns` on its own squircle. `Assets.car` is committed precompiled, listed only in
   `tauri.macos.conf.json`: tauri can compile the `.icon` at bundle time, but that needs Xcode 26's
   `actool` on every build machine and has crashed there (tauri-apps/tauri#15315, #16538). It is
-  compiled with `--minimum-deployment-target 12.0`, the shell's floor, so the catalog also
-  carries renditions older macOS can draw. `npm run icon` recompiles it when Xcode 26 is present
+  compiled with `--minimum-deployment-target 12.0`, the shell's floor, so actool also flattens the
+  icon into renditions for macOS 12–15, which prefer those to the `.icns`; the `.icns` stays the
+  fallback wherever the catalog is not read (`tauri dev`, tools that read only `CFBundleIconFile`). `npm run icon` recompiles it when Xcode 26 is present
   and says so when it is not; the **Desktop icon** workflow compiles it too (artifact
   `assets-car`), checks the committed one names the `cezar` icon, and has macOS 26, 15 and
   15 Intel runners draw the shipped pair through NSWorkspace (`scripts/render-app-icon.swift`).

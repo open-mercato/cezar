@@ -7,13 +7,14 @@
 //
 // Three outputs, because the platforms draw an app icon differently:
 // - Windows .ico and Linux PNGs: the mark full-bleed on the 1024px canvas, via `tauri icon`.
-// - icon.icns, for macOS 15 and older: those draw the .icns as-is, so the rounded tile is baked
-//   in, inside Apple's icon grid (an 824px tile centred, transparent margin, a soft shadow).
-//   Full-bleed there is a hard-edged square in the Dock.
-// - cezar.icon + Assets.car, for macOS 26: an Icon Composer document (fill + glyph layer) that the
-//   system masks, lights and tints itself, in every appearance. Without it Tahoe falls back to the
-//   .icns. Assets.car is compiled with Xcode 26's actool; without one the .icon is still written
-//   and the stale Assets.car is reported (the desktop-check workflow compiles it too).
+// - icon.icns (CFBundleIconFile): macOS before 26 draws it as-is and masks nothing, so the rounded
+//   tile is baked in, inside Apple's icon grid (an 824px tile centred, transparent margin, a soft
+//   shadow). Full-bleed it was a hard-edged square in the Dock.
+// - cezar.icon + Assets.car (CFBundleIconName): an Icon Composer document (fill + glyph layer)
+//   that macOS 26 masks, lights and tints itself in every appearance. actool also flattens it into
+//   renditions for macOS 12-15, which then prefer them to the .icns. Assets.car needs Xcode 26's
+//   actool; without one the .icon is still written and the stale Assets.car is reported (the
+//   Desktop icon workflow compiles it too).
 // The splash logo (ui/icon.svg) is refreshed from the same source.
 // Rendering needs rsvg-convert (brew/apt install librsvg): the legacy tile needs real alpha.
 import { execFileSync, spawnSync } from 'node:child_process'
