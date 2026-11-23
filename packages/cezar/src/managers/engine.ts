@@ -2784,6 +2784,15 @@ export class ManagerEngine {
     });
   }
 
+  /** Whether the project runs tasks in its checkout by default (spec 2026-10-20-trunk-based-projects).
+   *  An unreadable config answers no: the request then goes out as asked. */
+  private async inPlaceProject(prefix: string): Promise<boolean> {
+    const response = await this.forward(`${prefix}/config`).catch(() => undefined);
+    if (!response?.ok) return false;
+    const config = (await response.json().catch(() => ({}))) as { taskWorkspace?: unknown };
+    return config.taskWorkspace === 'in-place';
+  }
+
   private static async refusalOf(response: Response): Promise<ManagerRefusal> {
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
     const status = response.status;
@@ -2890,6 +2899,9 @@ export class ManagerEngine {
       if (issue) return issue;
     }
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
+    // A dispatch root always gets its own worktree, which overrides a trunk-based project's in-place
+    // workspace: no Commit to the base branch, no auto-land. The project's model wins over the flag.
+    const dispatch = input.dispatch === true && !(await this.inPlaceProject(prefix));
     // Before the request: anything the run does after it starts is news to this manager.
     const followedAt = this.iso();
     const response = await this.forward(`${prefix}/runs`, {
@@ -2903,7 +2915,7 @@ export class ManagerEngine {
         ...(agentProfile !== undefined ? { agentProfile } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { reasoningEffort: input.effort } : {}),
-        ...(input.dispatch ? { dispatch: {} } : {}),
+        ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },
       },
     });
