@@ -544,6 +544,11 @@
   overflow-x: auto;
   overflow-y: hidden;
 }
+/* Prose wraps a long URL, id or inline code instead of scrolling it sideways on a phone; the
+ * scroll above stays a backstop for what cannot wrap. Tables and fences keep their own scroll. */
+.thread-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) {
+  overflow-wrap: anywhere;
+}
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
   font-size: 1.05em;
@@ -779,4 +784,40 @@
   --mascot-symbol: #754e28;
   --mascot-spark: #f5b82c;
   --mascot-shadow: rgba(90, 43, 25, 0.13);
+}
+
+/* Agents' brand marks on the reconnect card (spec 2026-11-18-inline-account-reconnect): intrinsic,
+ * like the mascot, so a mark reads the same in both themes. */
+:root {
+  --runner-mark-ink: #ffffff;
+  --runner-mark-claude: #d97757;
+  --runner-mark-codex: #0f0f0f;
+  --runner-mark-cursor: #3b3b3b;
+  --runner-mark-copilot: #8250df;
+  --runner-mark-opencode: #2563eb;
+  --runner-mark-kimi: #111827;
+  --runner-mark-pi: #0d9488;
+  --runner-mark-gemini: #1a73e8;
+  --runner-mark-antigravity: #ea4335;
+  --runner-mark-junie: #21d789;
+  --runner-mark-omp: #7c3aed;
+}
+
+/* A message reached from "your messages" (spec 2026-11-17-my-message-navigation): the #2218
+ * ring, plus a short violet wash so the eye finds it after a long scroll. */
+[data-jump-highlight] {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+  animation: jump-wash 1.8s ease-out;
+}
+@keyframes jump-wash {
+  0%,
+  25% {
+    background-color: color-mix(in srgb, var(--violet) 26%, var(--muted));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-jump-highlight] {
+    animation: none;
+  }
 }

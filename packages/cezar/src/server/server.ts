@@ -6,6 +6,13 @@ import { listServerInstances } from '../server-install/state.ts';
 import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred-reset.ts';
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
+import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
+import { buildAttentionList, currentTaskPr, managerNeedsYou, phoneBadgeCount } from '../attention/list.ts';
+import { createAttentionOverrideStore, type AttentionOverrideStore } from '../attention/overrides.ts';
+import { createAttentionService } from '../attention/service.ts';
+import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
+import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -34,6 +41,8 @@ import {
   managerActionParamSchema,
   managerCreateTaskInputSchema,
   managerIdParamSchema,
+  managerMemoryParamSchema,
+  putManagerMemoryInputSchema,
   managerJobParamSchema,
   managerMessagesQuerySchema,
   managerProposeActionInputSchema,
@@ -46,15 +55,22 @@ import {
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
   updateManagerInputSchema,
+  managerActivityInputSchema,
   workspaceEventsQuerySchema,
   workspaceLayoutsResponseSchema,
   workspaceLayoutsSchema,
 } from '@open-mercato/cezar-contract';
-import { ManagerEngine, type ManagerEngineDeps } from '../managers/engine.ts';
+import { describeAction, ManagerEngine, MANAGER_INACTIVE, type ManagerEngineDeps } from '../managers/engine.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { watchAutomationReports } from '../managers/automation-reports.ts';
 import { watchTaskReports } from '../managers/task-reports.ts';
+import { createManagerQuestionProvider, openAsk } from '../managers/questions.ts';
+import { createTaskQuestionProvider } from '../runs/questions.ts';
+import { askAlreadyClosed, QUESTION_ALREADY_CLOSED } from '../runs/task-asks.ts';
+import { createQuestionInbox } from '../questions/inbox.ts';
+import { questionsTopic } from '../questions/topic.ts';
+import type { QuestionProvider } from '../questions/types.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
 import { automationReportSchema, setAutomationReportInputSchema, automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
@@ -103,7 +119,8 @@ import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { getAgentFallbackPolicyQuerySchema, putAgentFallbackPolicySchema } from '@open-mercato/cezar-contract';
-import { providerConnectSchema } from '@open-mercato/cezar-contract';
+import { providerConnectSchema, loginSessionStartSchema, loginSessionInputSchema, type LoginSession } from '@open-mercato/cezar-contract';
+import { LoginSessionManager, phoneSafeSession, type LoginSessionResult } from '../core/login-session.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -187,6 +204,7 @@ import { setNamerModelCatalog } from '../runs/namer-model.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
+import { planUsageRoutes } from './plan-usage.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import { workflowCapabilities } from '../workflows/capabilities.ts';
 import {
@@ -218,7 +236,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
-import { artifactsDir } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
@@ -234,7 +252,8 @@ import {
   readEventsTail,
   validateLiveCursor,
 } from '../runs/event-history.ts';
-import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
+import { readRunUserMessages } from '../runs/user-messages.ts';
+import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexDiagnostic, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
 import {
@@ -277,8 +296,10 @@ import {
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
-import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
-import { isReclaimable, reclaimWorktrees, worktreesInUse } from '../runs/retention.ts';
+import { DiskGuard, type DiskGuardStatus } from '../runs/disk-guard.ts';
+import { workspaceDiskGuardDeps } from '../runs/disk-guard-workspace.ts';
+import { branchDiff, branchesCheckedOutElsewhere, localBranchExists, pruneOrphans, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeHasUnpreservedWork, worktreeSizeBytes } from '../git-worktree.ts';
+import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
@@ -299,10 +320,11 @@ import {
   readImageAtRev,
   pushCurrentBranch,
   worktreeGitStatus,
+  type GitStatusResult,
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
-import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { gatedSkillsRepos, loadConfig, resolveArchivedTaskDeleteDays, resolveWorktreeIdleDays, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { BYPASS_PERMISSIONS_HOSTED, bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
@@ -384,7 +406,8 @@ import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resol
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
+import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
@@ -418,6 +441,7 @@ import {
   type TelemetryConsentPayload,
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
+import { registerAuthResume } from './auth-resume.ts';
 import { MessageReceipts } from './message-receipts.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
@@ -490,10 +514,17 @@ export interface ServerDeps {
   workspaceEvents?: WorkspaceEventBus;
   /** Hands `startServer` the engine `createApp` built, which arms its timer and drains it. */
   onManagerEngine?: (engine: ManagerEngine) => void;
+  /** Hands `startServer` the disk guard `createApp` built (spec 2026-11-19-worktree-disk-usage),
+   *  which arms its timer; a bare app only reads it. */
+  onDiskGuard?: (guard: DiskGuard) => void;
   /** The phone relay client. `startServer` starts it; a bare app only answers the routes. */
   relay?: RelayService;
   /** Test seam: the agent backend a manager turn talks to (spec 2026-10-31-managers). */
   managerRunnerFor?: ManagerEngineDeps['runnerFor'];
+  /** Test seam: the Questions inbox's providers (spec 2026-11-17-questions-inbox); default the real ones. */
+  questionProviders?: { task?: QuestionProvider; manager?: QuestionProvider };
+  /** Tests inject one off disk; the default lives in `~/.cezar/attention-overrides.json`. */
+  attentionOverrides?: AttentionOverrideStore;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
    *  route's guards, cleanup and error surfacing are exercised for real
@@ -560,6 +591,8 @@ export interface ServerDeps {
   socketHub?: SocketHub;
   /** The task terminal's session registry. Injectable so route tests drive a fake PTY. */
   terminalSessions?: TerminalSessions;
+  /** Inline account reconnect's login sessions; tests inject a fake. */
+  loginSessions?: LoginSessionManager;
   /** What the first-run page's install commands are chosen from. Injectable so a route test probes nothing. */
   agentSetupProbeEnv?: () => Promise<InstallEnv>;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
@@ -816,6 +849,12 @@ export interface UpdateProjectResponse {
   project: ProjectListEntry;
 }
 
+/** One reply shape for the login-session routes: the session, or `{ error, command? }`. */
+function loginSessionReply(c: Context, result: LoginSessionResult, phone: boolean) {
+  if (result.ok) return c.json(phone ? phoneSafeSession(result.session) : result.session, 200);
+  return c.json({ error: result.error, ...(result.command ? { command: result.command } : {}) }, result.status);
+}
+
 // ---- workspace SSE (multi-project spec, step 2.8) --------------------------
 
 /** Workspace-level event names carried ONLY on `GET /api/workspace/events`
@@ -826,13 +865,17 @@ export type WorkspaceEventName =
   | 'project-removed'
   | 'checkout-progress'
   | 'provider-status'
+  | 'agent-login'
+  | 'account-reconnected'
   | 'automation-change'
   | 'tracker-changed'
   | 'worktree-lifecycle'
   | 'manager-change'
   | 'manager-message'
   | 'manager-delta'
-  | 'phone-pairing';
+  | 'phone-pairing'
+  /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
+  | 'attention-change';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -1061,15 +1104,8 @@ const openInSchema = z.object({
 // Attachment-carrying bodies validate with the CONTRACT's `attachmentListSchema` (#950) —
 // images plus the short PDF/TXT/MD allowlist, ~5 MB each once base64-decoded. Imported rather
 // than mirrored here, so the wire cannot drift from what the cockpit compiles against.
-const messageSchema = z
-  .object({
-    text: z.string().max(100_000).default(''),
-    images: attachmentListSchema.default([]),
-    idempotencyKey: z.string().uuid().optional(),
-  })
-  .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one attachment',
-  });
+// The contract's own schema: a hand-kept copy here missed `askRequestId` (Questions inbox spec).
+const messageSchema = messageInputSchema;
 
 // Run ids are unique across projects, so one workspace-wide receipt book serves every mount.
 const messageReceipts = new MessageReceipts<MessageResponse>();
@@ -1686,16 +1722,25 @@ export function createApp(deps: ServerDeps) {
   // count against the same workspace semaphore as the boot manager (step 2.5).
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
+  const contextProjects = async () => {
+    const selector = capabilities().singleProject
+      ? { projectId: await resolveBootProject() }
+      : undefined;
+    return listProjects(selector);
+  };
   const contexts = deps.contexts ?? new ProjectContexts({
-    listProjects: async () => {
-      const selector = capabilities().singleProject
-        ? { projectId: await resolveBootProject() }
-        : undefined;
-      return listProjects(selector);
-    },
+    listProjects: contextProjects,
     semaphore: deps.semaphore,
     hosted: () => !capabilities().localHandoff,
   });
+  // The disk guard (spec 2026-11-19-worktree-disk-usage, decision 3): health and its status route
+  // read it here; `startServer` arms its timer. Every registered project, since the disk is shared.
+  const diskGuard = new DiskGuard(
+    workspaceDiskGuardDeps({ boot: bootContext, contexts, listProjects: contextProjects, loadConfig: workspaceConfig.load }),
+    undefined,
+    (message) => console.log(`  ${message}`),
+  );
+  deps.onDiskGuard?.(diskGuard);
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
     ports: () => [deps.webhookPort ?? 4321, ...listServerInstances().map(instance => instance.state.primaryPort)],
@@ -2057,7 +2102,7 @@ export function createApp(deps: ServerDeps) {
       projects: workspace.projects,
       bootProject: workspace.bootProject,
       ...(process.env.CEZ_INSTANCE_ID ? { instanceId: process.env.CEZ_INSTANCE_ID } : {}),
-      ...diskHealth(bootRoot),
+      ...diskHealth(bootRoot, undefined, undefined, diskGuard.status()),
     };
   };
   // The scope-dependent fields, added per send: the cache below is process-wide, so a phone must
@@ -2082,6 +2127,8 @@ export function createApp(deps: ServerDeps) {
   // a phone in the relay scope or a hosted cockpit — and added per response, never to the cache or
   // the CORS-open `health` topic. `waiting` is set once the manager engine exists, below.
   let waitingOnUser: () => Promise<number> = async () => 0;
+  // The Older setting lives in workspace ui-state; its PUT re-counts the `questions` topic. Set below.
+  let refreshQuestions: () => void = () => {};
   const attentionForReader = async (caps: ReturnType<typeof capabilities>): Promise<{ attention?: { waiting: number; failed: number } }> => {
     if (!inRelayScope() && caps.localHandoff) return {};
     const waiting = Math.max(0, Math.floor(await waitingOnUser().catch(() => 0)));
@@ -2340,9 +2387,45 @@ export function createApp(deps: ServerDeps) {
     const cancel = watchLogin(check, () => {
       loginWatches.delete(key);
       track('provider_connected', { label: provider }, { sid });
+      // A terminal sign-in resumes what was blocked too (spec 2026-11-18-inline-account-reconnect).
+      void loginSessions.accountConnected(provider, profile.id);
     }, deps.loginWatchOffsetsMs ?? LOGIN_WATCH_OFFSETS_MS);
     loginWatches.set(key, cancel);
   };
+
+  // Inline account reconnect (spec 2026-11-18-inline-account-reconnect).
+  const loginSessions = deps.loginSessions ?? new LoginSessionManager({
+    resolveProfile: resolveWorkspaceProfile,
+    loginCommand: (provider, configDir) => providerAuth.loginCommand(provider, configDir),
+    // The user's completed login is the evidence the provider-auth spec asks for, so the incident
+    // is lifted before the fresh probe that must answer connected.
+    confirmConnected: async (provider, profile) => {
+      if (profile.isDefault) {
+        const latched = providerAuth.peekStatus()?.providers.find((row) => row.provider === provider)?.authFailureId;
+        if (latched) providerAuth.clearRuntimeAuthFailure(provider, latched);
+        const row = (await providerStatus({ refresh: true })).providers.find((candidate) => candidate.provider === provider);
+        if (row) workspaceEvents.emit('provider-status', row);
+        return row?.status === 'connected';
+      }
+      // No `provider-status` here: that event carries default-login rows only.
+      providerAuth.recheckProfileAuthFailure(provider, profile.id);
+      providerAuth.forgetProfileStatus(provider, profile.id);
+      return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
+    },
+    // Consulted only off a phone, where it is exactly the Connect gate.
+    remoteAccountsEnabled: accountsEnabled,
+    emit: (event, payload) => workspaceEvents.emit(event, payload),
+    openTerminal: (command) => openTerminal(bootRoot, command),
+    watchTerminal: (provider, profile) => watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }),
+    readIdentity: (provider, configDir) => readAccountIdentity(provider, configDir),
+    dryRun: () => process.env.CEZ_DRY_RUN === '1',
+  });
+
+  deps.onDispose?.(() => loginSessions.dispose());
+  const blockedOnAccount = async (provider: ProviderId, profileId: string): Promise<boolean> =>
+    (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId))
+    || (await workspaceProjectSources({ salvageColdRuns: true })).some((project) => project.available
+      && project.runs().some((run) => authParkForAccount(run, provider, profileId)));
 
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -2395,6 +2478,8 @@ export function createApp(deps: ServerDeps) {
         const result = await providerStatus({ refresh: true });
         const row = result.providers.find(({ provider: id }) => id === provider.data);
         if (row) workspaceEvents.emit('provider-status', row);
+        // The incident this retry cleared is over: resume what was parked on it.
+        if (row?.status === 'connected') void loginSessions.accountConnected(provider.data, DEFAULT_AGENT_ACCOUNT_ID);
         return c.json(result);
       },
     )
@@ -2489,6 +2574,24 @@ export function createApp(deps: ServerDeps) {
       watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
     })
+
+    // Inline account reconnect (spec 2026-11-18-inline-account-reconnect): the vendor's own sign-in,
+    // relayed to the card instead of a terminal. Tokens and pasted keys never reach a response.
+    .post('/providers/login', jsonZodValidator(loginSessionStartSchema, { message: `provider must be one of ${RUNNER_IDS.join(', ')}` }), async (c) => {
+      const result = await loginSessions.start(c.req.valid('json'), { local: capabilities().localHandoff, phone: inRelayScope() });
+      return loginSessionReply(c, result, inRelayScope());
+    })
+    .post(
+      '/providers/login/:sessionId/input',
+      paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
+      jsonZodValidator(loginSessionInputSchema, { message: 'code or apiKey is required' }),
+      async (c) => loginSessionReply(c, await loginSessions.input(c.req.valid('param').sessionId, c.req.valid('json')), inRelayScope()),
+    )
+    .delete(
+      '/providers/login/:sessionId',
+      paramZodValidator(z.object({ sessionId: z.string().min(1).max(64) }), { message: 'unknown login session' }),
+      async (c) => loginSessionReply(c, await loginSessions.cancel(c.req.valid('param').sessionId), inRelayScope()),
+    )
 
     // Offered next to an "X or newer is required" agent error: hands the CLI's own self-update to
     // a terminal, like Connect hands it the login.
@@ -2889,19 +2992,27 @@ export function createApp(deps: ServerDeps) {
           const all = await providerStatus(refresh ? { refresh: true } : undefined);
           const row = all.providers.find((candidate) => candidate.provider === account.provider);
           if (recheck && account.provider === 'cursor') await modelCatalog.refresh('cursor');
+          if (recheck && row?.status === 'connected' && await blockedOnAccount(account.provider, DEFAULT_AGENT_ACCOUNT_ID)) {
+            void loginSessions.accountConnected(account.provider, DEFAULT_AGENT_ACCOUNT_ID);
+          }
           return c.json({ status: row ?? { provider: account.provider, status: 'unknown' as const } });
         }
         // "Check again" re-probes THIS account only — the other accounts' warm answers are not
         // invalidated by asking about this one. Only `recheck` (the pane's button) may lift a dead
         // login; New task's verify-before-refuse re-probes with `refresh` alone (telemetry 9e4a95db).
         if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
+        const hadIncident = recheck && providerAuth.peekProfileStatus(account.provider, account.id)?.authFailureId !== undefined;
         if (recheck) providerAuth.recheckProfileAuthFailure(account.provider, account.id);
-        return c.json({
-          status: await providerAuth.profileStatus(account.provider, {
-            id: account.id,
-            configDir: account.path,
-          }),
+        const status = await providerAuth.profileStatus(account.provider, {
+          id: account.id,
+          configDir: account.path,
         });
+        // Check again lifted this account's incident, or something parked on it survived a restart
+        // that forgot the incident: resume it. A healthy account's Check again announces nothing.
+        if (recheck && status.status === 'connected' && (hadIncident || await blockedOnAccount(account.provider, account.id))) {
+          void loginSessions.accountConnected(account.provider, account.id);
+        }
+        return c.json({ status });
       },
     )
 
@@ -3635,7 +3746,8 @@ export function createApp(deps: ServerDeps) {
   const activeRunCount = (projectId: string): number => {
     const ctx = contexts.peek(projectId);
     if (!ctx) return 0;
-    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length;
+    // An idle park has no agent process to strand.
+    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status) && !isIdleParked(run)).length;
   };
 
   // Workspace-level by design: update state spans project and global installs,
@@ -3829,6 +3941,13 @@ export function createApp(deps: ServerDeps) {
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
+      worktreeIdleDaysDefault: config.resources.worktreeIdleDaysDefault,
+      archivedTaskDeleteDaysDefault: config.resources.archivedTaskDeleteDaysDefault,
+      diskGuard: {
+        minFreePercent: config.resources.diskGuard.minFreePercent,
+        minFreeGb: config.resources.diskGuard.minFreeGb,
+        maxWorktreesGb: config.resources.diskGuard.maxWorktreesGb,
+      },
     },
     // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
     // `JSON.stringify` drops it, which is the exact drift `contract-parity` catches. And absent has
@@ -3856,6 +3975,13 @@ export function createApp(deps: ServerDeps) {
       const usage = hostSampler.sampleHostUsage();
       hostSampler.keepWarm();
       return c.json(usage);
+    })
+    // The disk guard's thresholds and last pass, for Settings → Worktrees. A read of what the
+    // guard already holds: never a `statfs` or `du` of its own.
+    .get('/workspace/disk-guard', async (c) => {
+      const config = await workspaceConfig.load();
+      const { minFreePercent, minFreeGb, maxWorktreesGb } = config.resources.diskGuard;
+      return c.json(diskGuardStatusBody(diskGuard.status(), { minFreePercent, minFreeGb, maxWorktreesGb }));
     })
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
@@ -3942,6 +4068,18 @@ export function createApp(deps: ServerDeps) {
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
+          }
+          if (resources?.worktreeIdleDaysDefault !== undefined) {
+            config.resources.worktreeIdleDaysDefault = resources.worktreeIdleDaysDefault;
+          }
+          if (resources?.archivedTaskDeleteDaysDefault !== undefined) {
+            config.resources.archivedTaskDeleteDaysDefault = resources.archivedTaskDeleteDaysDefault;
+          }
+          if (resources?.diskGuard) {
+            for (const key of ['minFreePercent', 'minFreeGb', 'maxWorktreesGb'] as const) {
+              const value = resources.diskGuard[key];
+              if (value !== undefined) config.resources.diskGuard[key] = value;
+            }
           }
           // `null` CLEARS back to "no opinion" — a partial patch cannot say that by omission,
           // and leaving a stale runner behind would keep overriding repos that never chose.
@@ -4039,7 +4177,7 @@ export function createApp(deps: ServerDeps) {
           await mergeWriteWorkspaceUiState((state) => ({
             ...state,
             ...parsed.data,
-          })),
+          })).finally(() => refreshQuestions()),
         );
       } catch (err) {
         // A read-only home degrades to an unsaved pref, never a crash.
@@ -4947,7 +5085,7 @@ export function createApp(deps: ServerDeps) {
             projectId: project.id,
             timeZone: localTimeZone(),
             store,
-            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller({ host: remote.host }) },
+            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller({ host: remote.host }), onPullRequestClosed: (number, state) => reportPrClosed(project.root, number, state, { verify: true }) },
             launch: parsed.data.mode === 'execute'
               ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
@@ -5198,12 +5336,33 @@ export function createApp(deps: ServerDeps) {
 
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
+    // Archived tasks past their lifetime (spec 2026-11-19-worktree-disk-usage); `cez worktrees
+    // prune --archived-older-than` calls it. Before the `/:id/...` routes, like the sweeps below.
+    .post('/runs/archived/delete-expired', jsonZodValidator(deleteExpiredArchivedInputSchema, { absent: ({}) }), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const body = c.req.valid('json');
+      const days = body.olderThanDays ?? await resolveArchivedTaskDeleteDays(repoRoot);
+      const result = await deleteExpiredArchivedTasks(repoRoot, store, days, {
+        isLive: (id) => manager.isActive(id), dryRun: body.dryRun === true, lifecycle: manager.lifecycle,
+        activity: storeActivity(store),
+        // The rest of what `DELETE /runs/:id` does: terminals stop, a PR head's ref goes with it.
+        onDeleted: (run) => stopTaskProcesses(run.id),
+      });
+      if (body.dryRun !== true && result.deleted.length > 0) await manager.sweepPrHeadRefs();
+      return c.json({ ...result, days, dryRun: body.dryRun === true });
+    })
+
     .post('/runs/archive-finished', (c) => {
-      const { store } = c.get('project');
+      const { store, manager } = c.get('project');
       const open = store.listRuns().filter((run) => !run.archived).map((run) => run.id);
       const archived = store.archiveFinished();
-      // The sweep is an archive like any other: each task it took loses its terminals (spec §6).
-      if (archived > 0) for (const id of open) if (store.getRun(id)?.archived) stopTaskProcesses(id);
+      // The sweep is an archive like any other: each task it took loses its terminals (spec §6)
+      // and its worktree (branch kept, Continue restores it).
+      if (archived > 0) {
+        const taken = open.filter((id) => store.getRun(id)?.archived);
+        for (const id of taken) stopTaskProcesses(id);
+        manager.reclaimWorktreesOf(taken);
+      }
       // One event for the sweep, `value` = how many it archived (summed on the dashboard).
       if (archived > 0) track('task_archived', { label: 'bulk', value: archived }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ archived });
@@ -5224,7 +5383,10 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
-      if (run && parsed.data.archived !== false) stopTaskProcesses(id);
+      if (run && parsed.data.archived !== false) {
+        stopTaskProcesses(id);
+        manager.reclaimWorktreesOf([id]);
+      }
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
       if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
@@ -5382,6 +5544,26 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
+    // Spec 2026-11-17-my-message-navigation: the opening task plus every persisted user message.
+    .get(
+      '/runs/:id/user-messages',
+      paramZodValidator(runIdParamSchema),
+      async (c) => {
+        const { store, dataDir } = c.get('project');
+        const { id } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const ts = run.createdAt ?? run.startedAt;
+        return c.json({
+          messages: await readRunUserMessages(join(dataDir, 'runs', `${id}.ndjson`), {
+            task: run.task,
+            ...(ts ? { ts } : {}),
+            ...(run.taskImages ? { images: run.taskImages } : {}),
+          }),
+        });
+      },
+    )
+
     .get(
       '/runs/:id/history-context',
       paramZodValidator(runIdParamSchema),
@@ -5482,6 +5664,8 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: MessageResponse | undefined;
       try {
+        // A card answered from a stale tab (Questions inbox spec); inside the try so the receipt settles.
+        if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
         // Stacking onto a queued prompt mutates an existing task and invokes no provider.
         // Provider availability still gates live delivery after the record leaves `queued`, but
         // must not strand prompt authoring just because an unrelated fallback provider is
@@ -5505,7 +5689,9 @@ export function createApp(deps: ServerDeps) {
         // (the record is written a tick later), the engine can.
         //   live session → delivered · still queued → folded into the prompt
         //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
-        if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
+        // Sent from an ask card it answers that card; typed, it flags open cards (Questions inbox spec).
+        const reply = parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {};
+        if (manager.sendMessage(id, content, reply)) return c.json((answered = { delivered: true as const }));
 
         const currentRun = store.getRun(id);
         // Bounds apply only to a message that is actually about to be stacked. Without this
@@ -5520,7 +5706,7 @@ export function createApp(deps: ServerDeps) {
 
         const queued = manager.enqueueMessage(id, content);
         if (queued) return c.json((answered = { queued: true as const, message: queued }));
-        if (manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
+        if (manager.deferMessage(id, content, { ...reply, userReply: true })) return c.json((answered = { deferred: true as const }));
         return c.json({ error: 'session closed' }, 409);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
@@ -5633,6 +5819,7 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: ContinueResponse | undefined;
       try {
+        if (askAlreadyClosed(run, parsed.data.askRequestId)) return c.json({ error: QUESTION_ALREADY_CLOSED }, 409);
         if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
           return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
         }
@@ -5661,6 +5848,8 @@ export function createApp(deps: ServerDeps) {
           model: parsed.data.model,
           reasoningEffort: parsed.data.reasoningEffort,
           agentProfile: parsed.data.agentProfile,
+          // The user's own Continue: answers its card, or flags open cards as replied in chat.
+          reply: parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {},
         });
         if (!result.ok) return c.json({ error: result.error }, 409);
         return c.json((answered = { continued: true as const }));
@@ -5803,7 +5992,7 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
-        const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
+        const engineOwnsSession = (run.status === 'running' || run.status === 'queued' || run.status === 'waiting') && !isIdleParked(run);
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
@@ -5868,11 +6057,13 @@ export function createApp(deps: ServerDeps) {
 
     // Task diff (spec 006): what this run changed — its worktree vs its base.
     .get('/runs/:id/diff', async (c) => {
-      const { store } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const kept = await reclaimedBranchOf(run, repoRoot);
+      if (kept) return c.text(await branchDiff(repoRoot, run.baseBranch ?? 'HEAD', kept));
       if (!run.worktreePath || !existsSync(run.worktreePath)) {
-        return c.text('(no worktree — this task ran directly in the repo working tree)');
+        return c.text(run.worktreeReclaimedAt ? `(${RECLAIMED_WORKTREE})` : '(no worktree — this task ran directly in the repo working tree)');
       }
       return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD'));
     })
@@ -5882,7 +6073,7 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectChanges(workingDirectory, run.baseBranch ?? 'HEAD', {
         taskBranch: run.branch,
         // Anchors a repointed worktree at the branch as this run found it (#751).
@@ -5900,8 +6091,14 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const kept = await reclaimedBranchOf(run, repoRoot);
+      if (kept) {
+        const fromBranch = await collectRunCommits(repoRoot, run.baseBranch ?? 'HEAD', kept);
+        if (!fromBranch.ok) return c.json({ error: fromBranch.error }, 409);
+        return c.json({ commits: fromBranch.commits });
+      }
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectRunCommits(workingDirectory, run.baseBranch ?? 'HEAD');
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ commits: result.commits });
@@ -5912,8 +6109,9 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      // A reclaimed task's commits live on in the shared object store: read them from the repo.
+      const workingDirectory = (await reclaimedBranchOf(run, repoRoot)) ? repoRoot : workingDirectoryOf(run, repoRoot);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
       const result = await collectCommitChanges(workingDirectory, c.req.param('sha'));
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.commit);
@@ -6178,11 +6376,19 @@ export function createApp(deps: ServerDeps) {
       // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
       const inPlace = !worktree && run.worktree === false && !run.readOnly;
       if (!worktree && !inPlace) return c.json({ error: NO_WORKTREE }, 409);
-      const result = worktree
+      const result: GitStatusResult = worktree
         ? await worktreeGitStatus(worktree, run.baseBranch)
         : await checkoutGitStatus(c.get('project').root);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
+      const { baseRemote, baseTracked } = result;
+      const body: GitStatusResponse = {
+        uncommitted: result.uncommitted,
+        unpushed: result.unpushed,
+        behind: result.behind,
+        ahead: result.ahead,
+        ...(baseRemote ? { baseRemote, baseTracked: baseTracked === true } : {}),
+      };
+      return c.json(body);
     })
 
     // Draft PR from the review gate (spec 009): final autosave → push →
@@ -6193,9 +6399,9 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const draft = c.req.valid('json').draft ?? true;
       const id = c.req.param('id');
-      const run = store.getRun(id);
-      if (!run) return c.json({ error: 'not found' }, 404);
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
+      const run = (await withRestoredWorktree(c.get('project'), store.getRun(id)))!;
       // A pull-request head run's branch holds the whole foreign PR under this run's changes: a
       // draft PR from it into the default base would re-propose that PR (spec
       // 2026-10-06-agentic-e2e-checks Phase 3). Refused until publishing back is designed.
@@ -6208,7 +6414,7 @@ export function createApp(deps: ServerDeps) {
       if (!run.worktreePath || !existsSync(run.worktreePath) || !run.branch) {
         return c.json(
           {
-            error: 'no worktree/branch to publish — this task ran in the repo working tree',
+            error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : 'no worktree/branch to publish — this task ran in the repo working tree',
           },
           400,
         );
@@ -6270,8 +6476,9 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (run.pullRequestUrl) return c.json({ found: true as const, url: run.pullRequestUrl });
-      const worktree = worktreeOf(run);
-      const target = worktree ? await resolvePrTarget(run) : null;
+      // A reclaimed task's branch is still in the repo: its remotes and `gh` answer from the root.
+      const worktree = worktreeOf(run) ?? (await reclaimedBranchOf(run, repoRoot) ? repoRoot : null);
+      const target = worktree ? await resolvePrTarget({ ...run, worktreePath: worktree }) : null;
       const pr = worktree && target ? await findBranchPr(worktree, target) : null;
       if (!pr) return c.json({ found: false as const });
       forgetRefStatus(repoRoot, pr.number);
@@ -6636,6 +6843,18 @@ export function createApp(deps: ServerDeps) {
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
+  const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk — its branch is kept, and Continue restores it';
+  /** A reclaimed task's kept branch, when its tree is gone and the branch still exists: the read
+   *  routes answer from it without a checkout (spec 2026-11-19-worktree-disk-usage). */
+  const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> =>
+    run.worktreeReclaimedAt && run.branch && !(run.worktreePath && existsSync(run.worktreePath))
+      && await localBranchExists(repoRoot, run.branch) ? run.branch : null;
+  /** Only the PR path restores a reclaimed tree: publishing needs a checkout (autosave, push). */
+  const withRestoredWorktree = async (project: { store: RunStore; manager: RunManager }, run: RunRecord | undefined): Promise<RunRecord | undefined> => {
+    if (!run?.worktreeReclaimedAt || !run.worktreePath || existsSync(run.worktreePath) || project.manager.isActive(run.id)) return run;
+    await project.manager.restoreReclaimedWorktree?.(run.id);
+    return project.store.getRun(run.id) ?? run;
+  };
 
   /** Every pull request number this run points at — the one it created and the one it is about
    *  (#901), from whichever field carries it. Used to invalidate what the forge told us about
@@ -6658,6 +6877,9 @@ export function createApp(deps: ServerDeps) {
       // The keep-limit the panel reports is the one the enforcer will actually
       // apply — inherited from the workspace default when this repo sets none.
       const keep = await resolveWorktreeRetention(repoRoot);
+      const idleDays = await resolveWorktreeIdleDays(repoRoot);
+      const { manager } = c.get('project');
+      const activity = storeActivity(store);
       const runs = store.listRuns().filter((r) => r.worktreePath && existsSync(r.worktreePath));
       const inUse = await worktreesInUse(runs);
       const worktrees = await Promise.all(
@@ -6669,7 +6891,8 @@ export function createApp(deps: ServerDeps) {
           // POSIX `du` — degrades to null (Windows / du missing / error); never blocks.
           sizeBytes: await worktreeSizeBytes(r.worktreePath as string),
           finishedAt: r.finishedAt ?? null,
-          reclaimable: isReclaimable(r) && !inUse.has(r.id),
+          lastActivityAt: activity(r),
+          reclaimable: isIdleReclaimable(r) && !manager.isActive(r.id) && !inUse.has(r.id),
           // Spread, not `key: undefined` — the contract types it as optional on the wire.
           ...(inUse.has(r.id) ? { inUse: inUse.get(r.id)! } : {}),
         })),
@@ -6678,18 +6901,38 @@ export function createApp(deps: ServerDeps) {
       const totalBytes = worktrees.some((w) => w.sizeBytes === null)
         ? null
         : worktrees.reduce((sum, w) => sum + (w.sizeBytes ?? 0), 0);
-      return c.json({ worktrees, totalBytes, keep });
+      return c.json({ worktrees, totalBytes, keep, idleDays });
     })
 
-    .post('/worktrees/reclaim', jsonZodValidator(() => reclaimBodySchema, { absent: ({}), message: 'invalid body' }), async (c) => {
-      const { root: repoRoot, store } = c.get('project');
-      // The body is validated (an empty or `{}` one is accepted) but carries nothing this
-      // handler reads; retention is best-effort, so 200 always.
-      const reclaimed = await reclaimWorktrees(repoRoot, store, await resolveWorktreeRetention(repoRoot), { lifecycle: c.get('project').manager.lifecycle });
+    .post('/worktrees/reclaim', jsonZodValidator(reclaimWorktreesInputSchema, { absent: ({}), message: 'invalid body' }), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const body = c.req.valid('json');
+      const isLive = (id: string) => manager.isActive(id);
+      const opts = { lifecycle: manager.lifecycle, isLive };
+      // An empty body is "Reclaim now": the configured retention, count then age. Best-effort, 200 always.
+      const targets = selectManualReclaim(store.listRuns(), body, isLive, storeActivity(store));
+      if (body.dryRun) {
+        const candidates = targets ?? await configuredReclaimCandidates(repoRoot, store, isLive);
+        const runs = store.listRuns().filter((r) => candidates.includes(r.id));
+        const inUse = await worktreesInUse(runs);
+        // The real pass keeps a tree with uncommitted work (#2215); the preview must not list it.
+        const dirty = new Set<string>();
+        for (const run of runs) if (run.worktreePath && await worktreeHasUnpreservedWork(run.worktreePath)) dirty.add(run.id);
+        return c.json({ reclaimed: candidates.filter((id) => !inUse.has(id) && !dirty.has(id)), dryRun: true });
+      }
+      const reclaimed = targets === null
+        ? await enforceWorktreeRetention(repoRoot, store, opts)
+        : await reclaimSelectedWorktrees(repoRoot, store, targets, opts);
       return c.json({ reclaimed });
-    });
+    })
 
-  const reclaimBodySchema = z.object({}).passthrough();
+    // `cez worktrees prune`: the boot-time orphan sweep on demand. Never throws; a tree in use stays.
+    .post('/worktrees/prune', async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const ids = new Set(store.listRuns().map((r) => r.id));
+      const removed = await pruneOrphans(repoRoot, ids, (id) => manager.lifecycle.allowOrphanPrune(id)).catch(() => [] as string[]);
+      return c.json({ removed });
+    });
 
   /**
    * "The inbox is on and this entry exists" — the 409/404 half of `POST /todos/:id/start`, lifted
@@ -7048,6 +7291,10 @@ export function createApp(deps: ServerDeps) {
         // already-open stream.
         const offWorkspace = workspaceEvents.on((event, data) => {
           if (relayReader && event === 'phone-pairing') return;
+          if (relayReader && event === 'agent-login') {
+            void stream.writeSSE({ event, data: JSON.stringify(phoneSafeSession(data as LoginSession)) });
+            return;
+          }
           if (event === 'project-removed') {
             const removed = (data as { id?: string }).id;
             if (removed !== undefined && attached.has(removed)) {
@@ -7631,7 +7878,7 @@ export function createApp(deps: ServerDeps) {
     if (action === pullRepo || action === syncRepo) {
       const live = project.store
         .listRuns()
-        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting'));
+        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting') && !isIdleParked(r));
       if (live) return { error: 'an in-place task is running in this checkout — wait for it to finish' };
     }
     const result = await action(info.root);
@@ -7895,6 +8142,10 @@ export function createApp(deps: ServerDeps) {
       // Count-based worktree retention (#483): keep the last N finished worktrees
       // on disk. 0 = unlimited. Always materialized (schema default 10).
       worktreeRetention: config.worktreeRetention,
+      worktreeIdleDays: await resolveWorktreeIdleDays(repoRoot),
+      worktreeIdleDaysOwn: config.worktreeIdleDays !== undefined,
+      archivedTaskDeleteDays: await resolveArchivedTaskDeleteDays(repoRoot),
+      archivedTaskDeleteDaysOwn: config.archivedTaskDeleteDays !== undefined,
       ...(lifecycle.configured ? { worktreeLifecycle: lifecycle.config, worktreeLifecycleRevision: lifecycle.revision! } : {}),
       // Live title updates (task auto-naming spec): tri-state — null means "no
       // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
@@ -7994,6 +8245,14 @@ export function createApp(deps: ServerDeps) {
             if (parsed.data.worktreeRetention === null) delete raw.worktreeRetention;
             else raw.worktreeRetention = parsed.data.worktreeRetention;
           }
+          if (parsed.data.worktreeIdleDays !== undefined) {
+            if (parsed.data.worktreeIdleDays === null) delete raw.worktreeIdleDays;
+            else raw.worktreeIdleDays = parsed.data.worktreeIdleDays;
+          }
+          if (parsed.data.archivedTaskDeleteDays !== undefined) {
+            if (parsed.data.archivedTaskDeleteDays === null) delete raw.archivedTaskDeleteDays;
+            else raw.archivedTaskDeleteDays = parsed.data.archivedTaskDeleteDays;
+          }
           if (parsed.data.liveTitleUpdates !== undefined) {
             if (parsed.data.liveTitleUpdates === null) delete raw.liveTitleUpdates;
             else raw.liveTitleUpdates = parsed.data.liveTitleUpdates;
@@ -8074,7 +8333,7 @@ export function createApp(deps: ServerDeps) {
           await save(false);
         }
         // A new keep-limit applies now, not at the next finished task (#2003).
-        if (parsed.data.worktreeRetention !== undefined) c.get('project').manager.scheduleRetention();
+        if (parsed.data.worktreeRetention !== undefined || parsed.data.worktreeIdleDays !== undefined || parsed.data.archivedTaskDeleteDays !== undefined) c.get('project').manager.scheduleRetention();
         return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
       } catch (error) { return lifecycleError(c, error); }
     });
@@ -8543,6 +8802,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
+    ...(run.parked !== undefined ? { parked: run.parked } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.diffStat !== undefined ? { diffStat: run.diffStat } : {}),
@@ -8580,6 +8840,8 @@ export function createApp(deps: ServerDeps) {
       : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
+    ...(run.model !== undefined ? { model: run.model } : {}),
+    ...(run.actualModel !== undefined ? { actualModel: run.actualModel } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
     ...(run.peakProcCount !== undefined ? { peakProcCount: run.peakProcCount } : {}),
     // The live sample, on the same terms as `GET /runs`: process-wide sampler, so a
@@ -8780,7 +9042,7 @@ export function createApp(deps: ServerDeps) {
   // Spec 2026-10-31-managers. Single-mount: a manager spans projects, so a scoped spelling would
   // be a contradiction. Explicit paths for the gate, for the reason `requireAutomations` spells out.
   const managerLoopback: { request?: (path: string, init?: RequestInit) => Response | Promise<Response> } = {};
-  const managerProjectSources = async (): Promise<ManagerProjectSource[]> => {
+  const workspaceProjectSources = async ({ salvageColdRuns = false } = {}): Promise<ManagerProjectSource[]> => {
     const registry = await loadWorkspaceConfig().then((config) => config.projects).catch(() => []);
     const bootId = await resolveBootProject(registry);
     const visible = capabilities().singleProject ? registry.filter((project) => project.id === bootId) : registry;
@@ -8794,7 +9056,11 @@ export function createApp(deps: ServerDeps) {
         name: project.name || basename(project.root),
         root: project.root,
         available: existsSync(project.root),
-        runs: () => owned ? owned.store.listRuns() : readColdRuns(join(project.root, '.ai/cezar')),
+        runs: () => {
+          if (owned) return owned.store.listRuns();
+          const dataDir = join(project.root, '.ai/cezar');
+          return salvageColdRuns ? readRunIndexDiagnostic(dataDir, project.root).runs : readColdRuns(dataDir);
+        },
         automationFailures: () => {
           if (!owned) return [];
           return owned.automationStore.list().flatMap((automation) => {
@@ -8812,7 +9078,7 @@ export function createApp(deps: ServerDeps) {
   const managerEngine = new ManagerEngine({
     store: managerStore,
     emit: (event, data) => workspaceEvents.emit(event, data),
-    projects: managerProjectSources,
+    projects: workspaceProjectSources,
     github: {
       list: (root) => fetchGithub(root, false, 30),
       refStatus: (root, prs) => fetchGithubRefStatus(root, { prs: prs.slice(0, GH_REF_STATUS_MAX), issues: [] }),
@@ -8835,15 +9101,176 @@ export function createApp(deps: ServerDeps) {
       track: (event, label, opts) => track(event, { label }, opts),
       timing: recordTiming,
     },
-    pushSignal: (managerId) => phonePairing.signalPush(managerId),
+    pushSignal: (managerId, kind) => phonePairing.signalPush(managerId, kind),
+    // An open card older than this stops counting (spec 2026-11-17-questions-inbox, Older).
+    olderAfterDays: async () => (await readWorkspaceUiState()).questions?.olderAfterDays,
+    // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
+    onActivityChange: () => refreshQuestions(),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
-  // The badge, read when a push goes out: what waits on the user across managers that notify.
-  waitingOnUser = async () =>
-    (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0);
-  phonePairing.attachPush(waitingOnUser);
+  // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
+  deps.onDispose?.(registerAuthResume({
+    contexts,
+    boot: { context: bootContext, projectId: () => resolveBootProject() },
+    managers: { resumeAuthFailed: (provider, profileId) => (capabilities().managers !== false ? managerEngine.resumeAuthFailed(provider, profileId) : []) },
+  }));
+  // The Questions inbox (spec 2026-11-17-questions-inbox): every open manager and task question. With
+  // managers off the manager provider is gated out and the inbox serves task questions only.
+  const taskQuestions = createTaskQuestionProvider({
+    contexts,
+    // The gate the messages and Continue routes meet before an answer reaches the agent.
+    providerBlocked: (ctx, run) => {
+      const live = ['running', 'waiting'].includes(run.status) && run.idleClosedAt === undefined && run.awaitingAnswerSince === undefined;
+      return providerActionError([live ? providerForActiveRun(run) : providerForExistingRun(run)], {
+        repoRoot: ctx.root,
+        profileFor: (provider) => recordedProfileFor(run, provider),
+      });
+    },
+  });
+  deps.onDispose?.(() => taskQuestions.dispose());
+  const questionInbox = createQuestionInbox({
+    task: deps.questionProviders?.task ?? taskQuestions,
+    manager: deps.questionProviders?.manager ?? createManagerQuestionProvider(managerEngine),
+    managersEnabled: () => capabilities().managers !== false,
+    managerInactive: (managerId) => managerStore.get(managerId)?.inactive !== undefined,
+    olderAfterDays: async () => (await readWorkspaceUiState()).questions?.olderAfterDays,
+  });
+  refreshQuestions = () => questionInbox.refresh();
+  deps.onDispose?.(() => questionInbox.dispose());
+  // Trusted-only like `host`: attention counts are never readable by a foreign local page (BACKWARD_COMPATIBILITY.md).
+  deps.socketHub?.registerTopic('questions', questionsTopic(questionInbox));
+  // The attention list (spec 2026-11-20-phone-notifications-inbox, variant D): Now's Needs you, the Now
+  // badge and every phone's icon are filters of it.
+  const readAttention = async (): Promise<AttentionResponse> => {
+    const managersOn = capabilities().managers !== false;
+    const managers = managersOn ? await managerEngine.list() : [];
+    const approvals = managers.flatMap((manager) => manager.pendingActions > 0
+      ? managerEngine.messages(manager.id, { pending: '1' }).messages.flatMap((message) =>
+        message.kind === 'action' ? [{ managerId: manager.id, message, title: describeAction(message.action) }] : [])
+      : []);
+    const inbox = await questionInbox.list().catch(() => undefined);
+    const sources = await workspaceProjectSources();
+    const available = sources.filter((source) => source.available);
+    const projects = available.map((source) => ({ id: source.id, runs: source.runs() }));
+    const roots = new Map(available.map((source) => [source.id, source.root]));
+    const overrides = await attentionOverrides.list().catch(() => []);
+    armSnoozeWake(overrides);
+    return buildAttentionList({
+      questions: inbox?.open ?? [],
+      managers,
+      approvals,
+      projects,
+      now: Date.now(),
+      olderAfterDays: inbox?.olderAfterDays ?? 0,
+      overrides,
+      prState: (projectId, number) => {
+        const root = roots.get(projectId);
+        return root ? readCachedPrEnds(root, [number])[number] : undefined;
+      },
+      // The task's CURRENT PR, as the forge cache already knows it: never a `gh` call. A superseded,
+      // closed PR says nothing about the one the task opened after it.
+      prEnded: (projectId, run) => {
+        const root = roots.get(projectId);
+        const number = root ? currentTaskPr(run) : undefined;
+        const ended = root && number !== undefined ? readCachedPrEnds(root, [number])[number] : undefined;
+        return ended && number !== undefined ? { number, ...ended } : undefined;
+      },
+    });
+  };
+  // The list may have changed where no run, manager or question frame says so (a snooze ending, a
+  // dismissal from a phone, a PR closing): the cockpit re-reads on this, phones on the recount.
+  const attentionChanged = () => {
+    attention.poke();
+    workspaceEvents.emit('attention-change', {});
+  };
+  // A snooze ends with no event of its own: one timer for the soonest, so the badge and a phone hear it.
+  let snoozeTimer: ReturnType<typeof setTimeout> | undefined;
+  const armSnoozeWake = (overrides: readonly { until?: string }[]) => {
+    const soonest = Math.min(...overrides.map((entry) => (entry.until ? Date.parse(entry.until) : Number.POSITIVE_INFINITY)));
+    if (snoozeTimer) clearTimeout(snoozeTimer);
+    snoozeTimer = undefined;
+    if (!Number.isFinite(soonest)) return;
+    // setTimeout overflows past ~24.8 days; a later wake just re-arms on the next read.
+    snoozeTimer = setTimeout(() => { snoozeTimer = undefined; attentionChanged(); }, Math.min(Math.max(0, soonest - Date.now()) + 1_000, 2 ** 31 - 1));
+    snoozeTimer.unref?.();
+  };
+  deps.onDispose?.(() => { if (snoozeTimer) clearTimeout(snoozeTimer); });
+  const attentionOverrides = deps.attentionOverrides ?? createAttentionOverrideStore();
+  // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
+  const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
+  deps.onDispose?.(() => attention.dispose());
+  attention.onChange(() => {
+    phonePairing.noteAttentionChange();
+    workspaceEvents.emit('attention-change', {});
+  });
+  questionInbox.onChange(() => attention.poke());
+  const offAttentionEvents = workspaceEvents.on((event) => {
+    if (event === 'manager-change' || event === 'manager-message') attention.poke();
+  });
+  deps.onDispose?.(offAttentionEvents);
+  const watchedStores = new Set<RunStore>();
+  const watchRuns = (store: RunStore) => {
+    if (watchedStores.has(store)) return;
+    watchedStores.add(store);
+    const poke = () => attention.poke();
+    store.on('run', poke);
+    store.on('deleted', poke);
+    deps.onDispose?.(() => { store.off('run', poke); store.off('deleted', poke); });
+  };
+  watchRuns(bootContext.store);
+  for (const id of contexts.ids()) {
+    const built = contexts.peek(id);
+    if (built) watchRuns(built.store);
+  }
+  deps.onDispose?.(contexts.onContextBuilt((ctx) => { watchRuns(ctx.store); attention.poke(); }));
+  // Health's `waiting` for the phone asking: the kinds it counts, as its pushes do.
+  waitingOnUser = async () => {
+    const { items } = await attention.list();
+    const deviceId = relayDeviceId();
+    const prefs = (deviceId ? phonePairing.phonePrefs(deviceId) : null) ?? DEFAULT_PHONE_PUSH_PREFS;
+    return phoneBadgeCount(items, prefs.icon);
+  };
+  phonePairing.attachPush(async (kinds) => phoneBadgeCount((await attention.list()).items, kinds));
+
+  // ---- chained family: attention (workspace-level, single-mount) ----
+  const attentionRoutes = new Hono()
+    .get('/workspace/attention', async (c) => c.json(await attention.list()))
+    // Spec 2026-11-23-needs-you-triage: dismiss, snooze, "Still needs me", and their undo.
+    .post('/workspace/attention/overrides', jsonZodValidator(attentionOverrideInputSchema), async (c) => {
+      const overrides = await attentionOverrides.set(c.req.valid('json'));
+      armSnoozeWake(overrides);
+      attentionChanged();
+      return c.json({ overrides });
+    })
+    .post('/workspace/attention/overrides/clear', jsonZodValidator(attentionOverrideClearInputSchema), async (c) => {
+      const overrides = await attentionOverrides.clear(c.req.valid('json').key);
+      armSnoozeWake(overrides);
+      attentionChanged();
+      return c.json({ overrides });
+    });
+
+  // ---- chained family: Questions inbox (workspace-level, single-mount) ----
+  // Spec 2026-11-17-questions-inbox. A manager copy folded into its task's item answers the task.
+  const questionsRoutes = new Hono()
+    .get('/workspace/questions', async (c) => c.json(await questionInbox.list()))
+    .post('/workspace/questions/:key/answer', paramZodValidator(questionKeyParamSchema), jsonZodValidator(answerQuestionInputSchema), async (c) => {
+      const { text, reactivate } = c.req.valid('json');
+      const result = await questionInbox.answer(c.req.valid('param').key, text, { reactivate: reactivate === true });
+      return result.ok ? c.json({ ok: true as const, item: result.item }) : c.json({ error: result.error }, result.status);
+    })
+    .post('/workspace/questions/:key/dismiss', paramZodValidator(questionKeyParamSchema), async (c) => {
+      const result = await questionInbox.dismiss(c.req.valid('param').key);
+      return result.ok ? c.json({ ok: true as const, item: result.item }) : c.json({ error: result.error }, result.status);
+    });
   deps.onDispose?.(() => managerEngine.dispose());
+  // A GitHub read that sees a PR merged or closed closes its waiting merge cards (#2241 follow-up).
+  const stopPrClosed = onPrClosed((root, number, state, verify) => {
+    void managerEngine.pullRequestClosed(root, number, state, verify).catch(() => {});
+    // A paused task or a card on that PR moves to Probably done.
+    attentionChanged();
+  });
+  deps.onDispose?.(stopPrClosed);
 
   // A linked automation's finished run goes straight to its manager's chat (spec § Automation reports).
   const watchReports = (project: ProjectContext) => watchAutomationReports({
@@ -8889,7 +9316,14 @@ export function createApp(deps: ServerDeps) {
   const managersRoutes = new Hono()
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
-    .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
+    // `needsYou`: what Now still counts per manager, so the notch agrees with the Now and phone badges.
+    .get('/workspace/managers', async (c) => {
+      const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
+      return c.json({ managers: list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers });
+    })
+    // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
+    .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
+      c.json({ ok: true as const, changed: await managerEngine.setActivity(c.req.valid('json').active) }))
     .post('/workspace/managers', jsonZodValidator(createManagerInputSchema), async (c) => {
       const created = await managerEngine.create(c.req.valid('json'), { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
@@ -8909,8 +9343,10 @@ export function createApp(deps: ServerDeps) {
       return managerStore.get(id) ? c.json(managerEngine.messages(id, c.req.valid('query'))) : c.json(MANAGER_NOT_FOUND, 404);
     })
     .post('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), jsonZodValidator(sendManagerMessageInputSchema), async (c) => {
-      const { text, images, askId, idempotencyKey } = c.req.valid('json');
+      const { text, images, askId, idempotencyKey, reactivate } = c.req.valid('json');
       const { id } = c.req.valid('param');
+      // A message is a model turn: an inactive manager takes one only once the user confirmed reactivating it.
+      if (managerStore.get(id)?.inactive && reactivate !== true) return c.json({ error: MANAGER_INACTIVE }, 409);
       // Claimed before the uploads are read: a landed send consumed them, so its resend would 400.
       const receipt = idempotencyKey ? await managerSendReceipts.claim(`${id}:${idempotencyKey}`) : undefined;
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
@@ -8918,6 +9354,12 @@ export function createApp(deps: ServerDeps) {
       try {
         const attachments = readAttachments(images ?? []);
         if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
+        // A card answered, dismissed or closed elsewhere (another tab, the Questions page) takes no second answer.
+        if (askId !== undefined && managerStore.get(id)) {
+          const card = managerStore.message(id, askId);
+          if (card && !openAsk(card)) return c.json({ error: 'question already closed' }, 409);
+        }
+        if (reactivate === true && managerStore.get(id)?.inactive) await managerEngine.update(id, { active: true });
         if (!managerEngine.send(id, text, attachments, askId)) return c.json(MANAGER_NOT_FOUND, 404);
         return c.json((answered = { ok: true as const, attachments: attachments.length }));
       } finally {
@@ -8931,10 +9373,16 @@ export function createApp(deps: ServerDeps) {
     })
     .post('/workspace/managers/:id/stop', paramZodValidator(managerIdParamSchema), (c) =>
       managerEngine.stop(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
-    .post('/workspace/managers/:id/check', paramZodValidator(managerIdParamSchema), (c) =>
-      managerEngine.check(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
-    .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) =>
-      managerEngine.read(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    .post('/workspace/managers/:id/check', paramZodValidator(managerIdParamSchema), (c) => {
+      const checked = managerEngine.check(c.req.valid('param').id);
+      return 'error' in checked ? c.json({ error: checked.error }, checked.status) : c.json({ ok: true as const });
+    })
+    .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) => {
+      if (!managerEngine.read(c.req.valid('param').id)) return c.json(MANAGER_NOT_FOUND, 404);
+      // Its manager-change lands after the summary; the caller re-reads Now right away.
+      attention.poke();
+      return c.json({ ok: true as const });
+    })
     // Connectors (spec 2026-11-12-manager-connectors): the last observed servers, judged by the grants.
     .get('/workspace/managers/:id/connectors', paramZodValidator(managerIdParamSchema), async (c) => {
       const connectors = await managerEngine.connectors(c.req.valid('param').id);
@@ -8942,7 +9390,25 @@ export function createApp(deps: ServerDeps) {
     })
     .post('/workspace/managers/:id/connectors/refresh', paramZodValidator(managerIdParamSchema), async (c) => {
       const connectors = await managerEngine.refreshConnectors(c.req.valid('param').id);
+      if (connectors && 'error' in connectors) return c.json({ error: connectors.error }, connectors.status);
       return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    // Memory (spec 2026-11-21-manager-short-sessions-and-memory § 2.1): what every new session starts from.
+    .get('/workspace/managers/:id/memory', paramZodValidator(managerIdParamSchema), async (c) => {
+      const memory = await managerEngine.memory(c.req.valid('param').id);
+      return memory ? c.json(memory) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .put('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), jsonZodValidator(putManagerMemoryInputSchema), async (c) => {
+      const { id, key } = c.req.valid('param');
+      const memory = await managerEngine.setMemory(id, key, c.req.valid('json'));
+      if (!memory) return c.json(MANAGER_NOT_FOUND, 404);
+      return 'error' in memory ? c.json({ error: memory.error }, memory.status) : c.json(memory);
+    })
+    .delete('/workspace/managers/:id/memory/:key', paramZodValidator(managerMemoryParamSchema), async (c) => {
+      const { id, key } = c.req.valid('param');
+      const memory = await managerEngine.removeMemory(id, key);
+      if (!memory) return c.json(MANAGER_NOT_FOUND, 404);
+      return 'error' in memory ? c.json({ error: memory.error }, memory.status) : c.json(memory);
     })
     // The one route that performs a proposal. The agent's tools below can only create them.
     .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {
@@ -9056,6 +9522,10 @@ export function createApp(deps: ServerDeps) {
       phonePairing.denyPairing(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(PAIRING_NOT_FOUND, 409))
     .patch('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(renamePhoneInputSchema), (c) =>
       phonePairing.rename(c.req.valid('param').deviceId, c.req.valid('json').label) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
+    .put('/workspace/phones/:deviceId/prefs', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(phonePushSettingsSchema), (c) => {
+      const prefs = phonePairing.setPhoneSettings(c.req.valid('param').deviceId, c.req.valid('json'));
+      return prefs ? c.json(prefs) : c.json(PHONE_NOT_FOUND, 404);
+    })
     .delete('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), (c) =>
       phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
     // The relay account (RELAY_PROTOCOL.md § 18). Each one asks the relay, so only Settings calls them.
@@ -9117,6 +9587,20 @@ export function createApp(deps: ServerDeps) {
     return rest;
   };
   const phonePushRoutes = new Hono()
+    // The calling phone's own settings (spec 2026-11-20-phone-notifications-inbox). Never a 404 for a paired
+    // phone: the defaults until it first saves, so a 404 can only mean an older cezar.
+    .get('/workspace/phone/push/prefs', (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      const prefs = phonePairing.phonePrefs(deviceId);
+      return prefs ? c.json(prefs) : c.json(PHONE_NOT_FOUND, 404);
+    })
+    .put('/workspace/phone/push/prefs', jsonZodValidator(phonePushPrefsSchema), (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      const prefs = phonePairing.setPhonePrefs(deviceId, c.req.valid('json'));
+      return prefs ? c.json(prefs) : c.json(PHONE_NOT_FOUND, 404);
+    })
     .get('/workspace/phone/push', async (c) => {
       const deviceId = relayDeviceId();
       if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
@@ -9187,9 +9671,12 @@ export function createApp(deps: ServerDeps) {
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
     .route('/', managersRoutes)
+    .route('/', questionsRoutes)
+    .route('/', attentionRoutes)
     .route('/', phonesRoutes)
     .route('/', phonePushRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
+    .route('/', planUsageRoutes())
     .route('/', workspaceEventsRoutes)
     .route('/', telemetryRoutes);
 
@@ -9225,6 +9712,19 @@ export function createApp(deps: ServerDeps) {
   );
 
   return routed;
+}
+
+/** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */
+function diskGuardStatusBody(status: DiskGuardStatus, thresholds: { minFreePercent: number; minFreeGb: number; maxWorktreesGb: number }) {
+  return {
+    thresholds,
+    ...(status.checkedAt !== undefined ? { checkedAt: status.checkedAt } : {}),
+    ...(status.freeBytes !== undefined ? { freeBytes: status.freeBytes } : {}),
+    ...(status.totalBytes !== undefined ? { totalBytes: status.totalBytes } : {}),
+    ...(status.worktreesBytes !== undefined ? { worktreesBytes: status.worktreesBytes } : {}),
+    ...(status.lastAction !== undefined ? { lastAction: status.lastAction } : {}),
+    ...(status.warning !== undefined ? { warning: status.warning } : {}),
+  };
 }
 
 export function startServer(deps: ServerDeps, port: number): ServerType & { shutdownLifecycle(): Promise<void> } {
@@ -9265,11 +9765,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   let rescheduleAutomations = () => {};
   const appCleanups: Array<() => void> = [];
   let managerEngine: ManagerEngine | undefined;
+  let diskGuard: DiskGuard | undefined;
   const relay = deps.relay ?? new RelayService();
   const app = createApp({
     ...deps,
     relay,
     onManagerEngine: (engine) => { managerEngine = engine; deps.onManagerEngine?.(engine); },
+    onDiskGuard: (guard) => { diskGuard = guard; deps.onDiskGuard?.(guard); },
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
     webhookPort: port,
@@ -9326,7 +9828,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
         projectId,
         store,
         timeZone: localTimeZone(),
-        ...(project.github ? { github: { ...project.github, poller: new GithubPoller({ host: project.github.host }) } } : {}),
+        ...(project.github ? { github: { ...project.github, poller: new GithubPoller({ host: project.github.host }), onPullRequestClosed: (number, state) => reportPrClosed(project.root, number, state, { verify: true }) } } : {}),
         // Present unconditionally (unlike `github`, precomputed above from a sync remote parse):
         // whether the project actually has a tracker connection is resolved lazily, at poll time,
         // by `getDriver()` — a project with none simply fails that call and the scheduler backs off.
@@ -9380,6 +9882,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   });
   server.once('listening', () => {
     void relay.start();
+    // Boot already ran the retention sweep (src/index.ts), so the guard's first pass follows it.
+    diskGuard?.start();
     void listProjects().then((projects) => {
       if (shutdownPromise) return;
       // Spec 2026-10-31-managers: arms for a manager that exists, and only behind the flag.
@@ -9402,7 +9906,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); diskGuard?.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return Object.assign(server, {
     shutdownLifecycle(): Promise<void> {
@@ -9411,6 +9915,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       server.close();
       coordinator.stop();
       automationScheduler.stop();
+      diskGuard?.stop();
       shutdownPromise = (async () => {
         const results = await Promise.allSettled([managerEngine?.shutdown(), deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
         deps.manager.dispose();

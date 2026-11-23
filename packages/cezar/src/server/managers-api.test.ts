@@ -20,6 +20,7 @@ vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal
 
 const JSON_HEADERS = { 'content-type': 'application/json', host: '127.0.0.1' };
 const BASE = '/api/v1/workspace/managers';
+const managerStore = () => new ManagerStore(() => undefined);
 
 describe('the managers routes', () => {
   let root: string;
@@ -117,6 +118,16 @@ describe('the managers routes', () => {
     expect((await request(`${BASE}/missing`)).status).toBe(404);
     expect((await request(`${BASE}/missing/messages`)).status).toBe(404);
     expect((await request(`${BASE}/missing/check`, { method: 'POST' })).status).toBe(404);
+  });
+
+  it('writes memory only with its writer named, and lists it (spec 2026-11-21 § 2.1)', async () => {
+    const { id } = await createManager();
+    expect((await request(`${BASE}/${id}/memory/full-prs`, { method: 'PUT', body: { kind: 'feedback', text: 'Open full PRs' } })).status).toBe(400);
+    const saved = await request(`${BASE}/${id}/memory/full-prs`, { method: 'PUT', body: { kind: 'feedback', text: 'Open full PRs', source: 'manager' } });
+    expect(await saved.json()).toMatchObject({ entries: [{ key: 'full-prs', source: 'manager' }], limits: { entries: 40, bytes: 6144 } });
+    expect(await (await request(`${BASE}/${id}/memory`)).json()).toMatchObject({ entries: [{ key: 'full-prs' }] });
+    expect((await request(`${BASE}/${id}/memory/Bad Key`, { method: 'PUT', body: { kind: 'feedback', text: 'x', source: 'user' } })).status).toBe(400);
+    expect((await request(`${BASE}/${id}/memory/nope`, { method: 'DELETE' })).status).toBe(404);
   });
 
   it('persists connector grants and discovers connectors with a dry-run probe', async () => {
@@ -298,6 +309,64 @@ describe('the managers routes', () => {
     expect(response.status).toBe(403);
   });
 
+  it('refuses a second answer to a card that is already closed (Questions inbox)', async () => {
+    const { id } = await createManager();
+    const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+    const ask = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'next' }] }] };
+    log.persistMessage(id, { id: 'closed', seq: 0, at: 't', kind: 'assistant', turn: 'chat', text: '', streaming: false, commands: [], ask, askClosed: { reason: 'dismissed', at: 't' } } as ManagerMessage);
+    const send = (askId: string) => request(`${BASE}/${id}/messages`, { method: 'POST', body: { text: 'Base: main', askId } });
+    const refused = await send('closed');
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'question already closed' });
+  });
+
+  it('an inactive manager refuses chat, Check now and a connector probe until reactivated (spec 2026-11-19-manager-deactivate)', async () => {
+    const { id } = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const off = await request(`${BASE}/${id}`, { method: 'PATCH', body: { active: false } });
+    expect(off.status).toBe(200);
+    expect(((await off.json()) as { inactive?: { since: string } }).inactive?.since).toBeDefined();
+    for (const [path, body] of [[`${BASE}/${id}/messages`, { text: 'hi' }], [`${BASE}/${id}/check`, undefined], [`${BASE}/${id}/connectors/refresh`, undefined]] as const) {
+      const refused = await request(path, { method: 'POST', ...(body ? { body } : {}) });
+      expect(refused.status, path).toBe(409);
+      expect(await refused.json()).toEqual({ error: 'manager inactive' });
+    }
+    expect(managerStore().messages(id).filter((message) => message.kind === 'user')).toEqual([]);
+    const sent = await request(`${BASE}/${id}/messages`, { method: 'POST', body: { text: 'hi', reactivate: true } });
+    expect(sent.status).toBe(200);
+    expect(managerStore().get(id)?.inactive).toBeUndefined();
+    await vi.waitFor(() => expect(engine.inFlight()).toBe(0), { timeout: 15_000 });
+    expect(managerStore().messages(id).filter((message) => message.kind === 'user').map((message) => 'text' in message && message.text)).toEqual(['hi']);
+  });
+
+  it('deactivates and reactivates every manager at once, answering the ids that changed', async () => {
+    const one = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const two = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    await request(`${BASE}/${two.id}`, { method: 'PATCH', body: { active: false } });
+    const off = await request(`${BASE}/activity`, { method: 'POST', body: { active: false } });
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ ok: true, changed: [one.id] });
+    const on = await request(`${BASE}/activity`, { method: 'POST', body: { active: true } });
+    expect(((await on.json()) as { changed: string[] }).changed.sort()).toEqual([one.id, two.id].sort());
+    expect((await request(`${BASE}/activity`, { method: 'POST', body: { active: true, extra: 1 } })).status).toBe(400);
+  });
+
+  it('keeps an inactive manager\'s question listed but out of the count, and answers it only with reactivate', async () => {
+    const { id } = await createManager({ instructions: 'Watch', projects: 'all', cronMinutes: 0 });
+    const ask = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'next' }] }] };
+    managerStore().persistMessage(id, { id: 'card', seq: 0, at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '', streaming: false, commands: [], ask } as ManagerMessage);
+    await request(`${BASE}/${id}`, { method: 'PATCH', body: { active: false } });
+    const listed = (await (await request('/api/v1/workspace/questions')).json()) as { open: Array<{ key: string }>; counts: { live: number; older: number } };
+    expect(listed.open.map((item) => item.key)).toEqual([`m:${id}:card`]);
+    expect(listed.counts).toEqual({ live: 0, older: 0 });
+    const answer = (body: unknown) => request(`/api/v1/workspace/questions/${encodeURIComponent(`m:${id}:card`)}/answer`, { method: 'POST', body });
+    const refused = await answer({ text: 'Base: main' });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'manager inactive' });
+    expect((await answer({ text: 'Base: main', reactivate: true })).status).toBe(200);
+    expect(managerStore().get(id)?.inactive).toBeUndefined();
+    await vi.waitFor(() => expect(engine.inFlight()).toBe(0), { timeout: 15_000 });
+  });
+
   it('pages history oldest-first within the page, newest page by default', async () => {
     const { id } = await createManager();
     const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
@@ -308,6 +377,22 @@ describe('the managers routes', () => {
     const older = (await (await request(`${BASE}/${id}/messages?before=3&limit=10`)).json()) as { messages: Array<{ seq: number }>; hasMore: boolean };
     expect(older.messages.map((message) => message.seq)).toEqual([0, 1, 2]);
     expect(older.hasMore).toBe(false);
+  });
+
+  describe('kind=user', () => {
+    it('returns only the user\'s messages and keeps before/limit', async () => {
+      const { id } = await createManager();
+      const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+      const kinds = ['user', 'notice', 'user', 'notice', 'user'] as const;
+      kinds.forEach((kind, seq) =>
+        log.persistMessage(id, kind === 'user' ? { id: `m${seq}`, seq, at: 't', kind, text: 'q' } : { id: `m${seq}`, seq, at: 't', kind, text: 'x' }));
+      const page = async (query: string) =>
+        (await (await request(`${BASE}/${id}/messages?${query}`)).json()) as { messages: Array<{ seq: number }>; hasMore: boolean };
+      expect((await page('kind=user&limit=2')).messages.map((m) => m.seq)).toEqual([2, 4]);
+      const older = await page('kind=user&limit=2&before=4');
+      expect(older.messages.map((m) => m.seq)).toEqual([0, 2]);
+      expect(older.hasMore).toBe(false);
+    });
   });
 
   describe('pending=1', () => {

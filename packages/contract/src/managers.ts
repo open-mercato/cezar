@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { attachmentListSchema } from './runs.ts';
 import { runnerSchema } from './runners.ts';
+import { questionAboutSchema, questionCardReplaces, questionClosedSchema, questionStaleSchema } from './questions.ts';
 
 /**
  * Managers (spec `.ai/specs/2026-10-31-managers.md`): global, long-lived agents the user talks to
@@ -229,6 +230,11 @@ export const managerSchema = z.object({
   /** Read-only `gh` patterns the user allowed beyond the built-in policy. Absent = none. */
   bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
   jobs: z.array(managerJobSchema).max(32),
+  /** Deactivated by the user (spec 2026-11-19-manager-deactivate): no checks, jobs, follow-ups or
+   *  model calls until reactivated. Absent = active. */
+  inactive: z.object({ since: z.string() }).optional(),
+  /** The last reactivation: the floor every check and job due time counts from, so nothing overdue fires at once. */
+  activeSince: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -254,6 +260,9 @@ export const managerSummarySchema = managerSchema.extend({
   pendingActions: z.number().int().min(0),
   /** Question cards still waiting for an answer. */
   pendingQuestions: z.number().int().min(0),
+  /** `GET /workspace/managers` only: its approvals and questions Now still counts, after dismissals, snoozes,
+   *  Probably done and its Notify switch (spec 2026-11-23-needs-you-triage). The notch reads this. */
+  needsYou: z.object({ approvals: z.number().int().min(0), questions: z.number().int().min(0) }).optional(),
   lastCheckAt: z.string().optional(),
   /** Absent when `cronMinutes` is 0. */
   nextCheckAt: z.string().optional(),
@@ -316,6 +325,10 @@ export const updateManagerInputSchema = z.object({
   /** Forget the refused-command log. */
   clearBashDenials: z.literal(true).optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
+  /** false deactivates, true reactivates (spec 2026-11-19-manager-deactivate). */
+  active: z.boolean().optional(),
+  /** With `active: true`: run one forced check on reactivation (one model call). */
+  catchUp: z.literal(true).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
 
@@ -386,6 +399,9 @@ export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;
 
 /** The questions of a `CEZ:ASK` line, the same shape a task's ask card shows. */
 export const managerAskSchema = z.object({
+  /** The card's stable name; re-asking with it replaces the older card (Questions inbox spec). */
+  id: z.string().optional(),
+  about: questionAboutSchema.optional(),
   questions: z.array(z.object({
     id: z.string().optional(),
     header: z.string(),
@@ -421,6 +437,18 @@ const managerMessageBase = {
   sourceTasks: z.array(managerTaskSourceSchema).optional(),
 };
 
+/** What a deactivate or reactivate line carries; `reactivated` counts what happened while inactive. */
+export const managerActivityNoticeSchema = z.object({
+  change: z.enum(['deactivated', 'reactivated']),
+  since: z.string().optional(),
+  taskUpdates: z.number().int().min(0).optional(),
+  automationReports: z.number().int().min(0).optional(),
+  checksSkipped: z.number().int().min(0).optional(),
+  jobRunsSkipped: z.number().int().min(0).optional(),
+  catchUp: z.boolean().optional(),
+});
+export type ManagerActivityNotice = z.infer<typeof managerActivityNoticeSchema>;
+
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
 export const managerMessageSchema = z.discriminatedUnion('kind', [
   z.object({ ...managerMessageBase, kind: z.literal('user'), text: z.string(), attachments: z.array(managerAttachmentSchema).optional() }),
@@ -438,10 +466,21 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     ask: managerAskSchema.optional(),
     /** What the user answered; the next message they send answers an open card. */
     askAnswer: z.string().optional(),
+    /** Closed without a card answer: dismissed, replaced, withdrawn, expired, or answered on its linked copy. */
+    askClosed: questionClosedSchema.optional(),
+    /** Suspected out of date: still open and counted, with the reason shown on the card. */
+    askStale: questionStaleSchema.optional(),
     commands: z.array(managerCommandSchema),
     stopped: z.boolean().optional(),
     error: z.string().optional(),
-    /** A provider usage limit ended this turn; the manager resumes it at this instant. Dropped once it does, or is cancelled. */
+    /** The turn failed because this agent account's login was rejected (spec 2026-11-18-inline-account-reconnect):
+     *  the chat renders the reconnect card. Dropped once the turn is resumed. */
+    authFailure: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
+    /** Set when a reconnect re-ran this failed turn. */
+    reconnectedAt: z.string().optional(),
+    /** The account whose reconnect re-ran it (`authFailure` before the resume). */
+    reconnectedFrom: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
+    /** A provider usage limit ended this turn); the manager resumes it at this instant. Dropped once it does, or is cancelled. */
     resumeAt: z.string().optional(),
     costUsd: z.number().optional(),
     /** Posted by the server for a linked automation's run, with no model turn (`turn: 'job'`,
@@ -473,9 +512,32 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     result: z.string().optional(),
   }),
   /** A quiet system line: "Connected to meblohand", "Merged #12". */
-  z.object({ ...managerMessageBase, kind: z.literal('notice'), text: z.string() }),
+  z.object({
+    ...managerMessageBase,
+    kind: z.literal('notice'),
+    text: z.string(),
+    /** Set on the deactivate and reactivate lines (spec 2026-11-19-manager-deactivate); `text` says the same for older cockpits. */
+    activity: managerActivityNoticeSchema.optional(),
+  }),
 ]);
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;
+
+/** Close rule "replaced" for manager cards; the one definition lives in `questions.ts`. */
+export const askReplaces = (newer: ManagerAsk, older: ManagerAsk): boolean => questionCardReplaces(newer, older);
+
+/** Unanswered, still-open question cards a later card replaces (`askReplaces`). Covers history written before
+ *  the engine persisted `askClosed: replaced` (#2307). */
+export function supersededAskIds(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const superseded = new Set<string>();
+  const cards = [...messages]
+    .filter((message): message is Extract<ManagerMessage, { kind: 'assistant' }> & { ask: ManagerAsk } => message.kind === 'assistant' && message.ask !== undefined)
+    .sort((a, b) => a.seq - b.seq);
+  cards.forEach((older, index) => {
+    if (older.askAnswer !== undefined || older.askClosed !== undefined) return;
+    if (cards.slice(index + 1).some((newer) => askReplaces(newer.ask, older.ask))) superseded.add(older.id);
+  });
+  return superseded;
+}
 
 export const managerMessagesQuerySchema = z.object({
   /** Page older history: only messages with a lower `seq`. */
@@ -483,6 +545,8 @@ export const managerMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
   /** `1` keeps only `action` messages still waiting for the user; `before` and `limit` still apply. */
   pending: z.literal('1').optional(),
+  /** `user` keeps only the user's own messages (the "your messages" list); `before` and `limit` still apply. */
+  kind: z.literal('user').optional(),
 });
 export const managerMessagesResponseSchema = z.object({
   messages: z.array(managerMessageSchema),
@@ -498,6 +562,8 @@ export const sendManagerMessageInputSchema = z
     askId: z.string().min(1).max(200).optional(),
     // A resend of a send that already landed answers the first result (relay incident 2026-11-15).
     idempotencyKey: z.string().uuid().optional(),
+    // An inactive manager takes a message only when the user confirmed reactivating it (spec 2026-11-19-manager-deactivate).
+    reactivate: z.literal(true).optional(),
   })
   .refine((input) => input.text !== '' || (input.images?.length ?? 0) > 0, {
     message: 'write a message or attach a file',
@@ -513,6 +579,13 @@ export const managerActionDecisionInputSchema = z.object({
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;
 
 export const managerOkResponseSchema = z.object({ ok: z.literal(true) });
+
+/** `POST /workspace/managers/activity`: deactivate or reactivate every manager at once. */
+export const managerActivityInputSchema = z.strictObject({ active: z.boolean() });
+export type ManagerActivityInput = z.infer<typeof managerActivityInputSchema>;
+/** The managers whose state changed; one already in that state is left alone. */
+export const managerActivityResponseSchema = z.object({ ok: z.literal(true), changed: z.array(managerIdSchema) });
+export type ManagerActivityResponse = z.infer<typeof managerActivityResponseSchema>;
 
 /** `attachments` is what the server kept: the client's proof that nothing was dropped on the way. */
 export const managerSendResponseSchema = z.object({ ok: z.literal(true), attachments: z.number().int().min(0) });
@@ -567,6 +640,8 @@ export const managerSnapshotTaskSchema = z.object({
   runner: z.string().optional(),
   /** The model the run uses: the resolved identity when known, else what was asked for. */
   model: z.string().optional(),
+  /** The model the agent reported actually running — what "auto" or an alias resolved to. */
+  actualModel: z.string().optional(),
   effort: z.string().optional(),
   /** The pull request the task opened, else the one it declared it is about. */
   prNumber: z.number().int().optional(),
@@ -655,6 +730,8 @@ export const managerCreateTaskResponseSchema = z.object({
   projectId: z.string(),
   runId: z.string(),
   forwarded: managerForwardedSchema.optional(),
+  /** A flag the project's own settings overrode, said in one line (e.g. `--dispatch` in a trunk-based project). */
+  notice: z.string().optional(),
 });
 export type ManagerCreateTaskResponse = z.infer<typeof managerCreateTaskResponseSchema>;
 
@@ -715,7 +792,14 @@ export const managerProposeActionInputSchema = z.object({
 });
 export type ManagerProposeActionInput = z.infer<typeof managerProposeActionInputSchema>;
 
-export const managerProposeActionResponseSchema = z.object({ actionId: z.string(), status: managerActionStatusSchema });
+export const managerProposeActionResponseSchema = z.object({
+  actionId: z.string(),
+  status: managerActionStatusSchema,
+  /** Older waiting cards for the same PR or automation this proposal closed as `dismissed`. */
+  replaced: z.array(z.string()).optional(),
+  /** Other managers whose chats already wait on a card for the same PR or automation. */
+  alsoWaitingIn: z.array(z.string()).optional(),
+});
 
 export const managerTaskDetailQuerySchema = z.object({
   projectId: boundedId,
@@ -756,3 +840,37 @@ export const managerDeltaEventSchema = z.object({
   commands: z.array(managerCommandSchema).optional(),
 });
 export type ManagerDeltaEvent = z.infer<typeof managerDeltaEventSchema>;
+
+// ---- memory (spec 2026-11-21-manager-short-sessions-and-memory § 2.1) ----------------------
+
+/** What every new manager session starts from: small on purpose, so a size budget, not a log. */
+export const MANAGER_MEMORY_LIMITS = { entries: 40, bytes: 6144, text: 280, why: 200 } as const;
+export const managerMemoryKindSchema = z.enum(['preference', 'feedback', 'decision', 'pointer']);
+export type ManagerMemoryKind = z.infer<typeof managerMemoryKindSchema>;
+export const managerMemoryKeySchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'a key is 1–64 lowercase letters, digits or dashes');
+export const managerMemoryEntrySchema = z.object({
+  key: managerMemoryKeySchema,
+  kind: managerMemoryKindSchema,
+  text: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.text),
+  why: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.why).optional(),
+  updatedAt: z.string(),
+  source: z.enum(['user', 'manager', 'import']),
+});
+export type ManagerMemoryEntry = z.infer<typeof managerMemoryEntrySchema>;
+export const managerMemoryResponseSchema = z.object({
+  entries: z.array(managerMemoryEntrySchema),
+  limits: z.object({ entries: z.number().int(), bytes: z.number().int() }),
+  /** Size of the block every new session's system prompt carries. */
+  usedBytes: z.number().int().nonnegative(),
+});
+export type ManagerMemoryResponse = z.infer<typeof managerMemoryResponseSchema>;
+export const managerMemoryParamSchema = z.object({ id: managerIdSchema, key: managerMemoryKeySchema });
+export const putManagerMemoryInputSchema = z.object({
+  kind: managerMemoryKindSchema,
+  text: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.text),
+  why: z.string().trim().max(MANAGER_MEMORY_LIMITS.why).optional(),
+  /** Who wrote it: the cockpit sends `user`, `cez-manager memory set` sends `manager`. Required,
+   *  so a write is never credited to the user by default. */
+  source: z.enum(['user', 'manager']),
+});
+export type PutManagerMemoryInput = z.infer<typeof putManagerMemoryInputSchema>;

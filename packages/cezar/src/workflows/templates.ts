@@ -53,7 +53,7 @@ export const IMPLEMENT_AND_VERIFY = builtIn(
 
 export const IMPLEMENT_REVIEW_PR = builtIn(
   'implement-review-pr',
-  'Implement, test, get an AI review with verdicts, pass your gate, then open a draft PR.',
+  'Implement, test, get an AI review with verdicts, then open a PR with your approval.',
   {
     nodes: [
       { id: 'start', type: 'start' },
@@ -82,7 +82,7 @@ export const IMPLEMENT_REVIEW_PR = builtIn(
         session: { continue: 'implement' },
         prompt: 'The reviewer asked for changes:\n\n{{nodes.review.summary}}\n\nMake them.',
       },
-      { id: 'gate', type: 'gate.human', name: 'Your review', message: 'Review verdict: {{nodes.review.verdict}}. Open a draft PR for “{{task}}”?' },
+      { id: 'gate', type: 'gate.human', name: 'Your review', message: 'Review verdict: {{nodes.review.verdict}}. Open a PR for “{{task}}”?' },
       { id: 'pr', type: 'github.draft-pr', name: 'Draft PR' },
       { id: 'done', type: 'end', name: 'PR opened', status: 'success' },
       { id: 'stopped', type: 'end', name: 'Stopped', status: 'failed' },
@@ -177,7 +177,7 @@ export const REVIEW_COUNCIL = builtIn(
         id: 'gate',
         type: 'gate.human',
         name: 'Your call',
-        message: 'Council verdict: {{nodes.judge.verdict}}.\n\n{{nodes.judge.summary}}\n\nOpen a draft PR for “{{task}}”?',
+        message: 'Council verdict: {{nodes.judge.verdict}}.\n\n{{nodes.judge.summary}}\n\nOpen a PR for “{{task}}”?',
       },
       { id: 'pr', type: 'github.draft-pr', name: 'Draft PR' },
       { id: 'done', type: 'end', name: 'PR opened', status: 'success' },

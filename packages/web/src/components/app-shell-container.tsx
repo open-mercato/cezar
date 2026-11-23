@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { matchPath, useLocation } from 'react-router'
 
 import { useManagers } from '@/api/managers'
+import { useAttention } from '@/api/attention'
 import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig, useWorkspaceUiState } from '@/api/queries'
 import type { HealthResponse, ProjectsResponse, RunRecord, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type ProjectSwitcher as ProjectSwitcherData, type RepoChip } from '@/components/app-shell'
@@ -19,7 +20,7 @@ import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu
 import { ManagerHeads } from '@/components/manager-heads'
 import { ConnectPhoneLink, PhonesLink } from '@/components/connect-phone-link'
 import { RelayAccountNotice } from '@/components/relay-account-notice'
-import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
+import { ManagerRail, ManagerSidebar, ProjectQuestionsLink } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
@@ -222,6 +223,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
   const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const currentTasks = useMemo(() => <CurrentTasksContainer />, [])
+  // With managers off the Questions row moves here (spec 2026-11-17-questions-inbox § F).
+  const workspaceQuestions = useMemo(() => (health.data && !managersAvailable ? <ProjectQuestionsLink /> : null), [health.data, managersAvailable])
   // The machine glance lives in the footer's "⋯" menu now, so it mounts only while that is open;
   // its own wrapper still gates the viewport and transport (nothing below `md` or in remote).
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
@@ -256,7 +259,13 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     now,
   )
   // Slots, because AppShell stays QueryClient-free: each reads the managers cache itself.
-  const managerSidebar = useMemo(() => <ManagerSidebar />, [])
+  // Now leads where the project nav's Now does: the project the sidebar counts for.
+  const nowTo = navProjectId === null ? '/' : `/p/${encodeURIComponent(navProjectId)}/`
+  // Now is the one list (spec 2026-11-20-phone-notifications-inbox): its badge is the attention total,
+  // the number this computer adds to the phone's icon. The project's own count until it loads.
+  const attention = useAttention()
+  const nowCount = attention.data?.counts.total ?? runs.data?.needsYou ?? null
+  const managerSidebar = useMemo(() => <ManagerSidebar nowTo={nowTo} nowCount={nowCount} />, [nowTo, nowCount])
   const managerRail = useMemo(() => <ManagerRail />, [])
   const managerHeads = useMemo(() => <ManagerHeads />, [])
   const connectPhone = useMemo(() => <ConnectPhoneLink />, [])
@@ -285,7 +294,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         // Same `?? null` honesty: no badge while the list is unknown; a loaded list with none
         // unread is 0, which AppShell also renders as no badge.
         unreadCount={runs.data?.unread ?? null}
-        nowCount={runs.data?.needsYou ?? null}
+        nowCount={nowCount}
         runningCount={runs.data?.running ?? null}
         healthStatus={healthStatus}
         skillsUpdateAvailable={skillsUpdateAvailable}
@@ -309,6 +318,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         footerBanner={footerBanner}
         singleProject={singleProject}
         currentTasks={currentTasks}
+        workspaceQuestions={workspaceQuestions}
         switcher={switcher}
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}

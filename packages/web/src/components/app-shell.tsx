@@ -89,6 +89,8 @@ export type AppShellProps = {
   starCount?: number | null
   /** The active project's "Current tasks" (`CurrentTasksContainer`). */
   currentTasks?: ReactNode
+  /** The Workspace group's Questions row when managers are off (spec 2026-11-17-questions-inbox). */
+  workspaceQuestions?: ReactNode
   /** The project switcher control under the brand (`ProjectSwitcher`). Absent — the registry
    *  still loading, or a bare shell — the plain repo chip stands in. */
   switcher?: ReactNode
@@ -257,6 +259,7 @@ export const AppShell = React.memo(function AppShell({
   latestVersion = null,
   starCount = null,
   currentTasks,
+  workspaceQuestions,
   switcher,
   hostWidget,
   whatsNew,
@@ -380,6 +383,7 @@ export const AppShell = React.memo(function AppShell({
     latestVersion,
     starCount,
     currentTasks,
+    workspaceQuestions,
     switcher,
     hostWidget,
     whatsNew,
@@ -521,6 +525,7 @@ export const AppShell = React.memo(function AppShell({
               onMore={openMenu}
               manager={managerMode}
               attention={managerAttention}
+              nowCount={nowCount}
               managerTo={managerTo}
               managerTasks={managerMode ? managerTasks : null}
               everyWidth={phoneNav}
@@ -576,6 +581,7 @@ type NavProps = {
   latestVersion: string | null
   starCount: number | null
   currentTasks?: ReactNode
+  workspaceQuestions?: ReactNode
   switcher?: ReactNode
   hostWidget?: ReactNode
   whatsNew?: ReactNode
@@ -610,7 +616,6 @@ function modeSwitchProps(props: NavProps, onNavigate?: () => void): ModeSwitchPr
     managerMode: props.managerMode,
     projectsTo: props.projectsTo,
     managerTo: props.managerSwitchTo,
-    projectsAttention: Boolean(props.nowCount),
     managerAttention: props.managerAttention,
     onNavigate,
   }
@@ -733,7 +738,7 @@ function SidebarIconRail({
           {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
         </span>
       )}
-      {/* The folded Projects | Manager switch: two stacked icons above the nav, each with its dot. */}
+      {/* The folded Projects | Manager switch: two stacked icons above the nav, Manager with its dot. */}
       {managersAvailable ? <ModeRailSwitch {...modeSwitchProps(props)} /> : null}
       {managerMode ? (
         // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
@@ -951,7 +956,7 @@ function SidebarContent({
 }) {
   const {
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
-    newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
+    newNavItems, version, latestVersion, starCount, currentTasks, workspaceQuestions, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
     offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
     computerName,
   } = props
@@ -1034,6 +1039,7 @@ function SidebarContent({
               <h2 className="px-3 pt-3 pb-1 eyebrow text-soft-foreground">Workspace</h2>
               <DashboardLink onNavigate={onNavigate} />
               <AllTasksLink active={globalTasks} onNavigate={onNavigate} />
+              {workspaceQuestions ? <SidebarNavigateContext.Provider value={onNavigate}>{workspaceQuestions}</SidebarNavigateContext.Provider> : null}
               {workspace.map((item) => (
                 <SidebarNavRow
                   key={item.to}
@@ -1075,7 +1081,7 @@ function areaCountTitle(item: NavItem, count: number | null): string | undefined
   if (!count) return undefined
   const one = count === 1
   if (item.badge === 'tasks-unread') return `${count} unread finished ${one ? 'task' : 'tasks'}`
-  if (item.badge === 'needs-you') return `${count} ${one ? 'task needs' : 'tasks need'} you`
+  if (item.badge === 'needs-you') return `${count} ${one ? 'thing needs' : 'things need'} you`
   return undefined
 }
 
@@ -1084,7 +1090,7 @@ function areaCountTitle(item: NavItem, count: number | null): string | undefined
 export const NAV_ROW_CLASS =
   'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]'
 export const NAV_ROW_ACTIVE_CLASS = 'bg-muted font-semibold text-foreground'
-const NAV_BADGE_CLASS = 'ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground tabular-nums'
+export const NAV_BADGE_CLASS ='ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground tabular-nums'
 
 /**
  * One nav row. A plain Link, not NavLink: NavLink derives `aria-current` from its own prefix

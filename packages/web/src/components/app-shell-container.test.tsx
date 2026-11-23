@@ -299,6 +299,26 @@ describe('sidebar wiring', () => {
     expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
   })
 
+  // Questions inbox § F: task questions exist with managers off, so the row moves here.
+  it('puts Questions in the project sidebar’s Workspace group when managers are off', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } },
+      '/api/v1/todos': [],
+      '/api/v1/workspace/questions': { open: [], closed: [], counts: { live: 2, older: 0 }, olderAfterDays: 7 },
+    })
+    renderShell()
+    const link = await screen.findByRole('link', { name: 'Questions, 2 waiting' })
+    expect(link.getAttribute('href')).toBe('/questions')
+    expect(link.closest('nav')?.getAttribute('aria-label')).toBe('Workspace')
+  })
+
+  it('keeps Questions out of the project sidebar when managers are on (it is in manager mode)', async () => {
+    serve({ '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } }, '/api/v1/todos': [], '/api/v1/workspace/managers': { managers: [] } })
+    renderShell()
+    await waitFor(() => expect(healthAnswered()).toBe(true))
+    expect(screen.queryByRole('link', { name: /^Questions/ })).toBeNull()
+  })
+
   it('shows the Automations nav item once health reports the capability', async () => {
     serve({
       '/api/v1/health': { ...WITH_FORGE, capabilities: { ...HEALTH.capabilities, automations: true } },
@@ -423,6 +443,23 @@ describe('sidebar wiring', () => {
       renderShell('/tasks')
       await waitFor(() => expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar'))
       expect(tasksRow().getAttribute('href')).toBe('/p/cezar/tasks')
+    })
+
+    it('leads the manager sidebar\'s Now into the last project, with its needs-you count', async () => {
+      rememberLastProject('shop')
+      serve({
+        ...routes,
+        '/api/v1/health': { ...HEALTH, bootProject: 'cezar', capabilities: { ...HEALTH.capabilities, managers: true } },
+        '/api/v1/workspace/managers': { managers: [] },
+        '/api/v1/p/shop/runs': [run({ status: 'waiting' })],
+      })
+      renderShell('/manager')
+      // Manager mode waits for health to confirm the capability.
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-sidebar-now"]')).not.toBeNull())
+      const now = document.querySelector('[data-slot="manager-sidebar-now"]')!
+      expect(now.closest('nav')?.getAttribute('aria-label')).toBe('Workspace')
+      expect(now.getAttribute('href')).toBe('/p/shop/')
+      await waitFor(() => expect(now.querySelector('[data-slot="nav-needs-you-badge"]')?.textContent).toBe('1'))
     })
 
     it('remembers the project on screen', async () => {

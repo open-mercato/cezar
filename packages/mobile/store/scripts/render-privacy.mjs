@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Renders store/privacy-policy.md to store/privacy-policy.html, one self-contained page to host at the
-// privacy policy URL (RELEASING-MOBILE.md). Only the Markdown the policy uses: headings, paragraphs,
+// Renders store/privacy-policy.md to store/privacy-policy.html for internal review. The published
+// privacy policy is external (RELEASING-MOBILE.md). Only the Markdown the draft uses: headings, paragraphs,
 // lists, tables, **bold**, `code` and links. No dependency.
 //
 //   node store/scripts/render-privacy.mjs            draft: open facts are highlighted
@@ -69,7 +69,7 @@ export function page(md, { final }) {
   if (final && open.length) throw new Error(`${open.length} fact(s) still marked OPEN MERCATO TO CONFIRM`);
   const title = /^# (.*)$/m.exec(md)?.[1] ?? 'Privacy policy';
   const banner = open.length
-    ? `<p class="banner">Draft: ${open.length} highlighted fact(s) must be filled in before this page is published.</p>\n`
+    ? `<p class="banner">Internal draft: ${open.length} highlighted fact(s) remain unconfirmed. The published policy is linked below.</p>\n`
     : '';
   return `<!doctype html>
 <html lang="en">

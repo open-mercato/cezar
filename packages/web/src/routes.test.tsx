@@ -196,6 +196,8 @@ describe('pageTitleContext', () => {
     ['/manager/m-1', 'Manager'],
     ['/manager/new', 'New manager'],
     ['/manager/approvals', 'Approvals'],
+    ['/manager/questions', 'Questions'],
+    ['/questions', 'Questions'],
   ])('labels %s as %s', (pathname, pageLabel) => {
     expect(pageTitleContext(pathname)).toEqual({ pageLabel, taskId: null })
   })
@@ -985,6 +987,29 @@ describe('the Manager routes', () => {
     renderAt('/settings/global/manager', { health: off })
     expect(currentPathname()).toMatch(/^\/settings\/global\/(?!manager)/)
     expect(routeName()).not.toBe('not-found')
+  })
+})
+
+describe('the Questions routes (spec 2026-11-17-questions-inbox)', () => {
+  const MANAGERS_ON = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } }
+  const MANAGERS_OFF = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } }
+
+  it('lives at /manager/questions with managers on; /questions follows it there', async () => {
+    renderAt('/manager/questions', { health: MANAGERS_ON, managers: [] })
+    expect(await screen.findByRole('heading', { name: 'Questions', level: 1 })).toBeTruthy()
+    expect(currentPathname()).toBe('/manager/questions')
+    cleanup()
+    renderAt('/questions', { health: MANAGERS_ON, managers: [] })
+    await waitFor(() => expect(currentPathname()).toBe('/manager/questions'))
+  })
+
+  it('lives at /questions with managers off; /manager/questions follows it there', async () => {
+    renderAt('/questions', { health: MANAGERS_OFF })
+    expect(await screen.findByRole('heading', { name: 'Questions', level: 1 })).toBeTruthy()
+    expect(currentPathname()).toBe('/questions')
+    cleanup()
+    renderAt('/manager/questions', { health: MANAGERS_OFF })
+    await waitFor(() => expect(currentPathname()).toBe('/questions'))
   })
 })
 

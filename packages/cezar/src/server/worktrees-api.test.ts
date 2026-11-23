@@ -41,7 +41,7 @@ describe('the worktrees API', () => {
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+    app = createApp({ repoRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test' });
   });
 
   afterEach(() => {
@@ -92,7 +92,7 @@ describe('the worktrees API', () => {
     const byRun = Object.fromEntries(body.worktrees.map((w) => [w.runId, w]));
     // reclaimable flag matches the selector's rule: finished + has dir + not stamped.
     expect(byRun[doneId]!.reclaimable).toBe(true);
-    expect(byRun[reviewId]!.reclaimable).toBe(false); // review is spared
+    expect(byRun[reviewId]!.reclaimable).toBe(true); // review is restorable from its branch
     expect(byRun[runningId]!.reclaimable).toBe(false); // live work
 
     // Shape + real du sizes on this (POSIX) host.

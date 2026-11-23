@@ -24,14 +24,22 @@ function insideGitWorkTree(dir: string): boolean {
   }
 }
 
-if (insideGitWorkTree(realpathSync(tmpdir()))) {
+// A cezar agent's TMP can also sit under the real `~/.cezar` (`tmp/agent/…`): sandbox homes made
+// there trip `assertCezarHomeWriteIsSandboxed` on every write, so that TMP moves out the same way.
+function insideRealCezarHome(dir: string): boolean {
+  const realHome = join(homedir(), '.cezar')
+  const home = existsSync(realHome) ? realpathSync(realHome) : realHome
+  return dir === home || dir.startsWith(home + '/') || dir.startsWith(home + '\\')
+}
+
+if (insideGitWorkTree(realpathSync(tmpdir())) || insideRealCezarHome(realpathSync(tmpdir()))) {
   const candidates =
     process.platform === 'win32'
       ? [join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Temp'), join(process.env.SystemRoot || 'C:\\Windows', 'Temp')]
       : ['/tmp', '/var/tmp']
-  const outside = candidates.find((dir) => existsSync(dir) && isWritable(dir) && !insideGitWorkTree(realpathSync(dir)))
+  const outside = candidates.find((dir) => existsSync(dir) && isWritable(dir) && !insideGitWorkTree(realpathSync(dir)) && !insideRealCezarHome(realpathSync(dir)))
   if (!outside) {
-    throw new Error(`[cez] tmpdir ${tmpdir()} is inside a git work tree and no system temp outside one exists — refusing to run git fixtures in it`)
+    throw new Error(`[cez] tmpdir ${tmpdir()} is inside a git work tree or ~/.cezar and no system temp outside them exists — refusing to run git fixtures in it`)
   }
   process.env.TMPDIR = process.env.TMP = process.env.TEMP = outside
 }

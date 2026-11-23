@@ -2,8 +2,11 @@ import type { AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { z } from 'zod';
 import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
+import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
 import { parseStructured } from '../planner.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { INTERNAL_CONSUMERS, trackOneShot, type LedgerAccountRef } from '../usage-ledger/recorder.ts';
+import { oneShotAccountRef } from '../usage-ledger/identity.ts';
 import { resolveNamerModel } from './namer-model.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber, type TaskRefs } from './task-refs.ts';
 
@@ -202,7 +205,7 @@ export function postValidateTitle(title: string, refNumber?: number): string {
  * without one is never called (#2012) — its default model is the premium one —
  * except to name a branch under explicit `branchNaming`, which the user opted into.
  */
-export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
+export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows']; planUsageAccount?: LedgerAccountRef }, onUnavailable?: (reason: string) => void): Promise<NameResult | null> {
   try {
     const config = await loadConfig(repoRoot);
     if (ctx.nameBranch && ctx.branchNaming === undefined && config.branchNaming) {
@@ -216,9 +219,15 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
     // Name under the project's own agent account (spec 2026-07-29-agent-profiles) — naming is
     // a model call like any other, and billing it to the personal subscription for a work
     // project is the exact confusion accounts exist to remove.
-    const { env: profileEnv } = execution ? { env: execution.env } : await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+    const resolved = execution ? undefined : await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+    const profileEnv = execution ? execution.env : resolved!.env;
+    // Its own ledger consumer, so naming never lands in the task's plan-limit share.
+    const planAccount = execution ? execution.planUsageAccount : await oneShotAccountRef(runnerId, resolved?.profile);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const result = await runner.run({
+      const tracked = trackOneShot(runnerId, planAccount, INTERNAL_CONSUMERS.naming);
+      let result: Awaited<ReturnType<typeof runner.run>> | undefined;
+      try {
+      result = await runner.run({
         systemPrompt: ctx.branchNaming ? NAMER_SYSTEM_PROMPT + NAMER_BRANCH_PROMPT : NAMER_SYSTEM_PROMPT,
         userPrompt: buildNamerPrompt(ctx),
         cwd: repoRoot,
@@ -231,11 +240,17 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
         // through CEZ_MOCK_ARGS_FILE; the namer's bookkeeping call must not
         // interleave lines into that file.
         env: { ...profileEnv, CEZ_MOCK_ARGS_FILE: '' },
-      });
+      }, tracked.onEvent);
+      } finally {
+        tracked.done(result);
+      }
       const composed = composeNameResult(result.text, ctx);
       if (composed) return composed;
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof CodexToolPolicyError) {
+      try { onUnavailable?.(err.message); } catch { /* Diagnostics must not block a task. */ }
+    }
     // runner unavailable / crashed — the heuristic title stays
   }
   return null;

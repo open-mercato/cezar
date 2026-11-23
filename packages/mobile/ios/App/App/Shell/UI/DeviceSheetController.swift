@@ -1,9 +1,9 @@
 import UIKit
 
-/// The native device switcher over a server page: one plain row per saved computer (its avatar, name and
-/// status in words, a tick on the current one or "N need you"), then Add a device and Manage devices
+/// The native switcher over a server page: one plain row per saved cezar (its avatar, name and status in
+/// words, a tick on the current one or "N need you"), then Connect another cezar and Manage cezars
 /// (switcher spec "Native list"). Server pages learn nothing of it: it opens from `cezar://servers` and the
-/// banner's Devices button, both native.
+/// banner's Cezars button, both native.
 final class DeviceSheetController: UITableViewController {
     enum Choice {
         /// Open this outcome in place of the page on screen.
@@ -20,6 +20,8 @@ final class DeviceSheetController: UITableViewController {
     private var servers: [ServerRecord] = []
     private var rows: [DeviceSwitch.Row] = []
     private var probes: DeviceProbes?
+    /// Holds the badge rounds off this sheet's warm links until it closes.
+    private var held = false
     private var switching: String?
     private var chosen = false
 
@@ -33,7 +35,7 @@ final class DeviceSheetController: UITableViewController {
         self.book = book
         self.onChoice = onChoice
         super.init(style: .insetGrouped)
-        title = "Devices"
+        title = "Your cezars"
     }
 
     @available(*, unavailable)
@@ -41,6 +43,7 @@ final class DeviceSheetController: UITableViewController {
 
     deinit {
         probes?.stop()
+        if held { ShellServices.badges.hold(false) }
     }
 
     /// In a navigation controller for the title: medium and large on a phone, a form-sheet card on an iPad.
@@ -70,14 +73,9 @@ final class DeviceSheetController: UITableViewController {
             book.sync(servers)
             book.noted(currentId, online: true, waiting: nil, failed: nil, at: relayNowMs())
         }
-        let relay = ShellServices.relay
-        let probes = DeviceProbes(relay: DeviceProbes.relayProbe(relay, userAgent: ShellServices.userAgent),
-                                  direct: DeviceProbes.directProbe(connector) { server in
-                                      guard let url = server.url else { return nil }
-                                      return await WebsiteData.cookieHeader(serverId: server.id, url: url)
-                                  },
-                                  release: { server in relay.releaseWarm(server.id) },
-                                  onChange: { [weak self] id, reading in DispatchQueue.main.async { self?.refresh(id, reading) } })
+        ShellServices.badges.hold(true)
+        held = true
+        let probes = ShellServices.deviceProbes(connector) { [weak self] id, reading in DispatchQueue.main.async { self?.refresh(id, reading) } }
         self.probes = probes
         rows = makeRows([:])
         probes.start(servers, currentId: currentId)
@@ -90,7 +88,14 @@ final class DeviceSheetController: UITableViewController {
             // Swiped away mid-switch: the user stayed on this page, so the switch's answer opens nothing.
             chosen = true
             probes?.stop()
+            release()
         }
+    }
+
+    private func release() {
+        guard held else { return }
+        held = false
+        ShellServices.badges.hold(false)
     }
 
     private func makeRows(_ readings: [String: DeviceSwitch.Reading]) -> [DeviceSwitch.Row] {
@@ -100,11 +105,8 @@ final class DeviceSheetController: UITableViewController {
     /// Keeps what the computer said for next time (its counts, when it was last online), then redraws.
     private func refresh(_ id: String, _ reading: DeviceSwitch.Reading) {
         guard let probes, !chosen else { return }
-        let counts = reading.attention
-        book.update { book in
-            book.noted(id, online: reading.status == .online, waiting: counts?.waiting, failed: counts?.failed, at: relayNowMs())
-        }
-        if counts != nil { ShellServices.notifier.showBadge(book.load().badge) }
+        book.update { book in book.noted(id, reading, at: relayNowMs()) }
+        if reading.attention != nil { ShellServices.notifier.settle() }
         rows = makeRows(probes.snapshot())
         tableView.reloadSections(IndexSet(integer: Section.devices.rawValue), with: .none)
     }
@@ -122,7 +124,7 @@ final class DeviceSheetController: UITableViewController {
         if indexPath.section == Section.actions.rawValue {
             let add = indexPath.row == 0
             var content = UIListContentConfiguration.cell()
-            content.text = add ? "Add a device" : "Manage devices"
+            content.text = add ? "Connect another cezar" : "Manage cezars"
             content.image = UIImage(systemName: add ? "plus" : "gearshape")
             content.imageProperties.tintColor = add ? tintColorForActions : .secondaryLabel
             // Under the avatars, so the action words line up with the names.

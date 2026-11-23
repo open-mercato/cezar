@@ -11,6 +11,11 @@ enum ShellServices {
 
     static var userAgent: String { userAgentToken(version: version) }
 
+    /// Your cezars' About line, e.g. "0.1.1 (87)".
+    static var versionWords: String {
+        CezarList.version(short: version, build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+    }
+
     #if DEBUG
     static let debugBuild = true
     #else
@@ -28,7 +33,7 @@ enum ShellServices {
         return directory
     }()
 
-    /// The Devices screen's "Copy startup log".
+    /// Your cezars' "Copy startup log".
     static let startupLog = StartupLog(file: directory.appendingPathComponent("startup.log"), clock: nowMs)
 
     static let deviceKeys: DeviceKeyStore = KeychainDeviceKeyStore()
@@ -58,6 +63,24 @@ enum ShellServices {
     static let devices = DeviceBookStore(storage: KeychainDeviceBookStorage())
 
     static let notifier = PushNotifier(servers: { connector.list() }, book: devices)
+
+    /// The switcher's probes over the saved list, warming the links a switch takes; the sheet's and the page's.
+    static func deviceProbes(_ connector: ShellConnector, onChange: @escaping (String, DeviceSwitch.Reading) -> Void) -> DeviceProbes {
+        DeviceProbes(relay: DeviceProbes.relayProbe(relay, userAgent: userAgent),
+                     direct: DeviceProbes.directProbe(connector) { server in
+                         guard let url = server.url else { return nil }
+                         return await WebsiteData.cookieHeader(serverId: server.id, url: url)
+                     },
+                     release: { server in relay.releaseWarm(server.id) }, onChange: onChange)
+    }
+
+    /// The connect page's `probe`, whose readings the next listed outcome carries.
+    static let cezars: CezarProbe = CezarProbe(make: { deviceProbes(connector, onChange: $0) }, book: devices, clock: relayNowMs,
+                                   onBadge: { _ in notifier.settle() }, keepLinks: { badges.held })
+
+    /// Every saved cezar's count on resume and while a page is open, not only on Your cezars (B1).
+    static let badges: BadgeRefresh = BadgeRefresh(round: { current, done in cezars.probe(connector.list(), currentId: current, done: done) },
+                                     clock: relayNowMs, apply: { notifier.settle() })
 
     /// The relay account calls (RELAY_PROTOCOL.md § 18), signed by the server's device key.
     static let accounts = AccountClient(relay: URLSessionPushRelay(), clock: nowMs)

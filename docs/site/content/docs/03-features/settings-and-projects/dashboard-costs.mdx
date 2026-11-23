@@ -24,3 +24,15 @@ Dashboard → Usage & cost
 3. Check Trends and Backends & models.
 
 > **Good to know**: Costs come from data reported by providers. The view indicates incomplete coverage. It does not replace a full account bill.
+
+## Plan limits
+
+The **Plan limits** card, first in Usage & cost, shows who used each Claude (Pro/Max login) or Codex (ChatGPT login) account's 5-hour or weekly limit: tasks, managers, usage cezar could not split, and usage outside cezar. **Details →** opens the readings chart, a table per task and manager, and hints such as attempts that failed a check step or watch checks that found nothing.
+
+Shares are marked `≈`. Providers report usage per account, so when several tasks run at once cezar splits each rise by the cost (Claude) or tokens (Codex) each one reported, and your own Claude Code sessions on the same login are never excluded. A task with no reading says "not measured yet"; tools without plan limits say "not reported" — never 0%.
+
+The same numbers appear on the task page (the "This task ≈ N% of 5h" chip), in the Tasks list's optional **Plan limit** column, in manager chats (a header chip with the account's current 5-hour use and what the manager and the tasks it started spent of it, its largest turns, a warning above the composer from 80% of the limit, and a grey "This reply ≈ N% of 5h" line under each finished reply, which opens what that reply cost: its window, whether it ran alone, and its requests and context), and in Settings → Agent accounts.
+
+In a manager chat's breakdown, each of the largest turns shows its requests and peak context, its own cache reads, cache writes and output tokens (Claude managers), and why it cost what it did: a cold start (the manager's history had to be cached again, usually after an idle hour), a large context, many requests, big tool output, or a new session. **Turn shape** sums the window's turns: their average context and requests, their total cache reads, writes and output, how many tool calls handed work to tasks, looked up cezar state or were the manager's own work, and how many turns did enough work that a task could have done it. Agents read them with `cezar usage` or `cezar usage --json` (schema `cezar.usage-ledger`).
+
+> **Good to know**: Readings are saved on this computer only, kept 90 days, with no prompts or code. Turn tracking off per account in Settings → Agent accounts, or for the machine with `CEZ_USAGE_LOG=0`.

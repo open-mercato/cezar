@@ -198,7 +198,7 @@ export function Feed({
                 removed
                   ? 'Outside current results'
                   : `Latest result: ${
-                      isIdleClosed(row.run) ? 'Closed after inactivity' : row.run.status === 'failed' ? 'Failed' : 'Completed'
+                      isIdleClosed(row.run) ? 'Session closed' : row.run.status === 'failed' ? 'Failed' : 'Completed'
                     }`
               }
             />

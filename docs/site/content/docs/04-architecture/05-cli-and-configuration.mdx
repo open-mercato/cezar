@@ -56,6 +56,8 @@ npx cezar-run serve --repo /path/to/project --port 4321 --no-open
 | cezar projects / projects add &lt;directory> | Reads or changes the local project registry. No server is required. |
 | cezar runs list --json | Reads tasks from the running server specified by `CEZ_API_URL`. |
 | `cezar task` / `cezar automation` | Controls dispatch and automations on the running server. |
+| `cezar worktrees` list / reclaim / prune / remove | Lists task worktrees and frees their disk. Uses the running server for the project when there is one, otherwise works on the project directory. |
+| `cezar versions prune` [--keep N] [--dry-run] [--backups] | Deletes old installed versions; `versions.backup-*` folders only with `--backups`. |
 | `cezar init` | Adds an example workflow and skill without overwriting existing files. |
 | cezar install / update / versions | Installs or updates the managed launcher, or lists installed versions. |
 
@@ -77,8 +79,8 @@ Use `CEZ_HOME` to select a directory other than `~/.cezar`. This does not move r
 
 | Path | Contents |
 | --- | --- |
-| &lt;repo>/`.ai/cezar/config.json` | Optional project settings: runner, models, branch, worktree retention count, and instructions. |
-| `~/.cezar/`config.json | Project registry and resources: concurrency limit, memory limits, and monitoring settings. |
+| &lt;repo>/`.ai/cezar/config.json` | Optional project settings: runner, models, branch, worktree retention count and age, and instructions. |
+| `~/.cezar/`config.json | Project registry and resources: concurrency limit, memory limits, monitoring settings, worktree age default, archived-task lifetime, and disk guard. |
 | &lt;repo>/`.ai/cezar/workflows/` and skills/ | YAML workflows and local instructions. These can be tracked in Git. |
 | &lt;repo>/`.ai/cezar/runs.json` and runs/\*.ndjson | Task index and event records. This working data is excluded from Git. |
 | `~/.cezar/`agent-`accounts.json` | Additional agent accounts and the selected account for each project. |
@@ -100,5 +102,34 @@ The example below is part of an optional project configuration. `reviewGate` is 
 ```
 
 `bypassPermissions` is also disabled by default. Setting it to true (Settings → Agents → **Skip all permission prompts**) runs the project's Claude Code tasks with `--permission-mode bypassPermissions`: every tool call is approved without asking, including commands outside the Claude Code Bash sandbox. Read-only tasks and a manager's own turns are never affected. cezar ignores the key while `.ai/cezar/config.json` is tracked by git, so a cloned repository cannot turn approvals off, and while it runs as root, because Claude Code refuses bypass mode for root. It is local-only: a hosted cockpit refuses to turn it on and ignores it.
+
+## Worktree disk limits
+
+Each task worktree is a full checkout. Reclaiming one removes the directory only; the branch stays and Continue restores it. A worktree with uncommitted changes is never reclaimed.
+
+| Key | File | Default | Meaning |
+| --- | --- | --- | --- |
+| `worktreeRetention` | project | 10 | Keep the last N done, failed or cancelled worktrees. `0` = unlimited. |
+| `worktreeIdleDays` | project | inherits | Reclaim a worktree of a task in review, waiting, done, failed or cancelled after N days without activity. `0` = off. Unset inherits the global default. |
+| `resources.worktreeIdleDaysDefault` | global | 7 | Age limit for projects that set none. |
+| `resources.diskGuard.minFreePercent` | global | 10 | The guard acts below the smaller of this percentage and `minFreeGb` of free space. `0` = off. |
+| `resources.diskGuard.minFreeGb` | global | 5 | See above. `0` = off. |
+| `resources.diskGuard.maxWorktreesGb` | global | 20 | The guard acts when worktrees of every project total more than this. `0` = off. |
+| `archivedTaskDeleteDays` | project | inherits | Delete a task N days after it was archived, with its worktree and branch. A branch with an open pull request, or with commits neither merged nor pushed, is kept. `0` = never. Unset inherits the global default. |
+| `resources.archivedTaskDeleteDaysDefault` | global | 90 | Archived-task lifetime for projects that set none. |
+| `versionRetention` | global | 3 | Installed versions kept in `~/.cezar/versions`, the running one included. `0` = no automatic pruning. |
+
+Edit them in Project settings → Worktrees and Settings → Behaviour. To free space from a terminal:
+
+```bash title="Terminal"
+npx cezar-run worktrees list
+npx cezar-run worktrees reclaim --older-than 7d --dry-run
+npx cezar-run worktrees reclaim --all-inactive
+npx cezar-run worktrees prune
+npx cezar-run worktrees prune --archived-older-than 90d --dry-run
+npx cezar-run worktrees remove <runId>
+```
+
+See [Disk usage and worktrees](/docs/features/settings-and-projects/disk-usage) for what each mechanism covers and a manual cleanup on a server.
 
 > **Good to know**: Set `baseBranch` to the correct branch for the repository. Missing or invalid configuration usually falls back to defaults. Configured lifecycle transitions have separate, strict validation.

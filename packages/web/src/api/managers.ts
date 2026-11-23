@@ -8,6 +8,8 @@ import {
   type ManagerDeltaEvent,
   type ManagerActionDecisionInput,
   type ManagerConnectorsResponse,
+  type ManagerMemoryResponse,
+  type PutManagerMemoryInput,
   type ManagerListResponse,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -51,6 +53,16 @@ export async function updateManager(id: string, patch: UpdateManagerInput): Prom
   return unwrap(await managers()[':id'].$patch({ param: managerParam(id), json: patch }), managerPath(id))
 }
 
+/** Deactivate or reactivate (spec 2026-11-19-manager-deactivate); `catchUp` runs one forced check. */
+export async function setManagerActive(id: string, active: boolean, opts?: { catchUp?: boolean }): Promise<ManagerSummary> {
+  return updateManager(id, { active, ...(active && opts?.catchUp ? { catchUp: true as const } : {}) })
+}
+
+/** Every manager at once (the bulk route): the ids whose state changed. */
+export async function setManagersActive(active: boolean): Promise<string[]> {
+  return (await unwrap(await managers().activity.$post({ json: { active } }), '/workspace/managers/activity')).changed
+}
+
 export async function deleteManager(id: string) {
   return unwrap(await managers()[':id'].$delete({ param: managerParam(id) }), managerPath(id))
 }
@@ -60,12 +72,13 @@ export const MANAGER_PAGE_SIZE = 50
 export async function getManagerMessages(
   id: string,
   before: number | undefined,
-  opts?: { signal?: AbortSignal; pending?: boolean },
+  opts?: { signal?: AbortSignal; pending?: boolean; kind?: 'user'; limit?: number },
 ): Promise<ManagerMessagesResponse> {
   const query = {
-    limit: String(MANAGER_PAGE_SIZE),
+    limit: String(opts?.limit ?? MANAGER_PAGE_SIZE),
     ...(before === undefined ? {} : { before: String(before) }),
     ...(opts?.pending ? { pending: '1' as const } : {}),
+    ...(opts?.kind ? { kind: opts.kind } : {}),
   }
   const since = streamClock
   const page = await unwrap(
@@ -152,11 +165,12 @@ export function resetManagerSendKeys(): void {
   unansweredSends.clear()
 }
 
-export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
+export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string, opts?: { reactivate?: boolean }) {
   // Staging may re-upload a file under a new id, so a file counts by its name, not its upload.
   const files = (images ?? []).map((image) => ('data' in image ? `${image.mediaType}:${image.data.length}` : image.name ?? '?'))
   const fingerprint = JSON.stringify([id, askId ?? '', text, files])
-  const base = { text, ...(images?.length ? { images } : {}) }
+  // `reactivate`: the user confirmed waking an inactive manager for this message (spec 2026-11-19-manager-deactivate).
+  const base = { text, ...(images?.length ? { images } : {}), ...(opts?.reactivate ? { reactivate: true as const } : {}) }
   const timeout = images?.length ? MANAGER_SEND_WITH_FILES_TIMEOUT_MS : MANAGER_SEND_TIMEOUT_MS
   const post = (json: typeof base & { askId?: string; idempotencyKey?: string }) => bounded(async (signal) =>
     unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }, { init: { signal } }), managerPath(id, '/messages')), timeout, MANAGER_SEND_INTERRUPTED)
@@ -166,7 +180,7 @@ export async function sendManagerMessage(id: string, text: string, images?: Atta
   const send = async (json: typeof base & { askId?: string; idempotencyKey?: string }): Promise<Awaited<ReturnType<typeof post>>> =>
     post(json).catch((failure: unknown) => {
       if (!(failure instanceof ApiError) || failure.status !== 400) throw failure
-      const known = Object.fromEntries(Object.entries(json).filter(([key]) => key === 'text' || key === 'images' || !failure.message.includes(key)))
+      const known = Object.fromEntries(Object.entries(json).filter(([key]) => key === 'text' || key === 'images' || key === 'reactivate' || !failure.message.includes(key)))
       if (Object.keys(known).length === Object.keys(json).length) throw failure
       return send(known as typeof json)
     })
@@ -226,6 +240,24 @@ export async function refreshManagerConnectors(id: string): Promise<ManagerConne
   return unwrap(await managers()[':id'].connectors.refresh.$post({ param: managerParam(id) }), managerPath(id, '/connectors/refresh'))
 }
 
+export async function getManagerMemory(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerMemoryResponse> {
+  return unwrap(await managers()[':id'].memory.$get({ param: managerParam(id) }, { init: { signal: opts?.signal } }), managerPath(id, '/memory'))
+}
+
+export async function putManagerMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse> {
+  return unwrap(
+    await managers()[':id'].memory[':key'].$put({ param: { ...managerParam(id), key }, json: input }),
+    managerPath(id, `/memory/${encodeURIComponent(key)}`),
+  )
+}
+
+export async function deleteManagerMemory(id: string, key: string): Promise<ManagerMemoryResponse> {
+  return unwrap(
+    await managers()[':id'].memory[':key'].$delete({ param: { ...managerParam(id), key } }),
+    managerPath(id, `/memory/${encodeURIComponent(key)}`),
+  )
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export const managerKeys = {
@@ -235,14 +267,16 @@ export const managerKeys = {
   approvals: (id: string) => ['workspace', 'managers', 'approvals', id] as const,
   allApprovals: ['workspace', 'managers', 'approvals'] as const,
   connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
+  memory: (id: string) => ['workspace', 'managers', 'memory', id] as const,
 }
 
 type MessagePages = InfiniteData<ManagerMessagesResponse, number | undefined>
 
 /** Most recently active first; a manager that never spoke sorts by its creation. */
+/** Most recent first, inactive managers after the active ones (spec 2026-11-19-manager-deactivate). */
 export function orderManagers(managers: readonly ManagerSummary[]): ManagerSummary[] {
   const at = (manager: ManagerSummary) => Date.parse(manager.lastActivityAt ?? manager.createdAt) || 0
-  return [...managers].sort((a, b) => at(b) - at(a))
+  return [...managers].sort((a, b) => Number(a.inactive !== undefined) - Number(b.inactive !== undefined) || at(b) - at(a))
 }
 
 export function applyManagerChange(
@@ -549,6 +583,30 @@ export function useManagerMessages(id: string) {
   })
 }
 
+/**
+ * Every message the user sent, oldest first, for the "your messages" list
+ * (spec 2026-11-17-my-message-navigation). Pages back with `before` until the start.
+ */
+export function useManagerUserMessages(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['workspace', 'managers', 'user-messages', id] as const,
+    queryFn: async ({ signal }) => {
+      const out: ManagerMessage[] = []
+      let before: number | undefined
+      // 20 × 500 messages; a chat longer than that lists its newest 10,000.
+      for (let page = 0; page < 20; page += 1) {
+        const { messages, hasMore } = await getManagerMessages(id, before, { signal, kind: 'user', limit: 500 })
+        out.unshift(...messages)
+        if (!hasMore || messages.length === 0) break
+        before = messages[0]!.seq
+      }
+      return out
+    },
+    enabled,
+    staleTime: 15_000,
+  })
+}
+
 /** The flattened chat, oldest first. */
 export function managerChat(pages: { pages: ManagerMessagesResponse[] } | undefined): ManagerMessage[] {
   return (pages?.pages ?? []).flatMap((page) => page.messages).sort((a, b) => a.seq - b.seq)
@@ -571,6 +629,25 @@ export function useUpdateManager(id: string) {
   })
 }
 
+/** Deactivate or reactivate any manager; the list row updates from the answer. */
+export function useSetManagerActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, active, catchUp }: { id: string; active: boolean; catchUp?: boolean }) => setManagerActive(id, active, { ...(catchUp ? { catchUp } : {}) }),
+    onSuccess: (manager) => {
+      queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, manager.id, manager, false))
+    },
+  })
+}
+
+export function useSetManagersActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ active }: { active: boolean }) => setManagersActive(active),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: managerKeys.list }),
+  })
+}
+
 export function useManagerConnectors(id: string, enabled = true) {
   return useQuery({
     queryKey: managerKeys.connectors(id),
@@ -584,6 +661,24 @@ export function useRefreshManagerConnectors(id: string) {
   return useMutation({
     mutationFn: () => refreshManagerConnectors(id),
     onSuccess: (response) => queryClient.setQueryData(managerKeys.connectors(id), response),
+  })
+}
+
+export function useManagerMemory(id: string, enabled = true) {
+  return useQuery({
+    queryKey: managerKeys.memory(id),
+    queryFn: ({ signal }) => getManagerMemory(id, { signal }),
+    enabled,
+  })
+}
+
+/** Spec 2026-11-21-manager-short-sessions-and-memory § 2.1: the user's own edits to a manager's memory. */
+export function useManagerMemoryWrite(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (change: { key: string; input?: PutManagerMemoryInput }) =>
+      change.input ? putManagerMemory(id, change.key, change.input) : deleteManagerMemory(id, change.key),
+    onSuccess: (response) => queryClient.setQueryData(managerKeys.memory(id), response),
   })
 }
 

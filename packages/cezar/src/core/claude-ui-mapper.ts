@@ -33,6 +33,7 @@ import type {
   ToolLocation,
   UiEvent,
   UiMessageItem,
+  UiModelUsage,
   UiReasoningItem,
   UiSessionStartedEvent,
   UiToolItem,
@@ -648,6 +649,8 @@ function mapResult(msg: Record<string, unknown>, state: ClaudeUiMapperState): Cl
   const turnEvent: UiTurnCompletedEvent = { type: 'turn.completed', turnId, stopReason: resultStopReason(msg) };
   if (usage) turnEvent.usage = usage;
   if (costUsd !== undefined) turnEvent.costUsd = costUsd;
+  const models = resultModelUsage(msg.modelUsage);
+  if (models) turnEvent.models = models;
   events.push(turnEvent);
   if (usage) {
     const usageEvent: UiUsageUpdatedEvent = { type: 'usage.updated', usage };
@@ -682,6 +685,26 @@ function resultStopReason(msg: Record<string, unknown>): StopReason {
     default:
       return msg.is_error === true ? 'error' : 'end_turn';
   }
+}
+
+/** `result.modelUsage` — `{ [model]: { inputTokens, outputTokens, costUSD, … } }` — as a list. */
+function resultModelUsage(raw: unknown): UiModelUsage[] | undefined {
+  if (!isRecord(raw)) return undefined;
+  const models: UiModelUsage[] = [];
+  for (const [model, entry] of Object.entries(raw)) {
+    if (model === '') continue;
+    const share: UiModelUsage = { model };
+    if (isRecord(entry)) {
+      const input = num(entry.inputTokens);
+      const output = num(entry.outputTokens);
+      const cost = num(entry.costUSD);
+      if (input !== undefined) share.inputTokens = input;
+      if (output !== undefined) share.outputTokens = output;
+      if (cost !== undefined) share.costUsd = cost;
+    }
+    models.push(share);
+  }
+  return models.length > 0 ? models : undefined;
 }
 
 /** Raw counts straight off the wire — never cost-weighted (that stays a

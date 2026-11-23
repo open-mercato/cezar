@@ -887,8 +887,9 @@ project questions after restart are suppressed rather than guessed fresh. The re
 
 Ownership is deliberately fail-closed. On Windows, a dead owner whose PID was reused by a process
 this user cannot open reports an unreadable start time, so acquisition keeps waiting until the
-stale `owner.lock` is removed; a changed hostname (recreated container on a bind mount) or any
-unreadable identity behaves the same way. Windows boot-time changes do not authorize takeover;
+stale `owner.lock` is removed; a changed hostname with a different boot ID (another machine or a
+recreated container on a bind mount) or any unreadable identity behaves the same way. A changed
+hostname with the SAME stable boot ID is a renamed host on one kernel (#2398): pid+start decide. Windows boot-time changes do not authorize takeover;
 PID and process-start evidence are required. Linux locks from a different PID namespace, or
 locks with no namespace evidence, remain fail-closed on the same boot. The macOS
 boot-session stability dependency is described above. Two cockpits on one project are unsupported for task execution; if a non-owner

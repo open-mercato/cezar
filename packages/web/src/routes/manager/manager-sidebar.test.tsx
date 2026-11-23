@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { managerKeys } from '@/api/managers'
 import { queryKeys } from '@/api/queries'
+import { questionKeys } from '@/api/questions'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { managerFixture } from './manager-fixtures'
@@ -188,11 +189,61 @@ describe('ManagerSidebar', () => {
       managerFixture({ id: 'ops', name: 'Ops', pendingActions: 1, lastActivityAt: new Date(Date.now() - 180_000).toISOString() }),
     ], true, '/manager/shop')
     const links = within(workspace()).getAllByRole('link')
-    expect(links.map((link) => link.textContent)).toEqual(['Approvals2 pending approvals', 'Manager settings'])
-    expect(links[0]!.getAttribute('href')).toBe('/manager/approvals')
-    expect(links[0]!.getAttribute('aria-current')).toBeNull()
-    expect(links[1]!.getAttribute('href')).toBe('/settings/global/manager')
+    expect(links.map((link) => link.textContent)).toEqual(['Now', 'Approvals2 pending approvals', 'Questions', 'Manager settings'])
+    expect(links[1]!.getAttribute('href')).toBe('/manager/approvals')
+    expect(links[1]!.getAttribute('aria-current')).toBeNull()
+    expect(links[2]!.getAttribute('href')).toBe('/manager/questions')
+    expect(links[3]!.getAttribute('href')).toBe('/settings/global/manager')
     expect(within(workspace()).getByRole('button', { name: 'Jobs' }).getAttribute('aria-haspopup')).toBe('dialog')
+  })
+
+  // Questions inbox design § 01: workspace counts fill info-blue above zero, muted at zero.
+  it('lists Questions between Approvals and Jobs, with the live count; counts fill blue above zero', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
+    client.setQueryData(managerKeys.list, { managers: [managerFixture({ pendingActions: 0, jobs: [] })] })
+    client.setQueryData(questionKeys.all, { open: [], closed: [], counts: { live: 3, older: 2 }, olderAfterDays: 7 })
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/manager/global']}><ManagerSidebar /></MemoryRouter></QueryClientProvider>)
+    const nav = workspace()
+    const questions = within(nav).getByRole('link', { name: 'Questions, 3 waiting' })
+    expect(questions.getAttribute('href')).toBe('/manager/questions')
+    const labels = [...nav.querySelectorAll('a, button')].map((node) => node.getAttribute('data-slot'))
+    expect(labels.indexOf('sidebar-questions')).toBe(labels.indexOf('manager-sidebar-approvals') + 1)
+    expect(labels.indexOf('manager-sidebar-jobs')).toBe(labels.indexOf('sidebar-questions') + 1)
+    // Older questions are not counted.
+    expect(questions.querySelector('[data-slot="sidebar-questions-count"]')?.textContent).toBe('3')
+    expect(questions.querySelector('[data-slot="sidebar-questions-count"]')?.className).toContain('bg-info')
+    expect(nav.querySelector('[data-slot="sidebar-approvals-count"]')?.className).toContain('bg-muted')
+    act(() => client.setQueryData(questionKeys.all, { open: [], closed: [], counts: { live: 0, older: 2 }, olderAfterDays: 7 }))
+    await waitFor(() => expect(questions.querySelector('[data-slot="sidebar-questions-count"]')?.className).toContain('bg-muted'))
+    cleanup()
+    renderSidebar([managerFixture({ pendingActions: 2 })])
+    expect(document.querySelector('[data-slot="sidebar-approvals-count"]')?.className).toContain('bg-info')
+  })
+
+  it('leads the Workspace group with Now, into the given project, with the project nav\'s needs-you badge', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
+    client.setQueryData(managerKeys.list, { managers: [managerFixture()] })
+    const view = (count: number | null) => (
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/manager/global']}><ManagerSidebar nowTo="/p/shop/" nowCount={count} /></MemoryRouter>
+      </QueryClientProvider>
+    )
+    const { rerender } = render(view(2))
+    const now = within(workspace()).getAllByRole('link')[0]!
+    expect(now.textContent).toBe('Now2')
+    expect(now.getAttribute('href')).toBe('/p/shop/')
+    expect(now.querySelector('svg.lucide-circle-dot')).not.toBeNull()
+    expect(now.getAttribute('aria-current')).toBeNull()
+    const badge = now.querySelector('[data-slot="nav-needs-you-badge"]')!
+    expect(badge.getAttribute('title')).toBe('2 tasks need you')
+    expect(badge.className).toContain('bg-violet')
+    // Like the project nav: no badge at zero or while unknown.
+    rerender(view(0))
+    expect(now.querySelector('[data-slot="nav-needs-you-badge"]')).toBeNull()
+    rerender(view(null))
+    expect(now.textContent).toBe('Now')
   })
 
   it('keeps Approvals reachable with zero pending actions, and Jobs needs an open chat', () => {

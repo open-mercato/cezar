@@ -42,6 +42,19 @@ describe('ProjectAutomationScheduler', () => {
     });
   });
 
+  it('hands every merged or closed PR a poll saw to onPullRequestClosed', async () => {
+    const { store, definition } = await setup();
+    const onPullRequestClosed = vi.fn();
+    const candidates = [
+      candidate,
+      { ...reviewCandidate, event: 'pull_request.merged' as const, eventId: 'merged' },
+      { ...reviewCandidate, number: 9, event: 'pull_request.closed' as const, eventId: 'closed' },
+    ];
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll: async () => ({ candidates, truncated: false, pages: 1 }) } as never, onPullRequestClosed }, launch: async () => ({ runId: 'run' }) });
+    await scheduler.check(definition, 'preview');
+    expect(onPullRequestClosed.mock.calls).toEqual([[8, 'merged'], [9, 'closed']]);
+  });
+
   it('reserves before launch and deduplicates the overlap window', async () => {
     const { store, definition } = await setup();
     const launch = vi.fn(async () => ({ runId: 'run' }));

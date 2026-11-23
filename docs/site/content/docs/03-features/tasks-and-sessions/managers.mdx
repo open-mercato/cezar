@@ -76,7 +76,7 @@ The switch sits under the brand in the sidebar, and the mode comes from the URL:
 
 A dot on **Manager** and on each manager's row means it wants you: amber when an approval or a question waits on you, blue when there is only an unread message. **Manager** takes you back to the chat or list you left in that browser tab, and the tab's title names the manager you have open. The command palette also lists **Manager**, **New manager**, and each manager by name.
 
-Choose **Workspace → Approvals** in the Manager sidebar to review pending approval cards from all managers, grouped by manager. You can also open `/manager/approvals` directly. The count includes pending approvals; questions still appear in each manager’s chat and attention indicator. The page stays available when there are no pending approvals. **Open chat** jumps to that manager’s waiting cards. On a phone, open the menu to reach **Approvals**.
+Choose **Workspace → Approvals** in the Manager sidebar to review pending approval cards from all managers, grouped by manager. You can also open `/manager/approvals` directly. The count includes pending approvals; questions have their own page, **Questions**. The page stays available when there are no pending approvals. **Open chat** jumps to that manager’s waiting cards. On a phone, open the menu to reach **Approvals**.
 
 After you decide, the card stays visible while the action runs and shows its final result, including a refusal. Choose **Clear results** to remove completed cards from the view. If the result could not be loaded, **Retry result** reads it again without repeating your decision.
 
@@ -153,6 +153,8 @@ A check reads the task stores and the same GitHub data the GitHub tab uses, then
 
 **A quiet check costs nothing.** With no new attention item, Cezar makes no model call and leaves no message. A new item starts one model turn. The manager then tells you what deserves your attention, or decides that nothing does and stays silent. You pay for that turn in both cases.
 
+The manager's instructions decide what a check raises. A manager whose instructions are about something else, such as reviewing your own work, mentions only what serves them and stays silent about unrelated pull requests and failed tasks. A manager with no instructions raises every attention item. To widen or narrow what a manager watches, change its instructions in **Persona…**.
+
 Cezar reports each item once. The same task failing again is a new item, and so is a pull request problem that cleared and came back.
 
 **Check now** in the gear menu and `/check` skip that gate, so they always run a model turn. When nothing needs you, the chat shows *Checked: nothing needs you right now.*
@@ -191,6 +193,22 @@ From the command line, `cez automation add … --report-to-manager --manager <id
 
 > **Good to know**: Automations that don't report to a manager behave as before. When you delete a manager, its automations drop the link on their next run.
 
+## Deactivate a manager
+
+Deactivating a manager stops its work without deleting it. Its chat, memory, jobs, settings and automation links stay as they are. Open the gear and select **Deactivate…**, or right-click the manager in the sidebar. The dialog lists what stops and what keeps going. To switch every manager off at once, for example before a laptop sleeps, open the **⋯** menu next to *Managers* in the sidebar and select **Deactivate all…**. **Settings → Manager** has the same controls.
+
+While a manager is inactive:
+
+- It makes **no model calls**. Checks, jobs and follow-up turns stop, and so do its notifications. **Check now** is off.
+- Tasks it started keep running, and their *Task update* cards still post to its chat. The manager hears those updates on its next turn after you reactivate it.
+- Automations that report to it keep running and keep posting their results.
+- You can still decide its approvals. Its questions stay listed with a *Manager inactive* label but leave the Questions count. **Dismiss** closes a question without reactivating the manager. Answering a question needs the manager, so the cockpit asks you to reactivate it first.
+- Its avatar turns grey with a pause badge, and it moves below the active managers under *Inactive*.
+
+You can still type in the chat of an inactive manager. **Reactivate and send** asks you to confirm, then reactivates it and sends your message.
+
+To bring a manager back, select **Reactivate…** in the chat banner, the gear or the sidebar menu. Reactivating spends nothing by default: checks and jobs restart from that moment, so overdue ones don't all run at once. The chat shows one line that counts what happened while the manager was off. Tick **Catch me up** to run one check right away. That check is one model turn.
+
 ## What a manager can do
 
 | Action | Chat and job turns | Watch checks |
@@ -216,7 +234,7 @@ When a card is out of view, an **N approvals waiting** pill sits above the compo
 
 To skip the summary, open **Settings → Manager**, pick the manager, and turn off **Merges**, **Automations**, **Jobs** or **Connector calls**. All four are on by default, each manager keeps its own choice, and it applies to every device on that server. With a switch off, **Approve** sends the decision straight away. The card still appears and still needs your tap, so a manager never acts on its own.
 
-**Dismiss** closes a card without deciding, for a proposal that no longer applies. A merge card whose pull request was already merged or closed is dismissed on its own: when you open the chat, at the manager's next watch check, or when you approve it.
+**Dismiss** closes a card without deciding, for a proposal that no longer applies. A merge card whose pull request was already merged or closed is dismissed on its own: as soon as cezar sees the pull request merged or closed (its chip on the card, the merge box, an automation poll), when you open the chat, at the manager's next watch check, or when you approve it.
 
 A merge card also lists the tasks behind its pull request, the one that opened it first, then tasks that review or mention it, up to three plus a count. Select one to open that task.
 
@@ -245,16 +263,35 @@ A write produces an approval card, like a merge. The card shows the connector, t
 > - A grant applies from the manager's next turn, and so does a revoke. A card that waits when you revoke its tool fails on approval.
 > - Only Claude managers can use connectors. Other agents have their own MCP configuration.
 > - Watch checks never get connector tools, because they read text anyone can write.
+> - A manager with no connector granted does not load any, so their tool lists never take up its context. The Connectors dialog looks them up when you open it.
 > - Connectors disconnect and reconnect on their own. When one is down, the manager tells you it is temporarily unavailable, and a write card for it fails with the same message.
 > - Cezar does not pass connector grants to tasks the manager starts.
+
+## Memory and sessions
+
+A manager does not keep one endless conversation. A chat continues the same session only while it is active: within 55 minutes of the last turn, under 100,000 tokens of context, and less than 12 hours after the session started. Otherwise the next turn starts a new session. Scheduled checks and jobs always start a new one. Your chat stays one thread; only what the model carries changes.
+
+A new session starts from:
+
+- **Memory**: what you asked the manager to remember, such as "open full PRs, not drafts" or "HTML design before UI work".
+- The open question cards, the notes since its last turn, and the tasks it follows with their status.
+- The last few messages between you and the manager.
+
+The manager can read older messages with `cez-manager history` and a task's details with `cez-manager task`.
+
+Open the manager's gear menu and select **Memory…** to see, edit, add or delete entries. The manager saves an entry when you tell it something it should keep. Memory holds at most 40 entries and 6 KB. A Claude manager's earlier Claude Code memory is imported once, and Claude Code's own memory is then switched off for it, so there is one memory, the same on every agent.
+
+> **Good to know**: Memory is for lasting preferences and decisions, not task results. Tasks keep their own reports, and the manager looks them up when it needs them.
 
 ## Agents, accounts, model and cancelling
 
 Open the chat's settings gear → **Manager agent** to change the manager's agent, account, model and effort in one dialog. The account field lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. During setup, **Model and effort** also offers agent and account choices.
 
+> **Good to know**: Codex is not offered as the manager's own agent. A manager's tools are limited to a `cez-manager` shell allowlist, and Codex cannot enforce that limit, so a manager already set to Codex, or one with no agent set on a machine whose default is Codex, shows an error in its chat instead of running. Choose Claude Code for the manager. Tasks the manager starts can still run on Codex.
+
 Use **Agent for new tasks** during setup or in the dialog's **For new tasks** section to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
 
-**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Codex manager's task runs on Codex even when the project's default is Claude. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
+**Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Claude Code manager's task runs on Claude Code even when the project's default is Codex. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
 
 The manager passes an account with `cez-manager task create --runner claude --account <id>`. The task records the requested account and the account that actually ran; open its agent badge to see the account label. If a selected account was deleted, task creation is refused instead of using another account.
 
@@ -284,7 +321,15 @@ Cezar refuses a task or message whose text is a placeholder such as `[transcript
 
 ## Answer a manager's questions
 
-When a manager needs a decision from you, it shows a question card with clickable choices, its recommended choice first. Every question also offers **Other…** and **Need more info**. A reply typed in the chat answers the card too. Once answered from the card, it collapses to each question with your answer. A reply you type in the chat shows as your own message.
+When a manager needs a decision from you, it shows a question card with clickable choices, its recommended choice first. Every question also offers **Other…** and **Need more info**. Once answered from the card, it collapses to each question with your answer. A reply you type in the chat shows as your own message and leaves open cards open, marked **May be out of date**; the manager closes them on its next turn if your reply covered them.
+
+A card closes on its own when a newer card asks the same thing again (the same card name, or every one of its questions), when the manager withdraws it, or when the pull request or task it declares it is about is finished. A closed card shrinks to one line that says why. To answer every open question in one place, see [Questions](#questions).
+
+## Questions
+
+Choose **Workspace → Questions** in the Manager sidebar, or open `/manager/questions`, to see every open question from your managers and tasks in one list, grouped by where it was asked. Answer it there, **Dismiss** it (the agent is told you skipped it; **Undo** is offered for a few seconds), or use **Open in context** to jump to the card in its chat. A manager card that relays a task's question appears once, under the task, and answering either copy closes both. A card you answer or dismiss there stays in place for 30 seconds with what happened (your answer and where it was sent, or **Dismissed**), then leaves; so does one that closes while you are looking at it, with the reason. It leaves only once you are idle (not while the pointer or keyboard focus is in the list, nor for 3 seconds after you scroll or press a key), and the text you are reading does not move. The count drops as soon as you click.
+
+The count beside **Questions** includes only questions that still need you. A card marked **May be out of date** still counts until you dismiss it or the agent closes it. A question left unanswered for longer than the **Move to Older after** setting (7 days by default) moves to **Older** and stops counting; it is not closed. **Closed** lists the last seven days with the reason each closed. With managers turned off, **Questions** sits in the project sidebar and lists task questions.
 
 ## Choose read-only or write access
 
@@ -316,6 +361,8 @@ Approvals stay in the chat. Nothing shows while no manager is active. Turn it of
 Every task the manager names or starts appears as a card in the chat. A card shows the task's title, live status, and added and removed lines. Dispatched tasks appear as their root task, and you can ask the manager about the subtasks.
 
 Select a card to open that task's own thread and keep working there. The task then shows a `Back to <manager>` link, which stays for the browser session as you move between the task's tabs. A pull request chip opens the pull request in the GitHub tab.
+
+Pull requests and issues become chips in replies, question cards and on the Questions page when the manager names the project: a `[[pr:…]]` marker, a GitHub link, or a connected project's id or name followed by `/` or `#` and the number (`frontends/2902`). A bare `#12` resolves to the project a marker in the same reply or card names, else to the only connected project, and a number with no `#` and no project stays plain text. Card headers are always plain text.
 
 ## Tool limits by agent
 

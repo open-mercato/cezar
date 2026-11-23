@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CezarBot · Devices screen redesign (phase 1)</title>
+<style>
+  /* The page around the mockups. */
+  :root { --page: #f4f4f2; --ink: #171717; --soft: #5c5c5c; --rule: #e2e2de; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .page { max-width: 1320px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1.doc { font-size: 28px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--soft); margin: 0 0 24px; max-width: 760px; }
+  .bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; padding: 12px 16px; margin: 0 -16px 24px; background: color-mix(in srgb, var(--page) 92%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--rule); }
+  .seg { display: inline-flex; background: #e7e7e3; border-radius: 10px; padding: 3px; gap: 2px; flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; font: inherit; font-size: 13px; color: var(--soft); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); font-weight: 600; }
+  .bar label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--soft); margin-right: 6px; }
+  .stage { display: grid; grid-template-columns: minmax(0, auto) minmax(280px, 1fr); gap: 32px; align-items: start; }
+  @media (max-width: 1000px) { .stage { grid-template-columns: 1fr; } }
+  .caption h2 { font-size: 18px; margin: 0 0 8px; }
+  .caption p, .caption li { color: #333; }
+  .caption ul { padding-left: 18px; margin: 8px 0; }
+  .caption .tag { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 99px; background: #e9f9dc; color: #2c5a0c; margin-bottom: 8px; }
+  .caption .tag.before { background: #fde8e8; color: #8a1c1c; }
+  section.notes { margin-top: 56px; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+  section.notes article { background: #fff; border: 1px solid var(--rule); border-radius: 14px; padding: 20px 22px; }
+  section.notes h3 { margin: 0 0 10px; font-size: 16px; }
+  section.notes table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  section.notes td, section.notes th { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  section.notes th { font-weight: 600; color: var(--soft); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  section.notes ul { padding-left: 18px; margin: 0; }
+  section.notes li { margin: 4px 0; }
+  code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: #efefeb; padding: 1px 5px; border-radius: 4px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+  .flow span.node { background: #171717; color: #fff; padding: 6px 10px; border-radius: 8px; }
+  .flow span.node.new { background: #a8f372; color: #0d0d0d; font-weight: 600; }
+  .flow span.arrow { color: var(--soft); }
+
+  /* ---------- Device frames ---------- */
+  .frame { position: relative; background: #050505; border-radius: 54px; padding: 12px; box-shadow: 0 30px 60px -20px rgba(0,0,0,.35), 0 0 0 1px #2a2a2a inset; }
+  .frame.android { border-radius: 36px; padding: 10px; }
+  .frame.ipad { border-radius: 34px; padding: 18px; }
+  .screen { position: relative; overflow: hidden; border-radius: 42px; }
+  .frame.android .screen { border-radius: 28px; }
+  .frame.ipad .screen { border-radius: 18px; }
+  .zoom { zoom: 0.82; }
+  .zoom.ipad { zoom: 0.66; }
+
+  /* ---------- The app (mirrors packages/mobile/connect/connect.css tokens) ---------- */
+  .app { --bg: #0d0d0d; --fg: #fff; --muted: #a3a3a3; --line: #262626; --card: #161616; --card-2: #1d1d1d; --accent: #a8f372; --on-accent: #0d0d0d; --ok: #4ade80; --warn: #f5a524; --danger: #ff6b6b; --off: #737373;
+    background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, -apple-system, Roboto, sans-serif; display: flex; flex-direction: column; height: 100%; position: relative; }
+  .app.light { --bg: #fff; --fg: #171717; --muted: #5c5c5c; --line: #ebebeb; --card: #fafafa; --card-2: #f2f2f2; --accent: #171717; --on-accent: #fff; --ok: #16a34a; --warn: #b45309; --danger: #dc2626; --off: #8a8a8a; }
+  .sys { height: 50px; flex: none; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 30px 8px; font-size: 15px; font-weight: 600; }
+  .android .sys { height: 34px; align-items: center; padding: 0 22px; font-size: 13px; font-weight: 500; }
+  .ipad .sys { height: 26px; align-items: center; padding: 0 22px; font-size: 13px; }
+  .sys .icons { display: flex; gap: 6px; align-items: center; }
+  .sys .icons i { display: inline-block; width: 16px; height: 10px; border-radius: 2px; background: currentColor; opacity: .9; }
+  .sys .icons i.bat { width: 24px; height: 11px; border-radius: 3px; }
+  .island { position: absolute; top: 11px; left: 50%; translate: -50% 0; width: 122px; height: 35px; border-radius: 20px; background: #000; z-index: 3; }
+  .android .island { width: 12px; height: 12px; top: 11px; border-radius: 50%; }
+  .ipad .island { display: none; }
+  .gesture { flex: none; height: 26px; display: grid; place-items: center; }
+  .gesture i { width: 134px; height: 5px; border-radius: 3px; background: var(--fg); opacity: .85; }
+  .android .gesture i { width: 108px; height: 4px; opacity: .6; }
+  .scroll { flex: 1; overflow-y: auto; scrollbar-width: none; }
+  .scroll::-webkit-scrollbar { display: none; }
+  .col { max-width: 560px; margin: 0 auto; padding: 8px 20px 28px; }
+
+  .top { display: flex; align-items: center; gap: 4px; min-height: 52px; margin: 0 -8px 4px; }
+  .iconbtn { width: 44px; height: 44px; display: grid; place-items: center; border: 0; background: transparent; color: inherit; border-radius: 12px; cursor: pointer; flex: none; }
+  .iconbtn:hover { background: var(--card-2); }
+  .iconbtn svg { width: 22px; height: 22px; }
+  .top .crumb { font-size: 15px; color: var(--muted); }
+  .app h1 { font-size: 28px; line-height: 1.15; margin: 4px 0 4px; letter-spacing: -0.01em; }
+  .app .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  .mark { width: 22px; height: 34px; fill: currentColor; }
+
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 26px 4px 8px; }
+
+  /* Computer cards */
+  .cards { display: grid; gap: 10px; }
+  .card { display: flex; align-items: center; gap: 12px; padding: 12px 6px 12px 14px; min-height: 76px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; position: relative; cursor: pointer; text-align: left; color: inherit; font: inherit; width: 100%; transition: border-color .15s, background .15s; }
+  .card:hover { border-color: color-mix(in srgb, var(--fg) 22%, var(--line)); }
+  .card.current { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  .card.selected { background: var(--card-2); border-color: var(--accent); }
+  .avatar { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 16px; flex: none; position: relative; }
+  .avatar.lg { width: 64px; height: 64px; font-size: 22px; }
+  .avatar .dot { position: absolute; right: -1px; bottom: -1px; width: 14px; height: 14px; border-radius: 50%; border: 3px solid var(--card); }
+  .avatar.lg .dot { width: 18px; height: 18px; border-width: 3px; border-color: var(--bg); }
+  .dot.online { background: var(--ok); } .dot.offline { background: var(--off); } .dot.attention { background: var(--warn); } .dot.checking { background: var(--off); opacity: .6; }
+  .who { flex: 1; min-width: 0; }
+  .who .name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16.5px; }
+  .who .name span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hero .who .name { flex-wrap: wrap; row-gap: 2px; }
+  .hero .who .name span.t { white-space: normal; }
+  .who .meta { font-size: 13.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who .state { font-size: 13.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .state.online { color: var(--ok); } .state.offline { color: var(--muted); } .state.attention { color: var(--warn); }
+  .pill { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 99px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); flex: none; }
+  .app.light .pill { background: #ececec; color: #171717; }
+  .need { font-size: 12.5px; font-weight: 600; color: var(--warn); }
+  .chev { color: var(--muted); display: grid; place-items: center; width: 28px; flex: none; }
+  .chev svg { width: 18px; height: 18px; }
+  .card .more { margin-left: -4px; }
+  .fix { margin-left: auto; flex: none; min-height: 36px; padding: 0 14px; border-radius: 99px; border: 1px solid var(--warn); color: var(--warn); background: transparent; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+
+  /* Hero (one computer) */
+  .hero { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 20px; }
+  .hero .row { display: flex; align-items: center; gap: 14px; }
+  .hero .name { font-size: 20px; font-weight: 700; }
+  .hero .buttons { display: grid; gap: 10px; margin-top: 18px; }
+  .hero .hint { font-size: 14px; color: var(--muted); margin: 14px 0 0; }
+
+  .btn { min-height: 50px; padding: 0 18px; border-radius: 12px; border: 1px solid var(--line); background: transparent; color: inherit; font: inherit; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; width: 100%; }
+  .btn svg { width: 20px; height: 20px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.ghost { border-style: dashed; color: var(--fg); }
+  .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
+  .btn.text { border: 0; min-height: 44px; color: var(--muted); font-weight: 500; }
+  .add { margin-top: 12px; }
+
+  /* Grouped list (App section, detail) */
+  .group { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .item { display: flex; align-items: center; gap: 12px; min-height: 54px; padding: 10px 14px; border-top: 1px solid var(--line); width: 100%; background: transparent; color: inherit; font: inherit; text-align: left; border-left: 0; border-right: 0; border-bottom: 0; }
+  .item:first-child { border-top: 0; }
+  button.item { cursor: pointer; }
+  button.item:hover { background: var(--card-2); }
+  .item .ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--card-2); color: var(--fg); flex: none; }
+  .item .ic svg { width: 18px; height: 18px; }
+  .item .lbl { flex: 1; min-width: 0; }
+  .item .lbl small { display: block; color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 1px; }
+  .item .val { color: var(--muted); font-size: 14.5px; text-align: right; }
+  .item.danger { color: var(--danger); }
+  .item.danger .ic { color: var(--danger); }
+  .foot { font-size: 12.5px; color: var(--muted); margin: 8px 4px 0; }
+
+  .switch { width: 51px; height: 31px; border-radius: 99px; background: var(--line); position: relative; flex: none; border: 0; cursor: pointer; transition: background .15s; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: left .15s; }
+  .switch[aria-checked="true"] { background: var(--accent); }
+  .app.light .switch[aria-checked="true"] { background: #16a34a; }
+  .switch[aria-checked="true"]::after { left: 22px; }
+  .android .switch { width: 52px; height: 32px; }
+  .android .switch::after { width: 16px; height: 16px; top: 8px; left: 8px; background: var(--muted); box-shadow: none; }
+  .android .switch[aria-checked="true"]::after { width: 24px; height: 24px; top: 4px; left: 24px; background: var(--on-accent); }
+
+  /* Detail head */
+  .dhead { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 8px 0 18px; }
+  .dhead .name { font-size: 24px; font-weight: 700; margin-top: 6px; }
+
+  /* Empty state */
+  .empty { text-align: center; padding: 28px 4px 8px; }
+  .empty .glyph { width: 88px; height: 88px; margin: 0 auto 18px; border-radius: 24px; background: var(--card); border: 1px solid var(--line); display: grid; place-items: center; }
+  .empty .glyph svg { width: 34px; height: 52px; fill: var(--fg); }
+  .steps { text-align: left; counter-reset: s; list-style: none; padding: 0; margin: 20px 0; display: grid; gap: 10px; }
+  .steps li { counter-increment: s; display: flex; gap: 12px; align-items: flex-start; font-size: 15px; }
+  .steps li::before { content: counter(s); flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--card-2); border: 1px solid var(--line); display: grid; place-items: center; font-size: 13px; font-weight: 700; }
+
+  /* Sheet / dialog */
+  .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.55); z-index: 10; display: flex; align-items: flex-end; animation: fade .18s ease-out; }
+  .ipad .scrim { align-items: center; justify-content: center; }
+  .sheet { background: var(--card); width: 100%; border-radius: 22px 22px 0 0; padding: 10px 20px 34px; border-top: 1px solid var(--line); animation: up .22s ease-out; }
+  .ipad .sheet { width: 420px; border-radius: 20px; border: 1px solid var(--line); padding: 22px; }
+  .sheet .grab { width: 38px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 14px; }
+  .ipad .sheet .grab { display: none; }
+  .sheet h2 { font-size: 20px; margin: 0 0 8px; }
+  .sheet p { color: var(--muted); font-size: 15px; margin: 0 0 18px; }
+  .sheet .btn + .btn { margin-top: 10px; }
+  .btn.destruct { background: var(--danger); border-color: var(--danger); color: #fff; }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes up { from { transform: translateY(30px); opacity: .4; } }
+
+  .toast { position: absolute; left: 50%; bottom: 50px; translate: -50% 0; background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 20; white-space: nowrap; animation: fade .15s; }
+
+  /* iPad split */
+  .split { display: grid; grid-template-columns: 400px 1fr; height: 100%; }
+  .split .left { border-right: 1px solid var(--line); overflow-y: auto; scrollbar-width: none; }
+  .split .left .col { padding: 8px 20px 28px; }
+  .split .right { overflow-y: auto; scrollbar-width: none; }
+  .split .right .col { max-width: 520px; padding-top: 32px; }
+
+  /* "Before": the current list, as connect.css draws it. */
+  .old { padding: 32px 20px; }
+  .old .mk { width: 26px; height: 40px; fill: var(--fg); margin-bottom: 24px; }
+  .old h1 { font-size: 24px; margin: 0 0 16px; }
+  .old .r { display: flex; gap: 8px; margin-bottom: 8px; }
+  .old .r .o { flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .old .r .o span { display: block; } .old .r .o span + span { color: var(--muted); font-size: 14px; }
+  .old .b { min-height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 0 16px; background: transparent; color: inherit; font: inherit; }
+  .old .b.p { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .old .chk { display: flex; gap: 8px; align-items: center; min-height: 44px; padding-left: 12px; }
+  .old .chk i { width: 20px; height: 20px; border-radius: 4px; background: var(--accent); }
+  .old .m { color: var(--muted); font-size: 14px; margin: 12px 0 24px; }
+  .old .w { width: 100%; }
+  .old a { color: var(--muted); font-size: 14px; display: inline-block; margin-top: 40px; }
+  .old .wrap { max-width: 28rem; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">CezarBot · a clearer “Devices” screen</h1>
+  <p class="lede">Phase 1 design for the connect page's list screen (<code>packages/mobile/connect/</code>, shared by iOS and Android). Every mockup below is live: tap a cezar to open it, tap <b>⋯</b> for its settings, try Forget. The <b>Name</b> control swaps the noun everywhere, since the list can hold a laptop, a VPS or a cloud host. Spec: <code>.ai/specs/2026-11-19-mobile-devices-screen.md</code>.</p>
+
+  <div class="bar" role="toolbar" aria-label="Mockup controls">
+    <div><label>Device</label><span class="seg" id="seg-device"></span></div>
+    <div><label>State</label><span class="seg" id="seg-state"></span></div>
+    <div><label>Name</label><span class="seg" id="seg-name"></span></div>
+    <div><label>Theme</label><span class="seg" id="seg-theme"></span></div>
+  </div>
+
+  <div class="stage">
+    <div id="device"></div>
+    <div class="caption" id="caption"></div>
+  </div>
+
+  <section class="notes">
+    <article>
+      <h3>How you get here, and back</h3>
+      <div class="flow">
+        <span class="node">Manager</span><span class="arrow">→ Devices link / banner →</span>
+        <span class="node">Switcher sheet (native)</span><span class="arrow">→ “Manage cezars” →</span>
+        <span class="node new">Your cezars</span>
+      </div>
+      <ul style="margin-top:12px">
+        <li>The top-left <b>←</b> carries the name of the cezar you came from (“← MacBook Pro”), and returns to its Manager, as <code>cameFrom</code> does today. Android Back and the iOS edge swipe do the same.</li>
+        <li>Tapping any card opens that cezar at <code>/manager</code> (Decision 3 of the manager-first spec); tapping the current one just goes back.</li>
+        <li>On a cold start with no cezars, this screen is the empty state: pairing comes first.</li>
+        <li>The native switcher keeps its job (quick switching over a page) but renames its two actions to <b>Connect another cezar</b> and <b>Manage cezars</b>; the banner's button becomes <b>Cezars</b>.</li>
+      </ul>
+    </article>
+    <article>
+      <h3>Copy</h3>
+      <table>
+        <tr><th>Now</th><th>Proposed</th></tr>
+        <tr><td>Devices</td><td>Your cezars (recommended; Machines, Servers, Connections compared live)</td></tr>
+        <tr><td>Add a device</td><td>Connect another cezar (first one: Connect your cezar)</td></tr>
+        <tr><td>Forget / Forget this device</td><td>Forget this ${W.one}</td></tr>
+        <tr><td>Notifications (checkbox)</td><td>Notify me when it needs me (on the cezar's page)</td></tr>
+        <tr><td>Turn on / off app lock</td><td>App lock (switch)</td></tr>
+        <tr><td>https://relay… / URL</td><td>“Paired with this phone” or the host name only</td></tr>
+        <tr><td>—</td><td>Online · Offline since 09:41 · Sign in needed · 2 need you · Current</td></tr>
+      </table>
+      <p class="foot" style="color:#5c5c5c">“Relay” appears once, on the detail's Connection row, where it explains how a paired cezar is reached.</p>
+    </article>
+    <article>
+      <h3>Accessibility</h3>
+      <ul>
+        <li>Every target is at least 44×44 pt (iOS) / 48 dp (Android): cards are 76 tall, the ⋯ button 44.</li>
+        <li>A card is one button whose label reads like the native switcher's: “MacBook Pro, online, 2 need you, current. Opens its Manager.” The ⋯ button is separate: “Settings for MacBook Pro”.</li>
+        <li>Status is never colour alone: a word always sits beside the dot.</li>
+        <li>Switches use <code>role="switch"</code> with <code>aria-checked</code>; section titles are headings so VoiceOver's rotor and TalkBack's heading navigation jump between the list and “App”.</li>
+        <li>Forget's sheet traps focus, starts on Cancel, and Escape / Back closes it.</li>
+        <li>Respects Dynamic Type / font scale (no fixed heights on text), reduced motion, light and dark.</li>
+      </ul>
+    </article>
+    <article>
+      <h3>Native vs web, today and after</h3>
+      <table>
+        <tr><th>Part</th><th>Where</th></tr>
+        <tr><td>This screen, Forget, pairing, app lock row, startup log</td><td>Web: <code>connect/connect.js</code>, <code>screens.js</code>, <code>nav.js</code> (one implementation for both platforms)</td></tr>
+        <tr><td>Quick switcher sheet</td><td>Native: <code>DeviceSheetController.swift</code>, <code>DeviceSwitcherSheet.java</code></td></tr>
+        <tr><td>Status words, avatar colour, “N need you”</td><td>Native: <code>DeviceSwitch</code>, <code>DeviceIdentity</code>, <code>DeviceBook</code>, probes in <code>DeviceProbes</code></td></tr>
+      </table>
+      <p style="margin-top:10px">Phase 2 needs from native: each <code>list</code> row also carries <code>status</code>, <code>words</code>, <code>need</code>, <code>initials</code>, <code>color</code>, <code>current</code> and <code>relay</code> (computed by the existing <code>DeviceSwitch.rows</code>), a pushed update when a probe answers, a <code>rename</code> method, and the OS notification permission plus app version. The page keeps drawing only what native tells it.</p>
+    </article>
+  </section>
+</div>
+
+<script>
+(() => {
+  const MARK = ['354.6,217.3 511.0,307.6 421.0,359.6 354.6,321.2 267.9,371.2 267.9,471.3 444.6,573.3 354.6,625.3 177.9,523.3 177.9,319.3', '177.9,284.6 354.6,182.6 354.6,78.7 177.9,180.7', '354.6,372.3 397.0,396.8 397.0,445.8 354.6,470.3 312.1,445.8 312.1,396.8', '483.7,372.3 526.1,396.8 526.1,445.8 483.7,470.3 441.2,445.8 441.2,396.8'];
+  const mark = (cls = 'mark') => `<svg class="${cls}" viewBox="177.9 78.7 348.2 546.6" aria-hidden="true">${MARK.map((p) => `<polygon points="${p}"/>`).join('')}</svg>`;
+  const I = {
+    back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>',
+    chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
+    more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>',
+    log: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+    shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+    info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg>',
+    ext: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+    qr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg>',
+    keys: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>',
+    pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg>',
+    link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+    user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
+  };
+
+  // DeviceIdentity's palette and initials, so the cards match the native switcher's avatars.
+  const PALETTE = ['#7c6cf0', '#e0912a', '#2fb862', '#2a9fd8', '#e05a73', '#22b3a0'];
+  const color = (name) => { let h = 0; for (const c of name.trim()) h = (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; };
+  const initials = (name) => name.trim().split(/\s+/).map((w) => w[0]).filter((c) => /[\p{L}\p{N}]/u.test(c)).slice(0, 2).join('').toUpperCase();
+
+  const C = {
+    mbp: { id: 'mbp', label: 'MacBook Pro', relay: true, status: 'online', words: 'Online', need: 2, push: true },
+    rome: { id: 'rome', label: 'rome', host: 'rome.cezar.run', relay: false, status: 'online', words: 'Online', need: 0, push: null, user: 'patryk' },
+    studio: { id: 'studio', label: 'vps-fra1', relay: true, status: 'offline', words: 'Offline since 09:41', need: 1, push: true },
+    ci: { id: 'ci', label: 'build box', host: 'ci.example.com', relay: false, status: 'attention', words: 'Sign in needed', fix: 'Sign in', push: null },
+    removed: { id: 'removed', label: 'Office iMac', relay: true, status: 'attention', words: "This phone was removed", fix: 'Pair again', push: false },
+  };
+  const clone = (...ids) => ids.map((id) => ({ ...C[id] }));
+  const STATES = {
+    before: { label: 'Before', servers: () => clone('mbp') },
+    one: { label: 'One', servers: () => clone('mbp'), current: 'mbp' },
+    several: { label: 'Several', servers: () => clone('mbp', 'rome', 'studio'), current: 'mbp' },
+    offline: { label: 'Offline', servers: () => [{ ...C.mbp, status: 'offline', words: 'Offline since 09:41', need: null }] },
+    signin: { label: 'Needs sign-in', servers: () => clone('mbp', 'ci', 'removed', 'studio'), current: 'mbp' },
+    empty: { label: 'Empty', servers: () => [] },
+    detail: { label: 'Detail', servers: () => clone('mbp', 'rome', 'studio'), current: 'mbp', screen: 'detail', sel: 'mbp' },
+    forget: { label: 'Forget confirm', servers: () => clone('mbp', 'rome', 'studio'), current: 'mbp', screen: 'forget', sel: 'studio' },
+  };
+  const DEVICES = { ios: 'iPhone', android: 'Android phone', ipad: 'iPad' };
+  const THEMES = { dark: 'Dark', light: 'Light' };
+  // The thing in the list can be a laptop, a VPS or a cloud host: candidate names, compared live.
+  const NAMES = {
+    cezars: { label: 'Your cezars', title: 'Your cezars', one: 'cezar', many: 'cezars', add: 'Connect another cezar', first: 'Connect your cezar' },
+    machines: { label: 'Machines', title: 'Machines', one: 'machine', many: 'machines', add: 'Connect another machine', first: 'Connect a machine' },
+    servers: { label: 'Servers', title: 'Servers', one: 'server', many: 'servers', add: 'Connect another server', first: 'Connect a server' },
+    connections: { label: 'Connections', title: 'Connections', one: 'connection', many: 'connections', add: 'Add a connection', first: 'Add your first connection' },
+  };
+  let W = NAMES.cezars;
+
+  const CAPTIONS = {
+    before: ['before', 'Today', `<p>What ships now (<code>drawList</code>): a bordered row that does not read as tappable, a loose Forget, a Notifications checkbox of unclear scope, the green <b>Add a device</b> as the strongest thing on screen, and app-wide settings in the same column. No status, no “current”. On iPad the 28rem column floats in empty space.</p>`],
+    one: ['after', 'One cezar', `<ul><li>The cezar is a <b>hero card</b> with its live status and “current” mark; the green button now does the main job: <b>Open Manager</b>.</li><li><b>Connect another cezar</b> is a quiet dashed button under it.</li><li>Per-cezar settings sit behind <b>⋯</b>; app-wide ones are grouped under <b>App</b>.</li></ul>`],
+    several: ['after', 'Several cezars', `<ul><li>A list of cards, current first, then online, offline, the rest, by “need you” inside each (the native switcher's order, <code>DeviceSwitch.rows</code>).</li><li>The whole card opens that cezar's Manager; the chevron says so. <b>⋯</b> opens its page.</li><li>No green button competes: the cards are the action.</li></ul>`],
+    offline: ['after', 'Offline / unreachable', `<ul><li>The hero says why in words, with the time it was last seen, and what to do: wake the machine it runs on.</li><li>The primary becomes <b>Try again</b>; nothing is hidden behind an error screen.</li></ul>`],
+    signin: ['after', 'Needs sign-in or re-pairing', `<ul><li>A card that cannot open shows its reason in amber and a <b>one-tap fix</b> right on the card: <b>Sign in</b> (direct server), <b>Pair again</b> (removed from the cezar), Confirm email, Accept terms… The words are the native switcher's.</li><li>The card itself still opens, leading to today's matching screen.</li></ul>`],
+    empty: ['after', 'No cezars yet', `<ul><li>One clear job: connect your cezar. The steps say where to find the code.</li><li><b>Scan QR code</b> is primary, <b>Enter code</b> secondary, a server address is the small text link (today's Advanced).</li><li>Privacy policy and the startup log stay reachable for store review and bug reports.</li></ul>`],
+    detail: ['after', 'A cezar\'s page', `<ul><li>Everything about <i>one</i> cezar: status, how it is reached, its notifications, rename, sign-in account, forget.</li><li>“Notify me” is clearly scoped to this cezar; the phone-wide permission lives under App.</li><li>On iPad this is the right pane of a split view, so it is always visible next to the list.</li></ul>`],
+    forget: ['after', 'Forget confirm', `<ul><li>A bottom sheet on phones, a centred dialog on iPad.</li><li>It names the cezar and says exactly what goes. The destructive button is red, Cancel is first in focus.</li></ul>`],
+  };
+
+  const S = { device: 'ios', state: 'one', theme: 'dark', name: 'cezars', screen: 'list', sel: null, servers: [], current: null, toast: null, lock: true, renaming: false };
+
+  function reset() {
+    const st = STATES[S.state];
+    S.servers = st.servers();
+    S.current = st.current ?? null;
+    S.screen = st.screen ?? 'list';
+    S.sel = st.sel ?? (S.device === 'ipad' ? S.servers[0]?.id ?? null : null);
+    S.renaming = false;
+  }
+
+  const order = (rows) => rows.map((r, i) => [r, i]).sort(([a, i], [b, j]) => {
+    const g = (r) => (r.id === S.current ? 0 : 1);
+    const grp = (r) => ({ online: 0, offline: 1, checking: 1, attention: 2 })[r.status];
+    return g(a) - g(b) || grp(a) - grp(b) || (b.need ?? 0) - (a.need ?? 0) || i - j;
+  }).map(([r]) => r);
+
+  const where = (s) => (s.relay ? 'Paired with this phone' : s.host);
+  const needWords = (s) => (s.need ? (s.need === 1 ? '1 needs you' : `${s.need} need you`) : '');
+  const ariaCard = (s) => [s.label, s.words, needWords(s), s.id === S.current ? 'current' : ''].filter(Boolean).join(', ');
+
+  function avatar(s, lg) {
+    return `<span class="avatar${lg ? ' lg' : ''}" style="background:${color(s.label)}" aria-hidden="true">${initials(s.label)}<span class="dot ${s.status}"></span></span>`;
+  }
+  function stateLine(s) {
+    const need = s.id !== S.current && s.need ? `<span class="need">· ${needWords(s)}</span>` : '';
+    return `<span class="state ${s.status}">${s.words}${need}</span>`;
+  }
+
+  function card(s) {
+    const cur = s.id === S.current;
+    const sel = S.device === 'ipad' && S.sel === s.id && S.screen !== 'list-only';
+    const tail = s.fix ? `<button class="fix" data-act="fix" data-id="${s.id}">${s.fix}</button>` : `<span class="chev">${I.chev}</span>`;
+    return `<div class="card${cur ? ' current' : ''}${sel ? ' selected' : ''}" role="button" tabindex="0" data-act="open" data-id="${s.id}" aria-label="${ariaCard(s)}. Opens its Manager.">
+      ${avatar(s)}
+      <span class="who">
+        <span class="name"><span class="t">${s.label}</span>${cur ? '<span class="pill">Current</span>' : ''}</span>
+        <span class="meta">${where(s)}</span>
+        ${stateLine(s)}
+      </span>
+      ${tail}
+      <button class="iconbtn more" data-act="detail" data-id="${s.id}" aria-label="Settings for ${s.label}">${I.more}</button>
+    </div>`;
+  }
+
+  function hero(s) {
+    const off = s.status === 'offline';
+    const cur = s.id === S.current;
+    const hint = off ? `<p class="hint">${s.label} is asleep or offline. Wake it, or check that cezar is running on it.</p>`
+      : s.need ? `<p class="hint"><span class="need">${needWords(s)}</span> in the Manager.</p>` : '';
+    return `<div class="hero">
+      <div class="row">
+        ${avatar(s, true)}
+        <div class="who">
+          <div class="name"><span class="t">${s.label}</span>${cur ? ' <span class="pill" style="vertical-align:3px">Current</span>' : ''}</div>
+          <div class="meta">${where(s)}</div>
+          ${stateLine({ ...s, need: 0 })}
+        </div>
+        <button class="iconbtn more" data-act="detail" data-id="${s.id}" aria-label="Settings for ${s.label}">${I.more}</button>
+      </div>
+      ${hint}
+      <div class="buttons">
+        <button class="btn primary" data-act="open" data-id="${s.id}">${off ? 'Try again' : 'Open Manager'}</button>
+      </div>
+    </div>`;
+  }
+
+  function appSection(minimal) {
+    const items = [
+      `<div class="item"><span class="ic">${I.lock}</span><span class="lbl">App lock<small>Face ID, fingerprint or screen lock when the app opens and after a minute away.</small></span><button class="switch" role="switch" aria-checked="${S.lock}" aria-label="App lock" data-act="lock"></button></div>`,
+      minimal ? '' : `<button class="item" data-act="toast" data-msg="Opens the phone's notification settings"><span class="ic">${I.bell}</span><span class="lbl">Notifications<small>Allowed for CezarBot. Choose which ones notify you on each one's page.</small></span><span class="val">On</span><span class="chev">${I.chev}</span></button>`,
+      `<button class="item" data-act="toast" data-msg="Copied 42 lines"><span class="ic">${I.log}</span><span class="lbl">Copy startup log<small>For a bug report.</small></span></button>`,
+      `<button class="item" data-act="toast" data-msg="Opens in your browser"><span class="ic">${I.shield}</span><span class="lbl">Privacy policy</span><span class="chev">${I.ext}</span></button>`,
+      `<div class="item"><span class="ic">${I.info}</span><span class="lbl">Version</span><span class="val">0.1.1 (87)</span></div>`,
+    ];
+    return `<h2 class="eyebrow">App</h2><div class="group">${items.join('')}</div>`;
+  }
+
+  function topBar(title, backTo) {
+    const back = backTo ? `<button class="iconbtn" data-act="back" aria-label="Back to ${backTo}">${I.back}</button><span class="crumb">${backTo}</span>` : '';
+    return `<div class="top">${back}</div>${title ? `<h1>${title}</h1>` : ''}`;
+  }
+
+  function listView(inSplit) {
+    const servers = order(S.servers);
+    const cur = S.servers.find((s) => s.id === S.current);
+    if (!servers.length) return emptyView();
+    let body;
+    if (servers.length === 1 && !inSplit) {
+      body = `${hero(servers[0])}<button class="btn ghost add" data-act="add">${I.plus}${W.add}</button>`;
+    } else {
+      body = `<div class="cards">${servers.map(card).join('')}</div><button class="btn ghost add" data-act="add">${I.plus}${W.add}</button>`;
+    }
+    const count = servers.length === 1 ? `The ${W.one} this phone is connected to.` : `${servers.length} ${W.many} connected to this phone.`;
+    return `${topBar(W.title, cur?.label)}<p class="sub">${count}</p>${body}${appSection()}`;
+  }
+
+  function emptyView() {
+    return `${topBar('')}<div class="empty">
+      <div class="glyph">${mark('')}</div>
+      <h1>${W.first}</h1>
+      <p class="sub" style="margin-bottom:0">CezarBot shows a cezar running on your laptop, a server or the cloud, so you can answer it from here.</p>
+      <ol class="steps"><li>Open cezar, wherever it runs.</li><li>Go to Settings, then Connect a phone.</li><li>Scan the code it shows.</li></ol>
+      <div style="display:grid;gap:10px">
+        <button class="btn primary" data-act="toast" data-msg="Opens the camera">${I.qr}Scan QR code</button>
+        <button class="btn" data-act="toast" data-msg="Enter code">${I.keys}Enter code</button>
+        <button class="btn text" data-act="toast" data-msg="Server address form">Use a server address instead</button>
+      </div>
+    </div>${appSection(true)}`;
+  }
+
+  function detailView(id, inSplit) {
+    const s = S.servers.find((r) => r.id === id);
+    if (!s) return inSplit ? `<div class="sub" style="text-align:center;margin-top:120px">Choose a ${W.one}</div>` : listView();
+    const cur = s.id === S.current;
+    const off = s.status === 'offline';
+    const primary = s.fix ? s.fix : off ? 'Try again' : cur ? `Back to ${s.label}` : 'Open Manager';
+    const push = s.relay
+      ? `<div class="item"><span class="ic">${I.bell}</span><span class="lbl">Notify me<small>When ${s.label} needs you. Only that, never what it is about.</small></span><button class="switch" role="switch" aria-checked="${s.push}" aria-label="Notify me when ${s.label} needs me" data-act="push" data-id="${s.id}"></button></div>`
+      : `<div class="item"><span class="ic">${I.bell}</span><span class="lbl">Notifications<small>Available for ${W.many} paired with a code.</small></span></div>`;
+    const name = S.renaming
+      ? `<div class="item"><span class="ic">${I.pen}</span><input aria-label="Name" value="${s.label}" style="flex:1;min-height:40px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit;font:inherit;padding:0 10px" id="rename"><button class="fix" style="border-color:var(--accent);color:var(--accent)" data-act="rename-save" data-id="${s.id}">Save</button></div>`
+      : `<button class="item" data-act="rename"><span class="ic">${I.pen}</span><span class="lbl">Name</span><span class="val">${s.label}</span><span class="chev">${I.chev}</span></button>`;
+    const conn = `<div class="item"><span class="ic">${I.link}</span><span class="lbl">Connection<small>${s.relay ? 'Through the Cezar relay, end-to-end encrypted.' : `Directly, at ${s.host}.`}</small></span></div>`;
+    const acct = s.user ? `<div class="item"><span class="ic">${I.user}</span><span class="lbl">Signed in as</span><span class="val">${s.user}</span></div>` : '';
+    return `${inSplit ? '' : topBar("", W.title)}
+      <div class="dhead">${avatar(s, true)}<div class="name">${s.label}${cur ? ' <span class="pill" style="vertical-align:4px">Current</span>' : ''}</div>${stateLine({ ...s, need: s.need })}</div>
+      <button class="btn primary" data-act="${s.fix ? 'fix' : 'open'}" data-id="${s.id}">${primary}</button>
+      <h2 class="eyebrow">This ${W.one}</h2>
+      <div class="group">${push}${name}${conn}${acct}</div>
+      <div class="group" style="margin-top:18px"><button class="item danger" data-act="forget" data-id="${s.id}"><span class="ic">${I.trash}</span><span class="lbl">Forget this ${W.one}</span></button></div>
+      <p class="foot">${s.relay ? 'Removes this phone from it. You can pair again with a new code.' : 'Deletes its saved password from this phone.'}</p>`;
+  }
+
+  function forgetSheet(id) {
+    const s = S.servers.find((r) => r.id === id);
+    if (!s) return '';
+    const what = s.relay ? `This phone is removed from ${s.label}, and its keys and website data are deleted. To use it again, pair with a new code.` : `Its saved password and website data are deleted from this phone.`;
+    return `<div class="scrim" data-act="cancel"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="fg-t" onclick="event.stopPropagation()">
+      <div class="grab"></div><h2 id="fg-t">Forget ${s.label}?</h2><p>${what}</p>
+      <button class="btn" data-act="cancel">Cancel</button>
+      <button class="btn destruct" data-act="forget-yes" data-id="${s.id}">Forget ${s.label}</button>
+    </div></div>`;
+  }
+
+  function beforeView() {
+    const s = S.servers[0];
+    return `<div class="old"><div class="wrap">${mark('mk')}<h1>Devices</h1>
+      <div class="r"><div class="o"><span>${s.label}</span><span>https://rome.cezar.run</span></div><button class="b">Forget</button></div>
+      <div class="chk"><i></i>Notifications</div>
+      <button class="b p" style="margin-top:12px">Add a device</button>
+      <button class="b w" style="margin-top:14px">Turn off app lock</button>
+      <p class="m">Asks for your fingerprint, face or screen lock when the app opens and after a minute away.</p>
+      <button class="b w">Copy startup log</button>
+      <br><a>Privacy policy</a></div></div>`;
+  }
+
+  function screen() {
+    if (S.state === 'before') return `<div class="scroll">${beforeView()}</div>`;
+    if (S.device === 'ipad' && S.servers.length) {
+      const sel = S.sel ?? order(S.servers)[0]?.id;
+      return `<div class="split"><div class="left"><div class="col">${listView(true)}</div></div><div class="right"><div class="col">${detailView(sel, true)}</div></div></div>`;
+    }
+    const inner = S.screen === 'detail' || S.screen === 'forget' ? detailView(S.sel) : listView();
+    return `<div class="scroll"><div class="col">${inner}</div></div>`;
+  }
+
+  function render() {
+    const d = S.device;
+    const size = d === 'ipad' ? [1180, 820] : d === 'android' ? [412, 892] : [393, 852];
+    const sys = d === 'android' ? '<span>9:41</span><span class="icons"><i></i><i></i><i class="bat"></i></span>'
+      : d === 'ipad' ? '<span>9:41  Thu 19 Nov</span><span class="icons"><i></i><i class="bat"></i></span>'
+      : '<span>9:41</span><span class="icons"><i></i><i></i><i class="bat"></i></span>';
+    const sheet = S.screen === 'forget' ? forgetSheet(S.sel) : '';
+    const toast = S.toast ? `<div class="toast" role="status">${S.toast}</div>` : '';
+    document.getElementById('device').innerHTML = `<div class="zoom ${d}"><div class="frame ${d}"><div class="screen" style="width:${size[0]}px;height:${size[1]}px">
+      <div class="app ${S.theme} ${d}"><div class="island"></div><div class="sys">${sys}</div>${screen()}${d === 'ipad' ? '' : '<div class="gesture"><i></i></div>'}${sheet}${toast}</div>
+    </div></div></div>`;
+    const [tag, title, text] = CAPTIONS[S.state];
+    const platform = d === 'ipad' ? '<p><b>iPad:</b> a split view, list on the left, the selected cezar on the right, so the width is used and settings are one tap away. Above 900 pt wide only; narrower windows (Split View, Slide Over) get the phone layout.</p>'
+      : d === 'android' ? '<p><b>Android:</b> the same web screen; Material-style switches, system Back pops one level, then returns to the cezar you came from.</p>'
+      : '<p><b>iPhone:</b> the same web screen; the edge swipe pops one level, as the ← does.</p>';
+    document.getElementById('caption').innerHTML = `<span class="tag ${tag}">${tag === 'before' ? 'Current' : 'Proposed'}</span><h2>${title}</h2>${text}${S.state === 'before' ? '' : platform}`;
+    // Cancel takes focus first, without scrolling the page around the mockup.
+    if (S.screen === "forget") document.querySelector(".sheet .btn")?.focus({ preventScroll: true });
+    syncSegs();
+  }
+
+  function flash(msg) {
+    S.toast = msg;
+    render();
+    clearTimeout(flash.t);
+    flash.t = setTimeout(() => { S.toast = null; render(); }, 1400);
+  }
+
+  document.getElementById('device').addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    e.stopPropagation();
+    const { act, id, msg } = el.dataset;
+    const s = S.servers.find((r) => r.id === id);
+    if (act === 'open') {
+      if (S.device === 'ipad' && el.classList.contains('card')) { S.sel = id; S.screen = 'list'; S.renaming = false; return render(); }
+      return flash(s.id === S.current ? `Back to ${s.label}` : s.status === 'offline' ? 'Trying again…' : `Opening ${s.label} · Manager`);
+    }
+    if (act === 'fix') return flash(s.fix === 'Sign in' ? 'Sign in screen' : 'Pairing: scan a new code');
+    if (act === 'detail') { S.sel = id; S.screen = 'detail'; S.renaming = false; return render(); }
+    if (act === 'back') { if (S.screen === 'detail' || S.screen === 'forget') { S.screen = 'list'; S.renaming = false; return render(); } return flash(`Back to ${el.getAttribute('aria-label').replace('Back to ', '')}`); }
+    if (act === 'add') return flash(`${W.add}: scan or enter a code`);
+    if (act === 'lock') { S.lock = !S.lock; return render(); }
+    if (act === 'push') { s.push = !s.push; return render(); }
+    if (act === 'rename') { S.renaming = true; render(); document.getElementById('rename')?.focus(); return; }
+    if (act === 'rename-save') { const v = document.getElementById('rename').value.trim(); if (v) s.label = v; S.renaming = false; return render(); }
+    if (act === 'forget') { S.sel = id; S.screen = 'forget'; return render(); }
+    if (act === 'cancel') { S.screen = 'detail'; return render(); }
+    if (act === 'forget-yes') {
+      S.servers = S.servers.filter((r) => r.id !== id);
+      if (S.current === id) S.current = null;
+      S.screen = 'list'; S.sel = S.device === 'ipad' ? order(S.servers)[0]?.id ?? null : null;
+      return flash(`Forgot ${s.label}`);
+    }
+    if (act === 'toast') return flash(msg);
+  });
+  document.getElementById('device').addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.card')) { e.preventDefault(); e.target.click(); }
+    if (e.key === 'Escape' && S.screen === 'forget') { S.screen = 'detail'; render(); }
+  });
+
+  function seg(id, options, key) {
+    const host = document.getElementById(id);
+    host.innerHTML = Object.entries(options).map(([k, v]) => `<button type="button" data-k="${k}">${v.label ?? v}</button>`).join('');
+    host.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      S[key] = b.dataset.k;
+      if (key === 'name') W = NAMES[S.name];
+      if (key === 'device' || key === 'state') reset();
+      render();
+    });
+  }
+  function syncSegs() {
+    for (const [id, key] of [['seg-device', 'device'], ['seg-state', 'state'], ['seg-theme', 'theme'], ['seg-name', 'name']]) {
+      for (const b of document.querySelectorAll(`#${id} button`)) b.setAttribute('aria-pressed', String(b.dataset.k === S[key]));
+    }
+  }
+  seg('seg-device', DEVICES, 'device');
+  seg('seg-state', STATES, 'state');
+  seg('seg-theme', THEMES, 'theme');
+  seg('seg-name', NAMES, 'name');
+  // #device=ipad&state=several&theme=light links straight to one view.
+  for (const [k, v] of new URLSearchParams(location.hash.slice(1))) if (k in S && ({ device: DEVICES, state: STATES, theme: THEMES, name: NAMES })[k]?.[v]) S[k] = v;
+  W = NAMES[S.name];
+  reset();
+  render();
+})();
+</script>
+</body>
+</html>
