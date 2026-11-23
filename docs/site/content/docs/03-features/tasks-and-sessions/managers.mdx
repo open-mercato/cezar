@@ -119,6 +119,8 @@ A check reads the task stores and the same GitHub data the GitHub tab uses, then
 
 **A quiet check costs nothing.** With no new attention item, Cezar makes no model call and leaves no message. A new item starts one model turn. The manager then tells you what deserves your attention, or decides that nothing does and stays silent. You pay for that turn in both cases.
 
+The manager's instructions decide what a check raises. A manager whose instructions are about something else, such as reviewing your own work, mentions only what serves them and stays silent about unrelated pull requests and failed tasks. A manager with no instructions raises every attention item. To widen or narrow what a manager watches, change its instructions in **Persona…**.
+
 Cezar reports each item once. The same task failing again is a new item, and so is a pull request problem that cleared and came back.
 
 **Check now** in the gear menu and `/check` skip that gate, so they always run a model turn. When nothing needs you, the chat shows *Checked: nothing needs you right now.*
