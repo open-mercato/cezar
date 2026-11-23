@@ -15,6 +15,7 @@ import { ApiError, cez, unwrap } from './client'
 import { managerKeys } from './managers'
 import { queryKeys } from './queries'
 import { subscribeTopic } from './ws'
+import { noteAttentionMaybeChanged } from './attention'
 
 /**
  * The Questions inbox (spec `.ai/specs/2026-11-17-questions-inbox.md`): the workspace-level read,
@@ -95,6 +96,7 @@ export function useQuestionsSubscription(): void {
           const listChanged = next !== undefined && revision !== undefined && next !== revision
           revision = next
           applyQuestionCounts(queryClient, counts, listChanged)
+          noteAttentionMaybeChanged(queryClient)
         })
       } else if (!local && release !== undefined) {
         release()

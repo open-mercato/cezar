@@ -27,8 +27,12 @@ reconnect during a session, so tools come and go between turns.
 Claude's `system/init` stream message carries `mcp_servers: [{name, status}]` and `tools: [...]`.
 The Claude runner emits it as a new AgentEvent `{ type: 'mcp-servers', servers: [{ name, status }],
 tools: string[] }` (other runners never emit it). The engine stores the latest one per manager in
-its state (`connectors: { observedAt, servers: [{ key, name, status, tools[] }] }`) on EVERY turn
-— chat, watch, job.
+its state (`connectors: { observedAt, servers: [{ key, name, status, tools[] }] }`) on every turn
+that loads connectors. Amended 2026-11-21 (spec 2026-11-21-manager-short-sessions-and-memory § 2.4):
+a turn of a manager with no connector granted, and every watch, runs with `--strict-mcp-config`
+and `ENABLE_CLAUDEAI_MCP_SERVERS=false`, so no connector's tool list or instructions reach its
+context. Such a turn observes nothing, and the Connectors dialog probes once on open when nothing
+has been seen yet.
 
 `GET /api/v1/workspace/managers/:id/connectors` returns `managerConnectorsResponseSchema` from that
 state plus the current grants. `POST …/connectors/refresh` runs a probe: a Claude session with the

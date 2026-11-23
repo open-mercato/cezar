@@ -26,6 +26,17 @@ struct DeviceBook: Codable, Equatable {
     /// The app-icon badge: what waits for the user on every computer, as last known.
     var badge: Int { entries.values.reduce(0) { $0 + max(0, $1.waiting ?? 0) } }
 
+    /// The relay computers whose count is known to be 0: their delivered notifications go (spec 2026-11-20-phone-notifications-inbox, B3).
+    var settled: Set<String> {
+        Set(entries.values.compactMap { entry in entry.waiting == 0 ? entry.cezarId.flatMap { $0.isEmpty ? nil : $0 } : nil })
+    }
+
+    /// The delivered notifications of `settled` computers, by request id. A relay push is matched by its `s`, a local
+    /// one by its id, which is the cezar id too.
+    static func toRemove(_ delivered: [(id: String, cezarId: String?)], settled: Set<String>) -> [String] {
+        delivered.filter { settled.contains($0.cezarId ?? $0.id) }.map(\.id)
+    }
+
     func entry(cezarId: String?) -> Entry? {
         guard let cezarId, !cezarId.isEmpty else { return nil }
         return entries.values.first { $0.cezarId == cezarId }

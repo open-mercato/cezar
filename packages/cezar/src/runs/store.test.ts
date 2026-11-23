@@ -171,6 +171,14 @@ describe('RunStore — directional usage persistence', () => {
     expect(RunStore.open(dataDir).getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000 });
   });
 
+  it('keeps per-request and per-turn token splits off the record (they are manager turn stats)', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'live', steps: [] });
+    store.setLiveUsage(run.id, { contextTokens: 5000, cacheWriteTokens: 4000 });
+    store.setLiveUsage(run.id, { turnTokens: { cacheReadTokens: 1, cacheWriteTokens: 2, outputTokens: 3 } });
+    expect(store.getRun(run.id)?.liveUsage).toEqual({ contextTokens: 5000, at: expect.any(String) });
+  });
+
   it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     expect(RunStore.open(dataDir).getRun(LEGACY_RUN.id)?.inputTokens).toBeUndefined();

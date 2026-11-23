@@ -1,3 +1,4 @@
+import { DEFAULT_PHONE_PUSH_PREFS } from '@open-mercato/cezar-api-client'
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -62,7 +63,7 @@ const confirmed: RelayAccountResponse = { local: base.account, status: confirmed
 const fresh: RelayAccountResponse = { local: { attached: false, computerName: 'Studio Mac' }, status: null }
 const DEFAULT = 'https://rome.cezar.run'
 const unset: PhonesResponse = { ...base, relayOrigin: DEFAULT, relaySource: 'default' }
-const paired: PhonesResponse = { ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }] }
+const paired: PhonesResponse = { ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', prefs: DEFAULT_PHONE_PUSH_PREFS, platform: 'android', addedAt: '', connected: true }] }
 const NEXT = 'https://own.example.test'
 const QR = `cezar-pair:1.${'a'.repeat(43)}.${'b'.repeat(43)}.https://relay.example.test`
 const started = { id: '11111111-1111-4111-8111-111111111111', qr: QR, relayOrigin: base.relayOrigin, expiresAt: new Date(Date.now() + 120_000).toISOString() }
@@ -150,7 +151,7 @@ describe('PhonesSection', () => {
   it('marks a phone that has notifications on', async () => {
     api.getPhones.mockResolvedValue({
       ...base,
-      phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true, push: true }],
+      phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', prefs: DEFAULT_PHONE_PUSH_PREFS, platform: 'android', addedAt: '', connected: true, push: true }],
     })
     show()
     await screen.findByText('Connected · Notifications on')
@@ -160,7 +161,7 @@ describe('PhonesSection', () => {
     api.getPhones.mockResolvedValue({
       ...base,
       relay: { status: 'connected' },
-      phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }],
+      phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', prefs: DEFAULT_PHONE_PUSH_PREFS, platform: 'android', addedAt: '', connected: true }],
     })
     show()
     await screen.findByText('Connected')
@@ -400,7 +401,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
   })
 
   it('existing phones with no account see step 2 with the grace left, and no modal', async () => {
-    api.getPhones.mockResolvedValue({ ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }], account: { attached: false, prompt: true } })
+    api.getPhones.mockResolvedValue({ ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', prefs: DEFAULT_PHONE_PUSH_PREFS, platform: 'android', addedAt: '', connected: true }], account: { attached: false, prompt: true } })
     api.getRelayAccount.mockResolvedValue({ local: { attached: false, prompt: true }, status: { ...pendingStatus, email: null } })
     show()
     const step = await screen.findByTestId('phone-step-2')
@@ -478,7 +479,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
         lastDown: { at, reason: 'no-pong' }, lastBlock: { at, reason: 'email-unconfirmed' },
       },
       keepAwake: { enabled: true, active: true },
-      phones: [{ deviceId: 'd'.repeat(22), label: 'iPad', platform: 'ios', addedAt: '', connected: false }],
+      phones: [{ deviceId: 'd'.repeat(22), label: 'iPad', prefs: DEFAULT_PHONE_PUSH_PREFS, platform: 'ios', addedAt: '', connected: false }],
     })
     api.getRelayAccount.mockResolvedValue({ ...confirmed, status: pendingStatus })
     show()

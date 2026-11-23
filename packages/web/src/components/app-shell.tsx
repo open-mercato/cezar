@@ -527,6 +527,7 @@ export const AppShell = React.memo(function AppShell({
               onMore={openMenu}
               manager={managerMode}
               attention={managerAttention}
+              nowCount={nowCount}
               managerTo={managerTo}
               managerTasks={managerMode ? managerTasks : null}
               everyWidth={phoneNav}
@@ -1085,7 +1086,7 @@ function areaCountTitle(item: NavItem, count: number | null): string | undefined
   if (!count) return undefined
   const one = count === 1
   if (item.badge === 'tasks-unread') return `${count} unread finished ${one ? 'task' : 'tasks'}`
-  if (item.badge === 'needs-you') return `${count} ${one ? 'task needs' : 'tasks need'} you`
+  if (item.badge === 'needs-you') return `${count} ${one ? 'thing needs' : 'things need'} you`
   return undefined
 }
 

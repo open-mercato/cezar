@@ -1,7 +1,7 @@
 import type {
-  PlanUsageAccount, PlanUsageConsumer, PlanUsageInterval, PlanUsageReading, PlanUsageWindow, PlanUsageWindowKind,
+  PlanUsageAccount, PlanUsageConsumer, PlanUsageInterval, PlanUsageReading, PlanUsageWindow, PlanUsageWindowKind, PlanUsageTurnStats,
 } from '@open-mercato/cezar-contract';
-import type { LedgerConsumer, LedgerRecord } from './store.ts';
+import type { LedgerConsumer, LedgerRecord, LedgerTurnStats } from './store.ts';
 
 /**
  * Plan-limit attribution (design rev 3, "How it's calculated"). Pure: ledger records in,
@@ -33,9 +33,19 @@ interface Session {
   begin: number;
   end?: number;
   quiet?: boolean;
+  turn?: LedgerTurnStats;
   samples: Sample[];
   /** No `end` was recorded: `end` is the open-session bound, not evidence the turn was live. */
   capped?: boolean;
+}
+/** A manager turn's stats plus its reported cost, for the message it wrote. */
+/** A reply's turn stats: its last attempt's shape (a retry is the one that answered) and the cost of
+ *  every attempt, since each one spent the limit. */
+function turnOf(attempts: readonly Session[]): { turn?: PlanUsageTurnStats } {
+  const last = attempts.filter((a) => a.turn).reduce<Session | undefined>((a, b) => (!a || b.begin >= a.begin ? b : a), undefined);
+  if (!last?.turn) return {};
+  const usd = attempts.reduce((sum, a) => sum + a.samples.reduce((total, sample) => total + (sample.usd ?? 0), 0), 0);
+  return { turn: { ...last.turn, ...(usd > 0 ? { usd: Math.round(usd * 10_000) / 10_000 } : {}) } };
 }
 interface Reading { at: number; used: number; status: PlanUsageReading['status']; source: PlanUsageReading['source'] }
 interface Share {
@@ -231,6 +241,7 @@ export function indexLedger(records: LedgerRecord[]): Ledger {
       if (s && s.end === undefined) {
         s.end = r.at;
         if (r.quiet !== undefined) s.quiet = r.quiet;
+        if (r.turn) s.turn = r.turn;
       }
     } else if (r.t === 'tracking') {
       markers.push(r);
@@ -289,14 +300,17 @@ function windowSeeds(ledger: Ledger): WindowSeed[] {
   return seeds;
 }
 
-function attribute(sessions: Session[], a: number, b0: number, delta: number): { shares: Share[]; outside: number; unsplit: number; interval: Omit<PlanUsageInterval, 'from' | 'to' | 'deltaPp'> } {
+function attribute(sessions: Session[], a: number, b0: number, delta: number, source?: PlanUsageReading['source']): { shares: Share[]; outside: number; unsplit: number; interval: Omit<PlanUsageInterval, 'from' | 'to' | 'deltaPp'> } {
   const b = b0 > a ? b0 : a + 1;
   const active = sessions.map((s) => ({ s, start: Math.max(s.begin, a), stop: Math.min(sessionEnd(s, Number.MAX_SAFE_INTEGER), b) }))
     // Closed overlap: a call that began and answered within one instant still ran in the slice.
     .filter((x) => x.s.begin <= b && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > a)
-    // Claude reads the account when a request starts: the turn whose start produced reading `b`
-    // had spent nothing yet, so it is not a candidate for the slice that reading closes.
-    .filter((x) => !(x.s.begin > b - READING_LEAD && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > b));
+    // A reading taken as a turn starts predates its spend, so that turn is no candidate. Claude
+    // sends its reading after a request's answer, which already counts that request's input: once
+    // a turn has a per-request sample that ended by `b`, the reading includes it (a re-cached
+    // history read 16 s into a turn showed the whole jump, spec 2026-11-21 § 1.3).
+    .filter((x) => !(x.s.begin > b - READING_LEAD && sessionEnd(x.s, Number.MAX_SAFE_INTEGER) > b)
+      || (source === 'claude-stream' && x.s.samples.some((sample) => sample.from >= x.s.begin && sample.to <= b && sample.to < sessionEnd(x.s, Number.MAX_SAFE_INTEGER))));
   const consumerIds = new Set(active.map((x) => x.s.consumer.id));
   if (consumerIds.size === 0) {
     return { shares: [], outside: delta, unsplit: 0, interval: { outcome: 'outside', weightUnit: null, allocations: [], outsideCezarPp: round(delta), unsplitPp: 0 } };
@@ -449,7 +463,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
     // The slice since the high-water reading, not since a later flat or lower (corrected) one;
     // turns begun before the last recording gap never carry over it.
     const gapBefore = lastGapBefore(gaps, from);
-    const result = attribute(sessions.filter((x) => carriesOver(x, gapBefore)), from, cur.at, delta);
+    const result = attribute(sessions.filter((x) => carriesOver(x, gapBefore)), from, cur.at, delta, cur.source);
     outside += result.outside;
     unsplit += result.unsplit;
     for (const share of result.shares) shares.push({ ...share, interval: i });
@@ -462,6 +476,12 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
   const consumers = new Map<string, PlanUsageConsumer & { _partners: Set<string> }>();
   const failuresBy = new Map<string, Ledger['failures']>();
   for (const f of ledger.failures) failuresBy.set(f.consumerId, [...(failuresBy.get(f.consumerId) ?? []), f]);
+  // Every attempt of a reply in this window, shares or not: until the next reading the answering
+  // attempt has none, yet its shape and spend are the reply's.
+  const attemptsOf = new Map<string, Session[]>();
+  for (const s of sessions) {
+    if (s.messageId) attemptsOf.set(s.messageId, [...(attemptsOf.get(s.messageId) ?? []), s]);
+  }
   for (const share of shares) {
     const s = share.session!;
     let c = consumers.get(share.consumerId);
@@ -484,9 +504,14 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
     if ((failuresBy.get(share.consumerId) ?? []).some((f) => share.at > f.since && share.at <= f.at)) c.retryWasteEstimatePp += share.pp;
     if (c.parts && s.part) c.parts[s.part] += share.pp;
     if (c.messages && s.messageId && s.part) {
-      const m = c.messages.find((x) => x.messageId === s.messageId);
-      if (m) m.estimatePp += share.pp;
-      else c.messages.push({ messageId: s.messageId, part: s.part, estimatePp: share.pp });
+      let m = c.messages.find((x) => x.messageId === s.messageId);
+      if (!m) {
+        m = { messageId: s.messageId, part: s.part, at: new Date(s.begin).toISOString(), estimatePp: 0, aloneInferredPp: 0, sharedEstimatePp: 0, ...turnOf(attemptsOf.get(s.messageId) ?? [s]) };
+        c.messages.push(m);
+      }
+      m.estimatePp += share.pp;
+      if (share.alone) m.aloneInferredPp += share.pp;
+      else m.sharedEstimatePp += share.pp;
     }
   }
   // "Ran together with": other consumers holding a shared slice of the same reading pair.
@@ -511,7 +536,7 @@ function buildWindow(seed: WindowSeed, ledger: Ledger, options: ComputeOptions):
       ...(c.kind === 'manager' ? {
         turns: { chat: own.filter((s) => s.part === 'chat').length, watch: own.filter((s) => s.part === 'watch').length, job: own.filter((s) => s.part === 'job').length },
         quietWatchTurns: own.filter((s) => s.part === 'watch' && s.quiet === true).length,
-        messages: (c.messages ?? []).map((m) => ({ ...m, estimatePp: round(m.estimatePp) })),
+        messages: (c.messages ?? []).map((m) => ({ ...m, estimatePp: round(m.estimatePp), aloneInferredPp: round(m.aloneInferredPp), sharedEstimatePp: round(m.sharedEstimatePp) })),
       } : {}),
     };
   }).filter((c) => c.estimatePp > 0).sort((x, y) => y.estimatePp - x.estimatePp);

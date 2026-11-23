@@ -382,11 +382,7 @@ func switching() async {
     expect(ShellConnector.add == "add", "the connect page's add screen")
 }
 
-// FirstPaint: the cover goes once the page says so, or after the cap.
-expect(FirstPaint.done(true, coveredMs: 0), "painted")
-expect(!FirstPaint.done(false, coveredMs: 14999), "not yet")
-expect(!FirstPaint.done(nil, coveredMs: 100), "no answer")
-expect(FirstPaint.done(nil, coveredMs: FirstPaint.maxCoverMs), "never longer than the cap")
+// The cover over a server page: StartupWatchdog, in the watchdog suite.
 
 // LaunchHold (Android's LaunchHoldTest): held until released, never past the cap.
 var holdNow: Int64 = 1000

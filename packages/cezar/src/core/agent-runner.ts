@@ -92,6 +92,10 @@ export interface AgentRunSpec {
   /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
+  /** Claude only: load no MCP server and no claude.ai connector (`--strict-mcp-config` with no
+   *  config). For a manager turn that may call none: their tool lists and instructions otherwise
+   *  fill its context on every turn (spec 2026-11-21-manager-short-sessions-and-memory § 2.4). */
+  noMcpServers?: boolean;
   /** Claude only: extra settings (e.g. a `PreToolUse` hook) for `--settings`, written to a `0600`
    *  temp file, never inline in argv. Other backends ignore it, so never rely on it elsewhere. */
   claudeSettings?: Record<string, unknown>;
@@ -243,8 +247,12 @@ export interface AgentUsageWindow {
 export interface AgentUsageStatus {
   /** Tokens in the main agent's context after its latest message. */
   contextTokens?: number;
+  /** Of `contextTokens`, what that request wrote to the prompt cache (Claude only). */
+  cacheWriteTokens?: number;
   contextWindow?: number;
   limits?: AgentUsageWindow[];
+  /** A finished turn's own totals (Claude's result frame): what a manager turn's stats record. */
+  turnTokens?: { cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number };
 }
 
 export interface AgentToolCallRecord {
