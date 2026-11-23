@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { open, realpath } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { AgentRunSpec } from './agent-runner.ts';
@@ -96,7 +96,10 @@ export class CodexReadBroker {
       if (!this.policy.tools.has(input.tool)) throw new Error(`${input.tool} is not granted`);
       switch (input.tool) {
         case 'Read': {
-          const file = await open(await this.allowedPath(input.path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+          const target = await this.allowedPath(input.path);
+          // Windows has no O_NOFOLLOW; the path is already realpath-resolved, this refuses a link swapped in since.
+          if (constants.O_NOFOLLOW === undefined && (await lstat(target)).isSymbolicLink()) throw new Error('Read requires a regular file of at most 2 MB');
+          const file = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
           try {
             const stat = await file.stat();
             if (!stat.isFile() || stat.size > 2_000_000) throw new Error('Read requires a regular file of at most 2 MB');

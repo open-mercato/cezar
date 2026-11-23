@@ -29,7 +29,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     next(); continue;
   }
   switch (msg.method) {
-    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/99.0.0' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: 'macos' } }); break;
+    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/99.0.0' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: ({ darwin: 'macos', win32: 'windows' })[process.platform] ?? 'linux' } }); break;
     case 'initialized': break;
     case 'config/read': {
       const effective = { apps: null, plugins: {}, mcp_servers: {}, hooks: null, ...config };

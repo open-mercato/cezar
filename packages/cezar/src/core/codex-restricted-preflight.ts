@@ -1,6 +1,6 @@
-import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
+import { currentRestrictedPlatform, expectedCodexPlatformOs, samePath, type RestrictedPlatform } from './codex-restricted-platform.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import type { RestrictedCodexHome } from './codex-restricted-home.ts';
 
@@ -15,13 +15,15 @@ const hooksResponse = z.object({ data: z.array(z.object({ hooks: z.array(z.unkno
 function fail(detail: string): never { throw new CodexToolPolicyError(detail); }
 
 /** Refuse changed/unknown transports; this is a tested protocol contract, not a version lower bound. */
-export function verifyRestrictedCodexIdentity(value: unknown, home: RestrictedCodexHome): void {
-  const identity = z.object({ userAgent: z.string(), codexHome: z.string(), platformOs: z.enum(['macos', 'linux']) }).safeParse(value);
+export function verifyRestrictedCodexIdentity(value: unknown, home: RestrictedCodexHome, platform: RestrictedPlatform = currentRestrictedPlatform()): void {
+  const identity = z.object({ userAgent: z.string(), codexHome: z.string(), platformOs: z.enum(['macos', 'linux', 'windows']) }).safeParse(value);
   if (!identity.success || !/^cezar\/0\.169\.0(?:\s|$)/.test(identity.data.userAgent)) fail('the installed Codex protocol has not been verified');
-  if (resolve(identity.data.codexHome) !== home.path) fail('Codex did not use the isolated account home');
+  // Codex must itself report the OS cezar is verifying for; Windows is never assumed.
+  if (identity.data.platformOs !== expectedCodexPlatformOs(platform)) fail('Codex did not report the platform it was verified on');
+  if (!samePath(platform, identity.data.codexHome, home.path)) fail('Codex did not use the isolated account home');
 }
 
-export function verifyRestrictedCodexConfig(value: unknown, home: RestrictedCodexHome): void {
+export function verifyRestrictedCodexConfig(value: unknown, home: RestrictedCodexHome, platform: RestrictedPlatform = currentRestrictedPlatform()): void {
   const parsed = configResponse.safeParse(value);
   if (!parsed.success) fail('Codex cannot report its effective configuration and layers');
   const { config, layers } = parsed.data;
@@ -33,9 +35,10 @@ export function verifyRestrictedCodexConfig(value: unknown, home: RestrictedCode
     if (!map.success || Object.keys(map.data).length) fail(`native ${key} are present`);
   }
   for (const key of ['hooks', 'apps', 'browser_use', 'computer_use', 'notify']) if (config[key] != null) fail(`native ${key} are present`);
-  if (!layers.some(layer => layer.name.type === 'user' && layer.name.file === `${home.path}/config.toml`)) fail('the isolated config layer is missing');
+  const isolated = (file: string | undefined): boolean => file !== undefined && samePath(platform, file, platform.path.join(home.path, 'config.toml'));
+  if (!layers.some(layer => layer.name.type === 'user' && isolated(layer.name.file))) fail('the isolated config layer is missing');
   for (const layer of layers) {
-    if (layer.name.type === 'user' && layer.name.file === `${home.path}/config.toml`) {
+    if (layer.name.type === 'user' && isolated(layer.name.file)) {
       if (!isDeepStrictEqual(layer.config, JSON.parse(JSON.stringify(home.config)))) fail('the isolated configuration changed before startup');
       continue;
     }
@@ -54,7 +57,7 @@ export function verifyRestrictedCodexServices(hooks: unknown, mcp: unknown): voi
   if (!hooksResponse.safeParse(hooks).success || !emptyList.safeParse(mcp).success) fail('hooks or MCP services could not be proven absent');
 }
 
-export function verifyRestrictedCodexThread(value: unknown, cwd: string): void {
+export function verifyRestrictedCodexThread(value: unknown, cwd: string, platform: RestrictedPlatform = currentRestrictedPlatform()): void {
   const thread = z.object({ approvalPolicy: z.literal('never'), cwd: z.string(), sandbox: z.object({ type: z.literal('readOnly'), networkAccess: z.literal(false) }) }).safeParse(value);
-  if (!thread.success || resolve(thread.data.cwd) !== resolve(cwd)) fail('the thread did not retain its sandbox and approval policy');
+  if (!thread.success || !samePath(platform, thread.data.cwd, cwd)) fail('the thread did not retain its sandbox and approval policy');
 }

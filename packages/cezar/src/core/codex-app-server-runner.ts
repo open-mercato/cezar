@@ -1,6 +1,7 @@
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { compileCodexRestrictedPolicy, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
+import { currentRestrictedPlatform, restrictedPlatformSupported, type RestrictedPlatform } from './codex-restricted-platform.ts';
 import { prepareRestrictedCodexHome, type RestrictedCodexHome } from './codex-restricted-home.ts';
 import { CODEX_READ_TOOL, CodexReadBroker } from './codex-restricted-tools.ts';
 import { verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread } from './codex-restricted-preflight.ts';
@@ -54,6 +55,8 @@ export interface CodexRunnerOptions {
   timeoutMs?: number;
   /** Waits between `thread/resume` retries while another process holds the thread. */
   resumeLockRetryMs?: readonly number[];
+  /** Test seam: the platform restricted execution is verified for (defaults to this host). */
+  restrictedPlatform?: RestrictedPlatform;
 }
 
 /** ~16s: outlasts a previous session's own EOF→TERM→KILL teardown (12s) before forking. */
@@ -108,9 +111,11 @@ export class CodexAppServerRunner implements AgentRunner {
   private readonly bin: string;
   private readonly timeoutMs: number;
   private readonly resumeLockRetryMs: readonly number[];
+  private readonly restrictedPlatform?: RestrictedPlatform;
   private lastSession: CodexSession | null = null;
 
   constructor(opts: CodexRunnerOptions = {}) {
+    this.restrictedPlatform = opts.restrictedPlatform;
     this.bin = resolveCodexExecutable(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
     this.resumeLockRetryMs = opts.resumeLockRetryMs ?? RESUME_LOCK_RETRY_MS;
@@ -130,7 +135,7 @@ export class CodexAppServerRunner implements AgentRunner {
     opts: SessionOptions = {},
   ): AgentSession {
     const policy = compileCodexRestrictedPolicy(spec);
-    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts, policy);
+    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts, policy, this.restrictedPlatform);
     this.lastSession = session;
     return session;
   }
@@ -147,6 +152,7 @@ class CodexSession implements AgentSession {
 
   private readonly child!: ChildProcessWithoutNullStreams;
   private readonly restrictedHome?: RestrictedCodexHome;
+  private platform: RestrictedPlatform = currentRestrictedPlatform();
   private readonly readBroker?: CodexReadBroker;
   private enforcementActive = false;
   private readonly rpc!: CodexAppServerRpc;
@@ -213,10 +219,12 @@ class CodexSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
     private readonly policy?: CodexRestrictedPolicy,
+    restrictedPlatform?: RestrictedPlatform,
   ) {
     if (policy) {
-      if (process.platform !== 'darwin' && process.platform !== 'linux') throw new CodexToolPolicyError('restricted execution is unavailable on this platform');
-      this.restrictedHome = prepareRestrictedCodexHome(spec);
+      this.platform = restrictedPlatform ?? currentRestrictedPlatform();
+      if (!restrictedPlatformSupported(this.platform)) throw new CodexToolPolicyError('restricted execution is unavailable on this platform');
+      this.restrictedHome = prepareRestrictedCodexHome(spec, process.env, this.platform);
       this.readBroker = new CodexReadBroker(policy, spec, this.restrictedHome.toolEnv, this.restrictedHome.githubReadsAllowed);
     }
     watchOwnSignals();
@@ -534,8 +542,8 @@ class CodexSession implements AgentSession {
 
   private async bootstrapRestricted(identity: Record<string, unknown>): Promise<string | undefined> {
     const home = this.restrictedHome!;
-    verifyRestrictedCodexIdentity(identity, home);
-    verifyRestrictedCodexConfig(await this.rpc.request('config/read', { cwd: this.spec.cwd, includeLayers: true }), home);
+    verifyRestrictedCodexIdentity(identity, home, this.platform);
+    verifyRestrictedCodexConfig(await this.rpc.request('config/read', { cwd: this.spec.cwd, includeLayers: true }), home, this.platform);
     verifyRestrictedCodexRequirements(await this.rpc.request('configRequirements/read', {}));
     const absentServices = async (threadId?: string) => verifyRestrictedCodexServices(
       await this.rpc.request('hooks/list', threadId ? { threadId } : { cwds: [this.spec.cwd] }),
@@ -551,7 +559,7 @@ class CodexSession implements AgentSession {
     if (this.spec.resume && this.spec.sessionId) ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, overrides));
     else {
       const res = await this.rpc.request('thread/start', { ...overrides, environments: [], dynamicTools: [CODEX_READ_TOOL] });
-      verifyRestrictedCodexThread(res, this.spec.cwd);
+      verifyRestrictedCodexThread(res, this.spec.cwd, this.platform);
       this.threadId = threadIdOf(res);
       model = threadModelOf(res);
     }
@@ -570,7 +578,7 @@ class CodexSession implements AgentSession {
     for (let attempt = 0; ; attempt++) {
       try {
         const res = await this.rpc.request('thread/resume', { threadId, ...overrides });
-        if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd);
+        if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd, this.platform);
         return { threadId, model: threadModelOf(res) };
       } catch (err) {
         if (!isActiveWriterError(err) || !this.stdinOpen) throw err;
@@ -581,7 +589,7 @@ class CodexSession implements AgentSession {
       }
     }
     const res = await this.rpc.request('thread/fork', { threadId, ...overrides });
-    if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd);
+    if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd, this.platform);
     const forkedId = threadIdOf(res);
     if (!forkedId) throw new Error(`codex: thread ${threadId} is open in another Codex process and could not be forked`);
     this.emit({
