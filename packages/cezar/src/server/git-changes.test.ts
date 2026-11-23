@@ -1596,7 +1596,7 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'reset', '-q', '--hard', fork);
       g(dir, 'checkout', '-q', 'task');
       expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1 });
-      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 1, ahead: 0 });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 1, ahead: 0, baseRemote: 'origin' });
 
       // The task commits its own work: ahead counts only what the branch would propose.
       writeFileSync(join(dir, 'task.txt'), 't\n');
@@ -1604,7 +1604,7 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'commit', '-qm', 'task work');
       expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1, ahead: 1 });
 
-      expect(await worktreeGitStatus(dir, fork)).toMatchObject({ behind: null, ahead: null });
+      expect(await worktreeGitStatus(dir, fork)).not.toHaveProperty('baseRemote');
       expect(await worktreeGitStatus(dir, 'no-such-branch')).toMatchObject({ behind: null, ahead: null });
       expect(await worktreeGitStatus(dir)).toMatchObject({ behind: null, ahead: null });
     } finally {
@@ -1641,10 +1641,11 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'reset', '-q', '--hard', forkPoint);
       g(dir, 'checkout', '-q', '-b', 'task');
 
-      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 2 });
-      expect(await worktreeGitStatus(dir, 'upstream/main')).toMatchObject({ behind: 2 });
+      // `baseRemote` names the remote counted, so a land pushes where `ahead` is measured (#2428).
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 2, baseRemote: 'upstream' });
+      expect(await worktreeGitStatus(dir, 'upstream/main')).toMatchObject({ behind: 2, baseRemote: 'upstream' });
       // An old record that named the fork explicitly still measures against it.
-      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 0 });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 0, baseRemote: 'origin' });
     } finally {
       for (const d of [fork, canonical, dir]) rmSync(d, { recursive: true, force: true });
     }

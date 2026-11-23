@@ -201,12 +201,16 @@ export function inPlacePrPrompt(draft: boolean, base: string): string {
 }
 
 /** Commit to the base from a worktree task in a trunk-based project: the server lands only in-place
- *  tasks, so the agent does what `landInPlace` does — rebase, required checks, push to the base's
- *  own upstream. No remote is named: a fork clone's base lives on its upstream, not `origin`. */
-export function landBranchPrompt(base: string, requiredChecks: readonly string[] = []): string {
+ *  tasks, so the agent does what `landInPlace` does — rebase, required checks, push. The remote is
+ *  the one `git/status` counted `ahead` against (`baseRemote`, the resolved PR target): pushing
+ *  anywhere else — a fork clone's `origin` — leaves the button offering the same land again. */
+export function landBranchPrompt(base: string, requiredChecks: readonly string[] = [], remote?: string): string {
   const checks = requiredChecks.length > 0
     ? `run the required checks (${requiredChecks.map((check) => `\`${check}\``).join(', ')}) and stop without pushing if any fails`
     : `run the project's checks and stop without pushing if any fails`
+  if (remote) {
+    return `Commit to ${base}: commit what is left, fetch ${remote} and rebase this branch onto ${remote}/${base}, ${checks}, then push it with \`git push ${remote} HEAD:${base}\``
+  }
   return `Commit to ${base}: commit what is left, fetch and rebase this branch onto the latest ${base} from the remote ${base} tracks, ${checks}, then push this branch's HEAD to ${base} on that same remote — the one ${base} tracks, not this task branch's remote`
 }
 

@@ -843,7 +843,7 @@ export async function commitAll(dir: string, message: string): Promise<CommitRes
 }
 
 export type GitStatusResult =
-  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null }
+  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null; baseRemote?: string }
   | { ok: false; error: string };
 
 /** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
@@ -864,12 +864,13 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
     uncommitted++;
     if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
   }
-  const { behind, ahead } = await baseDivergence(dir, baseBranch);
+  const { behind, ahead, baseRemote } = await baseDivergence(dir, baseBranch);
+  const based = baseRemote ? { baseRemote } : {};
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead };
+  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead, ...based };
   const count = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
   const unpushed = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
-  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind, ahead };
+  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind, ahead, ...based };
 }
 
 /** How the worktree's HEAD stands against the task's base branch: commits the base has that HEAD
@@ -882,7 +883,7 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
 export async function baseDivergence(
   dir: string,
   baseBranch: string | undefined,
-): Promise<{ behind: number | null; ahead: number | null }> {
+): Promise<{ behind: number | null; ahead: number | null; baseRemote?: string }> {
   const unknown = { behind: null, ahead: null };
   if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
   const remotes = await resolveTaskRemotes((args) => git(dir, args));
@@ -898,6 +899,8 @@ export async function baseDivergence(
     return {
       behind: Number.isFinite(behind) ? (behind as number) : null,
       ahead: Number.isFinite(ahead) ? (ahead as number) : null,
+      // The remote whose ref was counted: a land must push there, or `ahead` never reaches 0.
+      ...(remote && ref !== split.branch ? { baseRemote: remote } : {}),
     };
   }
   return unknown;

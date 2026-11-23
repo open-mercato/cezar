@@ -1320,7 +1320,7 @@ describe('the facts line', () => {
       '/api/v1/repo': () => jsonResponse({ info: { root: '/repo', branch: 'main', remote: 'origin' } }),
       '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0 }),
     })
-    const worktreeTask = { worktreePath: '/repo/.ai/cezar/worktrees/r1', branch: 'cez/r1' }
+    const worktreeTask = { worktreePath: '/repo/.ai/cezar/worktrees/r1', branch: 'cez/r1', baseBranch: 'main' }
     const gitButton = (action: string) => document.querySelector(`[data-slot="git-button"] [data-action="${action}"]`)
 
     it('an in-place task offers Commit to main', async () => {
@@ -1364,6 +1364,33 @@ describe('the facts line', () => {
     it('a dispatch child keeps Create PR: its work goes back to its parent, not to main', async () => {
       stubFetch(project('auto'))
       renderHeader(run('waiting', { ...worktreeTask, dispatch: { rootRunId: 'root', parentRunId: 'root', kind: 'implement' } }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('a worktree task based on another branch (develop) keeps Create PR: its ahead never reads main', async () => {
+      stubFetch(project('auto'))
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'develop' }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('a fork clone lands on the remote git status measured against, with an `upstream/main` base', async () => {
+      const sent = stubFetch({
+        ...project('auto'),
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'upstream' }),
+      })
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'upstream/main' }))
+      await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
+      fireEvent.click(gitButton('land')!)
+      await waitFor(() =>
+        expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('git push upstream HEAD:main'))).toBe(true),
+      )
+    })
+
+    it('a failed git status still leaves the branch step (Create PR), not an empty slot', async () => {
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => jsonResponse({ error: 'boom' }, 500) })
+      renderHeader(run('waiting', worktreeTask))
       await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
       expect(gitButton('land')).toBeNull()
     })

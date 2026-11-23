@@ -245,8 +245,9 @@ describe('trunkBranchGitActionPolicy — a worktree task in a trunk-based projec
     expect(trunkBranch({ uncommitted: 0, ahead: 2 })).toMatchObject({ id: 'land' })
   })
 
-  it('waits for git status, and needs the agent, which is still working mid-turn', () => {
-    expect(trunkBranch({ uncommitted: undefined })).toBeNull()
+  it('with git status unknown (loading or failed) keeps the branch step, and needs the agent mid-turn', () => {
+    expect(trunkBranch({ uncommitted: undefined })).toEqual(gitActionPolicy(withState({ uncommitted: undefined })))
+    expect(trunkBranch({ uncommitted: undefined })?.id).toBe('create-pr')
     expect(trunkBranch({ status: 'running' })).toMatchObject({ id: 'land', enabled: false })
     expect(trunkBranch({ agentBlocked: 'no session' })).toMatchObject({ id: 'land', enabled: false })
   })

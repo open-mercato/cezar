@@ -123,12 +123,19 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // 2026-10-20-trunk-based-projects).
   const autoLandProject = config.data?.landing === 'auto' && config.data.landingBlocked === null
   const trunk = !run.worktreePath && run.worktree === false && !run.readOnly && autoLandProject
-  // A worktree task in that project still lands on the base, through its agent — but not a dispatch
-  // child, whose work goes back to its parent (spec 2026-09-10-dispatch).
-  const trunkBranch = Boolean(run.worktreePath) && !run.readOnly && !run.dispatch?.parentRunId && autoLandProject
   const trunkBase = config.data?.baseBranch ?? repo.data?.info?.branch ?? 'main'
   // A trunk task reads the shared checkout, which other tasks land from too: keep it live.
   const status = useRunGitStatus(run.id, (Boolean(run.worktreePath) || trunk) && !finished, isRunActive(run.status) || trunk)
+  // A worktree task in that project still lands on the base, through its agent — but not a dispatch
+  // child, whose work goes back to its parent (spec 2026-09-10-dispatch), and only when the task is
+  // based on that branch: `ahead` counts against `run.baseBranch`, so a task off `develop` would
+  // read as never landed on `main`.
+  const trunkBranch =
+    Boolean(run.worktreePath) &&
+    !run.readOnly &&
+    !run.dispatch?.parentRunId &&
+    autoLandProject &&
+    basedOn(run.baseBranch, trunkBase, [status.data?.baseRemote, repo.data?.info?.remote])
   const queryClientForStatus = useQueryClient()
   // A turn that just ended (or a landing that just settled) changed what there is to commit; the
   // last poll may predate it, and a stale "2 uncommitted" offers Commit on a clean tree.
@@ -319,7 +326,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     }
     switch (id) {
       case 'land':
-        if (trunkBranch) void promptAgent(id, () => landBranchPrompt(trunkBase, config.data?.requiredChecks ?? []))
+        if (trunkBranch) {
+          void promptAgent(id, () => landBranchPrompt(trunkBase, config.data?.requiredChecks ?? [], status.data?.baseRemote))
+        }
         break
       case 'commit':
       case 'commit-push':
@@ -373,4 +382,10 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
       />
     ),
   }
+}
+
+/** Whether a task's recorded base is the trunk: `main`, or `<remote>/main` for a known remote. */
+export function basedOn(baseBranch: string | undefined, trunkBase: string, remotes: readonly (string | undefined)[]): boolean {
+  if (!baseBranch) return false
+  return baseBranch === trunkBase || remotes.some((remote) => remote && baseBranch === `${remote}/${trunkBase}`)
 }

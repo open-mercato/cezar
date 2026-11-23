@@ -235,7 +235,8 @@ export function gitActionPolicy(state: GitActionState): GitAction | null {
 export function trunkBranchGitActionPolicy(state: GitActionState, base: string): GitAction | null {
   const branchAction = gitActionPolicy(state)
   if (state.prUrl || state.assessment || !state.hasWorktree) return branchAction
-  if (state.uncommitted === undefined) return null
+  // Status unknown (loading, or the request failed): the branch's own step, as `gitActionPolicy`.
+  if (state.uncommitted === undefined) return branchAction
   // Landed is measured against the base (`ahead`), never `unpushed`: that counts the branch's own
   // upstream, which a `HEAD:<base>` push leaves behind. An unknown base (`ahead` null) lands nothing
   // it cannot see, so a clean tree falls back to the branch's own step.

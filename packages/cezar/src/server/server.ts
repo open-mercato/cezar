@@ -7,7 +7,7 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
-import { DEFAULT_PHONE_PUSH_PREFS, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
+import { DEFAULT_PHONE_PUSH_PREFS, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
 import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
 import { createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
@@ -319,6 +319,7 @@ import {
   readImageAtRev,
   pushCurrentBranch,
   worktreeGitStatus,
+  type GitStatusResult,
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
@@ -6370,11 +6371,19 @@ export function createApp(deps: ServerDeps) {
       // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
       const inPlace = !worktree && run.worktree === false && !run.readOnly;
       if (!worktree && !inPlace) return c.json({ error: NO_WORKTREE }, 409);
-      const result = worktree
+      const result: GitStatusResult = worktree
         ? await worktreeGitStatus(worktree, run.baseBranch)
         : await checkoutGitStatus(c.get('project').root);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
+      const { baseRemote } = result;
+      const body: GitStatusResponse = {
+        uncommitted: result.uncommitted,
+        unpushed: result.unpushed,
+        behind: result.behind,
+        ahead: result.ahead,
+        ...(baseRemote ? { baseRemote } : {}),
+      };
+      return c.json(body);
     })
 
     // Draft PR from the review gate (spec 009): final autosave → push →
