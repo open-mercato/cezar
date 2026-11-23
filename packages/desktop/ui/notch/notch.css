@@ -42,6 +42,9 @@ body {
 }
 body[data-floating] #island {
   border-radius: var(--corner);
+}
+/* Only the open sheet casts a shadow: a compact pill's would bleed out of the menu bar. */
+body[data-floating] #island[data-state='expanded'] {
   box-shadow: 0 6px 18px rgb(0 0 0 / 0.32);
 }
 #island[data-state='tucked'] {

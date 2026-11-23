@@ -59,7 +59,10 @@ active   [same as primary]                          the open list, primary first
   `pill2.placement: "below"` hangs it under pill 1 instead.
 - **Open**: one sheet grows out of the housing, 440 wide, up to six rows of face, name, text and
   badge or status, then scrolls. Pill 2 folds into it.
-- **No notch**: the same shapes float as capsules at top centre, 6 below the menu bar.
+- **No notch**: the same shapes float as capsules at top centre, 2pt inside the menu bar strip, so
+  the collapsed pills never reach the frontmost app's toolbar below it (a browser's tabs). The strip
+  is `visibleFrame`'s gap, or 24pt when a screen reports none (a hidden bar, or macOS 26 reporting
+  `visibleFrame` up to the top). Only the open list, shown while the pointer is on it, reaches below.
 
 Screenshots: `assets/notch/`, one per state.
 

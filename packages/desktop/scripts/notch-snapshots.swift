@@ -50,7 +50,7 @@ func shoot(_ index: Int) {
   let expanded = state["expanded"] as? Bool ?? false
   let floating = housing["width"]! == 0
   let script = """
-    document.getElementById('bar').style.height = \(floating ? "'25px'" : "'37px'");
+    document.getElementById('bar').style.height = \(floating ? "'30px'" : "'37px'");
     document.getElementById('cam').style.display = \(floating ? "'none'" : "'block'");
     window.__notch.render({ layout: \(json(layout)), housing: \(json(housing)), model: null });
     window.__notch.setExpanded(false);
