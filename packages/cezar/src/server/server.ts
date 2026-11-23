@@ -4693,7 +4693,9 @@ export function createApp(deps: ServerDeps) {
         if (!resolved.preview.available) return c.json({ error: resolved.preview.message }, 400);
         if (resolved.preview.previewRevision !== input.previewRevision || !lease.isValid()) return c.json({ error: 'Settings or reset time changed. Check the preview again.' }, 409);
         if ((input.task.variants ?? 1) > 1 && !await getRepoInfo(project.root)) return c.json({ error: 'Parallel variants need a git repository.' }, 400);
-        const { task, images: _images, todoId: _todoId, variants, ...fields } = input.task;
+        // Task tags stay off automation definitions (spec 2026-11-23-task-tags § 5), so a scheduled
+        // start does not carry them; tag the task once it runs.
+        const { task, images: _images, todoId: _todoId, variants, tags: _tags, ...fields } = input.task;
         const automation = store.create({
           name: task.trim().replace(/\s+/g, ' ').slice(0, 100), kind: 'schedule', enabled: true,
           schedule: resolved.schedule!,

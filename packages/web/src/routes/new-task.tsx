@@ -1,6 +1,7 @@
 import { previewSettingsKey, StartTimePopover, useStartTimePicker, type StartChoice } from '@/components/start-time-picker'
 import { ApiError, createDeferredStart } from '@/api/client'
 import { deferredCreateInputSchema } from '@open-mercato/cezar-api-client'
+import { RUN_TAGS_MAX, type RunTag } from '@open-mercato/cezar-api-client'
 import { markScheduledTasks } from '@/lib/scheduled-tasks-gate'
 import { automationsQueryKey } from './automations/use-automations'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -53,6 +54,9 @@ import { ghostChip, useOnboardingWrite } from '@/components/onboarding-kit'
 import { PickerPill, RunnerPill, chevron, chipClass, engineLeftClass, engineRightClass, modelPillClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { ReasoningEffortPill, reasoningEffortOffered } from '@/components/reasoning-effort-pill'
+import { AddTagButton, TaskTagChip, TaskTagPicker, type TagRowState } from '@/components/task-tag-picker'
+import { useActiveProjectId, useTaskTags } from '@/api/task-tags'
+import { applyTagDelta, resolveRunTags } from '@/lib/task-tags'
 import { SourcePill } from '@/components/source-pill'
 import {
   Command,
@@ -176,6 +180,7 @@ export function NewTaskRoute() {
   // test), and everything below degrades to exactly the single-project behavior.
   const { projectId: urlProjectId } = useParams()
   const draftProjectId = useProjectScope().projectId
+  const activeProjectId = useActiveProjectId()
   const projects = useProjects()
 
   // The deep-link params, captured ONCE: the mount effect below strips them from the URL
@@ -649,6 +654,7 @@ export function NewTaskRoute() {
         dispatch,
         readOnly: askOn,
         inPlaceByDefault,
+        tagIds: shownTags.map((tag) => tag.id),
       })
   }
   const schedulingDisabledReason = images.length ? 'Remove attachments to schedule this task.' : deepLink.todo ? 'Tasks linked to a todo can only start now.' : health.data?.capabilities?.automations !== true ? 'Scheduling is disabled on this server.' : undefined
@@ -784,6 +790,25 @@ export function NewTaskRoute() {
         searchPlaceholder="Search models…"
         status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
       />
+    </span>
+  )
+  // Task tags (spec 2026-11-23-task-tags § 7.2): real registry entries the moment they are
+  // picked or created; held in the draft, sent as `tags`, never a remembered option.
+  const draftTags = draft.tags ?? []
+  const tagRegistry = useTaskTags()
+  const shownTags = resolveRunTags(draftTags, tagRegistry.data)
+  const setDraftTags = (next: RunTag[]) => update({ tags: next.length > 0 ? next : undefined })
+  const toggleDraftTag = (tag: RunTag, add: boolean) =>
+    setDraftTags(add ? applyTagDelta(draftTags, [tag], []) : draftTags.filter((t) => t.id !== tag.id))
+  const tagStateOf = (id: string) => (draftTags.some((t) => t.id === id) ? 'checked' : 'empty') as TagRowState
+  const tagPill = (
+    <span className="inline-flex flex-wrap items-center gap-1" data-slot="composer-tags">
+      {shownTags.map((tag) => (
+        <TaskTagChip key={tag.id} tag={tag} onRemove={() => toggleDraftTag(tag, false)} />
+      ))}
+      <TaskTagPicker projectId={activeProjectId} stateOf={tagStateOf} onToggle={toggleDraftTag}>
+        <AddTagButton compact={shownTags.length > 0} disabled={draftTags.length >= RUN_TAGS_MAX} />
+      </TaskTagPicker>
     </span>
   )
   const sourcePill = (
@@ -1130,6 +1155,7 @@ export function NewTaskRoute() {
                 </span>
               )}
               {sourcePill}
+              {tagPill}
               {enginePill}
             </>
           }

@@ -2,11 +2,20 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import type { ApiRun, CreateTaskTagInput, PatchTaskTagInput, RunTag, RunsIndexResponse, TaskTagsList } from '@open-mercato/cezar-api-client'
 
 import { createTaskTag, deleteTaskTag, editRunTags, getTaskTags, updateTaskTag } from '@/api/client'
-import { queryKeys, workspaceQueryKeys } from '@/api/queries'
+import { queryKeys, useHealth, workspaceQueryKeys } from '@/api/queries'
+import { useProjectScope } from '@/api/project-scope-context'
 import { applyTagDelta } from '@/lib/task-tags'
 
 /** Task tags (spec 2026-11-23-task-tags § 7): one registry query, invalidated by every mutation. */
 export const taskTagsQueryKey = ['workspace', 'task-tags'] as const
+
+/** The registry id of the project on screen — `bootProject` when the URL is unscoped — which is
+ *  the `projectId` the tag wire speaks. */
+export function useActiveProjectId(): string | undefined {
+  const { projectId } = useProjectScope()
+  const boot = useHealth().data?.bootProject
+  return projectId ?? boot
+}
 
 export function useTaskTags() {
   return useQuery({
