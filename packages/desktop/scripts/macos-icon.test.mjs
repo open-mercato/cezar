@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -68,6 +70,40 @@ describe('macOS app icon', () => {
     expect(stampProblem(stamp, sourceHash(), catalogHash()), 'recompile: npm run icon on Xcode 26, or commit the assets-car artifact').toBeNull()
   })
 
+  it('hashes icon.json and each named layer once, sorted, with LF line endings and no stray files', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cezar-icon-doc-'))
+    try {
+      const doc = path.join(dir, 'cezar.icon')
+      cpSync(path.join(icons, 'cezar.icon'), doc, { recursive: true })
+      const crlf = text => text.replace(/\r?\n/g, '\r\n')
+      const layer = json(path.join(doc, 'icon.json')).groups[0].layers[0]
+      // 'z.svg' named first and the committed layer twice: hashed once each, in path order.
+      const layers = [{ ...layer, 'image-name': 'z.svg' }, layer, { ...layer }]
+      const iconJson = `${JSON.stringify({ groups: [{ layers }] }, null, 2)}\n`
+      const mark = readFileSync(path.join(doc, 'Assets', layer['image-name']), 'utf8')
+      writeFileSync(path.join(doc, 'icon.json'), crlf(iconJson))
+      writeFileSync(path.join(doc, 'Assets', layer['image-name']), crlf(mark))
+      writeFileSync(path.join(doc, 'Assets', 'z.svg'), crlf('<svg>\n</svg>\n'))
+      writeFileSync(path.join(doc, 'Assets', '.mark.svg.swp'), 'editor noise')
+
+      const expected = createHash('sha256')
+      for (const [file, text] of [
+        [`Assets/${layer['image-name']}`, mark.replace(/\r\n/g, '\n')],
+        ['Assets/z.svg', '<svg>\n</svg>\n'],
+        ['icon.json', iconJson],
+      ]) expected.update(`${file}\0`).update(text).update('\0')
+
+      expect(sourceHash(doc)).toBe(expected.digest('hex'))
+      // The committed document with CRLF endings and a stray file still has the committed hash.
+      cpSync(path.join(icons, 'cezar.icon'), doc, { recursive: true })
+      writeFileSync(path.join(doc, 'icon.json'), crlf(readFileSync(path.join(icons, 'cezar.icon/icon.json'), 'utf8')))
+      rmSync(path.join(doc, 'Assets', 'z.svg'))
+      expect(sourceHash(doc)).toBe(sourceHash())
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('names a stamp that belongs to another source or another catalog', () => {
     const stamp = { source: 's', car: 'c' }
 
@@ -100,8 +136,9 @@ describe('macOS app icon', () => {
     expect(verify).toContain('plutil -extract CFBundleIconFile raw')
     expect(inputs).toContain('icon-car.mjs check-source')
     expect(names.indexOf('Check the macOS icon inputs')).toBeLessThan(names.indexOf('Build and upload with tauri-action'))
-    expect(cleanup.if).toContain('failure()')
-    expect(cleanup.if).toContain("steps.tauri.outcome != 'skipped'")
+    expect(cleanup.if.replace(/\s+/g, ' ')).toBe(
+      "(failure() || cancelled()) && runner.os == 'macOS' && !inputs.dry_run && steps.tauri.outcome != 'skipped'",
+    )
     expect(step(steps, 'Build and upload with tauri-action').id).toBe('tauri')
     expect(cleanup.run).toMatch(/isDraft -q \.isDraft\)" != true \]; then[\s\S]*exit 0[\s\S]*delete-asset/)
     expect(names.at(-1)).toBe("Remove this leg's macOS assets from the draft")

@@ -16,6 +16,8 @@ on:
       - 'packages/desktop/src-tauri/tauri.conf.json'
       - 'packages/desktop/scripts/render-app-icon.swift'
       - '.github/workflows/desktop-icon.yml'
+      # It decides the bytes the source hash sees.
+      - '.gitattributes'
   workflow_dispatch:
 
 permissions:
