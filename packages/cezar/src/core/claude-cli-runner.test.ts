@@ -9,7 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
+  applyClaudeArtifactEnv,
   buildClaudeArgs,
+  claudeArtifactBlockers,
   CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
   appendClaudeSystemPrompt,
@@ -739,4 +741,42 @@ console.log(${JSON.stringify(result(1.25, 30))});
     // The session is now known: a resume in this process diffs against its last total.
     expect(new ClaudeSessionCost('unpinned-1', true, dir, undefined).increment(2)).toBeCloseTo(0.75);
   }, 15_000);
+});
+
+describe('claude artifacts opt-in (#2195)', () => {
+  const base = { userPrompt: 'x', cwd: '/tmp', allowedTools: ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'] };
+  const tools = (args: string[]) => args[args.indexOf('--allowedTools') + 1]?.split(',') ?? [];
+
+  it('is off by default: no Artifact tool, no env var', () => {
+    expect(tools(buildClaudeArgs(base, {}))).not.toContain('Artifact');
+    const child: NodeJS.ProcessEnv = {};
+    applyClaudeArtifactEnv(child, {});
+    expect(child.CLAUDE_CODE_ARTIFACT).toBeUndefined();
+  });
+
+  it('CEZ_CLAUDE_ARTIFACTS=1 adds Artifact and the env var', () => {
+    const host = { CEZ_CLAUDE_ARTIFACTS: '1' };
+    expect(tools(buildClaudeArgs(base, host))).toContain('Artifact');
+    const child: NodeJS.ProcessEnv = {};
+    applyClaudeArtifactEnv(child, host);
+    expect(child.CLAUDE_CODE_ARTIFACT).toBe('1');
+  });
+
+  it('also on a resumed session', () => {
+    const args = buildClaudeArgs({ ...base, sessionId: 's1', resume: true }, { CEZ_CLAUDE_ARTIFACTS: '1' });
+    expect(args).toContain('--resume');
+    expect(tools(args)).toContain('Artifact');
+  });
+
+  it("respects a step's explicit allowedTools", () => {
+    const args = buildClaudeArgs({ ...base, allowedTools: ['Read', 'Grep'] }, { CEZ_CLAUDE_ARTIFACTS: '1' });
+    expect(tools(args)).not.toContain('Artifact');
+  });
+
+  it('names host switches that keep the tool off', () => {
+    expect(claudeArtifactBlockers({})).toEqual([]);
+    expect(claudeArtifactBlockers({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '0' })).toHaveLength(1);
+    expect(claudeArtifactBlockers({ ANTHROPIC_BASE_URL: 'https://gw.example.com' })).toHaveLength(1);
+    expect(claudeArtifactBlockers({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com' })).toEqual([]);
+  });
 });
