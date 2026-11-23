@@ -196,6 +196,53 @@ describe('the workspace terminal routes', () => {
     });
   });
 
+  describe('defined terminal commands (#1555)', () => {
+    const put = (body: unknown) =>
+      apiRequest(makeApp(), '/api/v1/terminal-commands', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('stores the team list in the repo config and offers it to the task beside the detected ones', async () => {
+      writeFileSync(join(worktree, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+      const res = await put({ scope: 'project', commands: [{ name: 'Tests', command: 'pnpm test' }] });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ project: [{ name: 'Tests', command: 'pnpm test' }], personal: [] });
+      const runId = seedRun();
+      const body = (await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/commands`)).json()) as {
+        configured?: unknown;
+        commands: unknown;
+      };
+      expect(body.configured).toEqual([{ name: 'Tests', command: 'pnpm test', scope: 'project' }]);
+      expect(body.commands).toMatchObject([{ command: 'npm run dev', source: 'package.json' }]);
+    });
+
+    it('answers no `configured` key when nothing is defined (zero config)', async () => {
+      const runId = seedRun();
+      const body = await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/commands`)).json();
+      expect(body).not.toHaveProperty('configured');
+    });
+
+    it('removes the key when the list is emptied', async () => {
+      await put({ scope: 'project', commands: [{ name: 'a', command: 'b' }] });
+      const res = await put({ scope: 'project', commands: [] });
+      expect(await res.json()).toMatchObject({ project: [] });
+    });
+
+    it('rejects an empty name, an empty command and an oversized list at the boundary', async () => {
+      expect((await put({ scope: 'project', commands: [{ name: ' ', command: 'x' }] })).status).toBe(400);
+      expect((await put({ scope: 'project', commands: [{ name: 'x', command: '' }] })).status).toBe(400);
+      const many = Array.from({ length: 31 }, (_, i) => ({ name: `n${i}`, command: `c${i}` }));
+      expect((await put({ scope: 'project', commands: many })).status).toBe(400);
+    });
+
+    it('refuses to store a command where the terminal is off', async () => {
+      process.env.CEZ_TERMINAL = '0';
+      expect((await put({ scope: 'project', commands: [{ name: 'a', command: 'b' }] })).status).toBe(409);
+    });
+  });
+
   describe('opening a session', () => {
     it('starts the shell in the task worktree and names its topic', async () => {
       const runId = seedRun();

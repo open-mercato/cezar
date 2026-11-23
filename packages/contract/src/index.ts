@@ -33,6 +33,7 @@ export * from './star-count.ts';
 export * from './worktree-lifecycle.ts';
 export * from './preview.ts';
 export * from './start-app.ts';
+export * from './terminal-commands.ts';
 export * from './secrets.ts';
 export * from './e2e.ts';
 

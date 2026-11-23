@@ -36,7 +36,7 @@ vi.mock('../task-workspace/terminal-pane', () => ({
 }))
 
 vi.mock('../task-workspace/terminal-extras', () => ({
-  CommandPicker: () => null,
+  NewTerminalMenu: () => null,
   DetectedUrlsStrip: () => <div data-testid="detected-urls" />,
 }))
 

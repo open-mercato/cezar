@@ -33,7 +33,7 @@ import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociatio
 import { existsSync, readFileSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema, projectTerminalSessionParamsSchema,
-  startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
+  startAppSetSchema, startAppStateSchema, terminalCommandsSetSchema, terminalCommandsStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
 import {
@@ -79,6 +79,7 @@ import { automationReportSchema, setAutomationReportInputSchema, automationsExpo
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { discoverCommands, installCommand } from './terminal/commands.ts';
 import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
+import { configuredCommands, readTerminalCommands, writeTerminalCommands } from '../terminal-commands.ts';
 import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
@@ -8812,9 +8813,34 @@ export function createAppParts(deps: ServerDeps) {
         ? await Promise.all([discoverCommands(worktree), setupScripts > 0 ? null : installCommand(worktree)])
         : [[], null];
       const recipe = effectiveStartApp(await readStartApp(dataDir, repoRoot));
+      const configured = configuredCommands(await readTerminalCommands(dataDir, repoRoot));
       return c.json(
-        discoveredCommandsSchema.parse({ commands, ...(install ? { install } : {}), ...(recipe ? { recipe } : {}) }),
+        discoveredCommandsSchema.parse({
+          commands,
+          ...(install ? { install } : {}),
+          ...(recipe ? { recipe } : {}),
+          ...(configured.length > 0 ? { configured } : {}),
+        }),
       );
+    })
+    // Run commands the user defined (#1555), stored beside the start recipe: the team's in the
+    // repo config, the user's own in their registry entry. Like a recipe, a stored command is one
+    // a terminal will later run, so writing is refused wherever the terminal is.
+    .get('/terminal-commands', async (c) => {
+      const { root, dataDir } = c.get('project');
+      return c.json(terminalCommandsStateSchema.parse(await readTerminalCommands(dataDir, root)));
+    })
+    .put('/terminal-commands', jsonZodValidator(terminalCommandsSetSchema), async (c) => {
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json({ error: refusal }, 409);
+      const { root, dataDir } = c.get('project');
+      const { scope, commands } = c.req.valid('json');
+      try {
+        if (!(await writeTerminalCommands(dataDir, root, scope, commands))) {
+          return c.json({ error: 'This project is not in your project list, so it cannot keep commands of your own.' }, 409);
+        }
+      } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'The commands could not be saved' }, 409); }
+      return c.json(terminalCommandsStateSchema.parse(await readTerminalCommands(dataDir, root)));
     })
     // The project's start recipe (spec `2026-10-09-design-mode` §7c): the team's in the repo
     // config, the user's own in their registry entry. Writing one stores a command a terminal will

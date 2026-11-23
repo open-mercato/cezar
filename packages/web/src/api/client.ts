@@ -10,6 +10,8 @@ import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
   StartAppSet,
+  TerminalCommandsSet,
+  TerminalCommandsState,
   StartAppState,
   TerminalCreateInput,
   TerminalOutput,
@@ -3319,6 +3321,22 @@ export async function getStartApp(): Promise<StartAppState> {
   return unwrap(
     await cez.api.v1.p[':projectId']['start-app'].$get({ param: { projectId: queryScope() } }),
     '/start-app',
+  )
+}
+
+/** The project's defined terminal run commands, the team's and this user's (#1555). */
+export async function getTerminalCommands(): Promise<TerminalCommandsState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['terminal-commands'].$get({ param: { projectId: queryScope() } }),
+    '/terminal-commands',
+  )
+}
+
+/** Replace one scope's list of defined terminal commands. */
+export async function setTerminalCommands(body: TerminalCommandsSet): Promise<TerminalCommandsState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['terminal-commands'].$put({ param: { projectId: queryScope() }, json: body }),
+    '/terminal-commands',
   )
 }
 

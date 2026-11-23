@@ -18,6 +18,7 @@ import type { TerminalSession } from '@open-mercato/cezar-api-client'
  *    is the component whose poll made it visible.
  */
 
+let menuProps: { shells: string[]; onNew: (shell?: string) => void; onRun: (command: string) => void }
 const getRunTerminal = vi.fn()
 const createRunTerminal = vi.fn()
 const stopRunTerminal = vi.fn(async () => undefined)
@@ -43,7 +44,10 @@ vi.mock('./terminal-pane', () => ({
 
 // Both read the server on their own schedule; neither is under test here.
 vi.mock('./terminal-extras', () => ({
-  CommandPicker: () => null,
+  NewTerminalMenu: (props: { shells: string[]; onNew: (shell?: string) => void; onRun: (command: string) => void }) => {
+    menuProps = props
+    return null
+  },
   DetectedUrlsStrip: () => null,
 }))
 
@@ -132,8 +136,8 @@ describe('TerminalDrawer — Stop', () => {
   })
 })
 
-describe('TerminalDrawer — choosing a shell', () => {
-  it('asks which shell when the host offers more than one', async () => {
+describe('TerminalDrawer — opening a terminal (#1554)', () => {
+  it('opens the default shell in one click even when the host offers several', async () => {
     getRunTerminal.mockResolvedValue({
       available: true,
       sessions: [session('s-1')],
@@ -143,18 +147,28 @@ describe('TerminalDrawer — choosing a shell', () => {
     drawer()
     await waitFor(() => expect(tabNames()).toHaveLength(1))
 
-    fireEvent.pointerDown(
-      screen.getByRole('button', { name: 'New terminal tab' }),
-      new MouseEvent('pointerdown', { bubbles: true }),
-    )
-    const bash = await screen.findByText('/bin/bash')
-    fireEvent.click(bash)
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
+
+    await waitFor(() => expect(createRunTerminal).toHaveBeenCalledWith('r1', {}))
+  })
+
+  it('hands the menu the host shells and opens a named one through it', async () => {
+    getRunTerminal.mockResolvedValue({
+      available: true,
+      sessions: [session('s-1')],
+      shells: ['/bin/zsh', '/bin/bash'],
+    })
+    createRunTerminal.mockResolvedValue(session('s-2'))
+    drawer()
+    await waitFor(() => expect(tabNames()).toHaveLength(1))
+
+    await waitFor(() => expect(menuProps.shells).toEqual(['/bin/zsh', '/bin/bash']))
+    menuProps.onNew('/bin/bash')
 
     await waitFor(() => expect(createRunTerminal).toHaveBeenCalledWith('r1', { shell: '/bin/bash' }))
   })
 
   it('just opens the default when there is only one', async () => {
-    // Nothing to ask, so `+` stays a button rather than becoming a menu of one.
     getRunTerminal.mockResolvedValue({ available: true, sessions: [session('s-1')], shells: ['/bin/zsh'] })
     createRunTerminal.mockResolvedValue(session('s-2'))
     drawer()
