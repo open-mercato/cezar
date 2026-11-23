@@ -75,6 +75,8 @@ main checkout, and the main checkout's `.ai/qa/test-env-app.log` shows "recovere
 
 ## Progress
 
+PR: #2430
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Stopgap in test-env-up.sh
