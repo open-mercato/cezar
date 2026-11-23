@@ -35,8 +35,12 @@ on:
 permissions:
   contents: write # create the release + upload assets
 
+# Every run that writes a release shares one group: a tag push and a manual run of the same
+# version must never overlap, or one could publish while the other removes a failed leg's assets.
+# The version is not known before checkout, so the group cannot be keyed on it. Dry runs never
+# touch a release and keep their own group.
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: desktop-release-${{ inputs.dry_run && github.run_id || 'release' }}
   cancel-in-progress: false
 
 env:
@@ -182,7 +186,22 @@ jobs:
             } >> "$GITHUB_ENV"
           done
 
+      # The macOS icons before anything is built or uploaded (spec 2026-09-25 § Replacing the icon):
+      # tauri-action uploads as it bundles, so a bundle that fails a check afterwards has
+      # already reached the draft release.
+      - name: Check the macOS icon inputs
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: |
+          test -f src-tauri/icons/Assets.car || { echo "::error::no src-tauri/icons/Assets.car"; exit 1; }
+          node scripts/icon-car.mjs check-source || { echo "::error::Assets.car is stale against cezar.icon"; exit 1; }
+          # Captured first: under pipefail, grep -q closing the pipe early could fail a good catalog.
+          info=$(xcrun assetutil --info src-tauri/icons/Assets.car)
+          grep -Eq '"Name" ?: ?"cezar"' <<<"$info" || { echo "::error::Assets.car has no icon named cezar"; exit 1; }
+
       - name: Build and upload with tauri-action
+        id: tauri
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -318,8 +337,6 @@ jobs:
             if [ -f "$INSTALLER.sig" ]; then gh release upload "$TAG" "$INSTALLER.sig" --clobber; fi
           fi
 
-      # Stable, versionless copies: the landing page's Download button and the package-manager
-      # manifests link these, so shipping a version never means editing a link.
       # The bundle must be SEALED, whoever signed it: this is the check that fails on the build
       # macOS calls damaged.
       - name: Verify the macOS bundle's signature
@@ -333,6 +350,21 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${apps[0]}"
           codesign -dv "${apps[0]}" 2>&1 | grep -E "Signature|TeamIdentifier|Sealed"
 
+      # Both icons: without the catalog every macOS draws the .icns fallback, without the .icns
+      # the places that read only CFBundleIconFile show a blank app.
+      - name: Verify the macOS bundle's icons
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: |
+          shopt -s nullglob
+          apps=( src-tauri/target/*/release/bundle/macos/*.app )
+          test -f "${apps[0]}/Contents/Resources/Assets.car" || { echo "::error::no Assets.car in the bundle"; exit 1; }
+          test "$(plutil -extract CFBundleIconName raw "${apps[0]}/Contents/Info.plist")" = cezar || { echo "::error::CFBundleIconName is not cezar"; exit 1; }
+          test -n "$(plutil -extract CFBundleIconFile raw "${apps[0]}/Contents/Info.plist")" || { echo "::error::no CFBundleIconFile"; exit 1; }
+
+      # Stable, versionless copies: the landing page's Download button and the package-manager
+      # manifests link these, so shipping a version never means editing a link.
       - name: Upload the versionless installer
         shell: bash
         working-directory: ${{ env.DESKTOP_DIR }}
@@ -413,6 +445,30 @@ jobs:
           path: ${{ env.DESKTOP_DIR }}/src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 1
+
+      # A macOS leg that failed or was cancelled after tauri-action ran takes its bundles back off
+      # the DRAFT, so nothing a check rejected waits there for a re-run or a manual publish. A leg
+      # that failed before tauri-action uploaded nothing, and the step skips it.
+      - name: Remove this leg's macOS assets from the draft
+        if: (failure() || cancelled()) && runner.os == 'macOS' && !inputs.dry_run && steps.tauri.outcome != 'skipped'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCH: ${{ startsWith(matrix.target, 'aarch64') && 'aarch64' || 'x64|x86_64' }}
+        run: |
+          # A manual run reuses an existing release, published ones included: never touch those.
+          if [ "$(gh release view "$TAG" --json isDraft -q .isDraft)" != true ]; then
+            echo "release $TAG is not a draft: leaving its assets"
+            exit 0
+          fi
+          gh release view "$TAG" --json assets -q '.assets[].name' \
+            | { grep -E "_(${ARCH})([._].*)?\.(dmg|app\.tar\.gz(\.sig)?)$|^cezar-macos-(${ARCH})\.dmg(\.sha256)?$" || true; } \
+            | while read -r asset; do
+                # Again before each delete, in case the release was published meanwhile.
+                [ "$(gh release view "$TAG" --json isDraft -q .isDraft)" = true ] || { echo "release $TAG was published: stopping"; break; }
+                gh release delete-asset "$TAG" "$asset" --yes
+              done
 
   # Arch Linux and what is built on it (Omarchy, Manjaro, EndeavourOS): a pacman package, built
   # AND installed inside a real Arch container, so a library the binary needs and Arch does not
