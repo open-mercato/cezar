@@ -23,6 +23,11 @@ describe('ensureDataGitignore', () => {
     for (const entry of DATA_GITIGNORE_ENTRIES) expect(lines, entry).toContain(entry);
   });
 
+  it('ignores the server lock — a pid and host identity are machine state, not repo content', () => {
+    ensureDataGitignore(repoRoot);
+    expect(gitignore().split('\n')).toContain('server-lock/');
+  });
+
   it('ignores unsent drafts — a pasted screenshot must never reach the user\'s git history', () => {
     ensureDataGitignore(repoRoot);
     expect(gitignore().split('\n')).toContain('drafts/');
