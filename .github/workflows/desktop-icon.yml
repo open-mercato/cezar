@@ -67,7 +67,7 @@ jobs:
   render:
     name: Render on ${{ matrix.os }}
     needs: compile
-    # Still draws when only the committed-catalog check failed: the renders are the evidence.
+    # Still draws when only the stale-catalog check failed: the renders of the fresh compile are the evidence.
     # Without the artifact (actool failed) every leg would only fail on the download.
     if: ${{ !cancelled() && needs.compile.outputs.uploaded == 'true' }}
     strategy:
@@ -96,7 +96,8 @@ jobs:
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp /usr/bin/true "$app/Contents/MacOS/check"
           cp "$ICONS/icon.icns" "$app/Contents/Resources/icon.icns"
-          # The catalog just compiled from cezar.icon; the compile job proves the committed one equal.
+          # The catalog just compiled from cezar.icon. It is what ships only when the compile job's
+          # stale check passed; the renders still run when it failed, as evidence for the fix.
           cp compiled/Assets.car "$app/Contents/Resources/Assets.car"
           cat > "$app/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -120,7 +121,7 @@ jobs:
           plutil -remove CFBundleIconName "$legacy/Contents/Info.plist"
           plutil -replace CFBundleIdentifier -string dev.cezar.icon-check-legacy "$legacy/Contents/Info.plist"
           codesign -f -s - "$legacy"
-          swift packages/desktop/scripts/render-app-icon.swift "$app" "renders/${{ matrix.os }}-shipped.png" 256
+          swift packages/desktop/scripts/render-app-icon.swift "$app" "renders/${{ matrix.os }}-compiled.png" 256
           swift packages/desktop/scripts/render-app-icon.swift "$legacy" "renders/${{ matrix.os }}-icns-only.png" 256
 
       - name: Upload the renders

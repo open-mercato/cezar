@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 import { describe, expect, it } from 'vitest'
 
-import { ICON_NAME, MIN_MACOS, actoolArgs, sourceHash } from './icon-car.mjs'
+import { ICON_NAME, actoolArgs, catalogHash, renditionsOf, sourceHash, stampProblem } from './icon-car.mjs'
 
 // The macOS icon pair (spec 2026-09-25 § Replacing the icon): the Icon Composer catalog Assets.car
 // (CFBundleIconName), drawn by macOS 26 and, flattened, by macOS 12-15, and icon.icns, the fallback.
@@ -37,7 +37,6 @@ describe('macOS app icon', () => {
     const floor = json(path.join(tauri, 'tauri.conf.json')).bundle.macOS.minimumSystemVersion
     const args = actoolArgs('doc.icon', 'out')
 
-    expect(MIN_MACOS).toBe(floor)
     expect(ICON_NAME).toBe('cezar')
     expect(args.slice(args.indexOf('--app-icon'), args.indexOf('--app-icon') + 2)).toEqual(['--app-icon', 'cezar'])
     const target = args.indexOf('--minimum-deployment-target')
@@ -55,10 +54,38 @@ describe('macOS app icon', () => {
     expect(script).not.toContain("'actool'")
   })
 
-  it('keeps the committed Assets.car compiled from cezar.icon as it is now', () => {
+  it('fails CI on a stale committed catalog: source and stamp, then renditions against a fresh compile', () => {
+    const workflow = parse(readFileSync(path.join(root, '.github/workflows/desktop-icon.yml'), 'utf8'))
+    const gate = step(workflow.jobs.compile.steps, 'Check the committed Assets.car is current').run
+
+    expect(gate).toContain('icon-car.mjs check-source')
+    expect(gate).toMatch(/icon-car\.mjs compare out\/Assets\.car "\$ICONS\/Assets\.car"/)
+  })
+
+  it('keeps the committed Assets.car paired with its stamp and compiled from cezar.icon as it is now', () => {
     const stamp = json(path.join(icons, 'Assets.car.json'))
 
-    expect(stamp.source, 'icons/Assets.car is stale: recompile it (npm run icon on Xcode 26, or the assets-car artifact)').toBe(sourceHash())
+    expect(stampProblem(stamp, sourceHash(), catalogHash()), 'recompile: npm run icon on Xcode 26, or commit the assets-car artifact').toBeNull()
+  })
+
+  it('names a stamp that belongs to another source or another catalog', () => {
+    const stamp = { source: 's', car: 'c' }
+
+    expect(stampProblem(stamp, 's', 'c')).toBeNull()
+    expect(stampProblem(stamp, 'other', 'c')).toMatch(/not compiled from icons\/cezar\.icon/)
+    expect(stampProblem(stamp, 's', 'other')).toMatch(/commit them together/)
+  })
+
+  it('compares renditions without per-compile noise but with every other digest and size', () => {
+    const header = { Timestamp: 1, AssetStorageVersion: 'Xcode 26.6' }
+    const bitmap = { AssetType: 'Icon Image', Name: 'cezar', PixelWidth: 64, Scale: 2, SHA1Digest: 'A', RenditionName: 'x-UUID1.png' }
+    const vector = { AssetType: 'Vector', Name: 'cezar_Assets/mark', SHA1Digest: 'V' }
+    const base = renditionsOf([header, bitmap, vector])
+
+    expect(renditionsOf([{ Timestamp: 2 }, { ...bitmap, SHA1Digest: 'B', RenditionName: 'x-UUID2.png' }, vector])).toEqual(base)
+    expect(renditionsOf([header, { ...bitmap, PixelWidth: 32 }, vector])).not.toEqual(base)
+    expect(renditionsOf([header, bitmap, { ...vector, SHA1Digest: 'W' }])).not.toEqual(base)
+    expect(renditionsOf([header, bitmap])).not.toEqual(base)
   })
 
   it('fails a release whose macOS bundle lacks either icon, and checks the inputs before uploading', () => {
@@ -74,7 +101,34 @@ describe('macOS app icon', () => {
     expect(inputs).toContain('icon-car.mjs check-source')
     expect(names.indexOf('Check the macOS icon inputs')).toBeLessThan(names.indexOf('Build and upload with tauri-action'))
     expect(cleanup.if).toContain('failure()')
+    expect(cleanup.if).toContain("steps.tauri.outcome != 'skipped'")
+    expect(step(steps, 'Build and upload with tauri-action').id).toBe('tauri')
+    expect(cleanup.run).toMatch(/isDraft -q \.isDraft\)" != true \]; then[\s\S]*exit 0[\s\S]*delete-asset/)
     expect(names.at(-1)).toBe("Remove this leg's macOS assets from the draft")
+  })
+
+  it('takes back exactly the failed leg\'s macOS assets and nothing else', () => {
+    const cleanup = step(parse(readFileSync(path.join(root, '.github/workflows/desktop-release.yml'), 'utf8')).jobs.build.steps, "Remove this leg's macOS assets from the draft")
+    const [, silicon, intel] = /&& '([^']+)' \|\| '([^']+)'/.exec(cleanup.env.ARCH)
+    const pattern = /grep -E "([^"]+)"/.exec(cleanup.run)[1]
+    const matches = arch => name => new RegExp(pattern.replaceAll('${ARCH}', arch)).test(name)
+    // Every asset of the desktop-v0.1.14 release.
+    const legs = {
+      [silicon]: ['Cezar_0.1.14_aarch64.dmg', 'Cezar_aarch64.app.tar.gz', 'Cezar_aarch64.app.tar.gz.sig', 'cezar-macos-aarch64.dmg', 'cezar-macos-aarch64.dmg.sha256'],
+      [intel]: ['Cezar_0.1.14_x64.dmg', 'Cezar_x64.app.tar.gz', 'Cezar_x64.app.tar.gz.sig', 'cezar-macos-x86_64.dmg', 'cezar-macos-x86_64.dmg.sha256'],
+    }
+    const others = [
+      'cezar-linux-x86_64.AppImage', 'cezar-linux-x86_64.AppImage.sha256', 'cezar-linux-x86_64.deb', 'cezar-linux-x86_64.deb.sha256',
+      'cezar-linux-x86_64.pkg.tar.zst', 'cezar-linux-x86_64.pkg.tar.zst.sha256', 'cezar-windows-x86_64-setup.exe',
+      'cezar-windows-x86_64-setup.exe.sha256', 'Cezar_0.1.14_amd64.AppImage', 'Cezar_0.1.14_amd64.AppImage.sig', 'Cezar_0.1.14_amd64.deb',
+      'Cezar_0.1.14_amd64.deb.sig', 'Cezar_0.1.14_x64-setup.exe', 'Cezar_0.1.14_x64-setup.exe.sig', 'desktop-latest.json',
+    ]
+
+    for (const [arch, own] of Object.entries(legs)) {
+      const other = Object.entries(legs).find(([key]) => key !== arch)[1]
+      for (const name of own) expect(matches(arch)(name), `${arch} ${name}`).toBe(true)
+      for (const name of [...other, ...others]) expect(matches(arch)(name), `${arch} ${name}`).toBe(false)
+    }
   })
 })
 

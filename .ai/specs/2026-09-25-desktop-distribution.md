@@ -191,8 +191,10 @@ Dock on macOS 15 and older):
   `Assets.car` is committed precompiled, listed only in `tauri.macos.conf.json`: tauri can compile
   the `.icon` at bundle time, but that needs Xcode 26's `actool` on every build machine and has
   crashed there (tauri-apps/tauri#15315, #16538). `scripts/icon-car.mjs` holds the actool
-  arguments `npm run icon` and CI share, and records the sha256 of the `.icon` it compiled in
-  `Assets.car.json`; a catalog whose hash no longer matches is stale and fails the unit suite.
+  arguments `npm run icon` and CI share. It records in `Assets.car.json` the sha256 of the `.icon`
+  it compiled (`icon.json` and its layer images, LF line endings; `.gitattributes` keeps them
+  `-text`) and of `Assets.car` itself, so the unit suite fails on a stale catalog and on a stamp
+  committed without its catalog.
   Without Xcode 26, `npm run icon` writes the `.icon` and says `Assets.car` is stale.
 - **`icon.icns`** (`CFBundleIconFile`): the fallback wherever the catalog is not read (`tauri dev`,
   tools that read only `CFBundleIconFile`; macOS 26 also draws it on its own squircle without a
@@ -205,8 +207,9 @@ it when you have no Xcode 26), fails when the committed `Assets.car` is stale (s
 its renditions against the fresh compile; the flattened bitmaps' pixel digests are left out,
 as actool re-renders them differently on every compile), and has macOS 26, 15 and 15 Intel runners draw the pair
 through NSWorkspace (`scripts/render-app-icon.swift`). The release checks the icon inputs before
-tauri-action builds and uploads, checks the bundle carries both icons after, and takes a failed
-macOS leg's assets back off the draft release.
+tauri-action builds and uploads, checks the bundle carries both icons after, and takes a macOS leg's assets
+back off the release when the leg failed after tauri-action ran and the release is still a draft
+(a manual run can reuse a published release; that one is never touched).
 
 Rendering needs `rsvg-convert` (`brew install librsvg`): the tile needs real alpha. It bumps nothing: bump
 the shell version, tag `desktop-v…`, and every installed app shows the new icon after its next
