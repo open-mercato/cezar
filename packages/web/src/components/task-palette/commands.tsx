@@ -20,6 +20,7 @@ import {
   TextCursorInputIcon,
   Trash2Icon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import type { ReactNode } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
@@ -356,7 +357,7 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
 function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null, terminalAvailable: boolean): readonly ViewId[] {
   return (
     workspace?.views ??
-    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable))
+    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || hasWorkflowGraph(run)) && (view !== 'terminal' || terminalAvailable))
   )
 }
 
