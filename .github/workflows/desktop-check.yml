@@ -70,7 +70,9 @@ jobs:
       - name: Cache cargo
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: packages/desktop/src-tauri
+          workspaces: |
+            packages/desktop/src-tauri
+            packages/desktop/test/rustls-security
 
       # The same list as desktop-release.yml's Linux leg.
       - name: Install Linux build dependencies
