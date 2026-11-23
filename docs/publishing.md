@@ -11,7 +11,7 @@ How cezar reaches npm. Two paths, deliberately separate
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
   after fully green `verify`, `vitest` and `webhooks-cross-platform` runs — on `develop`
   pushes and same-repo PRs only. A draft PR runs no CI, and a PR that only touches the
-  docs-only paths in `ci.yml`'s `scope` job skips the suites, so neither publishes one.
+  docs-only paths in [`scripts/ci-scope.mjs`](../scripts/ci-scope.mjs) skips the suites, so neither publishes one.
 - **Nightlies** are **clock-driven**: [`nightly.yml`](../.github/workflows/nightly.yml)
   cuts `main`'s tip every night under the `nightly` dist-tag, so `npx cezar-run@nightly`
   is always the trunk. Also runnable on demand from the Actions tab.

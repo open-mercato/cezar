@@ -39,27 +39,21 @@ jobs:
         with:
           fetch-depth: 2 # a PR checkout is the merge commit; its first parent is the base
 
-      # Only paths no suite, build or package step reads. Root `*.md` is NOT here:
-      # `bc-route-inventory.test.ts` reads BACKWARD_COMPATIBILITY.md. Any doubt runs the suites.
-      # `--no-renames`: a file MOVED into one of these paths must still list its old path.
-      # codeql.yml's `paths-ignore` repeats this set; change both together.
+      # The path list lives in scripts/ci-scope.mjs (pinned by ci-scope.test.ts). Any doubt runs
+      # the suites. `--no-renames`: a file MOVED into a docs-only path still lists its old path.
       - name: Decide whether the suites run
         id: diff
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          code=true
-          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only --no-renames HEAD^1 HEAD) && [ -n "$files" ]; then
-            code=false
-            while IFS= read -r file; do
-              case "$file" in
-                .ai/specs/*|.ai/plans/*|.ai/analysis/*|.ai/runs/*) ;;
-                docs/adr/*|docs/mockups/*|docs/screenshots/*) ;;
-                *) code=true; echo "runs the suites: $file"; break ;;
-              esac
-            done <<< "$files"
+          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only --no-renames HEAD^1 HEAD); then
+            printf '%s\n' "$files"
+            # A crash must not fail `scope`: dependents skipped on a failed need pass required checks.
+            printf '%s\n' "$files" | node scripts/ci-scope.mjs >> "$GITHUB_OUTPUT" || echo code=true >> "$GITHUB_OUTPUT"
+          else
+            echo code=true >> "$GITHUB_OUTPUT"
           fi
-          echo "code=$code" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
 
   # The vitest suites were ~8 of the job's ~9 minutes, so they run as parallel shards
   # beside `verify` instead of inside it.

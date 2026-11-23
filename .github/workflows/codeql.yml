@@ -7,8 +7,8 @@ on:
     branches:
       - main
       - develop
-    # Same docs-only set as ci.yml's `scope` job; change both together. Safe at the trigger:
-    # no required check here.
+    # The docs-only set of scripts/ci-scope.mjs (ci-scope.test.ts keeps them equal). Safe at the
+    # trigger: no required check here.
     paths-ignore:
       - '.ai/specs/**'
       - '.ai/plans/**'
