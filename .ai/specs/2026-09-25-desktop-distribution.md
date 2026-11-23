@@ -175,7 +175,7 @@ The mark lives in three places, on two cadences:
 | Where | Ships with | Command |
 | --- | --- | --- |
 | Cockpit brand tile + favicon (`packages/web/public/icon.svg`) | cezar (npm) — every channel update | replace the SVG |
-| App icon set (`packages/desktop/src-tauri/icons/*`: `.icns`, `.ico`, PNGs) and the splash logo (`packages/desktop/ui/icon.svg`) | the shell — one shell release | `cd packages/desktop && npm run icon [-- path/to/new.svg]` |
+| App icon set (`packages/desktop/src-tauri/icons/*`: `.ico`, PNGs, `icon.icns` with its `macos-legacy.svg` source, the `cezar.icon` document and its compiled `Assets.car` + `Assets.car.json`) and the splash logo (`packages/desktop/ui/icon.svg`) | the shell — one shell release | `cd packages/desktop && npm run icon [-- path/to/new.svg]` |
 
 `npm run icon` writes three outputs from the one SVG, because the platforms draw an app icon
 differently (shell 0.1.15; before it, one full-bleed set showed a hard-edged black square in the
@@ -183,22 +183,29 @@ Dock on macOS 15 and older):
 
 - **Windows `.ico` and Linux PNGs**: the mark full-bleed on the 1024px canvas, filled with `--bg`
   when given, the mark's gradient when it has one, else the brand tile's black, via `tauri icon`.
-- **`icon.icns`** (`CFBundleIconFile`): macOS before 26 draws an `.icns` as-is and masks nothing,
-  so the rounded tile is baked in, inside Apple's icon grid: an 824px tile with the 185.4px corner centred
-  on the 1024px canvas, a transparent margin and a soft shadow (`icons/macos-legacy.svg`).
-- **`cezar.icon` + `Assets.car`, for macOS 26**: an Icon Composer document (the tile colour as
-  the fill, the glyph as one glass layer) that Tahoe masks, lights and recolours itself for the
-  default, dark, tinted and clear appearances. The bundler copies `Assets.car` and sets
-  `CFBundleIconName`; macOS 26 prefers it over `CFBundleIconFile`. Without it Tahoe draws the
-  `.icns` on its own squircle. `Assets.car` is committed precompiled, listed only in
-  `tauri.macos.conf.json`: tauri can compile the `.icon` at bundle time, but that needs Xcode 26's
-  `actool` on every build machine and has crashed there (tauri-apps/tauri#15315, #16538). It is
-  compiled with `--minimum-deployment-target 12.0`, the shell's floor, so actool also flattens the
-  icon into renditions for macOS 12–15, which prefer those to the `.icns`; the `.icns` stays the
-  fallback wherever the catalog is not read (`tauri dev`, tools that read only `CFBundleIconFile`). `npm run icon` recompiles it when Xcode 26 is present
-  and says so when it is not; the **Desktop icon** workflow compiles it too (artifact
-  `assets-car`), checks the committed one names the `cezar` icon, and has macOS 26, 15 and
-  15 Intel runners draw the shipped pair through NSWorkspace (`scripts/render-app-icon.swift`).
+- **`cezar.icon` + `Assets.car`** (`CFBundleIconName`): an Icon Composer document (the tile
+  colour as the fill, the glyph as one glass layer). macOS 26 masks, lights and recolours it itself
+  for the default, dark, tinted and clear appearances. It is compiled with
+  `--minimum-deployment-target 12.0`, the shell's floor, so actool also flattens it into
+  renditions that macOS 12–15 draw: every supported macOS prefers the catalog to the `.icns`.
+  `Assets.car` is committed precompiled, listed only in `tauri.macos.conf.json`: tauri can compile
+  the `.icon` at bundle time, but that needs Xcode 26's `actool` on every build machine and has
+  crashed there (tauri-apps/tauri#15315, #16538). `scripts/icon-car.mjs` holds the actool
+  arguments `npm run icon` and CI share, and records the sha256 of the `.icon` it compiled in
+  `Assets.car.json`; a catalog whose hash no longer matches is stale and fails the unit suite.
+  Without Xcode 26, `npm run icon` writes the `.icon` and says `Assets.car` is stale.
+- **`icon.icns`** (`CFBundleIconFile`): the fallback wherever the catalog is not read (`tauri dev`,
+  tools that read only `CFBundleIconFile`; macOS 26 also draws it on its own squircle without a
+  catalog). macOS before 26 draws an `.icns` as-is and masks nothing, so the rounded tile is baked
+  in, inside Apple's icon grid: an 824px tile with the 185.4px corner centred on the 1024px canvas,
+  a transparent margin and a soft shadow (`icons/macos-legacy.svg`).
+
+The **Desktop icon** workflow compiles the `.icon` with Xcode 26 (artifact `assets-car`: commit
+it when you have no Xcode 26), fails when the committed `Assets.car` is stale (source hash, then
+its renditions against the fresh compile), and has macOS 26, 15 and 15 Intel runners draw the pair
+through NSWorkspace (`scripts/render-app-icon.swift`). The release checks the icon inputs before
+tauri-action builds and uploads, checks the bundle carries both icons after, and takes a failed
+macOS leg's assets back off the draft release.
 
 Rendering needs `rsvg-convert` (`brew install librsvg`): the tile needs real alpha. It bumps nothing: bump
 the shell version, tag `desktop-v…`, and every installed app shows the new icon after its next

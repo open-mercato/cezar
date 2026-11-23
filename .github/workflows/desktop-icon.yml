@@ -1,10 +1,10 @@
 name: Desktop icon
 
-# The macOS app icon is two icons (scripts/icon.mjs): icon.icns for macOS 15 and older and an
-# Icon Composer document compiled into Assets.car for macOS 26. This compiles the document with
-# Xcode 26 (the Assets.car artifact is what a maintainer without Xcode 26 commits), checks the
-# committed Assets.car names the icon Info.plist will ask for, and has each macOS draw the
-# shipped pair the way its Dock does.
+# The macOS app icon is two icons (scripts/icon.mjs): an Icon Composer document compiled into
+# Assets.car, which macOS 26 draws and macOS 12-15 draw from its flattened renditions, and
+# icon.icns, the fallback wherever the catalog is not read. This compiles the document with
+# Xcode 26 (the assets-car artifact is what a maintainer without Xcode 26 commits), fails when the
+# committed Assets.car is stale, and has each macOS draw the compiled pair the way its Dock does.
 on:
   pull_request:
     branches:
@@ -12,6 +12,8 @@ on:
     paths:
       - 'packages/desktop/src-tauri/icons/**'
       - 'packages/desktop/scripts/icon.mjs'
+      - 'packages/desktop/scripts/icon-car.mjs'
+      - 'packages/desktop/src-tauri/tauri.conf.json'
       - 'packages/desktop/scripts/render-app-icon.swift'
       - '.github/workflows/desktop-icon.yml'
   workflow_dispatch:
@@ -40,15 +42,9 @@ jobs:
       - name: Compile cezar.icon with actool
         shell: bash
         run: |
-          xcrun actool --version --output-format human-readable-text < /dev/null
-          mkdir -p out
-          # The same arguments as compileAssetsCar in scripts/icon.mjs.
-          xcrun actool "$ICONS/cezar.icon" --compile out --output-format human-readable-text \
-            --notices --warnings --output-partial-info-plist out/partial.plist --app-icon cezar \
-            --include-all-app-icons --enable-on-demand-resources NO --development-region en \
-            --target-device mac --minimum-deployment-target 12.0 --platform macosx < /dev/null
-          cat out/partial.plist
-          xcrun assetutil --info out/Assets.car | head -80
+          # icon-car.mjs holds the actool arguments npm run icon uses too.
+          node packages/desktop/scripts/icon-car.mjs compile out
+          cat out/partial.plist out/Assets.car.json
 
       - name: Upload the compiled Assets.car
         id: upload
@@ -58,12 +54,14 @@ jobs:
           path: out/
           retention-days: 14
 
-      - name: Check the committed Assets.car
+      # Stale = compiled from another cezar.icon (the hash beside it) or carrying other renditions
+      # than the fresh compile (names, sizes, appearances, pixel digests).
+      - name: Check the committed Assets.car is current
         shell: bash
         run: |
-          test -f "$ICONS/Assets.car" || { echo "::error::$ICONS/Assets.car is missing: commit the compiled artifact"; exit 1; }
-          xcrun assetutil --info "$ICONS/Assets.car" > committed.json
-          grep -Eq '"Name" ?: ?"cezar"' committed.json || { echo "::error::the committed Assets.car has no icon named cezar"; exit 1; }
+          test -f "$ICONS/Assets.car" || { echo "::error::$ICONS/Assets.car is missing: commit the assets-car artifact"; exit 1; }
+          node packages/desktop/scripts/icon-car.mjs check-source || { echo "::error::$ICONS/Assets.car is stale: commit the assets-car artifact"; exit 1; }
+          node packages/desktop/scripts/icon-car.mjs compare out/Assets.car "$ICONS/Assets.car" || { echo "::error::$ICONS/Assets.car differs from a fresh compile: commit the assets-car artifact"; exit 1; }
 
   render:
     name: Render on ${{ matrix.os }}
@@ -87,7 +85,7 @@ jobs:
           name: assets-car
           path: compiled
 
-      - name: Draw the shipped icon pair the way this macOS does
+      - name: Draw the icon pair the way this macOS does
         shell: bash
         run: |
           sw_vers
@@ -97,9 +95,8 @@ jobs:
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp /usr/bin/true "$app/Contents/MacOS/check"
           cp "$ICONS/icon.icns" "$app/Contents/Resources/icon.icns"
-          # The committed catalog; the one just compiled only while none is committed yet.
-          car="$ICONS/Assets.car"; [ -f "$car" ] || car=compiled/Assets.car
-          cp "$car" "$app/Contents/Resources/Assets.car"
+          # The catalog just compiled from cezar.icon; the compile job proves the committed one equal.
+          cp compiled/Assets.car "$app/Contents/Resources/Assets.car"
           cat > "$app/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

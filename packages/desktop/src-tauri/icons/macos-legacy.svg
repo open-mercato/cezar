@@ -3,7 +3,7 @@
 <clipPath id="cezar-tile"><rect x="100" y="100" width="824" height="824" rx="185.4"/></clipPath>
 <filter id="cezar-shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000" flood-opacity="0.3"/></filter>
 </defs>
-<rect x="100" y="100" width="824" height="824" rx="185.4" fill="#000" filter="url(#cezar-shadow)"/>
+<rect x="100" y="100" width="824" height="824" rx="185.4" fill="#000000" filter="url(#cezar-shadow)"/>
 <g clip-path="url(#cezar-tile)">
 <g transform="translate(100 100) scale(1.170455)">
 <rect width="704" height="704" fill="#000000"/>

@@ -182,6 +182,18 @@ jobs:
             } >> "$GITHUB_ENV"
           done
 
+      # The macOS icons before anything is built or uploaded (spec 2026-09-25 § Replacing the icon):
+      # tauri-action uploads as it bundles, so a bundle that fails a check afterwards has
+      # already reached the draft release.
+      - name: Check the macOS icon inputs
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: |
+          test -f src-tauri/icons/Assets.car || { echo "::error::no src-tauri/icons/Assets.car"; exit 1; }
+          node scripts/icon-car.mjs check-source || { echo "::error::Assets.car is stale against cezar.icon"; exit 1; }
+          xcrun assetutil --info src-tauri/icons/Assets.car | grep -Eq '"Name" ?: ?"cezar"' || { echo "::error::Assets.car has no icon named cezar"; exit 1; }
+
       - name: Build and upload with tauri-action
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
@@ -332,7 +344,16 @@ jobs:
           if [ ${#apps[@]} -eq 0 ]; then echo "::error::no .app bundle found"; exit 1; fi
           codesign --verify --deep --strict --verbose=2 "${apps[0]}"
           codesign -dv "${apps[0]}" 2>&1 | grep -E "Signature|TeamIdentifier|Sealed"
-          # Both macOS icons (spec 2026-09-25 § Replacing the icon): without them macOS 26 or 15 falls back.
+
+      # Both icons: without the catalog every macOS draws the .icns fallback, without the .icns
+      # the places that read only CFBundleIconFile show a blank app.
+      - name: Verify the macOS bundle's icons
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: |
+          shopt -s nullglob
+          apps=( src-tauri/target/*/release/bundle/macos/*.app )
           test -f "${apps[0]}/Contents/Resources/Assets.car" || { echo "::error::no Assets.car in the bundle"; exit 1; }
           test "$(plutil -extract CFBundleIconName raw "${apps[0]}/Contents/Info.plist")" = cezar || { echo "::error::CFBundleIconName is not cezar"; exit 1; }
           test -n "$(plutil -extract CFBundleIconFile raw "${apps[0]}/Contents/Info.plist")" || { echo "::error::no CFBundleIconFile"; exit 1; }
@@ -417,6 +438,20 @@ jobs:
           path: ${{ env.DESKTOP_DIR }}/src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 1
+
+      # A macOS leg that failed after tauri-action uploaded takes its bundles back off the draft,
+      # so nothing a check rejected waits there for a re-run or a manual publish.
+      - name: Remove this leg's macOS assets from the draft
+        if: failure() && runner.os == 'macOS' && !inputs.dry_run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCH: ${{ startsWith(matrix.target, 'aarch64') && 'aarch64' || 'x64|x86_64' }}
+        run: |
+          gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null \
+            | { grep -E "_(${ARCH})([._].*)?\.(dmg|app\.tar\.gz(\.sig)?)$|^cezar-macos-(${ARCH})\.dmg(\.sha256)?$" || true; } \
+            | while read -r asset; do gh release delete-asset "$TAG" "$asset" --yes; done
 
   # Arch Linux and what is built on it (Omarchy, Manjaro, EndeavourOS): a pacman package, built
   # AND installed inside a real Arch container, so a library the binary needs and Arch does not

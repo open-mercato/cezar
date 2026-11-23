@@ -7,14 +7,13 @@
 //
 // Three outputs, because the platforms draw an app icon differently:
 // - Windows .ico and Linux PNGs: the mark full-bleed on the 1024px canvas, via `tauri icon`.
-// - icon.icns (CFBundleIconFile): macOS before 26 draws it as-is and masks nothing, so the rounded
-//   tile is baked in, inside Apple's icon grid (an 824px tile centred, transparent margin, a soft
-//   shadow). Full-bleed it was a hard-edged square in the Dock.
-// - cezar.icon + Assets.car (CFBundleIconName): an Icon Composer document (fill + glyph layer)
-//   that macOS 26 masks, lights and tints itself in every appearance. actool also flattens it into
-//   renditions for macOS 12-15, which then prefer them to the .icns. Assets.car needs Xcode 26's
-//   actool; without one the .icon is still written and the stale Assets.car is reported (the
-//   Desktop icon workflow compiles it too).
+// - cezar.icon + Assets.car (CFBundleIconName): an Icon Composer document (fill + glyph layer).
+//   macOS 26 masks, lights and tints it itself in every appearance; actool also flattens it into
+//   renditions that macOS 12-15 prefer to the .icns. Compiling needs Xcode 26 (icon-car.mjs);
+//   without one the .icon is still written and Assets.car is reported stale.
+// - icon.icns (CFBundleIconFile): the fallback wherever the catalog is not read (`tauri dev`,
+//   tools that read only CFBundleIconFile). macOS before 26 draws an .icns as-is, so the rounded
+//   tile is baked in, inside Apple's icon grid (824px tile centred, transparent margin, soft shadow).
 // The splash logo (ui/icon.svg) is refreshed from the same source.
 // Rendering needs rsvg-convert (brew/apt install librsvg): the legacy tile needs real alpha.
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -22,6 +21,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { ICON_DOC, ICONS_DIR, compileCatalog } from './icon-car.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const desktop = resolve(here, '..')
@@ -33,9 +34,6 @@ const positional = args.filter((arg, i) => arg !== '--bg' && (bgAt < 0 || i !== 
 const TILE_COLOR = '#000000'
 /** Apple's macOS icon grid (Big Sur to Sequoia): the tile, its offset and corner on a 1024 canvas. */
 const GRID = { tile: 824, inset: 100, radius: 185.4 }
-/** The deployment floor of the shell (tauri.conf.json `minimumSystemVersion`), for actool. */
-const MIN_MACOS = '12.0'
-const ICON_NAME = 'cezar'
 
 const source = resolve(positional[0] ?? resolve(desktop, '../web/public/icon.svg'))
 if (!existsSync(source)) {
@@ -78,7 +76,7 @@ const legacyTile = `<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill
 <clipPath id="cezar-tile"><rect x="${inset}" y="${inset}" width="${tile}" height="${tile}" rx="${radius}"/></clipPath>
 <filter id="cezar-shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000" flood-opacity="0.3"/></filter>
 </defs>
-<rect x="${inset}" y="${inset}" width="${tile}" height="${tile}" rx="${radius}" fill="#000" filter="url(#cezar-shadow)"/>
+<rect x="${inset}" y="${inset}" width="${tile}" height="${tile}" rx="${radius}" fill="${tileFill}" filter="url(#cezar-shadow)"/>
 <g clip-path="url(#cezar-tile)">
 ${markOnTile(tile, inset)}
 </g>
@@ -106,7 +104,7 @@ const iconJson = {
 }
 if (!glyph) console.warn('icon: no plain full-size background rect in the mark — the Tahoe icon keeps it in its layer')
 
-const iconsDir = join(desktop, 'src-tauri', 'icons')
+const iconsDir = ICONS_DIR
 const work = mkdtempSync(join(tmpdir(), 'cezar-icon-'))
 const render = (name, body) => {
   const svgPath = join(work, `${name}.svg`)
@@ -116,49 +114,40 @@ const render = (name, body) => {
   return pngPath
 }
 
-writeFileSync(join(iconsDir, 'source.svg'), fullBleed)
-writeFileSync(join(iconsDir, 'macos-legacy.svg'), legacyTile)
-execFileSync('npx', ['tauri', 'icon', render('full-bleed', fullBleed), '-o', iconsDir], { cwd: desktop, stdio: 'inherit' })
-for (const extra of ['android', 'ios']) rmSync(join(iconsDir, extra), { recursive: true, force: true })
-// Only the .icns is taken from the tile render; every other file stays full-bleed.
-const legacyOut = join(work, 'legacy')
-execFileSync('npx', ['tauri', 'icon', render('legacy', legacyTile), '-o', legacyOut], { cwd: desktop, stdio: 'ignore' })
-copyFileSync(join(legacyOut, 'icon.icns'), join(iconsDir, 'icon.icns'))
-
-const iconDoc = join(iconsDir, `${ICON_NAME}.icon`)
-rmSync(iconDoc, { recursive: true, force: true })
-mkdirSync(join(iconDoc, 'Assets'), { recursive: true })
-writeFileSync(join(iconDoc, 'icon.json'), `${JSON.stringify(iconJson, null, 2)}\n`)
-writeFileSync(join(iconDoc, 'Assets', 'mark.svg'), tahoeLayer)
-compileAssetsCar(iconDoc)
-
-copyFileSync(source, join(desktop, 'ui', 'icon.svg'))
-rmSync(work, { recursive: true, force: true })
-console.log(`icon: regenerated ${iconsDir} and ui/icon.svg from ${source}`)
-
-/** Xcode 26's actool, run the way Xcode itself compiles an Icon Composer icon into a catalog. */
-function compileAssetsCar(doc) {
-  const version = spawnSync('xcrun', ['actool', '--version', '--output-format', 'human-readable-text'], {
+try {
+  writeFileSync(join(iconsDir, 'source.svg'), fullBleed)
+  writeFileSync(join(iconsDir, 'macos-legacy.svg'), legacyTile)
+  execFileSync('npx', ['tauri', 'icon', render('full-bleed', fullBleed), '-o', iconsDir], { cwd: desktop, stdio: 'inherit' })
+  for (const extra of ['android', 'ios']) rmSync(join(iconsDir, extra), { recursive: true, force: true })
+  // Only the .icns is taken from the tile render; every other file stays full-bleed. Its log is a
+  // second copy of the one above, so it shows only when the run fails.
+  const legacyOut = join(work, 'legacy')
+  const legacy = spawnSync('npx', ['tauri', 'icon', render('legacy', legacyTile), '-o', legacyOut], {
+    cwd: desktop,
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
   })
-  const major = Number(/short-bundle-version: (\d+)/.exec(version.stdout ?? '')?.[1] ?? 0)
-  if (major < 26) {
-    console.warn(
-      'icon: no Xcode 26 actool here, so icons/Assets.car was NOT recompiled: run this again on a Mac with Xcode 26',
-    )
-    return
+  if (legacy.status !== 0) {
+    process.stderr.write(`${legacy.stdout ?? ''}${legacy.stderr ?? ''}${legacy.error ? `${legacy.error}\n` : ''}`)
+    throw new Error('tauri icon failed on the macOS tile')
   }
-  const out = join(work, 'car')
-  mkdirSync(out, { recursive: true })
-  // A null stdin: actool's ibtoold fails on a closed one (tauri-apps/tauri#16538).
-  execFileSync(
-    'xcrun',
-    ['actool', doc, '--compile', out, '--output-format', 'human-readable-text', '--notices', '--warnings',
-      '--output-partial-info-plist', join(out, 'partial.plist'), '--app-icon', ICON_NAME, '--include-all-app-icons',
-      '--enable-on-demand-resources', 'NO', '--development-region', 'en', '--target-device', 'mac',
-      '--minimum-deployment-target', MIN_MACOS, '--platform', 'macosx'],
-    { stdio: ['ignore', 'inherit', 'inherit'] },
-  )
-  copyFileSync(join(out, 'Assets.car'), join(iconsDir, 'Assets.car'))
+  copyFileSync(join(legacyOut, 'icon.icns'), join(iconsDir, 'icon.icns'))
+
+  rmSync(ICON_DOC, { recursive: true, force: true })
+  mkdirSync(join(ICON_DOC, 'Assets'), { recursive: true })
+  writeFileSync(join(ICON_DOC, 'icon.json'), `${JSON.stringify(iconJson, null, 2)}\n`)
+  writeFileSync(join(ICON_DOC, 'Assets', 'mark.svg'), tahoeLayer)
+  const car = join(work, 'car')
+  if (compileCatalog(car)) {
+    for (const file of ['Assets.car', 'Assets.car.json']) copyFileSync(join(car, file), join(iconsDir, file))
+  } else {
+    console.warn('icon: no Xcode 26 actool here, so icons/Assets.car is now STALE: recompile it on a Mac with Xcode 26')
+  }
+
+  copyFileSync(source, join(desktop, 'ui', 'icon.svg'))
+  console.log(`icon: regenerated ${iconsDir} and ui/icon.svg from ${source}`)
+} catch (error) {
+  console.error(`icon: ${error.message}`)
+  process.exitCode = 1
+} finally {
+  rmSync(work, { recursive: true, force: true })
 }
