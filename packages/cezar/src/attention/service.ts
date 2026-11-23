@@ -90,19 +90,16 @@ export function createAttentionService(deps: {
 }
 
 /**
- * One `attention-change` per change (spec 2026-11-23-needs-you-triage, review 2 finding 6): when a
- * recount will run (a phone listens), its own change report announces it; otherwise say it now.
+ * One `attention-change` per change (spec 2026-11-23-needs-you-triage): sent when the change happens,
+ * whether or not a phone listens. The recount a poke starts drives only the phone's push, gated on its
+ * revision; the cockpit never waits on it, since a read can fail and a change (a re-snooze that only
+ * moves `until`) can leave the revision alone.
  */
-export function createAttentionAnnouncer(deps: { poke: () => void; recounting: () => boolean; announce: () => void }): {
-  changed: () => void;
-  recounted: () => void;
-} {
+export function createAttentionAnnouncer(deps: { poke: () => void; announce: () => void }): { changed: () => void } {
   return {
     changed() {
       deps.poke();
-      if (!deps.recounting()) deps.announce();
+      deps.announce();
     },
-    recounted: () => deps.announce(),
   };
 }
-

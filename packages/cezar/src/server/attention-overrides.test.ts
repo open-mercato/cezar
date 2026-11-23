@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ import { RunStore } from '../runs/store.ts';
 import { runInRelayScope } from '../relay/scope.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { reportPrClosed } from './forge/pr-closed.ts';
+import { RelayService } from '../relay/service.ts';
 import { createApp, WorkspaceEventBus } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
@@ -124,15 +125,17 @@ describe('attention override routes', () => {
     const run = store.createRun({ title: 'Paused on #7', workflow: 'quick-task', task: 't', steps: [] });
     store.updateRun(run.id, { status: 'waiting' });
     store.recordPrRef(run.id, { number: 7, origin: 'marker' });
-    const prEnds = createPrEndMemory(() => join(repoRoot, 'attention-pr-ends.json'));
-    const boot = () => createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', prEnds,
+    // A fresh memory per boot: each one reads the file back, as a restart does (review of #2443, finding 2).
+    const boot = () => createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test',
+      prEnds: createPrEndMemory(() => join(repoRoot, 'attention-pr-ends.json')),
       attentionOverrides: createAttentionOverrideStore(() => join(repoRoot, 'attention-overrides.json')) });
     const settledOf = async (app: ReturnType<typeof boot>) => attentionResponseSchema.parse(await (await apiRequest(app, '/api/v1/workspace/attention')).json())
       .items.find((item) => item.runId === run.id)?.settled;
     try {
       __seedRefStatusCacheForTests(repoRoot, [[7, { kind: 'pr', status: 'merged', endedAt: new Date(Date.now() + 1000).toISOString() }]]);
       expect(await settledOf(boot())).toEqual({ why: 'pr-merged', detail: 'PR #7 merged' });
-      // A restart: the forge cache is empty, the verdict stays.
+      // A restart: the forge cache is empty, the verdict stays, read back from the file.
+      expect(readFileSync(join(repoRoot, 'attention-pr-ends.json'), 'utf8')).toContain('"merged"');
       __clearRefStatusCacheForTests();
       expect(await settledOf(boot())).toEqual({ why: 'pr-merged', detail: 'PR #7 merged' });
       // Reopened, as a fresh read says: live again, and forgotten.
@@ -144,4 +147,21 @@ describe('attention override routes', () => {
       __clearRefStatusCacheForTests();
     }
   }, 30_000);
+
+  it('tells the cockpit at once while a phone listens, a re-snooze included (review of #2443, finding 1)', async () => {
+    const wants = vi.spyOn(RelayService.prototype, 'wantsCounts').mockReturnValue(true);
+    try {
+      const { list, post, events } = build();
+      const task = (await list()).items.find((item) => item.kind === 'task' && !item.settled)!;
+      events.length = 0;
+      await post('/api/v1/workspace/attention/overrides', { key: task.key, mode: 'dismiss', until: new Date(Date.now() + 3_600_000).toISOString() });
+      expect(events).toEqual(['attention-change']);
+      // Moving only the snooze's end leaves the item list alone, and is still news for the cockpit.
+      await post('/api/v1/workspace/attention/overrides', { key: task.key, mode: 'dismiss', until: new Date(Date.now() + 7_200_000).toISOString() });
+      expect(events).toEqual(['attention-change', 'attention-change']);
+    } finally {
+      wants.mockRestore();
+    }
+  }, 30_000);
 });
+

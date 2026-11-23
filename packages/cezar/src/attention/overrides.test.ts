@@ -50,7 +50,10 @@ describe('attention override store (spec 2026-11-23-needs-you-triage)', () => {
     expect((await store.list(NOW))[0]).not.toHaveProperty('projectId');
   });
 
-  it('on a read-only home keeps every change in memory and still sees the file (review 2, finding 2)', async () => {
+  // chmod does not stop root, and Windows ignores it (review of #2443, finding 3).
+  const canDenyWrites = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+  it.skipIf(!canDenyWrites)('on a read-only home keeps every change in memory and still sees the file (review 2, finding 2)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cez-overrides-ro-'));
     const path = join(dir, 'attention-overrides.json');
     writeFileSync(path, JSON.stringify({ overrides: [{ key: 'old', mode: 'dismiss', at: new Date(NOW).toISOString() }] }));
@@ -68,6 +71,29 @@ describe('attention override store (spec 2026-11-23-needs-you-triage)', () => {
       // The next write lands everything on disk.
       await store.set({ key: 'c', mode: 'keep' }, NOW + 2);
       expect(JSON.parse(readFileSync(path, 'utf8')).overrides.map((entry: { key: string }) => entry.key).sort()).toEqual(['a', 'b', 'c', 'phone']);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  it.skipIf(!canDenyWrites)('a newer change on disk to a key this process failed to write wins (review of #2443, finding 4)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-overrides-ro-'));
+    const path = join(dir, 'attention-overrides.json');
+    writeFileSync(path, JSON.stringify({ overrides: [] }));
+    chmodSync(dir, 0o500);
+    try {
+      const mine = createAttentionOverrideStore(() => path);
+      await mine.set({ key: 'k', mode: 'dismiss' }, NOW);
+      await mine.set({ key: 'only-mine', mode: 'dismiss' }, NOW);
+      chmodSync(dir, 0o700);
+      // Later, another process says the opposite about `k`.
+      await createAttentionOverrideStore(() => path).set({ key: 'k', mode: 'keep' }, NOW + 1);
+      const seen = Object.fromEntries((await mine.list(NOW + 1)).map((entry) => [entry.key, entry.mode]));
+      expect(seen).toEqual({ k: 'keep', 'only-mine': 'dismiss' });
+      // And our next write does not put the old `k` back.
+      await mine.set({ key: 'other', mode: 'dismiss' }, NOW + 2);
+      const disk = JSON.parse(readFileSync(path, 'utf8')).overrides as Array<{ key: string; mode: string }>;
+      expect(Object.fromEntries(disk.map((entry) => [entry.key, entry.mode]))).toEqual({ k: 'keep', 'only-mine': 'dismiss', other: 'dismiss' });
     } finally {
       chmodSync(dir, 0o700);
     }

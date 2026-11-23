@@ -48,8 +48,9 @@ text showed raw `[[pr:…]]` markers.
   drops the item from `items` (until `until`, a snooze); `keep` clears `settled`. Keyed by item key, so
   a re-raised wait shows again. Entries expire after 30 days, at most 500 are kept, and deleting the
   file only brings items back; a store re-reads the file when its stamp changes, so another cezar
-  process's write shows. On a home cezar cannot write, this process's changes are kept in memory and laid
-  over the file on every read, so none is lost and another writer's still show (`attention/keyed-store.ts`). `GET /workspace/attention` returns the active `overrides`. A dismissal stores
+  process's write shows. On a home cezar cannot write, the keys this process failed to write are kept in
+  memory and laid over the file on every read, so none is lost and another writer's still show; a key
+  another process changed on disk since then takes the newer value (`attention/keyed-store.ts`). `GET /workspace/attention` returns the active `overrides`. A dismissal stores
   its task (`projectId`/`runId`, sent by the cockpit) and also covers that run's items that began before
   it: when a dismissed question's card closes, the run's wait comes back under a task key and stays
   hidden. A wait that began after the dismissal shows again.
@@ -58,8 +59,9 @@ text showed raw `[[pr:…]]` markers.
 - Live: the workspace stream carries `attention-change` (`{}`) whenever the list may have changed with no
   run, manager or question frame saying so: an override write (a phone's included), a snooze ending or a
   dismissal reaching its 30-day TTL (one timer for the soonest, armed on every read and write), a PR
-  closing. Once per change: when a phone listens, the recount announces it; otherwise the change itself.
-  The cockpit re-reads the list on it.
+  closing. Sent once, when the change happens, phone or not; the recount a change starts only drives the
+  phone's push (gated on its revision), so a failed read or a change outside the revision (a re-snooze)
+  never keeps the cockpit stale. The cockpit re-reads the list on it.
 - `GET /workspace/managers` adds `needsYou: { approvals, questions }` per manager, what Now still lists.
   The notch shows it; the manager heads count from the attention list itself. A muted manager's cards
   stay there (Notify off takes them out of the Now and phone badges only, as its toast says).

@@ -98,18 +98,12 @@ describe('createAttentionService', () => {
   });
 });
 
-describe('createAttentionAnnouncer (review 2, finding 6)', () => {
-  it('announces a change once: now, or by the recount when a phone listens', () => {
+describe('createAttentionAnnouncer (review of #2443, finding 1)', () => {
+  it('announces every change at once, whether or not a recount follows', () => {
     const log: string[] = [];
-    let phone = false;
-    const announcer = createAttentionAnnouncer({ poke: () => log.push('poke'), recounting: () => phone, announce: () => log.push('announce') });
+    const announcer = createAttentionAnnouncer({ poke: () => log.push('poke'), announce: () => log.push('announce') });
     announcer.changed();
-    expect(log).toEqual(['poke', 'announce']);
-    log.length = 0;
-    phone = true;
     announcer.changed();
-    announcer.recounted();
-    expect(log).toEqual(['poke', 'announce']);
+    expect(log).toEqual(['poke', 'announce', 'poke', 'announce']);
   });
 });
-

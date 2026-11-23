@@ -34,37 +34,48 @@ async function readBody(file: string): Promise<unknown> {
   }
 }
 
+/** What a key held on disk, comparable across reads. */
+const snapshot = (value: unknown): string => JSON.stringify(value ?? null);
+
 export function createKeyedStore<V>(options: KeyedStoreOptions<V>): KeyedStore<V> {
   let cache: { entries: Map<string, V>; stamp: string } | undefined;
-  // Set once a write failed: the keys this process changed, and their values (absent = deleted).
-  let memory: Map<string, V | undefined> | undefined;
+  // Only the keys this process failed to write: the value it wants, and what the file held for that
+  // key when it failed. A different value on disk later is a newer change, and it wins (review of #2443).
+  let memory: Map<string, { value: V | undefined; disk: string }> | undefined;
 
-  const fromFile = async (file: string, now: number): Promise<{ entries: Map<string, V>; stamp: string }> => {
+  const fromFile = async (file: string, now: number): Promise<{ entries: Map<string, V>; raw: Map<string, V>; stamp: string }> => {
     const stamp = await stampOf(file);
     if (cache && cache.stamp === stamp && !memory) {
       options.prune?.(cache.entries, now);
-      return cache;
+      return { ...cache, raw: cache.entries };
     }
-    const entries = options.decode(await readBody(file));
-    for (const [key, value] of memory ?? []) {
-      if (value === undefined) entries.delete(key);
-      else entries.set(key, value);
+    const raw = options.decode(await readBody(file));
+    const entries = new Map(raw);
+    for (const [key, kept] of [...(memory ?? [])]) {
+      if (snapshot(raw.get(key)) !== kept.disk) {
+        memory!.delete(key);
+        continue;
+      }
+      if (kept.value === undefined) entries.delete(key);
+      else entries.set(key, kept.value);
     }
+    if (memory?.size === 0) memory = undefined;
     options.prune?.(entries, now);
-    return { entries, stamp };
+    return { entries, raw, stamp };
   };
 
   return {
     async load(now = Date.now()) {
-      cache = await fromFile(options.path(), now);
-      return new Map(cache.entries);
+      const read = await fromFile(options.path(), now);
+      cache = { entries: read.entries, stamp: read.stamp };
+      return new Map(read.entries);
     },
     update(mutate, now = Date.now()) {
       const file = options.path();
       return serializedByPath(file, async () => {
         // Always from the file: another process may have written since our last read.
         cache = undefined;
-        const base = (await fromFile(file, now)).entries;
+        const { entries: base, raw } = await fromFile(file, now);
         const next = new Map(base);
         mutate(next);
         options.prune?.(next, now);
@@ -73,10 +84,11 @@ export function createKeyedStore<V>(options: KeyedStoreOptions<V>): KeyedStore<V
           memory = undefined;
           cache = { entries: next, stamp: await stampOf(file) };
         } catch {
-          // A read-only home: keep every change this process made, laid over the file from now on.
+          // A read-only home: keep only what this write changed, against what the file held.
           memory ??= new Map();
           for (const key of new Set([...base.keys(), ...next.keys()])) {
-            if (base.get(key) !== next.get(key)) memory.set(key, next.get(key));
+            if (base.get(key) === next.get(key)) continue;
+            memory.set(key, { value: next.get(key), disk: memory.get(key)?.disk ?? snapshot(raw.get(key)) });
           }
           cache = { entries: next, stamp: await stampOf(file) };
         }

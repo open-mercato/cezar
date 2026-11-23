@@ -9195,7 +9195,6 @@ export function createApp(deps: ServerDeps) {
   // dismissal from a phone, a PR closing): the cockpit re-reads on this, phones on the recount.
   const announcer = createAttentionAnnouncer({
     poke: () => attention.poke(),
-    recounting: () => phonePairing.wantsCounts(),
     announce: () => workspaceEvents.emit('attention-change', {}),
   });
   const attentionChanged = () => announcer.changed();
@@ -9217,10 +9216,8 @@ export function createApp(deps: ServerDeps) {
   // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
   const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
   deps.onDispose?.(() => attention.dispose());
-  attention.onChange(() => {
-    phonePairing.noteAttentionChange();
-    announcer.recounted();
-  });
+  // The recount is the phone's: a cockpit heard the change itself (`announcer`), or a run/manager frame.
+  attention.onChange(() => phonePairing.noteAttentionChange());
   questionInbox.onChange(() => attention.poke());
   const offAttentionEvents = workspaceEvents.on((event) => {
     if (event === 'manager-change' || event === 'manager-message') attention.poke();
@@ -9333,7 +9330,8 @@ export function createApp(deps: ServerDeps) {
   const managersRoutes = new Hono()
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
-    // `needsYou`: what Now still counts per manager, so the notch agrees with the Now and phone badges.
+    // `needsYou`: what Now still lists per manager (not dismissed, snoozed or probably done; a muted
+    // manager's included), so the notch and the heads show what Now shows.
     .get('/workspace/managers', async (c) => {
       const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
       return c.json({ managers: list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers });
