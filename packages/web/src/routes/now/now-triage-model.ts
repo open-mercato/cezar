@@ -68,6 +68,11 @@ export function isHidden(target: TriageTarget, overrides: readonly AttentionOver
   return overrides?.some((entry) => entry.key === target.key && entry.mode === 'dismiss') ?? false
 }
 
+/** Now's own task row: its item left the list when dismissed, so the dismissal names the run it hid. */
+export function isRunHidden(projectId: string | undefined, runId: string, overrides: readonly AttentionOverride[] | undefined): boolean {
+  return projectId !== undefined && (overrides?.some((entry) => entry.mode === 'dismiss' && entry.projectId === projectId && entry.runId === runId) ?? false)
+}
+
 /** One line of toast text: a long title would wrap the toast. */
 export function shortLabel(text: string, max = 48): string {
   const plain = text.replace(/\[\[(?:task|pr|issue):[^\]/\s]+\/([^\]\s]+)\]\]/g, (_match, id: string) => (/^\d+$/.test(id) ? `#${id}` : 'task')).replace(/\s+/g, ' ').trim()

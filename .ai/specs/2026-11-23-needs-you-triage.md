@@ -14,7 +14,7 @@ text showed raw `[[pr:…]]` markers.
 - Variant A: a ✕ and a ⋯ menu on every row; settled items fold into a collapsed **Probably done** group.
 - Phone: a swipe left only REVEALS Snooze and Dismiss; a tap acts. A grip on the row's edge and a
   one-time peek of the first row show that rows slide.
-- "Gone quiet" reuses the Questions page's Older days (`questions.olderAfterDays`, default 3; 0 = off).
+- "Gone quiet" reuses the Questions page's Older days (`questions.olderAfterDays`, default 7; 0 = off).
 - ✕ on a question also closes the card (`dismissed`), after the Questions page's 6 s undo window.
 
 ## Server
@@ -33,7 +33,8 @@ text showed raw `[[pr:…]]` markers.
 - Overrides, `~/.cezar/attention-overrides.json` (`{ key, mode: dismiss|keep, at, until? }`): `dismiss`
   drops the item from `items` (until `until`, a snooze); `keep` clears `settled`. Keyed by item key, so
   a re-raised wait shows again. Entries expire after 30 days, at most 500 are kept, and deleting the
-  file only brings items back. `GET /workspace/attention` returns the active `overrides`.
+  file only brings items back. `GET /workspace/attention` returns the active `overrides`; a dismissal
+  that hid a task's item carries that item's `projectId`/`runId`, so Now hides its own row for the run.
 - Routes: `POST /workspace/attention/overrides` and `POST /workspace/attention/overrides/clear`, both
   answering `{ overrides }`. A PR closing (`onPrClosed`) and a snooze ending poke the list.
 

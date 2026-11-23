@@ -182,7 +182,8 @@ describe('Needs you triage (spec 2026-11-23-needs-you-triage)', () => {
     fireEvent.click(within(group).getByRole('button', { name: /Probably done/ }))
     expect(group.querySelector('[data-run-id="r1"] [data-slot="now-settled"]')?.textContent).toBe('PR #2317 merged')
     cleanup()
-    renderNow({ attention: { items: [{ ...waiting, settled: undefined }], total: 0, overrides: [{ key: waiting.key, mode: 'dismiss', at: ago(1) }] }, scope: 'project', onScope: vi.fn(), attentionActions: actions(), triage: triage(), projectId: 'cezar' })
+    // The server leaves a dismissed item out; its override names the run.
+    renderNow({ attention: { items: [], total: 0, overrides: [{ key: waiting.key, mode: 'dismiss', at: ago(1), projectId: 'cezar', runId: 'r1' }] }, scope: 'project', onScope: vi.fn(), attentionActions: actions(), triage: triage(), projectId: 'cezar' })
     expect(needsYou().querySelector('[data-run-id="r1"]')).toBeNull()
     expect(needsYou().getAttribute('data-count')).toBe('0')
   })

@@ -56,6 +56,7 @@ import { DismissButton, ProbablyDoneGroup, SettledReason, SwipeRow, TriageMenu, 
 import {
   SNOOZE_LABEL,
   isHidden,
+  isRunHidden,
   itemForRun,
   itemTarget,
   shortLabel,
@@ -174,7 +175,7 @@ export function NowView({
   const taskRows = React.useMemo(() => needsYou.flatMap((row) => {
     const item = itemForRun(attention?.items, projectId, row.run.id)
     const target = taskRowTarget(item, projectId, row.run, row.since, shortLabel(runTitle(row.run)))
-    if (isHidden(target, attention?.overrides, pendingQuestions)) return []
+    if (isHidden(target, attention?.overrides, pendingQuestions) || isRunHidden(projectId, row.run.id, attention?.overrides)) return []
     return [{ row, target, settled: item?.settled }]
   }), [needsYou, attention, projectId, pendingQuestions])
   const groups = React.useMemo(

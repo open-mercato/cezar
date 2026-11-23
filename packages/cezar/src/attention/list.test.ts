@@ -171,6 +171,8 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
     expect(dismissed.items.map((item) => [item.kind, item.settled, item.counted])).toEqual([['question', undefined, true]]);
     expect(dismissed.counts.total).toBe(1);
     expect(dismissed.revision).not.toBe(first.revision);
+    // The dismissal names the task it hid, for Now's own row.
+    expect(dismissed.overrides.find((entry) => entry.key === taskKey)).toMatchObject({ projectId: 'app', runId: 'wait' });
     // A new wait is a new key: it shows again.
     const raised = buildAttentionList(sources({ ...base, projects: [{ id: 'app', runs: [run('wait', { status: 'waiting', waitingSince: ago(1) })] }], overrides: [{ key: taskKey, mode: 'dismiss', at: ago(1) }] }));
     expect(raised.items.some((item) => item.kind === 'task')).toBe(true);

@@ -54,6 +54,9 @@ export const attentionOverrideSchema = z.object({
   mode: attentionOverrideModeSchema,
   at: z.string(),
   until: z.string().optional(),
+  /** The task a dismissal hid, so Now hides its own row for it too (the item itself left the list). */
+  projectId: z.string().optional(),
+  runId: z.string().optional(),
 });
 export type AttentionOverride = z.infer<typeof attentionOverrideSchema>;
 

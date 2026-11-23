@@ -54,7 +54,13 @@ export function applyOverrideLocally(queryClient: QueryClient, override: Pick<At
     if (!data) return data
     const rest = data.overrides.filter((entry) => entry.key !== override.key)
     if (override.mode === 'clear') return { ...data, overrides: rest }
-    const entry: AttentionOverride = { key: override.key, mode: override.mode, at: new Date().toISOString() }
+    const hid = data.items.find((item) => item.key === override.key)
+    const entry: AttentionOverride = {
+      key: override.key,
+      mode: override.mode,
+      at: new Date().toISOString(),
+      ...(override.mode === 'dismiss' && hid?.projectId && hid.runId ? { projectId: hid.projectId, runId: hid.runId } : {}),
+    }
     const items = override.mode === 'dismiss'
       ? data.items.filter((item) => item.key !== override.key)
       : data.items.map((item) => {

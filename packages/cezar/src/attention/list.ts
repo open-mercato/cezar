@@ -153,8 +153,14 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
     // Probably done: still listed, never counted.
     return [{ ...item, counted: false }];
   }).map((item) => (mode.get(item.key) === 'keep' && item.settled ? withoutSettled(item) : item));
+  // A dismissal names the task it hid; Now's own task rows have no other way to find it.
+  const hid = new Map(items.filter((item) => mode.get(item.key) === 'dismiss' && item.runId).map((item) => [item.key, item]));
+  const answered = overrides.map(({ projectId: _p, runId: _r, ...entry }) => {
+    const item = hid.get(entry.key);
+    return item?.projectId && item.runId ? { ...entry, projectId: item.projectId, runId: item.runId } : entry;
+  });
   shown.sort((a, b) => Number(!!a.settled) - Number(!!b.settled) || KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.since.localeCompare(a.since));
-  return { items: shown, counts: countAttention(shown), revision: revisionOf(shown, overrides), overrides };
+  return { items: shown, counts: countAttention(shown), revision: revisionOf(shown, overrides), overrides: answered };
 }
 
 function withoutSettled(item: AttentionItem): AttentionItem {
