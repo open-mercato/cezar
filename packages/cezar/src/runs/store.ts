@@ -41,6 +41,7 @@ import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
 import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
+import { RUN_TAGS_MAX, runTagSchema } from '@open-mercato/cezar-contract';
 import { dispatchSchema, runParkedSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { foldReportedModel, foldRunModels } from './reported-model.ts';
@@ -232,6 +233,9 @@ export const runRecordSchema = z.object({
    *  own selection — an override for Claude says nothing about which Codex account a mixed
    *  workflow's codex step should use. Absent = follow the project. */
   agentProfile: z.string().optional(),
+  /** Task tags, id plus a display snapshot (spec 2026-11-23-task-tags). `.catch` so a hand-edited
+   *  value drops only the tags, never the run. Omitted, never `[]`, when the run has none. */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional().catch(undefined),
   fallbackPolicy: z.object({
     enabled: z.boolean(),
     candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
@@ -1512,6 +1516,8 @@ export class RunStore extends EventEmitter {
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
+    /** Resolved task tags (spec 2026-11-23-task-tags); empty or absent stores nothing. */
+    tags?: RunRecord['tags'];
     fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
@@ -1535,6 +1541,7 @@ export class RunStore extends EventEmitter {
       reasoningEffort: input.reasoningEffort,
       runner: input.runner,
       agentProfile: input.agentProfile,
+      ...(input.tags && input.tags.length > 0 ? { tags: input.tags.map((tag) => ({ ...tag })) } : {}),
       fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,

@@ -1070,6 +1070,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  /** Resolved task tags (spec 2026-11-23-task-tags). A lens only: the engine never reads them. */
+  tags?: RunRecord['tags'];
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
   /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
@@ -2121,6 +2123,7 @@ export class RunManager {
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
+      ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
       // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
       fallbackPolicy: ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
@@ -3531,6 +3534,9 @@ export class RunManager {
       /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
        *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
       automationPaused?: (automationId: string) => boolean;
+      /** The child's task tags, resolved by the route from `input.tags` (spec 2026-11-23-task-tags).
+       *  Never the parent's: a child gets tags only through `--tag` (D13). */
+      tags?: RunRecord['tags'];
     } = {},
   ): { id: string; branch?: string } | { refused: string } {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
@@ -3619,6 +3625,7 @@ export class RunManager {
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
       ...(childAccount ? { agentProfile: childAccount } : {}),
+      ...(opts.tags && opts.tags.length > 0 ? { tags: opts.tags } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,

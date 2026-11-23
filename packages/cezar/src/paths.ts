@@ -135,6 +135,12 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** The task-tag registry (spec 2026-11-23-task-tags) — its own file for the `agentAccountsPath`
+ *  reason: a cezar that has never heard of tags never opens it, so it cannot drop them. */
+export function taskTagsPath(): string {
+  return join(cezarHomeDir(), 'task-tags.json');
+}
+
 /** Manager definitions (spec 2026-10-31-managers). */
 export function managersPath(): string {
   return join(cezarHomeDir(), 'managers.json');

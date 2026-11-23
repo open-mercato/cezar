@@ -84,6 +84,11 @@ export const automationTaskSchema = z
   .passthrough()
   .refine((task) => !(task.workflow && task.steps), {
     message: 'task selects either a named workflow or inline steps, not both',
+  })
+  // `.passthrough()` would keep it and the launch would apply it: tagging an automation's tasks is
+  // a later, separate decision (spec 2026-11-23-task-tags § 5).
+  .refine((task) => !Object.prototype.hasOwnProperty.call(task, 'tags'), {
+    message: 'automation tasks cannot carry task tags',
   });
 
 /**

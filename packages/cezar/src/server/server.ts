@@ -131,6 +131,7 @@ import {
   type GroupVariant,
   type PickVariantResponse,
   type RunIndexEntry,
+  type RunTag,
   type RunsIndexResponse,
   type StarCountPayload,
   designProxyRequestSchema,
@@ -301,6 +302,8 @@ import { branchDiff, branchesCheckedOutElsewhere, localBranchExists, pruneOrphan
 import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
+import { runTagsRoutes, taskTagError, taskTagsWorkspaceRoutes } from './task-tags.ts';
+import { resolveTagRefs } from '../workspace/task-tags.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
 import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
@@ -2360,6 +2363,20 @@ export function createApp(deps: ServerDeps) {
     } catch {
       return null;
     }
+  };
+
+  /** Every project the task-tag wire can name: the registry plus the unregistered boot project. */
+  const taskTagProjectRoots = async (): Promise<Array<{ id: string; root: string }>> => {
+    const projects = (await loadWorkspaceConfig()).projects;
+    const registry = projects.map((p) => ({ id: p.id, root: p.root }));
+    const bootId = await resolveBootProject(projects).catch(() => undefined);
+    if (bootId !== undefined && !registry.some((p) => p.id === bootId)) {
+      registry.push({ id: bootId, root: await realpath(bootRoot).catch(() => bootRoot) });
+    }
+    // `default` is the reserved boot alias every scoped route accepts; never a display id.
+    const bootRootReal = bootId === undefined ? undefined : registry.find((p) => p.id === bootId)?.root;
+    registry.push({ id: 'default', root: bootRootReal ?? (await realpath(bootRoot).catch(() => bootRoot)) });
+    return registry;
   };
 
   // ---- chained family: agent providers (workspace-level) ----
@@ -5257,8 +5274,18 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(runner, input.account);
         if ('error' in account) return c.json({ error: `dispatch refused — ${account.error}` }, 409);
       }
+      let tags: RunTag[] = [];
+      if (input.tags && input.tags.length > 0) {
+        if (!store.getRun(c.req.param('id'))) return c.json({ error: `no such run: ${c.req.param('id')}` }, 409);
+        try {
+          tags = (await resolveTagRefs(input.tags, c.get('project').root)).tags;
+        } catch (error) {
+          return taskTagError(c, error);
+        }
+      }
       const outcome = manager.dispatch(c.req.param('id'), input, {
         automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
+        ...(tags.length > 0 ? { tags } : {}),
       });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
       return c.json(outcome, 201);
@@ -5477,7 +5504,17 @@ export function createApp(deps: ServerDeps) {
       }
       const images = resolveAttachments(parsed.data.images);
       if (typeof images === 'string') return c.json({ error: images }, 400);
+      // Resolved before the run exists, so a bad ref creates nothing (spec 2026-11-23-task-tags § 5).
+      let tags: RunTag[] = [];
+      if (parsed.data.tags && parsed.data.tags.length > 0) {
+        try {
+          tags = (await resolveTagRefs(parsed.data.tags, repoRoot)).tags;
+        } catch (error) {
+          return taskTagError(c, error);
+        }
+      }
       const input = {
+        ...(tags.length > 0 ? { tags } : {}),
         task: parsed.data.task,
         model: parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
@@ -8717,6 +8754,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', webhookRoutes)
     .route('/', dispatchRoutes)
     .route('/', runsRoutes)
+    .route('/', runTagsRoutes())
     .route('/', draftRoutes)
     .route('/', layoutRoutes)
     .route('/', groupsRoutes)
@@ -8790,6 +8828,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     ...(run.parked !== undefined ? { parked: run.parked } : {}),
     workflow: run.workflow,
+    ...(run.tags !== undefined && run.tags.length > 0 ? { tags: run.tags } : {}),
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.diffStat !== undefined ? { diffStat: run.diffStat } : {}),
     ...(run.dispatch !== undefined
@@ -9580,6 +9619,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', agentSetupFamily)
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)
+    .route('/', taskTagsWorkspaceRoutes({ projectRoots: taskTagProjectRoots }))
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
     .route('/', starCountRoutes)
