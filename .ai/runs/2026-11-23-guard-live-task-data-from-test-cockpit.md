@@ -79,8 +79,8 @@ main checkout, and the main checkout's `.ai/qa/test-env-app.log` shows "recovere
 
 ### Phase 1: Stopgap in test-env-up.sh
 
-- [ ] 1.1 Refuse in a used main checkout outside CI
-- [ ] 1.2 Launcher tests for refused and allowed cases
+- [x] 1.1 Refuse in a used main checkout outside CI — 622a327b1
+- [x] 1.2 Launcher tests for refused and allowed cases — 622a327b1
 
 ### Phase 2: Per-data-dir server lock
 
