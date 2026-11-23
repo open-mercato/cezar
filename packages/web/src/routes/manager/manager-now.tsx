@@ -6,6 +6,7 @@ import { Link, useSearchParams } from 'react-router'
 import { useAttention } from '@/api/attention'
 import { orderManagers, useManagers } from '@/api/managers'
 import { useRunsIndex } from '@/api/queries'
+import { ScreenLoading } from '@/components/loading-state'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import {
@@ -193,6 +194,9 @@ export function ManagerNowRoute() {
     const followed = new Set((filter === undefined ? ordered : ordered.filter((manager) => manager.id === filter)).flatMap((manager) => manager.followedTasks))
     return (runsIndex.data?.runs ?? []).filter((run) => run.status === 'running' && followed.has(`${run.projectId}/${run.id}`))
   }, [runsIndex.data, ordered, filter])
+  // A requested manager waits for the list rather than flashing All managers first; an unknown id falls
+  // back to All only once the list says it is unknown.
+  const waiting = managers.data === undefined && search.has(MANAGER_FILTER_PARAM)
   const onFilter = React.useCallback((managerId: string | undefined) => {
     setSearch((current) => {
       const next = new URLSearchParams(current)
@@ -201,6 +205,7 @@ export function ManagerNowRoute() {
       return next
     })
   }, [setSearch])
+  if (waiting) return <ScreenLoading label="Loading managers…" />
   return (
     <LiveNowProvider intervalMs={30_000}>
       <ManagerProjectsContext.Provider value={referenceProjects}>
