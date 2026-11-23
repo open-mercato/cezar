@@ -9188,7 +9188,7 @@ export function createApp(deps: ServerDeps) {
         return ended && number !== undefined ? { number, ...ended } : undefined;
       },
     });
-    await prEnds.note(ends.seen, ends.reopened).catch(() => {});
+    await prEnds.note(ends.seen, ends.dropped).catch(() => {});
     return list;
   };
   // The list may have changed where no run, manager or question frame says so (a snooze ending, a

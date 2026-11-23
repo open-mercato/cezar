@@ -160,6 +160,20 @@ describe('dismiss with undo', () => {
     await vi.waitFor(() => expect(onFailed).toHaveBeenCalledWith('disk full'))
   })
 
+  it('a second caller of a close already pending still hears its failure (review of #2443, round 3)', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockResolvedValue(Response.json({ error: 'disk full' }, { status: 500 }))
+    const first = vi.fn()
+    const second = vi.fn()
+    scheduleDismiss(client, 'm:global:1', 'Design', { onFailed: first })
+    // Now's ✕ on a card the Questions page is already closing.
+    scheduleDismiss(client, 'm:global:1', 'Design', { onFailed: second })
+    await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS)
+    await vi.waitFor(() => expect(second).toHaveBeenCalledWith('disk full'))
+    expect(first).toHaveBeenCalledWith('disk full')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('a 409 is no failure for the caller: the card closed anyway', async () => {
     vi.useFakeTimers()
     fetchMock.mockResolvedValue(Response.json({ error: 'already closed' }, { status: 409 }))

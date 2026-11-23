@@ -35,9 +35,11 @@ text showed raw `[[pr:…]]` markers.
   A PR settles an item only when it ended AFTER the item began (`mergedAt`/`closedAt`, read by the same
   ref-status query cezar already runs): a PR that ended before the task asked again says nothing about
   the new wait, and an unknown end time settles nothing. What cezar has seen end is kept in
-  `~/.cezar/attention-pr-ends.json` (`{ root, number, state, endedAt }`, at most 2,000), so a verdict
-  outlives the forge cache's 10 min / 24 h TTL and a restart; a fresh read that finds the PR open again
-  drops it. On a tie in time (legacy refs), a created PR outranks a declared one, and declaring a PR
+  `~/.cezar/attention-pr-ends.json` (`{ root, number, state, endedAt, seenAt }`, at most 2,000), so a
+  verdict outlives the forge cache's 10 min / 24 h TTL and a restart; a fresh read that finds the PR open
+  again drops it. A merged end is kept; a closed one lapses a day after a fresh read last confirmed it
+  (`seenAt`), since a PR can be reopened while nothing reads it. A fresh answer with no time borrows the
+  remembered time of the same end. On a tie in time (legacy refs), a created PR outranks a declared one, and declaring a PR
   again (`CEZ:PR`) makes it the newest.
   Cards whose declared `about` ended, and replaced cards, already close and leave the list.
 - Order: tiers — blocking decisions (approvals, questions, messages), the review gate, waits, failures.

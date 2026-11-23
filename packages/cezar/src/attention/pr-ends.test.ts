@@ -36,32 +36,67 @@ describe('createPrEndMemory', () => {
 });
 
 describe('prEndLookup', () => {
-  const none = { end: () => undefined, isOpen: () => false };
+  const NOW = Date.parse('2026-11-23T12:00:00.000Z')
+  const at = (hoursAgo: number) => new Date(NOW - hoursAgo * 3_600_000).toISOString()
+  const none = { end: () => undefined, isOpen: () => false }
 
   it('a fresh closed (not merged) end is used and remembered', () => {
-    const ends = prEndLookup(new Map(), { end: () => ({ state: 'closed', endedAt: '2026-11-23T09:00:00.000Z' }), isOpen: () => false });
-    expect(ends.lookup('/repo', 4)).toEqual({ state: 'closed', endedAt: '2026-11-23T09:00:00.000Z' });
-    expect(ends.seen).toEqual([{ root: '/repo', number: 4, state: 'closed', endedAt: '2026-11-23T09:00:00.000Z' }]);
-  });
+    const ends = prEndLookup(new Map(), { end: () => ({ state: 'closed', endedAt: at(3) }), isOpen: () => false }, NOW)
+    expect(ends.lookup('/repo', 4)).toEqual({ state: 'closed', endedAt: at(3) })
+    expect(ends.seen).toEqual([{ root: '/repo', number: 4, state: 'closed', endedAt: at(3), seenAt: at(0) }])
+  })
 
-  it('an end with no endedAt is used for this read but never remembered', () => {
-    const ends = prEndLookup(new Map(), { end: () => ({ state: 'merged' }), isOpen: () => false });
-    expect(ends.lookup('/repo', 5)).toEqual({ state: 'merged' });
-    expect(ends.seen).toEqual([]);
-  });
+  it('an end with no endedAt, and none remembered, is used for this read but never stored', () => {
+    const ends = prEndLookup(new Map(), { end: () => ({ state: 'merged' }), isOpen: () => false }, NOW)
+    expect(ends.lookup('/repo', 5)).toEqual({ state: 'merged' })
+    expect(ends.seen).toEqual([])
+  })
+
+  it('a fresh end with no time borrows the remembered one for the same end (review of #2443, round 3)', () => {
+    const known = new Map([[prEndKey('/repo', 5), record(5, { endedAt: at(30), seenAt: at(1) })]])
+    const ends = prEndLookup(known, { end: () => ({ state: 'merged' }), isOpen: () => false }, NOW)
+    expect(ends.lookup('/repo', 5)).toEqual({ state: 'merged', endedAt: at(30) })
+    // A different state is a different end: no time is borrowed.
+    const closed = prEndLookup(known, { end: () => ({ state: 'closed' }), isOpen: () => false }, NOW)
+    expect(closed.lookup('/repo', 5)).toEqual({ state: 'closed' })
+  })
 
   it('falls back to the memory, and drops it when a fresh read says open', () => {
-    const known = new Map([[prEndKey('/repo', 6), record(6, { state: 'closed' })]]);
-    expect(prEndLookup(known, none).lookup('/repo', 6)).toEqual({ state: 'closed', endedAt: '2026-11-23T10:00:00.000Z' });
-    const reopened = prEndLookup(known, { end: () => undefined, isOpen: () => true });
-    expect(reopened.lookup('/repo', 6)).toBeUndefined();
-    expect(reopened.reopened).toEqual([prEndKey('/repo', 6)]);
-  });
+    const known = new Map([[prEndKey('/repo', 6), record(6, { state: 'closed', endedAt: at(2), seenAt: at(1) })]])
+    expect(prEndLookup(known, none, NOW).lookup('/repo', 6)).toEqual({ state: 'closed', endedAt: at(2) })
+    const reopened = prEndLookup(known, { end: () => undefined, isOpen: () => true }, NOW)
+    expect(reopened.lookup('/repo', 6)).toBeUndefined()
+    expect(reopened.dropped).toEqual([prEndKey('/repo', 6)])
+  })
 
-  it('an unchanged fresh end is not written again', () => {
-    const known = new Map([[prEndKey('/repo', 8), record(8)]]);
-    const ends = prEndLookup(known, { end: () => ({ state: 'merged', endedAt: '2026-11-23T10:00:00.000Z' }), isOpen: () => false });
-    ends.lookup('/repo', 8);
-    expect(ends.seen).toEqual([]);
-  });
-});
+  it('a remembered closed end lapses a day after it was last confirmed; a merged one stays (review of #2443, round 3)', () => {
+    const known = new Map([
+      [prEndKey('/repo', 7), record(7, { state: 'closed', endedAt: at(40), seenAt: at(25) })],
+      [prEndKey('/repo', 8), record(8, { state: 'closed', endedAt: at(40), seenAt: at(23) })],
+      [prEndKey('/repo', 9), record(9, { state: 'merged', endedAt: at(400), seenAt: at(300) })],
+    ])
+    const ends = prEndLookup(known, none, NOW)
+    expect(ends.lookup('/repo', 7)).toBeUndefined()
+    expect(ends.lookup('/repo', 8)).toEqual({ state: 'closed', endedAt: at(40) })
+    expect(ends.lookup('/repo', 9)).toEqual({ state: 'merged', endedAt: at(400) })
+    expect(ends.dropped).toEqual([prEndKey('/repo', 7)])
+  })
+
+  it('a fresh read confirming a closed end renews it, at most hourly', () => {
+    const known = new Map([
+      [prEndKey('/repo', 7), record(7, { state: 'closed', endedAt: at(40), seenAt: at(2) })],
+      [prEndKey('/repo', 8), record(8, { state: 'closed', endedAt: at(40), seenAt: at(0.5) })],
+    ])
+    const ends = prEndLookup(known, { end: () => ({ state: 'closed', endedAt: at(40) }), isOpen: () => false }, NOW)
+    ends.lookup('/repo', 7)
+    ends.lookup('/repo', 8)
+    expect(ends.seen.map((entry) => [entry.number, entry.seenAt])).toEqual([[7, at(0)]])
+  })
+
+  it('an unchanged fresh merged end is not written again', () => {
+    const known = new Map([[prEndKey('/repo', 8), record(8, { seenAt: at(30) })]])
+    const ends = prEndLookup(known, { end: () => ({ state: 'merged', endedAt: '2026-11-23T10:00:00.000Z' }), isOpen: () => false }, NOW)
+    ends.lookup('/repo', 8)
+    expect(ends.seen).toEqual([])
+  })
+})

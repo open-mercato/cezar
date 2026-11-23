@@ -273,7 +273,15 @@ function watchClosedElsewhere(queryClient: QueryClient): void {
 
 export function scheduleDismiss(queryClient: QueryClient, key: string, label: string, opts?: { onFailed?: (error: string) => void }): void {
   const existing = dismissals.get(key)
-  if (existing && !existing.error) return
+  if (existing && !existing.error) {
+    // Already on its way (the Questions page, a card): this caller still hears a failure.
+    const later = opts?.onFailed
+    if (later) {
+      const earlier = existing.onFailed
+      existing.onFailed = earlier ? (error) => { earlier(error); later(error) } : later
+    }
+    return
+  }
   clearTimeout(existing?.timer)
   const entry: Entry = { key, label, paused: false, remaining: DISMISS_UNDO_MS, startedAt: Date.now(), queryClient, ...(opts?.onFailed ? { onFailed: opts.onFailed } : {}) }
   watchClosedElsewhere(queryClient)

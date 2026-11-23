@@ -151,6 +151,7 @@ describe('attention override routes', () => {
 
   it('tells the cockpit at once while a phone listens, a re-snooze included (review of #2443, finding 1)', async () => {
     const wants = vi.spyOn(RelayService.prototype, 'wantsCounts').mockReturnValue(true);
+    const pushed = vi.spyOn(RelayService.prototype, 'noteAttentionChange');
     try {
       const { list, post, events } = build();
       const task = (await list()).items.find((item) => item.kind === 'task' && !item.settled)!;
@@ -160,11 +161,14 @@ describe('attention override routes', () => {
       // Moving only the snooze's end leaves the item list alone, and is still news for the cockpit.
       await post('/api/v1/workspace/attention/overrides', { key: task.key, mode: 'dismiss', until: new Date(Date.now() + 7_200_000).toISOString() });
       expect(events).toEqual(['attention-change', 'attention-change']);
-      // The recount the posts started (ATTENTION_SETTLE_MS later) is the phone's: it adds no third event.
-      await new Promise((resolve) => setTimeout(resolve, ATTENTION_SETTLE_MS + 1_500));
+      // The recount the posts started (ATTENTION_SETTLE_MS later) is the phone's: it ran and pushed,
+      // and it added no third event.
+      await vi.waitFor(() => expect(pushed).toHaveBeenCalled(), { timeout: ATTENTION_SETTLE_MS + 3_000, interval: 50 });
+      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(events).toEqual(['attention-change', 'attention-change']);
     } finally {
       wants.mockRestore();
+      pushed.mockRestore();
     }
   }, 30_000);
 });

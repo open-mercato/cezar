@@ -16,45 +16,62 @@ const recordSchema = z.object({
   number: z.number().int().positive(),
   state: z.enum(['merged', 'closed']),
   endedAt: z.string(),
+  /** When a fresh forge read last confirmed it. A closed end lapses a day after that (it can reopen). */
+  seenAt: z.string().optional(),
 });
 export type PrEndRecord = z.infer<typeof recordSchema>;
 
 export const PR_ENDS_MAX = 2_000;
+/** A remembered closed PR can be reopened unseen: it stops counting as ended a day after a fresh read
+ *  last confirmed it, so a reopen cannot keep its items Probably done forever (review of #2443). A
+ *  merged PR never un-merges and is kept. */
+export const CLOSED_END_TTL_MS = 24 * 60 * 60_000;
+/** A closed end confirmed again is written back at most this often. */
+const CONFIRM_EVERY_MS = 60 * 60_000;
 
 export const prEndKey = (root: string, number: number): string => `${root}#${number}`;
 
 export interface PrEndMemory {
   /** The remembered ends, for one attention read. */
   load(): Promise<Map<string, PrEndRecord>>;
-  /** What a read learned: ends seen fresh, and PRs a fresh read found open again. */
-  note(seen: readonly PrEndRecord[], reopened: readonly string[]): Promise<void>;
+  /** What a read learned: ends seen fresh, and ends to forget (reopened, or a closed one that lapsed). */
+  note(seen: readonly PrEndRecord[], dropped: readonly string[]): Promise<void>;
 }
 
 /** One read's lookups: the fresh cache first, the memory when it has forgotten. */
 export function prEndLookup(
   known: ReadonlyMap<string, PrEndRecord>,
   fresh: { end: (root: string, number: number) => PrEnd | undefined; isOpen: (root: string, number: number) => boolean },
-): { lookup: (root: string, number: number) => PrEnd | undefined; seen: PrEndRecord[]; reopened: string[] } {
+  now: number = Date.now(),
+): { lookup: (root: string, number: number) => PrEnd | undefined; seen: PrEndRecord[]; dropped: string[] } {
   const seen = new Map<string, PrEndRecord>();
-  const reopened = new Set<string>();
+  const dropped = new Set<string>();
+  const confirmedAt = (record: PrEndRecord) => Date.parse(record.seenAt ?? record.endedAt);
   const lookup = (root: string, number: number): PrEnd | undefined => {
     const key = prEndKey(root, number);
+    const kept = known.get(key);
     const end = fresh.end(root, number);
     if (end) {
-      const kept = known.get(key);
-      if (end.endedAt && (kept?.state !== end.state || kept.endedAt !== end.endedAt)) {
-        seen.set(key, { root, number, state: end.state, endedAt: end.endedAt });
+      // A fresh answer without a time keeps the one remembered for the same end.
+      const endedAt = end.endedAt ?? (kept?.state === end.state ? kept.endedAt : undefined);
+      const stale = kept?.state === 'closed' && now - confirmedAt(kept) > CONFIRM_EVERY_MS;
+      if (endedAt && (kept?.state !== end.state || kept.endedAt !== endedAt || stale)) {
+        seen.set(key, { root, number, state: end.state, endedAt, seenAt: new Date(now).toISOString() });
       }
-      return end;
+      return endedAt ? { state: end.state, endedAt } : end;
     }
     if (fresh.isOpen(root, number)) {
-      if (known.has(key)) reopened.add(key);
+      if (kept) dropped.add(key);
       return undefined;
     }
-    const kept = known.get(key);
-    return kept ? { state: kept.state, endedAt: kept.endedAt } : undefined;
+    if (!kept) return undefined;
+    if (kept.state === 'closed' && !(now - confirmedAt(kept) <= CLOSED_END_TTL_MS)) {
+      dropped.add(key);
+      return undefined;
+    }
+    return { state: kept.state, endedAt: kept.endedAt };
   };
-  return { lookup, get seen() { return [...seen.values()]; }, get reopened() { return [...reopened]; } };
+  return { lookup, get seen() { return [...seen.values()]; }, get dropped() { return [...dropped]; } };
 }
 
 export function createPrEndMemory(path: () => string = attentionPrEndsPath): PrEndMemory {
@@ -76,15 +93,15 @@ export function createPrEndMemory(path: () => string = attentionPrEndsPath): PrE
   });
   return {
     load: () => store.load(),
-    async note(seen, reopened) {
-      if (seen.length === 0 && reopened.length === 0) return;
+    async note(seen, dropped) {
+      if (seen.length === 0 && dropped.length === 0) return;
       await store.update((entries) => {
         for (const record of seen) {
           const key = prEndKey(record.root, record.number);
           entries.delete(key);
           entries.set(key, record);
         }
-        for (const key of reopened) entries.delete(key);
+        for (const key of dropped) entries.delete(key);
       });
     },
   };
