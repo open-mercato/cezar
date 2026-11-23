@@ -16,7 +16,7 @@ const sourceQuery = 'query TrackerSource { organization { id urlKey } }';
 const teamFields = 'id name';
 const pageFields = 'pageInfo { hasNextPage endCursor }';
 const issueFields = `identifier title description url createdAt updatedAt creator { name }
-  team { id } state { name type } labels(first: 100) { nodes { name } pageInfo { hasNextPage } }`;
+  priority priorityLabel team { id } state { name type } labels(first: 100) { nodes { name } pageInfo { hasNextPage } }`;
 const sourceSchema = z.object({ organization: z.object({ id: z.string().min(1), urlKey: z.string().regex(/^[a-zA-Z0-9_-]+$/) }) });
 const teamSchema = z.object({ id: z.uuid(), name: z.string().min(1) });
 const pageSchema = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).nullable() });
@@ -26,6 +26,7 @@ const itemSchema = z.object({
   url: z.url(), createdAt: z.iso.datetime({ offset: true }), updatedAt: z.iso.datetime({ offset: true }),
   creator: z.object({ name: z.string() }).nullable(), team: z.object({ id: z.string().min(1) }),
   state: z.object({ name: z.string(), type: z.string() }),
+  priority: z.number().nullish(), priorityLabel: z.string().nullish(),
   labels: z.object({ nodes: z.array(z.object({ name: z.string() })), pageInfo: z.object({ hasNextPage: z.boolean() }) }),
 });
 const envelopeSchema = z.object({
@@ -121,6 +122,8 @@ TrackerProvider {
       kind: 'issue', id: raw.identifier, title: raw.title, author: raw.creator?.name ?? '',
       createdAt: raw.createdAt, updatedAt: raw.updatedAt, labels: raw.labels.nodes.map(label => label.name),
       ...descriptionBody(raw.description ?? '', cap), url: raw.url, status: raw.state.name,
+      // 0 is Linear's "No priority"; leave the key out like Jira does.
+      ...(raw.priority && raw.priorityLabel ? { priority: raw.priorityLabel } : {}),
     };
   };
   const listCandidates = async (query: TrackerCandidatesQuery): Promise<TrackerCandidatesResult> => {

@@ -75,6 +75,9 @@ export const trackerItemSchema = z
     unsupportedContent: z.boolean(),
     url: httpsUrlSchema,
     status: z.string(),
+    /** Vendor priority/issue-type names as plain strings; absent when the vendor has none. */
+    priority: z.string().optional(),
+    type: z.string().optional(),
   })
   .strict();
 export type TrackerItem = z.infer<typeof trackerItemSchema>;
