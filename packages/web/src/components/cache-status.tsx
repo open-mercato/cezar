@@ -165,9 +165,11 @@ export function ConnectionBanner() {
   const answered = useRequestsAnswered()
   // A hidden tab releases its stream on purpose (#1753); only a visible one is "down".
   const streamDown = streamAvailable() && visible && (!connected || !online)
-  // cezar still answers plain requests: only the live updates are gone, and polling covers them.
-  const paused = useDelayed(streamDown && online && answered, CONNECTION_BANNER_DELAY_MS)
-  const down = streamDown && !(online && answered)
+  // A cezar response is stronger evidence than the browser's coarse `navigator.onLine` hint:
+  // localhost can keep answering while that hint is false or stale. Only the live updates are
+  // gone in that case, and polling covers them.
+  const paused = useDelayed(streamDown && answered, CONNECTION_BANNER_DELAY_MS)
+  const down = streamDown && !answered
   const shown = useDelayed(down, !online ? 0 : everConnected ? CONNECTION_BANNER_DELAY_MS : FIRST_CONNECT_BANNER_DELAY_MS)
   const long = useDelayed(shown, LONG_OFFLINE_MS)
   const [phase, setPhase] = useState<BannerPhase>('hidden')
