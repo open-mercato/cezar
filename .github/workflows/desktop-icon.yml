@@ -31,6 +31,8 @@ jobs:
     name: Compile the Icon Composer icon
     runs-on: macos-26
     timeout-minutes: 15
+    outputs:
+      uploaded: ${{ steps.upload.outcome == 'success' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,6 +51,7 @@ jobs:
           xcrun assetutil --info out/Assets.car | head -80
 
       - name: Upload the compiled Assets.car
+        id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-car
@@ -66,7 +69,8 @@ jobs:
     name: Render on ${{ matrix.os }}
     needs: compile
     # Still draws when only the committed-catalog check failed: the renders are the evidence.
-    if: ${{ !cancelled() }}
+    # Without the artifact (actool failed) every leg would only fail on the download.
+    if: ${{ !cancelled() && needs.compile.outputs.uploaded == 'true' }}
     strategy:
       fail-fast: false
       matrix:

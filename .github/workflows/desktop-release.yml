@@ -334,8 +334,8 @@ jobs:
           codesign -dv "${apps[0]}" 2>&1 | grep -E "Signature|TeamIdentifier|Sealed"
           # Both macOS icons (spec 2026-09-25 § Replacing the icon): without them macOS 26 or 15 falls back.
           test -f "${apps[0]}/Contents/Resources/Assets.car" || { echo "::error::no Assets.car in the bundle"; exit 1; }
-          test "$(plutil -extract CFBundleIconName raw "${apps[0]}/Contents/Info.plist")" = cezar
-          test -n "$(plutil -extract CFBundleIconFile raw "${apps[0]}/Contents/Info.plist")"
+          test "$(plutil -extract CFBundleIconName raw "${apps[0]}/Contents/Info.plist")" = cezar || { echo "::error::CFBundleIconName is not cezar"; exit 1; }
+          test -n "$(plutil -extract CFBundleIconFile raw "${apps[0]}/Contents/Info.plist")" || { echo "::error::no CFBundleIconFile"; exit 1; }
 
       - name: Upload the versionless installer
         shell: bash
