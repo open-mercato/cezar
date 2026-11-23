@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+    # `ready_for_review` is what starts the suites for a PR that was opened as a draft.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
       - develop
@@ -21,10 +23,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides what a run owes. A draft PR runs nothing: `scope` is skipped, and every job below
+  # needs it. A PR that only touches the paths listed here skips the suites.
+  scope:
+    name: Scope
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2 # a PR checkout is the merge commit; its first parent is the base
+
+      # Only paths no suite, build or package step reads. Root `*.md` is NOT here:
+      # `bc-route-inventory.test.ts` reads BACKWARD_COMPATIBILITY.md. Any doubt runs the suites.
+      - name: Decide whether the suites run
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          code=true
+          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
+            code=false
+            while IFS= read -r file; do
+              case "$file" in
+                .ai/specs/*|.ai/plans/*|.ai/analysis/*|.ai/runs/*) ;;
+                docs/adr/*|docs/mockups/*|docs/screenshots/*) ;;
+                *) code=true; echo "runs the suites: $file"; break ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   # The vitest suites were ~8 of the job's ~9 minutes, so they run as parallel shards
   # beside `verify` instead of inside it.
   vitest:
     name: Server and cockpit unit suites (${{ matrix.shard }}/3)
+    needs: scope
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -32,24 +71,32 @@ jobs:
       matrix:
         shard: [1, 2, 3]
 
+    # The skip is per STEP, not per job: a matrix job skipped whole reports under its
+    # unexpanded name, and the three shard names are required checks on `main`.
     steps:
       - name: Check out repository
+        if: needs.scope.outputs.code == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
+        if: needs.scope.outputs.code == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: lts/*
           cache: npm
 
       - name: Install dependencies
+        if: needs.scope.outputs.code == 'true'
         run: npm ci
 
       - name: Run server and cockpit unit suites
+        if: needs.scope.outputs.code == 'true'
         run: npm test -- --shard=${{ matrix.shard }}/3
 
   verify:
     name: Typecheck, build, E2E, and package
+    needs: scope
+    if: needs.scope.outputs.code == 'true' # skipped whole: a skipped job passes a required check
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -100,6 +147,8 @@ jobs:
   webhooks-cross-platform:
     # Separate OS checks make platform failures visible in branch protection.
     name: Webhook ownership on ${{ matrix.os }}
+    needs: scope
+    if: needs.scope.outputs.code == 'true' # not a required check, so the whole job may skip
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -150,11 +199,12 @@ jobs:
   # script degrades to a loud dry run, so this job stays green on unconfigured forks.
   publish-snapshot:
     name: Publish npm snapshot
-    needs: [verify, vitest, webhooks-cross-platform]
+    needs: [scope, verify, vitest, webhooks-cross-platform]
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+      needs.scope.outputs.code == 'true' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
