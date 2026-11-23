@@ -27,6 +27,9 @@ export interface TaskQuestionDeps {
   now?: () => number;
   /** The provider gate the messages and Continue routes run: a refusal text, or null to proceed. */
   providerBlocked?: (ctx: ProjectContext, run: RunRecord) => Promise<string | null | undefined>;
+  /** The boot project's context under its registry id. It never enters the lazy map, which refuses
+   *  it (this process holds its data-dir lock, PR #2430), so a boot-project answer must use it. */
+  boot?: () => Promise<ProjectContext | undefined>;
 }
 
 const DAY_MS = 86_400_000;
@@ -208,6 +211,11 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
 
   /** The project's live context, built if needed: acting on a question is a reason to open it. */
   const contextFor = async (projectId: string): Promise<ProjectContext | QuestionResult> => {
+    const boot = await deps.boot?.();
+    if (boot?.id === projectId) {
+      attach(boot);
+      return boot;
+    }
     try {
       const ctx = await contexts.context(projectId);
       attach(ctx);

@@ -9106,6 +9106,12 @@ export function createApp(deps: ServerDeps) {
   // managers off the manager provider is gated out and the inbox serves task questions only.
   const taskQuestions = createTaskQuestionProvider({
     contexts,
+    // The boot project answers through the context serveCommand built (PR #2430), under its registry id.
+    boot: async () => {
+      const id = await resolveBootProject();
+      if (!id) return undefined;
+      return id === bootContext.id ? bootContext : { ...bootContext, id };
+    },
     // The gate the messages and Continue routes meet before an answer reaches the agent.
     providerBlocked: (ctx, run) => {
       const live = ['running', 'waiting'].includes(run.status) && run.idleClosedAt === undefined && run.awaitingAnswerSince === undefined;
