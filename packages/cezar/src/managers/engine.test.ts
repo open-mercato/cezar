@@ -752,6 +752,7 @@ describe('ManagerEngine', () => {
       await settled(engine);
       const prompt = backend.specs[0]?.userPrompt ?? '';
       expect(prompt).toContain('New attention items: 150');
+      expect(prompt).toContain('it takes precedence over the default role of watching pull requests and proposing merges:\nWatch\n');
       expect(prompt).toContain('"newItemsNotShown":50');
       expect(prompt).toContain('Nightly 149');
       expect(prompt).not.toContain('Nightly 10"');
