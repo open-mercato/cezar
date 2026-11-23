@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { RunStatus } from '@open-mercato/cezar-api-client'
 
-import { gitActionPolicy, trunkGitActionPolicy, type GitActionState } from './git-actions'
+import { gitActionPolicy, trunkBranchGitActionPolicy, trunkGitActionPolicy, type GitActionState } from './git-actions'
 
 /**
  * The git action policy, pinned row by row. The run's git button renders whatever this returns —
@@ -232,5 +232,50 @@ describe('an impact run (spec 2026-10-22-html-artifacts-and-impact, Q11)', () =>
     const forge = { kind: 'github', available: true } as GitActionState['forge']
     const trunk = { status: 'waiting' as RunStatus, base: 'main', uncommitted: 2, unpushed: 0, behind: 0, forge, assessment: true }
     expect(trunkGitActionPolicy(trunk)?.alternatives?.map((a) => a.id)).toEqual([])
+  })
+})
+
+describe('trunkBranchGitActionPolicy — a worktree task in a trunk-based project (#2426)', () => {
+  const trunkBranch = (extra: Partial<GitActionState>) => trunkBranchGitActionPolicy(withState(extra), 'main')
+
+  it('leads with Commit to main, the branch steps under its chevron', () => {
+    const action = trunkBranch({})
+    expect(action).toMatchObject({ id: 'land', label: 'Commit to main', enabled: true })
+    expect(action?.alternatives?.map((a) => a.id)).toEqual(['create-pr', 'create-draft-pr'])
+    expect(trunkBranch({ uncommitted: 0, ahead: 2 })).toMatchObject({ id: 'land' })
+  })
+
+  it('with git status unknown (loading or failed) keeps the branch step, and needs the agent mid-turn', () => {
+    expect(trunkBranch({ uncommitted: undefined })).toEqual(gitActionPolicy(withState({ uncommitted: undefined })))
+    expect(trunkBranch({ uncommitted: undefined })?.id).toBe('create-pr')
+    expect(trunkBranch({ status: 'running' })).toMatchObject({ id: 'land', enabled: false })
+    expect(trunkBranch({ agentBlocked: 'no session' })).toMatchObject({ id: 'land', enabled: false })
+  })
+
+  it('measures landed against the base, not the branch upstream a HEAD:main push leaves behind', () => {
+    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 2 })).toBeNull()
+  })
+
+  it('once landed offers nothing — not the branch policy’s Push or Update branch for work already on main', () => {
+    // No forge: the branch policy alone would offer Push for the branch's own upstream.
+    expect(gitActionPolicy(withState({ forge: null, uncommitted: 0, ahead: 0, unpushed: 2 }))?.id).toBe('push')
+    expect(trunkBranch({ forge: null, uncommitted: 0, ahead: 0, unpushed: 2 })).toBeNull()
+    expect(trunkBranch({ forge: null, uncommitted: 0, ahead: 0, unpushed: null, behind: 3 })).toBeNull()
+  })
+
+  it('with an unknown base (ahead null) lands only uncommitted work', () => {
+    expect(trunkBranch({ uncommitted: 2, ahead: null })).toMatchObject({ id: 'land', enabled: true })
+    expect(trunkBranch({ uncommitted: 0, ahead: null })?.id).toBe('create-pr')
+  })
+
+  it('no worktree → the branch policy; queued → Commit to main disabled', () => {
+    expect(trunkBranch({ hasWorktree: false })).toBeNull()
+    expect(trunkBranch({ status: 'queued' })).toMatchObject({ id: 'land', enabled: false, reason: 'Commit to main unavailable — the agent is still working' })
+  })
+
+  it('falls back to the branch policy with nothing to land, an open PR or an assessment', () => {
+    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 0 })).toBeNull()
+    expect(trunkBranch({ prUrl: '#7', uncommitted: 1 })?.id).toBe('commit-push')
+    expect(trunkBranch({ assessment: true })).toBeNull()
   })
 })

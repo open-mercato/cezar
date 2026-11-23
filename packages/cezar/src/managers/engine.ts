@@ -1966,7 +1966,8 @@ export class ManagerEngine {
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
     // A dispatch root always gets its own worktree, which overrides a trunk-based project's in-place
     // workspace: no Commit to the base branch, no auto-land. The project's model wins over the flag.
-    const dispatch = input.dispatch === true && !(await this.inPlaceProject(prefix));
+    const dispatchIgnored = input.dispatch === true && (await this.inPlaceProject(prefix));
+    const dispatch = input.dispatch === true && !dispatchIgnored;
     // Before the request: anything the run does after it starts is news to this manager.
     const followedAt = this.iso();
     const response = await this.forward(`${prefix}/runs`, {
@@ -1989,7 +1990,12 @@ export class ManagerEngine {
     if (input.title) {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);
     }
-    return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
+    return {
+      projectId: input.projectId,
+      runId: run.id,
+      ...(forward ? { forwarded: forward.forwarded } : {}),
+      ...(dispatchIgnored ? { notice: `dispatch ignored: ${input.projectId} runs tasks in place` } : {}),
+    };
   }
 
   /** A live task takes the message; a finished one is continued with it. */

@@ -1071,12 +1071,41 @@ describe('ManagerEngine', () => {
           },
         });
         const id = await create(engine);
-        expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true })).toMatchObject({ runId: 'new-run' });
-        return requests.find((request) => request.path.endsWith('/runs'))?.body as Record<string, unknown>;
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true });
+        expect(created).toMatchObject({ runId: 'new-run' });
+        const notice = 'notice' in created ? created.notice : undefined;
+        return { body: requests.find((request) => request.path.endsWith('/runs'))?.body as Record<string, unknown>, notice };
       };
-      expect(await startIn('in-place')).not.toHaveProperty('dispatch');
-      expect(await startIn('worktree')).toMatchObject({ dispatch: {} });
-      expect(await startIn(null)).toMatchObject({ dispatch: {} });
+      const inPlace = await startIn('in-place');
+      expect(inPlace.body).not.toHaveProperty('dispatch');
+      expect(inPlace.notice).toBe('dispatch ignored: alpha runs tasks in place');
+      for (const workspace of ['worktree', null]) {
+        const kept = await startIn(workspace);
+        expect(kept.body).toMatchObject({ dispatch: {} });
+        expect(kept.notice).toBeUndefined();
+      }
+    });
+
+    // Fail open: an unreadable project config never silently drops what the manager asked for.
+    it.each([
+      ['answers an error', async () => Response.json({ error: 'boom' }, { status: 500 })],
+      ['throws', async (): Promise<Response> => { throw new Error('connection refused'); }],
+    ])('keeps --dispatch, with no notice, when reading /config %s', async (_label, configResponse) => {
+      requests.length = 0;
+      const engine = makeEngine({
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+          if (path.endsWith('/config')) return configResponse();
+          if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+          return Response.json({ ok: true });
+        },
+      });
+      const id = await create(engine);
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true });
+      expect(created).toMatchObject({ runId: 'new-run' });
+      expect(created).not.toHaveProperty('notice');
+      expect(requests.some((request) => request.path.endsWith('/config'))).toBe(true);
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ dispatch: {} });
     });
   });
 

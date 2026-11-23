@@ -843,6 +843,12 @@ export const gitStatusResponseSchema = z.object({
   behind: z.number().nullable(),
   /** Commits the branch has that same base lacks — what a PR would propose; null alike. */
   ahead: z.number().nullable(),
+  /** The remote whose `<remote>/<base>` those counts read (the resolved PR target, #1383); absent
+   *  when they read a local branch. A land pushes here so `ahead` can reach 0. */
+  baseRemote: z.string().optional(),
+  /** Present with `baseRemote`: whether the local base branch tracks that remote — where
+   *  `landInPlace` pushes. A worktree land is offered only when the two agree. */
+  baseTracked: z.boolean().optional(),
 });
 export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
 

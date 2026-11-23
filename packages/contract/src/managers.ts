@@ -580,6 +580,8 @@ export const managerCreateTaskResponseSchema = z.object({
   projectId: z.string(),
   runId: z.string(),
   forwarded: managerForwardedSchema.optional(),
+  /** A flag the project's own settings overrode, said in one line (e.g. `--dispatch` in a trunk-based project). */
+  notice: z.string().optional(),
 });
 export type ManagerCreateTaskResponse = z.infer<typeof managerCreateTaskResponseSchema>;
 
