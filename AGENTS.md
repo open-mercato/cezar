@@ -220,7 +220,9 @@ npm run test:e2e    # .ai/scripts/e2e.sh → test-env-up.sh + vitest (packages/w
 It boots the app on a free port with `CEZ_DRY_RUN=1` (agent CLIs mocked — no login, no
 network), reuses an already-healthy instance instead of double-booting, and writes
 `.ai/qa/test-env.json` so QA skills attach to the same instance. Stop it with
-`.ai/scripts/test-env-down.sh`. Exit contract:
+`.ai/scripts/test-env-down.sh`. Run it from a task worktree: in a main checkout that already holds
+cezar tasks (`.ai/cezar/runs.json`) it refuses outside CI, because the test cockpit would serve that
+checkout's live task data (PR #2430). Exit contract:
 
 | Exit     | Marker                    | Meaning                                                                                                           |
 | -------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
