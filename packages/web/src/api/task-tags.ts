@@ -23,6 +23,9 @@ export function useTaskTags() {
     queryKey: taskTagsQueryKey,
     queryFn: ({ signal }) => getTaskTags({ signal }),
     staleTime: 30_000,
+    // No SSE carries registry edits, so another tab's new tag is only learned by asking: on
+    // focus here, and every time a picker opens (`TaskTagPicker`).
+    refetchOnWindowFocus: true,
   })
 }
 

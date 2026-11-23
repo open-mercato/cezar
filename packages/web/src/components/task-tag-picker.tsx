@@ -1,5 +1,5 @@
 import { CheckIcon, MinusIcon, PlusIcon, XIcon } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link as GlobalLink } from 'react-router'
 
 import type { RunTag, TaskTag } from '@open-mercato/cezar-api-client'
@@ -92,6 +92,8 @@ export function TaskTagPicker({
   const [ownOpen, setOwnOpen] = useState(false)
   const open = controlledOpen ?? ownOpen
   const setOpen = (next: boolean) => {
+    // A tag made in another tab (or by an agent's `cez task tag`) must be offered here.
+    if (next) void registry.refetch()
     if (controlledOpen === undefined) setOwnOpen(next)
     onOpenChange?.(next)
     if (!next) {
@@ -103,6 +105,10 @@ export function TaskTagPicker({
   const [error, setError] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const registry = useTaskTags()
+  useEffect(() => {
+    // The ⋯ menu opens a controlled picker without going through `setOpen`.
+    if (controlledOpen) void registry.refetch()
+  }, [controlledOpen])
   const create = useCreateTaskTag()
   const { project, global } = pickerTags(registry.data, projectId)
   const key = tagNameKey(search)
