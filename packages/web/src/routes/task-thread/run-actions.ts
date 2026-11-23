@@ -201,9 +201,10 @@ export function inPlacePrPrompt(draft: boolean, base: string): string {
 }
 
 /** Commit to the base from a worktree task in a trunk-based project: the server lands only in-place
- *  tasks, so the agent commits, rebases its branch onto the base and pushes it there. */
+ *  tasks, so the agent commits, rebases its branch onto the base and pushes it there. The remote is
+ *  the one the base tracks, as the server's landing uses — never a literal `origin` (fork clones). */
 export function landBranchPrompt(base: string): string {
-  return `Commit to ${base}: commit what is left, rebase this branch onto the latest ${base}, run the project's checks, then push it to ${base} (git push origin HEAD:${base})`
+  return `Commit to ${base}: commit what is left, rebase this branch onto the latest ${base} from the remote ${base} tracks, run the project's checks, then push it to ${base} on that same remote (git push <that remote> HEAD:${base})`
 }
 
 /** Update branch for an in-place task: bring the checkout up to date, keeping the task's changes. */

@@ -1342,7 +1342,7 @@ describe('the facts line', () => {
       fireEvent.keyDown(menu, { key: 'Escape' })
       fireEvent.click(gitButton('land')!)
       await waitFor(() =>
-        expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('git push origin HEAD:main'))).toBe(true),
+        expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('git push <that remote> HEAD:main'))).toBe(true),
       )
     })
 
