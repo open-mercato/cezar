@@ -92,5 +92,5 @@ main checkout, and the main checkout's `.ai/qa/test-env-app.log` shows "recovere
 
 ### Phase 3: Docs
 
-- [ ] 3.1 AGENTS.md validation note
-- [ ] 3.2 Spec note recording the decision
+- [x] 3.1 AGENTS.md validation note — ae77b2904
+- [x] 3.2 Spec note recording the decision — ae77b2904
