@@ -28,8 +28,23 @@ pub struct ManagerRow {
     pub preview: Option<String>,
     pub pending_actions: u32,
     pub pending_questions: u32,
+    /// What Now still counts for this manager after dismissals, snoozes and Probably done
+    /// (spec 2026-11-23-needs-you-triage). An older sidecar omits it: the pending counts stand in.
+    pub needs_you: Option<NeedsYou>,
     pub last_activity_at: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct NeedsYou {
+    pub approvals: u32,
+    pub questions: u32,
+}
+
+/// The approvals and questions that still need the user, as the Now and phone badges count them.
+fn waiting(row: &ManagerRow) -> (u32, u32) {
+    row.needs_you.map_or((row.pending_actions, row.pending_questions), |needs| (needs.approvals, needs.questions))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -87,7 +102,8 @@ fn mascot_of(row: &ManagerRow) -> Option<String> {
 }
 
 fn pending_count(row: &ManagerRow) -> u32 {
-    row.pending_actions.saturating_add(row.pending_questions)
+    let (approvals, questions) = waiting(row);
+    approvals.saturating_add(questions)
 }
 
 /// One face per manager. What the user must act on outranks what the manager is doing.
@@ -137,7 +153,8 @@ fn plural(count: u32, one: &str) -> String {
 }
 
 fn badge_of(row: &ManagerRow) -> Option<String> {
-    let parts: Vec<String> = [(row.pending_actions, "approval"), (row.pending_questions, "question")]
+    let (approvals, questions) = waiting(row);
+    let parts: Vec<String> = [(approvals, "approval"), (questions, "question")]
         .into_iter()
         .filter(|(count, _)| *count > 0)
         .map(|(count, label)| plural(count, label))
@@ -304,6 +321,19 @@ mod tests {
         waiting.pending_questions = 1;
         assert_eq!(badge_of(&waiting).as_deref(), Some("2 approvals · 1 question"));
         assert_eq!(badge_of(&row("1", "idle")), None);
+    }
+
+    /// A dismissed, snoozed or probably-done card leaves the notch as it leaves the Now badge.
+    #[test]
+    fn needs_you_wins_over_the_raw_pending_counts() {
+        let dismissed = ManagerRow { pending_actions: 1, pending_questions: 2, needs_you: Some(NeedsYou { approvals: 0, questions: 1 }), ..row("1", "idle") };
+        assert_eq!(badge_of(&dismissed).as_deref(), Some("1 question"));
+        assert_eq!(face_of(&dismissed), Face::NeedsYou);
+        let cleared = ManagerRow { needs_you: Some(NeedsYou::default()), ..dismissed.clone() };
+        assert_eq!(badge_of(&cleared), None);
+        assert_eq!(face_of(&cleared), Face::Idle);
+        let parsed = parse_list(r#"{"managers":[{"id":"m","pendingActions":2,"pendingQuestions":0,"needsYou":{"approvals":0,"questions":0}}]}"#).unwrap();
+        assert_eq!(face_of(&parsed[0]), Face::Idle);
     }
 
     #[test]

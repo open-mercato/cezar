@@ -144,6 +144,22 @@
           { "id": "c", "name": "C", "avatar": 1, "face": "working", "text": "c" }
         ]
       }
+    },
+    {
+      "name": "needsYou wins over the pending counts: a dismissed approval leaves the notch",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [
+        { "id": "a", "name": "A", "avatar": 7, "status": "idle", "pendingActions": 1, "pendingQuestions": 0, "needsYou": { "approvals": 0, "questions": 0 }, "preview": "Merge #12?", "createdAt": "2026-10-01T00:00:00.000Z" },
+        { "id": "b", "name": "B", "avatar": 3, "status": "idle", "pendingActions": 0, "pendingQuestions": 2, "needsYou": { "approvals": 0, "questions": 1 }, "preview": "Which API?", "createdAt": "2026-10-02T00:00:00.000Z" }
+      ],
+      "expected": {
+        "primary": { "id": "b", "name": "B", "avatar": 3, "face": "needs-you", "text": "Which API?", "badge": "1 question" },
+        "minis": [],
+        "overflow": 0,
+        "active": [
+          { "id": "b", "name": "B", "avatar": 3, "face": "needs-you", "text": "Which API?", "badge": "1 question" }
+        ]
+      }
     }
   ]
 }
