@@ -32,9 +32,10 @@ export const DRAFT_MAX_SURFACES = 16;
  * several queued messages, each with its own inline editor. `diff-comments` is not a text input:
  * its `text` is the JSON list of line comments left on the Changes tab, held until the next
  * message carries them to the agent (the self-review flow). `design-picks` is the same kind of
- * entry for the Preview tab's Design Mode: the JSON list of unsent element notes.
+ * entry for the Preview tab's Design Mode: the JSON list of unsent element notes, and
+ * `message-quotes` the JSON list of conversation fragments quoted for the next message.
  */
-export const DRAFT_SURFACE_RE = /^(composer|review-notes|diff-comments|design-picks|task-prompt|title|message:[A-Za-z0-9_-]{1,64})$/;
+export const DRAFT_SURFACE_RE = /^(composer|review-notes|diff-comments|message-quotes|design-picks|task-prompt|title|message:[A-Za-z0-9_-]{1,64})$/;
 
 export const draftSurfaceSchema = z
   .string()
