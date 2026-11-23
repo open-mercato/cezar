@@ -80,6 +80,7 @@ import {
   type CockpitLease,
   type CockpitRuntimeRecord,
 } from './runtime/cockpit-runtime.ts';
+import { claimDataDirLock, dataDirInUseMessage } from './runtime/data-dir-lock.ts';
 import { handoffMarkerLine, handoffProject } from './runtime/cockpit-handoff.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
@@ -350,7 +351,9 @@ async function serveCommand(
   const runtimeId = newRuntimeId();
   let cockpitLease: CockpitLease | undefined;
   let runtimeReleased = false;
+  let releaseDataLock = async (): Promise<void> => {};
   const releaseRuntime = async (): Promise<void> => {
+    await releaseDataLock();
     if (!cockpitLease || runtimeReleased) return;
     runtimeReleased = true;
     await releaseCockpitRuntime(cockpitLease).catch((error: unknown) => {
@@ -420,6 +423,17 @@ async function serveCommand(
       'Stop that process or wait for it to finish starting; cezar will not launch a duplicate.',
     );
   }
+
+  // One server per project's task data (PR #2430): the slot above lives in CEZ_HOME, so a server
+  // with another home (the dry-run test env) would otherwise adopt this project's live tasks.
+  const bootDataDir = join(repoRoot, '.ai/cezar');
+  const dataLock = await claimDataDirLock(bootDataDir);
+  if (dataLock.kind === 'held') {
+    await releaseRuntime();
+    throw new Error(`${dataDirInUseMessage(bootDataDir, dataLock)} — cezar will not start a second server on the same tasks. Stop that process, or open this project in its cockpit.`);
+  }
+  if (dataLock.kind === 'degraded') console.warn(`[cez] project lock unavailable (${dataLock.reason}) — starting without it`);
+  else releaseDataLock = dataLock.release;
 
   const bootProjectId = await initServeWorkspace(repoRoot);
   // Lets a second cezar on this machine see which worktree this one runs from (worktree-in-use.ts).
