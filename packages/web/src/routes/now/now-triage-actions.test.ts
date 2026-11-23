@@ -11,6 +11,8 @@ import { keyedQueue } from './now-triage-model'
 const NOW = new Date(2026, 10, 25, 12).getTime()
 const run = { id: 'r1', title: 'Fix login', status: 'waiting' } as unknown as RunRecord
 
+let failClose: ((error: string) => void) | undefined
+
 function harness(over: Partial<TriageDeps> = {}) {
   const calls: string[] = []
   const toasts: Array<{ message: string; opts?: Parameters<TriageDeps['toast']>[1] }> = []
@@ -19,7 +21,7 @@ function harness(over: Partial<TriageDeps> = {}) {
     setOverride: vi.fn(async (input) => { calls.push(`set:${input.key}:${input.mode}${input.until ? `:until=${input.until}` : ''}${input.runId ? `:run=${input.runId}` : ''}`); return [] }),
     clearOverride: vi.fn(async (key) => { calls.push(`clear:${key}`); return [] }),
     applyLocally: vi.fn((override) => { calls.push(`local:${override.key}:${override.mode}`) }),
-    scheduleClose: vi.fn((key) => { calls.push(`close:${key}`) }),
+    scheduleClose: vi.fn((key, _label, onFailed) => { calls.push(`close:${key}`); failClose = onFailed }),
     holdClose: vi.fn((key, held) => { calls.push(`hold:${key}:${held}`) }),
     undoClose: vi.fn((key) => { calls.push(`undo-close:${key}`); return true }),
     finishRun: vi.fn(async (id) => { calls.push(`finish:${id}`) }),
@@ -53,6 +55,17 @@ describe('Needs you triage actions', () => {
     undo()
     await settle()
     expect(calls).toEqual(['undo-close:r:app:r1:q', 'local:question:r:app:r1:q:clear', 'clear:question:r:app:r1:q'])
+  })
+
+  it('a failed card close un-hides the row and says why, from the close itself (review 2, finding 5)', async () => {
+    const { actions, calls, toasts } = harness()
+    actions.dismiss({ key: 'question:m:a:1', label: 'Ship it?', questionKey: 'm:a:1' })
+    await settle()
+    calls.length = 0
+    failClose!('disk full')
+    await settle()
+    expect(calls).toEqual(['local:question:m:a:1:clear', 'clear:question:m:a:1'])
+    expect(toasts.at(-1)).toMatchObject({ message: 'Could not close “Ship it?”: disk full', opts: { tone: 'danger' } })
   })
 
   it('holding the toast holds the card close (review finding 9)', () => {

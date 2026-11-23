@@ -1,7 +1,6 @@
-import { readFile, stat } from 'node:fs/promises';
 import { attentionOverrideSchema, type AttentionOverride, type AttentionOverrideInput } from '@open-mercato/cezar-contract';
 import { attentionOverridesPath } from '../paths.ts';
-import { atomicWriteJson, serializedByPath } from '../workspace/config.ts';
+import { createKeyedStore } from './keyed-store.ts';
 
 /**
  * The user's dismissals, snoozes and "Still needs me" on attention items (spec
@@ -32,72 +31,44 @@ export function activeOverrides(entries: readonly AttentionOverride[], now: numb
   });
 }
 
-async function readEntries(path: string): Promise<AttentionOverride[]> {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await readFile(path, 'utf8'));
-  } catch {
-    return [];
-  }
-  const rows = (raw as { overrides?: unknown } | null)?.overrides;
-  if (!Array.isArray(rows)) return [];
-  // Per-entry salvage: one bad row never drops the rest.
-  return rows.flatMap((row) => {
-    const parsed = attentionOverrideSchema.safeParse(row);
-    return parsed.success ? [parsed.data] : [];
-  });
+/** When the list next changes on its own: the soonest snooze end or TTL expiry (review 2, finding 6). */
+export function nextOverrideWake(entries: readonly AttentionOverride[]): number | undefined {
+  const times = entries.flatMap((entry) => [msOf(entry.until), msOf(entry.at) + OVERRIDE_TTL_MS]).filter((at) => Number.isFinite(at));
+  return times.length > 0 ? Math.min(...times) : undefined;
 }
 
-const UNWRITTEN = 'unwritten';
-
-/** The file's change stamp, or `missing`: another cezar process on this computer may write it. */
-const stampOf = async (file: string): Promise<string> =>
-  stat(file).then((info) => `${info.mtimeMs}:${info.size}`, () => 'missing');
+function decode(raw: unknown): Map<string, AttentionOverride> {
+  const rows = (raw as { overrides?: unknown } | null | undefined)?.overrides;
+  const out = new Map<string, AttentionOverride>();
+  if (!Array.isArray(rows)) return out;
+  // Per-entry salvage: one bad row never drops the rest.
+  for (const row of rows) {
+    const parsed = attentionOverrideSchema.safeParse(row);
+    if (parsed.success) out.set(parsed.data.key, parsed.data);
+  }
+  return out;
+}
 
 export function createAttentionOverrideStore(path: () => string = attentionOverridesPath): AttentionOverrideStore {
-  let cache: { entries: AttentionOverride[]; stamp: string } | undefined;
-  // Re-read when the file changed since: one `stat` per read, the whole file only after a write.
-  const load = async () => {
-    // A home we could not write: what this process holds is the only copy.
-    if (cache?.stamp === UNWRITTEN) return cache.entries;
-    const file = path();
-    const stamp = await stampOf(file);
-    if (cache?.stamp !== stamp) cache = { entries: await readEntries(file), stamp };
-    return cache.entries;
+  const prune = (entries: Map<string, AttentionOverride>, now: number) => {
+    const live = new Set(activeOverrides([...entries.values()], now).map((entry) => entry.key));
+    for (const key of [...entries.keys()]) if (!live.has(key)) entries.delete(key);
+    // Insertion order is age order: the oldest go first.
+    while (entries.size > OVERRIDES_MAX) entries.delete(entries.keys().next().value!);
   };
-  const write = (mutate: (entries: AttentionOverride[], now: number) => AttentionOverride[], now: number) => {
-    const file = path();
-    return serializedByPath(file, async () => {
-      // Another process may have written since: re-read before every write.
-      const next = activeOverrides(mutate(await readEntries(file), now), now).slice(-OVERRIDES_MAX);
-      try {
-        await atomicWriteJson(file, { overrides: next });
-        cache = { entries: next, stamp: await stampOf(file) };
-      } catch {
-        // A read-only home: the choice lasts this process.
-        cache = { entries: next, stamp: UNWRITTEN };
-      }
-      return next;
-    });
-  };
+  const store = createKeyedStore<AttentionOverride>({ path, decode, encode: (entries) => ({ overrides: [...entries.values()] }), prune });
   return {
-    async list(now = Date.now()) {
-      return activeOverrides(await load(), now);
-    },
-    set(input, now = Date.now()) {
-      return write((entries, at) => [
-        ...entries.filter((entry) => entry.key !== input.key),
-        {
-          key: input.key,
-          mode: input.mode,
-          at: new Date(at).toISOString(),
-          ...(input.mode === 'dismiss' && input.until ? { until: input.until } : {}),
-          ...(input.projectId && input.runId ? { projectId: input.projectId, runId: input.runId } : {}),
-        },
-      ], now);
-    },
-    clear(key, now = Date.now()) {
-      return write((entries) => entries.filter((entry) => entry.key !== key), now);
-    },
+    list: async (now = Date.now()) => [...(await store.load(now)).values()],
+    set: async (input, now = Date.now()) => [...(await store.update((entries) => {
+      entries.delete(input.key);
+      entries.set(input.key, {
+        key: input.key,
+        mode: input.mode,
+        at: new Date(now).toISOString(),
+        ...(input.mode === 'dismiss' && input.until ? { until: input.until } : {}),
+        ...(input.projectId && input.runId ? { projectId: input.projectId, runId: input.runId } : {}),
+      });
+    }, now)).values()],
+    clear: async (key, now = Date.now()) => [...(await store.update((entries) => { entries.delete(key); }, now)).values()],
   };
 }

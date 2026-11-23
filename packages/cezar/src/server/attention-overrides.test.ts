@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attentionOverridesResponseSchema, attentionResponseSchema, healthResponseSchema } from '@open-mercato/cezar-contract';
 import { createAttentionOverrideStore } from '../attention/overrides.ts';
+import { createPrEndMemory } from '../attention/pr-ends.ts';
+import { __clearRefStatusCacheForTests, __seedRefStatusCacheForTests } from './forge/github.ts';
 import { RunStore } from '../runs/store.ts';
 import { runInRelayScope } from '../relay/scope.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -116,5 +118,30 @@ describe('attention override routes', () => {
     const { events } = build();
     reportPrClosed(repoRoot, 5, 'merged');
     expect(events).toEqual(['attention-change']);
+  }, 30_000);
+
+  it('a PR-based Probably done outlives the forge cache, until a fresh read finds the PR open (review 2, finding 1)', async () => {
+    const run = store.createRun({ title: 'Paused on #7', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'waiting' });
+    store.recordPrRef(run.id, { number: 7, origin: 'marker' });
+    const prEnds = createPrEndMemory(() => join(repoRoot, 'attention-pr-ends.json'));
+    const boot = () => createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', prEnds,
+      attentionOverrides: createAttentionOverrideStore(() => join(repoRoot, 'attention-overrides.json')) });
+    const settledOf = async (app: ReturnType<typeof boot>) => attentionResponseSchema.parse(await (await apiRequest(app, '/api/v1/workspace/attention')).json())
+      .items.find((item) => item.runId === run.id)?.settled;
+    try {
+      __seedRefStatusCacheForTests(repoRoot, [[7, { kind: 'pr', status: 'merged', endedAt: new Date(Date.now() + 1000).toISOString() }]]);
+      expect(await settledOf(boot())).toEqual({ why: 'pr-merged', detail: 'PR #7 merged' });
+      // A restart: the forge cache is empty, the verdict stays.
+      __clearRefStatusCacheForTests();
+      expect(await settledOf(boot())).toEqual({ why: 'pr-merged', detail: 'PR #7 merged' });
+      // Reopened, as a fresh read says: live again, and forgotten.
+      __seedRefStatusCacheForTests(repoRoot, [[7, { kind: 'pr', status: 'review-required' }]]);
+      expect(await settledOf(boot())).toBeUndefined();
+      __clearRefStatusCacheForTests();
+      expect(await settledOf(boot())).toBeUndefined();
+    } finally {
+      __clearRefStatusCacheForTests();
+    }
   }, 30_000);
 });

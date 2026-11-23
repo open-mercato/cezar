@@ -19,7 +19,8 @@ export interface TriageDeps {
   /** The local cache moves on the click, before the server answers. */
   applyLocally: (override: { key: string; mode: 'dismiss' | 'keep' | 'clear'; projectId?: string; runId?: string }) => void
   /** The Questions page's delayed card close: scheduled, paused while the toast is held, undone. */
-  scheduleClose: (questionKey: string, label: string) => void
+  /** `onFailed` runs wherever the user is by then: Now may have unmounted (review 2, finding 5). */
+  scheduleClose: (questionKey: string, label: string, onFailed: (error: string) => void) => void
   holdClose: (questionKey: string, held: boolean) => void
   /** `false`: too late, the close was already sent. */
   undoClose: (questionKey: string) => boolean
@@ -73,7 +74,14 @@ export function createTriageActions(deps: TriageDeps): TriageActions {
     if (targets.length === 0) return
     const questions = targets.flatMap((target) => (target.questionKey ? [target.questionKey] : []))
     for (const target of targets) {
-      if (target.questionKey) deps.scheduleClose(target.questionKey, target.label)
+      if (target.questionKey) {
+        // A close that failed shows the card again: its hiding override goes, and the reason is said.
+        deps.scheduleClose(target.questionKey, target.label, (error) => {
+          deps.applyLocally({ key: target.key, mode: 'clear' })
+          void deps.inOrder(target.key, () => deps.clearOverride(target.key)).finally(() => void deps.refreshAttention())
+          deps.toast(`Could not close “${target.label}”: ${error}`, { tone: 'danger' })
+        })
+      }
       void override(target, 'dismiss')
     }
     deps.toast(targets.length === 1 ? `Dismissed “${targets[0]!.label}”` : `Dismissed ${targets.length} items`, {

@@ -88,3 +88,21 @@ export function createAttentionService(deps: {
     },
   };
 }
+
+/**
+ * One `attention-change` per change (spec 2026-11-23-needs-you-triage, review 2 finding 6): when a
+ * recount will run (a phone listens), its own change report announces it; otherwise say it now.
+ */
+export function createAttentionAnnouncer(deps: { poke: () => void; recounting: () => boolean; announce: () => void }): {
+  changed: () => void;
+  recounted: () => void;
+} {
+  return {
+    changed() {
+      deps.poke();
+      if (!deps.recounting()) deps.announce();
+    },
+    recounted: () => deps.announce(),
+  };
+}
+
