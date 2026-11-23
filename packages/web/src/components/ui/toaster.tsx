@@ -17,10 +17,10 @@ export type ToastTone = 'default' | 'danger'
 /** An optional trailing link. Deliberately a LINK and not a callback: a toast is transient, and
  *  an arbitrary action that outlives its own toast is a bug waiting to be written. Everything
  *  that needs one so far is "go here" (the star ask's repository). */
-export interface ToastAction {
-  label: string
-  href: string
-}
+export type ToastAction =
+  | { label: string; href: string }
+  /** An in-place undo (Needs you's Dismiss, spec 2026-11-23-needs-you-triage): clicking it also closes the toast. */
+  | { label: string; onClick: () => void }
 
 export interface ToastItem {
   id: number
@@ -102,10 +102,17 @@ export function friendlyToastMessage(message: string): string {
   return RAW_TRANSPORT_MESSAGES.has(message.trim()) ? UNREACHABLE_TOAST : message
 }
 
+/** Closes one toast early: the undo it carried was used. */
+export function dismissToast(id: number): void {
+  if (!items.some((t) => t.id === id && !t.exiting)) return
+  publish(items.map((t) => (t.id === id ? { ...t, exiting: true } : t)))
+  schedule(() => publish(items.filter((t) => t.id !== id)), EXIT_MS)
+}
+
 export function toast(
   rawMessage: string,
   opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean; expected?: boolean } = {},
-): void {
+): number {
   const message = friendlyToastMessage(rawMessage)
   const item: ToastItem = {
     id: nextId++,
@@ -131,6 +138,7 @@ export function toast(
     publish(items.map((t) => (t.id === item.id ? { ...t, exiting: true } : t)))
     schedule(() => publish(items.filter((t) => t.id !== item.id)), EXIT_MS)
   }, lifetime)
+  return item.id
 }
 
 /** Test seam: clears the module-level queue *and* every pending timer, so one test's toasts
@@ -177,7 +185,23 @@ export function Toaster() {
           )}
         >
           {item.message}
-          {item.action ? (
+          {item.action && 'onClick' in item.action ? (
+            <>
+              {' '}
+              <button
+                type="button"
+                data-slot="toast-action"
+                onClick={() => {
+                  if (!item.action || !('onClick' in item.action)) return
+                  item.action.onClick()
+                  dismissToast(item.id)
+                }}
+                className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                {item.action.label}
+              </button>
+            </>
+          ) : item.action ? (
             <>
               {' '}
               <a

@@ -45,6 +45,10 @@ A notification names the computer that needs you, and tapping it opens that comp
 
 When you handle something anywhere, on the computer or another phone, it leaves the list, and the app's count follows the next time it opens.
 
+Every row has a **✕ Dismiss** button and a **⋯** menu (also on right-click). Dismiss hides the row until it changes, for example when a task asks something new, and **Undo** in the toast brings it back. Dismissing a question also closes it, after the same undo window the Questions page uses. The menu adds **Snooze** (an hour, this evening, tomorrow morning or next week), and for this project's tasks **Mark done**, **Archive task** and **Cancel task**. On a phone, swipe a row left to reveal **Snooze** and **Dismiss**, then tap one; a swipe alone never dismisses anything.
+
+cezar moves rows that probably no longer need you into a collapsed **Probably done** group under the list, each with its reason, and leaves them out of every count: a question whose PR or task has ended or that the conversation has moved past, a task whose own pull request merged or closed, and a question or a paused task quiet for longer than the Questions page's **Older** setting (3 days by default). **Still needs me** puts a row back, and **Dismiss all** clears the group. Dismissals and snoozes are kept per computer, so the cockpit and every phone show the same list.
+
 ## Notification settings
 
 On the phone, **Settings → Notifications → This phone** chooses which kinds send a push, which count on the icon, and quiet hours. On the computer, the same settings sit under **Settings → Connect a phone → Notifications**, one set per phone. They are kept on the computer: the relay never learns what a push is about. By default everything pushes, and failed tasks do not count on the icon. Quiet hours follow the phone's own time zone: no alert arrives during them, and one comes when they end if something still waits.

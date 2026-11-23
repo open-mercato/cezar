@@ -131,3 +131,74 @@ describe('the attention model', () => {
     expect(attentionKeysShown()).toEqual(['f'])
   })
 });
+
+describe('Needs you triage (spec 2026-11-23-needs-you-triage)', () => {
+  function triage() {
+    return { dismiss: vi.fn(), dismissAll: vi.fn(), snooze: vi.fn(), keep: vi.fn() }
+  }
+
+  it('paints a card’s [[pr:…]] marker as a PR chip, never as raw text', () => {
+    const chip = item({ key: 'c', kind: 'question', title: 'Earlier reviews of [[pr:cezar/2428]] read nothing. How now?', managerId: 'shop', managerName: 'Shop manager', questionKey: 'm:shop:m2' })
+    renderNow({ attention: { items: [chip], total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: triage(), referenceProjects: [{ id: 'cezar', name: 'cezar' }] })
+    const row = needsYou().querySelector('[data-key="c"]') as HTMLElement
+    expect(row.textContent).not.toContain('[[pr:')
+    expect(row.querySelector('[data-slot="manager-inline-reference"]')?.textContent).toContain('2428')
+    // The row link names it in plain words.
+    expect(row.querySelector('[data-slot="now-row-link"]')?.getAttribute('aria-label')).toBe('Earlier reviews of #2428 read nothing. How now?')
+  })
+
+  it('a question’s ✕ dismisses it with its card; the menu offers snooze', async () => {
+    const acts = triage()
+    renderNow({ attention: { items: ITEMS, total: 4 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: acts })
+    const question = needsYou().querySelector('[data-key="q"]') as HTMLElement
+    fireEvent.click(within(question).getByRole('button', { name: 'Dismiss and close the question' }))
+    expect(acts.dismiss).toHaveBeenCalledWith({ key: 'q', label: 'Which API?', questionKey: 'm:shop:msg1' })
+    const review = needsYou().querySelector('[data-key="t"]') as HTMLElement
+    fireEvent.click(within(review).getByRole('button', { name: 'Dismiss' }))
+    expect(acts.dismiss).toHaveBeenLastCalledWith({ key: 't', label: 'Bump formula' })
+  })
+
+  it('moves probably-done items into a collapsed group, out of the count, with "Still needs me"', () => {
+    const acts = triage()
+    const done = item({ key: 'd', kind: 'question', title: 'Old question', managerId: 'shop', managerName: 'Shop manager', questionKey: 'm:shop:d', counted: false, settled: { why: 'work-ended', detail: 'PR #2428 it mentions was merged' } })
+    renderNow({ attention: { items: [...ITEMS, done], total: 4 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: acts })
+    expect(attentionKeysShown()).toEqual(['q', 'a', 'm', 't', 'f'])
+    const group = needsYou().querySelector('[data-slot="now-probably-done"]') as HTMLElement
+    expect(group.textContent).toContain('Probably done1')
+    fireEvent.click(within(group).getByRole('button', { name: /Probably done/ }))
+    const row = group.querySelector('[data-key="d"]') as HTMLElement
+    expect(row.querySelector('[data-slot="now-settled"]')?.textContent).toBe('PR #2428 it mentions was merged')
+    fireEvent.click(within(row).getByRole('button', { name: 'Still needs me' }))
+    expect(acts.keep).toHaveBeenCalledWith({ key: 'd', label: 'Old question', questionKey: 'm:shop:d' })
+    fireEvent.click(within(group).getByRole('button', { name: 'Dismiss all' }))
+    expect(acts.dismissAll).toHaveBeenCalledWith([{ key: 'd', label: 'Old question', questionKey: 'm:shop:d' }])
+  })
+
+  it('This project: a task row borrows its item’s verdict, and a dismissed or pending one leaves', () => {
+    const waiting = item({ key: 'task-needs-you:cezar:r1:x', kind: 'task', title: 'Fix login', projectId: 'cezar', runId: 'r1', counted: false, settled: { why: 'pr-merged', detail: 'PR #2317 merged' } })
+    renderNow({ attention: { items: [waiting], total: 0 }, scope: 'project', onScope: vi.fn(), attentionActions: actions(), triage: triage(), projectId: 'cezar' })
+    expect(needsYou().getAttribute('data-count')).toBe('0')
+    const group = needsYou().querySelector('[data-slot="now-probably-done"]') as HTMLElement
+    fireEvent.click(within(group).getByRole('button', { name: /Probably done/ }))
+    expect(group.querySelector('[data-run-id="r1"] [data-slot="now-settled"]')?.textContent).toBe('PR #2317 merged')
+    cleanup()
+    renderNow({ attention: { items: [{ ...waiting, settled: undefined }], total: 0, overrides: [{ key: waiting.key, mode: 'dismiss', at: ago(1) }] }, scope: 'project', onScope: vi.fn(), attentionActions: actions(), triage: triage(), projectId: 'cezar' })
+    expect(needsYou().querySelector('[data-run-id="r1"]')).toBeNull()
+    expect(needsYou().getAttribute('data-count')).toBe('0')
+  })
+
+  it('the phone reveals Snooze and Dismiss on a swipe; only a tap acts', () => {
+    const acts = triage()
+    renderNow({ attention: { items: ITEMS.slice(3, 4), total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: acts })
+    const swipe = needsYou().querySelector('[data-slot="now-swipe"]') as HTMLElement
+    const surface = swipe.lastElementChild as HTMLElement
+    fireEvent.pointerDown(surface, { pointerType: 'touch', clientX: 300, clientY: 10 })
+    fireEvent.pointerMove(surface, { pointerType: 'touch', clientX: 100, clientY: 12 })
+    fireEvent.pointerUp(surface, { pointerType: 'touch', clientX: 100, clientY: 12 })
+    expect(swipe.getAttribute('data-open')).toBe('true')
+    expect(acts.dismiss).not.toHaveBeenCalled()
+    fireEvent.click(swipe.querySelector('[data-slot="now-swipe-dismiss"]') as HTMLElement)
+    expect(acts.dismiss).toHaveBeenCalledWith({ key: 't', label: 'Bump formula' })
+    expect(swipe.getAttribute('data-open')).toBeNull()
+  })
+})

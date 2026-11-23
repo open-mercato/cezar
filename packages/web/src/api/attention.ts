@@ -1,6 +1,9 @@
 import {
+  attentionOverridesResponseSchema,
   attentionResponseSchema,
   phonePushPrefsSchema,
+  type AttentionOverride,
+  type AttentionOverrideInput,
   type AttentionResponse,
   type PhonePushPrefs,
 } from '@open-mercato/cezar-api-client'
@@ -31,6 +34,36 @@ export async function getAttention(opts?: { signal?: AbortSignal }): Promise<Att
 
 export function useAttention(enabled = true) {
   return useQuery({ queryKey: attentionKeys.all, queryFn: ({ signal }) => getAttention({ signal }), enabled })
+}
+
+/** Dismiss, snooze or keep an item (spec 2026-11-23-needs-you-triage). */
+export async function setAttentionOverride(input: AttentionOverrideInput): Promise<AttentionOverride[]> {
+  const path = '/workspace/attention/overrides'
+  return checked(attentionOverridesResponseSchema, path, await unwrap(await cez.api.v1.workspace.attention.overrides.$post({ json: input }), path)).overrides
+}
+
+/** Undo, or "Still needs me" on a dismissed item. */
+export async function clearAttentionOverride(key: string): Promise<AttentionOverride[]> {
+  const path = '/workspace/attention/overrides/clear'
+  return checked(attentionOverridesResponseSchema, path, await unwrap(await cez.api.v1.workspace.attention.overrides.clear.$post({ json: { key } }), path)).overrides
+}
+
+/** The click shows at once: the item leaves the list (or its Probably done mark) before the server answers. */
+export function applyOverrideLocally(queryClient: QueryClient, override: Pick<AttentionOverride, 'key' | 'mode'> | { key: string; mode: 'clear' }): void {
+  queryClient.setQueryData<AttentionResponse>(attentionKeys.all, (data) => {
+    if (!data) return data
+    const rest = data.overrides.filter((entry) => entry.key !== override.key)
+    if (override.mode === 'clear') return { ...data, overrides: rest }
+    const entry: AttentionOverride = { key: override.key, mode: override.mode, at: new Date().toISOString() }
+    const items = override.mode === 'dismiss'
+      ? data.items.filter((item) => item.key !== override.key)
+      : data.items.map((item) => {
+        if (item.key !== override.key || !item.settled) return item
+        const { settled: _settled, ...kept } = item
+        return { ...kept, counted: item.kind !== 'failed' }
+      })
+    return { ...data, items, overrides: [...rest, entry] }
+  })
 }
 
 const SETTLE_MS = 600
