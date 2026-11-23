@@ -2530,6 +2530,23 @@ describe('fetchRefStatuses', () => {
     expect(out[3]).toEqual({ kind: 'issue', status: 'not-planned' });
   });
 
+  it('keeps when a merged or closed PR ended, from the same query (spec 2026-11-23-needs-you-triage)', async () => {
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({ state: 'MERGED', mergedAt: '2026-11-20T10:00:00Z', closedAt: '2026-11-20T10:00:00Z' }),
+        r1: prNode({ state: 'CLOSED', mergedAt: null, closedAt: '2026-11-21T09:00:00Z' }),
+        r2: prNode({ mergedAt: null, closedAt: null }),
+      });
+    });
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [1, 2, 3]);
+    expect(sent).toContain('mergedAt closedAt');
+    expect(out[1]).toMatchObject({ status: 'merged', endedAt: '2026-11-20T10:00:00Z' });
+    expect(out[2]).toMatchObject({ status: 'closed', endedAt: '2026-11-21T09:00:00Z' });
+    expect(out[3]).not.toHaveProperty('endedAt');
+  });
+
   it('files a number the CALLER thought was a PR under the kind it really is', async () => {
     // The screenshot bug's other half: a bare `#774` in a task can be inferred as either kind, and
     // asking `issue(number:)` about a pull request is a question GitHub answers with an error.

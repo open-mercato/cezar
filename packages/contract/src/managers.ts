@@ -260,6 +260,9 @@ export const managerSummarySchema = managerSchema.extend({
   pendingActions: z.number().int().min(0),
   /** Question cards still waiting for an answer. */
   pendingQuestions: z.number().int().min(0),
+  /** `GET /workspace/managers` only: its approvals and questions Now still counts, after dismissals, snoozes,
+   *  Probably done and its Notify switch (spec 2026-11-23-needs-you-triage). The notch reads this. */
+  needsYou: z.object({ approvals: z.number().int().min(0), questions: z.number().int().min(0) }).optional(),
   lastCheckAt: z.string().optional(),
   /** Absent when `cronMinutes` is 0. */
   nextCheckAt: z.string().optional(),

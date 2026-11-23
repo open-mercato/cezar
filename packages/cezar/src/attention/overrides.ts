@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { attentionOverrideSchema, type AttentionOverride, type AttentionOverrideInput } from '@open-mercato/cezar-contract';
 import { attentionOverridesPath } from '../paths.ts';
 import { atomicWriteJson, serializedByPath } from '../workspace/config.ts';
@@ -48,19 +48,34 @@ async function readEntries(path: string): Promise<AttentionOverride[]> {
   });
 }
 
+const UNWRITTEN = 'unwritten';
+
+/** The file's change stamp, or `missing`: another cezar process on this computer may write it. */
+const stampOf = async (file: string): Promise<string> =>
+  stat(file).then((info) => `${info.mtimeMs}:${info.size}`, () => 'missing');
+
 export function createAttentionOverrideStore(path: () => string = attentionOverridesPath): AttentionOverrideStore {
-  let cache: AttentionOverride[] | undefined;
-  const load = async () => (cache ??= await readEntries(path()));
+  let cache: { entries: AttentionOverride[]; stamp: string } | undefined;
+  // Re-read when the file changed since: one `stat` per read, the whole file only after a write.
+  const load = async () => {
+    // A home we could not write: what this process holds is the only copy.
+    if (cache?.stamp === UNWRITTEN) return cache.entries;
+    const file = path();
+    const stamp = await stampOf(file);
+    if (cache?.stamp !== stamp) cache = { entries: await readEntries(file), stamp };
+    return cache.entries;
+  };
   const write = (mutate: (entries: AttentionOverride[], now: number) => AttentionOverride[], now: number) => {
     const file = path();
     return serializedByPath(file, async () => {
       // Another process may have written since: re-read before every write.
       const next = activeOverrides(mutate(await readEntries(file), now), now).slice(-OVERRIDES_MAX);
-      cache = next;
       try {
         await atomicWriteJson(file, { overrides: next });
+        cache = { entries: next, stamp: await stampOf(file) };
       } catch {
         // A read-only home: the choice lasts this process.
+        cache = { entries: next, stamp: UNWRITTEN };
       }
       return next;
     });
@@ -72,7 +87,13 @@ export function createAttentionOverrideStore(path: () => string = attentionOverr
     set(input, now = Date.now()) {
       return write((entries, at) => [
         ...entries.filter((entry) => entry.key !== input.key),
-        { key: input.key, mode: input.mode, at: new Date(at).toISOString(), ...(input.mode === 'dismiss' && input.until ? { until: input.until } : {}) },
+        {
+          key: input.key,
+          mode: input.mode,
+          at: new Date(at).toISOString(),
+          ...(input.mode === 'dismiss' && input.until ? { until: input.until } : {}),
+          ...(input.projectId && input.runId ? { projectId: input.projectId, runId: input.runId } : {}),
+        },
       ], now);
     },
     clear(key, now = Date.now()) {

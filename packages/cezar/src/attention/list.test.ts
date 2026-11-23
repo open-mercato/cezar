@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ManagerMessage, QuestionItem } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
-import { buildAttentionList, phoneBadgeCount, type AttentionSources } from './list.ts';
+import { buildAttentionList, currentTaskPr, managerNeedsYou, phoneBadgeCount, type AttentionSources, type PrEnd } from './list.ts';
 
 const NOW = Date.parse('2026-11-20T12:00:00.000Z');
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
@@ -130,8 +130,9 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
     }));
     expect(list.items.map((item) => [item.runId ?? item.key, item.settled?.detail])).toEqual([
       ['new', undefined],
-      ['question:m:mgr:old', 'Quiet for 3 days'],
-      ['old', 'Quiet for 3 days'],
+      // The age itself, never the threshold.
+      ['question:m:mgr:old', 'Quiet for 4 days'],
+      ['old', 'Quiet for 4 days'],
     ]);
     expect(list.counts.total).toBe(1);
   });
@@ -149,7 +150,7 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
         run('asks', { status: 'waiting', waitingSince: ago(3), pullRequestUrl: 'https://github.com/o/r/pull/9' }),
         run('open', { status: 'review', finishedAt: ago(4), markerRefs: { pr: 5 } }),
       ] }],
-      prEnded: (_projectId, r) => (r.id === 'merged' ? { number: 2317, state: 'merged' } : r.id === 'asks' ? { number: 9, state: 'closed' } : undefined),
+      prEnded: (_projectId, r) => (r.id === 'merged' ? { number: 2317, state: 'merged', endedAt: ago(1) } : r.id === 'asks' ? { number: 9, state: 'closed', endedAt: ago(1) } : undefined),
     }));
     expect(list.items.map((item) => [item.runId, item.kind, item.settled?.detail])).toEqual([
       ['open', 'review', undefined],
@@ -163,7 +164,11 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
   it('folds a question card once its declared or mentioned PR merged or closed', () => {
     const card = (key: string, text: string, patch: Partial<QuestionItem> = {}) =>
       question(key, { questions: [{ header: 'Merge', question: text, options: [{ label: 'Yes' }, { label: 'No' }] }], ...patch });
-    const states: Record<string, 'merged' | 'closed'> = { 'cezar/2428': 'merged', 'app/7': 'closed', 'app/8': 'merged' };
+    const states: Record<string, PrEnd> = {
+      'cezar/2428': { state: 'merged', endedAt: ago(1) },
+      'app/7': { state: 'closed', endedAt: ago(1) },
+      'app/8': { state: 'merged', endedAt: ago(1) },
+    };
     const list = buildAttentionList(sources({
       questions: [
         card('m:mgr:mention', 'Earlier reviews of [[pr:cezar/2428]] read nothing. How now?'),
@@ -205,6 +210,66 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
     expect(mixed.olderAfterDays).toBe(4);
   });
 
+  it('only a PR that ended after the wait or question began settles it (review finding 2)', () => {
+    const list = buildAttentionList(sources({
+      questions: [
+        question('m:mgr:before', { askedAt: ago(10), questions: [{ header: 'M', question: 'Follow up on [[pr:app/4]]?', options: [] }] }),
+        question('m:mgr:after', { askedAt: ago(10), questions: [{ header: 'M', question: 'Merge [[pr:app/5]]?', options: [] }] }),
+        question('m:mgr:when', { askedAt: ago(10), questions: [{ header: 'M', question: 'Merge [[pr:app/6]]?', options: [] }] }),
+      ],
+      projects: [{ id: 'app', runs: [
+        // Continued after its PR merged: the new wait is live.
+        run('continued', { status: 'waiting', waitingSince: ago(5), markerRefs: { pr: 3 } }),
+        run('waiting', { status: 'waiting', waitingSince: ago(5), markerRefs: { pr: 2 } }),
+      ] }],
+      prEnded: (_projectId, r) => (r.id === 'continued' ? { number: 3, state: 'merged', endedAt: ago(60) } : { number: 2, state: 'merged', endedAt: ago(1) }),
+      prState: (_projectId, number) => (number === 4 ? { state: 'merged', endedAt: ago(30) } : number === 5 ? { state: 'merged', endedAt: ago(2) } : { state: 'merged' }),
+    }));
+    const settled = Object.fromEntries(list.items.map((item) => [item.runId ?? item.key, item.settled?.detail]));
+    expect(settled).toEqual({
+      continued: undefined,
+      waiting: 'PR #2 merged',
+      'question:m:mgr:before': undefined,
+      'question:m:mgr:after': 'PR #5 it mentions was merged',
+      // No end time known: nothing is settled on a guess.
+      'question:m:mgr:when': undefined,
+    });
+  });
+
+  it('settles on the task’s current PR, never a superseded one (review finding 1)', () => {
+    const at = (minutes: number) => ago(minutes);
+    expect(currentTaskPr({ prRefs: [{ number: 10, origin: 'created', at: at(60) }, { number: 12, origin: 'created', at: at(5) }, { number: 99, origin: 'derived', at: at(1) }] })).toBe(12);
+    expect(currentTaskPr({ pullRequestUrl: 'https://github.com/o/r/pull/7', markerRefs: { pr: 3 } })).toBe(7);
+    expect(currentTaskPr({ markerRefs: { pr: 3 } })).toBe(3);
+    expect(currentTaskPr({ prRefs: [{ number: 99, origin: 'derived', at: at(1) }] })).toBeUndefined();
+  });
+
+  it('keeps a task dismissed after its dismissed question’s card closes (review finding 3)', () => {
+    const waiting = run('wait', { status: 'waiting', waitingSince: ago(30) });
+    const asked = question('r:app:wait:req', { askedAt: ago(20), source: { kind: 'task', projectId: 'app', runId: 'wait', title: 'Task wait', status: 'waiting' } });
+    const dismissal = { key: 'question:r:app:wait:req', mode: 'dismiss' as const, at: ago(10), projectId: 'app', runId: 'wait' };
+    // While asking: one row, the question, dismissed.
+    expect(buildAttentionList(sources({ questions: [asked], projects: [{ id: 'app', runs: [waiting] }], overrides: [dismissal] })).items).toEqual([]);
+    // The card closed: the run's wait comes back under its task key, and stays dismissed.
+    const closed = buildAttentionList(sources({ projects: [{ id: 'app', runs: [waiting] }], overrides: [dismissal] }));
+    expect(closed.items).toEqual([]);
+    expect(closed.overrides[0]).toMatchObject({ projectId: 'app', runId: 'wait' });
+    // A new wait after the dismissal is news again.
+    const again = buildAttentionList(sources({ projects: [{ id: 'app', runs: [run('wait', { status: 'waiting', waitingSince: ago(1) })] }], overrides: [dismissal] }));
+    expect(again.items.map((item) => item.kind)).toEqual(['task']);
+  });
+
+  it('counts a manager’s live approvals and questions for the notch (review finding 6)', () => {
+    const list = buildAttentionList(sources({
+      questions: [question('m:mgr:q1'), question('m:mgr:q2', { stale: { why: 'manager-acted', detail: 'x', since: ago(1) } }), question('m:mgr:q3')],
+      approvals: [{ managerId: 'mgr', message: action('a1'), title: 'Merge' }],
+      overrides: [{ key: 'question:m:mgr:q3', mode: 'dismiss', at: ago(1) }],
+    }));
+    expect(managerNeedsYou(list.items, 'mgr')).toEqual({ approvals: 1, questions: 1 });
+    const muted = buildAttentionList(sources({ questions: [question('m:mgr:q1')], managers: [{ id: 'mgr', name: 'Shop manager', important: 0, notify: false }] }));
+    expect(managerNeedsYou(muted.items, 'mgr')).toEqual({ approvals: 0, questions: 0 });
+  });
+
   it('hides a dismissed item until its key changes, and "keep" overrides the detection', () => {
     const base = {
       questions: [question('m:mgr:q1', { stale: { why: 'manager-acted' as const, detail: 'the manager acted', since: ago(1) } })],
@@ -216,8 +281,6 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
     expect(dismissed.items.map((item) => [item.kind, item.settled, item.counted])).toEqual([['question', undefined, true]]);
     expect(dismissed.counts.total).toBe(1);
     expect(dismissed.revision).not.toBe(first.revision);
-    // The dismissal names the task it hid, for Now's own row.
-    expect(dismissed.overrides.find((entry) => entry.key === taskKey)).toMatchObject({ projectId: 'app', runId: 'wait' });
     // A new wait is a new key: it shows again.
     const raised = buildAttentionList(sources({ ...base, projects: [{ id: 'app', runs: [run('wait', { status: 'waiting', waitingSince: ago(1) })] }], overrides: [{ key: taskKey, mode: 'dismiss', at: ago(1) }] }));
     expect(raised.items.some((item) => item.kind === 'task')).toBe(true);

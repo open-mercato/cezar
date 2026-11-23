@@ -35,6 +35,21 @@ describe('attention override store (spec 2026-11-23-needs-you-triage)', () => {
     expect(JSON.parse(readFileSync(path, 'utf8')).overrides.map((entry: { key: string }) => entry.key)).toEqual(['snoozed', 'b']);
   });
 
+  it('a store that already read sees another process’s later write (review finding 12)', async () => {
+    const path = fileIn();
+    const mine = createAttentionOverrideStore(() => path);
+    expect(await mine.list(NOW)).toEqual([]);
+    await createAttentionOverrideStore(() => path).set({ key: 'phone', mode: 'dismiss', projectId: 'app', runId: 'r1' }, NOW);
+    expect((await mine.list(NOW)).map((entry) => [entry.key, entry.runId])).toEqual([['phone', 'r1']]);
+  });
+
+  it('keeps run fields only as a pair', async () => {
+    const path = fileIn();
+    const store = createAttentionOverrideStore(() => path);
+    await store.set({ key: 'half', mode: 'dismiss', projectId: 'app' }, NOW);
+    expect((await store.list(NOW))[0]).not.toHaveProperty('projectId');
+  });
+
   it('treats a corrupt file as empty', async () => {
     const path = fileIn();
     writeFileSync(path, '{not json');

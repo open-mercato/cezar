@@ -54,7 +54,8 @@ export const attentionOverrideSchema = z.object({
   mode: attentionOverrideModeSchema,
   at: z.string(),
   until: z.string().optional(),
-  /** The task a dismissal hid, so Now hides its own row for it too (the item itself left the list). */
+  /** The task a dismissal is about. It also covers that run's items that began before it (a closed
+   *  question's wait), so the row the user dismissed never comes back under another key. */
   projectId: z.string().optional(),
   runId: z.string().optional(),
 });
@@ -66,6 +67,9 @@ export const attentionOverrideInputSchema = z.strictObject({
   mode: attentionOverrideModeSchema,
   /** A snooze's end; absent dismisses until the item changes. */
   until: z.string().datetime({ offset: true }).optional(),
+  /** The item's task, when it has one. */
+  projectId: z.string().min(1).max(300).optional(),
+  runId: z.string().min(1).max(300).optional(),
 });
 export type AttentionOverrideInput = z.infer<typeof attentionOverrideInputSchema>;
 

@@ -8,7 +8,7 @@ import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBin
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
 import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
-import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
+import { buildAttentionList, currentTaskPr, managerNeedsYou, phoneBadgeCount } from '../attention/list.ts';
 import { createAttentionOverrideStore, type AttentionOverrideStore } from '../attention/overrides.ts';
 import { createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
@@ -407,7 +407,7 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
@@ -873,7 +873,9 @@ export type WorkspaceEventName =
   | 'manager-change'
   | 'manager-message'
   | 'manager-delta'
-  | 'phone-pairing';
+  | 'phone-pairing'
+  /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
+  | 'attention-change';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -9164,25 +9166,23 @@ export function createApp(deps: ServerDeps) {
       overrides,
       prState: (projectId, number) => {
         const root = roots.get(projectId);
-        const state = root ? readCachedRefStatuses(root, [number]).prs[number] : undefined;
-        return state === 'merged' || state === 'closed' ? state : undefined;
+        return root ? readCachedPrEnds(root, [number])[number] : undefined;
       },
-      // The task's own PR (created or declared), as the forge cache already knows it: never a `gh` call.
+      // The task's CURRENT PR, as the forge cache already knows it: never a `gh` call. A superseded,
+      // closed PR says nothing about the one the task opened after it.
       prEnded: (projectId, run) => {
         const root = roots.get(projectId);
-        if (!root) return undefined;
-        const created = run.pullRequestUrl ? refNumberFromUrl(run.pullRequestUrl) : null;
-        const own = [created, run.markerRefs?.pr, ...(run.prRefs ?? []).filter((ref) => ref.origin === 'created' || ref.origin === 'marker').map((ref) => ref.number)]
-          .filter((number): number is number => typeof number === 'number' && number > 0);
-        if (own.length === 0) return undefined;
-        const { prs } = readCachedRefStatuses(root, own);
-        for (const number of new Set(own)) {
-          const state = prs[number];
-          if (state === 'merged' || state === 'closed') return { number, state };
-        }
-        return undefined;
+        const number = root ? currentTaskPr(run) : undefined;
+        const ended = root && number !== undefined ? readCachedPrEnds(root, [number])[number] : undefined;
+        return ended && number !== undefined ? { number, ...ended } : undefined;
       },
     });
+  };
+  // The list may have changed where no run, manager or question frame says so (a snooze ending, a
+  // dismissal from a phone, a PR closing): the cockpit re-reads on this, phones on the recount.
+  const attentionChanged = () => {
+    attention.poke();
+    workspaceEvents.emit('attention-change', {});
   };
   // A snooze ends with no event of its own: one timer for the soonest, so the badge and a phone hear it.
   let snoozeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -9192,7 +9192,7 @@ export function createApp(deps: ServerDeps) {
     snoozeTimer = undefined;
     if (!Number.isFinite(soonest)) return;
     // setTimeout overflows past ~24.8 days; a later wake just re-arms on the next read.
-    snoozeTimer = setTimeout(() => { snoozeTimer = undefined; attention.poke(); }, Math.min(Math.max(0, soonest - Date.now()) + 1_000, 2 ** 31 - 1));
+    snoozeTimer = setTimeout(() => { snoozeTimer = undefined; attentionChanged(); }, Math.min(Math.max(0, soonest - Date.now()) + 1_000, 2 ** 31 - 1));
     snoozeTimer.unref?.();
   };
   deps.onDispose?.(() => { if (snoozeTimer) clearTimeout(snoozeTimer); });
@@ -9200,7 +9200,10 @@ export function createApp(deps: ServerDeps) {
   // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
   const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
   deps.onDispose?.(() => attention.dispose());
-  attention.onChange(() => phonePairing.noteAttentionChange());
+  attention.onChange(() => {
+    phonePairing.noteAttentionChange();
+    workspaceEvents.emit('attention-change', {});
+  });
   questionInbox.onChange(() => attention.poke());
   const offAttentionEvents = workspaceEvents.on((event) => {
     if (event === 'manager-change' || event === 'manager-message') attention.poke();
@@ -9236,12 +9239,14 @@ export function createApp(deps: ServerDeps) {
     // Spec 2026-11-23-needs-you-triage: dismiss, snooze, "Still needs me", and their undo.
     .post('/workspace/attention/overrides', jsonZodValidator(attentionOverrideInputSchema), async (c) => {
       const overrides = await attentionOverrides.set(c.req.valid('json'));
-      attention.poke();
+      armSnoozeWake(overrides);
+      attentionChanged();
       return c.json({ overrides });
     })
     .post('/workspace/attention/overrides/clear', jsonZodValidator(attentionOverrideClearInputSchema), async (c) => {
       const overrides = await attentionOverrides.clear(c.req.valid('json').key);
-      attention.poke();
+      armSnoozeWake(overrides);
+      attentionChanged();
       return c.json({ overrides });
     });
 
@@ -9262,8 +9267,8 @@ export function createApp(deps: ServerDeps) {
   // A GitHub read that sees a PR merged or closed closes its waiting merge cards (#2241 follow-up).
   const stopPrClosed = onPrClosed((root, number, state, verify) => {
     void managerEngine.pullRequestClosed(root, number, state, verify).catch(() => {});
-    // A paused task on that PR moves to Probably done.
-    attention.poke();
+    // A paused task or a card on that PR moves to Probably done.
+    attentionChanged();
   });
   deps.onDispose?.(stopPrClosed);
 
@@ -9311,7 +9316,11 @@ export function createApp(deps: ServerDeps) {
   const managersRoutes = new Hono()
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
-    .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
+    // `needsYou`: what Now still counts per manager, so the notch agrees with the Now and phone badges.
+    .get('/workspace/managers', async (c) => {
+      const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
+      return c.json({ managers: list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers });
+    })
     // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
     .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
       c.json({ ok: true as const, changed: await managerEngine.setActivity(c.req.valid('json').active) }))

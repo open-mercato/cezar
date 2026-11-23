@@ -31,14 +31,28 @@ export interface AttentionSources {
   now: number;
   /** The Questions page's Older days (`0` = off): a question or a paused task open longer is probably done. */
   olderAfterDays?: number;
-  /** The task's own pull request, when the forge cache already knows it ended. Never asks the forge. */
-  prEnded?: (projectId: string, run: RunRecord) => { number: number; state: 'merged' | 'closed' } | undefined;
+  /** The task's CURRENT pull request, when the forge cache already knows it ended, and when. Never asks the forge. */
+  prEnded?: (projectId: string, run: RunRecord) => PrEnd & { number: number } | undefined;
   /** Any PR in a project, as the forge cache already knows it: a question card's declared or mentioned PR. */
-  prState?: (projectId: string, number: number) => 'merged' | 'closed' | undefined;
+  prState?: (projectId: string, number: number) => PrEnd | undefined;
   overrides?: readonly AttentionOverride[];
 }
 
 const DAY_MS = 24 * 60 * 60_000;
+
+export interface PrEnd {
+  state: 'merged' | 'closed';
+  /** When it ended; unknown never settles anything. */
+  endedAt?: string;
+}
+
+/** Only a PR that ended after the wait or question began says it is done: one that ended before
+ *  was already over when the task asked again. */
+const endedAfter = (ended: PrEnd | undefined, since: string): ended is PrEnd => {
+  const at = ended?.endedAt ? Date.parse(ended.endedAt) : Number.NaN;
+  const start = Date.parse(since);
+  return Number.isFinite(at) && Number.isFinite(start) && at > start;
+};
 
 /** Tiers (spec 2026-11-23-needs-you-triage § Order): blocking decisions, the review gate, waits, failures. */
 const TIER: Record<AttentionKind, number> = { approval: 0, question: 0, message: 0, review: 1, task: 2, failed: 3 };
@@ -73,7 +87,11 @@ function questionPrs(question: QuestionItem): Array<{ number: number; projects: 
   return [...out.values()].map((entry) => ({ ...entry, projects: [...entry.projects] }));
 }
 
-const quiet = (days: number): AttentionSettled => ({ why: 'quiet', detail: `Quiet for ${days} ${days === 1 ? 'day' : 'days'}` });
+/** The age itself, not the threshold: a task paused 40 days reads "Quiet for 40 days". */
+const quiet = (since: string, now: number): AttentionSettled => {
+  const days = Math.max(1, Math.floor((now - Date.parse(since)) / DAY_MS));
+  return { why: 'quiet', detail: `Quiet for ${days} ${days === 1 ? 'day' : 'days'}` };
+};
 
 const TASK_KIND: Partial<Record<string, AttentionKind>> = { 'task-needs-you': 'task', 'task-review': 'review', 'task-failed': 'failed' };
 
@@ -106,10 +124,10 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
   const days = sources.olderAfterDays ?? 0;
   const runs = new Map<string, RunRecord>();
   for (const project of sources.projects) for (const run of project.runs) runs.set(`${project.id}/${run.id}`, run);
-  const prSettled = (projectId: string | undefined, runId: string | undefined): AttentionSettled | undefined => {
+  const prSettled = (projectId: string | undefined, runId: string | undefined, since: string): AttentionSettled | undefined => {
     const run = projectId && runId ? runs.get(`${projectId}/${runId}`) : undefined;
-    const ended = run && sources.prEnded?.(projectId!, run);
-    return ended ? { why: ended.state === 'merged' ? 'pr-merged' : 'pr-closed', detail: `PR #${ended.number} ${ended.state}` } : undefined;
+    const ended = run ? sources.prEnded?.(projectId!, run) : undefined;
+    return ended && endedAfter(ended, since) ? { why: ended.state === 'merged' ? 'pr-merged' : 'pr-closed', detail: `PR #${ended.number} ${ended.state}` } : undefined;
   };
 
   const asked = new Set<string>();
@@ -118,13 +136,13 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
     // An inactive manager's cards leave the count, as on the Questions page.
     if (question.source.kind === 'manager' && managers.get(question.source.managerId)?.inactive) continue;
     if (question.source.kind === 'task') asked.add(`${question.source.projectId}/${question.source.runId}`);
-    const settled = question.source.kind === 'task' ? prSettled(question.source.projectId, question.source.runId) : undefined;
+    const settled = question.source.kind === 'task' ? prSettled(question.source.projectId, question.source.runId, question.askedAt) : undefined;
     const cardPr = settled ? undefined : questionPrs(question).map((pr) => {
-      const state = pr.projects.map((projectId) => sources.prState?.(projectId, pr.number)).find((found) => found !== undefined);
-      return state ? { why: state === 'merged' ? 'pr-merged' as const : 'pr-closed' as const, detail: `PR #${pr.number} ${pr.declared ? '' : 'it mentions was '}${state}` } : undefined;
+      const ended = pr.projects.map((projectId) => sources.prState?.(projectId, pr.number)).find((found) => endedAfter(found, question.askedAt));
+      return ended ? { why: ended.state === 'merged' ? 'pr-merged' as const : 'pr-closed' as const, detail: `PR #${pr.number} ${pr.declared ? '' : 'it mentions was '}${ended.state}` } : undefined;
     }).find((found) => found !== undefined);
     const stale = question.stale ? { why: STALE_REASON[question.stale.why] ?? 'overtaken', detail: question.stale.detail } : undefined;
-    items.push(questionItem(question, muted, settled ?? cardPr ?? stale ?? (question.older ? quiet(days) : undefined)));
+    items.push(questionItem(question, muted, settled ?? cardPr ?? stale ?? (question.older ? quiet(question.askedAt, sources.now) : undefined)));
   }
 
   for (const { managerId, message, title } of sources.approvals) {
@@ -163,7 +181,7 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
       if (kind === 'task' && asked.has(`${project.id}/${row.runId}`)) continue;
       const since = row.since ?? new Date(sources.now).toISOString();
       const wentQuiet = kind === 'task' && days > 0 && sources.now - Date.parse(since) > days * DAY_MS;
-      const settled = prSettled(project.id, row.runId) ?? (wentQuiet ? quiet(days) : undefined);
+      const settled = prSettled(project.id, row.runId, since) ?? (wentQuiet ? quiet(since, sources.now) : undefined);
       items.push({
         key: row.key,
         kind,
@@ -180,24 +198,23 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
 
   const overrides = activeOverrides(sources.overrides ?? [], sources.now);
   const mode = new Map(overrides.map((entry) => [entry.key, entry.mode]));
+  // A dismissal also covers its task's items that began before it: when a dismissed question's card
+  // closes, the run's wait comes back under another key, and it is the same wait.
+  const runDismissals = overrides.filter((entry) => entry.mode === 'dismiss' && entry.projectId && entry.runId);
+  const coveredByRun = (item: AttentionItem) => runDismissals.some((entry) =>
+    entry.projectId === item.projectId && entry.runId === item.runId && Date.parse(item.since) <= Date.parse(entry.at));
   const shown = items.flatMap((item) => {
     const said = mode.get(item.key);
-    if (said === 'dismiss') return [];
+    if (said === 'dismiss' || (said !== 'keep' && coveredByRun(item))) return [];
     if (said === 'keep' || !item.settled) return [item];
     // Probably done: still listed, never counted.
     return [{ ...item, counted: false }];
   }).map((item) => (mode.get(item.key) === 'keep' && item.settled ? withoutSettled(item) : item));
-  // A dismissal names the task it hid; Now's own task rows have no other way to find it.
-  const hid = new Map(items.filter((item) => mode.get(item.key) === 'dismiss' && item.runId).map((item) => [item.key, item]));
-  const answered = overrides.map(({ projectId: _p, runId: _r, ...entry }) => {
-    const item = hid.get(entry.key);
-    return item?.projectId && item.runId ? { ...entry, projectId: item.projectId, runId: item.runId } : entry;
-  });
   // Within a tier, an item past half the quiet threshold sorts below the fresh ones (spec § Order).
   const aging = (item: AttentionItem) => Number(days > 0 && sources.now - Date.parse(item.since) > (days * DAY_MS) / 2);
   shown.sort((a, b) => Number(!!a.settled) - Number(!!b.settled) || TIER[a.kind] - TIER[b.kind] || aging(a) - aging(b)
     || KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.since.localeCompare(a.since));
-  return { items: shown, counts: countAttention(shown), revision: revisionOf(shown, overrides), overrides: answered, olderAfterDays: days };
+  return { items: shown, counts: countAttention(shown), revision: revisionOf(shown, overrides), overrides, olderAfterDays: days };
 }
 
 function withoutSettled(item: AttentionItem): AttentionItem {
@@ -226,3 +243,21 @@ const revisionOf = (items: readonly AttentionItem[], overrides: readonly Attenti
   createHash('sha256')
     .update([...items.map((item) => `${item.key}|${item.counted ? 1 : 0}|${item.settled?.why ?? ''}`), ...overrides.map((entry) => `o:${entry.key}|${entry.mode}`)].join('\n'))
     .digest('base64url').slice(0, 22);
+
+/** The task's current PR: the newest it created or declared, else its created URL, else its `CEZ:PR`.
+ *  Never a PR it only mentions (`derived`). */
+export function currentTaskPr(run: Pick<RunRecord, 'prRefs' | 'pullRequestUrl' | 'markerRefs'>): number | undefined {
+  const own = (run.prRefs ?? []).filter((ref) => ref.origin !== 'derived');
+  const newest = own.reduce<(typeof own)[number] | undefined>((best, ref) => (!best || Date.parse(ref.at) >= Date.parse(best.at) ? ref : best), undefined);
+  if (newest) return newest.number;
+  const created = run.pullRequestUrl ? Number(/\/(\d+)\/?$/.exec(run.pullRequestUrl.trim())?.[1]) : Number.NaN;
+  if (Number.isInteger(created) && created > 0) return created;
+  return run.markerRefs?.pr;
+}
+
+/** A manager's approvals and questions Now still counts: not dismissed, snoozed or probably done, Notify on. */
+export function managerNeedsYou(items: readonly AttentionItem[], managerId: string): { approvals: number; questions: number } {
+  const live = items.filter((item) => item.managerId === managerId && item.counted && !item.settled);
+  return { approvals: live.filter((item) => item.kind === 'approval').length, questions: live.filter((item) => item.kind === 'question').length };
+}
+
