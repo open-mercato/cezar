@@ -70,13 +70,20 @@ export function compileCatalog(out, doc = ICON_DOC) {
   return true
 }
 
-/** The catalog's renditions without what differs per compile (timestamps, tool versions, UUIDs). */
+/**
+ * The catalog's renditions without what differs per compile: timestamps, tool versions, UUIDs, and
+ * the pixel digests of the flattened `Icon Image` bitmaps, which actool re-renders differently each
+ * time. Those are still compared by name, size and scale; the source hash is the content gate.
+ */
 export function renditions(car) {
   const info = JSON.parse(execFileSync('xcrun', ['assetutil', '--info', car], { encoding: 'utf8' }))
   const keys = ['AssetType', 'Name', 'Appearance', 'Idiom', 'PixelWidth', 'PixelHeight', 'Scale', 'SHA1Digest']
   return info
     .slice(1)
-    .map((asset) => JSON.stringify(Object.fromEntries(keys.filter((k) => k in asset).map((k) => [k, asset[k]]))))
+    .map((asset) => {
+      const kept = keys.filter((k) => k in asset && !(k === 'SHA1Digest' && asset.AssetType === 'Icon Image'))
+      return JSON.stringify(Object.fromEntries(kept.map((k) => [k, asset[k]])))
+    })
     .sort()
 }
 

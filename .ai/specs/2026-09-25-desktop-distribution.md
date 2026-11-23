@@ -202,7 +202,8 @@ Dock on macOS 15 and older):
 
 The **Desktop icon** workflow compiles the `.icon` with Xcode 26 (artifact `assets-car`: commit
 it when you have no Xcode 26), fails when the committed `Assets.car` is stale (source hash, then
-its renditions against the fresh compile), and has macOS 26, 15 and 15 Intel runners draw the pair
+its renditions against the fresh compile; the flattened bitmaps' pixel digests are left out,
+as actool re-renders them differently on every compile), and has macOS 26, 15 and 15 Intel runners draw the pair
 through NSWorkspace (`scripts/render-app-icon.swift`). The release checks the icon inputs before
 tauri-action builds and uploads, checks the bundle carries both icons after, and takes a failed
 macOS leg's assets back off the draft release.

@@ -55,7 +55,8 @@ jobs:
           retention-days: 14
 
       # Stale = compiled from another cezar.icon (the hash beside it) or carrying other renditions
-      # than the fresh compile (names, sizes, appearances, pixel digests).
+      # than the fresh compile (names, sizes, appearances, and the digests of everything but the
+      # flattened bitmaps, which actool re-renders differently on every compile).
       - name: Check the committed Assets.car is current
         shell: bash
         run: |
