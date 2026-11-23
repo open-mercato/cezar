@@ -10,6 +10,7 @@
  */
 import { parseArgs } from 'node:util';
 import { missingCockpitMessage } from '../cockpit-address.ts';
+import { TASK_TAG_ID_RE } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 export interface TaskCliEnv {
@@ -29,9 +30,12 @@ const USAGE = `cez task — dispatch cezar tasks from inside a task (on by defau
   cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch|run>]
                   [--scope "…"] [--budget <usd>] [--success "…"] [--evidence "…"] [--tools A,B]
                   [--runner ${RUNNER_IDS.join('|')}] [--model <model>] [--account <profile>] [--retry-limit <0-3>]
+                  [--tag <name|id>]…
   cez task report --status done|partial|failed|blocked --result "…" [--evidence "…"]…
                   [--verdict approve|changes|reject] [--suggestions "…"]… [--confidence <0-1>]
                   [--side-effect "…"]… [--error "…"]… [--next "…"]
+  cez task tag [<run id>] [--add <name|id>]… [--remove <name|id>]…
+                                      edit a task's tags (default: this task); prints the result
   cez task list                       the tree this task belongs to, with status and cost
   cez task tree <run id>              the tree rooted at (or containing) another run`;
 
@@ -50,6 +54,12 @@ async function readError(response: Response): Promise<string> {
     // not JSON
   }
   return `${response.status} ${response.statusText}`;
+}
+
+/** A tag id when it looks like one, else a name to reuse-or-create (spec 2026-11-23-task-tags § 6). */
+function tagRef(value: string): { id: string } | { name: string } {
+  const trimmed = value.trim();
+  return TASK_TAG_ID_RE.test(trimmed) ? { id: trimmed } : { name: trimmed };
 }
 
 function number(value: string | undefined, name: string): number | undefined {
@@ -103,6 +113,7 @@ export async function runTaskCommand(
             model: { type: 'string' },
             account: { type: 'string' },
             'retry-limit': { type: 'string' },
+            tag: { type: 'string', multiple: true },
           },
         });
         const objective = positionals.join(' ').trim();
@@ -122,6 +133,7 @@ export async function runTaskCommand(
           ...(values.model ? { model: values.model } : {}),
           ...(values.account ? { account: values.account } : {}),
           ...(values['retry-limit'] !== undefined ? { retry_limit: number(values['retry-limit'], 'retry-limit') } : {}),
+          ...(values.tag?.length ? { tags: values.tag.filter((t) => t.trim()).map(tagRef) } : {}),
         };
         const response = await io.fetch(`${api.scope}/runs/${encodeURIComponent(env.CEZ_TASK_ID)}/dispatch`, {
           method: 'POST',
@@ -170,6 +182,47 @@ export async function runTaskCommand(
         });
         if (!response.ok) throw new Error(`report refused — ${await readError(response)}`);
         io.log(`report recorded — status ${values.status}${values.verdict ? `, verdict ${values.verdict}` : ''}. It is delivered to your parent when this task settles.`);
+        return 0;
+      }
+      case 'tag': {
+        const { values, positionals } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { add: { type: 'string', multiple: true }, remove: { type: 'string', multiple: true } },
+        });
+        const runId = positionals[0] ?? env.CEZ_TASK_ID;
+        if (!runId) throw new Error('a run id is required (or run this inside a task, where CEZ_TASK_ID is set)');
+        const add = (values.add ?? []).filter((v) => v.trim()).map(tagRef);
+        const removeArgs = (values.remove ?? []).map((v) => v.trim()).filter(Boolean);
+        if (add.length === 0 && removeArgs.length === 0) throw new Error('name a tag with --add or --remove');
+        type TaggedRun = { id: string; tags?: Array<{ id: string; name: string }> };
+        let run: TaggedRun | undefined;
+        const one = await io.fetch(`${api.scope}/runs/${encodeURIComponent(runId)}`);
+        if (one.ok) run = (await one.json()) as TaggedRun;
+        else {
+          const all = await io.fetch(`${api.scope}/runs`);
+          if (!all.ok) throw new Error(`could not list runs — ${await readError(all)}`);
+          const matches = ((await all.json()) as TaggedRun[]).filter((r) => r.id.startsWith(runId));
+          if (matches.length > 1) throw new Error(`run id ${runId} is ambiguous`);
+          run = matches[0];
+        }
+        if (!run) throw new Error(`no run ${runId}`);
+        // `--remove` by name matches the run's current tags; an id is passed through as-is.
+        const remove = removeArgs.flatMap((value) => {
+          if (TASK_TAG_ID_RE.test(value)) return [value];
+          const key = value.toLowerCase();
+          const hit = run.tags?.filter((t) => t.name.toLowerCase() === key).map((t) => t.id) ?? [];
+          if (hit.length === 0) throw new Error(`run ${run.id.slice(0, 8)} has no tag named "${value}"`);
+          return hit;
+        });
+        const response = await io.fetch(`${api.scope}/runs/${encodeURIComponent(run.id)}/tags`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...(add.length ? { add } : {}), ...(remove.length ? { remove } : {}) }),
+        });
+        if (!response.ok) throw new Error(`tag refused — ${await readError(response)}`);
+        const { tags } = (await response.json()) as { tags: Array<{ name: string }> };
+        io.log(tags.length > 0 ? tags.map((t) => t.name).join(', ') : '(no tags)');
         return 0;
       }
       case 'list':

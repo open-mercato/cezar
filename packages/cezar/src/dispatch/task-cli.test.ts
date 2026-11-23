@@ -119,4 +119,51 @@ describe('cez task', () => {
       '    kid-0000  done $0.10  Kid → done (approve)',
     ]);
   });
+
+  describe('task tags (spec 2026-11-23-task-tags)', () => {
+    /** Answers by URL: the run record, then the tag delta. */
+    const routed = (run: { id: string; tags?: Array<{ id: string; name: string }> }) => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      const out: string[] = [];
+      const err: string[] = [];
+      const io: TaskCliIo = {
+        fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+          calls.push({ url: String(url), init });
+          const body = String(url).endsWith('/tags')
+            ? { tags: [{ id: 'tt-newtag00001', name: 'batch' }] }
+            : run;
+          return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+        }) as typeof fetch,
+        log: (line) => out.push(line),
+        error: (line) => err.push(line),
+      };
+      return { calls, out, err, io };
+    };
+
+    it('create sends --tag as names or ids', async () => {
+      const h = harness({ status: 201, body: { id: 'child-1' } });
+      await runTaskCommand(['create', 'x', '--tag', 'review batch', '--tag', 'tt-abcdefgh01'], env, h.io);
+      expect(JSON.parse(String(h.calls[0]?.init?.body)).tags).toEqual([{ name: 'review batch' }, { id: 'tt-abcdefgh01' }]);
+    });
+
+    it('tag defaults to CEZ_TASK_ID, adds by name and id, removes by name and id, and prints the result', async () => {
+      const h = routed({ id: 'run-1', tags: [{ id: 'tt-oldtag00001', name: 'Old' }] });
+      const code = await runTaskCommand(['tag', '--add', 'batch', '--add', 'tt-abcdefgh01', '--remove', 'old', '--remove', 'tt-zzzzzzzz01'], env, h.io);
+      expect(code).toBe(0);
+      expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/run-1');
+      expect(h.calls[1]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/run-1/tags');
+      expect(JSON.parse(String(h.calls[1]?.init?.body))).toEqual({
+        add: [{ name: 'batch' }, { id: 'tt-abcdefgh01' }],
+        remove: ['tt-oldtag00001', 'tt-zzzzzzzz01'],
+      });
+      expect(h.out).toEqual(['batch']);
+    });
+
+    it('tag on another run, and refuses a name the run does not carry', async () => {
+      const h = routed({ id: 'other-run' });
+      expect(await runTaskCommand(['tag', 'other-run', '--remove', 'nope'], env, h.io)).toBe(1);
+      expect(h.err[0]).toContain('has no tag named "nope"');
+      expect(await runTaskCommand(['tag', 'other-run'], env, routed({ id: 'other-run' }).io)).toBe(1);
+    });
+  });
 });
