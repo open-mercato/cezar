@@ -90,6 +90,13 @@ export const automationTaskSchema = z
     message: 'task selects either a named workflow or inline steps, not both',
   });
 
+function dropInvalidTaskTags(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !('tags' in raw)) return raw;
+  if (z.array(automationTaskTagSchema).max(RUN_TAGS_MAX).safeParse((raw as { tags: unknown }).tags).success) return raw;
+  const { tags: _tags, ...rest } = raw as Record<string, unknown>;
+  return rest;
+}
+
 /**
  * A poll's two defaulted keys are filled BEFORE parsing, and only for a poll kind (`github` or
  * `tracker`): `.default()` on the keys themselves would also stamp `intervalSeconds: 300` and an
@@ -123,7 +130,8 @@ export const automationDefinitionObjectSchema = z
     trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
     schedules: automationSchedulesSchema.optional(),
-    task: automationTaskSchema,
+    // A malformed `tags` drops the tags, never the definition (spec 2026-11-23-automation-task-tags).
+    task: z.preprocess(dropInvalidTaskTags, automationTaskSchema),
     deferredStart: deferredStartStateSchema.optional(),
     /** A manager's chat the server posts each run to. A link this version cannot read is dropped,
      *  never the definition: losing a report beats losing an automation. */

@@ -185,7 +185,7 @@ describe('task tags API', () => {
     expect(index.runs.find((r) => r.id === run.id)?.tags?.map((t) => t.name)).toEqual(['indexed']);
   });
 
-  it('an automation saves its tags as {id, name}, creating a named tag (spec § 5a)', async () => {
+  it('an automation saves its tags as {id, name}, creating a named tag (spec 2026-11-23-automation-task-tags)', async () => {
     expect(automationTaskSchema.safeParse({ prompt: 'x', tags: [{ name: 'batch' }] }).success).toBe(true);
     expect(automationTaskSchema.safeParse({ prompt: 'x', tags: [{ id: 'tt-abcdefgh1234' }] }).success).toBe(false);
     const res = await send('POST', '/api/v1/automations', {

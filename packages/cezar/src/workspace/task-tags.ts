@@ -357,7 +357,7 @@ export function applyRunTagDelta(current: readonly RunTag[] | undefined, add: re
   return next;
 }
 
-// ---- automation tags (spec § 5a) ------------------------------------------------------------
+// ---- automation tags (spec 2026-11-23-automation-task-tags) ------------------------------------------------------------
 
 /** Save time, with the user present: a live id stays, a gone or foreign id falls back to its name,
  *  and a name with no tag creates one, as `POST /runs` would. Stored as `{id, name}` so the launch

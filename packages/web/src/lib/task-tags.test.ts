@@ -81,7 +81,7 @@ describe('helpers', () => {
   })
 })
 
-describe('resolveAutomationTags (spec § 5a)', () => {
+describe('resolveAutomationTags (spec 2026-11-23-automation-task-tags)', () => {
   const registry = {
     tags: [
       { id: 'tt-live00000001', name: 'nightly', color: 'blue' as const, createdAt: '' },

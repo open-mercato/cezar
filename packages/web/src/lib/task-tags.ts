@@ -36,7 +36,7 @@ export function resolveRunTags(
   return out
 }
 
-/** An automation's `{id, name}` as the launch will resolve it (spec § 5a): by live id, then by a
+/** An automation's `{id, name}` as the launch will resolve it (spec 2026-11-23-automation-task-tags): by live id, then by a
  *  live tag of that name; otherwise a `snapshot` chip — the launch will skip it. */
 export function resolveAutomationTags(
   tags: readonly AutomationTaskTag[],
