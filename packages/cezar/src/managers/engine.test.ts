@@ -1056,6 +1056,30 @@ describe('ManagerEngine', () => {
     });
   });
 
+  describe('starting a task', () => {
+    // A dispatch root always gets a worktree, so in a trunk-based project --dispatch cost the task its
+    // Commit to main and its auto-land (the header offered Create PR instead).
+    it('drops --dispatch in an in-place project and keeps it elsewhere', async () => {
+      const startIn = async (taskWorkspace: string | null) => {
+        requests.length = 0;
+        const engine = makeEngine({
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            if (path.endsWith('/config')) return Response.json({ taskWorkspace });
+            if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+            return Response.json({ ok: true });
+          },
+        });
+        const id = await create(engine);
+        expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true })).toMatchObject({ runId: 'new-run' });
+        return requests.find((request) => request.path.endsWith('/runs'))?.body as Record<string, unknown>;
+      };
+      expect(await startIn('in-place')).not.toHaveProperty('dispatch');
+      expect(await startIn('worktree')).toMatchObject({ dispatch: {} });
+      expect(await startIn(null)).toMatchObject({ dispatch: {} });
+    });
+  });
+
   describe('forwarding a user message', () => {
     /** 20k+ characters of what broke the shell: Polish, quotes, apostrophes, `$`, backticks, newlines. */
     const transcript = Array.from({ length: 260 }, (_, index) =>

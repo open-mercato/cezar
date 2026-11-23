@@ -1295,6 +1295,28 @@ describe('the facts line', () => {
     expect(menu.textContent).not.toContain('no supported forge remote')
   })
 
+  // A trunk task waiting on the user shows Answer AND its git step, and that step is Commit to main.
+  // A task with its own worktree in the same project (a manager's --dispatch root) offers Create PR.
+  it('a trunk task asking a question keeps Commit to main beside Answer; a worktree task gets Create PR', async () => {
+    const trunkProject = {
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true }, checks: [{ name: 'gh', available: true }] }),
+      '/api/v1/config': () => jsonResponse({ profile: 'trunk', taskWorkspace: 'in-place', landing: 'auto', landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' }),
+      '/api/v1/repo': () => jsonResponse({ info: { root: '/repo', branch: 'main', remote: 'origin' } }),
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0 }),
+    }
+    stubFetch(trunkProject)
+    renderHeader(run('waiting', { worktree: false }))
+    expect(primaryRow().getByRole('button', { name: 'Answer' })).toBeTruthy()
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="land"]')?.textContent).toBe('Commit to main'))
+    expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).toBeNull()
+
+    cleanup()
+    stubFetch({ ...trunkProject, '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 0, behind: 0, ahead: 2 }) })
+    renderHeader(run('waiting', { worktreePath: '/repo/.ai/cezar/worktrees/r1', branch: 'cez/r1' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="git-button"] [data-action="land"]')).toBeNull()
+  })
+
   it('the title row reserves the git button’s height, so the header does not jump without it', () => {
     stubFetch()
     renderHeader(run('done'))
