@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { OVERRIDE_TTL_MS, createAttentionOverrideStore, nextOverrideWake } from './overrides.ts';
+import { OVERRIDES_MAX, OVERRIDE_TTL_MS, createAttentionOverrideStore, nextOverrideWake } from './overrides.ts';
 
 const NOW = Date.parse('2026-11-23T12:00:00.000Z');
 const fileIn = () => join(mkdtempSync(join(tmpdir(), 'cez-overrides-')), 'attention-overrides.json');
@@ -105,6 +105,21 @@ describe('attention override store (spec 2026-11-23-needs-you-triage)', () => {
     expect(nextOverrideWake([{ key: 'plain', mode: 'dismiss', at }])).toBe(NOW + OVERRIDE_TTL_MS);
     expect(nextOverrideWake([{ key: 'plain', mode: 'dismiss', at }, { key: 's', mode: 'dismiss', at, until: new Date(NOW + 60_000).toISOString() }])).toBe(NOW + 60_000);
   });
+
+  it('keeps the newest 500, a key set again counting as new (review of #2443, round 2)', async () => {
+    const path = fileIn();
+    const store = createAttentionOverrideStore(() => path);
+    for (let i = 0; i <= OVERRIDES_MAX; i += 1) {
+      await store.set({ key: `k${i}`, mode: 'dismiss' }, NOW + i);
+      if (i === 250) await store.set({ key: 'k0', mode: 'dismiss' }, NOW + i);
+    }
+    const keys = (await store.list(NOW + OVERRIDES_MAX)).map((entry) => entry.key);
+    expect(keys).toHaveLength(OVERRIDES_MAX);
+    // k0 was set again after k1..k250: k1 is now the oldest, and the one that goes.
+    expect(keys).toContain('k0');
+    expect(keys).not.toContain('k1');
+    expect(keys.at(-1)).toBe(`k${OVERRIDES_MAX}`);
+  }, 60_000);
 
   it('treats a corrupt file as empty', async () => {
     const path = fileIn();

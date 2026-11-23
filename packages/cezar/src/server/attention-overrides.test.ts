@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attentionOverridesResponseSchema, attentionResponseSchema, healthResponseSchema } from '@open-mercato/cezar-contract';
 import { createAttentionOverrideStore } from '../attention/overrides.ts';
 import { createPrEndMemory } from '../attention/pr-ends.ts';
+import { ATTENTION_SETTLE_MS } from '../attention/service.ts';
 import { __clearRefStatusCacheForTests, __seedRefStatusCacheForTests } from './forge/github.ts';
 import { RunStore } from '../runs/store.ts';
 import { runInRelayScope } from '../relay/scope.ts';
@@ -158,6 +159,9 @@ describe('attention override routes', () => {
       expect(events).toEqual(['attention-change']);
       // Moving only the snooze's end leaves the item list alone, and is still news for the cockpit.
       await post('/api/v1/workspace/attention/overrides', { key: task.key, mode: 'dismiss', until: new Date(Date.now() + 7_200_000).toISOString() });
+      expect(events).toEqual(['attention-change', 'attention-change']);
+      // The recount the posts started (ATTENTION_SETTLE_MS later) is the phone's: it adds no third event.
+      await new Promise((resolve) => setTimeout(resolve, ATTENTION_SETTLE_MS + 1_500));
       expect(events).toEqual(['attention-change', 'attention-change']);
     } finally {
       wants.mockRestore();
