@@ -7,6 +7,8 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
 import { ProjectContexts } from './project-context.ts';
+import { claimDataDirLock } from '../runtime/data-dir-lock.ts';
+import { processIdentityPlatformSupported } from '../runtime/process-identity.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp, projectRouteManifest, type ProjectRouteInfo } from './server.ts';
 
@@ -345,6 +347,24 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     expect(await res.json()).toEqual({
       error: `project folder not found: ${other.id}`,
     });
+  });
+
+  // PR #2430: a project whose task data another live server owns is never opened (nor recovered).
+  it.skipIf(!processIdentityPlatformSupported())('a project another live cezar serves answers 409 {error} and is not built', async () => {
+    const other = await registerProject(otherRoot);
+    const held = await claimDataDirLock(join(other.root, '.ai/cezar'));
+    expect(held.kind).toBe('owned');
+    try {
+      const res = await apiRequest(app, `/api/v1/p/${other.id}/runs`);
+      expect(res.status).toBe(409);
+      const body = await res.json() as { error: string };
+      expect(body.error).toBe(`project ${other.id} is in use: another cezar (pid ${process.pid}) already serves the tasks in ${join(other.root, '.ai/cezar')}`);
+      expect(contexts.peek(other.id)).toBeUndefined();
+    } finally {
+      if (held.kind === 'owned') await held.release();
+    }
+    // Once the owner lets go, the same project opens normally.
+    expect((await apiRequest(app, `/api/v1/p/${other.id}/runs`)).status).toBe(200);
   });
 
   it('a non-boot project builds lazily and answers with its own state', async () => {

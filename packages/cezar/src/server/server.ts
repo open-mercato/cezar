@@ -1941,9 +1941,10 @@ export function createApp(deps: ServerDeps) {
       c.set('project', await contexts.context(raw));
     } catch (err) {
       if (err instanceof ProjectContextError) {
-        return err.reason === 'missing-root'
-          ? c.json({ error: `project folder not found: ${err.projectId}` }, 409)
-          : c.json({ error: err.message }, 404);
+        if (err.reason === 'missing-root') return c.json({ error: `project folder not found: ${err.projectId}` }, 409);
+        // Another live server owns this project's tasks (PR #2430).
+        if (err.reason === 'in-use') return c.json({ error: err.message }, 409);
+        return c.json({ error: err.message }, 404);
       }
       throw err;
     }

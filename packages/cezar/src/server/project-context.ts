@@ -11,6 +11,7 @@ import { RunManager } from '../workflows/run.ts';
 import { outsideRelayScope } from '../relay/scope.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { getRepoInfo } from './git.ts';
+import { claimDataDirLock, dataDirInUseMessage, type DataDirLockClaim } from '../runtime/data-dir-lock.ts';
 
 /**
  * Per-project server context (spec 2026-07-20-multi-project-workspace,
@@ -67,9 +68,11 @@ export interface ProjectContextDeps {
   semaphore?: WorkspaceSemaphore;
   /** A hosted cockpit: each project's RunManager keeps `bypassPermissions` off. */
   hosted?: () => boolean;
+  /** One server per project data dir (PR #2430); injectable so tests can stage a held lock. */
+  claimDataDir?: (dataDir: string) => Promise<DataDirLockClaim>;
 }
 
-export type ProjectContextFailure = 'unknown-project' | 'missing-root';
+export type ProjectContextFailure = 'unknown-project' | 'missing-root' | 'in-use';
 
 /** Typed failure so the route layer can map reasons to statuses (404/409)
  *  without string matching. */
@@ -77,11 +80,15 @@ export class ProjectContextError extends Error {
   constructor(
     readonly reason: ProjectContextFailure,
     readonly projectId: string,
+    /** `in-use` only: who already serves the project's tasks. */
+    inUse?: string,
   ) {
     super(
       reason === 'unknown-project'
         ? `unknown project: ${projectId}`
-        : `project root is missing: ${projectId}`,
+        : reason === 'in-use'
+          ? `project ${projectId} is in use: ${inUse ?? 'another cezar already serves its tasks'}`
+          : `project root is missing: ${projectId}`,
     );
     this.name = 'ProjectContextError';
   }
@@ -107,6 +114,10 @@ export class ProjectContexts {
   /** One semaphore for every manager this map builds — injected by boot,
    *  private-but-shared otherwise. */
   private readonly semaphore: WorkspaceSemaphore;
+  /** Data-dir lock release per built context; dropped on dispose. */
+  private readonly dataLocks = new Map<string, () => Promise<void>>();
+  /** A degraded lock warns once per data dir, not once per build attempt. */
+  private readonly warnedDataDirs = new Set<string>();
 
   constructor(private readonly deps: ProjectContextDeps) {
     this.semaphore = deps.semaphore ?? new WorkspaceSemaphore();
@@ -206,6 +217,7 @@ export class ProjectContexts {
     this.contexts.delete(projectId);
     this.cleanupPreparation(ctx);
     teardown(ctx);
+    this.releaseDataLock(projectId);
     return true;
   }
 
@@ -231,6 +243,12 @@ export class ProjectContexts {
     return this.shutdownPromise;
   }
 
+  private releaseDataLock(projectId: string): void {
+    const release = this.dataLocks.get(projectId);
+    this.dataLocks.delete(projectId);
+    void release?.();
+  }
+
   private cleanupPreparation(context: ProjectContext): void {
     const cleanups = this.preparationCleanup.get(context) ?? [];
     this.preparationCleanup.delete(context);
@@ -247,6 +265,24 @@ export class ProjectContexts {
 
     ensureDataGitignore(project.root);
     const dataDir = join(project.root, '.ai/cezar');
+    // Before the store opens: a project another live server owns must not be recovered here.
+    const lock = await (this.deps.claimDataDir ?? claimDataDirLock)(dataDir);
+    if (lock.kind === 'held') throw new ProjectContextError('in-use', projectId, dataDirInUseMessage(dataDir, lock));
+    if (lock.kind === 'degraded' && !this.warnedDataDirs.has(dataDir)) {
+      this.warnedDataDirs.add(dataDir);
+      console.warn(`[cez] project lock unavailable for ${projectId} (${lock.reason}) — opening it without one`);
+    }
+    if (lock.kind === 'owned') this.dataLocks.set(projectId, lock.release);
+    try {
+      return await this.open(project, dataDir);
+    } catch (err) {
+      // Whatever failed after the claim — store, manager, recovery — must not strand the lock.
+      this.releaseDataLock(projectId);
+      throw err;
+    }
+  }
+
+  private async open(project: ProjectContextSource, dataDir: string): Promise<ProjectContext> {
     // keepLive + recover() (#367), same as serveCommand: runs that were live
     // when this project's context last existed are re-queued or resumed.
     const store = RunStore.open(dataDir, { keepLive: true });

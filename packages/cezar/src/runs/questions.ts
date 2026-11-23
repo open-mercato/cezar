@@ -215,6 +215,7 @@ export function createTaskQuestionProvider(deps: TaskQuestionDeps): QuestionProv
     } catch (err) {
       // A gone root answers 409 like every project route; anything else is not found.
       if (err instanceof ProjectContextError && err.reason === 'missing-root') return { ok: false, status: 409, error: `project folder not found: ${projectId}` };
+      if (err instanceof ProjectContextError && err.reason === 'in-use') return { ok: false, status: 409, error: err.message };
       return notFound;
     }
   };
