@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyTagDelta, groupTagsByName, offersCreate, pickerTags, resolveRunTags } from './task-tags'
+import { applyTagDelta, groupTagsByName, offersCreate, pickerTags, resolveAutomationTags, resolveRunTags } from './task-tags'
 
 /** spec 2026-11-23-task-tags § 4.3 / § 7.1. */
 describe('resolveRunTags', () => {
@@ -78,5 +78,22 @@ describe('helpers', () => {
       { key: 'batch', name: 'batch', ids: ['tt-one0000001', 'tt-two0000001'], color: 'blue' },
       { key: 'other', name: 'other', ids: ['tt-three00001'] },
     ])
+  })
+})
+
+describe('resolveAutomationTags (spec § 5a)', () => {
+  const registry = {
+    tags: [
+      { id: 'tt-live00000001', name: 'nightly', color: 'blue' as const, createdAt: '' },
+      { id: 'tt-other0000001', name: 'mine', projectId: 'other', createdAt: '' },
+    ],
+  }
+  it('matches by id, then by name, and marks the rest as a snapshot the launch will skip', () => {
+    const shown = resolveAutomationTags(
+      [{ id: 'tt-live00000001', name: 'old name' }, { id: 'tt-gone00000001', name: 'NIGHTLY' }, { name: 'mine' }, { name: 'missing' }],
+      registry,
+      'p1',
+    )
+    expect(shown.map((t) => [t.name, t.snapshot])).toEqual([['nightly', false], ['nightly', false], ['mine', true], ['missing', true]])
   })
 })

@@ -135,7 +135,7 @@ export const automationTaskSchema = createRunInputBaseSchema
     prompt: z.string(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     systemPrompt: z.string().optional(),
-    /** Task tags every launched run gets (spec 2026-11-23-task-tags § 5a): `{id, name}`, resolved
+    /** Task tags every launched run gets (spec 2026-11-23-automation-task-tags): `{id, name}`, resolved
      *  at launch by id, then by name; a tag that resolves neither way is dropped, never created. */
     tags: z.array(automationTaskTagSchema).max(RUN_TAGS_MAX).optional(),
     dispatch: automationDispatchSchema.optional(),
@@ -471,6 +471,8 @@ export const automationTemplateSchema = z.object({
     dispatch: automationDispatchSchema.optional(),
     checkout: automationTaskSchema.shape.checkout,
     allowForkHeads: automationTaskSchema.shape.allowForkHeads,
+    /** Names only: a tag id is the source project's, and the copy resolves the name in its own. */
+    tags: automationTaskSchema.shape.tags,
   }),
 });
 export type AutomationTemplate = z.infer<typeof automationTemplateSchema>;

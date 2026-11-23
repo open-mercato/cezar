@@ -26,6 +26,7 @@ export interface CliDefinition {
     model?: string
     autonomous?: boolean
     dispatch?: AutomationDispatch
+    tags?: Array<{ id?: string; name: string }>
   }
   enable?: boolean
 }
@@ -84,6 +85,8 @@ export function cliFlagsOf(definition: CliDefinition): string {
     if (task.dispatch.maxSubtasks !== undefined) parts.push(`--max-subtasks ${task.dispatch.maxSubtasks}`)
     if (task.dispatch.reviewChild) parts.push('--review-child')
   }
+  // Names only: a pasted command resolves them in whichever project and machine runs it.
+  for (const tag of task.tags ?? []) parts.push(`--tag ${shellQuote(tag.name)}`)
   if (definition.enable) parts.push('--enable')
   parts.push(`--prompt ${shellQuote(task.prompt || '…')}`)
   return parts.join(' ')

@@ -59,7 +59,7 @@ export const taskTagRefSchema = z.union([
 ]);
 export type TaskTagRef = z.infer<typeof taskTagRefSchema>;
 
-/** A tag on an automation's task (spec 2026-11-23-task-tags § 5a): the name always, so an id
+/** A tag on an automation's task (spec 2026-11-23-automation-task-tags): the name always, so an id
  *  that is gone or unknown on this machine falls back to a tag of that name at launch. */
 export const automationTaskTagSchema = z
   .object({

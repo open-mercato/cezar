@@ -65,7 +65,7 @@ export const automationTaskSchema = z
     generateFollowups: z.boolean().optional(),
     autonomous: z.boolean().optional(),
     systemPrompt: z.string().max(100_000).optional(),
-    /** Task tags for every launched run (spec 2026-11-23-task-tags § 5a). */
+    /** Task tags for every launched run (spec 2026-11-23-automation-task-tags). */
     tags: z.array(automationTaskTagSchema).max(RUN_TAGS_MAX).optional(),
     /**
      * Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):

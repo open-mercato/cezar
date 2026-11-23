@@ -4702,7 +4702,7 @@ export function createApp(deps: ServerDeps) {
         if ((input.task.variants ?? 1) > 1 && !await getRepoInfo(project.root)) return c.json({ error: 'Parallel variants need a git repository.' }, 400);
         const { task, images: _images, todoId: _todoId, variants, tags: tagRefs, ...fields } = input.task;
         // Resolved now, while the user is here; the launch then resolves `{id, name}` fail-open
-        // like any automation's (spec 2026-11-23-task-tags § 5a).
+        // like any automation's (spec 2026-11-23-automation-task-tags).
         let tags: AutomationTaskTag[] = [];
         if (tagRefs && tagRefs.length > 0) {
           try {

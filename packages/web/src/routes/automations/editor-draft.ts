@@ -6,6 +6,7 @@ import {
   type AutomationFilters,
   type AutomationKind,
   type AutomationSchedule,
+  type AutomationTaskTag,
   type AutomationTemplate,
   type CreateAutomationInput,
   type Runner,
@@ -74,6 +75,8 @@ export interface EditorDraft {
   dispatch: boolean
   maxSubtasks: number
   reviewChild: boolean
+  /** `task.tags`: `{id, name}`, resolved at launch by id, then name (spec 2026-11-23-automation-task-tags). */
+  tags: AutomationTaskTag[]
   enabled: boolean
   /** `task.checkout`/`task.allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3). The editor
    *  has no control for them yet; they are carried so saving a PR-head verifier from the cockpit
@@ -158,6 +161,7 @@ export function newDraft(): EditorDraft {
     dispatch: false,
     maxSubtasks: 4,
     reviewChild: true,
+    tags: [],
     enabled: false,
   }
 }
@@ -209,6 +213,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     dispatch: task.dispatch !== undefined,
     maxSubtasks: task.dispatch?.maxSubtasks ?? base.maxSubtasks,
     reviewChild: task.dispatch?.reviewChild ?? base.reviewChild,
+    tags: task.tags?.map((tag) => ({ ...tag })) ?? [],
     enabled: definition.enabled,
     ...(task.checkout !== undefined ? { checkout: task.checkout } : {}),
     ...(task.allowForkHeads !== undefined ? { allowForkHeads: task.allowForkHeads } : {}),
@@ -226,6 +231,7 @@ export type TemplatePick = Pick<AutomationTemplateDraft, 'name' | 'kind' | 'sche
   autonomous?: boolean
   checkout?: 'base' | 'pr-head'
   allowForkHeads?: boolean
+  tags?: AutomationTaskTag[]
 }
 
 export function templatePick(template: AutomationTemplate): TemplatePick {
@@ -247,6 +253,7 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
     ...(template.task.dispatch ? { dispatch: template.task.dispatch } : {}),
     ...(template.task.checkout ? { checkout: template.task.checkout } : {}),
     ...(template.task.allowForkHeads !== undefined ? { allowForkHeads: template.task.allowForkHeads } : {}),
+    ...(template.task.tags?.length ? { tags: template.task.tags } : {}),
   }
 }
 
@@ -282,6 +289,7 @@ export function applyTemplate(draft: EditorDraft, template: TemplatePick): Edito
     dispatch: template.dispatch !== undefined,
     maxSubtasks: template.dispatch?.maxSubtasks ?? draft.maxSubtasks,
     reviewChild: template.dispatch?.reviewChild ?? draft.reviewChild,
+    tags: template.tags?.map((tag) => ({ ...tag })) ?? draft.tags,
   }
 }
 
@@ -313,6 +321,7 @@ export function toBody(draft: EditorDraft): AutomationBody {
     ...(draft.reasoningEffort ? { reasoningEffort: draft.reasoningEffort } : {}),
     autonomous: draft.autonomous,
     ...(draft.dispatch ? { dispatch: { maxSubtasks: draft.maxSubtasks, reviewChild: draft.reviewChild } } : {}),
+    ...(draft.tags.length > 0 ? { tags: draft.tags.map((tag) => ({ ...tag })) } : {}),
   }
   if (draft.kind === 'schedule') {
     return { name: draft.name.trim(), kind: 'schedule', schedule: scheduleBody(draft.schedule),

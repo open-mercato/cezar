@@ -1,4 +1,4 @@
-import type { RunTag, TaskTag, TaskTagColor, TaskTagsList } from '@open-mercato/cezar-api-client'
+import type { AutomationTaskTag, RunTag, TaskTag, TaskTagColor, TaskTagsList } from '@open-mercato/cezar-api-client'
 
 /**
  * Task tags in the cockpit (spec 2026-11-23-task-tags). The server keeps each run's snapshot
@@ -34,6 +34,22 @@ export function resolveRunTags(
     else out.push({ id: tag.id, name: tag.name, snapshot: true })
   }
   return out
+}
+
+/** An automation's `{id, name}` as the launch will resolve it (spec § 5a): by live id, then by a
+ *  live tag of that name; otherwise a `snapshot` chip — the launch will skip it. */
+export function resolveAutomationTags(
+  tags: readonly AutomationTaskTag[],
+  registry: Pick<TaskTagsList, 'tags'> | undefined,
+  projectId: string | undefined,
+): ResolvedRunTag[] {
+  const live = (registry?.tags ?? []).filter((tag) => !tag.orphaned && (tag.projectId === undefined || tag.projectId === projectId))
+  return tags.map((ref) => {
+    const tag = (ref.id ? live.find((t) => t.id === ref.id) : undefined) ?? live.find((t) => tagNameKey(t.name) === tagNameKey(ref.name))
+    return tag
+      ? { id: tag.id, name: tag.name, ...(tag.color ? { color: tag.color } : {}), snapshot: false }
+      : { id: ref.id ?? `name:${tagNameKey(ref.name)}`, name: ref.name, snapshot: true }
+  })
 }
 
 /** The tags a picker offers in `projectId`: its own, then global; each by `lastUsedAt`, then name.

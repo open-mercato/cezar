@@ -175,7 +175,7 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
   };
 }
 
-/** Tags resolve at launch, never refuse it (spec 2026-11-23-task-tags § 5a). */
+/** Tags resolve at launch, never refuse it (spec 2026-11-23-automation-task-tags). */
 async function applyAutomationTags(input: StartRunInput, definition: AutomationDefinition, root: string): Promise<{ dropped: string[] }> {
   const { tags, dropped } = await resolveAutomationTags(definition.task.tags, root);
   if (tags.length > 0) input.tags = tags;

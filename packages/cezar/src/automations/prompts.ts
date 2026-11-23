@@ -58,6 +58,7 @@ A GitHub poll:
     "generateFollowups": false,
     "systemPrompt": "Extra guidance for every launched run",  // optional
     "dispatch": { "maxSubtasks": 4, "reviewChild": true },    // optional: let each run dispatch up to N subtasks, and ask it to dispatch a final review task
+    "tags": [{ "name": "nightly" }],                         // optional: task tags every launched run gets (max 10); saved as { id, name }, a tag that no longer exists at launch is skipped
     "checkout": "pr-head",                           // optional, pull_request.* events only: fork the run's worktree from the PR's head instead of the base branch (its check steps then verify the PR itself; the run cannot publish a PR)
     "allowForkHeads": false                          // optional, with checkout "pr-head": admit heads from forks — untrusted code, run without check credentials
   }

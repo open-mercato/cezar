@@ -26,6 +26,7 @@ import { settingsSectionPath } from '@/routes/settings/settings-shell'
 import { automationState } from './automation-state'
 import { CopyAsCliCard } from './copy-as-cli-card'
 import { EditorDispatchRow } from './editor-dispatch-row'
+import { EditorTagsRow } from './editor-tags-row'
 import {
   applyTemplate,
   cliDefinitionOf,
@@ -467,6 +468,9 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                 reviewChild={draft.reviewChild}
                 onChange={(next) => patch(next)}
               />
+            </div>
+            <div className="mt-3">
+              <EditorTagsRow tags={draft.tags} onChange={(tags) => patch({ tags })} />
             </div>
             {error?.section === 'what' ? <InlineAlert>{error.message}</InlineAlert> : null}
           </Section>

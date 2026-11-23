@@ -131,6 +131,14 @@ describe('fromDefinition / toBody', () => {
     })
   })
 
+  it('round-trips task tags as {id, name}, and leaves them off an untagged body', () => {
+    const tags = [{ id: 'tt-abcdefgh1234', name: 'nightly' }, { name: 'deps' }]
+    const draft = fromDefinition({ ...SCHEDULE_DEF, task: { ...SCHEDULE_DEF.task, tags } })
+    expect(draft.tags).toEqual(tags)
+    expect(toBody(draft).task.tags).toEqual(tags)
+    expect('tags' in toBody(fromDefinition(SCHEDULE_DEF)).task).toBe(false)
+  })
+
   it('round-trips a github definition, filters as comma lists', () => {
     const draft = fromDefinition(GITHUB_DEF)
     expect(draft.filters.authors).toBe('alice, bob')

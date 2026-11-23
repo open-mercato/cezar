@@ -6,6 +6,8 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { REVIEW_CHILD_SUFFIX, dispatchIntentOf, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, renderAutomationTask, renderScheduleTask, renderTrackerTask, validateAutomationPrompt } from './task-template.ts';
 import { AutomationStore } from './store.ts';
+import type { RunTag } from '@open-mercato/cezar-contract';
+import { createTaskTag, deleteTaskTag, loadTaskTags, mergeWriteTaskTags } from '../workspace/task-tags.ts';
 import type { GithubAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
 import type { TrackerAutomationCandidate } from './tracker-poller.ts';
 
@@ -58,6 +60,34 @@ describe('automation task templates', () => {
       await launchAutomationRun({ root, manager, store, definition: { ...definition, task }, candidate, receiptId: 'receipt' });
       expect(inputs).toEqual([{ agentProfile: 'work' }]);
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('applies the automation\'s tags at launch, and a deleted tag drops without stopping it (spec 2026-11-23-automation-task-tags)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-template-tags-'));
+    const savedHome = process.env.CEZ_HOME;
+    process.env.CEZ_HOME = join(root, 'home');
+    try {
+      await mergeWriteTaskTags((tags) => {
+        createTaskTag(tags, { name: 'nightly', projectRoot: null });
+        createTaskTag(tags, { name: 'gone', projectRoot: null });
+      });
+      const [nightly, gone] = (await loadTaskTags()).tags;
+      await mergeWriteTaskTags((tags) => deleteTaskTag(tags, gone!.id));
+      const store = RunStore.open(join(root, '.ai/cezar'));
+      const manager = {
+        startRun: (workflow: { name: string }, input: { task: string; tags?: RunTag[] }) =>
+          store.createRun({ title: 'automation', workflow: workflow.name, task: input.task, tags: input.tags, steps: [] }),
+      } as unknown as RunManager;
+      const task = { ...definition.task, workflow: 'quick-task', tags: [{ id: nightly!.id, name: 'nightly' }, { id: gone!.id, name: 'gone' }] };
+      const launched = await launchAutomationRun({ root, manager, store, definition: { ...definition, task }, candidate, receiptId: 'receipt' });
+      expect(store.getRun(launched.runId)?.tags).toEqual([{ id: nightly!.id, name: 'nightly', color: nightly!.color }]);
+      expect(store.readEvents(launched.runId).some((event) => event.type === 'note' && String(event.message).includes('"gone"'))).toBe(true);
+      expect((await loadTaskTags()).tags.map((tag) => tag.name)).toEqual(['nightly']);
+      store.flush();
+    } finally {
+      process.env.CEZ_HOME = savedHome;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('refuses successful delivery when run provenance cannot be persisted', async () => {

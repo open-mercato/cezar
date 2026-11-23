@@ -185,8 +185,16 @@ describe('task tags API', () => {
     expect(index.runs.find((r) => r.id === run.id)?.tags?.map((t) => t.name)).toEqual(['indexed']);
   });
 
-  it('an automation task carrying tags is refused', () => {
-    expect(automationTaskSchema.safeParse({ prompt: 'x' }).success).toBe(true);
-    expect(automationTaskSchema.safeParse({ prompt: 'x', tags: [{ name: 'batch' }] }).success).toBe(false);
+  it('an automation saves its tags as {id, name}, creating a named tag (spec § 5a)', async () => {
+    expect(automationTaskSchema.safeParse({ prompt: 'x', tags: [{ name: 'batch' }] }).success).toBe(true);
+    expect(automationTaskSchema.safeParse({ prompt: 'x', tags: [{ id: 'tt-abcdefgh1234' }] }).success).toBe(false);
+    const res = await send('POST', '/api/v1/automations', {
+      name: 'Nightly', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 },
+      task: { prompt: 'nightly run', tags: [{ name: 'batch' }] },
+    });
+    expect(res.status).toBe(201);
+    const [tag] = (await loadTaskTags()).tags;
+    expect(tag?.name).toBe('batch');
+    expect((res.body.automation as { task: { tags?: unknown } }).task.tags).toEqual([{ id: tag!.id, name: 'batch' }]);
   });
 });
