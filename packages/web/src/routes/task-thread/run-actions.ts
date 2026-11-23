@@ -200,6 +200,12 @@ export function inPlacePrPrompt(draft: boolean, base: string): string {
   return `${draft ? 'Create draft PR' : 'Create PR'} against ${base} instead of landing: move these changes to a new branch, commit and push it, open the PR, then switch the checkout back to ${base}`
 }
 
+/** Commit to the base from a worktree task in a trunk-based project: the server lands only in-place
+ *  tasks, so the agent commits, rebases its branch onto the base and pushes it there. */
+export function landBranchPrompt(base: string): string {
+  return `Commit to ${base}: commit what is left, rebase this branch onto the latest ${base}, run the project's checks, then push it to ${base} (git push origin HEAD:${base})`
+}
+
 /** Update branch for an in-place task: bring the checkout up to date, keeping the task's changes. */
 export function inPlaceUpdatePrompt(base: string): string {
   return `Update branch: pull the latest ${base} into the checkout (rebase, keeping these uncommitted changes)`

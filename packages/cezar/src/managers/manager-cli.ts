@@ -527,6 +527,7 @@ export async function runManagerCommand(
           });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
           if (created.forwarded) io.log(forwardedLine(created.forwarded));
+          if (created.notice) io.log(created.notice);
           return 0;
         }
         if (sub === 'say') {

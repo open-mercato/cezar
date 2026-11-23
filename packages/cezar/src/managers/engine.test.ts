@@ -3382,12 +3382,19 @@ describe('ManagerEngine', () => {
           },
         });
         const id = await create(engine);
-        expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true })).toMatchObject({ runId: 'new-run' });
-        return requests.find((request) => request.path.endsWith('/runs'))?.body as Record<string, unknown>;
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true });
+        expect(created).toMatchObject({ runId: 'new-run' });
+        const notice = 'notice' in created ? created.notice : undefined;
+        return { body: requests.find((request) => request.path.endsWith('/runs'))?.body as Record<string, unknown>, notice };
       };
-      expect(await startIn('in-place')).not.toHaveProperty('dispatch');
-      expect(await startIn('worktree')).toMatchObject({ dispatch: {} });
-      expect(await startIn(null)).toMatchObject({ dispatch: {} });
+      const inPlace = await startIn('in-place');
+      expect(inPlace.body).not.toHaveProperty('dispatch');
+      expect(inPlace.notice).toBe('dispatch ignored: alpha runs tasks in place');
+      for (const workspace of ['worktree', null]) {
+        const kept = await startIn(workspace);
+        expect(kept.body).toMatchObject({ dispatch: {} });
+        expect(kept.notice).toBeUndefined();
+      }
     });
 
     it('refuses a model or effort the runner cannot use, listing the valid ones', async () => {

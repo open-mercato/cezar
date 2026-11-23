@@ -226,6 +226,27 @@ export function gitActionPolicy(state: GitActionState): GitAction | null {
   return null
 }
 
+/**
+ * A task with its own worktree in an auto-land project (a dispatch root, a task started before the
+ * project went trunk-based): its work still belongs on the base, so the step is **Commit to <base>**,
+ * done by the agent (the server lands only in-place tasks). The branch policy's steps ride under the
+ * chevron; a task that already opened a PR keeps its PR steps.
+ */
+export function trunkBranchGitActionPolicy(state: GitActionState, base: string): GitAction | null {
+  const branchAction = gitActionPolicy(state)
+  if (state.prUrl || state.assessment || !state.hasWorktree) return branchAction
+  if (state.uncommitted === undefined) return null
+  if (state.uncommitted === 0 && (state.ahead ?? 0) === 0 && (state.unpushed ?? 0) === 0) return branchAction
+  const label = `Commit to ${base}`
+  const alternatives = branchAction
+    ? [{ ...branchAction, alternatives: undefined }, ...(branchAction.alternatives ?? [])]
+    : []
+  if (state.status === 'running' || state.status === 'queued') {
+    return { id: 'land', label, enabled: false, reason: `${label} unavailable — the agent is still working`, alternatives }
+  }
+  return { ...agentStep(state, 'land', label), alternatives }
+}
+
 /** An in-place task in an auto-land project (spec 2026-10-20-trunk-based-projects). */
 export interface TrunkGitActionState {
   status: RunStatus

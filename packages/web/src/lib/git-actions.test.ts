@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { RunStatus } from '@open-mercato/cezar-api-client'
 
-import { gitActionPolicy, trunkGitActionPolicy, type GitActionState } from './git-actions'
+import { gitActionPolicy, trunkBranchGitActionPolicy, trunkGitActionPolicy, type GitActionState } from './git-actions'
 
 /**
  * The git action policy, pinned row by row. The run's git button renders whatever this returns —
@@ -232,5 +232,28 @@ describe('an impact run (spec 2026-10-22-html-artifacts-and-impact, Q11)', () =>
     const forge = { kind: 'github', available: true } as GitActionState['forge']
     const trunk = { status: 'waiting' as RunStatus, base: 'main', uncommitted: 2, unpushed: 0, behind: 0, forge, assessment: true }
     expect(trunkGitActionPolicy(trunk)?.alternatives?.map((a) => a.id)).toEqual([])
+  })
+})
+
+describe('trunkBranchGitActionPolicy — a worktree task in a trunk-based project (#2426)', () => {
+  const trunkBranch = (extra: Partial<GitActionState>) => trunkBranchGitActionPolicy(withState(extra), 'main')
+
+  it('leads with Commit to main, the branch steps under its chevron', () => {
+    const action = trunkBranch({})
+    expect(action).toMatchObject({ id: 'land', label: 'Commit to main', enabled: true })
+    expect(action?.alternatives?.map((a) => a.id)).toEqual(['create-pr', 'create-draft-pr'])
+    expect(trunkBranch({ uncommitted: 0, ahead: 2 })).toMatchObject({ id: 'land' })
+  })
+
+  it('waits for git status, and needs the agent, which is still working mid-turn', () => {
+    expect(trunkBranch({ uncommitted: undefined })).toBeNull()
+    expect(trunkBranch({ status: 'running' })).toMatchObject({ id: 'land', enabled: false })
+    expect(trunkBranch({ agentBlocked: 'no session' })).toMatchObject({ id: 'land', enabled: false })
+  })
+
+  it('falls back to the branch policy with nothing to land, an open PR or an assessment', () => {
+    expect(trunkBranch({ uncommitted: 0, ahead: 0, unpushed: 0 })).toBeNull()
+    expect(trunkBranch({ prUrl: '#7', uncommitted: 1 })?.id).toBe('commit-push')
+    expect(trunkBranch({ assessment: true })).toBeNull()
   })
 })

@@ -24,7 +24,7 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       if (String(url).endsWith('/managers/m1')) return Response.json({ id: 'm1', ...manager });
       if (String(url).includes('/messages?pending=1')) return Response.json({ messages: pending, hasMore: false });
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
-      if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}) }, { status: 201 });
+      if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}), ...(body?.dispatch ? { notice: 'dispatch ignored: alpha runs tasks in place' } : {}) }, { status: 201 });
       if (String(url).endsWith('/task-message')) return Response.json({ ok: true, ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 0 } } : {}) });
       if (String(url).endsWith('/task-cancel')) return Response.json({ runId: body?.runId, cancelled: true, status: 'cancelled', children: ['c1', 'c2'] });
       if (String(url).endsWith('/task-retry')) return Response.json({ projectId: 'alpha', runId: 'retried' }, { status: 201 });
@@ -218,6 +218,12 @@ describe('cez manager', () => {
     expect(await run('task', 'create', '--title', 'T', 'Do', 'it')).toBe(0);
     expect(calls.at(-1)?.body).toMatchObject({ projectId: 'alpha', task: 'Do it', title: 'T' });
     expect(logs).toContain('[[task:alpha/new]]');
+  });
+
+  it('task create says when the project ignored --dispatch', async () => {
+    const { run, logs } = harness();
+    expect(await run('task', 'create', '--dispatch', 'Do', 'it')).toBe(0);
+    expect(logs).toEqual(['[[task:alpha/new]]', 'dispatch ignored: alpha runs tasks in place']);
   });
 
   describe('content that does not fit a command', () => {
