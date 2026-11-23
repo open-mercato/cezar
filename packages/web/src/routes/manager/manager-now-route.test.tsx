@@ -25,7 +25,7 @@ function Where() {
   return <output data-testid="where">{pathname + search}</output>
 }
 
-function renderRoute(entry: string, { managersLoaded = true } = {}) {
+function renderRoute(entry: string, { managersLoaded = true, managersFail = false } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
   if (managersLoaded) client.setQueryData(managerKeys.list, { managers })
@@ -37,8 +37,8 @@ function renderRoute(entry: string, { managersLoaded = true } = {}) {
     runs: [run('r1', 'Bump the formula', 'running'), run('r2', 'Done already', 'done'), run('r3', 'Build iOS', 'running'), run('r9', 'Nobody follows me', 'running')],
     referenceStatuses: {}, perProjectLimit: 200, truncated: [],
   })
-  // Never resolves: the managers list stays loading when it was not seeded.
-  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+  // Never resolves: the managers list stays loading when it was not seeded, unless it fails.
+  vi.stubGlobal('fetch', vi.fn(() => (managersFail ? Promise.reject(new TypeError('Failed to fetch')) : new Promise<Response>(() => {}))))
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
@@ -93,5 +93,11 @@ describe('ManagerNowRoute', () => {
     // Once the list is in, the requested manager applies: never All managers in between.
     await vi.waitFor(() => expect(document.querySelector('[data-slot="manager-now-filter"]')?.getAttribute('data-filter')).toBe('mobile'))
     expect(rows()).toEqual(['a'])
+  })
+
+  it('a managers list that fails falls back to All managers instead of loading forever (review of #2444, round 2)', async () => {
+    renderRoute('/manager/now?manager=mobile', { managersLoaded: false, managersFail: true })
+    await vi.waitFor(() => expect(document.querySelector('[data-slot="manager-now-filter"]')?.getAttribute('data-filter')).toBe('all'))
+    expect(screen.queryByText('Loading managers…')).toBeNull()
   })
 })

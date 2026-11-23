@@ -18,7 +18,7 @@ export function rememberManagerLocation(location: string): void {
   }
 }
 
-const WORKSPACE_PAGES = new Set(['approvals', 'now'])
+const WORKSPACE_PAGES = new Set(['approvals', 'now', 'questions'])
 
 /**
  * Where the sidebar's Manager row leads: the chat or list this tab left, else `/manager`. A

@@ -196,7 +196,8 @@ export function ManagerNowRoute() {
   }, [runsIndex.data, ordered, filter])
   // A requested manager waits for the list rather than flashing All managers first; an unknown id falls
   // back to All only once the list says it is unknown.
-  const waiting = managers.data === undefined && search.has(MANAGER_FILTER_PARAM)
+  // Only while the list is on its way: a failed list (409, 5xx, offline) falls back to All managers.
+  const waiting = managers.isPending && managers.fetchStatus !== 'idle' && search.has(MANAGER_FILTER_PARAM)
   const onFilter = React.useCallback((managerId: string | undefined) => {
     setSearch((current) => {
       const next = new URLSearchParams(current)

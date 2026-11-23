@@ -17,6 +17,12 @@ it('remembers Manager mode\'s Now and its filter, not as a manager id', () => {
   expect(managerHref([])).toBe('/manager/now')
 })
 
+it('remembers the workspace Questions page, not as a manager id', () => {
+  rememberManagerLocation('/manager/questions')
+  expect(managerHref(['global'])).toBe('/manager/questions')
+  expect(managerHref([])).toBe('/manager/questions')
+})
+
 it('still falls back when a remembered manager was deleted', () => {
   rememberManagerLocation('/manager/deleted')
   expect(managerHref(['global'])).toBe('/manager')
