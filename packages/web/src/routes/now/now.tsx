@@ -65,6 +65,7 @@ import {
   orderNeedsYou,
   itemForRun,
   itemTarget,
+  keyedQueue,
   shortLabel,
   snoozeUntil,
   taskRowTarget,
@@ -806,15 +807,16 @@ export function NowRoute() {
       toast(`${what}: ${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' })
       refresh()
     }
+    const inOrder = keyedQueue()
     const override = (target: TriageTarget, mode: 'dismiss' | 'keep', until?: string) => {
       applyOverrideLocally(queryClient, { key: target.key, mode })
-      return setAttentionOverride({ key: target.key, mode, ...(until ? { until } : {}) }).then(refresh, failed('Could not save that'))
+      return inOrder(target.key, () => setAttentionOverride({ key: target.key, mode, ...(until ? { until } : {}) })).then(refresh, failed('Could not save that'))
     }
     const undo = (targets: readonly TriageTarget[]) => {
       for (const target of targets) {
         if (target.questionKey) undoDismiss(target.questionKey)
         applyOverrideLocally(queryClient, { key: target.key, mode: 'clear' })
-        void clearAttentionOverride(target.key).then(refresh, failed('Could not undo'))
+        void inOrder(target.key, () => clearAttentionOverride(target.key)).then(refresh, failed('Could not undo'))
       }
     }
     // A question's ✕ also closes its card (owner decision), after the Questions page's own undo window.

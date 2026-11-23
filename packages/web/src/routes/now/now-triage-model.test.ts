@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { AttentionItem, RunRecord } from '@open-mercato/cezar-api-client'
 
-import { isHidden, itemForRun, itemTarget, orderNeedsYou, shortLabel, snoozeUntil, taskRowTarget } from './now-triage-model'
+import { isHidden, itemForRun, itemTarget, keyedQueue, orderNeedsYou, shortLabel, snoozeUntil, taskRowTarget } from './now-triage-model'
 
 /** Needs you triage (spec 2026-11-23-needs-you-triage). */
 
@@ -52,6 +52,26 @@ describe('shortLabel', () => {
   it('names references plainly and stays on one line', () => {
     expect(shortLabel('Send notes on [[pr:cezar/2426]] to [[task:cezar/abc]]')).toBe('Send notes on #2426 to task')
     expect(shortLabel('x'.repeat(60))).toHaveLength(48)
+  })
+})
+
+describe('keyedQueue', () => {
+  it('starts an undo only after the dismiss it undoes has settled, even a failed one', async () => {
+    const run = keyedQueue()
+    const order: string[] = []
+    let finishDismiss!: () => void
+    const dismiss = run('k', () => new Promise<void>((resolve) => { finishDismiss = () => { order.push('dismiss'); resolve() } }))
+    const clear = run('k', async () => { order.push('clear') })
+    const other = run('other', async () => { order.push('other') })
+    await other
+    expect(order).toEqual(['other'])
+    finishDismiss()
+    await Promise.all([dismiss, clear])
+    expect(order).toEqual(['other', 'dismiss', 'clear'])
+
+    const failed = run('k', () => Promise.reject(new Error('offline')))
+    await expect(failed).rejects.toThrow('offline')
+    await expect(run('k', async () => 'after')).resolves.toBe('after')
   })
 })
 

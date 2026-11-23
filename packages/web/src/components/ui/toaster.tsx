@@ -14,9 +14,9 @@ import { cn } from '@/lib/utils'
 
 export type ToastTone = 'default' | 'danger'
 
-/** An optional trailing link. Deliberately a LINK and not a callback: a toast is transient, and
- *  an arbitrary action that outlives its own toast is a bug waiting to be written. Everything
- *  that needs one so far is "go here" (the star ask's repository). */
+/** An optional trailing action: a link ("go here", the star ask's repository) or an undo of what
+ *  the toast announces. A callback only ever undoes, since a toast is transient and an arbitrary
+ *  action that outlives it is a bug waiting to be written. */
 export type ToastAction =
   | { label: string; href: string }
   /** An in-place undo (Needs you's Dismiss, spec 2026-11-23-needs-you-triage): clicking it also closes the toast. */

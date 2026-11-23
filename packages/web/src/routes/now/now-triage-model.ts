@@ -91,6 +91,19 @@ export function orderNeedsYou<T extends { tier: number; rank: number; since: str
   return [...rows].sort((a, b) => a.tier - b.tier || aging(a) - aging(b) || a.rank - b.rank || b.since.localeCompare(a.since))
 }
 
+/** Runs override writes one key at a time, in click order: an Undo's clear must never reach the
+ *  server before the dismiss it undoes, or the dismissal sticks. A failed write does not block the next. */
+export function keyedQueue(): <T>(key: string, work: () => Promise<T>) => Promise<T> {
+  const tails = new Map<string, Promise<unknown>>()
+  return (key, work) => {
+    const next = (tails.get(key) ?? Promise.resolve()).catch(() => undefined).then(work)
+    tails.set(key, next)
+    const forget = () => { if (tails.get(key) === next) tails.delete(key) }
+    next.then(forget, forget)
+    return next
+  }
+}
+
 /** One line of toast text: a long title would wrap the toast. */
 export function shortLabel(text: string, max = 48): string {
   const plain = text.replace(/\[\[(?:task|pr|issue):[^\]/\s]+\/([^\]\s]+)\]\]/g, (_match, id: string) => (/^\d+$/.test(id) ? `#${id}` : 'task')).replace(/\s+/g, ' ').trim()
