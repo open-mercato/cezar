@@ -6,6 +6,7 @@ import { listServerInstances } from '../server-install/state.ts';
 import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred-reset.ts';
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
+import type { GitStatusResponse } from '@open-mercato/cezar-contract';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -293,6 +294,7 @@ import {
   readImageAtRev,
   pushCurrentBranch,
   worktreeGitStatus,
+  type GitStatusResult,
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
@@ -6123,11 +6125,19 @@ export function createApp(deps: ServerDeps) {
       // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
       const inPlace = !worktree && run.worktree === false && !run.readOnly;
       if (!worktree && !inPlace) return c.json({ error: NO_WORKTREE }, 409);
-      const result = worktree
+      const result: GitStatusResult = worktree
         ? await worktreeGitStatus(worktree, run.baseBranch)
         : await checkoutGitStatus(c.get('project').root);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
+      const { baseRemote, baseTracked } = result;
+      const body: GitStatusResponse = {
+        uncommitted: result.uncommitted,
+        unpushed: result.unpushed,
+        behind: result.behind,
+        ahead: result.ahead,
+        ...(baseRemote ? { baseRemote, baseTracked: baseTracked === true } : {}),
+      };
+      return c.json(body);
     })
 
     // Draft PR from the review gate (spec 009): final autosave → push →
