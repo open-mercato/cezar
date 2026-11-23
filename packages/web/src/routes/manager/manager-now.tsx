@@ -109,8 +109,8 @@ export function ManagerNowView({
       </header>
       <div className="flex flex-1 flex-col gap-6 p-3 pb-[calc(140px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
         {selected ? (
-          <p data-slot="manager-now-filtered" className="flex flex-wrap items-center gap-2 text-label text-muted-foreground">
-            Showing <span className="font-medium text-foreground">{selected.name}</span>: its questions, approvals and messages, and the tasks it started or follows.
+          <p data-slot="manager-now-filtered" className="text-label text-muted-foreground">
+            Showing <span className="font-medium text-foreground">{selected.name}</span>: its questions, approvals and messages, and the tasks it started or follows.{' '}
             <button type="button" data-slot="manager-now-show-all" className="font-medium text-foreground underline underline-offset-2" onClick={() => onFilter(undefined)}>
               Show all managers
             </button>

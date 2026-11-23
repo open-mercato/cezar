@@ -106,7 +106,8 @@ export function AttentionRow({
             <Button key={label} size="sm" variant="outline" disabled={busy} data-slot="now-answer-option"
               className="h-auto min-h-[30px] max-w-full py-1 text-left whitespace-normal wrap-anywhere"
               onClick={() => run(() => actions.answer(item, optionAnswer(item, label)), 'Could not send the answer')}>
-              {label}
+              {/* The label reads as words (`#12`), never a raw `[[pr:…]]` marker; the answer sends it as written. */}
+              {inlineReferenceText(label)}
             </Button>
           ))
         ) : null}
