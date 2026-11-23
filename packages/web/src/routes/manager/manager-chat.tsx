@@ -22,6 +22,7 @@ import {
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
+import { highlightJumpTarget } from '@/components/my-messages/use-my-messages-nav'
 import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
 import { CacheStatusChip } from '@/components/cache-status'
@@ -52,6 +53,8 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
+import { addMessageQuote, dropSentQuotes, messageWithQuotesAndReview, QUOTES_FULL_MESSAGE, type MessageQuote } from '@/lib/message-quotes'
+import { QuoteChips, QuoteSelectionChip, SelectionToolbar, useCoarsePointer, useMessageSelection, type QuoteCapture } from '@/components/quote-selection'
 import { managerAccessOf, supersededAskIds, type ManagerListResponse, type ManagerMessage, type ManagerSummary, type PlanUsageProvider } from '@open-mercato/cezar-api-client'
 
 import { useDismissStaleMerges, type DecideAction } from './manager-approval'
@@ -81,6 +84,8 @@ const STOP_AFTER_SEND_GUARD_MS = 600
 
 /** Per-manager drafts for the session: switching chats must not eat what was typed. */
 const drafts = new Map<string, string>()
+/** Quotes intentionally follow the manager's in-memory draft, not the server draft surfaces. */
+const quoteDrafts = new Map<string, MessageQuote[]>()
 
 const PENDING_CARD = '[data-slot="manager-action"][data-status="pending"]'
 const OPEN_QUESTION = '[data-slot="manager-ask"][data-resolved="false"]'
@@ -524,11 +529,36 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
   const [focusComposer] = useState(() => shouldFocusComposer(location.state))
   const [draft, setDraft] = useState(() => drafts.get(id) ?? '')
+  const [quotes, setQuotes] = useState<MessageQuote[]>(() => quoteDrafts.get(id) ?? [])
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = chat
   const loadOlder = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
   const scroll = useChatScroll(id, chat.messages, loadOlder)
+  const selection = useMessageSelection()
+  // A quoted or dismissed capture stays the hook's until the next selection; hide it here (spec § 1).
+  const [quoteHandled, setQuoteHandled] = useState<QuoteCapture | null>(null)
+  const capture = selection !== quoteHandled ? selection : null
+  const captureRef = useRef(capture)
+  captureRef.current = capture
+  const dismissCapture = useCallback(() => setQuoteHandled(captureRef.current), [])
+  const coarsePointer = useCoarsePointer()
+  const editQuotes = useCallback((change: (current: MessageQuote[]) => MessageQuote[]) => setQuotes((current) => {
+    const result = change(current)
+    quoteDrafts.set(id, result)
+    return result
+  }), [id])
+  const addQuote = useCallback((selected: QuoteCapture) => {
+    const { source: _source, ...rest } = selected
+    setQuoteHandled(selected)
+    const added = addMessageQuote(quotes, rest)
+    if (added.result === 'full') toast(QUOTES_FULL_MESSAGE, { tone: 'danger' })
+    if (added.result !== 'added') return
+    editQuotes((current) => { const again = addMessageQuote(current, rest); return again.result === 'added' ? again.items : current })
+    document.querySelector<HTMLTextAreaElement>('[data-route="manager-chat"] [data-slot="composer"] textarea')?.focus()
+  }, [editQuotes, quotes])
+  const removeQuote = useCallback((quoteIdToRemove: string) => editQuotes((current) => current.filter((quote) => quote.id !== quoteIdToRemove)), [editQuotes])
+  const changeQuote = useCallback((quote: MessageQuote) => editQuotes((current) => current.map((item) => item.id === quote.id ? quote : item)), [editQuotes])
   const returnedDecision = useRef('')
   useEffect(() => {
     if (!location.hash.startsWith('#decision-') || returnedDecision.current === location.key) return
@@ -611,6 +641,36 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   }, [update])
 
   const onDecide = useCallback<DecideAction>((actionId, decision, opts) => decideManagerAction(id, actionId, decision, opts), [id])
+  // Read through a ref: a fresh `chat` each render would re-render every memoized row.
+  const jumpSource = useRef({ chat, reveal: scroll.reveal })
+  jumpSource.current = { chat, reveal: scroll.reveal }
+  const jumpToQuote = useCallback((quote: MessageQuote) => {
+    const missing = () => toast('That message is no longer in this transcript.', { tone: 'danger' })
+    void (async () => {
+      const { chat: current } = jumpSource.current
+      let messages = current.messages
+      let more = current.hasNextPage
+      while (more && !messages.some((message) => message.seq === quote.ref)) {
+        const result = await current.fetchNextPage({ throwOnError: true })
+        messages = managerChat(result.data)
+        more = result.hasNextPage
+      }
+      const target = messages.find((message) => message.seq === quote.ref)
+      if (!target) return missing()
+      let found: HTMLElement | undefined
+      const find = (box: HTMLElement) => (found = [...box.querySelectorAll<HTMLElement>('[data-message-id]')].find((node) => node.dataset.messageId === target.id))
+      // A page just fetched mounts on a later frame.
+      for (let frame = 0; frame < 10; frame++) {
+        if (jumpSource.current.reveal(find)) {
+          // The same #2218 landing ring the task thread gives a quote's source (spec § 5).
+          if (found) highlightJumpTarget(found)
+          return
+        }
+        await new Promise((resolve) => requestAnimationFrame(resolve))
+      }
+      missing()
+    })().catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+  }, [])
   useDismissStaleMerges(chat.messages, onDecide)
   const needsYou = useNeedsYouJump(manager, chat, scroll)
   const floating = useFloatingOverlap()
@@ -653,6 +713,14 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const deliver = async (text: string, attachments: AttachmentEntry[], via: 'composer' | 'chip') => {
     // A command takes no files, so a message that has them is a message.
     const command = attachments.length > 0 ? null : parseManagerCommand(text)
+    // Only the composer carries quotes: a command or a quick prompt goes without them, and they stay
+    // as chips (spec 2026-11-20, § 4).
+    const carried = command === null && via === 'composer' ? quotes : []
+    // Throws when too long, before anything is spent: the composer keeps the text and the quotes stay.
+    const body = carried.length > 0 ? messageWithQuotesAndReview(text, carried, [], '', { taskDescription: false }) : command?.prompt ?? text
+    if (command !== null && via === 'composer' && quotes.length > 0) {
+      toast(`Quotes kept — /${command.name} is a command, so they go with your next message.`)
+    }
     // A message to an inactive manager wakes it, so it asks first; a cancel hands the draft back.
     const reactivate = inactive && command?.name !== 'stop'
     if (reactivate && !(await activity.confirmActivity({ kind: command?.name === 'check' ? 'check' : 'send', manager }))) {
@@ -667,7 +735,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       toast('Check started')
       return undefined
     }
-    const sent = await sendManagerMessage(id, command?.prompt ?? text, attachments, undefined, reactivate ? { reactivate: true } : undefined)
+    const sent = await sendManagerMessage(id, body, attachments, undefined, reactivate ? { reactivate: true } : undefined)
+    if (carried.length > 0) editQuotes((current) => dropSentQuotes(current, carried))
     trackManagerMessageSent(via, attachments.length > 0)
     // The next message answers an open card, whatever it says (spec 2026-10-31-managers, Questions).
     if (questionOpen) trackManagerQuestionAnswered('typed')
@@ -842,6 +911,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                   projects={connected}
                   superseded={superseded.has(message.id)}
                   authLive={authLive.has(message.id)}
+                  onQuoteJump={jumpToQuote}
                   {...(usageProvider ? { planUsage: planUsage.replies.get(message.id) } : {})}
                   answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
                   {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
@@ -903,6 +973,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             ))}
           </div>
         ) : null}
+        {capture ? <SelectionToolbar capture={capture} onQuote={addQuote} onDismiss={dismissCapture} showClose placement={coarsePointer ? 'below' : 'above'} /> : null}
         {usageProps ? <ManagerLimitStrip {...usageProps} /> : null}
         <Composer
           key={id}
@@ -914,6 +985,11 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             drafts.set(id, text)
           }}
           onSubmit={submit}
+          draftItems={quotes.length || (coarsePointer && capture) ? <>
+            {coarsePointer && capture ? <QuoteSelectionChip capture={capture} onQuote={addQuote} /> : null}
+            {quotes.length ? <QuoteChips quotes={quotes} onEdit={changeQuote} onRemove={removeQuote} /> : null}
+          </> : undefined}
+          allowEmptySubmit={quotes.length > 0}
           slashCommands={MANAGER_COMMANDS}
           placeholder={inactive ? `${manager.name} is inactive — write anyway; sending reactivates it` : `Message ${manager.name}, or / for commands`}
           {...(inactive ? { sendLabel: 'Reactivate and send', sendAriaLabel: 'Reactivate and send' } : {})}

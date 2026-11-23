@@ -6,11 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
 import { planUsageKeys } from '@/api/plan-usage'
 import { __clearRememberedStatusesForTests, queryKeys, workspaceQueryKeys } from '@/api/queries'
+import { withMessageQuotes } from '@/lib/message-quotes'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 import { runnerSchema } from '@open-mercato/cezar-api-client'
 
 import { AppShell } from '@/components/app-shell'
 import { ThemeProvider } from '@/components/theme-provider'
+import { resetToasts, Toaster } from '@/components/ui/toaster'
 
 import { ManagerChatRoute, forgetChatPlaces } from './manager-chat'
 import { actionMessage, assistantMessage, managerFixture, userMessage } from './manager-fixtures'
@@ -358,6 +360,207 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull()
     expect((screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement).disabled).toBe(false)
     expect(composer().getAttribute('placeholder')).toBe('Message Global Manager, or / for commands')
+  })
+
+  /** Selects `text` inside the message body that renders it and presses the toolbar's Quote. */
+  async function quote(text: string) {
+    const node = [...document.querySelectorAll('[data-quote-body]')]
+      .flatMap((body) => { const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT); const out: Node[] = []; while (walker.nextNode()) out.push(walker.currentNode); return out })
+      .find((candidate) => candidate.textContent?.includes(text))!
+    const start = node.textContent!.indexOf(text)
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, start + text.length)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    await act(async () => {
+      document.dispatchEvent(new Event('selectionchange'))
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Quote' }))
+    window.getSelection()!.removeAllRanges()
+  }
+  const quoted = (excerpt: string) => withMessageQuotes('', [{ id: 'x', ref: 2, role: 'assistant', excerpt, code: false, body: '' }])
+
+  it('sends quotes alone, and a command goes without them and keeps them', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    await quote('Reply')
+    expect(document.querySelector('[data-slot="quote-chips"]')?.textContent).toContain('Reply')
+
+    send('/status')
+    await waitFor(() => expect(posted('/messages')).toHaveLength(1))
+    expect(posted('/messages')[0]!.body).toMatchObject({ text: 'Give me a short status of my connected projects.' })
+    expect(document.querySelector('[data-slot="quote-chips"]')).not.toBeNull()
+
+    fireEvent.keyDown(composer(), { key: 'Enter' })
+    await waitFor(() => expect(posted('/messages')).toHaveLength(2))
+    expect(posted('/messages')[1]!.body).toMatchObject({ text: quoted('Reply') })
+    await waitFor(() => expect(document.querySelector('[data-slot="quote-chips"]')).toBeNull())
+  })
+
+  it('on touch, quotes a collapsed selection from the composer chip', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('coarse'), addEventListener() {}, removeEventListener() {} }))
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    const node = [...document.querySelectorAll('[data-quote-body]')]
+      .flatMap((body) => { const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT); const out: Node[] = []; while (walker.nextNode()) out.push(walker.currentNode); return out })
+      .find((candidate) => candidate.textContent?.includes('Reply'))!
+    const range = document.createRange()
+    range.setStart(node, 0)
+    range.setEnd(node, 'Reply'.length)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    const flush = () => act(async () => {
+      document.dispatchEvent(new Event('selectionchange'))
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+    })
+    await flush()
+    // The tap on the chip collapses the native selection first; the capture must survive it.
+    window.getSelection()!.removeAllRanges()
+    await flush()
+    const chip = await screen.findByRole('button', { name: 'Quote selection' })
+    fireEvent.click(chip)
+    await waitFor(() => expect(document.querySelector('[data-slot="quote-chips"]')?.textContent).toContain('Reply'))
+    expect(screen.queryByRole('button', { name: 'Quote selection' })).toBeNull()
+    expect(document.querySelector('[data-slot="quote-selection-toolbar"]')).toBeNull()
+    clearQuotes()
+  })
+
+  it('keeps a quote added while the send was in flight', async () => {
+    seedChat()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const plain = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && input.endsWith('/messages')) await held
+      return plain(input, init)
+    }))
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    await quote('Reply')
+    send('see this')
+    await quote('body')
+    release()
+    await waitFor(() => expect(posted('/messages')).toHaveLength(1))
+    expect(posted('/messages')[0]!.body).toMatchObject({ text: withMessageQuotes('see this', [{ id: 'x', ref: 2, role: 'assistant', excerpt: 'Reply', code: false, body: '' }]) })
+    await waitFor(() => expect(document.querySelector('[data-slot="quote-chips"]')?.textContent).not.toContain('Reply'))
+    expect(document.querySelector('[data-slot="quote-chips"]')?.textContent).toContain('body')
+    // Quote drafts live for the session, like typed drafts: leave none for the next case.
+    fireEvent.click(screen.getByRole('button', { name: /^Remove quote: / }))
+  })
+
+  it('keeps a quote whose note was edited while the send was in flight', async () => {
+    seedChat()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const plain = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && input.endsWith('/messages')) await held
+      return plain(input, init)
+    }))
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    await quote('Reply')
+    send('see this')
+    fireEvent.click(await screen.findByRole('button', { name: /Edit note on quote/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Note on quote' }), { target: { value: 'added later' } })
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Note on quote' }), { key: 'Enter' })
+    release()
+    await waitFor(() => expect(posted('/messages')).toHaveLength(1))
+    expect(posted('/messages')[0]!.body).toMatchObject({ text: withMessageQuotes('see this', [{ id: 'x', ref: 2, role: 'assistant', excerpt: 'Reply', code: false, body: '' }]) })
+    // The send landed, but what it carried is not what the chip holds now: the edit survives.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(screen.getByRole('button', { name: /Edit note on quote: Reply/ })).not.toBeNull()
+    clearQuotes()
+  })
+
+  /** Toasts render outside renderAt's tree; the store is global. */
+  function withToaster() {
+    resetToasts()
+    render(<Toaster />)
+    onTestFinished(() => resetToasts())
+  }
+  const clearQuotes = () => {
+    // One at a time: each removal re-renders the row.
+    let button: HTMLElement | undefined
+    while ((button = screen.queryAllByRole('button', { name: /^Remove quote: / })[0])) fireEvent.click(button)
+  }
+
+  it('a quick prompt sends exactly its prompt and keeps the quotes', async () => {
+    seedChat({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] })
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    await quote('Reply')
+    fireEvent.click(await screen.findByRole('button', { name: 'Standup' }))
+    await waitFor(() => expect(posted('/messages')).toHaveLength(1))
+    expect(posted('/messages')[0]!.body).toMatchObject({ text: 'Write my standup.' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(document.querySelector('[data-slot="quote-chips"]')?.textContent).toContain('Reply')
+    clearQuotes()
+  })
+
+  it('says the quotes are kept when a / command is sent', async () => {
+    withToaster()
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    await quote('Reply')
+    send('/status')
+    expect(await screen.findByText('Quotes kept — /status is a command, so they go with your next message.')).not.toBeNull()
+    clearQuotes()
+  })
+
+  it('refuses a message too long with its quotes, sends nothing and keeps them', async () => {
+    withToaster()
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('Reply body')
+    await quote('Reply')
+    send('x'.repeat(99_990))
+    expect(await screen.findByText(/^Too long with the quote attached/)).not.toBeNull()
+    expect(posted('/messages')).toHaveLength(0)
+    expect(document.querySelector('[data-slot="quote-chips"]')?.textContent).toContain('Reply')
+    expect(composer().value).toHaveLength(99_990)
+    fireEvent.change(composer(), { target: { value: '' } })
+    clearQuotes()
+  })
+
+  it('says so instead of dropping a 13th quote, and ignores a duplicate', async () => {
+    withToaster()
+    const words = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel', 'india', 'juliet', 'kilo', 'lima', 'mike']
+    server.managers = [managerFixture()]
+    server.messages = [userMessage(1), assistantMessage(2, { text: words.join(' ') })]
+    renderAt('/manager/global')
+    await screen.findByText(words.join(' '))
+    await quote('alpha')
+    await quote('alpha')
+    expect(screen.getAllByRole('button', { name: /^Remove quote: / })).toHaveLength(1)
+    expect(screen.queryByText(/^Up to 12 quotes/)).toBeNull()
+    for (const word of words.slice(1, 12)) await quote(word)
+    expect(screen.getAllByRole('button', { name: /^Remove quote: / })).toHaveLength(12)
+    await quote('mike')
+    expect(await screen.findByText('Up to 12 quotes per message — send these first.')).not.toBeNull()
+    expect(screen.getAllByRole('button', { name: /^Remove quote: / })).toHaveLength(12)
+    clearQuotes()
+  })
+
+  it('jumps to a quoted message while paging older transcript pages', async () => {
+    const quoted = withMessageQuotes('Please inspect this.', [{ id: 'q1', ref: 1, role: 'user', excerpt: 'Original source', code: false, body: '' }])
+    server.messages = [userMessage(3, quoted), assistantMessage(4, { text: 'I will inspect it.' })]
+    server.hasMore = true
+    server.pages = (path) => {
+      const before = new URL(path, 'http://x').searchParams.get('before')
+      return before === '3' ? { messages: [userMessage(1, 'Original source')], hasMore: false } : { messages: server.messages, hasMore: true }
+    }
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: /^Jump to message/ }))
+    await waitFor(() => expect(calls.some((call) => call.path.includes('before=3'))).toBe(true))
+    await waitFor(() => expect(screen.getAllByText('Original source').length).toBeGreaterThan(0))
+    // The landing ring the task thread gives a quote's source (#2218).
+    await waitFor(() => expect(document.querySelector('[data-jump-highlight]')?.textContent).toContain('Original source'))
   })
 
   it('puts the manager list in a rail beside the chat, with the open one marked', async () => {
