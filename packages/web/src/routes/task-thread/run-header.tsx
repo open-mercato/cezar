@@ -1060,14 +1060,14 @@ function DispatchParentLine({ run }: { run: ApiRun }) {
   return (
     <div
       data-slot="dispatch-parent-line"
-      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+      className="mt-1.5 flex min-w-0 items-center gap-2 overflow-hidden text-sm text-muted-foreground"
     >
       <span className="shrink-0">Dispatched by</span>
       <Link
         to={`/tasks/${parentRunId}`}
         data-slot="dispatch-parent"
         data-run-id={parentRunId}
-        className="inline-flex min-w-0 items-center gap-1.5 truncate hover:text-foreground"
+        className="inline-flex min-h-7 min-w-0 items-center gap-1.5 truncate rounded-sm font-medium text-foreground hover:underline"
       >
         {attention ? <StatusDot tone={attention.tone} pulse={attention.pulse} /> : null}
         <span className="truncate">{parent ? runTitle(parent) : parentRunId}</span>
@@ -1117,14 +1117,14 @@ function DispatchChildrenLine({ run }: { run: ApiRun }) {
     bumpSubtasks()
   }
   return (
-    <div data-slot="dispatch-children" className="mt-1 min-w-0 text-xs text-muted-foreground">
+    <div data-slot="dispatch-children" className="mt-1.5 min-w-0 text-sm text-muted-foreground">
       <button
         type="button"
         data-slot="dispatch-children-toggle"
         aria-controls={listId}
         aria-expanded={open}
         onClick={toggle}
-        className="flex min-w-0 max-w-full items-center gap-1.5 overflow-hidden hover:text-foreground"
+        className="flex min-h-7 min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-sm hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
       >
         <ChevronDownIcon
           aria-hidden="true"
@@ -1140,7 +1140,7 @@ function DispatchChildrenLine({ run }: { run: ApiRun }) {
         <div
           id={listId}
           data-slot="dispatch-children-list"
-          className="mt-0.5 flex max-h-28 min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-y-auto overscroll-contain pl-[1.125rem]"
+          className="mt-1 flex max-h-48 min-w-0 flex-col gap-0.5 overflow-y-auto overscroll-contain border-l border-border pl-3 ml-1.5"
         >
           {children.map((child) => {
             const attention = deriveAttention(child)
@@ -1151,7 +1151,7 @@ function DispatchChildrenLine({ run }: { run: ApiRun }) {
                 data-slot="dispatch-child"
                 data-run-id={child.id}
                 title={`${runTitle(child)} — ${attention.label}`}
-                className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
+                className="inline-flex min-h-7 max-w-full items-center gap-2 truncate rounded-sm hover:text-foreground hover:underline"
               >
                 <StatusDot tone={attention.tone} pulse={attention.pulse} />
                 <span className="truncate">{runTitle(child)}</span>
@@ -1190,7 +1190,7 @@ function SubtaskTally({ subtasks }: { subtasks: ApiRun[] }) {
   }
   const tally = [...byLabel.entries()].sort(([, a], [, b]) => a.rank - b.rank || b.count - a.count)
   return (
-    <span data-slot="dispatch-children-tally" className="flex min-w-0 items-center gap-2 overflow-hidden">
+    <span data-slot="dispatch-children-tally" className="flex min-w-0 items-center gap-3 overflow-hidden">
       {tally.map(([label, group]) => (
         <span key={label} className="inline-flex shrink-0 items-center gap-1">
           <StatusDot tone={group.tone} pulse={group.pulse} />

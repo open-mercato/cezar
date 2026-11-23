@@ -2508,7 +2508,7 @@ describe('dispatch lines', () => {
     await waitFor(() => expect(childLinks()).toHaveLength(3))
     expect(toggle().getAttribute('aria-expanded')).toBe('true')
     // The cap is what stops any list — opened by default or by hand — from pushing the transcript.
-    expect(childList()?.className).toContain('max-h-28')
+    expect(childList()?.className).toContain('max-h-48')
     expect(childList()?.className).toContain('overflow-y-auto')
   })
 

@@ -123,6 +123,37 @@ describe('CurrentTasks', () => {
   })
 })
 
+describe('CurrentTasks subtasks (#2383)', () => {
+  const kid = (id: string, parent: string, over: Partial<RunRecord> = {}) =>
+    run({ id, title: `Kid ${id}`, dispatch: { rootRunId: parent, parentRunId: parent }, ...over })
+
+  it('folds subtasks under the parent, count and disclosure first, then expands them indented', () => {
+    const parent = run({ id: 'p', title: 'Parent' })
+    renderList([parent, kid('k1', 'p'), kid('k2', 'p'), run({ id: 'solo', title: 'Solo' })])
+    expect(rows().map((row) => row.getAttribute('data-run-id'))).toEqual(['p', 'solo'])
+    const toggle = screen.getByRole('button', { name: 'Expand 2 subtasks' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(rows().map((row) => row.getAttribute('data-run-id'))).toEqual(['p', 'k1', 'k2', 'solo'])
+    expect(rows()[1]!.getAttribute('data-depth')).toBe('1')
+    expect(screen.getByRole('button', { name: 'Collapse 2 subtasks' }).getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse 2 subtasks' }))
+    expect(rows()).toHaveLength(2)
+  })
+
+  it('keeps a needs-you subtask visible while folded', () => {
+    renderList([run({ id: 'p' }), kid('k', 'p', { status: 'review' })])
+    expect(rows()).toHaveLength(1)
+    expect(document.querySelector('[data-slot="task-row-needs-you"]')?.textContent).toContain('1 subtasks need you')
+  })
+
+  it('marks a subtask whose parent is absent so it does not look like a peer', () => {
+    renderList([kid('k', 'gone')])
+    expect(rows()).toHaveLength(1)
+    expect(document.querySelector('[data-slot="task-row-orphan"]')).not.toBeNull()
+  })
+})
+
 describe('CurrentTasksContainer', () => {
   const fetchMock = vi.fn<typeof fetch>()
   afterEach(() => {
