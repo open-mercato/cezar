@@ -1,0 +1,38 @@
+---
+title: "Quote part of a message"
+description: "Select a sentence or a code snippet in a conversation and send it back to the agent with your note."
+related:
+  links:
+    - features/tasks-and-sessions/jump-to-your-messages
+    - features/tasks-and-sessions/message-drafts
+    - features/tasks-and-sessions/managers
+sources:
+  - label: "Message format"
+    path: packages/web/src/lib/message-quotes.ts
+    line: 60
+  - label: "Selection toolbar"
+    path: packages/web/src/components/quote-selection/selection-toolbar.tsx
+    line: 76
+  - label: "Task composer"
+    path: packages/web/src/routes/task-thread/task-composer.tsx
+    line: 150
+  - label: "Manager chat"
+    path: packages/web/src/routes/manager/manager-chat.tsx
+    line: 713
+  - label: "Design"
+    path: .ai/specs/2026-11-20-quote-message-fragments.md
+    line: 1
+---
+To ask about one sentence of a long answer, quote it instead of copying it by hand. Select the text, add a note, and Cezar sends it to the agent with the message it came from. It works like comments on diff lines on the Changes tab, and the two can go out in the same message.
+
+## Where to find it
+
+Task → Chat, or a manager chat → select text inside one message → **Quote**
+
+## How to use it
+
+1. Select text inside one message, from the agent or one of your own. A **Quote** button appears next to the selection. Select it, or press **Alt+Q** (**⌥Q** on a Mac), and the quote becomes a chip above the message field. On a phone or tablet the button sits below the selection, and a **Quote selection** chip also appears above the message field, so you can quote after the selection menu covers the button.
+2. Select the chip to read the whole quote and add a note, or **×** to remove it. The note is kept when you press Enter, select **Save** or move on to the message field; Esc discards the edit. Quote as many fragments as you need, from different messages.
+3. Send. The agent gets your text, then a **Quoted from the conversation:** block with each quote, the number of the message it came from, and your note. In the conversation the quotes show as cards, and **Jump to message** scrolls back to the quoted message.
+
+> **Good to know**: A selection must stay inside one message: text across two messages, sub-agent panels and tool output can't be quoted. Code keeps its formatting, and selecting a code block with its header quotes only the code. A quote holds up to 2000 characters, and a message up to 12 quotes: a 13th is refused with a message, and quoting the same text from the same message twice adds it once. A quote of the task description reads **From the task description**, and a quote of the agent's first answer reads **From the reply to the task**. A slash command such as `/compact` is sent on its own, and your quotes stay as chips for the next message. Reply buttons and prompt buttons send without your quotes. In a task, unsent quotes are kept with the [draft](/docs/features/tasks-and-sessions/message-drafts) and survive a reload. In a manager chat they survive switching chats but not a reload.
