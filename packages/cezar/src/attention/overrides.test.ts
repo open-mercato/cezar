@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { OVERRIDE_TTL_MS, createAttentionOverrideStore } from './overrides.ts';
+import { OVERRIDE_TTL_MS, createAttentionOverrideStore, nextOverrideWake } from './overrides.ts';
 
 const NOW = Date.parse('2026-11-23T12:00:00.000Z');
 const fileIn = () => join(mkdtempSync(join(tmpdir(), 'cez-overrides-')), 'attention-overrides.json');
@@ -48,6 +48,36 @@ describe('attention override store (spec 2026-11-23-needs-you-triage)', () => {
     const store = createAttentionOverrideStore(() => path);
     await store.set({ key: 'half', mode: 'dismiss', projectId: 'app' }, NOW);
     expect((await store.list(NOW))[0]).not.toHaveProperty('projectId');
+  });
+
+  it('on a read-only home keeps every change in memory and still sees the file (review 2, finding 2)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-overrides-ro-'));
+    const path = join(dir, 'attention-overrides.json');
+    writeFileSync(path, JSON.stringify({ overrides: [{ key: 'old', mode: 'dismiss', at: new Date(NOW).toISOString() }] }));
+    chmodSync(dir, 0o500);
+    try {
+      const store = createAttentionOverrideStore(() => path);
+      await store.set({ key: 'a', mode: 'dismiss' }, NOW);
+      await store.set({ key: 'b', mode: 'dismiss' }, NOW);
+      await store.clear('old', NOW);
+      expect((await store.list(NOW)).map((entry) => entry.key)).toEqual(['a', 'b']);
+      // The home comes back and another process writes: its entry shows, ours stay.
+      chmodSync(dir, 0o700);
+      await createAttentionOverrideStore(() => path).set({ key: 'phone', mode: 'dismiss' }, NOW + 1);
+      expect((await store.list(NOW + 1)).map((entry) => entry.key).sort()).toEqual(['a', 'b', 'phone']);
+      // The next write lands everything on disk.
+      await store.set({ key: 'c', mode: 'keep' }, NOW + 2);
+      expect(JSON.parse(readFileSync(path, 'utf8')).overrides.map((entry: { key: string }) => entry.key).sort()).toEqual(['a', 'b', 'c', 'phone']);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  it('wakes at the soonest snooze end or TTL expiry (review 2, finding 6)', () => {
+    const at = new Date(NOW).toISOString();
+    expect(nextOverrideWake([])).toBeUndefined();
+    expect(nextOverrideWake([{ key: 'plain', mode: 'dismiss', at }])).toBe(NOW + OVERRIDE_TTL_MS);
+    expect(nextOverrideWake([{ key: 'plain', mode: 'dismiss', at }, { key: 's', mode: 'dismiss', at, until: new Date(NOW + 60_000).toISOString() }])).toBe(NOW + 60_000);
   });
 
   it('treats a corrupt file as empty', async () => {

@@ -151,6 +151,26 @@ describe('dismiss with undo', () => {
     expect(liveQuestionCount(response([item('m:global:1')]), result.current)).toBe(1)
   })
 
+  it('a failed close tells its caller, with nothing mounted (review 2, finding 5)', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockResolvedValue(Response.json({ error: 'disk full' }, { status: 500 }))
+    const onFailed = vi.fn()
+    scheduleDismiss(client, 'm:global:1', 'Design', { onFailed })
+    await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS)
+    await vi.waitFor(() => expect(onFailed).toHaveBeenCalledWith('disk full'))
+  })
+
+  it('a 409 is no failure for the caller: the card closed anyway', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockResolvedValue(Response.json({ error: 'already closed' }, { status: 409 }))
+    const onFailed = vi.fn()
+    scheduleDismiss(client, 'm:global:1', 'Design', { onFailed })
+    await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await vi.advanceTimersByTimeAsync(10)
+    expect(onFailed).not.toHaveBeenCalled()
+  })
+
   it('a 409 (closed meanwhile) drops the dismissal and re-reads the list: no Retry that cannot succeed', async () => {
     vi.useFakeTimers()
     fetchMock.mockResolvedValue(Response.json({ error: 'already closed' }, { status: 409 }))

@@ -1024,6 +1024,18 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
   });
 
+  it('declaring a PR again makes it the newest association (spec 2026-11-23-needs-you-triage)', () => {
+    const { store, run } = freshRun();
+    store.recordPrRef(run.id, { number: 10, origin: 'marker', at: '2026-11-20T10:00:00.000Z' });
+    store.recordPrRef(run.id, { number: 11, origin: 'created', at: '2026-11-21T10:00:00.000Z' });
+    store.recordPrRef(run.id, { number: 10, origin: 'marker', at: '2026-11-22T10:00:00.000Z' });
+    const refs = store.getRun(run.id)?.prRefs ?? [];
+    expect(refs.find((ref) => ref.number === 10)?.at).toBe('2026-11-22T10:00:00.000Z');
+    // A patch re-sending the created URL is not a new declaration.
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/11' });
+    expect(store.getRun(run.id)?.prRefs?.find((ref) => ref.number === 11)?.at).toBe('2026-11-21T10:00:00.000Z');
+  });
+
   it('preserves legacy scalar associations before a replacement patch is applied', () => {
     const { store, run } = freshRun();
     store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/7' });

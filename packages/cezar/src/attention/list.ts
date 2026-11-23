@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  RUN_PR_REF_RANK,
   type AttentionCounts,
   type AttentionItem,
   type AttentionKind,
@@ -247,16 +248,22 @@ const revisionOf = (items: readonly AttentionItem[], overrides: readonly Attenti
  *  Never a PR it only mentions (`derived`). */
 export function currentTaskPr(run: Pick<RunRecord, 'prRefs' | 'pullRequestUrl' | 'markerRefs'>): number | undefined {
   const own = (run.prRefs ?? []).filter((ref) => ref.origin !== 'derived');
-  const newest = own.reduce<(typeof own)[number] | undefined>((best, ref) => (!best || Date.parse(ref.at) >= Date.parse(best.at) ? ref : best), undefined);
+  // Newest first; a tie (legacy refs all carry the run's `createdAt`) goes to the store's own rank.
+  const newest = own.reduce<(typeof own)[number] | undefined>((best, ref) => {
+    if (!best) return ref;
+    const delta = Date.parse(ref.at) - Date.parse(best.at);
+    return delta > 0 || (delta === 0 && RUN_PR_REF_RANK[ref.origin] < RUN_PR_REF_RANK[best.origin]) ? ref : best;
+  }, undefined);
   if (newest) return newest.number;
   const created = run.pullRequestUrl ? Number(/\/(\d+)\/?$/.exec(run.pullRequestUrl.trim())?.[1]) : Number.NaN;
   if (Number.isInteger(created) && created > 0) return created;
   return run.markerRefs?.pr;
 }
 
-/** A manager's approvals and questions Now still counts: not dismissed, snoozed or probably done, Notify on. */
+/** A manager's approvals and questions still waiting: not dismissed, snoozed or probably done. A muted
+ *  manager's stay listed here (its Notify switch only takes them out of the badges' counts). */
 export function managerNeedsYou(items: readonly AttentionItem[], managerId: string): { approvals: number; questions: number } {
-  const live = items.filter((item) => item.managerId === managerId && item.counted && !item.settled);
+  const live = items.filter((item) => item.managerId === managerId && !item.settled);
   return { approvals: live.filter((item) => item.kind === 'approval').length, questions: live.filter((item) => item.kind === 'question').length };
 }
 

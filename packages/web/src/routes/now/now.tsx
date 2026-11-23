@@ -4,7 +4,7 @@ import * as React from 'react'
 
 import { archiveFinished, archiveRun, cancelRun, continueRun, finishRun } from '@/api/client'
 import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@/api/queries'
-import type { AttentionItem, AttentionOverride, AttentionResponse, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
+import type { AttentionItem, AttentionOverride, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
 import { answerQuestion, pauseDismiss, resumeDismiss, scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
 import { applyOverrideLocally, attentionKeys, clearAttentionOverride, setAttentionOverride, useAttention } from '@/api/attention'
 import { decideManagerAction, managerKeys, markManagerRead, updateManager, useManagers } from '@/api/managers'
@@ -810,7 +810,7 @@ export function NowRoute() {
     setOverride: setAttentionOverride,
     clearOverride: clearAttentionOverride,
     applyLocally: (override) => applyOverrideLocally(queryClient, override),
-    scheduleClose: (key, label) => scheduleDismiss(queryClient, key, label),
+    scheduleClose: (key, label, onFailed) => scheduleDismiss(queryClient, key, label, { onFailed }),
     holdClose: (key, held) => (held ? pauseDismiss(key) : resumeDismiss(key)),
     undoClose: undoDismiss,
     finishRun,
@@ -826,22 +826,6 @@ export function NowRoute() {
     refreshManagers: () => queryClient.invalidateQueries({ queryKey: managerKeys.list }),
     inOrder: writeQueue.current,
   }), [queryClient, invalidate, managerList])
-  // A question whose close failed (not a 409) shows again with the reason, as on the Questions page:
-  // its hiding override goes too, or the row would stay out of sight with nothing said.
-  const reported = React.useRef(new Set<string>())
-  React.useEffect(() => {
-    for (const entry of pending) {
-      if (!entry.error || reported.current.has(entry.key)) continue
-      reported.current.add(entry.key)
-      const item = attention.data?.items.find((row) => row.questionKey === entry.key)
-        ?? queryClient.getQueryData<AttentionResponse>(attentionKeys.all)?.items.find((row) => row.questionKey === entry.key)
-      const key = item?.key ?? `question:${entry.key}`
-      applyOverrideLocally(queryClient, { key, mode: 'clear' })
-      void writeQueue.current(key, () => clearAttentionOverride(key)).finally(() => void queryClient.invalidateQueries({ queryKey: attentionKeys.all }))
-      toast(`Could not close “${entry.label}”: ${entry.error}`, { tone: 'danger' })
-    }
-    for (const key of [...reported.current]) if (!pending.some((entry) => entry.key === key && entry.error)) reported.current.delete(key)
-  }, [pending, attention.data, queryClient])
   const onMarkAllRead = React.useCallback((items: AttentionItem[]) => {
     void Promise.allSettled(items.map((item) => attentionActions.markRead(item))).then((results) => {
       if (results.some((result) => result.status === 'rejected')) toast('Some items could not be marked read', { tone: 'danger' })
