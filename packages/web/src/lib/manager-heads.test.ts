@@ -11,6 +11,7 @@ import {
   readHeadMemory,
   restingHeads,
   settleLater,
+  withLiveCounts,
   writeHeadMemory,
 } from './manager-heads'
 
@@ -69,3 +70,20 @@ describe('arrivals', () => {
     expect(readHeadMemory(HEADS_SEEN_KEY)).toEqual({})
   })
 })
+
+describe('withLiveCounts (review finding 6)', () => {
+  it('counts what Now counts: dismissed, probably-done and muted cards raise no head', () => {
+    const manager = { ...managerFixture({ id: 'shop' }), unread: 1, pendingActions: 1, pendingQuestions: 2 }
+    const item = (key: string, kind: 'approval' | 'question', over = {}) => ({ key, kind, title: key, since: '', counted: true, managerId: 'shop', ...over })
+    // The approval was dismissed (gone from the list); one question is probably done.
+    const [live] = withLiveCounts([manager], [item('q1', 'question'), item('q2', 'question', { settled: { why: 'quiet', detail: 'x' } })])
+    expect([live!.pendingActions, live!.pendingQuestions]).toEqual([0, 1])
+    expect(headKind(live!)).toBe('question')
+    const [muted] = withLiveCounts([manager], [item('q1', 'question', { counted: false })])
+    expect(headKind(muted!)).toBeNull()
+    // Without the list, the route's own `needsYou`, then the raw counts.
+    expect(withLiveCounts([{ ...manager, needsYou: { approvals: 0, questions: 0 } }], undefined)[0]!.pendingQuestions).toBe(0)
+    expect(withLiveCounts([manager], undefined)[0]).toBe(manager)
+  })
+})
+

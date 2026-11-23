@@ -2112,7 +2112,7 @@ export class ManagerEngine {
     const { store } = this.deps;
     turn.sourceTasks = fresh.flatMap((item) => item.runId ? [{ projectId: item.projectId, runId: item.runId }] : []);
     const startedAt = this.now();
-    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.openCards(id), await this.taskQuestions(manager)), turn, () => undefined).catch(turnFailure);
+    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.openCards(id), await this.taskQuestions(manager), manager.instructions), turn, () => undefined).catch(turnFailure);
     this.reportTurn(manager, turn, startedAt, result);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
@@ -2807,6 +2807,15 @@ export class ManagerEngine {
     });
   }
 
+  /** Whether the project runs tasks in its checkout by default (spec 2026-10-20-trunk-based-projects).
+   *  An unreadable config answers no: the request then goes out as asked. */
+  private async inPlaceProject(prefix: string): Promise<boolean> {
+    const response = await this.forward(`${prefix}/config`).catch(() => undefined);
+    if (!response?.ok) return false;
+    const config = (await response.json().catch(() => ({}))) as { taskWorkspace?: unknown };
+    return config.taskWorkspace === 'in-place';
+  }
+
   private static async refusalOf(response: Response): Promise<ManagerRefusal> {
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
     const status = response.status;
@@ -2913,6 +2922,10 @@ export class ManagerEngine {
       if (issue) return issue;
     }
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
+    // A dispatch root always gets its own worktree, which overrides a trunk-based project's in-place
+    // workspace: no Commit to the base branch, no auto-land. The project's model wins over the flag.
+    const dispatchIgnored = input.dispatch === true && (await this.inPlaceProject(prefix));
+    const dispatch = input.dispatch === true && !dispatchIgnored;
     // Before the request: anything the run does after it starts is news to this manager.
     const followedAt = this.iso();
     const response = await this.forward(`${prefix}/runs`, {
@@ -2926,7 +2939,7 @@ export class ManagerEngine {
         ...(agentProfile !== undefined ? { agentProfile } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { reasoningEffort: input.effort } : {}),
-        ...(input.dispatch ? { dispatch: {} } : {}),
+        ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },
       },
     });
@@ -2940,7 +2953,12 @@ export class ManagerEngine {
     this.rememberTaskSource(id, input.projectId, run.id);
     const named = `${input.title ?? ''}\n${input.task ?? ''}`;
     this.managerActed(id, { tasks: taskSources(named).map((task) => followKey(task.projectId, task.runId)), prs: prRefs(named) }, 'you started a task on it since');
-    return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
+    return {
+      projectId: input.projectId,
+      runId: run.id,
+      ...(forward ? { forwarded: forward.forwarded } : {}),
+      ...(dispatchIgnored ? { notice: `dispatch ignored: ${input.projectId} runs tasks in place` } : {}),
+    };
   }
 
   /** A live task takes the message; a finished one is continued with it. */

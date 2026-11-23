@@ -7,8 +7,9 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
-import { DEFAULT_PHONE_PUSH_PREFS, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
-import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
+import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
+import { buildAttentionList, currentTaskPr, managerNeedsYou, phoneBadgeCount } from '../attention/list.ts';
+import { createAttentionOverrideStore, type AttentionOverrideStore } from '../attention/overrides.ts';
 import { createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
 import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
@@ -329,6 +330,7 @@ import {
   readImageAtRev,
   pushCurrentBranch,
   worktreeGitStatus,
+  type GitStatusResult,
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
@@ -415,7 +417,7 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
@@ -531,6 +533,8 @@ export interface ServerDeps {
   managerRunnerFor?: ManagerEngineDeps['runnerFor'];
   /** Test seam: the Questions inbox's providers (spec 2026-11-17-questions-inbox); default the real ones. */
   questionProviders?: { task?: QuestionProvider; manager?: QuestionProvider };
+  /** Tests inject one off disk; the default lives in `~/.cezar/attention-overrides.json`. */
+  attentionOverrides?: AttentionOverrideStore;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
    *  route's guards, cleanup and error surfacing are exercised for real
@@ -879,7 +883,9 @@ export type WorkspaceEventName =
   | 'manager-change'
   | 'manager-message'
   | 'manager-delta'
-  | 'phone-pairing';
+  | 'phone-pairing'
+  /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
+  | 'attention-change';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -6380,11 +6386,19 @@ export function createApp(deps: ServerDeps) {
       // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
       const inPlace = !worktree && run.worktree === false && !run.readOnly;
       if (!worktree && !inPlace) return c.json({ error: NO_WORKTREE }, 409);
-      const result = worktree
+      const result: GitStatusResult = worktree
         ? await worktreeGitStatus(worktree, run.baseBranch)
         : await checkoutGitStatus(c.get('project').root);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
+      const { baseRemote, baseTracked } = result;
+      const body: GitStatusResponse = {
+        uncommitted: result.uncommitted,
+        unpushed: result.unpushed,
+        behind: result.behind,
+        ahead: result.ahead,
+        ...(baseRemote ? { baseRemote, baseTracked: baseTracked === true } : {}),
+      };
+      return c.json(body);
     })
 
     // Draft PR from the review gate (spec 009): final autosave → push →
@@ -9145,15 +9159,61 @@ export function createApp(deps: ServerDeps) {
       ? managerEngine.messages(manager.id, { pending: '1' }).messages.flatMap((message) =>
         message.kind === 'action' ? [{ managerId: manager.id, message, title: describeAction(message.action) }] : [])
       : []);
-    const questions = (await questionInbox.list().catch(() => undefined))?.open ?? [];
+    const inbox = await questionInbox.list().catch(() => undefined);
     const sources = await workspaceProjectSources();
-    const projects = sources.filter((source) => source.available).map((source) => ({ id: source.id, runs: source.runs() }));
-    return buildAttentionList({ questions, managers, approvals, projects, now: Date.now() });
+    const available = sources.filter((source) => source.available);
+    const projects = available.map((source) => ({ id: source.id, runs: source.runs() }));
+    const roots = new Map(available.map((source) => [source.id, source.root]));
+    const overrides = await attentionOverrides.list().catch(() => []);
+    armSnoozeWake(overrides);
+    return buildAttentionList({
+      questions: inbox?.open ?? [],
+      managers,
+      approvals,
+      projects,
+      now: Date.now(),
+      olderAfterDays: inbox?.olderAfterDays ?? 0,
+      overrides,
+      prState: (projectId, number) => {
+        const root = roots.get(projectId);
+        return root ? readCachedPrEnds(root, [number])[number] : undefined;
+      },
+      // The task's CURRENT PR, as the forge cache already knows it: never a `gh` call. A superseded,
+      // closed PR says nothing about the one the task opened after it.
+      prEnded: (projectId, run) => {
+        const root = roots.get(projectId);
+        const number = root ? currentTaskPr(run) : undefined;
+        const ended = root && number !== undefined ? readCachedPrEnds(root, [number])[number] : undefined;
+        return ended && number !== undefined ? { number, ...ended } : undefined;
+      },
+    });
   };
+  // The list may have changed where no run, manager or question frame says so (a snooze ending, a
+  // dismissal from a phone, a PR closing): the cockpit re-reads on this, phones on the recount.
+  const attentionChanged = () => {
+    attention.poke();
+    workspaceEvents.emit('attention-change', {});
+  };
+  // A snooze ends with no event of its own: one timer for the soonest, so the badge and a phone hear it.
+  let snoozeTimer: ReturnType<typeof setTimeout> | undefined;
+  const armSnoozeWake = (overrides: readonly { until?: string }[]) => {
+    const soonest = Math.min(...overrides.map((entry) => (entry.until ? Date.parse(entry.until) : Number.POSITIVE_INFINITY)));
+    if (snoozeTimer) clearTimeout(snoozeTimer);
+    snoozeTimer = undefined;
+    if (!Number.isFinite(soonest)) return;
+    // setTimeout overflows past ~24.8 days; a later wake just re-arms on the next read.
+    snoozeTimer = setTimeout(() => { snoozeTimer = undefined; attentionChanged(); }, Math.min(Math.max(0, soonest - Date.now()) + 1_000, 2 ** 31 - 1));
+    snoozeTimer.unref?.();
+  };
+  deps.onDispose?.(() => { if (snoozeTimer) clearTimeout(snoozeTimer); });
+  const attentionOverrides = deps.attentionOverrides ?? createAttentionOverrideStore();
   // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
   const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
   deps.onDispose?.(() => attention.dispose());
-  attention.onChange(() => phonePairing.noteAttentionChange());
+  attention.onChange(() => {
+    phonePairing.noteAttentionChange();
+    workspaceEvents.emit('attention-change', {});
+  });
   questionInbox.onChange(() => attention.poke());
   const offAttentionEvents = workspaceEvents.on((event) => {
     if (event === 'manager-change' || event === 'manager-message') attention.poke();
@@ -9185,7 +9245,20 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: attention (workspace-level, single-mount) ----
   const attentionRoutes = new Hono()
-    .get('/workspace/attention', async (c) => c.json(await attention.list()));
+    .get('/workspace/attention', async (c) => c.json(await attention.list()))
+    // Spec 2026-11-23-needs-you-triage: dismiss, snooze, "Still needs me", and their undo.
+    .post('/workspace/attention/overrides', jsonZodValidator(attentionOverrideInputSchema), async (c) => {
+      const overrides = await attentionOverrides.set(c.req.valid('json'));
+      armSnoozeWake(overrides);
+      attentionChanged();
+      return c.json({ overrides });
+    })
+    .post('/workspace/attention/overrides/clear', jsonZodValidator(attentionOverrideClearInputSchema), async (c) => {
+      const overrides = await attentionOverrides.clear(c.req.valid('json').key);
+      armSnoozeWake(overrides);
+      attentionChanged();
+      return c.json({ overrides });
+    });
 
   // ---- chained family: Questions inbox (workspace-level, single-mount) ----
   // Spec 2026-11-17-questions-inbox. A manager copy folded into its task's item answers the task.
@@ -9204,6 +9277,8 @@ export function createApp(deps: ServerDeps) {
   // A GitHub read that sees a PR merged or closed closes its waiting merge cards (#2241 follow-up).
   const stopPrClosed = onPrClosed((root, number, state, verify) => {
     void managerEngine.pullRequestClosed(root, number, state, verify).catch(() => {});
+    // A paused task or a card on that PR moves to Probably done.
+    attentionChanged();
   });
   deps.onDispose?.(stopPrClosed);
 
@@ -9284,7 +9359,11 @@ export function createApp(deps: ServerDeps) {
     .use('/workspace/managers/:id/rename', requireManagerTurn)
     .use('/workspace/managers/:id/automations', requireManagerTurn)
     .use('/workspace/managers/:id/automations/*', requireManagerTurn)
-    .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
+    // `needsYou`: what Now still counts per manager, so the notch agrees with the Now and phone badges.
+    .get('/workspace/managers', async (c) => {
+      const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
+      return c.json({ managers: list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers });
+    })
     // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
     .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
       c.json({ ok: true as const, changed: await managerEngine.setActivity(c.req.valid('json').active) }))

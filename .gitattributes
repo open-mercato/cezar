@@ -1,0 +1,3 @@
+# The Tahoe icon's source and catalog are hashed in Assets.car.json: keep their bytes as committed.
+packages/desktop/src-tauri/icons/cezar.icon/** -text
+packages/desktop/src-tauri/icons/Assets.car binary

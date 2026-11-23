@@ -145,6 +145,11 @@ export function managersDir(): string {
   return join(cezarHomeDir(), 'managers');
 }
 
+/** Dismissed, snoozed and kept attention items (spec 2026-11-23-needs-you-triage). */
+export function attentionOverridesPath(): string {
+  return join(cezarHomeDir(), 'attention-overrides.json');
+}
+
 /** Per-project automatic agent fallback policy. Kept separate from account credentials. */
 export function agentFallbackPolicyPath(): string {
   return join(cezarHomeDir(), 'agent-fallback.json');
