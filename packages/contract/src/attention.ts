@@ -27,7 +27,7 @@ export const attentionItemSchema = z.object({
   title: z.string(),
   detail: z.string().optional(),
   since: z.string(),
-  /** In the Now count. False for failed tasks and for managers whose Notify is off. */
+  /** In the Now count, unless `settled`. False for failed tasks and for managers whose Notify is off. */
   counted: z.boolean(),
   projectId: z.string().optional(),
   runId: z.string().optional(),

@@ -50,7 +50,7 @@ text showed raw `[[pr:…]]` markers.
   verdict. A row the server does not list is keyed `now:<project>:<run>:<since>`.
 - Menu: Open, Still needs me (settled only), Dismiss, Snooze ›, Mute / Unmute this manager (the
   manager's own Notify switch, with undo) for a manager's items, Copy link, and for this project's runs
-  Mark done (`/finish`), Archive task (with undo) and Cancel task (confirm dialog).
+  Mark done (`/finish`), Archive task (with undo) and Stop task (the same Stop confirm the thread uses).
 - Card titles render `[[pr:…]]`/`[[task:…]]` through the manager chat's reference renderer, against
   the projects health lists.
 

@@ -2,6 +2,8 @@ import {
   attentionOverridesResponseSchema,
   attentionResponseSchema,
   phonePushPrefsSchema,
+  type AttentionCounts,
+  type AttentionItem,
   type AttentionOverride,
   type AttentionOverrideInput,
   type AttentionResponse,
@@ -49,26 +51,42 @@ export async function clearAttentionOverride(key: string): Promise<AttentionOver
 }
 
 /** The click shows at once: the item leaves the list (or its Probably done mark) before the server answers. */
-export function applyOverrideLocally(queryClient: QueryClient, override: Pick<AttentionOverride, 'key' | 'mode'> | { key: string; mode: 'clear' }): void {
+/** The server's counts (`attention/list.ts` `countAttention`): settled items are in none. */
+export function countAttentionItems(items: readonly AttentionItem[]): AttentionCounts {
+  const counts: AttentionCounts = { total: 0, question: 0, approval: 0, task: 0, review: 0, failed: 0, message: 0 }
+  for (const item of items) {
+    if (item.settled) continue
+    counts[item.kind] += 1
+    if (item.counted) counts.total += 1
+  }
+  return counts
+}
+
+/** The click shows at once, the tab badge included: the item leaves the list (or its Probably done
+ *  mark) before the server answers. An undone dismissal comes back with the refetch. */
+export function applyOverrideLocally(
+  queryClient: QueryClient,
+  override: { key: string; mode: 'dismiss' | 'keep' | 'clear'; projectId?: string; runId?: string },
+): void {
   queryClient.setQueryData<AttentionResponse>(attentionKeys.all, (data) => {
     if (!data) return data
     const rest = data.overrides.filter((entry) => entry.key !== override.key)
     if (override.mode === 'clear') return { ...data, overrides: rest }
-    const hid = data.items.find((item) => item.key === override.key)
     const entry: AttentionOverride = {
       key: override.key,
       mode: override.mode,
       at: new Date().toISOString(),
-      ...(override.mode === 'dismiss' && hid?.projectId && hid.runId ? { projectId: hid.projectId, runId: hid.runId } : {}),
+      ...(override.mode === 'dismiss' && override.projectId && override.runId ? { projectId: override.projectId, runId: override.runId } : {}),
     }
     const items = override.mode === 'dismiss'
       ? data.items.filter((item) => item.key !== override.key)
+      // `counted` already says whether it counts once live (a muted manager's stays false).
       : data.items.map((item) => {
         if (item.key !== override.key || !item.settled) return item
         const { settled: _settled, ...kept } = item
-        return { ...kept, counted: item.kind !== 'failed' }
+        return kept
       })
-    return { ...data, items, overrides: [...rest, entry] }
+    return { ...data, items, counts: countAttentionItems(items), overrides: [...rest, entry] }
   })
 }
 

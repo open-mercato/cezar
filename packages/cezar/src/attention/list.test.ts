@@ -112,8 +112,8 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
     }));
     expect(list.items.map((item) => [item.key, item.settled?.why, item.counted])).toEqual([
       ['question:m:mgr:live', undefined, true],
-      ['question:m:mgr:stale', 'work-ended', false],
-      ['question:m:mgr:chat', 'overtaken', false],
+      ['question:m:mgr:stale', 'work-ended', true],
+      ['question:m:mgr:chat', 'overtaken', true],
     ]);
     expect(list.items[1]!.settled!.detail).toBe('PR #2428 it mentions was merged');
     expect(list.counts).toMatchObject({ total: 1, question: 1 });

@@ -270,12 +270,15 @@ export function scheduleDismiss(queryClient: QueryClient, key: string, label: st
   publish()
 }
 
-export function undoDismiss(key: string): void {
+/** `false` when it came too late: the close was already sent (or there was nothing to undo). */
+export function undoDismiss(key: string): boolean {
   const entry = dismissals.get(key)
-  if (!entry) return
+  if (!entry) return false
+  if (entry.timer === undefined && !entry.paused && !entry.error) return false
   clearTimeout(entry.timer)
   dismissals.delete(key)
   publish()
+  return true
 }
 
 export function pauseDismiss(key: string): void {

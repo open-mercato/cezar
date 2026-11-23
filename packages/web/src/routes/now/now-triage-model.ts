@@ -13,6 +13,9 @@ export interface TriageTarget {
   /** The toast's name for it. */
   label: string
   questionKey?: string
+  /** Its task: a dismissal covers that run's earlier waits too, so a closed question's wait stays hidden. */
+  projectId?: string
+  runId?: string
 }
 
 export type SnoozeChoice = 'hour' | 'evening' | 'tomorrow' | 'week'
@@ -56,12 +59,18 @@ export function itemForRun(items: readonly AttentionItem[] | undefined, projectI
 
 /** A row the server does not list (a lifecycle wait, an older failure) still gets a key: its run and wait. */
 export function taskRowTarget(item: AttentionItem | undefined, projectId: string | undefined, run: RunRecord, since: string, label: string): TriageTarget {
-  if (item) return { key: item.key, label, ...(item.questionKey ? { questionKey: item.questionKey } : {}) }
-  return { key: `now:${projectId ?? 'default'}:${run.id}:${since}`, label }
+  const task = projectId ? { projectId, runId: run.id } : {}
+  if (item) return { key: item.key, label, ...(item.questionKey ? { questionKey: item.questionKey } : {}), ...task }
+  return { key: `now:${projectId ?? 'default'}:${run.id}:${since}`, label, ...task }
 }
 
 export function itemTarget(item: AttentionItem, label = item.title): TriageTarget {
-  return { key: item.key, label, ...(item.kind === 'question' && item.questionKey ? { questionKey: item.questionKey } : {}) }
+  return {
+    key: item.key,
+    label,
+    ...(item.kind === 'question' && item.questionKey ? { questionKey: item.questionKey } : {}),
+    ...(item.projectId && item.runId ? { projectId: item.projectId, runId: item.runId } : {}),
+  }
 }
 
 /** Dismissed (or snoozed) by key, or a question waiting out its undo window before its card closes. */
@@ -71,8 +80,11 @@ export function isHidden(target: TriageTarget, overrides: readonly AttentionOver
 }
 
 /** Now's own task row: its item left the list when dismissed, so the dismissal names the run it hid. */
-export function isRunHidden(projectId: string | undefined, runId: string, overrides: readonly AttentionOverride[] | undefined): boolean {
-  return projectId !== undefined && (overrides?.some((entry) => entry.mode === 'dismiss' && entry.projectId === projectId && entry.runId === runId) ?? false)
+/** The server's rule (`attention/list.ts`): a dismissal covers its run's waits that began before it. */
+export function isRunHidden(projectId: string | undefined, runId: string, since: string, overrides: readonly AttentionOverride[] | undefined): boolean {
+  if (projectId === undefined) return false
+  return overrides?.some((entry) => entry.mode === 'dismiss' && entry.projectId === projectId && entry.runId === runId
+    && Date.parse(since) <= Date.parse(entry.at)) ?? false
 }
 
 /** The server's tiers and kind ranks (`attention/list.ts`): blocking decisions (approvals, questions,

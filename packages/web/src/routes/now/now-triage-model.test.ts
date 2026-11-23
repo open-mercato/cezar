@@ -27,11 +27,11 @@ describe('row targets', () => {
   it('borrows the server item’s key and question for a task row, by project and run', () => {
     expect(itemForRun([question], 'other', 'r1')).toBeUndefined()
     const item = itemForRun([question], 'app', 'r1')
-    expect(taskRowTarget(item, 'app', run, 'since', 'Ship')).toEqual({ key: question.key, label: 'Ship', questionKey: 'r:app:r1:req' })
+    expect(taskRowTarget(item, 'app', run, 'since', 'Ship')).toEqual({ key: question.key, label: 'Ship', questionKey: 'r:app:r1:req', projectId: 'app', runId: 'r1' })
   })
 
   it('keys a row the server does not list by its run and wait', () => {
-    expect(taskRowTarget(undefined, 'app', run, '2026-11-20T10:00:00.000Z', 'Fix')).toEqual({ key: 'now:app:r1:2026-11-20T10:00:00.000Z', label: 'Fix' })
+    expect(taskRowTarget(undefined, 'app', run, '2026-11-20T10:00:00.000Z', 'Fix')).toEqual({ key: 'now:app:r1:2026-11-20T10:00:00.000Z', label: 'Fix', projectId: 'app', runId: 'r1' })
   })
 
   it('closes the card only for a question', () => {

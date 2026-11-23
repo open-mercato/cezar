@@ -206,9 +206,8 @@ export function buildAttentionList(sources: AttentionSources): AttentionResponse
   const shown = items.flatMap((item) => {
     const said = mode.get(item.key);
     if (said === 'dismiss' || (said !== 'keep' && coveredByRun(item))) return [];
-    if (said === 'keep' || !item.settled) return [item];
-    // Probably done: still listed, never counted.
-    return [{ ...item, counted: false }];
+    // Probably done is listed and never counted; `counted` keeps what it would be, so "keep" restores it.
+    return [item];
   }).map((item) => (mode.get(item.key) === 'keep' && item.settled ? withoutSettled(item) : item));
   // Within a tier, an item past half the quiet threshold sorts below the fresh ones (spec § Order).
   const aging = (item: AttentionItem) => Number(days > 0 && sources.now - Date.parse(item.since) > (days * DAY_MS) / 2);

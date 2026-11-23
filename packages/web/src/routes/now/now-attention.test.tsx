@@ -155,7 +155,7 @@ describe('Needs you triage (spec 2026-11-23-needs-you-triage)', () => {
     expect(acts.dismiss).toHaveBeenCalledWith({ key: 'q', label: 'Which API?', questionKey: 'm:shop:msg1' })
     const review = needsYou().querySelector('[data-key="t"]') as HTMLElement
     fireEvent.click(within(review).getByRole('button', { name: 'Dismiss' }))
-    expect(acts.dismiss).toHaveBeenLastCalledWith({ key: 't', label: 'Bump formula' })
+    expect(acts.dismiss).toHaveBeenLastCalledWith({ key: 't', label: 'Bump formula', projectId: 'tap', runId: 'r9' })
   })
 
   it('moves probably-done items into a collapsed group, out of the count, with "Still needs me"', () => {
@@ -217,7 +217,7 @@ describe('Needs you triage (spec 2026-11-23-needs-you-triage)', () => {
     expect(swipe.getAttribute('data-open')).toBe('true')
     expect(acts.dismiss).not.toHaveBeenCalled()
     fireEvent.click(swipe.querySelector('[data-slot="now-swipe-dismiss"]') as HTMLElement)
-    expect(acts.dismiss).toHaveBeenCalledWith({ key: 't', label: 'Bump formula' })
+    expect(acts.dismiss).toHaveBeenCalledWith({ key: 't', label: 'Bump formula', projectId: 'tap', runId: 'r9' })
     expect(swipe.getAttribute('data-open')).toBeNull()
   })
 })

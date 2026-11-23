@@ -166,7 +166,7 @@ export function TriageMenu({
         ) : null}
         {cancel ? (
           <DropdownMenuItem data-slot="now-menu-cancel" variant="destructive" onSelect={() => actions.cancel!(run)}>
-            <SquareIcon aria-hidden="true" /> Cancel task…
+            <SquareIcon aria-hidden="true" /> Stop task…
           </DropdownMenuItem>
         ) : null}
       </DropdownMenuContent>

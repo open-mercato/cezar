@@ -102,8 +102,55 @@ export function friendlyToastMessage(message: string): string {
   return RAW_TRANSPORT_MESSAGES.has(message.trim()) ? UNREACHABLE_TOAST : message
 }
 
+/** A toast's remaining life, for one that pauses while the pointer or focus is on it (`onHold`). */
+interface Life {
+  handle?: ReturnType<typeof setTimeout>
+  remaining: number
+  startedAt: number
+  onHold?: (held: boolean) => void
+}
+const lives = new Map<number, Life>()
+
+function expire(id: number): void {
+  lives.delete(id)
+  publish(items.map((t) => (t.id === id ? { ...t, exiting: true } : t)))
+  schedule(() => publish(items.filter((t) => t.id !== id)), EXIT_MS)
+}
+
+function live(id: number, life: Life): void {
+  life.startedAt = Date.now()
+  const handle = setTimeout(() => {
+    timers.delete(handle)
+    expire(id)
+  }, life.remaining)
+  life.handle = handle
+  timers.add(handle)
+}
+
+/** Pointer or focus on a holdable toast: its clock and what it guards (an undo window) wait. */
+export function holdToast(id: number, held: boolean): void {
+  const life = lives.get(id)
+  if (!life) return
+  if (held && life.handle !== undefined) {
+    clearTimeout(life.handle)
+    timers.delete(life.handle)
+    life.handle = undefined
+    life.remaining = Math.max(0, life.remaining - (Date.now() - life.startedAt))
+    life.onHold?.(true)
+  } else if (!held && life.handle === undefined) {
+    live(id, life)
+    life.onHold?.(false)
+  }
+}
+
 /** Closes one toast early: the undo it carried was used. */
 export function dismissToast(id: number): void {
+  const life = lives.get(id)
+  if (life?.handle !== undefined) {
+    clearTimeout(life.handle)
+    timers.delete(life.handle)
+  }
+  lives.delete(id)
   if (!items.some((t) => t.id === id && !t.exiting)) return
   publish(items.map((t) => (t.id === id ? { ...t, exiting: true } : t)))
   schedule(() => publish(items.filter((t) => t.id !== id)), EXIT_MS)
@@ -111,7 +158,15 @@ export function dismissToast(id: number): void {
 
 export function toast(
   rawMessage: string,
-  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean; expected?: boolean } = {},
+  opts: {
+    tone?: ToastTone
+    action?: ToastAction
+    durationMs?: number
+    reported?: boolean
+    expected?: boolean
+    /** The toast pauses while hovered or focused, and says so: an undo's window waits with it. */
+    onHold?: (held: boolean) => void
+  } = {},
 ): number {
   const message = friendlyToastMessage(rawMessage)
   const item: ToastItem = {
@@ -134,6 +189,12 @@ export function toast(
   }
   // Two phases, one clock per toast: mark it exiting so the renderer can animate it out, then
   // remove it once the animation has played.
+  if (opts.onHold) {
+    const life: Life = { remaining: lifetime, startedAt: Date.now(), onHold: opts.onHold }
+    lives.set(item.id, life)
+    live(item.id, life)
+    return item.id
+  }
   schedule(() => {
     publish(items.map((t) => (t.id === item.id ? { ...t, exiting: true } : t)))
     schedule(() => publish(items.filter((t) => t.id !== item.id)), EXIT_MS)
@@ -146,6 +207,7 @@ export function toast(
 export function resetToasts(): void {
   for (const handle of timers) clearTimeout(handle)
   timers.clear()
+  lives.clear()
   publish([])
 }
 
@@ -172,6 +234,12 @@ export function Toaster() {
           data-slot="toast"
           data-tone={item.tone}
           data-state={item.exiting ? 'closed' : 'open'}
+          onPointerEnter={() => holdToast(item.id, true)}
+          onPointerLeave={() => holdToast(item.id, false)}
+          onFocus={() => holdToast(item.id, true)}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) holdToast(item.id, false)
+          }}
           className={cn(
             'pointer-events-auto max-w-[min(360px,calc(100vw-32px))] rounded-md px-3.5 py-2.5 text-ui font-medium shadow-modal',
             // tw-animate-css utilities (imported in styles/index.css), the same vocabulary the

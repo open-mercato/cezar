@@ -4,8 +4,8 @@ import * as React from 'react'
 
 import { archiveFinished, archiveRun, cancelRun, continueRun, finishRun } from '@/api/client'
 import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@/api/queries'
-import type { AttentionItem, AttentionOverride, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
-import { DISMISS_UNDO_MS, answerQuestion, scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
+import type { AttentionItem, AttentionOverride, AttentionResponse, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
+import { answerQuestion, pauseDismiss, resumeDismiss, scheduleDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
 import { applyOverrideLocally, attentionKeys, clearAttentionOverride, setAttentionOverride, useAttention } from '@/api/attention'
 import { decideManagerAction, managerKeys, markManagerRead, updateManager, useManagers } from '@/api/managers'
 import { setProjectRunRead } from '@/api/client'
@@ -53,6 +53,7 @@ import {
   type RunningRow,
 } from './now-model'
 import { AttentionRow, type AttentionActions } from './now-attention'
+import { createTriageActions } from './now-triage-actions'
 import { DismissButton, ProbablyDoneGroup, SettledReason, SwipeRow, TriageMenu, useRowMenu, type TriageActions } from './now-triage'
 import {
   SNOOZE_LABEL,
@@ -183,7 +184,7 @@ export function NowView({
   const taskRows = React.useMemo(() => needsYou.flatMap((row) => {
     const item = itemForRun(attention?.items, projectId, row.run.id)
     const target = taskRowTarget(item, projectId, row.run, row.since, shortLabel(runTitle(row.run)))
-    if (isHidden(target, attention?.overrides, pendingQuestions) || isRunHidden(projectId, row.run.id, attention?.overrides)) return []
+    if (isHidden(target, attention?.overrides, pendingQuestions) || isRunHidden(projectId, row.run.id, row.since, attention?.overrides)) return []
     return [{ row, target, settled: item?.settled }]
   }), [needsYou, attention, projectId, pendingQuestions])
   const groups = React.useMemo(
@@ -799,79 +800,48 @@ export function NowRoute() {
   )
   const managerList = managers.data?.managers ?? NO_MANAGERS
   const pending = usePendingDismissals()
-  const pendingQuestions = React.useMemo(() => new Set(pending.map((entry) => entry.key)), [pending])
+  // An errored close shows its card again (below), as the Questions page does.
+  const pendingQuestions = React.useMemo(() => new Set(pending.filter((entry) => !entry.error).map((entry) => entry.key)), [pending])
   const [cancelling, setCancelling] = React.useState<RunRecord | null>(null)
   // Outlives the triage memo, so writes stay ordered across a managers refresh.
   const writeQueue = React.useRef(keyedQueue())
-  const triage = React.useMemo<TriageActions>(() => {
-    const refresh = () => void queryClient.invalidateQueries({ queryKey: attentionKeys.all })
-    const failed = (what: string) => (error: unknown) => {
-      toast(`${what}: ${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' })
-      refresh()
+  const triage = React.useMemo<TriageActions>(() => createTriageActions({
+    queryClient,
+    setOverride: setAttentionOverride,
+    clearOverride: clearAttentionOverride,
+    applyLocally: (override) => applyOverrideLocally(queryClient, override),
+    scheduleClose: (key, label) => scheduleDismiss(queryClient, key, label),
+    holdClose: (key, held) => (held ? pauseDismiss(key) : resumeDismiss(key)),
+    undoClose: undoDismiss,
+    finishRun,
+    archiveRun: (id, archived) => archiveRun(id, archived),
+    setManagerNotify: (id, notify) => updateManager(id, { notify }),
+    managerMuted: (id) => managerList.find((manager) => manager.id === id)?.notify === false,
+    confirmCancel: setCancelling,
+    copy: (text) => Promise.resolve(globalThis.navigator?.clipboard?.writeText(text)),
+    origin: globalThis.location?.origin ?? 'http://127.0.0.1',
+    toast,
+    refreshAttention: () => queryClient.invalidateQueries({ queryKey: attentionKeys.all }),
+    refreshRuns: invalidate,
+    refreshManagers: () => queryClient.invalidateQueries({ queryKey: managerKeys.list }),
+    inOrder: writeQueue.current,
+  }), [queryClient, invalidate, managerList])
+  // A question whose close failed (not a 409) shows again with the reason, as on the Questions page:
+  // its hiding override goes too, or the row would stay out of sight with nothing said.
+  const reported = React.useRef(new Set<string>())
+  React.useEffect(() => {
+    for (const entry of pending) {
+      if (!entry.error || reported.current.has(entry.key)) continue
+      reported.current.add(entry.key)
+      const item = attention.data?.items.find((row) => row.questionKey === entry.key)
+        ?? queryClient.getQueryData<AttentionResponse>(attentionKeys.all)?.items.find((row) => row.questionKey === entry.key)
+      const key = item?.key ?? `question:${entry.key}`
+      applyOverrideLocally(queryClient, { key, mode: 'clear' })
+      void writeQueue.current(key, () => clearAttentionOverride(key)).finally(() => void queryClient.invalidateQueries({ queryKey: attentionKeys.all }))
+      toast(`Could not close “${entry.label}”: ${entry.error}`, { tone: 'danger' })
     }
-    const inOrder = writeQueue.current
-    const override = (target: TriageTarget, mode: 'dismiss' | 'keep', until?: string) => {
-      applyOverrideLocally(queryClient, { key: target.key, mode })
-      return inOrder(target.key, () => setAttentionOverride({ key: target.key, mode, ...(until ? { until } : {}) })).then(refresh, failed('Could not save that'))
-    }
-    const undo = (targets: readonly TriageTarget[]) => {
-      for (const target of targets) {
-        if (target.questionKey) undoDismiss(target.questionKey)
-        applyOverrideLocally(queryClient, { key: target.key, mode: 'clear' })
-        void inOrder(target.key, () => clearAttentionOverride(target.key)).then(refresh, failed('Could not undo'))
-      }
-    }
-    // A question's ✕ also closes its card (owner decision), after the Questions page's own undo window.
-    const dismissAll = (targets: TriageTarget[]) => {
-      if (targets.length === 0) return
-      for (const target of targets) {
-        if (target.questionKey) scheduleDismiss(queryClient, target.questionKey, target.label)
-        void override(target, 'dismiss')
-      }
-      toast(targets.length === 1 ? `Dismissed “${targets[0]!.label}”` : `Dismissed ${targets.length} items`, {
-        durationMs: DISMISS_UNDO_MS,
-        action: { label: 'Undo', onClick: () => undo(targets) },
-      })
-    }
-    const settleRun = () => Promise.all([invalidate(), refresh()])
-    return {
-      dismiss: (target) => dismissAll([target]),
-      dismissAll,
-      snooze: (target, choice: SnoozeChoice) => {
-        const until = snoozeUntil(choice, Date.now())
-        void override(target, 'dismiss', until.toISOString())
-        toast(`Snoozed “${target.label}” ${SNOOZE_LABEL[choice].toLowerCase()}`, {
-          durationMs: DISMISS_UNDO_MS,
-          action: { label: 'Undo', onClick: () => undo([{ key: target.key, label: target.label }]) },
-        })
-      },
-      keep: (target) => void override(target, 'keep'),
-      finish: (run) => void finishRun(run.id).then(settleRun, failed('Could not mark it done')),
-      archive: (run) => void archiveRun(run.id, true).then(() => {
-        void settleRun()
-        toast(`Archived “${shortLabel(runTitle(run))}”`, {
-          durationMs: DISMISS_UNDO_MS,
-          action: { label: 'Undo', onClick: () => void archiveRun(run.id, false).then(settleRun, failed('Could not unarchive')) },
-        })
-      }, failed('Could not archive')),
-      cancel: (run) => setCancelling(run),
-      managerMuted: (id) => managerList.find((manager) => manager.id === id)?.notify === false,
-      mute: (manager, muted) => {
-        const set = (notify: boolean) => updateManager(manager.id, { notify })
-          .then(() => Promise.all([queryClient.invalidateQueries({ queryKey: managerKeys.list }), refresh()]), failed('Could not change the manager'))
-        void set(!muted)
-        toast(muted ? `Muted ${manager.name}: its items stay listed, uncounted` : `Unmuted ${manager.name}`, {
-          durationMs: DISMISS_UNDO_MS,
-          action: { label: 'Undo', onClick: () => void set(muted) },
-        })
-      },
-      copyLink: (path) => {
-        const url = new URL(path, globalThis.location?.origin ?? 'http://127.0.0.1').href
-        void Promise.resolve(globalThis.navigator?.clipboard?.writeText(url))
-          .then(() => toast('Link copied'), () => toast('Could not copy the link', { tone: 'danger', expected: true }))
-      },
-    }
-  }, [queryClient, invalidate, managerList])
+    for (const key of [...reported.current]) if (!pending.some((entry) => entry.key === key && entry.error)) reported.current.delete(key)
+  }, [pending, attention.data, queryClient])
   const onMarkAllRead = React.useCallback((items: AttentionItem[]) => {
     void Promise.allSettled(items.map((item) => attentionActions.markRead(item))).then((results) => {
       if (results.some((result) => result.status === 'rejected')) toast('Some items could not be marked read', { tone: 'danger' })
@@ -913,7 +883,11 @@ export function NowRoute() {
             setCancelling(null)
             void cancelRun(run.id).then(
               () => Promise.all([invalidate(), queryClient.invalidateQueries({ queryKey: attentionKeys.all })]),
-              (error: unknown) => toast(`Could not cancel: ${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' }),
+              (error: unknown) => {
+                toast(`Could not stop the task: ${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' })
+                // A 409 usually means it already ended: show what it is now.
+                void Promise.all([invalidate(), queryClient.invalidateQueries({ queryKey: attentionKeys.all })])
+              },
             )
           }}
         />
