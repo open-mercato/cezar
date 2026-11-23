@@ -231,8 +231,7 @@ body[data-floating] .ear {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- faces: idle dims, working bobs, needs-you bounces in a ring, error is ringed and badged ---- */
-/* A legacy persona also blinks, looks about and crosses its eyes out; a mascot portrait is never drawn over. */
+/* ---- faces: idle blinks or breathes, working looks about or sways, needs-you bounces in a ring, error shudders ---- */
 
 .face {
   display: block;
@@ -312,6 +311,27 @@ body[data-floating] .ear {
   opacity: 0.9;
 }
 
+/* A mascot has no eyes to move, so the portrait itself carries the persona's motion: it breathes
+   where a persona blinks, sways where one looks about, glows as it bounces, slumps when it fails. */
+.face[data-mascot] .portrait {
+  transform-origin: 50% 100%;
+}
+.face[data-mascot][data-face='idle'] .portrait {
+  animation: breathe 4s ease-in-out infinite;
+}
+.face[data-mascot][data-face='working'] .portrait {
+  animation: sway 2.6s ease-in-out infinite;
+}
+.face[data-mascot][data-face='needs-you'] .portrait {
+  animation: glow 1.1s ease-in-out infinite;
+}
+.face[data-mascot][data-face='error'] .portrait {
+  transform: translateY(1px) rotate(-6deg);
+}
+.face[data-face='error'] .badge {
+  animation: throb 1.6s ease-in-out infinite;
+}
+
 /* Nothing on screen, nothing running (spec: no battery cost while no manager is active). */
 body[data-asleep] .face * {
   animation: none !important;
@@ -333,6 +353,23 @@ body[data-asleep] .face * {
 @keyframes bounce {
   0%, 55%, 100% { transform: translateY(0); }
   25% { transform: translateY(-3px); }
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04, 0.97); }
+}
+@keyframes sway {
+  0%, 18%, 100% { transform: rotate(0); }
+  30%, 46% { transform: rotate(6deg); }
+  62%, 78% { transform: rotate(-6deg); }
+}
+@keyframes glow {
+  0%, 55%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 transparent); }
+  25% { transform: scale(1.08); filter: drop-shadow(0 0 1.5px var(--needs-you)); }
+}
+@keyframes throb {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
 }
 @keyframes ring {
   from { opacity: 0.9; transform: scale(0.92); }

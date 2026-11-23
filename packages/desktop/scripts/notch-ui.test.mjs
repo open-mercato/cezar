@@ -58,6 +58,17 @@ describe('faces', () => {
     expect(read('../ui/notch/index.html')).toContain("img-src 'self';")
   })
 
+  it('animates a mascot portrait in every moving state, not a static image', () => {
+    const css = read('../ui/notch/notch.css')
+    for (const face of ['idle', 'working', 'needs-you']) {
+      expect(css).toMatch(new RegExp(`\\.face\\[data-mascot\\]\\[data-face='${face}'\\] \\.portrait \\{\\s*animation: \\w+`))
+    }
+    // The body carries the bob, bounce and shudder for persona and portrait alike.
+    for (const face of ['working', 'needs-you', 'error']) {
+      expect(css).toMatch(new RegExp(`\\.face\\[data-face='${face}'\\] \\.body \\{\\s*animation: \\w+`))
+    }
+  })
+
   it('moves no face under Reduce Motion', () => {
     const css = read('../ui/notch/notch.css')
     expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.face \*[\s\S]*animation: none !important/)

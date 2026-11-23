@@ -43,6 +43,15 @@ const states = [
   { name: '9-faces', housing: notched, model: { ...model(release), active: [release, nightly, watcher, entry('idle', 'Idle (only while folding away)', 4, 'planner', 'idle', 'Nothing to do')] }, expanded: true },
 ]
 
+// Frames of one animation cycle, frozen at `at` ms, that the harness writes as `<recording>.gif`.
+const idle = entry('idle', 'Idle (only while folding away)', 4, 'planner', 'idle', 'Nothing to do')
+const record = (recording, base, crop) =>
+  Array.from({ length: 26 }, (_, frame) => ({ ...base, name: `${recording}-${frame}`, recording, at: frame * 100, crop }))
+states.push(
+  ...record('motion-list', { housing: notched, model: { ...model(release), active: [release, nightly, watcher, idle] }, expanded: true }, { x: 270, y: 0, width: 460, height: 290 }),
+  ...record('motion-pills', { housing: notched, model: model(release, nightly, watcher, triage, idle) }, { x: 340, y: 0, width: 560, height: 40 }),
+)
+
 const server = createServer((request, response) => {
   const file = path.join(ui, new URL(request.url, 'http://x').pathname)
   if (!file.startsWith(ui)) return response.writeHead(403).end()

@@ -74,14 +74,17 @@ The same picture the cockpit's `ManagerAvatar` draws. A manager with a `mascot` 
 portrait (`ui/notch/mascots/`, the cockpit's `portrait-96.webp`, byte-checked by a test); the shell
 passes only a mascot it bundles, so a newer one falls back rather than breaking. A legacy manager
 with no mascot keeps its persona (`faces.js`, checked against `manager-avatar.tsx`). The state cues
-go around a portrait, never over it.
+go around a portrait, never over it, and the portrait itself moves: it has no eyes to blink, so
+it breathes, sways and glows instead.
 
-| State | Pose | Motion |
+| State | Pose | Motion (persona / portrait) |
 | --- | --- | --- |
-| idle | dimmed (a persona also blinks every 6s) | |
-| working | (a persona also looks side to side) | gentle bob |
-| needs-you | amber ring (a persona also widens its eyes) | bounces, the ring pulses |
-| error | desaturated, red ring, red × badge in the corner (a persona crosses its eyes) | shudders twice |
+| idle | dimmed | a blink every 6s / breathes every 4s |
+| working | | looks side to side / sways side to side; both bob gently |
+| needs-you | amber ring (a persona widens its eyes) | bounces, the ring pulses / the portrait also swells and glows amber |
+| error | desaturated, red ring; a persona crosses its eyes, a portrait slumps and gets a red × badge | shudders twice; the badge throbs |
+
+`motion-list.gif` and `motion-pills.gif` in `assets/notch/` record one cycle of each.
 
 Reduce Motion stops all of it and keeps every pose, and replaces the spring with a fade.
 
