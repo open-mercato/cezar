@@ -7,6 +7,7 @@ import { loadAgentAccounts, mergeWriteAgentAccounts, type AgentAccount } from '.
 import {
   createManagedAccountDir,
   isInsideAgentHomes,
+  isManagedAccountDir,
   logoutManagedAccount,
   markAccountSignedIn,
   PENDING_ACCOUNT_MAX_AGE_MS,
@@ -67,6 +68,21 @@ describe('managed account folders (spec 2026-11-24-add-account-in-cockpit)', () 
     expect(await removeManagedAccountDir(inside)).toBe(true);
     expect(existsSync(inside)).toBe(false);
     expect(await removeManagedAccountDir(inside)).toBe(false);
+  });
+
+  it('treats a folder as managed only inside agent-homes, gone ones by their stored path', async () => {
+    const inside = await createManagedAccountDir('claude', 'work');
+    const outside = join(home, 'own-claude');
+    mkdirSync(outside);
+    const link = join(agentHomesDir(), 'claude', 'escape');
+    symlinkSync(outside, link);
+
+    expect(await isManagedAccountDir(inside)).toBe(true);
+    expect(await isManagedAccountDir(join(agentHomesDir(), 'claude', 'gone'))).toBe(true);
+    expect(await isManagedAccountDir(outside)).toBe(false);
+    expect(await isManagedAccountDir(link)).toBe(false);
+    expect(await isManagedAccountDir(join(home, 'gone-outside'))).toBe(false);
+    expect(await isManagedAccountDir(agentHomesDir())).toBe(false);
   });
 
   it('logs out through the CLI with the account folder in its env', async () => {

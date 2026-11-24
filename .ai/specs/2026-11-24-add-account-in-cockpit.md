@@ -91,7 +91,10 @@ through `.passthrough()`:
 
 - `GET /workspace/agent-profiles` answers in relay scope with `configDir` and `files` removed from every row.
 - `POST` with `managed: true` is allowed. A client-supplied `configDir` is still refused.
-- `DELETE` is allowed for managed rows only.
+- `DELETE` is allowed for managed rows only. A row counts as managed only when its `managed` flag is set
+  **and** its folder lies under `agent-homes/` (a hand-edited flag never authorizes a logout or a phone removal).
+- `GET …/:id/status` and `GET …/:id/details` answer too: the wizard's Ready step shows who signed in and
+  checks the other accounts of that agent for the same login. Neither carries a host path.
 
 The phone never sends or receives a host path. The login session already strips a named account's command from a
 phone's view (`phoneSafeSession`).

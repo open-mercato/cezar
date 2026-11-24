@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ProviderId } from '../core/provider-auth.ts';
 import { buildChildEnv } from '../core/agent-env.ts';
 import { profileEnv } from '../core/agent-profiles.ts';
@@ -47,6 +47,22 @@ export async function isInsideAgentHomes(path: string): Promise<boolean> {
   }
   const rel = relative(root, target);
   return rel !== '' && !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel);
+}
+
+/**
+ * May cezar treat this `configDir` as one it made (log it out, let a phone remove it)? Inside
+ * `agent-homes/` with symlinks resolved; a folder already gone is judged by its stored path.
+ */
+export async function isManagedAccountDir(path: string): Promise<boolean> {
+  const expanded = expandTilde(path);
+  if (await isInsideAgentHomes(expanded)) return true;
+  try {
+    await lstat(expanded);
+    return false;
+  } catch {
+    const rel = relative(resolve(agentHomesDir()), resolve(expanded));
+    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  }
 }
 
 /** Delete a managed account's folder. False when it is gone already or outside `agent-homes/`. */

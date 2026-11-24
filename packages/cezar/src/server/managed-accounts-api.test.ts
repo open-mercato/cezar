@@ -7,7 +7,7 @@ import { agentHomesDir } from '../paths.ts';
 import { runInRelayScope } from '../relay/scope.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
-import { loadAgentAccounts } from '../workspace/agent-accounts.ts';
+import { loadAgentAccounts, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
@@ -135,6 +135,20 @@ describe('managed agent accounts API', () => {
       expect((await loadAgentAccounts()).accounts.map((a) => a.id)).toContain(pointed.body.profile.id);
       expect((await phone(() => send('DELETE', `${PATH}/${made.body.profile.id}`))).status).toBe(200);
       expect(existsSync(made.body.profile.path)).toBe(false);
+    });
+
+    it('does not trust a hand-edited managed flag on a folder outside agent-homes', async () => {
+      const own = join(home, 'own-claude');
+      mkdirSync(own);
+      const pointed = await send('POST', PATH, { provider: 'claude', label: 'Own', configDir: own });
+      await mergeWriteAgentAccounts((s) => {
+        const row = s.accounts.find((a) => a.id === pointed.body.profile.id);
+        if (row) row.managed = true;
+      });
+
+      expect((await phone(() => send('DELETE', `${PATH}/${pointed.body.profile.id}`))).status).toBe(409);
+      expect((await loadAgentAccounts()).accounts.map((a) => a.id)).toContain(pointed.body.profile.id);
+      expect(existsSync(own)).toBe(true);
     });
 
     it('still may not edit an account', async () => {

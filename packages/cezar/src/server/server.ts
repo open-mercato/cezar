@@ -208,6 +208,7 @@ import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
 import {
   createManagedAccountDir,
+  isManagedAccountDir,
   logoutManagedAccount,
   markAccountSignedIn,
   removeManagedAccountDir,
@@ -1691,11 +1692,13 @@ export function createApp(deps: ServerDeps) {
   const trackerWatches = new TrackerWatches(trackers, deps.socketHub);
   // The one place a relay request narrows (spec 2026-11-01-relay-qr-pairing § One new principal).
   const capabilities = () => narrowForRelay(resolveCapabilities(process.env, bindHost));
-  // Account management needs the machine, so no flag opens it to a phone.
-  const accountsEnabled = () => !inRelayScope() && agentAccountsEnabled(process.env, bindHost);
+  // Account management needs the machine; a phone gets only the managed subset below.
+  // One read of the boundary for both closures below (relay/authorization.test.ts counts them).
+  const accountsAllowed = () => agentAccountsEnabled(process.env, bindHost);
+  const accountsEnabled = () => !inRelayScope() && accountsAllowed();
   /** A paired phone may list (without host paths), add and remove accounts cezar manages
    *  (spec 2026-11-24-add-account-in-cockpit); folder paths never cross the relay. */
-  const phoneAccounts = () => inRelayScope() && agentAccountsEnabled(process.env, bindHost);
+  const phoneAccounts = () => inRelayScope() && accountsAllowed();
   const accountsVisible = () => accountsEnabled() || phoneAccounts();
   // The task terminal's registry (spec `2026-10-07-task-workspace` §6): one per server, because a
   // shell outlives the request that opened it and belongs to the host, not to a project context.
@@ -3233,10 +3236,12 @@ export function createApp(deps: ServerDeps) {
         } catch {
           // unreadable store: the merge-write below answers
         }
+        // The flag alone is hand-editable: a managed row must also live under agent-homes/.
+        const managed = target?.managed === true && await isManagedAccountDir(target.configDir);
         // A phone removes only accounts cezar made; anything else names a host folder.
-        if (!accountsEnabled() && !target?.managed) return c.json(hostedProfileRefusal, 409);
+        if (!accountsEnabled() && !managed) return c.json(hostedProfileRefusal, 409);
         // Log out first, so a Keychain item tied to the folder does not outlive it.
-        if (target?.managed) {
+        if (target && managed) {
           loginSessions.cancelAccount?.(target.provider, target.id);
           if (process.env.CEZ_DRY_RUN !== '1') await logoutManagedAccount(target);
         }
@@ -3270,7 +3275,7 @@ export function createApp(deps: ServerDeps) {
         // re-added account with the same id read the deleted one's state — its incident included.
         if (removedProvider) providerAuth.forgetProfile(removedProvider, id);
         else providerAuth.forgetProfileStatus(removedProvider, id);
-        if (target?.managed) await removeManagedAccountDir(target.configDir).catch(() => false);
+        if (target && managed) await removeManagedAccountDir(target.configDir).catch(() => false);
         return c.json({ removed: true as const, id });
       },
     );

@@ -262,13 +262,13 @@ export const createAgentProfileInputSchema = z.union([
     label: z.string().trim().max(200).optional(),
     /** Stored as written; validated absolute after `~` expansion, server-side. */
     configDir: z.string().trim().min(1).max(4096),
-  }),
+  }).strict(),
   /** cezar makes a private folder for the account (spec 2026-11-24-add-account-in-cockpit). */
   z.object({
     provider: providerIdSchema,
     label: z.string().trim().max(200).optional(),
     managed: z.literal(true),
-  }),
+  }).strict(),
 ]);
 export type CreateAgentProfileInput = z.infer<typeof createAgentProfileInputSchema>;
 
