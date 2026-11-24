@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
-import { compileV1 } from './graph.ts';
+import { compileV1, graphToSteps } from './graph.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -15,6 +16,7 @@ const sessions = vi.hoisted(() => [] as Array<{
   spec: AgentRunSpec;
   emit: (event: AgentEvent) => void;
   interrupt: () => void;
+  hardStop: () => void;
   settle: () => void;
 }>);
 
@@ -30,8 +32,9 @@ vi.mock('../core/runner-factory.ts', () => ({
         resolve({ text: '', tokensUsed: 0, toolCalls: [] });
       };
       const interrupt = vi.fn();
-      sessions.push({ backend, spec, emit, interrupt, settle });
-      return { get open() { return open; }, result: promise, sendMessage: vi.fn(() => true), end: settle, interrupt, hardStop: settle };
+      const hardStop = vi.fn(settle);
+      sessions.push({ backend, spec, emit, interrupt, hardStop, settle });
+      return { get open() { return open; }, result: promise, sendMessage: vi.fn(() => true), end: settle, interrupt, hardStop };
     },
   }),
 }));
@@ -46,22 +49,31 @@ const workflow: WorkflowDef = {
 
 const selection = { runner: 'codex', model: 'gpt-6.2-sol', agentProfile: 'default', reasoningEffort: 'high', changedBy: 'Release Manager' } as const;
 const wait = { timeout: 12_000, interval: 20 };
+const screenshot = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } } as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe('switching a task agent', { timeout: 20_000 }, () => {
   let root: string;
   let store: RunStore;
   let manager: RunManager;
+  let semaphore: WorkspaceSemaphore;
 
   beforeEach(() => {
     vi.stubEnv('CEZ_DRY_RUN', '1');
     sessions.length = 0;
     root = mkdtempSync(join(tmpdir(), 'cez-agent-switch-'));
+    vi.stubEnv('CEZ_HOME', join(root, 'home'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
     writeFileSync(join(root, 'README'), 'start\n');
     execFileSync('git', ['add', 'README'], { cwd: root });
     execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-qm', 'initial'], { cwd: root });
     store = RunStore.open(join(root, '.ai/cezar'));
-    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+    semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
     manager = new RunManager(store, root, { semaphore });
   });
 
@@ -72,8 +84,24 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     manager.dispose();
     store.flush();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  function finishedRun(withSession = true) {
+    const { id } = store.createRun({ title: 'Original', task: 'Review the build', workflow: 'old', runner: 'claude', worktree: false, steps: [
+      { id: 'work', name: 'Work', kind: 'agent' },
+    ] });
+    store.updateStep(id, 'work', { status: 'done', backend: 'claude', ...(withSession ? { sessionId: 'original' } : {}) });
+    store.updateRun(id, { status: 'done' });
+    return id;
+  }
+
+  async function expectFinished(id: string, steps: string[]) {
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)?.status).toMatch(/^(done|review)$/);
+    expect(store.getRun(id)?.steps.map((step) => [step.id, step.status])).toEqual(steps.map((step) => [step, 'done']));
+  }
 
   it('changes a queued task before its first launch, preserving its prompt stack and queue position', async () => {
     const blocker = manager.startRun(workflow, { task: 'first', worktree: false });
@@ -130,6 +158,38 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.readEvents(id).some((event) => event.message === 'run cancelled')).toBe(false);
   });
 
+  it.each(['claude', 'codex'] as const)('scopes a switch to %s to the replaced runner and unpinned steps', async (runner) => {
+    const accountDir = join(root, `${runner}-work`);
+    mkdirSync(accountDir);
+    await mergeWriteAgentAccounts((accounts) => {
+      accounts.accounts.push({ id: 'work', provider: runner, configDir: accountDir, label: 'Work', addedAt: '' });
+    });
+    const mixed = { ...workflow, steps: [
+      { ...workflow.steps[0]!, reasoningEffort: 'high' },
+      { ...workflow.steps[1]!, id: 'same-runner', reasoningEffort: 'low' },
+      { id: 'unpinned', name: 'Unpinned', prompt: '{{task}}' },
+      { id: 'review', name: 'Review', runner: 'codex', model: 'gpt-6.2-sol', reasoningEffort: 'medium' },
+    ] } satisfies WorkflowDef;
+    const { id } = manager.startRun(mixed, { task: 'Implement it', runner: 'claude', model: 'haiku', reasoningEffort: 'medium' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    const before = sessions[0]!;
+    expect(manager.switchAgent(id, { runner, agentProfile: 'work', changedBy: selection.changedBy })).toHaveProperty('summary');
+    before.settle();
+    for (let count = 2; count <= 5; count++) {
+      await vi.waitFor(() => expect(sessions).toHaveLength(count), wait);
+      sessions[count - 1]!.settle();
+    }
+    await expectFinished(id, ['work', 'same-runner', 'unpinned', 'review']);
+    const affected = sessions.slice(1, 4);
+    expect(affected.map((s) => s.backend)).toEqual([runner, runner, runner]);
+    expect(affected.map((s) => s.spec.model)).toEqual(runner === 'claude'
+      ? ['opus', 'sonnet', 'haiku'] : [undefined, undefined, undefined]);
+    expect(affected.map((s) => s.spec.reasoningEffort)).toEqual(runner === 'claude'
+      ? ['high', 'low', 'medium'] : [undefined, undefined, undefined]);
+    expect(sessions[4]).toMatchObject({ backend: 'codex', spec: { model: 'gpt-6.2-sol', reasoningEffort: 'medium' } });
+    expect(store.getRun(id)?.steps.map((step) => step.profileId)).toEqual(['work', 'work', 'work', 'default']);
+  });
+
   it('hands over a live Continue after releasing its session', async () => {
     const { id } = store.createRun({ title: 'Original', task: 'Review the build', workflow: 'old', runner: 'claude', worktree: false, steps: [
       { id: 'work', name: 'Work', kind: 'agent' },
@@ -150,6 +210,61 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     ]);
   });
 
+  it.each(['starting', 'prepare', 'lease'] as const)('keeps a dequeued Continue through a switch while it awaits %s', async (phase) => {
+    const id = finishedRun();
+    const tree = join(root, 'existing-worktree');
+    mkdirSync(tree);
+    store.updateRun(id, { worktreePath: tree });
+    const hold = deferred<void>();
+    const entered = vi.fn();
+    const requiresGate = vi.spyOn(manager.lifecycle, 'requiresGate').mockResolvedValue(false);
+    if (phase === 'starting') {
+      requiresGate.mockImplementationOnce(async () => {
+        entered();
+        await hold.promise;
+        return false;
+      });
+    } else if (phase === 'prepare') {
+      requiresGate.mockResolvedValueOnce(true);
+      vi.spyOn(manager.lifecycle, 'prepare').mockImplementationOnce(async (runId, baseBranch, _launch, signal) => {
+        store.updateRun(runId, { worktreeLifecycle: { worktreeId: runId, generation: 1, phase: 'setup', state: 'running', needsAttention: false } });
+        entered();
+        await hold.promise;
+        expect(signal?.aborted).toBe(true);
+        store.updateRun(runId, { worktreeLifecycle: undefined });
+        return { ready: false, path: tree, branch: 'main', baseBranch };
+      });
+    } else {
+      vi.spyOn(manager.lifecycle, 'acquireAgentLease').mockImplementationOnce(async () => {
+        entered();
+        await hold.promise;
+        return () => undefined;
+      });
+    }
+    const text = 'Use the attached screenshot';
+    expect(manager.continueRun(id, { text, images: [screenshot] }, true)).toEqual({ ok: true });
+    try {
+      await semaphore.release();
+      await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce(), wait);
+      expect(store.readEvents(id).filter((event) => event.type === 'user-message')).toEqual([]);
+      expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+      expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBe('continue-1');
+      expect(store.getRun(id)?.steps.at(-1)?.status).toBe('pending');
+      expect(sessions).toHaveLength(0);
+    } finally {
+      hold.resolve();
+    }
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { resume: false, images: [screenshot] } });
+    expect(sessions[0]!.spec.userPrompt).toContain(text);
+    expect(sessions[0]!.spec.userPrompt).not.toContain('Continue this task on the newly selected agent');
+    const messages = store.readEvents(id).filter((event) => event.type === 'user-message');
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ stepId: 'continue-1', text: expect.stringContaining(text), imageCount: 1 });
+    sessions[0]!.settle();
+    await expectFinished(id, ['work', 'continue-1']);
+  });
+
   it.each(['done', 'review', 'failed'] as const)('continues a %s task with its transcript', async (status) => {
     const { id } = store.createRun({ title: 'Original', task: 'Review the build', workflow: 'old', runner: 'claude', worktree: false, steps: [
       { id: 'work', name: 'Work', kind: 'agent' },
@@ -165,6 +280,138 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
   });
 
+  it.each([false, true])('recovers a pending switch after server restart (existing Continue: %s)', async (withContinue) => {
+    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
+    const id = finishedRun(withContinue);
+    const text = 'Preserve this requested follow-up';
+    if (withContinue) {
+      expect(manager.continueRun(id, { text, images: [screenshot] }, true)).toEqual({ ok: true });
+    }
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBe('continue-1');
+    expect(store.getRun(id)?.status).toBe('queued');
+    expect(sessions).toHaveLength(0);
+    manager.dispose();
+    store.flush();
+    release();
+    store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, root, { semaphore });
+    await manager.recover();
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { resume: false, model: 'gpt-6.2-sol', reasoningEffort: 'high' } });
+    expect(sessions[0]!.spec.userPrompt).toContain(withContinue ? text : 'Continue this task on the newly selected agent');
+    if (withContinue) expect(sessions[0]!.spec.images).toEqual([screenshot]);
+    expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
+    sessions[0]!.settle();
+    await expectFinished(id, ['work', 'continue-1']);
+  });
+
+  it('cancels the replacement while the interrupted agent still owns the run', async () => {
+    const id = finishedRun();
+    expect(manager.continueRun(id, { text: 'Check the results' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    expect(sessions[0]!.interrupt).toHaveBeenCalledOnce();
+    expect(manager.cancel(id)).toBe(true);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(sessions).toHaveLength(1);
+    expect(store.getRun(id)).toMatchObject({ status: 'cancelled', steps: [
+      { id: 'work', status: 'done' }, { id: 'continue-1', status: 'cancelled' }, { id: 'continue-2', status: 'cancelled' },
+    ] });
+    expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBeUndefined();
+    expect(store.readEvents(id)).toContainEqual(expect.objectContaining({ message: 'run cancelled during agent switch' }));
+  });
+
+  it('does not requeue the replacement when a switch is cancelled during Continue startup', async () => {
+    const id = finishedRun();
+    store.updateRun(id, { worktreePath: root });
+    const hold = deferred<boolean>();
+    const requiresGate = vi.spyOn(manager.lifecycle, 'requiresGate').mockImplementationOnce(() => hold.promise);
+    expect(manager.continueRun(id, { text: 'Check the results' }, true)).toEqual({ ok: true });
+    try {
+      await semaphore.release();
+      await vi.waitFor(() => expect(requiresGate).toHaveBeenCalledOnce(), wait);
+      expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+      expect(manager.cancel(id)).toBe(true);
+    } finally {
+      hold.resolve(false);
+    }
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(sessions).toHaveLength(0);
+    expect(store.getRun(id)).toMatchObject({ status: 'cancelled', steps: [
+      { id: 'work', status: 'done' }, { id: 'continue-1', status: 'cancelled' },
+    ] });
+    expect(store.readEvents(id).some((event) => event.type === 'user-message')).toBe(false);
+    expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBeUndefined();
+  });
+
+  it('hard-stops an agent that ignores the interrupt before starting its replacement', async () => {
+    const id = finishedRun();
+    expect(manager.continueRun(id)).toEqual({ ok: true });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    const old = sessions[0]!;
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    expect(old.interrupt).toHaveBeenCalledOnce();
+    expect(old.hardStop).not.toHaveBeenCalled();
+    expect(sessions).toHaveLength(1);
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(old.hardStop).toHaveBeenCalledOnce();
+    expect(sessions[1]).toMatchObject({ backend: 'codex', spec: { resume: false } });
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(sessions).toHaveLength(2);
+    expect(store.getRun(id)?.steps.map((step) => [step.id, step.status])).toEqual([
+      ['work', 'done'], ['continue-1', 'cancelled'], ['continue-2', 'done'],
+    ]);
+  });
+
+  it('resumes a cancelled workflow with existing sessions and runs its remaining checks', async () => {
+    const withCheck = { ...workflow, steps: [...workflow.steps, { id: 'verify', name: 'Verify', command: 'test -f README' }] };
+    const { id } = manager.startRun(withCheck, { task: 'Implement it' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(manager.cancel(id)).toBe(true);
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)).toMatchObject({ status: 'cancelled', graphState: { cursor: 'review' } });
+    expect(store.getRun(id)?.steps.every((step) => step.kind !== 'agent' || !!step.sessionId)).toBe(true);
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(sessions[2]).toMatchObject({ backend: 'codex', spec: { resume: false, model: 'gpt-6.2-sol' } });
+    sessions[2]!.settle();
+    await expectFinished(id, ['work', 'review', 'verify']);
+    expect(store.getRun(id)?.steps.map((step) => step.iterations)).toEqual([1, 2, 1]);
+  });
+
+  it('retries a failed check and continues through a gate and the remaining workflow', async () => {
+    const graph = compileV1([
+      workflow.steps[0]!, { id: 'verify', name: 'Verify', command: 'test -f ready' }, workflow.steps[1]!,
+    ]);
+    graph.nodes.push({ id: 'approval', type: 'gate.human', message: 'Ready for review?' });
+    graph.edges.find((edge) => edge.from === 'verify.pass')!.to = 'approval';
+    graph.edges.push({ from: 'approval.approve', to: 'review' });
+    const withCheck = { ...workflow, graph, steps: graphToSteps(graph) };
+    const { id } = manager.startRun(withCheck, { task: 'Implement it' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    const failed = store.getRun(id)!;
+    expect(failed).toMatchObject({ status: 'failed', error: 'check "verify" failed' });
+    expect(failed.graphState?.cursor).toBeUndefined();
+    writeFileSync(join(failed.worktreePath!, 'ready'), '');
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'waiting', graphState: { cursor: 'approval' } }), wait);
+    expect(sessions).toHaveLength(1);
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'Approve' }])).toBe(true);
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]).toMatchObject({ backend: 'codex', spec: { resume: false, model: 'gpt-6.2-sol' } });
+    sessions[1]!.settle();
+    await expectFinished(id, ['work', 'verify', 'approval', 'review']);
+    expect(store.getRun(id)?.steps.map((step) => step.iterations)).toEqual([1, 2, 1, 1]);
+  });
+
   it('retries a failed task with no prior session through its original workflow', async () => {
     const { id } = store.createRun({ title: 'Original', task: 'Review the build', workflow: 'custom',
       runner: 'claude', steps: [
@@ -178,6 +425,11 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     const run = store.getRun(id)!;
     expect(run.worktreePath).toBeTruthy();
     expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { cwd: run.worktreePath, resume: false } });
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]).toMatchObject({ backend: 'codex', spec: { model: 'gpt-6.2-sol' } });
+    sessions[1]!.settle();
+    await expectFinished(id, ['work', 'review']);
   });
 
   it('retries the failed agent node when model validation stopped a graph before launch', async () => {
@@ -201,5 +453,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     sessions[0]!.settle();
     await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
     expect(sessions[1]).toMatchObject({ backend: 'codex' });
+    sessions[1]!.settle();
+    await expectFinished(id, ['work', 'review']);
   });
 });

@@ -17,12 +17,34 @@ import { taskAskRecordSchema } from './questions.ts';
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
 export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
 
+const workflowAgentBaseSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+const workflowAgentOverrideSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string(),
+  // Omission keeps the original step selection. Null uses the new runner's default.
+  model: z.string().nullable().optional(),
+  reasoningEffort: z.string().nullable().optional(),
+});
+const workflowAgentSwitchSchema = z.object({
+  original: workflowAgentBaseSchema,
+  // Each slot represents the runner pinned in the workflow, or the absence of a pin.
+  overrides: z.partialRecord(z.union([runnerSchema, z.literal('unpinned')]), workflowAgentOverrideSchema),
+});
+export type WorkflowAgentSwitch = z.infer<typeof workflowAgentSwitchSchema>;
+
 export const runAgentSwitchSchema = z.object({
   summary: z.string(),
   /** Apply the selected agent to the unfinished workflow's agent steps. */
   workflow: z.literal(true).optional(),
+  workflowSelection: workflowAgentSwitchSchema.optional(),
   /** Fresh continuation to reconstruct if the server restarts before it launches. */
   continuationStepId: z.string().optional(),
+  continuationInput: z.object({ prompt: z.string(), attachmentUrls: z.array(z.string()) }).optional(),
 });
 
 /** `GET /workspace/events` query: `slim=1` opts into the slim `run` frame (`workspaceRunEventSchema`). */
