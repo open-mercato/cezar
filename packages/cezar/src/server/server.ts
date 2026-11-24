@@ -9,8 +9,9 @@ import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateI
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
 import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
 import { buildAttentionList, currentTaskPr, managerNeedsYou, phoneBadgeCount } from '../attention/list.ts';
-import { createAttentionOverrideStore, type AttentionOverrideStore } from '../attention/overrides.ts';
-import { createAttentionService } from '../attention/service.ts';
+import { createAttentionOverrideStore, nextOverrideWake, type AttentionOverrideStore } from '../attention/overrides.ts';
+import { createPrEndMemory, prEndLookup, type PrEndMemory } from '../attention/pr-ends.ts';
+import { createAttentionAnnouncer, createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
 import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
 import {
@@ -535,6 +536,8 @@ export interface ServerDeps {
   questionProviders?: { task?: QuestionProvider; manager?: QuestionProvider };
   /** Tests inject one off disk; the default lives in `~/.cezar/attention-overrides.json`. */
   attentionOverrides?: AttentionOverrideStore;
+  /** Tests inject one off disk; the default lives in `~/.cezar/attention-pr-ends.json`. */
+  prEnds?: PrEndMemory;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
    *  route's guards, cleanup and error surfacing are exercised for real
@@ -9166,7 +9169,15 @@ export function createApp(deps: ServerDeps) {
     const roots = new Map(available.map((source) => [source.id, source.root]));
     const overrides = await attentionOverrides.list().catch(() => []);
     armSnoozeWake(overrides);
-    return buildAttentionList({
+    // Fresh forge answers first; what the cache has forgotten, from what cezar saw end (review 2, finding 1).
+    const ends = prEndLookup(await prEnds.load().catch(() => new Map()), {
+      end: (root, number) => readCachedPrEnds(root, [number])[number],
+      isOpen: (root, number) => {
+        const status = readCachedRefStatuses(root, [number]).prs[number];
+        return status !== undefined && status !== 'merged' && status !== 'closed';
+      },
+    });
+    const list = buildAttentionList({
       questions: inbox?.open ?? [],
       managers,
       approvals,
@@ -9176,44 +9187,47 @@ export function createApp(deps: ServerDeps) {
       overrides,
       prState: (projectId, number) => {
         const root = roots.get(projectId);
-        return root ? readCachedPrEnds(root, [number])[number] : undefined;
+        return root ? ends.lookup(root, number) : undefined;
       },
-      // The task's CURRENT PR, as the forge cache already knows it: never a `gh` call. A superseded,
-      // closed PR says nothing about the one the task opened after it.
+      // The task's CURRENT PR, as cezar already knows it: never a `gh` call. A superseded, closed PR
+      // says nothing about the one the task opened after it.
       prEnded: (projectId, run) => {
         const root = roots.get(projectId);
         const number = root ? currentTaskPr(run) : undefined;
-        const ended = root && number !== undefined ? readCachedPrEnds(root, [number])[number] : undefined;
+        const ended = root && number !== undefined ? ends.lookup(root, number) : undefined;
         return ended && number !== undefined ? { number, ...ended } : undefined;
       },
     });
+    await prEnds.note(ends.seen, ends.dropped).catch(() => {});
+    return list;
   };
   // The list may have changed where no run, manager or question frame says so (a snooze ending, a
   // dismissal from a phone, a PR closing): the cockpit re-reads on this, phones on the recount.
-  const attentionChanged = () => {
-    attention.poke();
-    workspaceEvents.emit('attention-change', {});
-  };
-  // A snooze ends with no event of its own: one timer for the soonest, so the badge and a phone hear it.
+  const announcer = createAttentionAnnouncer({
+    poke: () => attention.poke(),
+    announce: () => workspaceEvents.emit('attention-change', {}),
+  });
+  const attentionChanged = () => announcer.changed();
+  // A snooze end or a dismissal's TTL has no event of its own: one timer for the soonest, so the
+  // badge and a phone hear it.
   let snoozeTimer: ReturnType<typeof setTimeout> | undefined;
-  const armSnoozeWake = (overrides: readonly { until?: string }[]) => {
-    const soonest = Math.min(...overrides.map((entry) => (entry.until ? Date.parse(entry.until) : Number.POSITIVE_INFINITY)));
+  const armSnoozeWake = (overrides: Parameters<typeof nextOverrideWake>[0]) => {
+    const soonest = nextOverrideWake(overrides);
     if (snoozeTimer) clearTimeout(snoozeTimer);
     snoozeTimer = undefined;
-    if (!Number.isFinite(soonest)) return;
+    if (soonest === undefined) return;
     // setTimeout overflows past ~24.8 days; a later wake just re-arms on the next read.
     snoozeTimer = setTimeout(() => { snoozeTimer = undefined; attentionChanged(); }, Math.min(Math.max(0, soonest - Date.now()) + 1_000, 2 ** 31 - 1));
     snoozeTimer.unref?.();
   };
   deps.onDispose?.(() => { if (snoozeTimer) clearTimeout(snoozeTimer); });
   const attentionOverrides = deps.attentionOverrides ?? createAttentionOverrideStore();
+  const prEnds = deps.prEnds ?? createPrEndMemory();
   // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
   const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
   deps.onDispose?.(() => attention.dispose());
-  attention.onChange(() => {
-    phonePairing.noteAttentionChange();
-    workspaceEvents.emit('attention-change', {});
-  });
+  // The recount is the phone's: a cockpit heard the change itself (`announcer`), or a run/manager frame.
+  attention.onChange(() => phonePairing.noteAttentionChange());
   questionInbox.onChange(() => attention.poke());
   const offAttentionEvents = workspaceEvents.on((event) => {
     if (event === 'manager-change' || event === 'manager-message') attention.poke();
@@ -9359,7 +9373,8 @@ export function createApp(deps: ServerDeps) {
     .use('/workspace/managers/:id/rename', requireManagerTurn)
     .use('/workspace/managers/:id/automations', requireManagerTurn)
     .use('/workspace/managers/:id/automations/*', requireManagerTurn)
-    // `needsYou`: what Now still counts per manager, so the notch agrees with the Now and phone badges.
+    // `needsYou`: what Now still lists per manager (not dismissed, snoozed or probably done; a muted
+    // manager's included), so the notch and the heads show what Now shows.
     .get('/workspace/managers', async (c) => {
       const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
       return c.json({ managers: list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers });

@@ -34,7 +34,13 @@ text showed raw `[[pr:…]]` markers.
   - a paused task (`kind: task`) waiting longer than the Older days → `quiet`, its detail the real age.
   A PR settles an item only when it ended AFTER the item began (`mergedAt`/`closedAt`, read by the same
   ref-status query cezar already runs): a PR that ended before the task asked again says nothing about
-  the new wait, and an unknown end time settles nothing.
+  the new wait, and an unknown end time settles nothing. What cezar has seen end is kept in
+  `~/.cezar/attention-pr-ends.json` (`{ root, number, state, endedAt, seenAt }`, at most 2,000), so a
+  verdict outlives the forge cache's 10 min / 24 h TTL and a restart; a fresh read that finds the PR open
+  again drops it. A merged end is kept; a closed one lapses a day after a fresh read last confirmed it
+  (`seenAt`), since a PR can be reopened while nothing reads it. A fresh answer with no time borrows the
+  remembered time of the same end. On a tie in time (legacy refs), a created PR outranks a declared one, and declaring a PR
+  again (`CEZ:PR`) makes it the newest.
   Cards whose declared `about` ended, and replaced cards, already close and leave the list.
 - Order: tiers — blocking decisions (approvals, questions, messages), the review gate, waits, failures.
   Within a tier an item past half the Older days sorts below the fresh ones, then by kind, newest first.
@@ -44,18 +50,23 @@ text showed raw `[[pr:…]]` markers.
   drops the item from `items` (until `until`, a snooze); `keep` clears `settled`. Keyed by item key, so
   a re-raised wait shows again. Entries expire after 30 days, at most 500 are kept, and deleting the
   file only brings items back; a store re-reads the file when its stamp changes, so another cezar
-  process's write shows. `GET /workspace/attention` returns the active `overrides`. A dismissal stores
+  process's write shows. On a home cezar cannot write, the keys this process failed to write are kept in
+  memory and laid over the file on every read, so none is lost and another writer's still show; a key
+  another process changed on disk since then takes the newer value (`attention/keyed-store.ts`). `GET /workspace/attention` returns the active `overrides`. A dismissal stores
   its task (`projectId`/`runId`, sent by the cockpit) and also covers that run's items that began before
   it: when a dismissed question's card closes, the run's wait comes back under a task key and stays
   hidden. A wait that began after the dismissal shows again.
 - Routes: `POST /workspace/attention/overrides` and `POST /workspace/attention/overrides/clear`, both
   answering `{ overrides }`.
 - Live: the workspace stream carries `attention-change` (`{}`) whenever the list may have changed with no
-  run, manager or question frame saying so: an override write (a phone's included), a snooze ending (one
-  timer, armed on every read and write, whether or not a phone listens), a PR closing, a recount. The
-  cockpit re-reads the list on it.
-- `GET /workspace/managers` adds `needsYou: { approvals, questions }` per manager, what Now still counts.
-  The notch shows it; the manager heads count from the attention list itself.
+  run, manager or question frame saying so: an override write (a phone's included), a snooze ending or a
+  dismissal reaching its 30-day TTL (one timer for the soonest, armed on every read and write), a PR
+  closing. Sent once, when the change happens, phone or not; the recount a change starts only drives the
+  phone's push (gated on its revision), so a failed read or a change outside the revision (a re-snooze)
+  never keeps the cockpit stale. The cockpit re-reads the list on it.
+- `GET /workspace/managers` adds `needsYou: { approvals, questions }` per manager, what Now still lists.
+  The notch shows it; the manager heads count from the attention list itself. A muted manager's cards
+  stay there (Notify off takes them out of the Now and phone badges only, as its toast says).
 
 ## Cockpit
 
@@ -67,9 +78,24 @@ text showed raw `[[pr:…]]` markers.
 - Undo: a question's card closes 6 s after ✕; the toast offering Undo leaves after 5 s and, while hovered
   or focused, holds both its own clock and the close. An Undo that came after the close was sent says
   so. Override writes for one key go out in click order, so an Undo never lands before its dismiss.
-- A question whose close failed (not a 409) shows again with the reason, as on the Questions page.
+- A question whose close failed (not a 409) shows again with the reason, as on the Questions page. The
+  recovery rides the pending close itself (`scheduleDismiss`'s `onFailed`), so it runs after Now unmounts.
 - Card titles render `[[pr:…]]`/`[[task:…]]` through the manager chat's reference renderer, against
   the projects health lists.
+
+## Manager mode's Now (owner decision 2026-11-23)
+
+- Now opened from Manager mode (the sidebar's Workspace Now, the phone bar's Now tab) is `/manager/now`,
+  never a project's Now: Manager mode stays in Manager mode. Now opened from a project is unchanged.
+- It shows **all managers** by default. A filter narrows it to one manager: a menu in the header on
+  desktop, a floating button over the list on a phone (`?manager=<id>`; an unknown id falls back to all).
+  The prototype that preselected the manager you came from was rejected as counterintuitive.
+- An item belongs to a manager when it is the manager's own (its question, approval or important
+  message) or a task it started or follows (`followedTasks`); a shared task belongs to each. Tasks no
+  manager started or follows stay in the project's Now. Rows are Now's own (answer, approve, ✕, ⋯,
+  Probably done); a task row names its manager ("Task of Scout"). Below, the managers' running tasks.
+- The Now badge in Manager mode (sidebar and phone bar) counts these items as Now counts (not
+  probably done, not uncounted). The project nav's badge keeps counting the whole list.
 
 ## Limits
 

@@ -1,15 +1,19 @@
 import { QueryClient } from '@tanstack/react-query'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AttentionOverride, RunRecord } from '@open-mercato/cezar-api-client'
 
-import { UNDO_TOAST_MS, createTriageActions, type TriageDeps } from './now-triage-actions'
+import { DISMISS_UNDO_MS, resetDismissals } from '@/api/questions'
+
+import { UNDO_TOAST_MS, createTriageActions, questionCloser, type TriageDeps } from './now-triage-actions'
 import { keyedQueue } from './now-triage-model'
 
 /** Needs you's wiring (spec 2026-11-23-needs-you-triage): what each click calls, in which order. */
 
 const NOW = new Date(2026, 10, 25, 12).getTime()
 const run = { id: 'r1', title: 'Fix login', status: 'waiting' } as unknown as RunRecord
+
+let failClose: ((error: string) => void) | undefined
 
 function harness(over: Partial<TriageDeps> = {}) {
   const calls: string[] = []
@@ -19,7 +23,7 @@ function harness(over: Partial<TriageDeps> = {}) {
     setOverride: vi.fn(async (input) => { calls.push(`set:${input.key}:${input.mode}${input.until ? `:until=${input.until}` : ''}${input.runId ? `:run=${input.runId}` : ''}`); return [] }),
     clearOverride: vi.fn(async (key) => { calls.push(`clear:${key}`); return [] }),
     applyLocally: vi.fn((override) => { calls.push(`local:${override.key}:${override.mode}`) }),
-    scheduleClose: vi.fn((key) => { calls.push(`close:${key}`) }),
+    scheduleClose: vi.fn((key, _label, onFailed) => { calls.push(`close:${key}`); failClose = onFailed }),
     holdClose: vi.fn((key, held) => { calls.push(`hold:${key}:${held}`) }),
     undoClose: vi.fn((key) => { calls.push(`undo-close:${key}`); return true }),
     finishRun: vi.fn(async (id) => { calls.push(`finish:${id}`) }),
@@ -53,6 +57,17 @@ describe('Needs you triage actions', () => {
     undo()
     await settle()
     expect(calls).toEqual(['undo-close:r:app:r1:q', 'local:question:r:app:r1:q:clear', 'clear:question:r:app:r1:q'])
+  })
+
+  it('a failed card close un-hides the row and says why, from the close itself (review 2, finding 5)', async () => {
+    const { actions, calls, toasts } = harness()
+    actions.dismiss({ key: 'question:m:a:1', label: 'Ship it?', questionKey: 'm:a:1' })
+    await settle()
+    calls.length = 0
+    failClose!('disk full')
+    await settle()
+    expect(calls).toEqual(['local:question:m:a:1:clear', 'clear:question:m:a:1'])
+    expect(toasts.at(-1)).toMatchObject({ message: 'Could not close “Ship it?”: disk full', opts: { tone: 'danger' } })
   })
 
   it('holding the toast holds the card close (review finding 9)', () => {
@@ -132,3 +147,21 @@ describe('Needs you triage actions', () => {
     expect(deps.refreshAttention).toHaveBeenCalled()
   })
 })
+
+describe('questionCloser (review of #2443, round 4)', () => {
+  afterEach(() => {
+    resetDismissals()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('hands a failed card close back to Now', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'disk full' }, { status: 500 })))
+    const onFailed = vi.fn()
+    questionCloser(new QueryClient())('m:a:1', 'Ship it?', onFailed)
+    await vi.advanceTimersByTimeAsync(DISMISS_UNDO_MS)
+    await vi.waitFor(() => expect(onFailed).toHaveBeenCalledWith('disk full'))
+  })
+})
+

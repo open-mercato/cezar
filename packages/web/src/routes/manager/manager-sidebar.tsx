@@ -20,8 +20,6 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toaster'
 import { NAV_BADGE_CLASS, NAV_ROW_ACTIVE_CLASS, NAV_ROW_CLASS, useSidebarNavigate } from '@/components/app-shell'
-import { activeNavPath } from '@/components/nav-items'
-import { stripProjectPrefix } from '@/lib/project-router'
 import { shortAge } from '@/lib/format'
 import { ListSkeleton, LoadingState } from '@/components/loading-state'
 import {
@@ -459,7 +457,8 @@ export function ProjectQuestionsLink() {
  *  phone bottom bar offers it from Manager. */
 function NowNavLink({ to, count, onNavigate }: { to: string; count: number | null; onNavigate?: (() => void) | undefined }) {
   const { pathname } = useLocation()
-  const active = activeNavPath(stripProjectPrefix(pathname)) === '/'
+  // Manager mode's own Now (spec 2026-11-23-needs-you-triage), not a project's.
+  const active = pathname === to
   return (
     <Link
       to={to}
@@ -471,7 +470,7 @@ function NowNavLink({ to, count, onNavigate }: { to: string; count: number | nul
       <CircleDotIcon className="size-4 shrink-0" aria-hidden="true" />
       Now
       {count ? (
-        <span data-slot="nav-needs-you-badge" title={`${count} ${count === 1 ? 'task needs' : 'tasks need'} you`} className={NAV_BADGE_CLASS}>
+        <span data-slot="nav-needs-you-badge" title={`${count} ${count === 1 ? 'thing from your managers needs' : 'things from your managers need'} you`} className={NAV_BADGE_CLASS}>
           {count}
         </span>
       ) : null}
@@ -484,10 +483,10 @@ function NowNavLink({ to, count, onNavigate }: { to: string; count: number | nul
  * New manager, the managers with their latest line, and a small Workspace group — Now, workspace
  * Approvals and Questions, the active chat's Jobs, and the global Manager settings.
  */
-export function ManagerSidebar({ nowTo = '/', nowCount = null }: {
-  /** The project nav's Now in the project the sidebar counts for. */
+export function ManagerSidebar({ nowTo = '/manager/now', nowCount = null }: {
+  /** Manager mode's Now: every manager's items. */
   nowTo?: string
-  /** That project's needs-you count; null while unknown. */
+  /** Its needs-you count; null while unknown. */
   nowCount?: number | null
 } = {}) {
   const { pathname } = useLocation()

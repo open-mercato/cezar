@@ -150,6 +150,11 @@ export function attentionOverridesPath(): string {
   return join(cezarHomeDir(), 'attention-overrides.json');
 }
 
+/** Pull requests cezar has seen end, so a Probably done verdict outlives the forge cache. */
+export function attentionPrEndsPath(): string {
+  return join(cezarHomeDir(), 'attention-pr-ends.json');
+}
+
 /** Per-project automatic agent fallback policy. Kept separate from account credentials. */
 export function agentFallbackPolicyPath(): string {
   return join(cezarHomeDir(), 'agent-fallback.json');

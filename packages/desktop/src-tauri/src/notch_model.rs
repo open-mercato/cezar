@@ -28,8 +28,8 @@ pub struct ManagerRow {
     pub preview: Option<String>,
     pub pending_actions: u32,
     pub pending_questions: u32,
-    /// What Now still counts for this manager after dismissals, snoozes and Probably done
-    /// (spec 2026-11-23-needs-you-triage). An older sidecar omits it: the pending counts stand in.
+    /// What Now still lists for this manager after dismissals, snoozes and Probably done; a muted
+    /// manager's stay (spec 2026-11-23-needs-you-triage). An older sidecar omits it: the pending counts stand in.
     pub needs_you: Option<NeedsYou>,
     pub last_activity_at: Option<String>,
     pub created_at: String,
