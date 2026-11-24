@@ -70,19 +70,37 @@ describe('managed account folders (spec 2026-11-24-add-account-in-cockpit)', () 
     expect(await removeManagedAccountDir(inside)).toBe(false);
   });
 
-  it('treats a folder as managed only inside agent-homes, gone ones by their stored path', async () => {
+  it('treats only its own agent-homes/<provider>/<id> as managed, gone ones by their stored path', async () => {
     const inside = await createManagedAccountDir('claude', 'work');
     const outside = join(home, 'own-claude');
     mkdirSync(outside);
-    const link = join(agentHomesDir(), 'claude', 'escape');
-    symlinkSync(outside, link);
+    symlinkSync(outside, join(agentHomesDir(), 'claude', 'escape'));
+    const acct = (id: string, configDir: string) => ({ provider: 'claude' as const, id, configDir });
 
-    expect(await isManagedAccountDir(inside)).toBe(true);
-    expect(await isManagedAccountDir(join(agentHomesDir(), 'claude', 'gone'))).toBe(true);
-    expect(await isManagedAccountDir(outside)).toBe(false);
-    expect(await isManagedAccountDir(link)).toBe(false);
-    expect(await isManagedAccountDir(join(home, 'gone-outside'))).toBe(false);
-    expect(await isManagedAccountDir(agentHomesDir())).toBe(false);
+    expect(await isManagedAccountDir(acct('work', inside))).toBe(true);
+    expect(await isManagedAccountDir(acct('gone', join(agentHomesDir(), 'claude', 'gone')))).toBe(true);
+    expect(await isManagedAccountDir(acct('own', outside))).toBe(false);
+    expect(await isManagedAccountDir(acct('escape', join(agentHomesDir(), 'claude', 'escape')))).toBe(false);
+    // A hand-edited row naming the provider folder, or another account's folder, is not its own.
+    expect(await isManagedAccountDir(acct('work', join(agentHomesDir(), 'claude')))).toBe(false);
+    expect(await isManagedAccountDir(acct('other', inside))).toBe(false);
+  });
+
+  it('never adopts a folder that is already there', async () => {
+    const dir = await createManagedAccountDir('claude', 'work');
+    writeFileSync(join(dir, '.credentials.json'), 'x');
+    await expect(createManagedAccountDir('claude', 'work')).rejects.toMatchObject({ code: 'EEXIST' });
+  });
+
+  it('keeps the folder of a row that signed in while the sweep was writing', async () => {
+    const dir = await createManagedAccountDir('claude', 'work');
+    await mergeWriteAgentAccounts((s) => { s.accounts.push(row({ addedAt: new Date(0).toISOString() })); });
+    let calls = 0;
+    // Stale when listed, live by the time the write re-checks it.
+    const removed = await sweepPendingAccounts({ isLive: () => ++calls > 1 });
+    expect(removed).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+    expect((await loadAgentAccounts()).accounts.map((a) => a.id)).toEqual(['work']);
   });
 
   it('logs out through the CLI with the account folder in its env', async () => {

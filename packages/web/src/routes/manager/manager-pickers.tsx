@@ -356,7 +356,7 @@ export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, className }
   className?: string
 }) {
   const status = useProviderStatus().data
-  const profiles = useAgentProfiles().data?.profiles ?? []
+  const profiles = (useAgentProfiles().data?.profiles ?? []).filter((profile) => !profile.pending)
   const selected = taskAgents ?? (taskRunner ? [{ runner: taskRunner }] : [])
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<ManagerTaskAgent[]>(selected)

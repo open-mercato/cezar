@@ -2906,8 +2906,18 @@ export function createApp(deps: ServerDeps) {
         let made: AgentAccount | undefined;
         try {
           const taken = (await loadAgentAccounts()).accounts.map((a) => a.id);
-          const id = allocateAgentProfileId(body.label || body.provider, taken);
-          const dir = await createManagedAccountDir(body.provider, id);
+          let id = allocateAgentProfileId(body.label || body.provider, taken);
+          let dir: string | undefined;
+          // A folder left behind under this id is never adopted: take the next id instead.
+          for (let attempt = 0; dir === undefined; attempt++) {
+            try {
+              dir = await createManagedAccountDir(body.provider, id);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 20) throw err;
+              taken.push(id);
+              id = allocateAgentProfileId(body.label || body.provider, taken);
+            }
+          }
           await mergeWriteAgentAccounts((store) => {
             // Lost a race for this id: the folder stays empty and the boot sweep never sees it.
             if (store.accounts.some((a) => a.id === id)) return;
@@ -3237,7 +3247,7 @@ export function createApp(deps: ServerDeps) {
           // unreadable store: the merge-write below answers
         }
         // The flag alone is hand-editable: a managed row must also live under agent-homes/.
-        const managed = target?.managed === true && await isManagedAccountDir(target.configDir);
+        const managed = target?.managed === true && await isManagedAccountDir(target);
         // A phone removes only accounts cezar made; anything else names a host folder.
         if (!accountsEnabled() && !managed) return c.json(hostedProfileRefusal, 409);
         // Log out first, so a Keychain item tied to the folder does not outlive it.

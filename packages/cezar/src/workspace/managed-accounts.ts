@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, realpath, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ProviderId } from '../core/provider-auth.ts';
 import { buildChildEnv } from '../core/agent-env.ts';
@@ -23,12 +23,15 @@ export function managedAccountDir(provider: ProviderId, id: string): string {
   return join(agentHomesDir(), provider, id);
 }
 
-/** Create the account's folder (and `agent-homes/` itself) private to this user. */
+/**
+ * Create the account's folder (and `agent-homes/` itself) private to this user. Throws `EEXIST`
+ * when the folder is already there: a leftover is never adopted, credentials and all.
+ */
 export async function createManagedAccountDir(provider: ProviderId, id: string): Promise<string> {
-  const root = agentHomesDir();
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  await mkdir(join(agentHomesDir(), provider), { recursive: true, mode: 0o700 });
+  await chmod(agentHomesDir(), 0o700).catch(() => {});
   const dir = managedAccountDir(provider, id);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await mkdir(dir, { mode: 0o700 });
   return dir;
 }
 
@@ -50,19 +53,19 @@ export async function isInsideAgentHomes(path: string): Promise<boolean> {
 }
 
 /**
- * May cezar treat this `configDir` as one it made (log it out, let a phone remove it)? Inside
- * `agent-homes/` with symlinks resolved; a folder already gone is judged by its stored path.
+ * May cezar treat this account's folder as one it made (log it out, delete it, let a phone remove
+ * it)? Only its own `agent-homes/<provider>/<id>`, symlinks resolved; a hand-edited flag or path
+ * never widens that. A folder already gone is judged by its stored path.
  */
-export async function isManagedAccountDir(path: string): Promise<boolean> {
-  const expanded = expandTilde(path);
-  if (await isInsideAgentHomes(expanded)) return true;
+export async function isManagedAccountDir(account: Pick<AgentAccount, 'provider' | 'id' | 'configDir'>): Promise<boolean> {
+  const expanded = resolve(expandTilde(account.configDir));
+  if (expanded !== resolve(managedAccountDir(account.provider, account.id))) return false;
   try {
     await lstat(expanded);
-    return false;
   } catch {
-    const rel = relative(resolve(agentHomesDir()), resolve(expanded));
-    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+    return true;
   }
+  return isInsideAgentHomes(expanded);
 }
 
 /** Delete a managed account's folder. False when it is gone already or outside `agent-homes/`. */
@@ -129,15 +132,24 @@ export async function sweepPendingAccounts(options: {
   }
   if (candidates.length === 0) return [];
   const ids = new Set(candidates.map((account) => account.id));
+  // Only rows the write really dropped: one that signed in meanwhile keeps its folder.
+  const removed: AgentAccount[] = [];
   try {
     await mergeWriteAgentAccounts((store) => {
-      store.accounts = store.accounts.filter((account) => !(ids.has(account.id) && stale(account)));
+      removed.length = 0;
+      store.accounts = store.accounts.filter((account) => {
+        const drop = ids.has(account.id) && stale(account);
+        if (drop) removed.push(account);
+        return !drop;
+      });
     });
   } catch {
     return [];
   }
-  for (const account of candidates) await removeManagedAccountDir(account.configDir).catch(() => false);
-  return [...ids];
+  for (const account of removed) {
+    if (await isManagedAccountDir(account).catch(() => false)) await removeManagedAccountDir(account.configDir).catch(() => false);
+  }
+  return removed.map((account) => account.id);
 }
 
 /** A pending account's first confirmed sign-in makes it usable. True when a row changed. */
