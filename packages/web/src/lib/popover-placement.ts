@@ -73,18 +73,19 @@ export function visibleBand(
 }
 
 /**
- * The content's unclamped height: its own scroll height plus whatever its inner scrollers
- * hide, so a list that already shrank to fit still reports the height it wants.
+ * The content's height without the placement clamp: measured with the inline max-height lifted
+ * (restored before anything paints), so a list shrunk by the clamp reports its real height while
+ * one capped by its own max-height (CommandList) is not counted past that cap.
  */
 export function naturalHeight(el: HTMLElement): number {
-  let hidden = 0
-  for (const child of el.querySelectorAll<HTMLElement>('*')) {
-    const extra = child.scrollHeight - child.clientHeight
-    if (extra <= 1) continue
-    const overflow = getComputedStyle(child).overflowY
-    if (overflow === 'auto' || overflow === 'scroll') hidden += extra
-  }
-  return el.scrollHeight + hidden
+  const { maxHeight, overflowY } = el.style
+  if (!maxHeight) return el.scrollHeight
+  el.style.maxHeight = ''
+  el.style.overflowY = ''
+  const height = el.scrollHeight
+  el.style.maxHeight = maxHeight
+  el.style.overflowY = overflowY
+  return height
 }
 
 /** `env(safe-area-inset-top)` in px — 0 where the engine has none (desktop, jsdom). */

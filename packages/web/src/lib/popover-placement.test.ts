@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { choosePopoverPlacement, POPOVER_MIN_HEIGHT, visibleBand } from './popover-placement'
+import { choosePopoverPlacement, naturalHeight, POPOVER_MIN_HEIGHT, visibleBand } from './popover-placement'
 
 // An iPhone-sized layout viewport (858px) with the keyboard up: the visual viewport is 507px
 // tall, so 351px of layout viewport sits under the keys. The switcher trigger is at 180–216.
@@ -72,5 +72,39 @@ describe('visibleBand', () => {
 
   it('falls back to the layout viewport without visualViewport', () => {
     expect(visibleBand({ innerHeight: 800, visualViewport: null }, 0, { top: 0, bottom: 0 })).toEqual({ top: 0, bottom: 800 })
+  })
+})
+
+describe('naturalHeight', () => {
+  /** A content element whose scroll height is 340px rendered, or `clamped` under an inline max-height. */
+  function content(clamped: number) {
+    const el = document.createElement('div')
+    // A capped inner list (CommandList's own max-height) hides 600px it never shows.
+    const list = document.createElement('div')
+    list.style.overflowY = 'auto'
+    vi.spyOn(list, 'scrollHeight', 'get').mockReturnValue(900)
+    vi.spyOn(list, 'clientHeight', 'get').mockReturnValue(300)
+    el.appendChild(list)
+    vi.spyOn(el, 'scrollHeight', 'get').mockImplementation(() => (el.style.maxHeight ? clamped : 340))
+    return el
+  }
+
+  it('is the rendered height, not counting what a self-capped inner list hides', () => {
+    expect(naturalHeight(content(340))).toBe(340)
+  })
+
+  it('measures with the placement clamp lifted and puts the clamp back', () => {
+    const el = content(250)
+    el.style.maxHeight = '250px'
+    el.style.overflowY = 'auto'
+    expect(naturalHeight(el)).toBe(340)
+    expect(el.style.maxHeight).toBe('250px')
+    expect(el.style.overflowY).toBe('auto')
+  })
+
+  it('lets a 340px menu flip to the side that holds it even with a capped inner list', () => {
+    const natural = naturalHeight(content(250))
+    const placement = choosePopoverPlacement({ anchorTop: 520, anchorBottom: 556, viewTop: 0, viewBottom: 812, sideOffset: 4, naturalHeight: natural, preferred: 'bottom' })
+    expect(placement).toEqual({ side: 'top', maxHeight: 516 })
   })
 })

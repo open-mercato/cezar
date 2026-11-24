@@ -120,12 +120,17 @@ function usePopoverPlacement(options: {
       safeTop = safeAreaTop()
       schedule()
     }
+    // A scroll inside the menu's own list moves neither the anchor nor the band.
+    const onScroll = (event: Event) => {
+      if (event.target instanceof Node && content.contains(event.target)) return
+      schedule()
+    }
     measure()
     const viewport = window.visualViewport
     viewport?.addEventListener("resize", schedule)
     viewport?.addEventListener("scroll", schedule)
     window.addEventListener("resize", onResize)
-    window.addEventListener("scroll", schedule, { capture: true, passive: true })
+    window.addEventListener("scroll", onScroll, { capture: true, passive: true })
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule)
     observer?.observe(content)
     return () => {
@@ -133,7 +138,7 @@ function usePopoverPlacement(options: {
       viewport?.removeEventListener("resize", schedule)
       viewport?.removeEventListener("scroll", schedule)
       window.removeEventListener("resize", onResize)
-      window.removeEventListener("scroll", schedule, { capture: true })
+      window.removeEventListener("scroll", onScroll, { capture: true })
       observer?.disconnect()
     }
   }, [enabled, content, slots, preferred, sideOffset, padTop, padBottom])
