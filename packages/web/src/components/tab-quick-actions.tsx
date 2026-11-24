@@ -47,8 +47,9 @@ export function quickActionHaptic(): void {
 export function useTabQuickActions() {
   const [open, setOpen] = React.useState<QuickTab | null>(null)
   const press = React.useRef<{ tab: QuickTab; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null)
+  // Set by a touch long-press; only that touch's own click is swallowed (pointer clicks carry
+  // `detail` ≥ 1, a keyboard Enter 0), and the next press or key clears it.
   const swallowClick = React.useRef(false)
-  const lastPointer = React.useRef<string>('mouse')
 
   const cancelPress = React.useCallback(() => {
     if (press.current) clearTimeout(press.current.timer)
@@ -66,7 +67,6 @@ export function useTabQuickActions() {
   const bind = React.useCallback((tab: QuickTab) => ({
     'aria-describedby': HINT_ID,
     onPointerDown: (event: React.PointerEvent) => {
-      lastPointer.current = event.pointerType
       swallowClick.current = false
       cancelPress()
       if (event.pointerType === 'mouse' || event.isPrimary === false) return
@@ -85,12 +85,22 @@ export function useTabQuickActions() {
       event.preventDefault()
       if (open === tab) return
       // Android fires this for a touch long-press, often before our timer: one open, one haptic.
-      if (press.current?.tab === tab || lastPointer.current === 'touch') openFromPress(tab)
-      else setOpen(tab)
+      // Right-click and Shift+F10 / the Menu key are not a touch, whatever came before them.
+      const pointerType = (event.nativeEvent as Partial<PointerEvent>).pointerType
+      if (press.current?.tab === tab || pointerType === 'touch') openFromPress(tab)
+      else {
+        cancelPress()
+        swallowClick.current = false
+        setOpen(tab)
+      }
+    },
+    onKeyDown: () => {
+      swallowClick.current = false
     },
     onClickCapture: (event: React.MouseEvent) => {
-      if (!swallowClick.current) return
+      const swallow = swallowClick.current
       swallowClick.current = false
+      if (!swallow || event.detail === 0) return
       event.preventDefault()
       event.stopPropagation()
     },
@@ -204,7 +214,8 @@ export function NowQuickActions({ index, nowCount }: { index: string; nowCount: 
         Needs you
         <Count n={nowCount ?? 0} />
       </DropdownMenuItem>
-      {projects.length > 1 ? (
+      {/* An unread registry may still hold several projects: offer it, Now shows what there is. */}
+      {projects.length !== 1 ? (
         <DropdownMenuItem className={ITEM} data-slot="quick-now-all" onSelect={() => navigate(index, { state: { nowScope: 'all' } })}>
           <GlobeIcon />
           Needs you — all projects

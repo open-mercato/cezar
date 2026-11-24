@@ -321,7 +321,7 @@ function LegacyPathRedirect() {
       projects.data,
       resolvedBoot,
     )
-    if (restored !== null) return <Navigate to={restored} replace />
+    if (restored !== null) return <Navigate to={restored} replace state={location.state} />
 
     // Nothing remembered. The boot folder is the landing project only while the registry lists
     // it: since `/api/v1/projects` stopped listing an unregistered boot folder once the user has
@@ -330,7 +330,7 @@ function LegacyPathRedirect() {
     // The most recently opened registered project is what the sidebar leads with, so it is what
     // a bare launch opens. `/p/<bootProject>/` and every legacy deep link below still resolve.
     const landing = bareRootLanding(projects.data, boot)
-    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace />
+    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace state={location.state} />
   }
 
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
@@ -340,6 +340,8 @@ function LegacyPathRedirect() {
     <Navigate
       to={`/p/${encodeURIComponent(boot)}${path}${location.search}${location.hash}`}
       replace
+      // A handoff in state (the bottom bar's Now scope) survives the hop into the project.
+      state={location.state}
     />
   )
 }

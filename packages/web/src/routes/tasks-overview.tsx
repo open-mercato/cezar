@@ -28,7 +28,7 @@ import {
   XIcon,
 } from 'lucide-react'
 import * as React from 'react'
-import { useLocation } from 'react-router'
+import { useLocation, useNavigate as useRouterNavigate } from 'react-router'
 import { Virtualizer } from 'virtua'
 import { Link, useNavigate } from '@/lib/project-router'
 
@@ -1879,11 +1879,32 @@ function BranchSkeleton() {
  * mutation. The invalidate on success is the authoritative half of the doctrine — the stream will
  * likely have patched each archived run already, but the endpoint's answer is the truth.
  */
+/**
+ * `?status=` (the bottom bar's quick actions) seeds the Status facet once and leaves the URL, so
+ * clearing the facet stays cleared on Back or a reload. A new seed remounts the table.
+ */
+function useStatusSeed(location: ReturnType<typeof useLocation>): { key: string; statuses: string[] } | null {
+  // The router's own navigate: `location.pathname` is already project-prefixed.
+  const navigate = useRouterNavigate()
+  const param = new URLSearchParams(location.search).get('status')
+  const [seed, setSeed] = React.useState<{ key: string; statuses: string[] } | null>(null)
+  if (param !== null && seed?.key !== location.key) setSeed({ key: location.key, statuses: param.split(',').filter(Boolean) })
+  React.useEffect(() => {
+    if (param === null) return
+    const rest = new URLSearchParams(location.search)
+    rest.delete('status')
+    const query = rest.toString()
+    void navigate({ pathname: location.pathname, search: query ? `?${query}` : '', hash: location.hash }, { replace: true, state: location.state })
+  }, [param, location, navigate])
+  return seed
+}
+
 export function TasksOverviewRoute() {
   const runs = useRuns()
-  const search = new URLSearchParams(useLocation().search)
+  const location = useLocation()
+  const search = new URLSearchParams(location.search)
   const initialQuery = search.get('q') ?? ''
-  const statusParam = search.get('status') ?? ''
+  const statusSeed = useStatusSeed(location)
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   // Project-scoped, unlike health. Unknown (still loading) counts as git so a fresh task's
@@ -1987,8 +2008,8 @@ export function TasksOverviewRoute() {
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TasksOverview
         // A new `?status=` while already here (a quick action) re-seeds the facets.
-        key={statusParam}
-        initialStatuses={statusParam ? statusParam.split(',').filter(Boolean) : undefined}
+        key={statusSeed?.key}
+        initialStatuses={statusSeed?.statuses}
         managersAvailable={health.data?.capabilities?.managers === true}
         scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
         hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}

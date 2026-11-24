@@ -35,10 +35,10 @@ function At() {
 const run = (id: string, status: string, createdAt: string, extra: Record<string, unknown> = {}) =>
   ({ id, status, title: `task ${id}`, task: `task ${id}`, createdAt, archived: false, steps: [], ...extra })
 
-function renderShell(entry: InitialEntry = '/p/boot/') {
+function renderShell(entry: InitialEntry = '/p/boot/', { unknownBoot = false } = {}) {
   const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
-  queries.setQueryData(queryKeys.health, { bootProject: 'boot', capabilities: { managers: true } })
-  queries.setQueryData(workspaceQueryKeys.projects, {
+  queries.setQueryData(queryKeys.health, unknownBoot ? { capabilities: { managers: true } } : { bootProject: 'boot', capabilities: { managers: true } })
+  if (!unknownBoot) queries.setQueryData(workspaceQueryKeys.projects, {
     projects: [{ id: 'boot', name: 'Boot', status: 'ok' }, { id: 'other', name: 'Other', status: 'ok' }],
     bootProject: 'boot',
     projectsDir: '',
@@ -111,7 +111,8 @@ describe('bottom bar quick actions', () => {
     const now = bar().getByRole('link', { name: 'Now' })
     longPress(now)
     expect(haptic).toHaveBeenCalledWith('cezar://haptic')
-    expect(fireEvent.click(now)).toBe(false)
+    // The touch's own click carries a tap count.
+    expect(fireEvent.click(now, { detail: 1 })).toBe(false)
     expect(seen.path).toBe('/p/boot/tasks')
     expect(within(await menu()).getByRole('menuitem', { name: /Archive all finished/ })).toBeTruthy()
   })
@@ -122,6 +123,59 @@ describe('bottom bar quick actions', () => {
     longPress(bar().getByRole('button', { name: 'More' }))
     expect(navigator.vibrate).toHaveBeenCalledWith(10)
     expect(within(await menu()).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Settings', 'Assets', 'Workflows'])
+  })
+
+  it('Shift+F10 after a touch is a keyboard menu: no haptic, no swallowed click', async () => {
+    device('Mozilla/5.0 CezarMobile/1.0')
+    const haptic = vi.spyOn(phoneApp.shellRequest, 'open').mockImplementation(() => {})
+    renderShell('/p/boot/tasks')
+    const tasks = bar().getByRole('link', { name: 'Tasks' })
+    fireEvent.pointerDown(tasks, { pointerType: 'touch', clientX: 10, clientY: 10 })
+    fireEvent.pointerUp(tasks, { pointerType: 'touch' })
+    fireEvent.click(tasks, { detail: 1 })
+    // The keyboard's context-menu event: no pointer type, no press in flight.
+    fireEvent.keyDown(tasks, { key: 'F10', shiftKey: true })
+    fireEvent.contextMenu(tasks)
+    await menu()
+    expect(haptic).not.toHaveBeenCalled()
+    fireEvent.keyDown(await menu(), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    fireEvent.click(bar().getByRole('link', { name: 'Now' }), { detail: 1 })
+    expect(seen.path).toBe('/p/boot/')
+  })
+
+  it('a long-press with no tap after it does not eat the next Enter', async () => {
+    device()
+    renderShell('/p/boot/tasks')
+    const now = bar().getByRole('link', { name: 'Now' })
+    longPress(now)
+    fireEvent.keyDown(await menu(), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    // Enter on a link: a click with no tap count.
+    fireEvent.click(now, { detail: 0 })
+    expect(seen.path).toBe('/p/boot/')
+  })
+
+  it('a long-press, then a key, then a later tap: the tap navigates', async () => {
+    device()
+    renderShell('/p/boot/tasks')
+    const now = bar().getByRole('link', { name: 'Now' })
+    longPress(now)
+    fireEvent.keyDown(await menu(), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    fireEvent.keyDown(now, { key: 'Tab' })
+    fireEvent.click(now, { detail: 1 })
+    expect(seen.path).toBe('/p/boot/')
+  })
+
+  it('Needs you — all projects hands the scope over even before the boot project is known', async () => {
+    device()
+    renderShell('/manager', { unknownBoot: true })
+    fireEvent.contextMenu(bar().getByRole('link', { name: 'Now' }))
+    fireEvent.click(within(await menu()).getByRole('menuitem', { name: 'Needs you — all projects' }))
+    // `/` hops into the project once it is known; routes.test pins that the state rides along.
+    await waitFor(() => expect(seen.path).toBe('/'))
+    expect(nowScopeFromState(seen.state)).toBe('all')
   })
 
   it('a short tap still navigates and opens nothing', () => {

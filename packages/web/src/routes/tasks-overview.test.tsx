@@ -3,7 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { GlobalEventsProvider } from '@/api/global-events'
 import { queryKeys } from '@/api/queries'
@@ -1292,6 +1292,38 @@ describe('TasksOverviewRoute — wired to the app', () => {
   const overviewTab = (view: string) =>
     document.querySelector(`[data-slot="overview-tab"][data-view="${view}"]`) as HTMLElement
   const sidebarRow = (id: string) => document.querySelector(`[data-slot="task-row"][data-run-id="${id}"]`)
+
+  it('takes ?status= once: the facet is set and the URL drops it, so clearing it stays cleared', async () => {
+    fetchMock.mockImplementation(async () =>
+      json([run({ id: 'a', status: 'review' }), run({ id: 'b', status: 'failed' })]))
+    let at = ''
+    function Probe() {
+      const location = useLocation()
+      at = location.pathname + location.search
+      return null
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks?status=review&q=']}>
+          <ListViewProvider>
+            <Probe />
+            <TasksOverviewRoute />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    const rows = () => [...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) => row.getAttribute('data-run-id'))
+    await waitFor(() => expect(rows()).toEqual(['a']))
+    // Replaced, not pushed: Back and a reload both land on the clean URL.
+    expect(at).toBe('/tasks?q=')
+    const scrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = vi.fn()
+    onTestFinished(() => { Element.prototype.scrollIntoView = scrollIntoView })
+    fireEvent.click(document.querySelector('[data-slot="facet-status"]') as HTMLElement)
+    fireEvent.click(await waitFor(() => document.querySelector('[data-action="facet-status-clear"]') as HTMLElement))
+    await waitFor(() => expect(rows().sort()).toEqual(['a', 'b']))
+    expect(at).toBe('/tasks?q=')
+  })
 
   it('hides automation tasks from the table AND the sidebar by default, and remembers All', async () => {
     const automated = run({
