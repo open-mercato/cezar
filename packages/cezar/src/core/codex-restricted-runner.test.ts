@@ -19,8 +19,8 @@ function setup(mode = '') {
   return { cwd, spec, runner, requests };
 }
 describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary', () => {
-  it.each(['new', 'resume', 'lock'])('blocks native/foreign/disallowed tools and allows reads on %s', async path => {
-    const f = setup(path === 'lock' ? 'lock' : '');
+  it.each(['new', 'resume', 'lock', 'newer', 'workspace'])('blocks native/foreign/disallowed tools and allows reads on %s', async path => {
+    const f = setup(['lock', 'newer', 'workspace'].includes(path) ? path : '');
     const result = await f.runner.run({ ...f.spec, ...(path !== 'new' ? { resume: true, sessionId: 'restricted' } : {}) });
     const responses = JSON.parse(result.text);
     for (const id of [204, 214]) expect(responses.find((r: {id: number}) => r.id === id).error).toBeDefined();
@@ -39,7 +39,19 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     expect(turn.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
     if (path === 'lock') expect(f.requests().some((r: {method: string}) => r.method === 'thread/fork')).toBe(true);
   });
-  it.each(['version', 'flags', 'apps', 'layer', 'hooks', 'mcp', 'requirements', 'sandbox'])('refuses before a model turn when %s cannot be verified', async mode => {
+  it('runs a read-only step on a Codex newer than 0.169.0 once every native feature is off for the thread', async () => {
+    const f = setup('newer');
+    const result = await f.runner.run({ ...f.spec, enforceReadOnly: true, allowedTools: ['Read', 'Grep', 'Glob'], bashAllowlist: undefined });
+    expect(JSON.parse(result.text).find((r: {id: number}) => r.id === 215).result.contentItems[0].text).toBe('allowed read');
+    const config = f.requests().find((r: {method: string}) => r.method === 'thread/start').params.config;
+    // The unknown flag and every listed one are off; a removed flag and the exec selector are left alone.
+    expect(config).toMatchObject({ 'features.future_native_tool': false, 'features.fast_mode': false, 'features.shell_tool': false });
+    expect(config).not.toHaveProperty('features.old_flag');
+    expect(config).not.toHaveProperty('features.unified_exec');
+    const lists = f.requests().filter((r: {method: string}) => r.method === 'experimentalFeature/list');
+    expect(lists.at(-1).params.threadId).toBe('restricted');
+  });
+  it.each(['version', 'flags', 'apps', 'layer', 'hooks', 'mcp', 'requirements', 'sandbox', 'managed-layer', 'newer-stuck', 'newer-garbled'])('refuses before a model turn when %s cannot be verified', async mode => {
     const f = setup(mode);
     await expect(f.runner.run(f.spec)).rejects.toThrow('tool-policy enforcement unavailable');
     expect(f.requests().some((r: {method: string}) => r.method === 'turn/start')).toBe(false);

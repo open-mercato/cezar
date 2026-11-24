@@ -3,7 +3,7 @@ import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { compileCodexRestrictedPolicy, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
 import { prepareRestrictedCodexHome, type RestrictedCodexHome } from './codex-restricted-home.ts';
 import { CODEX_READ_TOOL, CodexReadBroker } from './codex-restricted-tools.ts';
-import { verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread } from './codex-restricted-preflight.ts';
+import { codexFeaturesToDisable, parseCodexFeaturePage, verifyRestrictedCodexFeatures, verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread, type CodexFeature } from './codex-restricted-preflight.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -534,7 +534,7 @@ class CodexSession implements AgentSession {
 
   private async bootstrapRestricted(identity: Record<string, unknown>): Promise<string | undefined> {
     const home = this.restrictedHome!;
-    verifyRestrictedCodexIdentity(identity, home);
+    const { baseline } = verifyRestrictedCodexIdentity(identity, home);
     verifyRestrictedCodexConfig(await this.rpc.request('config/read', { cwd: this.spec.cwd, includeLayers: true }), home);
     verifyRestrictedCodexRequirements(await this.rpc.request('configRequirements/read', {}));
     const absentServices = async (threadId?: string) => verifyRestrictedCodexServices(
@@ -542,8 +542,11 @@ class CodexSession implements AgentSession {
       await this.rpc.request('mcpServerStatus/list', threadId ? { threadId } : {}),
     );
     await absentServices();
+    // Past the 0.169.0 baseline, a feature this isolation has never heard of may be a native tool.
+    const unknownOn = baseline ? [] : codexFeaturesToDisable(await this.codexFeatures());
     if (!this.stdinOpen) throw new Error('codex: isolated startup was interrupted');
     const overrides = clean({ model: this.spec.model, cwd: this.spec.cwd, sandbox: 'read-only', approvalPolicy: 'never', config: {
+      ...Object.fromEntries(unknownOn.map(key => [`features.${key}`, false])),
       ...Object.fromEntries(Object.entries(this.restrictedHome!.config.features as Record<string, boolean>).map(([key, value]) => [`features.${key}`, value])),
       web_search: 'disabled',
     } });
@@ -556,8 +559,22 @@ class CodexSession implements AgentSession {
       model = threadModelOf(res);
     }
     if (!this.threadId) throw new Error('codex: isolated thread did not return an id');
+    if (!baseline) verifyRestrictedCodexFeatures(await this.codexFeatures(this.threadId));
     await absentServices(this.threadId);
     return model;
+  }
+
+  /** Every page of `experimentalFeature/list`, for the thread's effective config when given. */
+  private async codexFeatures(threadId?: string): Promise<CodexFeature[]> {
+    const features: CodexFeature[] = [];
+    let cursor: string | null | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = parseCodexFeaturePage(await this.rpc.request('experimentalFeature/list', { limit: 500, ...(cursor ? { cursor } : {}), ...(threadId ? { threadId } : {}) }));
+      features.push(...result.data);
+      cursor = result.nextCursor;
+      if (!cursor) return features;
+    }
+    throw new CodexToolPolicyError('Codex reported too many native features to verify');
   }
 
   /**

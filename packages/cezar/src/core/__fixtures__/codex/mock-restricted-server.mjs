@@ -14,6 +14,9 @@ let results = [];
 let pending = 0;
 let queue = [];
 let turn;
+const newer = mode.startsWith('newer');
+const features = { future_native_tool: ['stable', true], shell_tool: ['stable', true], unified_exec: ['stable', true], fast_mode: ['stable', true], old_flag: ['removed', true], 'guardianv2.thread_context': ['removed', false] };
+const threadOff = new Set();
 function next() {
   const request = queue.shift();
   if (request) { pending = request.id; send(request); return; }
@@ -29,7 +32,14 @@ for await (const line of createInterface({ input: process.stdin })) {
     next(); continue;
   }
   switch (msg.method) {
-    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/99.0.0' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: 'macos' } }); break;
+    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/0.168.9' : newer ? 'cezar/0.170.0 (Mac OS 26.6.2; arm64) mock' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: 'macos' } }); break;
+    case 'experimentalFeature/list': {
+      // A newer Codex: a tool flag this isolation never heard of is on until the thread turns it off.
+      const thread = msg.params?.threadId;
+      const data = Object.entries(features).map(([name, [stage, enabled]]) => ({ name, stage, enabled, defaultEnabled: enabled }))
+        .map(feature => thread && threadOff.has(feature.name) && !(mode === 'newer-stuck' && feature.name === 'future_native_tool') ? { ...feature, enabled: false } : feature);
+      send({ id: msg.id, result: mode === 'newer-garbled' ? { data: 'nope' } : { data, nextCursor: null } }); break;
+    }
     case 'initialized': break;
     case 'config/read': {
       const effective = { apps: null, plugins: {}, mcp_servers: {}, hooks: null, ...config };
@@ -37,12 +47,15 @@ for await (const line of createInterface({ input: process.stdin })) {
       if (mode === 'apps') effective.features.apps = true;
       const layers = [{ name: { type: 'user', file: configPath }, config }];
       if (mode === 'layer') layers.push({ name: { type: 'futureLayer' }, config: {} });
+      if (mode === 'workspace' || mode === 'managed-layer') layers.push({ name: { type: 'enterpriseManaged', id: 'workspace-model-policy' }, config: mode === 'workspace' ? { model: 'gpt-x', model_reasoning_effort: 'medium' } : { model: 'gpt-x', mcp_servers: {} } });
       send({ id: msg.id, result: { config: effective, layers } }); break;
     }
-    case 'configRequirements/read': send({ id: msg.id, result: { requirements: mode === 'requirements' ? {} : null } }); break;
+    case 'configRequirements/read': send({ id: msg.id, result: { requirements: mode === 'requirements' ? { allowedSandboxModes: ['danger-full-access'], hooks: null }
+      : mode === 'workspace' ? { allowedLoginMethods: ['api', 'chatgpt'], featureRequirements: { chronicle: false }, hooks: null } : null } }); break;
     case 'hooks/list': send({ id: msg.id, result: { data: [{ hooks: mode === 'hooks' ? [{}] : [], errors: [], warnings: [] }] } }); break;
     case 'mcpServerStatus/list': send({ id: msg.id, result: { data: mode === 'mcp' && msg.params?.threadId ? [{ name: 'evil' }] : [], nextCursor: null } }); break;
     case 'thread/start': case 'thread/resume': case 'thread/fork':
+      for (const [key, value] of Object.entries(msg.params?.config ?? {})) if (key.startsWith('features.') && value === false) threadOff.add(key.slice(9));
       if (mode === 'lock' && msg.method === 'thread/resume') send({ id: msg.id, error: { code: -1, message: 'already has an active writer' } });
       else send({ id: msg.id, result: { thread: { id: th }, cwd, approvalPolicy: 'never', sandbox: { type: mode === 'sandbox' ? 'dangerFullAccess' : 'readOnly', networkAccess: false } } });
       break;
