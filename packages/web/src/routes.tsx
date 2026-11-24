@@ -41,7 +41,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
-import { NowRoute } from './routes/now/now'
+import { NowRoute, nowScopeFromState } from './routes/now/now'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
 // Dashboard charts, drag controls and exports are paid for only on this route.
@@ -316,11 +316,10 @@ function LegacyPathRedirect() {
     // its project is still worth waiting for.
     if (projects.data === undefined && !projects.isError) return <ScopeResolving />
 
-    const restored = locationToRestore(
-      readStoredLastLocation(),
-      projects.data,
-      resolvedBoot,
-    )
+    // A Now scope handoff (the bottom bar) asks for Now itself, not the last page this browser was on.
+    const restored = nowScopeFromState(location.state) === undefined
+      ? locationToRestore(readStoredLastLocation(), projects.data, resolvedBoot)
+      : null
     if (restored !== null) return <Navigate to={restored} replace state={location.state} />
 
     // Nothing remembered. The boot folder is the landing project only while the registry lists

@@ -1874,12 +1874,6 @@ function BranchSkeleton() {
 }
 
 /**
- * The overview wired to live data: `useRuns()` (kept fresh by the global SSE stream), the shared
- * Active/Archived context (the sidebar's tabs and these are one state), and the archive-finished
- * mutation. The invalidate on success is the authoritative half of the doctrine — the stream will
- * likely have patched each archived run already, but the endpoint's answer is the truth.
- */
-/**
  * `?status=` (the bottom bar's quick actions) seeds the Status facet once and leaves the URL, so
  * clearing the facet stays cleared on Back or a reload. A new seed remounts the table.
  */
@@ -1899,6 +1893,12 @@ function useStatusSeed(location: ReturnType<typeof useLocation>): { key: string;
   return seed
 }
 
+/**
+ * The overview wired to live data: `useRuns()` (kept fresh by the global SSE stream), the shared
+ * Active/Archived context (the sidebar's tabs and these are one state), and the archive-finished
+ * mutation. The invalidate on success is the authoritative half of the doctrine — the stream will
+ * likely have patched each archived run already, but the endpoint's answer is the truth.
+ */
 export function TasksOverviewRoute() {
   const runs = useRuns()
   const location = useLocation()

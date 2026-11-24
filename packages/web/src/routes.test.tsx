@@ -764,6 +764,14 @@ describe('legacy flat URLs redirect to the boot project', () => {
     await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
   })
 
+  it('a Now scope handoff to / opens Now, not the remembered last page', async () => {
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/run-1/changes' })
+    renderAt({ pathname: '/', state: { nowScope: 'all' } })
+    await waitFor(() => expect(routeName()).toBe('now'))
+    expect(currentPathname()).toMatch(/^\/p\/[^/]+\/$/)
+    await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
+  })
+
   it('a bare /p names no project and lands on the boot project home', () => {
     renderAt('/p')
     expect(routeName()).toBe('now')

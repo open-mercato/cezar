@@ -23,6 +23,8 @@ import { MANAGER_ATTENTION_DOT, managerAttention } from '@/lib/managers'
 import { isCezarShell, shellRequest } from '@/lib/phone-app'
 import { pathnameProjectId } from '@/lib/project-router'
 import { runTitle } from '@/lib/task-groups'
+import { filterRunsByOrigin } from '@/lib/task-filters'
+import { useTaskOrigin } from '@/lib/task-origin'
 import { finishedRunCount } from '@/lib/tasks-table'
 import { cn } from '@/lib/utils'
 
@@ -94,8 +96,15 @@ export function useTabQuickActions() {
         setOpen(tab)
       }
     },
-    onKeyDown: () => {
+    onKeyDown: (event: React.KeyboardEvent) => {
       swallowClick.current = false
+      // macOS browsers never turn these into `contextmenu`; elsewhere this runs first and the
+      // follow-up `contextmenu` finds the menu open.
+      if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+        event.preventDefault()
+        cancelPress()
+        setOpen(tab)
+      }
     },
     onClickCapture: (event: React.MouseEvent) => {
       const swallow = swallowClick.current
@@ -253,7 +262,9 @@ export function TasksQuickActions({ index }: { index: string }) {
   const navigate = useNavigate()
   const { projectId, bootProject, projects } = useIndexProject(index)
   const runs = useRunsForProject(projectId, bootProject).data
-  const active = React.useMemo(() => (runs ?? []).filter((run) => !run.archived), [runs])
+  // What the Tasks table shows by default: the remembered origin (Regular unless changed).
+  const [origin] = useTaskOrigin()
+  const active = React.useMemo(() => filterRunsByOrigin((runs ?? []).filter((run) => !run.archived), origin), [runs, origin])
   const recent = React.useMemo(
     () => [...active].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 3),
     [active],

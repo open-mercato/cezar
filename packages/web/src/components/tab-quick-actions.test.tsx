@@ -8,6 +8,7 @@ import { managerKeys } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { questionKeys } from '@/api/questions'
 import * as phoneApp from '@/lib/phone-app'
+import { TASK_ORIGIN_STORAGE_KEY } from '@/lib/task-origin'
 import { nowScopeFromState } from '@/routes/now/now'
 
 import { AppShell } from './app-shell'
@@ -49,6 +50,10 @@ function renderShell(entry: InitialEntry = '/p/boot/', { unknownBoot = false } =
     run('r3', 'review', '2026-11-24T08:00:00Z'),
     run('r4', 'failed', '2026-11-24T07:00:00Z'),
     run('r5', 'done', '2026-11-24T11:00:00Z', { archived: true }),
+    // Newest of all, but an automation's: the Tasks table hides it by default.
+    run('r6', 'running', '2026-11-24T12:00:00Z', {
+      automationTrigger: { automationId: 'nightly', automationRevision: 1, receiptId: 'rc', trigger: 'schedule', occurrenceAt: '2026-11-24T00:00:00.000Z' },
+    }),
   ])
   queries.setQueryData(managerKeys.list, {
     managers: [
@@ -177,6 +182,31 @@ describe('bottom bar quick actions', () => {
     await waitFor(() => expect(seen.path).toBe('/'))
     expect(nowScopeFromState(seen.state)).toBe('all')
   })
+
+  it('Tasks counts what the table shows: automation runs only when the remembered origin includes them', async () => {
+    device()
+    localStorage.setItem(TASK_ORIGIN_STORAGE_KEY, 'all')
+    renderShell()
+    fireEvent.contextMenu(bar().getByRole('link', { name: 'Tasks' }))
+    const items = within(await menu()).getAllByRole('menuitem').map((item) => item.textContent)
+    expect(items.slice(0, 2)).toEqual(['New task', 'task r6'])
+    expect(items).toContain('running2')
+  })
+
+  for (const [name, key] of [['Shift+F10', { key: 'F10', shiftKey: true }], ['the Menu key', { key: 'ContextMenu' }]] as const) {
+    it(`${name} opens the menu by itself (macOS sends no contextmenu), without a haptic`, async () => {
+      device('Mozilla/5.0 CezarMobile/1.0')
+      const haptic = vi.spyOn(phoneApp.shellRequest, 'open').mockImplementation(() => {})
+      renderShell()
+      const tasks = bar().getByRole('link', { name: 'Tasks' })
+      expect(fireEvent.keyDown(tasks, key)).toBe(false)
+      expect(within(await menu()).getByRole('menuitem', { name: 'New task' })).toBeTruthy()
+      // Windows and Linux still follow up with `contextmenu`: no second open, no haptic.
+      fireEvent.contextMenu(tasks)
+      expect(screen.getAllByRole('menu')).toHaveLength(1)
+      expect(haptic).not.toHaveBeenCalled()
+    })
+  }
 
   it('a short tap still navigates and opens nothing', () => {
     device()

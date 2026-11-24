@@ -2,7 +2,7 @@ import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate as useRouterNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { GlobalEventsProvider } from '@/api/global-events'
@@ -1300,14 +1300,18 @@ describe('TasksOverviewRoute — wired to the app', () => {
     function Probe() {
       const location = useLocation()
       at = location.pathname + location.search
-      return null
+      const navigate = useRouterNavigate()
+      return <button type="button" data-testid="back" onClick={() => void navigate(-1)} />
     }
     render(
       <QueryClientProvider client={createQueryClient()}>
-        <MemoryRouter initialEntries={['/tasks?status=review&q=']}>
+        <MemoryRouter initialEntries={['/elsewhere', '/tasks?status=review&q=']} initialIndex={1}>
           <ListViewProvider>
             <Probe />
-            <TasksOverviewRoute />
+            <Routes>
+              <Route path="/tasks" element={<TasksOverviewRoute />} />
+              <Route path="*" element={null} />
+            </Routes>
           </ListViewProvider>
         </MemoryRouter>
       </QueryClientProvider>
@@ -1323,6 +1327,9 @@ describe('TasksOverviewRoute — wired to the app', () => {
     fireEvent.click(await waitFor(() => document.querySelector('[data-action="facet-status-clear"]') as HTMLElement))
     await waitFor(() => expect(rows().sort()).toEqual(['a', 'b']))
     expect(at).toBe('/tasks?q=')
+    // Replaced, not pushed: one Back leaves Tasks for the page before it.
+    fireEvent.click(screen.getByTestId('back'))
+    await waitFor(() => expect(at).toBe('/elsewhere'))
   })
 
   it('hides automation tasks from the table AND the sidebar by default, and remembers All', async () => {
