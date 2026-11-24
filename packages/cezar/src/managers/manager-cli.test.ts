@@ -27,6 +27,9 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}), ...(body?.dispatch ? { notice: 'dispatch ignored: alpha runs tasks in place' } : {}) }, { status: 201 });
       if (String(url).endsWith('/task-message')) return Response.json({ ok: true, ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 0 } } : {}) });
       if (String(url).endsWith('/task-cancel')) return Response.json({ runId: body?.runId, cancelled: true, status: 'cancelled', children: ['c1', 'c2'] });
+      if (String(url).endsWith('/task-switch') || (String(url).endsWith('/task-retry') && body?.runner)) {
+        return Response.json({ projectId: 'alpha', runId: body.runId, notice: 'Switched from claude to codex by Release Manager' });
+      }
       if (String(url).endsWith('/task-retry')) return Response.json({ projectId: 'alpha', runId: 'retried' }, { status: 201 });
       if (String(url).endsWith('/workflows')) return Response.json(workflows);
       if (/\/automations\/[^/]+(\/report)?$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
@@ -329,6 +332,23 @@ describe('cez manager', () => {
       expect(logs.at(-1)).toBe('[[task:alpha/retried]]');
     });
 
+    it.each(['switch', 'retry'])('%s sends agent flags and prints the existing task card and switch', async (command) => {
+      const { run, calls, logs } = harness();
+      expect(await run('task', command, 'r1', '--runner', 'codex', '--account', 'work', '--model', 'gpt-6.2-sol', '--effort', 'high')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({
+        url: `http://x/api/v1/workspace/managers/m1/task-${command}`,
+        body: { projectId: 'alpha', runId: 'r1', runner: 'codex', agentProfile: 'work', model: 'gpt-6.2-sol', effort: 'high' },
+      });
+      expect(logs).toEqual(['[[task:alpha/r1]]', 'Switched from claude to codex by Release Manager']);
+    });
+
+    it('refuses an empty switch before contacting the cockpit', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('task', 'switch', 'r1')).toBe(1);
+      expect(errors.at(-1)).toContain('choose at least one of --runner, --account, --model or --effort');
+      expect(calls).toEqual([]);
+    });
+
     it('sends --model and --effort, and refuses an effort it does not know', async () => {
       const { run, calls, errors } = harness();
       expect(await run('task', 'create', '--project', 'alpha', '--model', 'opus', '--effort', 'max', 'Review it')).toBe(0);
@@ -344,7 +364,7 @@ describe('cez manager', () => {
     it('an unknown subcommand fails instead of being read as a run id', async () => {
       const { run, calls, errors } = harness();
       expect(await run('task', 'foo')).toBe(1);
-      expect(errors.at(-1)).toContain("unknown subcommand 'foo' for 'task'. Valid: create, say, cancel, retry, follow, unfollow, or a run id");
+      expect(errors.at(-1)).toContain("unknown subcommand 'foo' for 'task'. Valid: create, say, switch, cancel, retry, follow, unfollow, or a run id");
       expect(await run('job', 'frob')).toBe(1);
       expect(errors.at(-1)).toContain("unknown subcommand 'frob' for 'job'. Valid: add, list, remove");
       expect(calls).toEqual([]);
@@ -367,7 +387,7 @@ describe('cez manager', () => {
 
     it('--help works on every command and subcommand, without a cockpit', async () => {
       const io = { fetch: vi.fn() as unknown as typeof fetch, log: vi.fn(), error: vi.fn() };
-      for (const args of [['status', '--help'], ['task', '--help'], ['task', 'cancel', '-h'], ['task', 'say', '--help'], ['task', 'retry', '--help'], ['workflows', '--help'], ['merge', '--help'], ['job', 'add', '--help'], ['rename', '--help'], ['automation', '--help'], ['help', 'task', 'cancel']]) {
+      for (const args of [['status', '--help'], ['task', '--help'], ['task', 'cancel', '-h'], ['task', 'say', '--help'], ['task', 'switch', '--help'], ['task', 'retry', '--help'], ['workflows', '--help'], ['merge', '--help'], ['job', 'add', '--help'], ['rename', '--help'], ['automation', '--help'], ['help', 'task', 'cancel']]) {
         io.log.mockClear();
         expect(await runManagerCommand(args, {}, io)).toBe(0);
         expect(String(io.log.mock.calls[0]?.[0])).toContain(`cez manager ${args[0] === 'help' ? 'task cancel' : args[0]}`);

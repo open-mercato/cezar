@@ -17,6 +17,14 @@ import { taskAskRecordSchema } from './questions.ts';
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
 export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
 
+export const runAgentSwitchSchema = z.object({
+  summary: z.string(),
+  /** Apply the selected agent to the unfinished workflow's agent steps. */
+  workflow: z.literal(true).optional(),
+  /** Fresh continuation to reconstruct if the server restarts before it launches. */
+  continuationStepId: z.string().optional(),
+});
+
 /** `GET /workspace/events` query: `slim=1` opts into the slim `run` frame (`workspaceRunEventSchema`). */
 export const workspaceEventsQuerySchema = z.object({ slim: z.enum(['1']).optional() });
 export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
@@ -377,6 +385,7 @@ export const runRecordSchema = z.object({
   /** Why a `cancelled` run was stopped, and who stopped it, when the canceller said so. */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: runAgentSwitchSchema.optional(),
   /** ISO-8601 instant the current wait on the user began. Kept past the session while
    *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
   waitingSince: z.string().optional(),
@@ -1415,6 +1424,17 @@ export const continueInputSchema = z.object({
   askRequestId: z.string().min(1).max(200).optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
+
+export const switchRunAgentInputSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string().min(1).max(64).optional(),
+  model: z.string().max(200).optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
+  changedBy: z.string().trim().min(1).max(200),
+});
+export type SwitchRunAgentInput = z.infer<typeof switchRunAgentInputSchema>;
+export const switchRunAgentResponseSchema = z.object({ summary: z.string() });
+export type SwitchRunAgentResponse = z.infer<typeof switchRunAgentResponseSchema>;
 
 /**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both

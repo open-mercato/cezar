@@ -3317,7 +3317,7 @@ describe('ManagerEngine', () => {
 
   describe('task lifecycle (cancel, model, retry)', () => {
     const run = (id: string, over: Record<string, unknown> = {}) =>
-      ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', ...over }) as unknown as RunRecord;
+      ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', steps: [], ...over }) as unknown as RunRecord;
     const catalog = { runner: 'claude', source: 'live', stale: false, models: [{ id: 'opus', reasoningEfforts: [{ id: 'low' }, { id: 'high' }, { id: 'max' }] }, { id: 'claude-sonnet-5' }] };
 
     /** A project holding `runs`; `/cancel` marks the subtree cancelled the way `RunManager.cancel` does. */
@@ -3338,6 +3338,7 @@ describe('ManagerEngine', () => {
           return Response.json({ cancelled: live });
         }
         if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+        if (path.endsWith('/switch-agent')) return Response.json({ summary: 'Switched task agent' });
         return Response.json({ ok: true });
       },
     });
@@ -3388,6 +3389,38 @@ describe('ManagerEngine', () => {
       expect(await scoped.cancelTask(id, { projectId: 'alpha', runId: 'users-task' })).toMatchObject({ cancelled: true });
     });
 
+    it('validates the selected account pair and model before handing over the existing task', async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('owned', { runner: 'claude', startedByManager: { id, name: 'Manager' } })]);
+      await engine.update(id, { taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }] });
+      const input = { projectId: 'alpha', runId: 'owned' };
+      expect(await engine.switchTask(id, { ...input, runner: 'codex', agentProfile: 'work' })).toMatchObject({ status: 403 });
+      expect(await engine.switchTask(id, { ...input, runner: 'opencode' })).toMatchObject({ status: 403 });
+      expect(await engine.switchTask(id, { ...input, runner: 'claude', model: 'unlisted' })).toMatchObject({ status: 400, error: expect.stringContaining('Valid:') });
+      expect(requests.some((request) => request.method === 'POST')).toBe(false);
+      expect(await engine.switchTask(id, { ...input, runner: 'codex' })).toEqual({ ...input, notice: 'Switched task agent' });
+      expect(requests.at(-1)).toMatchObject({
+        path: '/api/v1/p/alpha/runs/owned/switch-agent',
+        method: 'POST',
+        body: { runner: 'codex', agentProfile: 'default', changedBy: store.get(id)?.name },
+      });
+    });
+
+    it('uses cancel ownership for a switch and a retry with agent flags', async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('user-task', { status: 'failed', runner: 'claude', model: 'opus' })]);
+      const input = { projectId: 'alpha', runId: 'user-task', runner: 'codex' };
+      expect(await engine.switchTask(id, input)).toMatchObject({ status: 403 });
+      expect(await engine.retryTask(id, input)).toMatchObject({ status: 403 });
+      expect(requests).toEqual([]);
+      await engine.update(id, { cancelAnyTask: true });
+      expect(await engine.retryTask(id, input)).toEqual({ projectId: 'alpha', runId: 'user-task', notice: 'Switched task agent' });
+      expect(requests.at(-1)?.path).toBe('/api/v1/p/alpha/runs/user-task/switch-agent');
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      await engine.update(id, { access: 'read' });
+      expect(await engine.switchTask(id, input)).toMatchObject({ status: 403 });
+    });
+
     it('refuses in a read-only project, outside its projects and in a watch turn', async () => {
       const engine = withRuns([]);
       const readOnly = await engine.create({ instructions: '', projects: ['alpha'], access: 'read' });
@@ -3405,6 +3438,7 @@ describe('ManagerEngine', () => {
       await vi.waitFor(() => expect(backend.open).toHaveLength(1));
       expect(await watched.cancelTask(id, { projectId: 'alpha', runId: 'r' })).toMatchObject({ status: 409 });
       expect(await watched.retryTask(id, { projectId: 'alpha', runId: 'r' })).toMatchObject({ status: 409 });
+      expect(await watched.switchTask(id, { projectId: 'alpha', runId: 'r', runner: 'codex' })).toMatchObject({ status: 409 });
       expect(requests).toEqual([]);
     });
 
@@ -3955,7 +3989,8 @@ describe('ManagerEngine', () => {
       const id = await started(engine);
       expect(store.state(id).follows['alpha/new-run']).toMatchObject({ created: true });
       finalMessage('new-run', '# Impact\nLow risk: two call sites.\nNothing else changes.');
-      const done = run({ id: 'new-run', title: 'Assess impact', status: 'review', finishedAt: later(1) });
+      const summary = 'Switched from claude (opus, default) to codex (auto, default) by Manager';
+      const done = run({ id: 'new-run', title: 'Assess impact', status: 'review', finishedAt: later(1), agentSwitch: { summary } });
       runs = [done];
       backend.scripts.push(say('The assessment is in: low risk. I will open the follow-up task next.'));
       engine.taskChanged('alpha', dataDir(), done, () => undefined);
@@ -3963,7 +3998,7 @@ describe('ManagerEngine', () => {
       // The card needs no model call.
       expect(cards(id)).toEqual([expect.objectContaining({
         turn: 'watch',
-        text: '[[task:alpha/new-run]]\n\n**Finished, ready for review.**\n\n# Impact\nLow risk: two call sites.\nNothing else changes.',
+        text: `[[task:alpha/new-run]]\n\n**Finished, ready for review.**\n\n${summary}\n\n# Impact\nLow risk: two call sites.\nNothing else changes.`,
         taskReport: { projectId: 'alpha', runId: 'new-run', state: 'review' },
       })]);
       expect(cards(id)[0]).not.toHaveProperty('important');

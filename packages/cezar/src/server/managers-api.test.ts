@@ -28,6 +28,7 @@ describe('the managers routes', () => {
   let store: RunStore;
   let engine: ManagerEngine;
   let startRun: ReturnType<typeof vi.fn>;
+  let switchAgent: ReturnType<typeof vi.fn>;
   let bus: WorkspaceEventBus;
   let app: ReturnType<typeof createApp>;
   const saved = { CEZ_HOME: process.env.CEZ_HOME, CEZ_DRY_RUN: process.env.CEZ_DRY_RUN, CEZ_MANAGERS: process.env.CEZ_MANAGERS };
@@ -52,12 +53,13 @@ describe('the managers routes', () => {
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
     store = RunStore.open(join(root, '.ai/cezar'));
     startRun = vi.fn(() => ({ id: 'run-1' }));
+    switchAgent = vi.fn(() => ({ summary: 'Switched task agent' }));
     bus = new WorkspaceEventBus();
     app = createApp({
       repoRoot: root,
       version: 'test',
       store,
-      manager: { startRun, isActive: () => false } as unknown as RunManager,
+      manager: { startRun, switchAgent, isActive: () => false } as unknown as RunManager,
       workspaceEvents: bus,
       onManagerEngine: (built) => { engine = built; },
     });
@@ -183,6 +185,24 @@ describe('the managers routes', () => {
     expect(await response.json()).toEqual({ projectId, runId: 'run-1' });
     expect(startRun).toHaveBeenCalledOnce();
     expect(startRun.mock.calls[0]?.[1]).toMatchObject({ task: 'Fix the login' });
+  });
+
+  it('validates switches and forwards the resolved account and manager identity to the run engine', async () => {
+    const { id, connectedProjectIds: [projectId] } = await createManager({
+      name: 'Release Manager', instructions: '', projects: 'all', cronMinutes: 0,
+      taskAgents: [{ runner: 'codex', agentProfile: 'default' }],
+    });
+    const run = store.createRun({ title: 'Review', workflow: 'quick-task', task: 'Review it', runner: 'claude', steps: [] });
+    store.updateRun(run.id, { startedByManager: { id, name: 'Release Manager' } });
+    const path = `${BASE}/${id}/task-switch`;
+    const body = { projectId, runId: run.id };
+    expect((await request(path, { method: 'POST', body })).status).toBe(400);
+    expect((await request(path, { method: 'POST', body: { ...body, runner: 'codex', agentProfile: 'personal' } })).status).toBe(403);
+    expect(switchAgent).not.toHaveBeenCalled();
+    const response = await request(path, { method: 'POST', body: { ...body, runner: 'codex' } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ...body, notice: 'Switched task agent' });
+    expect(switchAgent).toHaveBeenCalledWith(run.id, { runner: 'codex', agentProfile: 'default', changedBy: 'Release Manager' }, 'claude');
   });
 
   it('refuses a project out of scope, through the route', async () => {

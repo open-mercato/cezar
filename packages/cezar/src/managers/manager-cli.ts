@@ -41,9 +41,12 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--account id] [--model m] [--effort e] [--dispatch] "<objective>"
   cez manager task say --project <id> <run> [--model m] [--effort e] "<text>"
                                                  --model/--effort only when it continues a finished task
+  cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+                                                 change the agent and keep the task's history and worktree
   cez manager task cancel --project <id> <run> [--reason "…"]
                                                  stops it and every task it dispatched; worktree and branch stay
-  cez manager task retry --project <id> <run>    a failed or cancelled task again, as a new task
+  cez manager task retry --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+                                                 retry in place with agent flags, or start over without them
   cez manager task follow|unfollow [--project <id>] <run>
                                                  hear when a task you did not start settles or needs the user
       content flags for create and say:
@@ -111,7 +114,7 @@ const HELP: Record<string, string> = {
   tasks: SNAPSHOT_HELP('tasks', "Every connected project's tasks, the user's own included, with their model, effort and PR."),
   prs: SNAPSHOT_HELP('prs', 'Open pull requests and their status.'),
   task: `cez manager task <run> [--project <id>]
-cez manager task create|say|cancel|retry|follow|unfollow …   (each takes --help)
+cez manager task create|say|switch|cancel|retry|follow|unfollow …   (each takes --help)
 
 One task as JSON: status, startedBy, runner, model, actualModel (what the agent reported running), effort, prNumber/prUrl, its last message and its children.
   --project <id>   the task's project; found from the snapshot when omitted`,
@@ -133,15 +136,22 @@ Messages a running task, or continues a finished one with the text.
   --project <id>     the task's project
   --model <m>        continue on this model (a finished task only)
   --effort <e>       ${EFFORTS.join(' | ')} (a finished task only)${CONTENT_HELP}`,
+  'task switch': `cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+
+Choose at least one agent flag. Switches a queued task before it starts, interrupts a live agent turn,
+or continues a settled task with its conversation. Keeps the run id, worktree, branch, and history.
+The choice applies to the remaining agent steps of an unfinished workflow.
+Only a task this manager started, unless the user allowed "Cancel any task" in its settings.`,
   'task cancel': `cez manager task cancel --project <id> <run> [--reason "…"]
 
 Stops the task and every task it dispatched, and marks them cancelled. Their worktree and branch stay.
 Only a task this manager started, unless the user allowed "Cancel any task" in its settings.
   --project <id>     the task's project
   --reason "…"       why; kept on the task and shown in the cockpit`,
-  'task retry': `cez manager task retry --project <id> <run>
+  'task retry': `cez manager task retry --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
 
-Starts a failed or cancelled task again as a new task: the same objective, workflow, runner, model and effort.
+With any agent flag, retry a failed or cancelled task in place using the switch command's permissions.
+With no agent flags, start a new task with the same objective, workflow, runner, model and effort.
   --project <id>     the task's project`,
   'task follow': `cez manager task follow [--project <id>] <run>
 
@@ -502,6 +512,7 @@ export async function runManagerCommand(
                 (task.model || task.actualModel) && `${taskModelLabel(task.model, task.actualModel)}${task.effort ? `/${task.effort}` : ''}`,
                 task.prNumber !== undefined && `PR #${task.prNumber}`,
                 task.childCount > 0 && `${task.childCount} dispatched`,
+                task.agentSwitch,
               ].filter(Boolean).join(', ');
               lines.push(`${project.projectId}  ${task.runId}  ${task.status}  ${task.title}  (${facts})`);
             }
@@ -578,13 +589,22 @@ export async function runManagerCommand(
             : `${result.runId} is ${result.status}, so there was nothing to stop${children ? `; cancelled${children.slice(1)}` : ''}.`);
           return 0;
         }
-        if (sub === 'retry') {
-          const { values, positionals } = parse('task retry', taskArgs, { project: { type: 'string' } }, true);
+        if (sub === 'switch' || sub === 'retry') {
+          const { values, positionals } = parse(`task ${sub}`, taskArgs, {
+            project: { type: 'string' }, runner: { type: 'string' }, account: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
+          }, true);
           const [runId, ...extra] = positionals;
-          if (!runId || extra.length > 0) fail('usage: cez manager task retry --project <id> <run>');
+          if (!runId || extra.length > 0) fail(`usage: cez manager task ${sub} --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]`);
+          const effort = effortOf(values.effort);
+          const { runner, account, model } = values;
+          if (sub === 'switch' && !(runner || account || model || effort)) fail('choose at least one of --runner, --account, --model or --effort');
+          if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
           const projectId = await projectForRun(values.project, runId);
-          const created = await call<ManagerCreateTaskResponse>('/task-retry', { method: 'POST', body: { projectId, runId } });
+          const created = await call<ManagerCreateTaskResponse>(`/task-${sub}`, {
+            method: 'POST', body: { projectId, runId, runner, agentProfile: account, model, effort },
+          });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
+          if (created.notice) io.log(created.notice);
           return 0;
         }
         if (sub === 'follow' || sub === 'unfollow') {

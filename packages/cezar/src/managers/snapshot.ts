@@ -79,6 +79,7 @@ function taskRow(run: RunRecord, childCount: number): ManagerSnapshotTask {
     ...pullRequestOf(run),
     ...(run.cancelReason ? { cancelReason: run.cancelReason } : {}),
     ...(run.cancelledBy ? { cancelledBy: run.cancelledBy } : {}),
+    ...(run.agentSwitch ? { agentSwitch: run.agentSwitch.summary } : {}),
   };
 }
 
