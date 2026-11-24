@@ -158,7 +158,10 @@ Notable fields (full doc-comments in the source):
 - `brokeredShell?` — Codex only: a manager's Bash. The restricted session's broker passes each
   command to `verify` (the manager policy, `managerShellPlan`) and spawns the returned argv
   pipeline itself, with a heredoc body as stdin and no shell, in `env`. Claude enforces the same
-  policy through `bashHookCommand`; any other backend ignores the field.
+  policy through `bashHookCommand`; any other backend ignores the field. The commands run directly
+  on the host with the engine's environment: a Claude manager's `gh` stays inside the user's Claude
+  Bash sandbox, a Codex manager's does not, so a sandbox network allowlist does not cover it. Under
+  `CEZ_CODEX_NETWORK=0` only `offlinePrograms` run (a manager's: `cez-manager` and its pipe filters).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
 

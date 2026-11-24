@@ -242,7 +242,8 @@ Codex, cezar lists its native features at startup, turns every enabled one off f
 verifies that before the first model turn; a feature that stays on refuses the step. A ChatGPT workspace's
 model policy and requirements that only narrow (login methods, features forced off) are
 accepted. Unsupported controls fail before a model turn. Grep and Glob need `rg`; missing tools return a
-named read error. `CEZ_CODEX_NETWORK=0` also blocks brokered GitHub reads.
+named read error. `CEZ_CODEX_NETWORK=0` also blocks brokered GitHub reads, and a Codex manager's
+shell then runs only `cez-manager` and its pipe filters.
 
 Continue and restart preserve each step’s recorded tools and mutation policy. Old unrestricted
 Codex sessions are kept separate; missing-session recovery can open a fresh restricted session.

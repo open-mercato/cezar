@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
@@ -35,53 +35,104 @@ const SHELL_TIMEOUT_MS = 120_000;
 const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
 const SHELL_OUTPUT_CAP = 256_000;
 
-/** Spawns a vetted argv pipeline with no shell: what the verifier read is exactly what runs. */
-export function runPipeline(pipeline: readonly string[][], stdin: string | undefined, opts: { cwd: string; env: Record<string, string | undefined>; signal: AbortSignal }): Promise<{ ok: boolean; text: string }> {
+export interface PipelineOptions {
+  cwd: string;
+  env: Record<string, string | undefined>;
+  signal: AbortSignal;
+  /** Defaults to `SHELL_TIMEOUT_MS`; tests shorten it. */
+  timeoutMs?: number;
+  /** Tests inject a spawn that fails; production uses node's. */
+  spawn?: typeof spawn;
+}
+
+export const PIPELINE_REFUSED = 'cezar: refused a command with an empty stage or a control character';
+
+/**
+ * Spawns a vetted argv pipeline with no shell: what the verifier read is exactly what runs. Settles
+ * exactly once — on the last stage's close, the timeout, the output cap, an abort or a stage that
+ * cannot start — and each stage leads its own process group, so a kill also reaches what it forked.
+ */
+export function runPipeline(pipeline: readonly string[][], stdin: string | undefined, opts: PipelineOptions): Promise<{ ok: boolean; text: string }> {
   const env = Object.fromEntries(Object.entries(opts.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   // Everything spawn could refuse synchronously is refused here, before any stage starts.
   const invalid = !pipeline.length || pipeline.some((stage) => !stage.length || stage.some((arg) => typeof arg !== 'string' || CONTROL.test(arg)))
     || (stdin !== undefined && (typeof stdin !== 'string' || /\0/.test(stdin)));
-  if (invalid) return Promise.resolve({ ok: false, text: 'cezar: refused a command with an empty stage or a control character' });
+  if (invalid) return Promise.resolve({ ok: false, text: PIPELINE_REFUSED });
+  const start = opts.spawn ?? spawn;
+  const timeoutMs = opts.timeoutMs ?? SHELL_TIMEOUT_MS;
   return new Promise((done) => {
-    let stdout = '';
-    let stderr = '';
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    let outBytes = 0;
+    let errBytes = 0;
+    let truncated = false;
     let failure: string | undefined;
     let open = pipeline.length;
     let code: number | null = null;
-    const children: ChildProcessWithoutNullStreams[] = [];
-    const kill = () => { for (const child of children) child.kill('SIGKILL'); };
-    // Armed before the first spawn, so no started stage outlives it.
-    const timer = setTimeout(() => { failure = `command timed out after ${SHELL_TIMEOUT_MS / 1000}s`; kill(); }, SHELL_TIMEOUT_MS);
-    timer.unref?.();
-    try {
-      for (const [bin, ...args] of pipeline) children.push(spawn(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal }));
-    } catch (err) {
+    let settled = false;
+    const children: ChildProcess[] = [];
+    const killOne = (child: ChildProcess) => {
+      // The group outlives its leader while a forked grandchild (gh's git, a pager) still holds a pipe.
+      if (child.pid) try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is gone */ }
+      child.kill('SIGKILL');
+    };
+    const killAll = () => { for (const child of children) killOne(child); };
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      kill();
-      done({ ok: false, text: `cezar: could not start ${pipeline[children.length]?.[0] ?? 'the command'}: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}` });
+      opts.signal.removeEventListener('abort', onAbort);
+      killAll();
+      // Release pipes a surviving grandchild may hold, so nothing keeps this call's streams open.
+      for (const child of children) for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+      const text = Buffer.concat(out).toString('utf8') + (truncated ? TRUNCATED : '');
+      const errText = Buffer.concat(err).toString('utf8').trim();
+      // Over the cap is the read path's truncation, not a failure: cezar stopped it, the command did not fail.
+      const ok = !failure && (truncated || code === 0);
+      const detail = [text, errText && `[stderr]\n${errText}`, failure, !ok && !failure ? `[exit ${code ?? 'signal'}]` : ''].filter(Boolean).join('\n');
+      done({ ok, text: detail || '(no output)' });
+    };
+    const onAbort = () => { failure ??= 'session is closed'; finish(); };
+    // Armed before the first spawn, and it settles on its own: a 'close' a grandchild blocks never comes.
+    const timer = setTimeout(() => { failure ??= `command timed out after ${timeoutMs / 1000}s`; finish(); }, timeoutMs);
+    timer.unref?.();
+    if (opts.signal.aborted) { onAbort(); return; }
+    opts.signal.addEventListener('abort', onAbort, { once: true });
+    let stage = 0;
+    try {
+      for (; stage < pipeline.length; stage++) {
+        const [bin, ...args] = pipeline[stage]!;
+        const child = start(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+        children.push(child);
+        // EMFILE/ENFILE: node returns a child without stdio and reports the error a tick later.
+        if (!child.stdin || !child.stdout || !child.stderr) throw new Error('no stdio (out of file descriptors?)');
+      }
+    } catch (error) {
+      failure = `cezar: could not start ${pipeline[stage]?.[0] ?? 'the command'}: ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`;
+      finish();
       return;
     }
     children.forEach((child, index) => {
       const next = children[index + 1];
-      if (next) child.stdout.pipe(next.stdin).on('error', () => {});
-      else child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
-        if (stdout.length > SHELL_OUTPUT_CAP) { stdout = stdout.slice(0, SHELL_OUTPUT_CAP); kill(); }
+      if (next) child.stdout!.pipe(next.stdin!).on('error', () => {});
+      else child.stdout!.on('data', (chunk: Buffer) => {
+        if (truncated) return;
+        const room = SHELL_OUTPUT_CAP - outBytes;
+        out.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
+        outBytes += Math.min(chunk.length, room);
+        if (chunk.length > room) { truncated = true; finish(); }
       });
-      child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 16_000) stderr += chunk.toString('utf8'); });
-      child.stdin.on('error', () => {});
-      child.on('error', (err) => { failure ??= `${pipeline[index]![0]}: ${err.message.slice(0, 200)}`; });
+      child.stderr!.on('data', (chunk: Buffer) => { if (errBytes < 16_000) { err.push(chunk); errBytes += chunk.length; } });
+      child.stdin!.on('error', () => {});
+      child.on('error', (error) => { failure ??= `${pipeline[index]![0]}: ${error.message.slice(0, 200)}`; });
       child.on('close', (exit) => {
         if (!next) code = exit;
         // A shell's SIGPIPE: a reader that quit (`| head`) ends the writers before it, or they block on a full pipe.
-        for (const upstream of children.slice(0, index)) if (upstream.exitCode === null && upstream.signalCode === null) upstream.kill('SIGKILL');
-        if (--open > 0) return;
-        clearTimeout(timer);
-        const detail = [stdout, stderr.trim() && `[stderr]\n${stderr.trim()}`, failure, code !== 0 && !failure ? `[exit ${code ?? 'signal'}]` : ''].filter(Boolean).join('\n');
-        done({ ok: code === 0 && !failure, text: detail || '(no output)' });
+        for (const upstream of children.slice(0, index)) if (upstream.exitCode === null && upstream.signalCode === null) killOne(upstream);
+        if (--open === 0) finish();
       });
     });
-    const first = children[0]!.stdin;
+    const first = children[0]!.stdin!;
     if (stdin !== undefined) first.end(stdin); else first.end();
   });
 }
@@ -98,7 +149,14 @@ export class CodexReadBroker {
   private readonly cwd: Promise<string>;
   private readonly aborter = new AbortController();
 
-  constructor(private readonly policy: CodexRestrictedPolicy, spec: Pick<AgentRunSpec, 'cwd' | 'additionalDirectories'>, private readonly env: NodeJS.ProcessEnv, private readonly githubReadsAllowed = true) {
+  constructor(
+    private readonly policy: CodexRestrictedPolicy,
+    spec: Pick<AgentRunSpec, 'cwd' | 'additionalDirectories'>,
+    private readonly env: NodeJS.ProcessEnv,
+    private readonly githubReadsAllowed = true,
+    /** Tests shorten both; the backstop only fires when the command's own timeout failed to. */
+    private readonly limits: { shellTimeoutMs?: number; backstopMs?: number } = {},
+  ) {
     this.cwd = realpath(spec.cwd);
     void this.cwd.catch(() => {});
     this.allowedRoots = Promise.all([spec.cwd, ...(spec.additionalDirectories ?? [])].map(async p => realpath(p).catch(() => undefined)))
@@ -139,7 +197,7 @@ export class CodexReadBroker {
     this.pending++;
     let timer: NodeJS.Timeout | undefined;
     // A manager command has its own timeout; this backstop only fires if that one fails.
-    const limit = this.policy.shell ? SHELL_TIMEOUT_MS + 10_000 : 20_000;
+    const limit = this.limits.backstopMs ?? (this.policy.shell ? (this.limits.shellTimeoutMs ?? SHELL_TIMEOUT_MS) + 10_000 : 20_000);
     try {
       return await Promise.race([this.perform(params), new Promise<CodexReadResult>(done => {
         timer = setTimeout(() => { this.close(); done(result(false, 'cezar: read timed out; this broker is closed')); }, limit);
@@ -184,8 +242,11 @@ export class CodexReadBroker {
             if (CONTROL.test(input.command)) throw new Error('cezar manager policy: a control character');
             const plan = this.policy.shell.verify(input.command);
             if (!plan.ok) throw new Error(`cezar manager policy: ${plan.reason}`);
-            if (!this.githubReadsAllowed && plan.pipeline.some(([bin]) => bin === 'gh')) throw new Error('GitHub reads are disabled by CEZ_CODEX_NETWORK=0');
-            const ran = await runPipeline(plan.pipeline, plan.stdin, { cwd: await this.cwd, env: this.policy.shell.env, signal: this.aborter.signal });
+            // Network off: only programs the shell names as offline run — gh and any user-allowed gh pattern do not.
+            const offline = new Set(this.policy.shell.offlinePrograms ?? []);
+            const online = plan.pipeline.find(([bin]) => !offline.has(bin!));
+            if (!this.githubReadsAllowed && online) throw new Error(`network commands are disabled by CEZ_CODEX_NETWORK=0 (\`${online[0]}\` may reach the network)`);
+            const ran = await runPipeline(plan.pipeline, plan.stdin, { cwd: await this.cwd, env: this.policy.shell.env, signal: this.aborter.signal, ...(this.limits.shellTimeoutMs ? { timeoutMs: this.limits.shellTimeoutMs } : {}) });
             return result(ran.ok, ran.text);
           }
           const argv = codexBashArgv(input.command, this.policy);
