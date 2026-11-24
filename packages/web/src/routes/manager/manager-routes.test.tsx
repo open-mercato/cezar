@@ -732,12 +732,11 @@ describe('/manager/:id', () => {
   it('keeps account choices in header settings without composer options or dictation', async () => {
     const recognition = vi.fn()
     vi.stubGlobal('SpeechRecognition', recognition)
-    seedChat({ runner: 'claude' })
+    seedChat({ runner: 'codex' })
     renderAt('/manager/global', (client) => {
-      client.setQueryData(workspaceQueryKeys.agentProfiles, { defaults: { claude: 'personal' }, profiles: [
-        { provider: 'claude', id: 'work', label: 'Work' },
+      client.setQueryData(workspaceQueryKeys.agentProfiles, { defaults: { codex: 'work' }, profiles: [
+        { provider: 'codex', id: 'work', label: 'Work' },
         { provider: 'claude', id: 'personal', label: 'Personal' },
-        { provider: 'codex', id: 'other', label: 'Other' },
       ] })
     })
     fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
@@ -756,7 +755,7 @@ describe('/manager/:id', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Agent account' }))
     fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Work' }))
     await waitFor(() => expect(calls.some((call) => call.method === 'PATCH' && JSON.stringify(call.body) === JSON.stringify({ agentProfile: 'work' }))).toBe(true))
-    expect(screen.queryByRole('menuitemradio', { name: 'Other' })).toBeNull()
+    expect(screen.queryByRole('menuitemradio', { name: 'Personal' })).toBeNull()
     expect(recognition).not.toHaveBeenCalled()
   })
 

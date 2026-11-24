@@ -199,24 +199,13 @@ describe('the managers routes', () => {
     const path = `${BASE}/${id}/tasks`;
     expect((await request(path, { method: 'POST', body: { projectId, task: 'Use my selection', runner: 'claude' } })).status).toBe(201);
     expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
-    const automatic = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: null, runner: 'pi' } });
+    const automatic = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: null, runner: 'codex' } });
     expect(automatic.status).toBe(200);
     expect(await automatic.json()).not.toHaveProperty('taskRunner');
     expect((await request(path, { method: 'POST', body: { projectId, task: 'Use the manager backend' } })).status).toBe(201);
-    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'pi' });
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
     expect((await request(path, { method: 'POST', body: { projectId, task: 'Choose another agent', runner: 'claude' } })).status).toBe(201);
     expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'claude' });
-  });
-
-  it('refuses Codex as a manager agent on create and update, through the routes', async () => {
-    const created = await request(BASE, { method: 'POST', body: { instructions: '', projects: 'all', runner: 'codex' } });
-    expect(created.status).toBe(400);
-    expect(await created.json()).toMatchObject({ error: expect.stringContaining('Codex cannot run a manager') });
-    const { id } = await createManager();
-    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { runner: 'codex' } })).status).toBe(400);
-    expect(new ManagerStore().get(id)?.runner).toBeUndefined();
-    // Codex stays a task agent.
-    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: 'codex' } })).status).toBe(200);
   });
 
   it('rejects an unknown task agent on create and update', async () => {
@@ -228,10 +217,10 @@ describe('the managers routes', () => {
 
   it.each(runnerSchema.options)('persists %s for newly spawned tasks independently of the manager agent and account', async (runner) => {
     const { id, connectedProjectIds: [projectId] } = await createManager({
-      instructions: '', projects: 'all', runner: 'pi', agentProfile: 'default', taskRunner: runner, cronMinutes: 0,
+      instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskRunner: runner, cronMinutes: 0,
     });
     const managerPath = `${BASE}/${id}`;
-    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'pi', agentProfile: 'default', taskRunner: runner });
+    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
     const spawn = async (requested?: string) => {
       const response = await request(`${managerPath}/tasks`, {
         method: 'POST', body: { projectId, task: 'Spawn with the selected agent', ...(requested ? { runner: requested } : {}) },
@@ -244,10 +233,10 @@ describe('the managers routes', () => {
     const automatic = await request(managerPath, { method: 'PATCH', body: { taskRunner: null } });
     expect(await automatic.json()).not.toHaveProperty('taskRunner');
     expect(new ManagerStore().get(id)).not.toHaveProperty('taskRunner');
-    expect(await spawn()).toMatchObject({ runner: 'pi' });
+    expect(await spawn()).toMatchObject({ runner: 'codex' });
     expect(await spawn(runner)).toMatchObject({ runner });
     const pinned = await request(managerPath, { method: 'PATCH', body: { taskRunner: runner } });
-    expect(await pinned.json()).toMatchObject({ runner: 'pi', agentProfile: 'default', taskRunner: runner });
+    expect(await pinned.json()).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
     expect(new ManagerStore().get(id)?.taskRunner).toBe(runner);
     expect(await spawn()).toMatchObject({ runner });
   });
@@ -264,8 +253,8 @@ describe('the managers routes', () => {
     const second = await add('claude', 'Second');
     const codex = await add('codex', 'Codex');
     const agents = [{ runner: 'claude', agentProfile: first }, { runner: 'claude', agentProfile: second }, { runner: 'codex', agentProfile: codex }];
-    const { id, connectedProjectIds: [projectId] } = await createManager({ instructions: '', projects: 'all', runner: 'pi', agentProfile: 'default', taskAgents: agents, cronMinutes: 0 });
-    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'pi', agentProfile: 'default', taskAgents: agents });
+    const { id, connectedProjectIds: [projectId] } = await createManager({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents: agents, cronMinutes: 0 });
+    expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskAgents: agents });
     for (const agent of agents) {
       expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Use this exact account', ...agent } })).status).toBe(201);
       expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject(agent);

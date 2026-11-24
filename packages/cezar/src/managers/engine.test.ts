@@ -10,7 +10,7 @@ import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
 import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
-import { CODEX_MANAGER_REFUSAL, ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
+import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
 import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -352,42 +352,24 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.resume).toBeUndefined();
     });
 
-    it('refuses switching a manager to Codex and keeps its agent', async () => {
-      const engine = makeEngine();
-      const id = await create(engine, 0);
-      const refused = await engine.update(id, { runner: 'codex' });
-      expect(refused).toEqual({ error: CODEX_MANAGER_REFUSAL, status: 400 });
-      expect(store.get(id)?.runner).toBeUndefined();
-      expect(await engine.create({ instructions: 'Watch', projects: 'all', runner: 'codex' })).toEqual({ error: CODEX_MANAGER_REFUSAL, status: 400 });
-      // Codex stays available for the tasks a manager starts.
-      expect('error' in await engine.update(id, { taskRunner: 'codex' })).toBe(false);
-    });
-
-    it('moves a stored Codex manager to Claude Code once, with one notice, and answers on Claude', async () => {
+    it('refuses Codex after switching agent and account before opening another session', async () => {
       const configDir = join(home, 'codex-work');
       mkdirSync(configDir);
       await mergeWriteAgentAccounts((accounts) => ({
         ...accounts,
         accounts: [{ id: 'work', provider: 'codex', label: 'Work', configDir, addedAt: '' }],
       }));
-      const runnerFor = vi.fn((_runner: RunnerId) => backend.runner);
+      const runnerFor = vi.fn(() => backend.runner);
       const engine = makeEngine({ runnerFor });
       const id = await create(engine, 0);
-      // As #2330 left it: a pin the API no longer accepts.
-      store.update(id, (manager) => ({ ...manager, runner: 'codex', model: 'gpt-x', agentProfile: 'work' }));
       engine.send(id, 'one');
       await settled(engine);
+      await engine.update(id, { runner: 'codex', agentProfile: 'work' });
       engine.send(id, 'two');
       await settled(engine);
-      expect(runnerFor.mock.calls.map(([runner]) => runner)).toEqual(['claude', 'claude']);
-      expect(store.get(id)).toMatchObject({ runner: 'claude' });
-      expect(store.get(id)?.model).toBeUndefined();
-      expect(store.get(id)?.agentProfile).toBeUndefined();
-      expect(assistants(id).map((message) => message.error)).toEqual([undefined, undefined]);
-      const notices = store.messages(id).filter((message) => message.kind === 'notice' && message.text.includes('Codex cannot run a manager'));
-      expect(notices).toHaveLength(1);
-      // Its tasks defaulted to Codex through the pin and still do, on the same account.
-      expect(store.get(id)?.taskAgents).toEqual([{ runner: 'codex', agentProfile: 'work' }]);
+      expect(runnerFor).toHaveBeenCalledTimes(1);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
     });
 
     it('a turn that throws before its agent starts closes its message', async () => {
@@ -938,23 +920,20 @@ describe('ManagerEngine', () => {
       expect(chat?.enforceReadOnly).toBeUndefined();
     });
 
-    it('runs watches and chats on Claude Code when Codex is the machine default, with one notice', async () => {
-      const runnerFor = vi.fn((_runner: RunnerId) => backend.runner);
-      const engine = makeEngine({ github: readyPrGithub, runnerFor, defaultRunner: async (): Promise<RunnerId> => 'codex' });
+    it('refuses Codex watches and chats before opening an executor', async () => {
+      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
       const id = await create(engine);
       due(id);
       engine.tick();
       await settled(engine);
+      expect(backend.specs).toEqual([]);
+      expect(store.state(id).lastFailure?.cause).toContain('tool-policy enforcement unavailable');
+      expect(store.state(id).lastFailure?.cause).toContain('Pick Claude Code for this manager.');
+      expect(store.state(id).lastFailure?.cause).not.toMatch(/\bPi\b/);
       engine.send(id, 'hi');
       await settled(engine);
-      expect(runnerFor.mock.calls.map(([runner]) => runner)).toEqual(['claude', 'claude']);
-      expect(store.state(id).lastFailure).toBeUndefined();
-      expect(assistants(id).at(-1)?.error).toBeUndefined();
-      expect(store.get(id)?.runner).toBeUndefined();
-      expect(store.messages(id).filter((message) => message.kind === 'notice' && message.text.includes('cannot run a manager'))).toHaveLength(1);
-      // Its tasks still follow the machine default.
-      await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
-      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+      expect(backend.specs).toEqual([]);
+      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {
@@ -3224,10 +3203,9 @@ describe('ManagerEngine', () => {
   describe('task agent selection', () => {
     it('selects only allowed runner/account pairs, validates at launch and tells the manager their CLI arguments', async () => {
       let removed = false;
-      // Codex as the machine default still picks the Codex pair for a task.
-      const engine = makeEngine({ defaultRunner: async (): Promise<RunnerId> => 'codex', accountError: async (_runner, account) => removed && account === 'first' ? 'account removed' : null });
+      const engine = makeEngine({ accountError: async (_runner, account) => removed && account === 'first' ? 'account removed' : null });
       const taskAgents = [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'claude' as const, agentProfile: 'second' }, { runner: 'codex' as const, agentProfile: 'work' }];
-      const created = await engine.create({ instructions: '', projects: 'all', taskAgents, cronMinutes: 0 });
+      const created = await engine.create({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents, cronMinutes: 0 });
       if ('error' in created) throw created;
       const prompt = managerSystemPrompt(created, []);
       for (const agent of taskAgents) expect(prompt).toContain(`--runner ${agent.runner} --account ${agent.agentProfile}`);
@@ -3260,11 +3238,11 @@ describe('ManagerEngine', () => {
     it('lets Automatic select a different agent for each task', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);
-      await engine.update(id, { runner: 'pi' });
+      await engine.update(id, { runner: 'codex' });
       await engine.createTask(id, { projectId: 'alpha', task: 'Review it', runner: 'claude' });
       expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
       await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
-      expect(requests.at(-1)?.body).toMatchObject({ runner: 'pi' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
     });
 
     it('enforces the saved task agent even if the manager requests another', async () => {
@@ -3679,10 +3657,10 @@ describe('ManagerEngine', () => {
     it('counts a first and a later manager once each, keyed to the device that asked', async () => {
       const rec = recorder();
       const engine = makeEngine({ telemetry: rec.telemetry });
-      await engine.create({ name: SECRET, instructions: SECRET, projects: 'all', cronMinutes: 15, runner: 'pi' }, { sid: SID });
+      await engine.create({ name: SECRET, instructions: SECRET, projects: 'all', cronMinutes: 15, runner: 'codex' }, { sid: SID });
       await engine.create({ instructions: 'x', projects: ['alpha'], cronMinutes: 0 });
       expect(rec.of('manager_created')).toEqual([
-        { event: 'manager_created', label: 'yes:all:on:pi', sid: SID },
+        { event: 'manager_created', label: 'yes:all:on:codex', sid: SID },
         { event: 'manager_created', label: 'no:some:off:default' },
       ]);
     });

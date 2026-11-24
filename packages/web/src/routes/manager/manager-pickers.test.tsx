@@ -3,10 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AccountPicker, ManagerRunnerPicker, ModelPicker, TaskRunnerPicker } from './manager-pickers'
 
-const health = vi.hoisted(() => ({ defaultRunner: 'claude' }))
-
 vi.mock('@/api/queries', () => ({
-  useHealth: () => ({ data: health }),
+  useHealth: () => ({ data: { defaultRunner: 'claude' } }),
   useProviderStatus: () => ({ data: { providers: [
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
@@ -14,7 +12,7 @@ vi.mock('@/api/queries', () => ({
     { provider: 'opencode', status: 'connected', enabled: true },
   ] } }),
   useRunnerModels: () => ({ data: undefined }),
-  useAgentProfiles: () => ({ data: { defaults: { codex: 'work', claude: 'second' }, profiles: [
+  useAgentProfiles: () => ({ data: { defaults: { codex: 'work' }, profiles: [
     { provider: 'codex', id: 'default', label: 'Default' },
     { provider: 'codex', id: 'work', label: 'Work' },
     { provider: 'claude', id: 'personal', label: 'Personal' },
@@ -22,10 +20,7 @@ vi.mock('@/api/queries', () => ({
   ] } }),
 }))
 
-afterEach(() => {
-  cleanup()
-  health.defaultRunner = 'claude'
-})
+afterEach(cleanup)
 
 describe('manager agent and account selection', () => {
   it('keeps the dialog agent picker restricted and clears incompatible model/account pins', async () => {
@@ -69,13 +64,13 @@ describe('manager agent and account selection', () => {
 
   it('offers accounts in the model menu on the selected agent', async () => {
     const onChange = vi.fn()
-    render(<ModelPicker runner="claude" agentProfile="second" onChange={onChange} />)
+    render(<ModelPicker runner="codex" agentProfile="work" onChange={onChange} />)
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Model and effort' }))
-    const second = await screen.findByRole('menuitemradio', { name: 'Second' })
-    expect(second.getAttribute('aria-checked')).toBe('true')
-    expect(screen.queryByRole('menuitemradio', { name: 'Work' })).toBeNull()
-    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Personal' }))
-    expect(onChange).toHaveBeenCalledWith({ agentProfile: 'personal' })
+    const work = await screen.findByRole('menuitemradio', { name: 'Work' })
+    expect(work.getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByRole('menuitemradio', { name: 'Personal' })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Default' }))
+    expect(onChange).toHaveBeenCalledWith({ agentProfile: 'default' })
   })
 
   it('drops the previous model and account when switching agents', async () => {
@@ -88,22 +83,15 @@ describe('manager agent and account selection', () => {
 
   it('shows the workspace account and lets the user return to automatic account selection', async () => {
     const onChange = vi.fn()
-    render(<AccountPicker runner="claude" agentProfile="personal" onChange={onChange} />)
+    render(<AccountPicker runner="codex" agentProfile="default" onChange={onChange} />)
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Agent account' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Use workspace default (Second)' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Use workspace default (Work)' }))
     expect(onChange).toHaveBeenCalledWith({ agentProfile: null })
   })
 
   it('labels an inherited account using the workspace default', () => {
-    render(<AccountPicker runner="claude" onChange={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Agent account' }).textContent).toContain('Second')
-  })
-
-  it('shows Claude Code, never Codex, as the agent of a manager on the Codex default (#2330)', () => {
-    health.defaultRunner = 'codex'
-    render(<ManagerRunnerPicker onChange={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Manager agent' }).textContent).toContain('claude')
-    expect(screen.getByRole('button', { name: 'Manager agent' }).textContent).not.toContain('codex')
+    render(<AccountPicker runner="codex" onChange={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Agent account' }).textContent).toContain('Work')
   })
 })
 
