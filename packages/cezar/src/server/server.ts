@@ -2782,7 +2782,7 @@ export function createApp(deps: ServerDeps) {
 
   const agentProfilesRoutes = new Hono<ProjectApiEnv>()
     .get('/workspace/agent-profiles/fallback-policy', queryZodValidator(getAgentFallbackPolicyQuerySchema), async (c) => {
-      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      if (!accountsEnabled()) return c.json({ error: 'agent fallback is local-only' }, 409);
       const { projectId } = c.req.valid('query');
       const root = await projectRootFor(projectId);
       if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
@@ -2792,7 +2792,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(await getAgentFallbackPolicy(root));
     })
     .put('/workspace/agent-profiles/fallback-policy', jsonZodValidator(putAgentFallbackPolicySchema), async (c) => {
-      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      if (!accountsEnabled()) return c.json({ error: 'agent fallback is local-only' }, 409);
       const body = c.req.valid('json');
       const root = await projectRootFor(body.projectId);
       if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);

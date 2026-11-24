@@ -207,7 +207,7 @@ continue a task after its current agent exhausts its usage allowance. Add up to 
 provider/account pairs, optionally selecting a model for each. Drag the row handles or use the
 arrow buttons to reorder agents; remove rows with the remove button, then enable the header switch. Handles also support Space to pick up, arrow keys to move,
 Space to drop and Escape to cancel. Adding rows alone leaves fallback off; removing
-the last row turns it off. This setting is available on local cockpits only.
+the last row turns it off. This setting is available on local cockpits, and on a hosted cockpit started with `CEZ_REMOTE_AGENT_ACCOUNTS=1` (agents already signed in on the host).
 
 Fallback continues the same task and checkout. It applies to **Quick task** and sequential
 step-list workflows only while their last step is running, provided that step is an agent step.
@@ -572,7 +572,7 @@ Useful environment variables:
 | Var | Effect |
 |---|---|
 | `CEZ_DRY_RUN=1` | Run every agent's tasks on its bundled mock instead of the real CLI (`claude`, `codex`, `opencode` and the rest); the Codex and OpenCode health checks and model catalogs use the mock too — the entire cockpit works offline, for demos and development. |
-| `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
+| `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** and **Automatic fallback** (#2332) in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
 | `CEZ_USAGE_LOG=0` | Stop recording plan-limit usage. On by default and local only: Claude (Pro/Max) and Codex (ChatGPT) limit readings plus per-turn activity go to `~/.cezar/usage-ledger/` (kept 90 days, no prompts or code) and feed Dashboard → Usage & cost → Plan limits and `cezar usage`. One account can also be opted out in Settings → Agent accounts. |
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
