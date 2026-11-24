@@ -185,14 +185,15 @@ dl.id dt{color:var(--soft-foreground)}dl.id dd{margin:0}
   <h3>Per-agent login</h3>
   <table>
     <tr><th>Agent</th><th>Account variable</th><th>Local cockpit</th><th>Phone / hosted</th><th>Completion</th></tr>
-    <tr><td>Claude Code</td><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>claude auth login</code>. A PATH shim captures the <code>open</code> call and cezar opens the URL in a tab. The localhost callback finishes it.</td><td>The printed <code>claude.com/cai/oauth/authorize</code> URL. The user copies the code from the <code>platform.claude.com/oauth/code/callback</code> page and pastes it, and cezar writes it to the CLI's stdin.</td><td>The CLI exits 0, then <code>profileStatus</code> and the identity read</td></tr>
-    <tr><td>Codex</td><td><code>CODEX_HOME</code></td><td><code>codex login</code> (localhost:1455 callback)</td><td><code>codex login --device-auth</code>: a code like <code>XXXX-XXXXX</code>, 15 minutes</td><td>Automatic: the CLI exits after the approval</td></tr>
+    <tr><td>Claude Code</td><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>claude auth login</code>. A PATH shim captures the <code>open</code> call so no tab opens, and the URL is shown with <b>Copy link</b>. The localhost callback finishes it from any browser or profile on this computer.</td><td>The printed <code>claude.com/cai/oauth/authorize</code> URL. The user copies the code from the <code>platform.claude.com/oauth/code/callback</code> page and pastes it, and cezar writes it to the CLI's stdin.</td><td>The CLI exits 0, then <code>profileStatus</code> and the identity read</td></tr>
+    <tr><td>Codex</td><td><code>CODEX_HOME</code></td><td><code>codex login</code> (localhost:1455 callback). The URL is captured and shown with <b>Copy link</b>, never opened.</td><td><code>codex login --device-auth</code>: a code like <code>XXXX-XXXXX</code>, 15 minutes</td><td>Automatic: the CLI exits after the approval</td></tr>
     <tr><td>Codex · API key</td><td></td><td colspan="2"><code>codex login --with-api-key</code>. The key goes on stdin and Codex stores it in the account's folder.</td><td>The CLI exits 0</td></tr>
     <tr><td>OMP, Kimi</td><td><code>PI_CODING_AGENT_DIR</code>, <code>KIMI_CODE_HOME</code></td><td>Terminal hand-off with the variable set. The login watcher notices the sign-in.</td><td>The command is shown without the host path (it uses <code>cez account login &lt;id&gt;</code>, see below), then <i>Check again</i>.</td><td>The watcher, or Check again</td></tr>
     <tr><td class="soft">OpenCode, Cursor, Copilot, pi, Junie, Gemini, Antigravity</td><td colspan="4" class="soft">Can't carry a second account: their credentials don't follow one folder (<code>core/agent-profiles.ts</code>). They're listed in step 1, disabled, with that reason.</td></tr>
   </table>
   <p class="small muted">Why not <code>claude setup-token</code>: it prints a long-lived token that cezar would then have to store and inject. <code>auth login</code> leaves the credential in the vendor's own store (the folder, or the macOS Keychain item tied to that folder). cezar never holds a token.</p>
 
+  <div class="note" style="margin-top:12px"><b>cezar never opens a browser.</b> Every method shows the link with <b>Copy link</b> as the main action, and <i>Open in default browser</i> as a secondary button. That way the user picks the browser profile the account lives in. The reconnect card adopts the same rule: its synchronous pre-opened tab (<code>pendingTab</code> in <code>use-reconnect.ts</code>) is removed.</div>
   <h3>Directory layout</h3>
 <pre class="cmd" style="display:block;white-space:pre;padding:10px 12px"><code style="white-space:pre">~/.cezar/                      (cezarHomeDir(); CEZ_HOME relocates it)
   agent-accounts.json          rows gain optional  managed: true, pending: true
@@ -261,11 +262,12 @@ const stepper = (n) => `<div class="stepper">${['Agent', 'Sign in', 'Ready'].map
 function signing(r, where) {
   const n = R[r].name, remote = where === 'remote'
   if (r === 'claude' && !remote) return {
-    title: 'Approve in the browser',
-    body: `<p class="body">We opened <b>claude.com</b> in a new tab. Sign in with the account you want as <b>Work</b> and approve. This dialog updates by itself.</p>
-      <ul class="steps"><li class="d">✓ Private folder created</li><li class="n">● Approve in the browser</li><li>○ Verify</li></ul>`,
-    actions: `<button class="btn">Reopen sign-in page ↗</button>`,
-    cap: 'Local: the localhost callback finishes the sign-in, with no code to paste. After 3 s with no captured launch, the dialog falls back to the paste step.'
+    title: 'Open the link in your browser',
+    body: `<p class="body">Open this link in the browser and profile you want to sign in with, then approve as <b>Work</b>. This dialog updates by itself.</p>
+      <div class="cmd"><code>https://claude.com/cai/oauth/authorize?code=true&amp;client_id=…</code><button class="btn sm c">Copy link</button></div>
+      <ul class="steps"><li class="d">✓ Private folder created</li><li class="n">● Approve in your browser</li><li>○ Verify</li></ul>`,
+    actions: `<button class="btn">Open in default browser ↗</button>`,
+    cap: 'cezar never opens a tab on its own: you copy the link into whichever browser or profile holds the account. The link\'s callback is localhost, so any browser on this computer finishes the sign-in with no code to paste. The CLI\'s own browser launch is captured by a PATH shim and only used to read the URL. Only if no localhost URL is captured does the paste-code link appear instead.'
   }
   if (r === 'claude' && remote) return {
     title: 'Approve, then paste the code',
@@ -276,17 +278,18 @@ function signing(r, where) {
     cap: 'Phone or hosted: no localhost callback can reach this browser, so Claude uses its paste-code page. On a phone the link opens in Safari or Chrome. Copy the code there, come back and paste it.'
   }
   if (r === 'codex' && !remote) return {
-    title: 'Approve in the browser',
-    body: `<p class="body">We opened <b>auth.openai.com</b> in a new tab. Sign in with the ChatGPT account you want as <b>Client Acme</b>. This dialog updates by itself.</p>
-      <ul class="steps"><li class="d">✓ Private folder created</li><li class="n">● Approve in the browser</li><li>○ Verify</li></ul>`,
-    actions: `<button class="btn">Reopen sign-in page ↗</button><button class="btn g">Use an API key instead</button>`,
-    cap: 'Local Codex: codex login with its localhost:1455 callback.'
+    title: 'Open the link in your browser',
+    body: `<p class="body">Open this link in the browser and profile with the ChatGPT account you want as <b>Client Acme</b>. This dialog updates by itself.</p>
+      <div class="cmd"><code>https://auth.openai.com/oauth/authorize?response_type=code&amp;…</code><button class="btn sm c">Copy link</button></div>
+      <ul class="steps"><li class="d">✓ Private folder created</li><li class="n">● Approve in your browser</li><li>○ Verify</li></ul>`,
+    actions: `<button class="btn">Open in default browser ↗</button><button class="btn g">Use an API key instead</button>`,
+    cap: 'Local Codex: codex login with its localhost:1455 callback. The URL is captured from the CLI, never opened by cezar. Any browser profile on this computer works.'
   }
   if (r === 'codex' && remote) return {
     title: 'Enter the code',
     body: `<p class="body">Enter this code at <b>auth.openai.com</b>, on this or any device.</p>
       <div class="row"><span class="code">K7QM-4XW2P</span><button class="btn sm">Copy code</button><span class="small muted">Expires in <span class="mono">14:31</span></span></div>`,
-    actions: `<button class="btn c">Copy code &amp; open auth.openai.com ↗</button><button class="btn g">Use an API key instead</button>`,
+    actions: `<button class="btn c">Copy code</button><button class="btn">Open auth.openai.com ↗</button><button class="btn g">Use an API key instead</button>`,
     cap: 'Device code (codex login --device-auth). Completion is detected on its own, with nothing to paste back.'
   }
   return remote ? {
@@ -389,7 +392,7 @@ function placements() {
     <div class="agent"><div class="h">${mark('claude')} Claude Code</div>
       <div class="acct"><div class="n">Default</div><span class="pill ok">Signed in</span></div>
       <div class="acct"><div class="n">Work</div><span class="pill wait">Signing in…</span></div>
-      <div class="inline-signing body small">Approve at <b>claude.com</b> (tab opened) · <u>Reopen</u> · <u>Cancel</u></div>
+      <div class="inline-signing body small">Open the sign-in link in your browser · <u>Copy link</u> · <u>Cancel</u></div>
       <div class="acct soft">+ Add Claude Code account</div></div></div></div></div>`
   const C = `<div class="win mini"><div class="bar"><i></i><i></i><i></i></div><div class="pagebody">
     <div class="soft small">Settings › Agent accounts › New</div><h4 style="margin:6px 0">Add agent account</h4>${stepper(1)}

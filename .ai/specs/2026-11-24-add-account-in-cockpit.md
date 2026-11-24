@@ -29,8 +29,14 @@ family, because folder paths reveal the host's layout.
    are listed, disabled, with the reason. An *Advanced: use a folder that is already signed in* disclosure keeps today's
    path field. It is hidden on phones and on hosted cockpits.
 2. **Sign in.** cezar creates a private folder and starts the vendor's own login in it. The signing body is the
-   reconnect card's, so the same states apply: browser tab (local), paste the code (Claude remote), device code (Codex
-   remote), API key (Codex, on request), and the terminal hand-off (OMP and Kimi: no headless login).
+   reconnect card's, so the same states apply: a sign-in link (local), paste the code (Claude remote), device code
+   (Codex remote), API key (Codex, on request), and the terminal hand-off (OMP and Kimi: no headless login).
+
+**cezar never opens a browser** (owner, 2026-11-24). Every method shows the URL with **Copy link** as the main action
+and *Open in default browser* as a secondary one, so the user can use the browser profile the account lives in. The
+local links call back to `localhost`, so any browser on that machine completes the sign-in on its own. The CLI's own
+`open` call is captured by the PATH shim only to read the URL. The reconnect card follows the same rule, so its
+pre-opened tab (`pendingTab` in `use-reconnect.ts`) is removed.
 3. **Ready.** Shows the identity (email, organization, plan) and plan usage when the runner reports them, plus two
    optional switches: *Use for this project* and *Default for new projects*.
 
@@ -72,8 +78,8 @@ through `.passthrough()`:
 
 | Agent | Local cockpit | Phone or hosted | Completion |
 | --- | --- | --- | --- |
-| Claude Code | `claude auth login`; the browser launch is captured and opened in a tab | printed URL, then *paste the code* (stdin) | the CLI exits 0 → verify |
-| Codex | `codex login` (localhost:1455 callback) | `codex login --device-auth`: code and countdown | detected automatically |
+| Claude Code | `claude auth login`; the browser launch is captured and shown with Copy link (never opened) | printed URL, then *paste the code* (stdin) | the CLI exits 0 → verify |
+| Codex | `codex login` (localhost:1455 callback), URL shown with Copy link | `codex login --device-auth`: code and countdown | detected automatically |
 | Codex (API key) | `codex login --with-api-key` (stdin) | same | the CLI exits 0 |
 | OMP, Kimi | terminal hand-off and the login watcher | `cez account login <id>`, run on the computer, then *Check again* | watcher or Check again |
 
