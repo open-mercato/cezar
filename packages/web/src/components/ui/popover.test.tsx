@@ -60,6 +60,25 @@ class StubResizeObserver {
   }
 }
 
+/** A real MutationObserver that records its instances and what they watch. */
+class RecordingMutationObserver extends MutationObserver {
+  static all: RecordingMutationObserver[] = []
+  targets: Node[] = []
+  disconnected = false
+  constructor(callback: MutationCallback) {
+    super(callback)
+    RecordingMutationObserver.all.push(this)
+  }
+  override observe(target: Node, options?: MutationObserverInit) {
+    this.targets.push(target)
+    super.observe(target, options)
+  }
+  override disconnect() {
+    this.disconnected = true
+    super.disconnect()
+  }
+}
+
 /** Fire every live observer watching `el` (or only the placement hook's, which also watches the
  *  content — Radix's own watches the wrapper), then let the frame run. */
 async function resized(el: Element, onlyPlacement = false) {
@@ -283,8 +302,8 @@ describe('PopoverContent placement against the visual viewport', () => {
     rects.trigger = { x: 16, top: 40, width: 240, height: 60 }
     const content = await renderOpen(switcher())
     await keyboard(100) // 0px below the trigger, 34px above it
+    expect(content().dataset.side).toBe('top')
     expect(content().style.maxHeight).toBe('')
-    expect(content().style.maxHeight).not.toBe('0px')
   })
 
   it('leaves avoidCollisions={false} to Radix: no flip, no clamp', async () => {
@@ -401,22 +420,34 @@ describe('PopoverContent re-placement while open', () => {
   })
 
   it('removes every listener and observer on close, and re-attaches on reopen', async () => {
+    // Keyed by type AND capture: a listener removed without the capture flag it was added with
+    // stays attached, and must leave its count non-zero.
     const windowActive = new Map<string, number>()
+    const key = (type: string, options?: boolean | EventListenerOptions) =>
+      `${type}:${typeof options === 'boolean' ? options : !!options?.capture}`
+    const live = (type: string) =>
+      [...windowActive].filter(([k]) => k.startsWith(`${type}:`)).reduce((sum, [, n]) => sum + n, 0)
+    const leaked = (type: string) => [...windowActive].filter(([k, n]) => k.startsWith(`${type}:`) && n !== 0)
     const add = window.addEventListener.bind(window)
     const remove = window.removeEventListener.bind(window)
     vi.spyOn(window, 'addEventListener').mockImplementation(
       (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
-        windowActive.set(type, (windowActive.get(type) ?? 0) + 1)
+        windowActive.set(key(type, options), (windowActive.get(key(type, options)) ?? 0) + 1)
         add(type, listener, options)
       },
     )
     vi.spyOn(window, 'removeEventListener').mockImplementation(
       (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
-        windowActive.set(type, (windowActive.get(type) ?? 0) - 1)
+        windowActive.set(key(type, options), (windowActive.get(key(type, options)) ?? 0) - 1)
         remove(type, listener, options)
       },
     )
-    const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect')
+    RecordingMutationObserver.all = []
+    vi.stubGlobal('MutationObserver', RecordingMutationObserver)
+    const placementObservers = () =>
+      RecordingMutationObserver.all.filter((o) =>
+        o.targets.some((t) => t instanceof HTMLElement && t.hasAttribute('data-radix-popper-content-wrapper')),
+      )
     const tree = (open: boolean) => (
       <Popover open={open}>
         <PopoverTrigger>Projects</PopoverTrigger>
@@ -426,18 +457,20 @@ describe('PopoverContent re-placement while open', () => {
     const { rerender } = render(tree(true))
     await frame()
     expect(viewport.active.get('resize')).toBeGreaterThan(0)
-    expect(windowActive.get('resize')).toBeGreaterThan(0)
+    expect(live('resize')).toBeGreaterThan(0)
+    expect(windowActive.get('scroll:true')).toBeGreaterThan(0) // the hook's capture-phase scroll
     expect(StubResizeObserver.all.some((o) => !o.disconnected)).toBe(true)
+    expect(placementObservers().length).toBeGreaterThan(0)
 
     rerender(tree(false))
     await frame()
     expect(screen.queryByText('menu')).toBeNull()
     expect(viewport.active.get('resize')).toBe(0)
     expect(viewport.active.get('scroll')).toBe(0)
-    expect(windowActive.get('resize') ?? 0).toBe(0)
-    expect(windowActive.get('scroll') ?? 0).toBe(0)
+    expect(leaked('resize')).toEqual([])
+    expect(leaked('scroll')).toEqual([])
     expect(StubResizeObserver.all.every((o) => o.disconnected)).toBe(true)
-    expect(disconnect).toHaveBeenCalled()
+    expect(placementObservers().every((o) => o.disconnected)).toBe(true)
 
     rerender(tree(true))
     await frame()
