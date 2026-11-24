@@ -180,9 +180,10 @@ describe('the managers routes', () => {
     const [projectId] = ((await (await request(`${BASE}/${id}`)).json()) as { connectedProjectIds: string[] }).connectedProjectIds;
     const response = await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Fix the login' } });
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({ projectId, runId: 'run-1' });
+    expect(await response.json()).toMatchObject({ projectId, runId: 'run-1', agent: { runner: 'claude', reason: expect.stringContaining('automatic selection') } });
     expect(startRun).toHaveBeenCalledOnce();
-    expect(startRun.mock.calls[0]?.[1]).toMatchObject({ task: 'Fix the login' });
+    // The choice reaches the run's timeline through the real route.
+    expect(startRun.mock.calls[0]?.[1]).toMatchObject({ task: 'Fix the login', managerAgent: { note: expect.stringContaining('Agent chosen by manager') } });
   });
 
   it('refuses a project out of scope, through the route', async () => {

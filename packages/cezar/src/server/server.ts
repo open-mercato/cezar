@@ -374,6 +374,7 @@ import {
   defaultAgentProfile,
   listAgentProfiles,
   profileDirState,
+  resolveAccountId,
   resolveProfileEnvForRoot,
   resolveStoredProfile,
   sameProfileDir,
@@ -5597,6 +5598,7 @@ export function createApp(deps: ServerDeps) {
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
+        ...(parsed.data.startedByManager && parsed.data.managerAgent ? { managerAgent: parsed.data.managerAgent } : {}),
         worktree: parsed.data.worktree,
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,
@@ -9194,6 +9196,18 @@ export function createApp(deps: ServerDeps) {
     accountError: async (runner, agentProfile) => {
       const account = await resolveWorkspaceProfile(runner, agentProfile);
       return 'error' in account ? account.error : null;
+    },
+    // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
+    accountLimit: async (runner, agentProfile, repoRoot) => {
+      const store = await loadAgentAccounts().catch(() => undefined);
+      const account = agentProfile ?? (store ? resolveAccountId(store, { provider: runner, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID);
+      const named = store?.accounts.find((entry) => entry.id === account && entry.provider === runner);
+      const until = deps.semaphore?.accountHolds().deadlines?.get(`${runner}:${account}`);
+      return {
+        account,
+        label: named?.label || (account === DEFAULT_AGENT_ACCOUNT_ID ? 'default account' : account),
+        ...(until !== undefined && until > Date.now() ? { until } : {}),
+      };
     },
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
