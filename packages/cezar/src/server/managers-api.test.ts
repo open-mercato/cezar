@@ -10,6 +10,7 @@ import { agentProfileResponseSchema, runnerSchema } from '@open-mercato/cezar-co
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import type { AgentEvent } from '../core/agent-runner.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
+import type { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { eligibleFallbackCandidates, fallbackConsentCurrent, managerFallbackPolicy } from '../workspace/agent-fallback.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { RunStore } from '../runs/store.ts';
@@ -238,10 +239,14 @@ describe('the managers routes', () => {
     // Back to Automatic: no list to fall back within.
     expect((await request(`${BASE}/${created.id}`, { method: 'PATCH', body: { taskAgents: null } })).status).toBe(200);
     expect(fallbackConsentCurrent(policy, live)).toBe(false);
-    // Another manager's id never reads this one's list, and a deleted manager withdraws its policy.
+    // Each policy reads its own manager's list by id: the other manager lists only Claude, so its
+    // policy drops Codex while this one's (re-listed with Codex) keeps it. A deleted manager withdraws its policy.
+    expect((await request(`${BASE}/${created.id}`, { method: 'PATCH', body: { taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }] } })).status).toBe(200);
     const other = await createManager({ instructions: 'Other', projects: 'all', taskAgents: [{ runner: 'claude', agentProfile: 'default' }] });
-    const otherPolicy = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }], other.id);
+    const otherPolicy = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }, { provider: 'codex', profileId: 'default' }], other.id);
     expect(fallbackConsentCurrent(otherPolicy, live)).toBe(true);
+    expect(eligibleFallbackCandidates(otherPolicy, new Set(), new Set(), null).eligible.map((c) => c.provider)).toEqual(['claude']);
+    expect(eligible()).toEqual(['claude', 'codex']);
     expect((await request(`${BASE}/${other.id}`, { method: 'DELETE' })).status).toBeLessThan(300);
     expect(fallbackConsentCurrent(otherPolicy, live)).toBe(false);
   });
@@ -275,6 +280,27 @@ describe('the managers routes', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ...body, notice: 'Switched task agent' });
     expect(switchAgent).toHaveBeenCalledWith(run.id, { runner: 'codex', agentProfile: 'default', changedBy: 'Release Manager' }, 'claude');
+  });
+
+  it('a fallback entry’s model crosses POST /runs, with the manager token, into the run’s input', async () => {
+    // No live model discovery in a unit test: an unanswered catalog falls back to the static model check.
+    await engine.shutdown();
+    app = createApp({
+      repoRoot: root, version: 'test', store,
+      manager: { startRun, switchAgent, isActive: () => false } as unknown as RunManager,
+      workspaceEvents: bus,
+      modelCatalog: { get: async () => { throw new Error('offline'); } } as unknown as RunnerModelCatalog,
+      onManagerEngine: (built) => { engine = built; },
+    });
+    const { id } = await createManager({ instructions: 'Watch', projects: 'all', runner: 'claude', taskAgents: [{ runner: 'claude', agentProfile: 'default' }] });
+    const [projectId] = ((await (await request(`${BASE}/${id}`)).json()) as { connectedProjectIds: string[] }).connectedProjectIds;
+    const response = await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Fix it', model: 'opus' } });
+    expect(response.status).toBe(201);
+    // Through the real route and its zod contract: a schema without `fallback[].model` strips it here.
+    expect(startRun.mock.calls[0]?.[1]).toMatchObject({
+      model: 'opus',
+      managerAgent: { fallback: [{ provider: 'claude', profileId: 'default', model: 'opus' }] },
+    });
   });
 
   it('refuses a project out of scope, through the route', async () => {

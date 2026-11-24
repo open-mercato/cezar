@@ -1073,8 +1073,9 @@ function autoResumeCap(reason: AutoResumeReason | undefined, error?: string): nu
  * copy lives on `RunRecord.autoResumeAt`. Server-side formatting is honest here because cezar is
  * local-first: the process and the browser reading it are the same machine.
  */
-/** A dispatched child's copy of its parent's manager policy: on the child's runner a fallback keeps
- *  the CHILD's model (or the runner default), never the parent's. */
+/** A dispatched child's copy of its parent's manager policy — the manager's whole list, so admission
+ *  skips the child's own account and keeps the parent's. On the child's runner a fallback keeps the
+ *  CHILD's model (or the runner default); elsewhere the model the engine checked for that runner. */
 function childFallbackPolicy(policy: NonNullable<RunRecord['fallbackPolicy']>, runner: RunnerId, model: string | undefined): NonNullable<RunRecord['fallbackPolicy']> {
   return {
     ...policy,
@@ -4200,7 +4201,8 @@ export class RunManager {
       this.store.appendEvent(runId, { type: 'note', message: `${label(fromKey)} could not start — ${startFailure}` });
     }
     // Say why a listed agent is not used when it is the one that just ran out.
-    if (startFailure === undefined && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
+    // A manager list always holds the task's own account; skipping it there is expected, not news.
+    if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
     const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot);
