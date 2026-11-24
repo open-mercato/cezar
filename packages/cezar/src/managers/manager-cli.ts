@@ -106,7 +106,7 @@ Compact by default: finished tasks the user has not opened, and all but the 20 n
 
 /** `--help` per command; `task create` adds the project's workflow names when it can reach them. */
 const HELP: Record<string, string> = {
-  status: SNAPSHOT_HELP('status', 'What needs attention, every task and every pull request.'),
+  status: SNAPSHOT_HELP('status', 'What needs attention, every task and every pull request, and the agent accounts new tasks may use with their usage-limit state.'),
   attention: SNAPSHOT_HELP('attention', 'What needs attention: waiting, failed, finished and stalled tasks, PRs and automations.'),
   tasks: SNAPSHOT_HELP('tasks', "Every connected project's tasks, the user's own included, with their model, effort and PR."),
   prs: SNAPSHOT_HELP('prs', 'Open pull requests and their status.'),
@@ -122,7 +122,12 @@ Starts a task.
   --title <t>        its title
   --workflow <w>     a workflow name (default quick-task); see cez manager workflows
   --runner <r>       the agent backend, e.g. claude or codex, from the manager's allowed task accounts
-  --account <id>     the agent account id (default selects the discovered account)
+  --account <id>     the agent account id from those accounts
+                     Omit both to use the manager's settings: its first allowed account with usage capacity,
+                     skipping any that is out of limits (cez manager status lists them). With none free the task
+                     queues until the first one resets. A usage limit hit mid-task moves it to another allowed
+                     account with capacity. The output names the chosen account and why; an explicit --account
+                     that is out of limits prints a warning naming an allowed one with capacity.
   --model <m>        a model id or alias the runner can use, e.g. opus; refused with the valid ones otherwise
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
   --dispatch         start it as the root of a dispatch tree, only for work worth splitting;
@@ -508,6 +513,12 @@ export async function runManagerCommand(
             if (hidden > 0) lines.push(`${project.projectId}: ${hidden} older finished task${hidden === 1 ? '' : 's'} not shown (--all lists them)`);
           }
         }
+        if (command === 'status' && data.accounts?.length) {
+          for (const account of data.accounts) {
+            const flags = `--runner ${account.runner}${account.agentProfile ? ` --account ${account.agentProfile}` : ' (automatic account)'}`;
+            lines.push(`account  ${flags}  ${account.label}  ${account.outOfLimitsUntil ? `out of usage limits until ${account.outOfLimitsUntil}` : 'has capacity'}`);
+          }
+        }
         if (command === 'status' || command === 'prs') {
           for (const project of projects) {
             if (project.prsUnavailable) lines.push(`${project.projectId}: pull requests unavailable — ${project.prsUnavailable}`);
@@ -548,6 +559,12 @@ export async function runManagerCommand(
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
           if (created.forwarded) io.log(forwardedLine(created.forwarded));
           if (created.notice) io.log(created.notice);
+          if (created.agent) {
+            const { agent } = created;
+            io.log(`agent: --runner ${agent.runner}${agent.agentProfile ? ` --account ${agent.agentProfile}` : ' (automatic account)'} — ${agent.label}; ${agent.reason}`);
+            if (agent.queuedUntil) io.log(`queued: no allowed account has capacity; the task starts when ${agent.label} resets at ${agent.queuedUntil}`);
+          }
+          if (created.warning) io.log(`warning: ${created.warning}`);
           return 0;
         }
         if (sub === 'say') {

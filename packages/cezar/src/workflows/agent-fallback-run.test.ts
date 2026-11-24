@@ -157,6 +157,52 @@ describe('automatic agent fallback', () => {
     expect(summary?.tone).toBe('danger');
   }, 40_000);
 
+  describe('a manager-started task falls back within the manager’s allowed accounts', () => {
+    const startedByManager = { id: 'm1', name: 'Coding Manager' };
+
+    it('moves to the next allowed account with capacity, with project fallback off, and records why', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(workflow, {
+        task: 'fix the bug mock:limit', worktree: false, startedByManager,
+        managerAgent: { note: 'Agent chosen by manager Coding Manager: claude · Default — default from manager settings', fallback: [{ provider: 'claude', profileId: 'second' }] },
+      });
+      expect(store.getRun(started.id)?.fallbackPolicy).toMatchObject({ enabled: true, source: 'manager' });
+      await until(() => store.getRun(started.id)?.fallbackEpisode?.current !== undefined, 'manager fallback to reserve its successor');
+      const record = store.getRun(started.id);
+      expect(record?.agentProfile).toBe('second');
+      expect(store.listRuns()).toHaveLength(1);
+      expect(messages(started.id)).toContain('Agent chosen by manager Coding Manager: claude · Default — default from manager settings');
+      expect(messages(started.id)).toContain('claude · Default reached its usage limit — claude · Second · auto model continues this task');
+    }, 40_000);
+
+    it('keeps the reset-time auto-resume when every other allowed account is out of limits', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      // `second` is already waiting out its own limit.
+      const first = manager.startRun(workflow, { task: 'mock:limit', worktree: false, agentProfile: 'second' });
+      await until(() => store.getRun(first.id)?.autoResumeAt !== undefined, 'second account held');
+      expect(manager.accountHolds().deadline.has('claude:second')).toBe(true);
+      const started = manager.startRun(workflow, {
+        task: 'mock:limit', worktree: false, startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'second' }] },
+      });
+      await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'auto-resume to arm');
+      expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
+      expect(store.getRun(started.id)?.status).toBe('failed');
+    }, 40_000);
+
+    it('an empty allowed remainder never falls back outside the list, even with project fallback on', async () => {
+      registerAccounts(['second']);
+      await enable([{ provider: 'claude', profileId: 'second' }]);
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(workflow, { task: 'mock:limit', worktree: false, startedByManager, managerAgent: { note: 'chosen', fallback: [] } });
+      expect(store.getRun(started.id)?.fallbackPolicy).toBeUndefined();
+      await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'auto-resume to arm');
+      expect(store.getRun(started.id)?.agentProfile).toBeUndefined();
+    }, 40_000);
+  });
+
   it('leaves the zero-config path untouched: no policy means the reset-time auto-resume, exactly as before', async () => {
     manager = new RunManager(store, repoRoot);
     const started = manager.startRun(workflow, { task: 'mock:limit', worktree: false });

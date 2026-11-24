@@ -166,6 +166,7 @@ import {
   candidateKey,
   eligibleFallbackCandidates,
   fallbackConsentCurrent,
+  managerFallbackPolicy,
   getAgentFallbackPolicySync,
   loadFallbackAccounts,
   type AgentFallbackPolicy,
@@ -1098,6 +1099,9 @@ export interface StartRunInput {
   systemPrompt?: string;
   /** Manager provenance also carries the task's restrictions to descendants and continuations. */
   startedByManager?: RunRecord['startedByManager'];
+  /** The manager's agent choice: a timeline note, and its other allowed accounts for a usage limit
+   *  (absent: the project's own fallback policy). */
+  managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string }> };
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -2122,7 +2126,11 @@ export class RunManager {
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
       // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
-      fallbackPolicy: ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
+      // A manager's task falls back within the manager's own allowed accounts (spec 2026-10-31-managers).
+      // An allowed-accounts list never falls back outside itself, so `[]` means no fallback at all.
+      fallbackPolicy: input.startedByManager && input.managerAgent?.fallback
+        ? managerFallbackPolicy(input.managerAgent.fallback)
+        : ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
       // startRun directly — a route-level gate would leave those writing todos.json.
@@ -2155,6 +2163,9 @@ export class RunManager {
       this.store.updateRun(run.id, { readOnly: true, ...(input.enforceReadOnly ? { enforceReadOnly: true as const } : {}) });
     }
     if (input.subject) this.store.updateRun(run.id, { subject: input.subject });
+    if (input.startedByManager && input.managerAgent) {
+      this.store.appendEvent(run.id, { type: 'lifecycle', tone: 'info', message: input.managerAgent.note });
+    }
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -3962,6 +3973,7 @@ export class RunManager {
       const index = defined.findIndex((step) => step.id === failed.id);
       if (index !== -1 && index < defined.length - 1) return undefined;
     }
+    if (snapshot.source === 'manager' && !successorFailedToStart && !this.managerFallbackHasCapacity(run, failed)) return undefined;
     const live = getAgentFallbackPolicySync(this.repoRoot);
     if (!fallbackConsentCurrent(snapshot as AgentFallbackPolicy, live)) return undefined;
     return { failed, successorFailedToStart };
@@ -4070,6 +4082,17 @@ export class RunManager {
     return true;
   }
 
+  /**
+   * A manager's task moves only to an allowed account with capacity now. With every one waiting out
+   * a limit it keeps the reset-time auto-resume instead of failing (manager task agents, #5).
+   */
+  private managerFallbackHasCapacity(run: RunRecord, failed: RunRecord['steps'][number]): boolean {
+    const origin = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
+    const attempted = new Set([...(run.fallbackEpisode?.attempted ?? []), origin]);
+    const held = this.semaphore.accountHolds().deadline;
+    return (run.fallbackPolicy?.candidates ?? []).some((c) => !attempted.has(candidateKey(c)) && !held.has(candidateKey(c)));
+  }
+
   private finishFallbackAdmission(runId: string, message: string): void {
     const run = this.store.getRun(runId);
     if (!run) return;
@@ -4171,7 +4194,7 @@ export class RunManager {
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       tone: 'danger',
-      message: `no fallback agent could continue — every agent in Settings → Agents → Automatic fallback was tried or unavailable${resets ? `; ${resets}` : ''}. Continue this task manually.`,
+      message: `no fallback agent could continue — every ${snapshot.source === 'manager' ? 'account in the manager’s settings for new tasks' : 'agent in Settings → Agents → Automatic fallback'} was tried or unavailable${resets ? `; ${resets}` : ''}. Continue this task manually.`,
     });
   }
 

@@ -36,6 +36,7 @@ import {
   type ManagerSummary,
   type ManagerTaskDetail,
   type ManagerTaskAgent,
+  type ManagerAccountState,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
@@ -55,6 +56,7 @@ import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
+import { chooseTaskAgent, type AccountOption, type TaskAgentChoice } from './task-agent-choice.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
@@ -152,6 +154,9 @@ export interface ManagerEngineDeps {
   defaultRunner: () => Promise<RunnerId>;
   /** Why this account cannot be picked, as `POST /runs` would say it. */
   accountError: (runner: RunnerId, agentProfile: string) => Promise<string | null>;
+  /** An account's resolved id, label and usage-limit reset (epoch ms) from the workspace holds.
+   *  Absent: every account has capacity. */
+  accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string) => Promise<{ account: string; label: string; until?: number }>;
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
@@ -833,7 +838,9 @@ export class ManagerEngine {
   async snapshot(id: string): Promise<ManagerSnapshot | undefined> {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
-    return buildSnapshot(await this.sources(manager), this.deps.github, this.now());
+    const sources = await this.sources(manager);
+    const snapshot = await buildSnapshot(sources, this.deps.github, this.now());
+    return { ...snapshot, accounts: await this.accountStates(manager, sources) };
   }
 
   private nextChange(id: string): number {
@@ -2886,7 +2893,7 @@ export class ManagerEngine {
     return { text, ...(forward ? { forward } : {}) };
   }
 
-  async createTask(id: string, input: ManagerCreateTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+  async createTask(id: string, input: ManagerCreateTaskInput, prefer?: { runner?: string; agentProfile?: string }): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const readOnly = managerAccessOf(scope.manager, input.projectId) === 'read';
@@ -2898,21 +2905,39 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
-    const agents = scope.manager.taskAgents;
+    const agents = scope.manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner));
     const preferred = await this.runnerOf(scope.manager);
     const candidates = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
       && (input.agentProfile === undefined || agent.agentProfile === input.agentProfile));
     if (candidates?.length === 0) {
       return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
     }
-    const selected = candidates?.find((agent) => agent.runner === preferred) ?? candidates?.[0];
-    const runner = selected?.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
-    const agentProfile = selected ? selected.agentProfile : input.agentProfile;
+    const root = scope.source?.root;
+    const now = this.now();
+    let choice: TaskAgentChoice | undefined;
+    let fallback: Array<{ provider: RunnerId; profileId: string }> | undefined;
+    if (agents && candidates) {
+      // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
+      const rank = (agent: ManagerTaskAgent) => (prefer && agent.runner === prefer.runner && agent.agentProfile === prefer.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
+      const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
+      const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
+      const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
+      choice = chooseTaskAgent(options, { explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now });
+      const picked = choice.chosen;
+      fallback = allowed.filter((option) => option !== picked && !(option.runner === picked.runner && option.account === picked.account))
+        .map((option) => ({ provider: option.runner, profileId: option.account }));
+    }
+    const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
+    const agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
     if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
-    if (input.model || input.effort) {
-      const issue = await this.modelIssue(runner, input.model, input.effort);
+    choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
+    // A retry moved to another runner keeps none of the old runner's model and effort.
+    const carried = !prefer || prefer.runner === undefined || prefer.runner === runner ? input : { ...input, model: undefined, effort: undefined };
+    const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
+    if (carried.model || carried.effort) {
+      const issue = await this.modelIssue(runner, carried.model, carried.effort);
       if (issue) return issue;
     }
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
@@ -2931,10 +2956,11 @@ export class ManagerEngine {
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         runner,
         ...(agentProfile !== undefined ? { agentProfile } : {}),
-        ...(input.model ? { model: input.model } : {}),
-        ...(input.effort ? { reasoningEffort: input.effort } : {}),
+        ...(carried.model ? { model: carried.model } : {}),
+        ...(carried.effort ? { reasoningEffort: carried.effort } : {}),
         ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },
+        managerAgent: { note: agentNote.slice(0, 500), ...(fallback ? { fallback: fallback.slice(0, 10) } : {}) },
       },
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
@@ -2952,7 +2978,46 @@ export class ManagerEngine {
       runId: run.id,
       ...(forward ? { forwarded: forward.forwarded } : {}),
       ...(dispatchIgnored ? { notice: `dispatch ignored: ${input.projectId} runs tasks in place` } : {}),
+      agent: {
+        runner: choice.chosen.runner,
+        ...(choice.chosen.agentProfile !== undefined ? { agentProfile: choice.chosen.agentProfile } : {}),
+        account: choice.chosen.account,
+        label: choice.chosen.label,
+        reason: choice.reason,
+        ...(choice.queuedUntil !== undefined ? { queuedUntil: new Date(choice.queuedUntil).toISOString() } : {}),
+      },
+      ...(choice.warning ? { warning: choice.warning } : {}),
     };
+  }
+
+  /** One account's usage-limit state, from the workspace holds; unknown = capacity. */
+  private async accountOption(runner: RunnerId, agentProfile: string | undefined, repoRoot?: string): Promise<AccountOption> {
+    const state = await this.deps.accountLimit?.(runner, agentProfile, repoRoot).catch(() => undefined);
+    return {
+      runner,
+      ...(agentProfile !== undefined ? { agentProfile } : {}),
+      account: state?.account ?? agentProfile ?? 'default',
+      label: state?.label ?? agentProfile ?? 'automatic account',
+      ...(state?.until !== undefined ? { until: state.until } : {}),
+    };
+  }
+
+  /** The accounts new tasks may use and their limit state, for `cez-manager status`. */
+  private async accountStates(manager: Manager, sources: ManagerProjectSource[]): Promise<ManagerAccountState[]> {
+    const root = sources.find((source) => source.available)?.root;
+    const agents = manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner))
+      ?? [{ runner: manager.taskRunner && isRunnerId(manager.taskRunner) ? manager.taskRunner : await this.runnerOf(manager) }];
+    const now = this.now();
+    return Promise.all(agents.map(async (agent) => {
+      const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+      return {
+        runner: option.runner,
+        ...(option.agentProfile !== undefined ? { agentProfile: option.agentProfile } : {}),
+        account: option.account,
+        label: option.label,
+        ...(option.until !== undefined && option.until > now ? { outOfLimitsUntil: new Date(option.until).toISOString() } : {}),
+      };
+    }));
   }
 
   /** A live task takes the message; a finished one is continued with it. */
@@ -3058,6 +3123,8 @@ export class ManagerEngine {
     const allowed = scope.manager.taskAgents
       ? scope.manager.taskAgents.some((agent) => agent.runner === run.runner && agent.agentProfile === run.agentProfile)
       : !scope.manager.taskRunner || scope.manager.taskRunner === run.runner;
+    // With an allowed-accounts list the retry takes the manager's default (limit-aware), its old account first.
+    const pinned = allowed && !scope.manager.taskAgents;
     const created = await this.createTask(id, {
       projectId: input.projectId,
       task: run.task,
@@ -3065,11 +3132,11 @@ export class ManagerEngine {
       allowPlaceholder: true,
       workflow: run.workflow,
       ...(run.titleOrigin === 'user' ? { title: run.title } : {}),
-      ...(allowed && run.runner ? { runner: run.runner } : {}),
-      ...(allowed && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
+      ...(pinned && run.runner ? { runner: run.runner } : {}),
+      ...(pinned && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
-    });
+    }, allowed ? { runner: run.runner, agentProfile: run.agentProfile } : undefined);
     if (!('error' in created)) this.managerActed(id, { tasks: [followKey(input.projectId, run.id)] }, 'you retried that task since');
     return created;
   }

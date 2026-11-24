@@ -20,6 +20,8 @@ export type AgentFallbackCandidate = { provider: ProviderId; profileId: string; 
 export type AgentFallbackPolicy = {
   enabled: boolean; candidates: AgentFallbackCandidate[]; revision: number;
   incarnation: string | null; revocation: string | null;
+  /** `manager`: built from the starting manager's allowed task accounts (no project consent). */
+  source?: 'manager';
 };
 
 const candidateSchema = z.object({
@@ -233,9 +235,21 @@ export async function putAgentFallbackPolicy(root: string, input: {
   } finally { lock(); }
 }
 
-/** A snapshot still carries the consent that is live now. */
+/** A snapshot still carries the consent that is live now. A manager's snapshot carries its own:
+ *  the user listed those accounts in the manager's settings. */
 export function fallbackConsentCurrent(snapshot: AgentFallbackPolicy, live: AgentFallbackPolicy): boolean {
+  if (snapshot.source === 'manager') return snapshot.enabled;
   return live.enabled && live.incarnation === snapshot.incarnation && live.revocation === snapshot.revocation;
+}
+
+/** The fallback snapshot for a task a manager starts: its other allowed accounts, in order. */
+export function managerFallbackPolicy(candidates: readonly { provider: ProviderId; profileId: string }[]): AgentFallbackPolicy | undefined {
+  if (candidates.length === 0) return undefined;
+  return {
+    enabled: true,
+    candidates: candidates.slice(0, 10).map((c) => ({ provider: c.provider, profileId: c.profileId })),
+    revision: 0, incarnation: null, revocation: null, source: 'manager',
+  };
 }
 
 export type FallbackSkip = { candidate: AgentFallbackCandidate; reason: string };
