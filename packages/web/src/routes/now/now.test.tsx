@@ -420,16 +420,24 @@ describe('NowRoute', () => {
 
   it('takes the scope a navigation hands over, and remembers it (bottom bar quick actions)', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }))))
+    let seen: { pathname: string; state: unknown } | undefined
+    function StateProbe() {
+      const location = useLocation()
+      seen = { pathname: location.pathname, state: location.state }
+      return null
+    }
     render(
       <QueryClientProvider client={createQueryClient()}>
         <MemoryRouter initialEntries={[{ pathname: '/p/cezar/', state: { nowScope: 'all' } }]}>
           <Routes>
-            <Route path="/p/:projectId/" element={<NowRoute />} />
+            <Route path="/p/:projectId/" element={<><NowRoute /><StateProbe /></>} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
     await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
+    // Consumed once: Back or a reload to this entry must not override a later manual choice.
+    await waitFor(() => expect(seen).toEqual({ pathname: '/p/cezar/', state: null }))
   })
 
   it('hides the New task button when health says Manager is available', async () => {
