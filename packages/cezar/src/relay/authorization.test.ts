@@ -499,7 +499,7 @@ describe('a relay request is a hosted request', () => {
       'automations/builtin-skill.ts': 1,
       'workflows/run.ts': 1, // `dispatch`
       'server/capabilities.ts': 8, // the definitions and their internal callers
-      'server/server.ts': 8, // the closure, the accounts and phone-accounts closures, startServer's flags and RunManagers' `hosted`, verifyWsUpgrade
+      'server/server.ts': 7, // the closure, the shared accounts boundary read, startServer's flags and RunManagers' `hosted`, verifyWsUpgrade
     };
 
     it('a new direct read of the boundary in a request path fails here', () => {
