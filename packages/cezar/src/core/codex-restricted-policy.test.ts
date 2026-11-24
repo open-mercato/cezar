@@ -21,3 +21,21 @@ describe('restricted Codex command approvals', () => {
     expect(() => compileCodexRestrictedPolicy(spec)).toThrow('tool-policy enforcement unavailable');
   });
 });
+
+describe('a brokered manager shell', () => {
+  const brokeredShell = { describe: 'x', env: {}, verify: () => ({ ok: false as const, reason: 'no' }) };
+  it('compiles to an isolated policy whose Bash is the shell', () => {
+    const compiled = compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['cez-manager', 'gh pr view'], brokeredShell });
+    expect(compiled).toMatchObject({ mutation: 'read-only', shell: brokeredShell });
+    expect([...compiled!.tools]).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+  });
+  it.each([
+    ['a write tool', { allowedTools: ['Read', 'Bash', 'Write'] }],
+    ['no Bash', { allowedTools: ['Read'] }],
+    ['a read-only step', { allowedTools: ['Read', 'Bash'], enforceReadOnly: true }],
+    ['a hook', { allowedTools: ['Read', 'Bash'], bashHookCommand: 'hook' }],
+    ['MCP', { allowedTools: ['Read', 'Bash'], mcpServers: [{ name: 'x', command: 'x' }] }],
+  ])('refuses %s', (_name, spec) => {
+    expect(() => compileCodexRestrictedPolicy({ ...spec, brokeredShell } as Parameters<typeof compileCodexRestrictedPolicy>[0])).toThrow('tool-policy enforcement unavailable');
+  });
+});

@@ -155,14 +155,25 @@ Notable fields (full doc-comments in the source):
   an ask card in an attended run (`canAskPermission`, #2042) and refused in an
   autonomous, headless or one-shot run, except this run's own files. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
+- `brokeredShell?` — Codex only: a manager's Bash. The restricted session's broker passes each
+  command to `verify` (the manager policy, `managerShellPlan`) and spawns the returned argv
+  pipeline itself, with a heredoc body as stdin and no shell, in `env`. Claude enforces the same
+  policy through `bashHookCommand`; any other backend ignores the field.
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
 
 **Restricted Codex execution** — `codex-restricted-policy.ts` snapshots the grant. The runner
-accepts only the verified 0.169.0 protocol on macOS/Linux, validates the isolated config and its
-layers, requires no managed requirements/hooks/MCP, and verifies thread sandbox/approval settings
-before the first model turn. Unknown versions, active system policy, unavailable controls and
-ambiguous legacy graph policies fail closed.
+accepts Codex 0.169.0 or newer on macOS/Linux, validates the isolated config and its layers,
+requires no hooks/MCP and no managed requirements beyond ones that only narrow (a workspace's
+login methods and features forced off; its model-only `enterpriseManaged` layer is accepted), and
+verifies thread sandbox/approval settings before the first model turn. A 0.169.0 prerelease is
+refused; only the exact 0.169.0 build relies on the static list. Any other version (newer, or a
+`+build`) also reads every page of `experimentalFeature/list`, disables every enabled, non-`removed` feature for the thread (a newer
+Codex may add a native tool the static list does not know) and re-reads the thread's list; only
+`unified_exec`, which 0.170.0 keeps on and which has no shell or environment to run in, may stay
+on. Only flagged features can be disabled: a tool a future Codex adds without a feature flag is
+invisible to this check. Older versions, active system policy, unavailable controls and ambiguous legacy graph policies
+fail closed.
 
 Restricted steps use a separate account-and-cwd state directory under `cezarHomeDir()/codex-restricted/`.
 Only supported model/provider settings and the selected account's file-backed authentication

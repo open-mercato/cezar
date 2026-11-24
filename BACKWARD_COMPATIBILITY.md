@@ -727,6 +727,18 @@ unknown ui-state keys. It does not touch per-repo files.
   **Approve, open a full PR**, which opens it ready for review. When the task already has a PR,
   `github.draft-pr` after an instructed approval pushes the branch to it instead of opening another.
 
+## Managers and restricted Codex — Codex managers run again, newer Codex verified, 2026-11-24
+
+- **Restored outcome**: a manager whose agent is Codex (pinned, or the machine default) runs its
+  chat, watch, job and follow-up turns again, replacing the 2026-11-19 refusal below. They run in
+  the isolated restricted Codex session: native shell, apps and MCP are off, and cezar's broker runs
+  each Bash call only after `managerShellPlan` (the policy Claude's PreToolUse hook applies)
+  approves it, as an argv pipeline without a shell. Codex managers cannot Write files and get no
+  connectors, as before. The cockpit's manager agent picker offers Codex again.
+- **Additive**: `AgentRunSpec.brokeredShell` (Codex only).
+- **Widened acceptance**: restricted Codex steps accept Codex 0.169.0 or newer (was exactly 0.169.0).
+  Past 0.169.0 every enabled native feature is turned off for the thread and verified first.
+
 ## Managers — Codex managers are refused (#2330), 2026-11-19
 
 - **Changed outcome (security, fail-closed)**: a manager whose agent is Codex — pinned, or the

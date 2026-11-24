@@ -287,7 +287,7 @@ Open the manager's gear menu and select **Memory…** to see, edit, add or delet
 
 Open the chat's settings gear → **Manager agent** to change the manager's agent, account, model and effort in one dialog. The account field lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. During setup, **Model and effort** also offers agent and account choices.
 
-> **Good to know**: Codex is not offered as the manager's own agent. A manager's tools are limited to a `cez-manager` shell allowlist, and Codex cannot enforce that limit, so a manager already set to Codex, or one with no agent set on a machine whose default is Codex, shows an error in its chat instead of running. Choose Claude Code for the manager. Tasks the manager starts can still run on Codex.
+> **Good to know**: A manager's shell is limited to `cez-manager` and read-only `gh` commands. Claude Code enforces that with a hook. On Codex, the manager runs in Codex's isolated read-only mode and cezar runs each command itself, only after the same check, so Codex needs 0.169.0 or newer. A Codex manager cannot write files and cannot use connectors.
 
 Use **Agent for new tasks** during setup or in the dialog's **For new tasks** section to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
 
