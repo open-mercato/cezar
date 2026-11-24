@@ -2930,7 +2930,10 @@ export class ManagerEngine {
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
       const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
       const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
-      choice = chooseTaskAgent(options, { explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now });
+      choice = chooseTaskAgent(options, {
+        explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now,
+        ...(input.runner && candidates.length < agents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
+      });
       firstRunner = options[0]?.runner;
       const picked = choice.chosen;
       // An explicit --runner or --account keeps a usage-limit fallback on that runner.
@@ -2956,6 +2959,17 @@ export class ManagerEngine {
       const issue = await this.modelIssue(runner, input.model, input.effort);
       if (issue && !unpinned) return issue;
       if (issue) {
+        // Dropped only when another allowed runner can use it: a flag the manager typed that no listed
+        // runner accepts (a typo) is refused with the valid choices, as when nothing moved. A retry's
+        // flags are the old run's, so they are only ever dropped.
+        const runners = retry ? [] as RunnerId[] : [...new Set((agents ?? []).map((agent) => agent.runner))].filter((other) => other !== runner);
+        const usable = async (check: (other: RunnerId) => Promise<ManagerRefusal | undefined>) => {
+          for (const other of runners) if (!(await check(other))) return true;
+          return false;
+        };
+        const refusedHere = (model?: string, effort?: string) => this.modelIssue(runner, model, effort);
+        if (!retry && input.model && (await refusedHere(input.model)) && !(await usable((other) => this.modelIssue(other, input.model, undefined)))) return issue;
+        if (!retry && input.effort && (await refusedHere(undefined, input.effort)) && !(await usable((other) => this.modelIssue(other, undefined, input.effort)))) return issue;
         const model = input.model && !(await this.modelIssue(runner, input.model, undefined)) ? input.model : undefined;
         const effort = input.effort && !(await this.modelIssue(runner, model, input.effort)) ? input.effort : undefined;
         carried = { ...input, model, effort };

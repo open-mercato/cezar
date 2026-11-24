@@ -3388,12 +3388,48 @@ describe('ManagerEngine', () => {
         expect(created).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work', reason: expect.stringContaining('--model opus dropped: not valid on codex') } });
         expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', reasoningEffort: 'high' });
         expect(requests.at(-1)?.body).not.toHaveProperty('model');
-        // A bad flag where nothing moved is still refused with the valid choices.
-        expect(await engine.createTask(await managerWith(limited({})), { projectId: 'alpha', task: 'Fix it', model: 'gpt-5.1-codex' })).toMatchObject({ status: 400 });
-        // On the runner it was meant for, the model stays.
+        // A bad flag where nothing moved (capacity on the first runner) is still refused with the valid choices.
+        const free = limited({});
+        expect(await free.createTask(await managerWith(free), { projectId: 'alpha', task: 'Fix it', model: 'gpt-5.1-codex' })).toMatchObject({ status: 400 });
+        // On the runner it was meant for, with capacity there, the model stays.
         const own = limited({});
-        await engine.createTask(await managerWith(own), { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(await own.createTask(await managerWith(own), { projectId: 'alpha', task: 'Fix it', model: 'opus' })).toMatchObject({ agent: { runner: 'claude', agentProfile: 'first' } });
         expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'first', model: 'opus' });
+        expect((requests.at(-1)?.body as { managerAgent: { note: string } }).managerAgent.note).not.toContain('out of limits');
+      });
+
+      it('after a limit skip, a --model or --effort no allowed runner accepts is still a 400', async () => {
+        // Each runner's live catalog, as the cockpit's /models answers it.
+        const catalogs: Record<string, unknown> = {
+          claude: { runner: 'claude', source: 'live', stale: false, models: [{ id: 'opus', reasoningEfforts: [{ id: 'low' }, { id: 'high' }] }] },
+          codex: { runner: 'codex', source: 'live', stale: false, models: [{ id: 'gpt-5.1-codex', reasoningEfforts: [{ id: 'low' }, { id: 'high' }] }] },
+        };
+        const engine = makeEngine({
+          accountLimit: async (runner, agentProfile) => ({ account: agentProfile ?? 'default', label: agentProfile ?? 'default', ...(runner === 'claude' ? { until: RESET } : {}) }),
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            const runner = /[?&]runner=([^&]+)/.exec(path)?.[1];
+            if (path.startsWith('/api/v1/models') && runner) return Response.json(catalogs[runner]);
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const posts = () => requests.filter((request) => request.method === 'POST').length;
+        const before = posts();
+        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus-typo' })).toMatchObject({ status: 400, error: expect.stringContaining("'opus-typo'") });
+        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'ultra' as 'high' })).toMatchObject({ status: 400 });
+        expect(posts()).toBe(before);
+      });
+
+      it('--runner narrowed to exhausted accounts while another allowed account is free: queued with a warning', async () => {
+        const engine = limited({ 'codex:work': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'codex' });
+        expect(created).toMatchObject({
+          agent: { runner: 'codex', agentProfile: 'work', queuedUntil: '2099-01-01T05:00:00.000Z' },
+          warning: '--runner codex has no account with capacity until 2099-01-01T05:00:00.000Z; claude first login has capacity (--runner claude --account first)',
+        });
+        expect((created as { agent: { reason: string } }).agent.reason).not.toContain('every allowed account is');
       });
 
       it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {

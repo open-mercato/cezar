@@ -388,6 +388,28 @@ describe('automatic agent fallback', () => {
       ]);
     }, 40_000);
 
+    it('a child on another runner than its parent: the parent’s model stays on parent-runner entries, the child’s on its own', async () => {
+      manager = new RunManager(store, repoRoot);
+      const parent = manager.startRun(workflow, {
+        task: 'mock:monitoring waiting on my tasks', model: 'opus', startedByManager,
+        managerAgent: { note: 'chosen', fallback: [
+          { provider: 'claude', profileId: 'default', model: 'opus' },
+          { provider: 'codex', profileId: 'default' },
+          { provider: 'codex', profileId: 'team', model: 'gpt-5.1-codex' },
+        ] },
+      });
+      store.updateRun(parent.id, { dispatch: { rootRunId: parent.id } });
+      await until(() => store.getRun(parent.id)?.activity === 'monitoring', 'parent parked');
+      const child = manager.dispatch(parent.id, { objective: 'mock:done child', runner: 'codex', model: 'gpt-5.1-codex-mini' });
+      if ('refused' in child) throw new Error(child.refused);
+      expect(store.getRun(child.id)).toMatchObject({ runner: 'codex', model: 'gpt-5.1-codex-mini' });
+      expect(store.getRun(child.id)?.fallbackPolicy?.candidates).toEqual([
+        { provider: 'claude', profileId: 'default', model: 'opus' },
+        { provider: 'codex', profileId: 'default', model: 'gpt-5.1-codex-mini' },
+        { provider: 'codex', profileId: 'team', model: 'gpt-5.1-codex-mini' },
+      ]);
+    }, 40_000);
+
     it('the limit a manager sees is the semaphore’s merged deadline under the queue’s own key', async () => {
       registerAccounts(['second']);
       const semaphore = new WorkspaceSemaphore();

@@ -259,6 +259,22 @@ describe('cez manager', () => {
     expect(logs).toContain('account  --runner claude --account second  Home  has capacity');
   });
 
+  it('task create with --runner narrowed to exhausted accounts never claims no allowed account has capacity', async () => {
+    const reply = {
+      projectId: 'alpha', runId: 'new',
+      agent: { runner: 'codex', agentProfile: 'work', account: 'work', label: 'Work', reason: 'default from manager settings: every allowed account for --runner codex is out of limits (codex Work out of limits until 2099-01-01T05:00:00.000Z); queued on codex Work, the first to reset', queuedUntil: '2099-01-01T05:00:00.000Z' },
+      warning: '--runner codex has no account with capacity until 2099-01-01T05:00:00.000Z; claude Home has capacity (--runner claude --account second)',
+    };
+    const fetchStub = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/tasks')
+      ? Response.json(reply, { status: 201 })
+      : Response.json(snapshot)) as unknown as typeof fetch;
+    const { run, logs } = harness({}, {}, [], { fetch: fetchStub });
+    expect(await run('task', 'create', '--project', 'alpha', '--runner', 'codex', 'Do it')).toBe(0);
+    expect(logs).toContain('queued: Work is out of usage limits; the task starts when it resets at 2099-01-01T05:00:00.000Z');
+    expect(logs).toContain(`warning: ${reply.warning}`);
+    expect(logs.some((line) => line.includes('no allowed account has capacity'))).toBe(false);
+  });
+
   it('task create says when the project ignored --dispatch', async () => {
     const { run, logs } = harness();
     expect(await run('task', 'create', '--dispatch', 'Do', 'it')).toBe(0);

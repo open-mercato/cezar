@@ -75,6 +75,23 @@ describe('chooseTaskAgent', () => {
     expect(choice.reason).toBe('automatic selection: codex default account out of limits until 2099-01-01T01:00:00.000Z; the task waits in the queue until it resets');
   });
 
+  it('--runner narrowed to exhausted accounts while another allowed one is free: a truthful reason and a warning', () => {
+    const codex: AccountOption = { runner: 'codex', agentProfile: 'work', account: 'work', label: 'Work' };
+    const codex2: AccountOption = { runner: 'codex', agentProfile: 'team', account: 'team', label: 'Team' };
+    const choice = chooseTaskAgent([held(codex, LATER), held(codex2, SOONER)], {
+      explicitAccount: false, fromSettings: true, now: NOW, narrowedBy: '--runner codex',
+      allowed: [held(codex, LATER), held(codex2, SOONER), second],
+    });
+    expect(choice.chosen.account).toBe('team');
+    expect(choice.queuedUntil).toBe(SOONER);
+    expect(choice.reason).toContain('every allowed account for --runner codex is out of limits');
+    expect(choice.reason).not.toContain('every allowed account is');
+    expect(choice.warning).toBe('--runner codex has no account with capacity until 2099-01-01T00:10:00.000Z; claude Home has capacity (--runner claude --account second)');
+    // Narrowed but every allowed account exhausted too: no alternative to name.
+    expect(chooseTaskAgent([held(codex, LATER)], { explicitAccount: false, fromSettings: true, now: NOW, narrowedBy: '--runner codex', allowed: [held(codex, LATER), held(second, LATER)] }))
+      .not.toHaveProperty('warning');
+  });
+
   it('refuses an empty candidate list', () => {
     expect(() => chooseTaskAgent([], { explicitAccount: false, fromSettings: true, now: NOW })).toThrow();
   });

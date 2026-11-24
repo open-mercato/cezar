@@ -36,7 +36,11 @@ export const accountFlags = (option: Pick<AccountOption, 'runner' | 'agentProfil
  */
 export function chooseTaskAgent(
   candidates: readonly AccountOption[],
-  options: { explicitAccount: boolean; fromSettings: boolean; allowed?: readonly AccountOption[]; now: number },
+  options: {
+    explicitAccount: boolean; fromSettings: boolean; allowed?: readonly AccountOption[]; now: number;
+    /** The flag that narrowed `candidates` below `allowed` (e.g. `--runner codex`), for honest wording. */
+    narrowedBy?: string;
+  },
 ): TaskAgentChoice {
   const open = (option: AccountOption) => option.until === undefined || option.until <= options.now;
   const first = candidates[0];
@@ -59,11 +63,15 @@ export function chooseTaskAgent(
     return { chosen: available, reason: skipped.length ? `${source}: ${skippedText}, used ${accountName(available)}` : `${source}: ${accountName(available)}` };
   }
   const soonest = candidates.reduce((best, option) => (option.until! < best.until! ? option : best));
+  // A flag narrowed the choice: "every allowed account" is only true of the accounts it left.
+  const alternative = options.narrowedBy ? options.allowed?.find(open) : undefined;
+  const scope = options.narrowedBy ? `every allowed account for ${options.narrowedBy}` : 'every allowed account';
   return {
     chosen: soonest,
     reason: candidates.length === 1
       ? `${source}: ${skippedText}; the task waits in the queue until it resets`
-      : `${source}: every allowed account is out of limits (${skippedText}); queued on ${accountName(soonest)}, the first to reset`,
+      : `${source}: ${scope} is out of limits (${skippedText}); queued on ${accountName(soonest)}, the first to reset`,
     queuedUntil: soonest.until,
+    ...(alternative ? { warning: `${options.narrowedBy} has no account with capacity until ${iso(soonest.until!)}; ${accountName(alternative)} has capacity (${accountFlags(alternative)})` } : {}),
   };
 }
