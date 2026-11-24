@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
@@ -23,6 +23,51 @@ export const CODEX_READ_TOOL = {
     pattern: z.string().nullable(), glob: z.string().nullable(), command: z.string().nullable(),
   }).strict()),
 };
+
+/** The tool a session's model sees: a manager's shell is described by the manager. */
+export function codexReadTool(policy: CodexRestrictedPolicy): typeof CODEX_READ_TOOL {
+  if (!policy.shell) return CODEX_READ_TOOL;
+  return { ...CODEX_READ_TOOL, description: `Tools enforced by cezar. Use Read for files, Grep for content, Glob for file names, Bash for one command: ${policy.shell.describe} Native shell and write tools are denied; cezar refuses every other command and any other shell syntax.` };
+}
+
+const SHELL_TIMEOUT_MS = 120_000;
+const SHELL_OUTPUT_CAP = 256_000;
+
+/** Spawns a vetted argv pipeline with no shell: what the verifier read is exactly what runs. */
+function runPipeline(pipeline: readonly string[][], stdin: string | undefined, opts: { cwd: string; env: Record<string, string | undefined>; signal: AbortSignal }): Promise<{ ok: boolean; text: string }> {
+  const env = Object.fromEntries(Object.entries(opts.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  return new Promise((done) => {
+    let stdout = '';
+    let stderr = '';
+    let failure: string | undefined;
+    let open = pipeline.length;
+    let code: number | null = null;
+    const children = pipeline.map(([bin, ...args]) => spawn(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal }));
+    const kill = () => { for (const child of children) child.kill('SIGKILL'); };
+    const timer = setTimeout(() => { failure = `command timed out after ${SHELL_TIMEOUT_MS / 1000}s`; kill(); }, SHELL_TIMEOUT_MS);
+    timer.unref?.();
+    children.forEach((child, index) => {
+      const next = children[index + 1];
+      if (next) child.stdout.pipe(next.stdin).on('error', () => {});
+      else child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+        if (stdout.length > SHELL_OUTPUT_CAP) { stdout = stdout.slice(0, SHELL_OUTPUT_CAP); kill(); }
+      });
+      child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 16_000) stderr += chunk.toString('utf8'); });
+      child.stdin.on('error', () => {});
+      child.on('error', (err) => { failure ??= `${pipeline[index]![0]}: ${err.message.slice(0, 200)}`; });
+      child.on('close', (exit) => {
+        if (!next) code = exit;
+        if (--open > 0) return;
+        clearTimeout(timer);
+        const detail = [stdout, stderr.trim() && `[stderr]\n${stderr.trim()}`, failure, code !== 0 && !failure ? `[exit ${code ?? 'signal'}]` : ''].filter(Boolean).join('\n');
+        done({ ok: code === 0 && !failure, text: detail || '(no output)' });
+      });
+    });
+    const first = children[0]!.stdin;
+    if (stdin !== undefined) first.end(stdin); else first.end();
+  });
+}
 
 export type CodexReadResult = { success: boolean; contentItems: Array<{ type: 'inputText'; text: string }> };
 const RESULT_CAP = 64_000;
@@ -76,9 +121,11 @@ export class CodexReadBroker {
     if (this.pending >= 4) return result(false, 'cezar: at most four read operations may run at once');
     this.pending++;
     let timer: NodeJS.Timeout | undefined;
+    // A manager command has its own timeout; this backstop only fires if that one fails.
+    const limit = this.policy.shell ? SHELL_TIMEOUT_MS + 10_000 : 20_000;
     try {
       return await Promise.race([this.perform(params), new Promise<CodexReadResult>(done => {
-        timer = setTimeout(() => { this.close(); done(result(false, 'cezar: read timed out; this broker is closed')); }, 20_000);
+        timer = setTimeout(() => { this.close(); done(result(false, 'cezar: read timed out; this broker is closed')); }, limit);
         timer.unref?.();
       })]);
     } finally { if (timer) clearTimeout(timer); this.pending--; }
@@ -116,6 +163,12 @@ export class CodexReadBroker {
           return result(true, await this.execute(['rg', '--no-config', '--files', '--glob', input.pattern, '--', target]));
         }
         case 'Bash': {
+          if (this.policy.shell) {
+            const plan = this.policy.shell.verify(input.command);
+            if (!plan.ok) throw new Error(`cezar manager policy: ${plan.reason}`);
+            const ran = await runPipeline(plan.pipeline, plan.stdin, { cwd: await this.cwd, env: this.policy.shell.env, signal: this.aborter.signal });
+            return result(ran.ok, ran.text);
+          }
           const argv = codexBashArgv(input.command, this.policy);
           if (!argv) throw new Error('command is outside this step’s approved read-only Bash grant');
           if (argv[0] === 'gh') {

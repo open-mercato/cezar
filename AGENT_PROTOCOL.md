@@ -155,6 +155,10 @@ Notable fields (full doc-comments in the source):
   an ask card in an attended run (`canAskPermission`, #2042) and refused in an
   autonomous, headless or one-shot run, except this run's own files. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
+- `brokeredShell?` — Codex only: a manager's Bash. The restricted session's broker passes each
+  command to `verify` (the manager policy, `managerShellPlan`) and spawns the returned argv
+  pipeline itself, with a heredoc body as stdin and no shell, in `env`. Claude enforces the same
+  policy through `bashHookCommand`; any other backend ignores the field.
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
 

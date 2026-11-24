@@ -52,7 +52,6 @@ import {
 import type { AttentionKind, AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
-import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
@@ -81,6 +80,8 @@ import {
   managerBashHookCommand,
   managerBashPatternIssue,
   managerBashSuggestion,
+  managerShellPlan,
+  MANAGER_SHELL_DESCRIPTION,
 } from './bash-policy.ts';
 import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan, type ManagerFailureKind } from './failure.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
@@ -384,7 +385,8 @@ export function managerWriteRules(filesDir: string): string[] {
 export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
-const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
+// Codex's fence is cezar's broker running `managerShellPlan` in an isolated session (#2330).
+const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi', 'codex']);
 
 /** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
 const ATTACHMENT_BASE64_LIMIT = 7_000_000;
@@ -418,6 +420,11 @@ const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, i
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /** `cez-manager` on the turn's PATH, so `bashAllowlist` can name one word. */
+/** A Codex manager's Bash: the policy Claude's hook applies, run by cezar's broker in the turn's env. */
+function codexManagerShell(bashAllow: readonly string[] | undefined, env: Record<string, string | undefined>): NonNullable<AgentRunSpec['brokeredShell']> {
+  return { verify: (command) => managerShellPlan(command, bashAllow ?? []), env, describe: MANAGER_SHELL_DESCRIPTION };
+}
+
 export function ensureManagerShim(): string {
   const dir = join(managersDir(), 'bin');
   assertCezarHomeWriteIsSandboxed(dir);
@@ -2217,8 +2224,6 @@ export class ManagerEngine {
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
-    // Every manager turn requires a tool fence, including chats and unattended watches.
-    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError('a manager needs its cez-manager shell fence, which Codex cannot enforce', 'Refusing this manager turn; no model turn was started. Pick Claude Code for this manager.')), runner };
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
@@ -2226,8 +2231,7 @@ export class ManagerEngine {
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
-    // Codex is refused above; Claude is the one manager runner with plan limits today.
-    const planProvider = runner === 'claude' ? runner : undefined;
+    const planProvider = runner === 'claude' || runner === 'codex' ? runner : undefined;
     const planProfile = 'profile' in profile ? profile.profile : undefined;
     turn.planAccount = planProvider && planProfile
       ? await ledgerAccountRef(planProvider, planProfile).catch(() => undefined)
@@ -2308,6 +2312,8 @@ export class ManagerEngine {
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
+    // Claude's Bash inherits the cockpit's env plus the turn's; the broker runs Codex's commands in the same.
+    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, { ...process.env, ...base.env });
     // A retry is the same user turn: it counts once, measured from the session as it stood before.
     const origin: TurnOrigin = { startedAt: this.now(), ...(resumeId && state.sessions[turn.kind] ? { prior: state.sessions[turn.kind]! } : {}) };
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);

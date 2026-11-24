@@ -2,7 +2,7 @@ import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { compileCodexRestrictedPolicy, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
 import { prepareRestrictedCodexHome, type RestrictedCodexHome } from './codex-restricted-home.ts';
-import { CODEX_READ_TOOL, CodexReadBroker } from './codex-restricted-tools.ts';
+import { CodexReadBroker, codexReadTool } from './codex-restricted-tools.ts';
 import { codexFeaturesToDisable, parseCodexFeaturePage, verifyRestrictedCodexFeatures, verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread, type CodexFeature } from './codex-restricted-preflight.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -553,7 +553,7 @@ class CodexSession implements AgentSession {
     let model: string | undefined;
     if (this.spec.resume && this.spec.sessionId) ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, overrides));
     else {
-      const res = await this.rpc.request('thread/start', { ...overrides, environments: [], dynamicTools: [CODEX_READ_TOOL] });
+      const res = await this.rpc.request('thread/start', { ...overrides, environments: [], dynamicTools: [codexReadTool(this.policy!)] });
       verifyRestrictedCodexThread(res, this.spec.cwd);
       this.threadId = threadIdOf(res);
       model = threadModelOf(res);

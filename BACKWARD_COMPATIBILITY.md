@@ -727,15 +727,15 @@ unknown ui-state keys. It does not touch per-repo files.
   **Approve, open a full PR**, which opens it ready for review. When the task already has a PR,
   `github.draft-pr` after an instructed approval pushes the branch to it instead of opening another.
 
-## Managers and restricted Codex — Codex managers run on Claude Code, newer Codex verified, 2026-11-24
+## Managers and restricted Codex — Codex managers run again, newer Codex verified, 2026-11-24
 
-- **Changed outcome**: `POST /managers` and `PATCH /managers/:id` answer `400` for `runner: 'codex'`
-  (a task agent of Codex is unchanged). A stored `runner: 'codex'` is rewritten to `'claude'` at boot
-  or on its next turn, with one chat notice; its `model` and `agentProfile` are dropped, and when it
-  had no task-agent choice it gains `taskRunner: 'codex'` (or `taskAgents: [{runner: 'codex',
-  agentProfile}]`) so its tasks still start on Codex. A manager with no pin on a Codex machine
-  default answers on Claude Code without its account pin; its tasks still use the default. This
-  replaces the 2026-11-19 refusal below, which left those chats unusable.
+- **Restored outcome**: a manager whose agent is Codex (pinned, or the machine default) runs its
+  chat, watch, job and follow-up turns again, replacing the 2026-11-19 refusal below. They run in
+  the isolated restricted Codex session: native shell, apps and MCP are off, and cezar's broker runs
+  each Bash call only after `managerShellPlan` (the policy Claude's PreToolUse hook applies)
+  approves it, as an argv pipeline without a shell. Codex managers cannot Write files and get no
+  connectors, as before. The cockpit's manager agent picker offers Codex again.
+- **Additive**: `AgentRunSpec.brokeredShell` (Codex only).
 - **Widened acceptance**: restricted Codex steps accept Codex 0.169.0 or newer (was exactly 0.169.0).
   Past 0.169.0 every enabled native feature is turned off for the thread and verified first.
 

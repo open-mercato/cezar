@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
@@ -352,14 +352,14 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.resume).toBeUndefined();
     });
 
-    it('refuses Codex after switching agent and account before opening another session', async () => {
+    it('switches a manager to Codex and its account in a fresh session', async () => {
       const configDir = join(home, 'codex-work');
       mkdirSync(configDir);
       await mergeWriteAgentAccounts((accounts) => ({
         ...accounts,
         accounts: [{ id: 'work', provider: 'codex', label: 'Work', configDir, addedAt: '' }],
       }));
-      const runnerFor = vi.fn(() => backend.runner);
+      const runnerFor = vi.fn((_runner: RunnerId) => backend.runner);
       const engine = makeEngine({ runnerFor });
       const id = await create(engine, 0);
       engine.send(id, 'one');
@@ -367,9 +367,12 @@ describe('ManagerEngine', () => {
       await engine.update(id, { runner: 'codex', agentProfile: 'work' });
       engine.send(id, 'two');
       await settled(engine);
-      expect(runnerFor).toHaveBeenCalledTimes(1);
-      expect(backend.specs).toHaveLength(1);
-      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
+      expect(runnerFor.mock.calls.map(([runner]) => runner)).toEqual(['claude', 'codex']);
+      expect(backend.specs).toHaveLength(2);
+      expect(backend.specs[1]?.resume).toBeUndefined();
+      expect(backend.specs[1]?.brokeredShell).toBeDefined();
+      expect(backend.specs[1]?.env?.CODEX_HOME).toBe(configDir);
+      expect(assistants(id).at(-1)?.error).toBeUndefined();
     });
 
     it('a turn that throws before its agent starts closes its message', async () => {
@@ -920,20 +923,31 @@ describe('ManagerEngine', () => {
       expect(chat?.enforceReadOnly).toBeUndefined();
     });
 
-    it('refuses Codex watches and chats before opening an executor', async () => {
+    it('runs Codex watches and chats behind the brokered cez-manager fence (#2330)', async () => {
       const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
       const id = await create(engine);
+      await engine.update(id, { bashAllow: ['gh label list'] });
+      backend.scripts.push(say('PR 7 is ready'), say('ok'));
       due(id);
       engine.tick();
       await settled(engine);
-      expect(backend.specs).toEqual([]);
-      expect(store.state(id).lastFailure?.cause).toContain('tool-policy enforcement unavailable');
-      expect(store.state(id).lastFailure?.cause).toContain('Pick Claude Code for this manager.');
-      expect(store.state(id).lastFailure?.cause).not.toMatch(/\bPi\b/);
       engine.send(id, 'hi');
       await settled(engine);
-      expect(backend.specs).toEqual([]);
-      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
+      expect(backend.specs).toHaveLength(2);
+      expect(assistants(id).at(-1)?.error).toBeUndefined();
+      for (const spec of backend.specs) {
+        // The same fence as Claude's hook, in Codex's isolated session: no Write, no hook, no MCP.
+        expect(spec.enforceReadOnly).toBeUndefined();
+        expect(spec.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+        expect(spec.bashHookCommand).toBeUndefined();
+        const shell = spec.brokeredShell!;
+        expect(shell.verify('cez-manager tasks --json')).toEqual({ ok: true, pipeline: [['cez-manager', 'tasks', '--json']] });
+        expect(shell.verify('gh label list')).toMatchObject({ ok: true });
+        for (const command of ['gh pr merge 7', 'git push', 'rm -rf /', 'cez-manager tasks; touch x']) expect(shell.verify(command).ok).toBe(false);
+        expect(shell.env.CEZ_MANAGER_ID).toBe(id);
+        expect(shell.env.PATH?.split(delimiter)[0]).toMatch(/bin$/);
+      }
+      expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['watch', 'chat']);
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {

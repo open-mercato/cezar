@@ -168,8 +168,8 @@ export function useManagerRunner(pinned: string | undefined): Runner {
 }
 
 function useManagerRunners() {
-  // Pi cannot grant the manager's restricted shell tools; Codex cannot enforce the cez-manager fence (#2330).
-  return usableRunners(useProviderStatus().data).filter((runner) => runner !== 'pi' && runner !== 'codex')
+  // Pi cannot grant the manager's restricted shell tools.
+  return usableRunners(useProviderStatus().data).filter((runner) => runner !== 'pi')
 }
 
 /** Radix re-fires on the checked item: only a different agent drops its model and account pins. */

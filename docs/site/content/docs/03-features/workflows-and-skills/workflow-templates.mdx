@@ -34,7 +34,7 @@ Its agents get Read, Grep, Glob and a Bash limited to read-only `gh` and `git` c
 
 Codex uses an isolated configuration and a read broker. Native shell tools and execution environments stay disabled, including after Continue, restart and fork. The broker validates every operation and refuses writes, pushes, PR mutations, unrestricted shell and MCP calls. Explicit empty grants stay empty in dispatched tasks.
 
-> **Good to know**: Restricted Codex execution requires Codex 0.169.0 or newer on macOS or Linux. Older versions, system policy or authentication settings produce a diagnostic before a model turn. Your ordinary unrestricted Codex tasks keep their native settings. Codex cannot run a manager, so a manager runs on Claude Code; its tasks can still use Codex. Planning and naming can use isolated no-tools calls.
+> **Good to know**: Restricted Codex execution requires Codex 0.169.0 or newer on macOS or Linux. Older versions, system policy or authentication settings produce a diagnostic before a model turn. Your ordinary unrestricted Codex tasks keep their native settings. A Codex manager uses the same isolated mode, with its `cez-manager` commands checked and run by cezar. Planning and naming can use isolated no-tools calls.
 
 ## What each workflow can do
 

@@ -73,6 +73,9 @@ for await (const line of createInterface({ input: process.stdin })) {
         dynamic(213, { tool: 'Read', path: 'a.txt' }, { tool: 'mcp__evil' }),
         dynamic(214, { tool: 'Read', path: 'a.txt' }, { threadId: 'foreign' }),
         dynamic(215, { tool: 'Read', path: 'a.txt' }),
+        dynamic(216, { tool: 'Bash', command: 'echo hi | wc -c' }),
+        dynamic(217, { tool: 'Bash', command: 'count-lines' }),
+        dynamic(218, { tool: 'Bash', command: 'echo $HOME > FORBIDDEN' }),
       ];
       next(); break;
     }

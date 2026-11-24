@@ -57,6 +57,37 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     expect(f.requests().some((r: {method: string}) => r.method === 'turn/start')).toBe(false);
     expect(existsSync(join(f.cwd, 'FORBIDDEN'))).toBe(false);
   });
+  it('runs only what a brokered shell vets, as an argv pipeline with no shell (Codex managers)', async () => {
+    const f = setup();
+    const seen: string[] = [];
+    const brokeredShell = {
+      describe: 'a test command.',
+      env: { PATH: process.env.PATH },
+      verify: (command: string) => {
+        seen.push(command);
+        if (command === 'echo hi | wc -c') return { ok: true as const, pipeline: [['echo', 'hi'], ['wc', '-c']] };
+        if (command === 'count-lines') return { ok: true as const, pipeline: [['wc', '-l']], stdin: 'a\nb\n' };
+        return { ok: false as const, reason: 'not a manager command' };
+      },
+    };
+    const result = await f.runner.run({ ...f.spec, allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['cez-manager'], brokeredShell });
+    const responses = JSON.parse(result.text);
+    const text = (id: number) => responses.find((r: {id: number}) => r.id === id).result;
+    expect(text(216)).toMatchObject({ success: true });
+    expect(text(216).contentItems[0].text.trim()).toBe('3');
+    expect(text(217).contentItems[0].text.trim()).toBe('2');
+    for (const id of [211, 212, 218]) {
+      expect(text(id).success).toBe(false);
+      expect(text(id).contentItems[0].text).toContain('cezar manager policy: not a manager command');
+    }
+    expect(seen).toEqual(expect.arrayContaining(['touch FORBIDDEN', 'gh pr merge 1', 'echo $HOME > FORBIDDEN']));
+    expect(existsSync(join(f.cwd, 'FORBIDDEN'))).toBe(false);
+    // The isolation is the read-only step's: native tools still declined, sandbox read-only.
+    for (const id of [200, 201]) expect(text(id).decision).toBe('decline');
+    const turn = f.requests().find((r: {method: string}) => r.method === 'turn/start').params;
+    expect(turn.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
+    expect(f.requests().find((r: {method: string}) => r.method === 'thread/start').params.dynamicTools[0].description).toContain('a test command.');
+  });
   it('keeps a no-tools invocation empty even when the model requests supported reads', async () => {
     const f = setup();
     const output = await f.runner.run({ ...f.spec, allowedTools: [], bashAllowlist: undefined });
