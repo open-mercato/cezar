@@ -15,6 +15,7 @@ import type { Density, Width } from '@/lib/appearance'
 import type { Theme } from '@/lib/theme'
 import { useProjectOrder } from '@/lib/use-project-order'
 import { useLiveUsageEnabled, writeLiveUsageEnabled } from '@/lib/live-usage-pref'
+import { TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, useTerminalFont, writeTerminalFont } from '@/lib/terminal-font-pref'
 import { toast } from '@/components/ui/toaster'
 import { FormRow, SettingsCard, isCommitKey, useSavedFlash } from './form-row'
 
@@ -228,6 +229,7 @@ export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
   const { density, width, setDensity, setWidth } = useAppearance()
   const liveUsage = useLiveUsageEnabled()
+  const terminalFont = useTerminalFont()
 
   return (
     <div
@@ -267,6 +269,24 @@ export function AppearanceSection() {
             { value: 'off', label: 'Hide' },
           ]}
           onChange={(value) => writeLiveUsageEnabled(value === 'on')}
+        />
+      </Field>
+      <Field
+        title="Terminal font size"
+        hint="Task workspace terminal, 8–32. Also Ctrl/Cmd + and − while the terminal is focused, 0 to reset. Applies to this browser."
+      >
+        <input
+          data-slot="appearance-terminal-font"
+          aria-label="Terminal font size"
+          type="number"
+          min={TERMINAL_FONT_MIN}
+          max={TERMINAL_FONT_MAX}
+          step={0.5}
+          key={terminalFont}
+          defaultValue={terminalFont}
+          onBlur={(event) => { if (event.currentTarget.value !== '') writeTerminalFont(Number(event.currentTarget.value)) }}
+          onKeyDown={(event) => { if (isCommitKey(event)) { event.preventDefault(); event.currentTarget.blur() } }}
+          className="h-8 w-24 rounded-md border border-input bg-card px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
       </Field>
       </SettingsCard>

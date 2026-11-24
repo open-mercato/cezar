@@ -54,6 +54,8 @@ class FakeTerminal {
   rows = 24
   onResize() {}
   onData() {}
+  parser = { registerOscHandler() { return { dispose() {} } } }
+  options: Record<string, unknown> = {}
   attachCustomKeyEventHandler() {}
   hasSelection() { return false }
   getSelection() { return '' }
