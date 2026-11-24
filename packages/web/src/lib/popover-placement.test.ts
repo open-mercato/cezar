@@ -48,6 +48,13 @@ describe('choosePopoverPlacement — keyboard-reduced visual viewport', () => {
     expect(placement).toEqual({ side: 'bottom', maxHeight: 121 })
   })
 
+  it('flips to the other side when only it holds the whole menu (desktop, trigger near the bottom)', () => {
+    const nearBottom = { anchorTop: 600, anchorBottom: 636, sideOffset: 4 }
+    const placement = choosePopoverPlacement({ ...nearBottom, viewTop: 0, viewBottom: 880, naturalHeight: 400, preferred: 'bottom' })
+    // 240px below would hold the usable minimum, but 596px above holds the whole menu.
+    expect(placement).toEqual({ side: 'top', maxHeight: 596 })
+  })
+
   it('honors a preferred top side the same way', () => {
     const composer = { anchorTop: 440, anchorBottom: 480, sideOffset: 4 }
     const placement = choosePopoverPlacement({ ...composer, viewTop: band.top, viewBottom: band.bottom, naturalHeight: 300, preferred: 'top' })

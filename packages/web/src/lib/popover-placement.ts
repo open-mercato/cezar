@@ -3,8 +3,9 @@
  * compares the content's FULL natural height against each side and takes the least-bad one,
  * so a long list flips above the trigger as soon as the mobile keyboard shortens the space
  * below — under the status bar, cut off — while a perfectly usable band below stays empty.
- * Here the preferred side wins whenever it can hold the menu or a usable minimum (the list
- * then scrolls inside), and the other side only when it is clearly larger.
+ * Here a side that holds the whole menu wins (preferred first); when neither does, the
+ * preferred side wins if it holds a usable minimum (the list then scrolls inside), and the
+ * other side only when it is clearly larger.
  *
  * Every coordinate is in the layout viewport (what `getBoundingClientRect` and Radix's fixed
  * strategy use); the visible band comes from `visualViewport`, so the keyboard area and a
@@ -44,6 +45,9 @@ export function choosePopoverPlacement(input: PopoverPlacementInput): PopoverPla
   const preferredRoom = input.preferred === 'bottom' ? below : above
   const otherRoom = input.preferred === 'bottom' ? above : below
   const other: PopoverSide = input.preferred === 'bottom' ? 'top' : 'bottom'
+  // A side that holds the whole menu wins first, as Radix's own flip does on desktop.
+  if (preferredRoom >= input.naturalHeight) return { side: input.preferred, maxHeight: preferredRoom }
+  if (otherRoom >= input.naturalHeight) return { side: other, maxHeight: otherRoom }
   const usable = Math.min(input.naturalHeight, input.minHeight ?? POPOVER_MIN_HEIGHT)
   if (preferredRoom >= usable) return { side: input.preferred, maxHeight: preferredRoom }
   if (otherRoom >= preferredRoom + POPOVER_FLIP_MARGIN) return { side: other, maxHeight: otherRoom }
