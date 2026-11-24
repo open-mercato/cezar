@@ -4420,6 +4420,7 @@ export class RunManager {
     const selection = resumingRepair
       ? { runner: run.runner, agentProfile: run.agentProfile, model: run.model, replaced: true }
       : definition && switchedWorkflowAgent(run, definition);
+    // A switch on another node leaves this pinned session and its recorded account intact.
     if (selection?.replaced && (step.backend !== selection.runner || step.profileId !== selection.agentProfile || step.model !== selection.model)) {
       return false;
     }
@@ -7543,12 +7544,17 @@ export class RunManager {
     if (repairRun && repair && resumeNode?.id === repair.checkId && !state.cancelled) {
       const step = { id: repair.stepId, name: 'Repair failed check', model: repairRun.model };
       const repairStep = repairRun.steps.find((candidate) => candidate.id === step.id);
-      const savedTools = repairStep?.toolPolicy ?? savedContinuationTools(repairRun);
       const failureTarget = graph.nodes.find((node) => node.id === edgeFrom(graph, repair.checkId, 'fail')?.to);
       const retryId = failureTarget?.type === 'loop' ? edgeFrom(graph, failureTarget.id, 'repeat')?.to : failureTarget?.id;
       const retryNode = graph.nodes.find((node) => node.id === retryId);
-      const toolsStep = retryNode?.type === 'agent' ? retryNode
-        : [...(repairRun.workflowDef?.steps ?? [])].reverse().find((candidate) => stepKind(candidate) === 'agent');
+      const retryAgent = retryNode?.type === 'agent' ? retryNode : undefined;
+      // A check with a retry target delegates repair to that agent's policy. A later
+      // review step's saved grants cannot stand in for the retry target.
+      const savedTools = retryAgent
+        ? repairRun.steps.find((candidate) => candidate.id === retryAgent.id)?.toolPolicy
+        : repairStep?.toolPolicy ?? savedContinuationTools(repairRun);
+      const toolsStep = retryAgent
+        ?? [...(repairRun.workflowDef?.steps ?? [])].reverse().find((candidate) => stepKind(candidate) === 'agent');
       const iteration = (repairStep?.iterations ?? 0) + 1;
       this.store.updateRun(runId, { currentStepId: step.id });
       this.store.updateStep(runId, step.id, { status: 'running', iterations: iteration, startedAt: new Date().toISOString() });

@@ -13,7 +13,7 @@ import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { compileV1, graphToSteps } from './graph.ts';
 import { READ_ONLY_TOOLS } from './landing.ts';
 import { RunManager } from './run.ts';
-import type { WorkflowDef } from './types.ts';
+import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
 
 const sessions = vi.hoisted(() => [] as Array<{
   backend: RunnerId;
@@ -121,6 +121,24 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
     manager = new RunManager(store, root, { semaphore });
     await manager.recover();
+  }
+
+  async function restartWithQueuedUsageLimitResume(id: string) {
+    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'failed', autoResumeReason: 'usage_limit' }), wait);
+    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
+    try {
+      const resumes = manager as unknown as {
+        autoResumeTimers: Map<string, ReturnType<typeof setTimeout>>;
+        fireAutoResume(runId: string): void;
+      };
+      clearTimeout(resumes.autoResumeTimers.get(id));
+      resumes.fireAutoResume(id);
+      expect(store.getRun(id)).toMatchObject({ status: 'queued', autoResumeAttempts: 1 });
+      await restart();
+    } finally {
+      release();
+    }
+    await semaphore.release();
   }
 
   it('changes a queued task before its first launch, preserving its prompt stack and queue position', async () => {
@@ -334,6 +352,34 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)?.steps.map((step) => step.profileId)).toEqual(['default', 'work', 'work']);
   });
 
+  it('resumes an unaffected runner’s earlier graph session on its default account', async () => {
+    await addWorkAccount('claude');
+    const graph = compileV1([
+      { id: 'prepare', prompt: 'Read the original task', runner: 'codex' },
+      workflow.steps[0]!,
+      { id: 'review', prompt: 'Review {{task}}', runner: 'codex' },
+    ]);
+    const review = graph.nodes.find((node) => node.id === 'review');
+    if (review?.type !== 'agent') throw new Error('missing review agent in fixture');
+    review.session = { continue: 'prepare' };
+    const { id } = manager.startRun({ ...workflow, graph, steps: graphToSteps(graph) }, { task: 'Implement it', runner: 'claude' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    const original = sessions[0]!;
+    expect(original).toMatchObject({ backend: 'codex', spec: { resume: false } });
+    original.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(manager.switchAgent(id, { runner: 'claude', agentProfile: 'work', changedBy: selection.changedBy })).toHaveProperty('summary');
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    sessions[2]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    expect(store.getRun(id)?.agentSwitch?.workflowSelection?.overrides.codex).toBeUndefined();
+    expect(sessions[3]).toMatchObject({ backend: 'codex', spec: { resume: true, sessionId: original.spec.sessionId } });
+    sessions[3]!.settle();
+    await expectFinished(id, ['prepare', 'work', 'review']);
+    expect(store.getRun(id)?.steps.map((step) => step.profileId)).toEqual(['default', 'work', 'default']);
+  });
+
   it.each([false, true])('reopens the switched session after usage-limit recovery (check repair: %s)', async (repair) => {
     await addWorkAccount('codex');
     const definition = repair ? { ...workflow, steps: [
@@ -352,15 +398,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
     sessions[1]!.emit({ type: 'error', message: 'Usage limit reached, try again in 60 minutes' });
     sessions[1]!.settle();
-    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'failed', autoResumeReason: 'usage_limit' }), wait);
-    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
-    try {
-      (manager as unknown as { fireAutoResume(runId: string): void }).fireAutoResume(id);
-      expect(store.getRun(id)).toMatchObject({ status: 'queued', autoResumeAttempts: 1 });
-    } finally {
-      release();
-    }
-    await restart();
+    await restartWithQueuedUsageLimitResume(id);
     await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
     expect(sessions[2]).toMatchObject({ backend: 'codex', spec: { resume: true, sessionId: sessions[1]!.spec.sessionId, model: selection.model } });
     if (repair) writeFileSync(join(sessions[2]!.spec.cwd, 'ready'), '');
@@ -371,6 +409,37 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     await expectFinished(id, repair ? ['work', 'verify', 'review', repairId!] : ['work', 'review']);
     expect(store.getRun(id)?.steps.find((step) => step.id === (repairId ?? 'work'))?.profileId).toBe('work');
     expect(store.getRun(id)?.steps.find((step) => step.id === 'review')?.profileId).toBe('work');
+  });
+
+  it('reopens the untouched pinned agent after recovering its queued usage-limit resume', async () => {
+    await addWorkAccount('codex');
+    const pinnedModel = 'gpt-5.1-codex';
+    const definition = { ...workflow, steps: [
+      workflow.steps[0]!,
+      { ...workflow.steps[1]!, runner: 'codex', model: pinnedModel, reasoningEffort: 'medium' },
+      { id: 'verify', command: 'test -f README' },
+    ] } satisfies WorkflowDef;
+    const { id } = manager.startRun(definition, { task: 'Implement it', runner: 'claude' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(manager.switchAgent(id, { ...selection, agentProfile: 'work' })).toHaveProperty('summary');
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    const pinned = sessions[2]!;
+    expect(pinned).toMatchObject({ backend: 'codex', spec: { resume: false, model: pinnedModel, reasoningEffort: 'medium' } });
+    expect(store.getRun(id)).toMatchObject({ agentProfile: 'work', model: selection.model });
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'review')?.profileId).toBe('default');
+    pinned.emit({ type: 'error', message: 'Usage limit reached, try again in 60 minutes' });
+    pinned.settle();
+    await restartWithQueuedUsageLimitResume(id);
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    expect(sessions[3]).toMatchObject({
+      backend: 'codex', spec: { resume: true, sessionId: pinned.spec.sessionId, model: pinnedModel, reasoningEffort: 'medium' },
+    });
+    sessions[3]!.settle();
+    await expectFinished(id, ['work', 'review', 'verify']);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'review')?.profileId).toBe('default');
   });
 
   it('hands over a live Continue after releasing its session', async () => {
@@ -422,6 +491,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     store.updateRun(id, { worktreePath: tree });
     const hold = deferred<void>();
     const entered = vi.fn();
+    let prepareSignal: AbortSignal | undefined;
     const requiresGate = vi.spyOn(manager.lifecycle, 'requiresGate').mockResolvedValue(false);
     if (phase === 'starting') {
       requiresGate.mockImplementationOnce(async () => {
@@ -432,10 +502,10 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     } else if (phase === 'prepare') {
       requiresGate.mockResolvedValueOnce(true);
       vi.spyOn(manager.lifecycle, 'prepare').mockImplementationOnce(async (runId, baseBranch, _launch, signal) => {
+        prepareSignal = signal;
         store.updateRun(runId, { worktreeLifecycle: { worktreeId: runId, generation: 1, phase: 'setup', state: 'running', needsAttention: false } });
         entered();
         await hold.promise;
-        expect(signal?.aborted).toBe(true);
         store.updateRun(runId, { worktreeLifecycle: undefined });
         return { ready: false, path: tree, branch: 'main', baseBranch };
       });
@@ -453,6 +523,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
       await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce(), wait);
       expect(store.readEvents(id).filter((event) => event.type === 'user-message')).toEqual([]);
       expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+      if (phase === 'prepare') expect(prepareSignal?.aborted).toBe(true);
       expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBe('continue-1');
       expect(store.getRun(id)?.steps.at(-1)?.status).toBe('pending');
       expect(sessions).toHaveLength(0);
@@ -535,8 +606,10 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     const operationId = randomUUID();
     const worktreeId = randomUUID();
     const hold = deferred<void>();
+    let prepareSignal: AbortSignal | undefined;
     vi.spyOn(manager.lifecycle, 'requiresGate').mockResolvedValue(true);
     vi.spyOn(manager.lifecycle, 'prepare').mockImplementationOnce(async (_id, baseBranch, pendingLaunch, signal) => {
+      prepareSignal = signal;
       const now = new Date().toISOString();
       await manager.lifecycle.store.writeWorktree({
         schemaVersion: 1, worktreeId, runId: id, projectRoot: root, worktreePath: tree.path, branch: tree.branch,
@@ -550,7 +623,6 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
         worktreeId, generation: 1, activeOperationId: operationId, phase: 'setup', state: 'running', needsAttention: false,
       } });
       await hold.promise;
-      expect(signal?.aborted).toBe(true);
       return { ready: false, path: tree.path, branch: tree.branch, baseBranch, operationId };
     });
     const text = 'Use the attached reproduction once setup finishes';
@@ -558,6 +630,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     try {
       await vi.waitFor(() => expect(manager.lifecycle.isBlocked(id)).toBe(true), wait);
       expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+      expect(prepareSignal?.aborted).toBe(true);
       expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBe('continue-1');
       expect(sessions).toHaveLength(0);
       if (outcome === 'cancel') expect(manager.cancel(id)).toBe(true);
@@ -731,6 +804,12 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
   });
 
   it.each(['saved', 'last agent', 'read-only'] as const)('keeps the %s tool policy on a failed-check repair spawn', async (policy) => {
+    if (policy === 'saved') {
+      const configDir = join(root, '.ai', 'cezar');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.json'), JSON.stringify({ bypassPermissions: true }));
+      if (process.getuid) vi.spyOn(process, 'getuid').mockReturnValue(501);
+    }
     const workerTools = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['npm test'] };
     const reviewTools = { allowedTools: ['Read', 'Grep', 'Bash'], bashAllowlist: ['git diff'] };
     const definition = { ...workflow, steps: [
@@ -744,6 +823,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     });
     await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
     if (!readOnly) expect(sessions[0]!.spec).toMatchObject(workerTools);
+    if (policy === 'saved') expect(sessions[0]!.spec.bypassPermissions).toBe(true);
     sessions[0]!.settle();
     await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
     expect(store.getRun(id)?.status).toBe('failed');
@@ -763,6 +843,76 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
       expect(sessions[1]!.spec.bypassPermissions).toBeUndefined();
     }
     expect(store.getRun(id)?.steps.at(-1)?.toolPolicy).toEqual(expected);
+  });
+
+  it.each([true, false])('repairs with the implement retry target’s tools after review ran (saved policy: %s)', async (saved) => {
+    const implementTools = { allowedTools: [...DEFAULT_ALLOWED_TOOLS], bashAllowlist: ['npm test', 'git diff'] };
+    const reviewTools = { allowedTools: ['Read', 'Grep'] };
+    const definition = { ...workflow, steps: [
+      { ...workflow.steps[0]!, id: 'implement', ...implementTools },
+      { ...workflow.steps[1]!, ...reviewTools },
+      { id: 'verify', command: 'test -f ready', onFail: { retry: 'implement', max: 1 } },
+    ] } satisfies WorkflowDef;
+    const { id } = manager.startRun(definition, { task: 'Implement it' });
+    for (const [index, tools] of [implementTools, reviewTools, implementTools, reviewTools].entries()) {
+      await vi.waitFor(() => expect(sessions).toHaveLength(index + 1), wait);
+      expect(sessions[index]!.spec).toMatchObject(tools);
+      sessions[index]!.settle();
+    }
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)?.status).toBe('failed');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'review')?.toolPolicy).toEqual(reviewTools);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'review')?.iterations).toBe(2);
+    // A saved effective policy can be narrower than the current definition.
+    const savedImplementTools = { ...implementTools, bashAllowlist: ['npm test'] };
+    store.updateStep(id, 'implement', { toolPolicy: saved ? savedImplementTools : undefined });
+    expect(manager.switchAgent(id, { runner: 'claude', agentProfile: 'default', changedBy: selection.changedBy })).toHaveProperty('summary');
+    const repairId = store.getRun(id)?.agentSwitch?.checkRepair?.stepId;
+    await vi.waitFor(() => expect(sessions).toHaveLength(5), wait);
+    expect(sessions[4]!.spec).toMatchObject(saved ? savedImplementTools : implementTools);
+    writeFileSync(join(sessions[4]!.spec.cwd, 'ready'), '');
+    sessions[4]!.settle();
+    await expectFinished(id, ['implement', 'review', 'verify', repairId!]);
+  });
+
+  it('preserves a failed repair checkpoint and retries that same repair on a later switch', async () => {
+    const definition = { ...workflow, steps: [
+      workflow.steps[0]!, { id: 'verify', command: 'test -f ready' }, workflow.steps[1]!,
+    ] } satisfies WorkflowDef;
+    const { id } = manager.startRun(definition, { task: 'Implement it' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    const checkError = store.getRun(id)?.steps.find((step) => step.id === 'verify')?.error;
+    expect(checkError).toBeTruthy();
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    const repair = store.getRun(id)?.agentSwitch?.checkRepair;
+    expect(repair).toMatchObject({ checkId: 'verify', stepId: expect.any(String) });
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    const failure = 'Repair could not update the worktree';
+    sessions[1]!.emit({ type: 'error', message: failure });
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    const failed = store.getRun(id)!;
+    expect(failed).toMatchObject({
+      status: 'failed', error: `repair for check "verify" failed: ${failure}`,
+      graphState: { cursor: 'verify' }, agentSwitch: { checkRepair: repair },
+    });
+    expect(failed.steps.find((step) => step.id === 'verify')).toMatchObject({ status: 'pending', iterations: 1, error: checkError });
+    expect(failed.steps.find((step) => step.id === repair!.stepId)).toMatchObject({ status: 'failed', iterations: 1, error: failure });
+    expect(manager.switchAgent(id, { runner: 'claude', agentProfile: 'default', changedBy: selection.changedBy })).toHaveProperty('summary');
+    expect(store.getRun(id)?.agentSwitch?.checkRepair).toEqual(repair);
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(sessions[2]).toMatchObject({ backend: 'claude', spec: { resume: false } });
+    expect(store.getRun(id)?.currentStepId).toBe(repair!.stepId);
+    writeFileSync(join(sessions[2]!.spec.cwd, 'ready'), '');
+    sessions[2]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    sessions[3]!.settle();
+    await expectFinished(id, ['work', 'verify', 'review', repair!.stepId]);
+    expect(store.getRun(id)?.agentSwitch?.checkRepair).toBeUndefined();
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.iterations).toBe(2);
+    expect(store.getRun(id)?.steps.find((step) => step.id === repair!.stepId)?.iterations).toBe(2);
   });
 
   it.each(['step list', 'saved graph'] as const)('gives the repaired check a fresh onFail retry budget (%s)', async (format) => {
