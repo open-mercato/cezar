@@ -64,3 +64,26 @@ describe('diff comment chips', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('asset comment chips', () => {
+  it('names the asset and the element, links to the asset, and never reads the body out', () => {
+    render(
+      <MemoryRouter>
+        <DiffCommentChips
+          runId="r1"
+          comments={[
+            base,
+            { kind: 'asset', id: 'e', asset: 'mock/recipe.html', selector: 'main > h2.title', label: 'Ingredients', excerpt: '', body: 'x'.repeat(500) },
+          ]}
+          onRemove={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    const link = screen.getByText('recipe.html · h2.title')
+    expect(link.getAttribute('href')).toBe('/tasks/r1/assets/mock%2Frecipe.html')
+    expect(link.getAttribute('aria-label')).toBe('Comment on mock/recipe.html element Ingredients')
+    expect(screen.getByRole('button', { name: 'Remove comment on recipe.html element Ingredients' })).not.toBeNull()
+    // Line comments still come first.
+    expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual(['page.tsx +11', 'recipe.html · h2.title'])
+  })
+})

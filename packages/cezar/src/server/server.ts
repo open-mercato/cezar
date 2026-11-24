@@ -239,7 +239,16 @@ import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type 
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
-import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
+import {
+  appendToStream,
+  artifactHeaders,
+  artifactPickerOrigins,
+  artifactPickerTag,
+  artifactsBaseUrl,
+  artifactsFrame,
+  openArtifact,
+  type ArtifactsBusPayload,
+} from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
 import { listProjectAssets } from '../runs/project-assets.ts';
 import type { RunArtifact } from '@open-mercato/cezar-contract';
@@ -5312,7 +5321,7 @@ export function createApp(deps: ServerDeps) {
   };
 
   /** Both artifact-file routes: `name` is a listed name, flat or `<folder>/<file>`. */
-  const serveArtifact = async (c: Context<ProjectApiEnv>, id: string, name: string, v: string | undefined) => {
+  const serveArtifact = async (c: Context<ProjectApiEnv>, id: string, name: string, v: string | undefined, picker?: '1') => {
     const { dataDir, store } = c.get('project');
     if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
     const runDir = artifactsDir(dataDir, id);
@@ -5321,7 +5330,10 @@ export function createApp(deps: ServerDeps) {
     const artifact = await findArtifact(dir, name);
     const stream = artifact ? await openArtifact(dir, name) : null;
     if (!artifact || !stream) return c.json({ error: 'artifact not found' }, 404);
-    return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
+    // `?picker=1`: the Assets view's element picker, appended to HTML only; headers unchanged.
+    const origins = picker === '1' && artifact.kind === 'html' ? artifactPickerOrigins(c.req.url) : undefined;
+    const body = origins ? appendToStream(stream, artifactPickerTag(origins)) : stream;
+    return c.body(body, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
   };
 
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
@@ -6147,13 +6159,15 @@ export function createApp(deps: ServerDeps) {
     // `?v=<n>` serves kept revision n (spec R4) from `.versions/<n>/`, same guard, same headers.
     .get('/runs/:id/artifacts/:name', paramZodValidator(artifactNameParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
       const { id, name } = c.req.valid('param');
-      return serveArtifact(c, id, name, c.req.valid('query').v);
+      const { v, picker } = c.req.valid('query');
+      return serveArtifact(c, id, name, v, picker);
     })
 
     // A file one folder down, at the URL a page's relative `<img src="shots/a.png">` resolves to.
     .get('/runs/:id/artifacts/:dir/:name', paramZodValidator(artifactNestedParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
       const { id, dir, name } = c.req.valid('param');
-      return serveArtifact(c, id, `${dir}/${name}`, c.req.valid('query').v);
+      const { v, picker } = c.req.valid('query');
+      return serveArtifact(c, id, `${dir}/${name}`, v, picker);
     })
 
     // Assess Impact (spec 2026-10-22-html-artifacts-and-impact § Serving): the server resolves and
