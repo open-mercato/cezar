@@ -62,6 +62,9 @@ export interface BrokeredShell {
   env: Record<string, string | undefined>;
   /** What the model is told the shell is for, appended to the tool description. */
   describe: string;
+  /** Programs that reach nothing beyond the loopback cockpit. Under `CEZ_CODEX_NETWORK=0` a
+   *  pipeline runs only when every stage is one of these; absent, every command is refused then. */
+  offlinePrograms?: readonly string[];
 }
 
 export interface AgentRunSpec {

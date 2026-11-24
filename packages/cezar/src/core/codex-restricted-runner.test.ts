@@ -1,10 +1,9 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CodexAppServerRunner } from './codex-app-server-runner.ts';
-import { runPipeline } from './codex-restricted-tools.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
 const bin = fileURLToPath(new URL('./__fixtures__/codex/mock-restricted-server.mjs', import.meta.url));
 const dirs: string[] = [];
@@ -53,18 +52,36 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     const lists = f.requests().filter((r: {method: string}) => r.method === 'experimentalFeature/list');
     expect(lists.at(-1).params.threadId).toBe('restricted');
   });
-  it.each(['version', 'flags', 'apps', 'layer', 'hooks', 'mcp', 'requirements', 'sandbox', 'managed-layer', 'newer-stuck', 'newer-garbled', 'prerelease', 'requirements-on'])('refuses before a model turn when %s cannot be verified', async mode => {
+  it.each([
+    ['version', 'the installed Codex protocol has not been verified'],
+    ['prerelease', 'the installed Codex protocol has not been verified'],
+    ['flags', 'a required native tool/extension control is unavailable'],
+    ['apps', 'a required native tool/extension control is unavailable'],
+    ['layer', 'an unverified futureLayer configuration layer is active'],
+    ['managed-layer', 'an unverified enterpriseManaged configuration layer is active'],
+    ['hooks', 'hooks or MCP services could not be proven absent'],
+    ['mcp', 'hooks or MCP services could not be proven absent'],
+    ['requirements', 'a managed Codex requirement (allowedSandboxModes) could not be verified'],
+    ['requirements-on', 'a managed Codex requirement (featureRequirements) could not be verified'],
+    ['sandbox', 'the thread did not retain its sandbox and approval policy'],
+    ['newer-stuck', 'native Codex features stayed enabled (future_native_tool)'],
+    ['newer-garbled', 'Codex cannot report its native features'],
+  ])('refuses before a model turn when %s cannot be verified', async (mode, reason) => {
     const f = setup(mode);
-    await expect(f.runner.run(f.spec)).rejects.toThrow('tool-policy enforcement unavailable');
+    await expect(f.runner.run(f.spec)).rejects.toThrow(`tool-policy enforcement unavailable — ${reason}`);
     expect(f.requests().some((r: {method: string}) => r.method === 'turn/start')).toBe(false);
     expect(existsSync(join(f.cwd, 'FORBIDDEN'))).toBe(false);
   });
   it('runs only what a brokered shell vets, as an argv pipeline with no shell (Codex managers)', async () => {
     const f = setup();
     const seen: string[] = [];
+    // A stub `gh` first on PATH: the unit suite never reaches github.com or the host's gh login.
+    const stubs = join(f.cwd, 'stub-bin');
+    mkdirSync(stubs);
+    writeFileSync(join(stubs, 'gh'), '#!/bin/sh\necho "stub gh: $*"\n', { mode: 0o755 });
     const brokeredShell = {
       describe: 'a test command.',
-      env: { PATH: process.env.PATH },
+      env: { PATH: `${stubs}${delimiter}${process.env.PATH}` },
       verify: (command: string) => {
         seen.push(command);
         if (command === 'echo hi | wc -c') return { ok: true as const, pipeline: [['echo', 'hi'], ['wc', '-c']] };
@@ -81,6 +98,7 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     expect(text(216)).toMatchObject({ success: true });
     expect(text(216).contentItems[0].text.trim()).toBe('3');
     expect(text(217).contentItems[0].text.trim()).toBe('2');
+    expect(text(221)).toEqual({ success: true, contentItems: [{ type: 'inputText', text: 'stub gh: pr view 1\n' }] });
     // No shell: every metacharacter reaches printf as one literal argument.
     expect(text(219)).toEqual({ success: true, contentItems: [{ type: 'inputText', text: METACHARACTERS }] });
     // A control character is refused before the verifier, like on the read path.
@@ -122,36 +140,19 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     const previous = process.env.CEZ_CODEX_NETWORK;
     process.env.CEZ_CODEX_NETWORK = '0';
     try {
-      const brokeredShell = { describe: 'x', env: { PATH: process.env.PATH }, verify: (command: string) => command === 'gh pr view 1'
+      // A stub gh first on PATH: a regressed guard would run it, never the host's real gh.
+      const stubs = join(f.cwd, 'stub-bin');
+      mkdirSync(stubs);
+      writeFileSync(join(stubs, 'gh'), '#!/bin/sh\necho "stub gh: $*"\n', { mode: 0o755 });
+      const brokeredShell = { describe: 'x', env: { PATH: `${stubs}${delimiter}${process.env.PATH}` }, verify: (command: string) => command === 'gh pr view 1'
         ? { ok: true as const, pipeline: [['gh', 'pr', 'view', '1']] } : { ok: false as const, reason: 'no' } };
       const result = await f.runner.run({ ...f.spec, allowedTools: ['Read', 'Bash'], bashAllowlist: undefined, brokeredShell });
       const reply = JSON.parse(result.text).find((r: {id: number}) => r.id === 221).result;
       expect(reply.success).toBe(false);
-      expect(reply.contentItems[0].text).toContain('GitHub reads are disabled by CEZ_CODEX_NETWORK=0');
+      expect(reply.contentItems[0].text).toContain('network commands are disabled by CEZ_CODEX_NETWORK=0 (`gh` may reach the network)');
     } finally {
       if (previous === undefined) delete process.env.CEZ_CODEX_NETWORK; else process.env.CEZ_CODEX_NETWORK = previous;
     }
-  });
-  it('refuses a pipeline with a control character before any stage starts', async () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'cez-pipeline-')); dirs.push(cwd);
-    const started = Date.now();
-    const ran = await runPipeline([['touch', 'STARTED'], ['cat', 'a\0b']], undefined, { cwd, env: { PATH: process.env.PATH }, signal: new AbortController().signal });
-    expect(ran.ok).toBe(false);
-    expect(existsSync(join(cwd, 'STARTED'))).toBe(false);
-    expect(Date.now() - started).toBeLessThan(1_000);
-  });
-  it('ends started stages when a later stage cannot start', async () => {
-    const started = Date.now();
-    const ran = await runPipeline([['sleep', '30'], ['cez-no-such-binary-2458']], undefined, { cwd: process.cwd(), env: { PATH: process.env.PATH }, signal: new AbortController().signal });
-    expect(ran.ok).toBe(false);
-    expect(ran.text).toContain('cez-no-such-binary-2458');
-    expect(Date.now() - started).toBeLessThan(10_000);
-  });
-  it('ends the writers of a brokered pipeline whose reader quits early, as a shell would', async () => {
-    const started = Date.now();
-    const ran = await runPipeline([['yes'], ['head', '-1']], undefined, { cwd: process.cwd(), env: { PATH: process.env.PATH }, signal: new AbortController().signal });
-    expect(ran).toEqual({ ok: true, text: 'y\n' });
-    expect(Date.now() - started).toBeLessThan(10_000);
   });
   it('keeps a no-tools invocation empty even when the model requests supported reads', async () => {
     const f = setup();

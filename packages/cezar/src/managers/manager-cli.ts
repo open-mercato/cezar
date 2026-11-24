@@ -3,7 +3,9 @@
  * client over `/workspace/managers`, addressed like `cez task`: `CEZ_API_URL` plus `CEZ_MANAGER_ID`,
  * both set on every manager turn. The `cez-manager` shim on the turn's PATH lands here.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { cezarHomeDir } from '../paths.ts';
 import { parseArgs } from 'node:util';
 import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerMemoryResponse, ManagerMessage, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
 import { managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
@@ -336,13 +338,31 @@ interface ContentValues {
 }
 
 /** The typed words, then the file or stdin; and what the server should copy in on its own. */
-async function contentOf(words: string[], values: ContentValues, io: ManagerCliIo): Promise<{ text: string; fromMessage?: string; allowPlaceholder?: true }> {
+/**
+ * A manager turn's `--file` reads only the manager's own workdir (where `files/` lives) and its
+ * attachments: the vetted shell accepts any `cez-manager` call, so this is not a way past the
+ * turn's read roots (`--file ~/.ssh/id_rsa`). Without a manager id there is no turn to confine.
+ */
+export async function readManagerFile(path: string, env: ManagerCliEnv): Promise<string> {
+  const real = await realpath(resolve(path));
+  const id = env.CEZ_MANAGER_ID;
+  if (id) {
+    const base = join(cezarHomeDir(env), 'managers', id);
+    const roots = (await Promise.all(['workdir', 'attachments'].map((dir) => realpath(join(base, dir)).catch(() => undefined))))
+      .filter((root): root is string => root !== undefined);
+    const inside = (root: string) => { const rel = relative(root, real); return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${'/'}`) && !rel.startsWith('..\\')); };
+    if (!roots.some(inside)) throw new Error('only files in the manager\'s workdir (files/) or its attachments can be read');
+  }
+  return readFile(real, 'utf8');
+}
+
+async function contentOf(words: string[], values: ContentValues, io: ManagerCliIo, env: ManagerCliEnv): Promise<{ text: string; fromMessage?: string; allowPlaceholder?: true }> {
   if (values['attach-last-user-message'] && values['from-message']) fail('use --attach-last-user-message or --from-message, not both');
   if (values.file !== undefined && values.stdin) fail('use --file or --stdin, not both');
   let extra = '';
   if (values.file !== undefined) {
     try {
-      extra = await (io.readFile ?? ((path: string) => readFile(path, 'utf8')))(values.file);
+      extra = await (io.readFile ?? ((path: string) => readManagerFile(path, env)))(values.file);
     } catch (error) {
       fail(`cannot read ${values.file}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -507,7 +527,7 @@ export async function runManagerCommand(
             ...CONTENT_OPTIONS,
           }, true);
           const effort = effortOf(values.effort);
-          const { text: task, ...content } = await contentOf(positionals, values, io);
+          const { text: task, ...content } = await contentOf(positionals, values, io, env);
           if (!task && !content.fromMessage) fail('an objective is required: cez manager task create --project <id> "<objective>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
           const created = await call<ManagerCreateTaskResponse>('/tasks', {
@@ -534,7 +554,7 @@ export async function runManagerCommand(
           const { values, positionals } = parse('task say', taskArgs, { project: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, ...CONTENT_OPTIONS }, true);
           const effort = effortOf(values.effort);
           const [runId, ...words] = positionals;
-          const { text, ...content } = runId ? await contentOf(words, values, io) : { text: '' };
+          const { text, ...content } = runId ? await contentOf(words, values, io, env) : { text: '' };
           if (!runId || (!text && !content.fromMessage)) fail('usage: cez manager task say --project <id> <run> "<text>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
           const sent = await call<ManagerTaskMessageResponse>('/task-message', {

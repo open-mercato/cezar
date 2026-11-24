@@ -82,6 +82,7 @@ import {
   managerBashSuggestion,
   managerShellPlan,
   MANAGER_SHELL_DESCRIPTION,
+  MANAGER_BASH_FILTERS,
 } from './bash-policy.ts';
 import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan, type ManagerFailureKind } from './failure.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
@@ -420,12 +421,21 @@ const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, i
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
-/** `cez-manager` on the turn's PATH, so `bashAllowlist` can name one word. */
-/** A Codex manager's Bash: the policy Claude's hook applies, run by cezar's broker in the turn's env. */
+/**
+ * A Codex manager's Bash: the policy Claude's hook applies, run by cezar's broker. Unlike a Claude
+ * manager's `gh`, which stays inside the user's Claude Bash sandbox (only `cez-manager` is excluded),
+ * these commands run directly on the host with the engine's environment, so a sandbox network
+ * allowlist does not apply to them. They are still only the vetted read-only set.
+ */
 function codexManagerShell(bashAllow: readonly string[] | undefined, env: Record<string, string | undefined>): NonNullable<AgentRunSpec['brokeredShell']> {
-  return { verify: (command) => managerShellPlan(command, bashAllow ?? []), env, describe: MANAGER_SHELL_DESCRIPTION };
+  return {
+    verify: (command) => managerShellPlan(command, bashAllow ?? []), env, describe: MANAGER_SHELL_DESCRIPTION,
+    // The cockpit is loopback and the filters read only their pipe; every `gh`, user patterns included, is network.
+    offlinePrograms: ['cez-manager', ...MANAGER_BASH_FILTERS],
+  };
 }
 
+/** `cez-manager` on the turn's PATH, so `bashAllowlist` can name one word. */
 export function ensureManagerShim(): string {
   const dir = join(managersDir(), 'bin');
   assertCezarHomeWriteIsSandboxed(dir);
