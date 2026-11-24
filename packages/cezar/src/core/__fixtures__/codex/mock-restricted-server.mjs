@@ -32,7 +32,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     next(); continue;
   }
   switch (msg.method) {
-    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/0.168.9' : newer ? 'cezar/0.170.0 (Mac OS 26.6.2; arm64) mock' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: 'macos' } }); break;
+    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/0.168.9' : mode === 'prerelease' ? 'cezar/0.169.0-alpha.1 mock' : newer ? 'cezar/0.170.0 (Mac OS 26.6.2; arm64) mock' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: 'macos' } }); break;
     case 'experimentalFeature/list': {
       // A newer Codex: a tool flag this isolation never heard of is on until the thread turns it off.
       const thread = msg.params?.threadId;

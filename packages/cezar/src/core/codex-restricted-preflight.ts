@@ -24,12 +24,13 @@ export const CODEX_VERIFIED_MIN: readonly [number, number, number] = [0, 169, 0]
  */
 export function verifyRestrictedCodexIdentity(value: unknown, home: RestrictedCodexHome): { baseline: boolean } {
   const identity = z.object({ userAgent: z.string(), codexHome: z.string(), platformOs: z.enum(['macos', 'linux']) }).safeParse(value);
-  const version = identity.success ? /^cezar\/(\d+)\.(\d+)\.(\d+)(?:[-+\s]|$)/.exec(identity.data.userAgent) : null;
+  const version = identity.success ? /^cezar\/(\d+)\.(\d+)\.(\d+)(?=[-+\s]|$)([-+]\S*)?/.exec(identity.data.userAgent) : null;
   const parts = version ? [Number(version[1]), Number(version[2]), Number(version[3])] : undefined;
   const order = parts ? (parts[0]! - CODEX_VERIFIED_MIN[0]) || (parts[1]! - CODEX_VERIFIED_MIN[1]) || (parts[2]! - CODEX_VERIFIED_MIN[2]) : -1;
   if (!identity.success || order < 0) fail(`the installed Codex protocol has not been verified (needs Codex ${CODEX_VERIFIED_MIN.join('.')} or newer)`);
   if (resolve(identity.data.codexHome) !== home.path) fail('Codex did not use the isolated account home');
-  return { baseline: order === 0 };
+  // A prerelease or build of 0.169.0 is not the build the static list was verified against.
+  return { baseline: order === 0 && !version![4] };
 }
 
 const featureList = z.object({

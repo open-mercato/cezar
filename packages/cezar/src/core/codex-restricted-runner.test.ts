@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CodexAppServerRunner } from './codex-app-server-runner.ts';
+import { runPipeline } from './codex-restricted-tools.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
 const bin = fileURLToPath(new URL('./__fixtures__/codex/mock-restricted-server.mjs', import.meta.url));
 const dirs: string[] = [];
@@ -87,6 +88,17 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     const turn = f.requests().find((r: {method: string}) => r.method === 'turn/start').params;
     expect(turn.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
     expect(f.requests().find((r: {method: string}) => r.method === 'thread/start').params.dynamicTools[0].description).toContain('a test command.');
+  });
+  it('checks native features on a 0.169.0 prerelease, which the static list was never verified against', async () => {
+    const f = setup('prerelease');
+    await f.runner.run(f.spec);
+    expect(f.requests().filter((r: {method: string}) => r.method === 'experimentalFeature/list')).toHaveLength(2);
+  });
+  it('ends the writers of a brokered pipeline whose reader quits early, as a shell would', async () => {
+    const started = Date.now();
+    const ran = await runPipeline([['yes'], ['head', '-1']], undefined, { cwd: process.cwd(), env: { PATH: process.env.PATH }, signal: new AbortController().signal });
+    expect(ran).toEqual({ ok: true, text: 'y\n' });
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
   it('keeps a no-tools invocation empty even when the model requests supported reads', async () => {
     const f = setup();

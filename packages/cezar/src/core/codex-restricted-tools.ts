@@ -34,7 +34,7 @@ const SHELL_TIMEOUT_MS = 120_000;
 const SHELL_OUTPUT_CAP = 256_000;
 
 /** Spawns a vetted argv pipeline with no shell: what the verifier read is exactly what runs. */
-function runPipeline(pipeline: readonly string[][], stdin: string | undefined, opts: { cwd: string; env: Record<string, string | undefined>; signal: AbortSignal }): Promise<{ ok: boolean; text: string }> {
+export function runPipeline(pipeline: readonly string[][], stdin: string | undefined, opts: { cwd: string; env: Record<string, string | undefined>; signal: AbortSignal }): Promise<{ ok: boolean; text: string }> {
   const env = Object.fromEntries(Object.entries(opts.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   return new Promise((done) => {
     let stdout = '';
@@ -58,6 +58,8 @@ function runPipeline(pipeline: readonly string[][], stdin: string | undefined, o
       child.on('error', (err) => { failure ??= `${pipeline[index]![0]}: ${err.message.slice(0, 200)}`; });
       child.on('close', (exit) => {
         if (!next) code = exit;
+        // A shell's SIGPIPE: a reader that quit (`| head`) ends the writers before it, or they block on a full pipe.
+        for (const upstream of children.slice(0, index)) if (upstream.exitCode === null && upstream.signalCode === null) upstream.kill('SIGKILL');
         if (--open > 0) return;
         clearTimeout(timer);
         const detail = [stdout, stderr.trim() && `[stderr]\n${stderr.trim()}`, failure, code !== 0 && !failure ? `[exit ${code ?? 'signal'}]` : ''].filter(Boolean).join('\n');
