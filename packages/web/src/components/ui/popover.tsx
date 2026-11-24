@@ -66,7 +66,8 @@ function paddingSides(padding: Padding | undefined): { top: number; bottom: numb
 
 /**
  * Picks the side and max height against the VISUAL viewport and re-picks while open as the
- * keyboard opens or closes, the anchor moves or the content changes (lib/popover-placement).
+ * keyboard opens or closes, the anchor moves or resizes, or the content changes
+ * (lib/popover-placement).
  * Floating-ui already clips to the visual viewport, so no keyboard inset goes into the padding.
  */
 function usePopoverPlacement(options: {
@@ -133,6 +134,13 @@ function usePopoverPlacement(options: {
     window.addEventListener("scroll", onScroll, { capture: true, passive: true })
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule)
     observer?.observe(content)
+    const anchor = slots.anchor.current ?? slots.trigger.current
+    if (anchor) observer?.observe(anchor)
+    // An anchor that moves on its own (a banner pushes it) is caught by Radix's autoUpdate, which
+    // rewrites the popper wrapper's style: re-measure on that rather than polling every frame.
+    const wrapper = content.parentElement
+    const moved = wrapper && typeof MutationObserver !== "undefined" ? new MutationObserver(schedule) : null
+    if (wrapper) moved?.observe(wrapper, { attributes: true, attributeFilter: ["style"] })
     return () => {
       cancelAnimationFrame(frame)
       viewport?.removeEventListener("resize", schedule)
@@ -140,6 +148,7 @@ function usePopoverPlacement(options: {
       window.removeEventListener("resize", onResize)
       window.removeEventListener("scroll", onScroll, { capture: true })
       observer?.disconnect()
+      moved?.disconnect()
     }
   }, [enabled, content, slots, preferred, sideOffset, padTop, padBottom])
   return enabled ? state : { placement: null, natural: 0, safeTop: state.safeTop }

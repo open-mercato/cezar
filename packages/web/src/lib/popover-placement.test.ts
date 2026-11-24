@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { choosePopoverPlacement, naturalHeight, POPOVER_MIN_HEIGHT, visibleBand } from './popover-placement'
+import { choosePopoverPlacement, naturalHeight, visibleBand } from './popover-placement'
 
 // An iPhone-sized layout viewport (858px) with the keyboard up: the visual viewport is 507px
 // tall, so 351px of layout viewport sits under the keys. The switcher trigger is at 180–216.
@@ -26,12 +26,11 @@ describe('choosePopoverPlacement — keyboard-reduced visual viewport', () => {
     expect(placement).toEqual({ side: 'bottom', maxHeight: 285 })
   })
 
-  it('stays below with a usable minimum even when the space above is a little larger', () => {
+  it('stays below when the space above is larger but not 1.5x larger', () => {
     const low = { anchorTop: 300, anchorBottom: 336, sideOffset: 6 }
     const placement = choosePopoverPlacement({ ...low, viewTop: band.top, viewBottom: band.bottom, naturalHeight: 474, preferred: 'bottom' })
-    expect(placement.side).toBe('bottom')
-    expect(placement.maxHeight).toBe(165)
-    expect(placement.maxHeight).toBeGreaterThanOrEqual(POPOVER_MIN_HEIGHT)
+    // 165px below vs 247px above: 82px more, but only 1.497x.
+    expect(placement).toEqual({ side: 'bottom', maxHeight: 165 })
   })
 
   it('flips up only when the room below is short and above is clearly larger, never past the safe area', () => {
@@ -44,14 +43,32 @@ describe('choosePopoverPlacement — keyboard-reduced visual viewport', () => {
   it('does not flip when the other side is not clearly larger', () => {
     const middle = { anchorTop: 210, anchorBottom: 380, sideOffset: 6 }
     const placement = choosePopoverPlacement({ ...middle, viewTop: band.top, viewBottom: band.bottom, naturalHeight: 474, preferred: 'bottom' })
-    // 121 below vs 157 above: short both ways, above is not 48px roomier.
+    // 121 below vs 157 above: short both ways, above is neither 48px nor 1.5x roomier.
     expect(placement).toEqual({ side: 'bottom', maxHeight: 121 })
+  })
+
+  describe('when neither side holds the menu, flips only to a clearly roomier side', () => {
+    // A 700px band, no offset: below = 700 - anchorBottom, above = anchorTop.
+    const place = (above: number, below: number) =>
+      choosePopoverPlacement({ anchorTop: above, anchorBottom: 700 - below, viewTop: 0, viewBottom: 700, sideOffset: 0, naturalHeight: 1000, preferred: 'bottom' })
+
+    it('flips: 450px above vs 170px below (280px more, 2.6x)', () => {
+      expect(place(450, 170)).toEqual({ side: 'top', maxHeight: 450 })
+    })
+
+    it('stays: 290px above vs 200px below (90px more, but 1.45x)', () => {
+      expect(place(290, 200)).toEqual({ side: 'bottom', maxHeight: 200 })
+    })
+
+    it('stays: 135px above vs 90px below (1.5x, but only 45px more)', () => {
+      expect(place(135, 90)).toEqual({ side: 'bottom', maxHeight: 90 })
+    })
   })
 
   it('flips to the other side when only it holds the whole menu (desktop, trigger near the bottom)', () => {
     const nearBottom = { anchorTop: 600, anchorBottom: 636, sideOffset: 4 }
     const placement = choosePopoverPlacement({ ...nearBottom, viewTop: 0, viewBottom: 880, naturalHeight: 400, preferred: 'bottom' })
-    // 240px below would hold the usable minimum, but 596px above holds the whole menu.
+    // 240px below is roomy, but only the 596px above holds the whole menu.
     expect(placement).toEqual({ side: 'top', maxHeight: 596 })
   })
 

@@ -3,9 +3,10 @@
  * compares the content's FULL natural height against each side and takes the least-bad one,
  * so a long list flips above the trigger as soon as the mobile keyboard shortens the space
  * below — under the status bar, cut off — while a perfectly usable band below stays empty.
- * Here a side that holds the whole menu wins (preferred first); when neither does, the
- * preferred side wins if it holds a usable minimum (the list then scrolls inside), and the
- * other side only when it is clearly larger.
+ * Here a side that holds the whole menu wins (preferred first). When neither does, the menu
+ * shrinks to its side's room and scrolls inside: on the preferred side, unless the other is
+ * clearly roomier (48px more and 1.5× the room). It is never clamped below 80px; with less
+ * than that either way it opens unclamped on the larger side, overflowing as Radix would.
  *
  * Every coordinate is in the layout viewport (what `getBoundingClientRect` and Radix's fixed
  * strategy use); the visible band comes from `visualViewport`, so the keyboard area and a
@@ -25,7 +26,6 @@ export interface PopoverPlacementInput {
   naturalHeight: number
   sideOffset: number
   preferred: PopoverSide
-  minHeight?: number
 }
 
 export interface PopoverPlacement {
@@ -34,10 +34,10 @@ export interface PopoverPlacement {
   maxHeight: number | null
 }
 
-/** Below this the menu is not worth opening on the preferred side if the other one is roomier. */
-export const POPOVER_MIN_HEIGHT = 160
-/** How much larger the other side must be before the menu flips to it. */
+/** The other side is "clearly roomier" when it has this many px more… */
 export const POPOVER_FLIP_MARGIN = 48
+/** …and at least this many times the preferred side's room. */
+export const POPOVER_FLIP_RATIO = 1.5
 /** Never clamp below this: a sliver of a menu is worse than one that overflows. */
 export const POPOVER_CLAMP_FLOOR = 80
 
@@ -50,10 +50,11 @@ export function choosePopoverPlacement(input: PopoverPlacementInput): PopoverPla
   // A side that holds the whole menu wins first, as Radix's own flip does on desktop.
   if (preferredRoom >= input.naturalHeight) return { side: input.preferred, maxHeight: preferredRoom }
   if (otherRoom >= input.naturalHeight) return { side: other, maxHeight: otherRoom }
-  const usable = Math.min(input.naturalHeight, input.minHeight ?? POPOVER_MIN_HEIGHT)
-  if (preferredRoom >= usable) return { side: input.preferred, maxHeight: preferredRoom }
+  // Neither holds it: the menu shrinks and scrolls, on the other side only if that is clearly roomier.
   const clamp = (room: number) => (room >= POPOVER_CLAMP_FLOOR ? room : null)
-  if (otherRoom >= preferredRoom + POPOVER_FLIP_MARGIN) return { side: other, maxHeight: clamp(otherRoom) }
+  const clearlyRoomier =
+    otherRoom >= preferredRoom + POPOVER_FLIP_MARGIN && otherRoom >= preferredRoom * POPOVER_FLIP_RATIO
+  if (clearlyRoomier) return { side: other, maxHeight: clamp(otherRoom) }
   if (preferredRoom >= POPOVER_CLAMP_FLOOR) return { side: input.preferred, maxHeight: preferredRoom }
   // Too little room either way: the larger side, unclamped (Radix's overflowing behavior).
   return { side: otherRoom > preferredRoom ? other : input.preferred, maxHeight: null }
