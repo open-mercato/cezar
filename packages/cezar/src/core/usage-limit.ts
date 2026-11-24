@@ -84,8 +84,9 @@ export function isUsageLimitMessage(message: string): boolean {
 /** An exhausted plan allowance, as opposed to a throttle. Rate-limit wording is excluded on purpose. */
 const EXHAUSTION_PHRASE_RE =
   /\bhit\s+your\s+(?:(?:usage|session|weekly|monthly|daily|hourly|5[\s-]?hour)\s+)?limit\b|\b(?:usage|weekly|monthly|daily|5[\s-]?hour)[\s-]?limit\b|\b(?:session|hourly)\s+limit\s+reached\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
-/** A billing quota that is gone, even when the provider reports it as an HTTP 429 (OpenAI does). */
-const QUOTA_GONE_RE = /\binsufficient[_\s]quota\b|\bexceeded\s+your\s+current\s+quota\b/i;
+/** A billing/plan quota that is gone, even when the provider or proxy reports it as an HTTP 429 (OpenAI, Google/Antigravity, CLIProxyAPI). */
+const QUOTA_GONE_RE =
+  /\binsufficient[_\s]quota\b|\bexceeded\s+your\s+current\s+quota\b|\binsufficient_g1_credits_balance\b|\bresource_exhausted\b|\bmodel_cooldown\b/i;
 const THROTTLE_RE = /\b(?:rate[\s_-]?limit|per[\s-]?minute|requests?\s+per|tokens?\s+per\s+minute|too\s+many\s+requests|429)\b/i;
 
 /**

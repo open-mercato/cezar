@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
+import { isUsageExhaustion, MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
 
 /** A fixed clock — every expectation below is relative to it. */
 const NOW = Date.parse('2026-08-03T12:00:00.000Z');
@@ -159,5 +159,31 @@ describe('parseUsageLimit', () => {
     expect(parseUsageLimit('You have hit your usage limit. Upgrade to continue.', NOW)).toBeNull();
     expect(parseUsageLimit("You've hit your 5-hour limit · resets 3:10pm (UTC)", NOW)?.evidence).toBe('clock');
     expect(parseUsageLimit('429 {"type":"rate_limit_error"}', NOW)).toBeNull();
+  });
+});
+
+describe('isUsageExhaustion', () => {
+  it('detects Google/Antigravity 429 RESOURCE_EXHAUSTED / INSUFFICIENT_G1_CREDITS_BALANCE', () => {
+    const err =
+      'API Error: 429 {"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED","details":[{"reason":"INSUFFICIENT_G1_CREDITS_BALANCE"}]}}';
+    expect(isUsageExhaustion(err)).toBe(true);
+  });
+
+  it('detects proxy 429 model_cooldown payloads', () => {
+    const err =
+      '429 {"error":{"code":"model_cooldown","message":"All credentials for model claude-opus-5-5 are cooling down","status":"RESOURCE_EXHAUSTED"}}';
+    expect(isUsageExhaustion(err)).toBe(true);
+  });
+
+  it('detects OpenAI insufficient_quota and Claude usage limit markers', () => {
+    expect(isUsageExhaustion('429 You exceeded your current quota (insufficient_quota)')).toBe(true);
+    expect(isUsageExhaustion(`Claude AI usage limit reached|${NOW / 1_000}`)).toBe(true);
+  });
+
+  it('does not treat transient 429 throttles or unrelated errors as quota exhaustion', () => {
+    expect(isUsageExhaustion(undefined)).toBe(false);
+    expect(isUsageExhaustion('429 Too Many Requests')).toBe(false);
+    expect(isUsageExhaustion('429 {"type":"rate_limit_error"}')).toBe(false);
+    expect(isUsageExhaustion('claude CLI exited with code 1 — ENOENT')).toBe(false);
   });
 });
