@@ -3,7 +3,7 @@ import { useActiveProjectId, useTaskTags } from '@/api/task-tags'
 import { AddTagButton, TaskTagChip, TaskTagPicker, type TagRowState } from '@/components/task-tag-picker'
 import { resolveAutomationTags } from '@/lib/task-tags'
 
-/** The task tags every launched run gets (spec 2026-11-23-task-tags § 5a). */
+/** The task tags every launched run gets (spec 2026-11-23-automation-task-tags). */
 export function EditorTagsRow({ tags, onChange }: { tags: AutomationTaskTag[]; onChange: (tags: AutomationTaskTag[]) => void }) {
   const projectId = useActiveProjectId()
   const registry = useTaskTags()

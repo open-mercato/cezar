@@ -60,11 +60,14 @@ describe('the definition reference', () => {
       if (['id', 'revision', 'createdAt', 'updatedAt', 'enabled'].includes(key)) continue;
       expect(AUTOMATION_SCHEMA_REFERENCE).toContain(`"${key}"`);
     }
-    // `filters`/`schedule` are optional wrappers and `task` carries a refine; walk to each object.
+    // `filters`/`schedule` are optional wrappers and `task` is a preprocess with a refine; walk to each object.
+    type Walked = { shape?: Record<string, unknown>; unwrap?: () => unknown; def?: { type?: string; innerType?: unknown; in?: Walked; out?: unknown } };
     const objectShape = (schema: unknown): Record<string, unknown> => {
-      let current = schema as { shape?: Record<string, unknown>; unwrap?: () => unknown; def?: { innerType?: unknown; in?: unknown } };
+      let current = schema as Walked;
       for (let hop = 0; hop < 6 && !current.shape; hop += 1) {
-        const next = current.unwrap ? current.unwrap() : (current.def?.innerType ?? current.def?.in);
+        // A `z.preprocess` pipe's `in` is the transform; the object is its `out`.
+        const piped = current.def?.in?.def?.type === 'transform' ? current.def.out : current.def?.in;
+        const next = current.unwrap ? current.unwrap() : (current.def?.innerType ?? piped);
         if (!next) break;
         current = next as typeof current;
       }

@@ -4635,15 +4635,15 @@ export function createApp(deps: ServerDeps) {
     return runs;
   };
 
-  /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
-   *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
-   *  reference does. */
-  // Spec 2026-11-23-task-tags § 5a: a definition stores `{id, name}`, resolved while the user saves.
+  // A definition stores `{id, name}`, resolved while the user saves (spec 2026-11-23-automation-task-tags).
   const withSavedAutomationTags = async <T extends { tags?: AutomationTaskTag[] }>(task: T, root: string): Promise<T> => {
     const { tags: refs, ...rest } = task;
     const tags = await automationTagsForSave(refs, root);
     return (tags ? { ...rest, tags } : rest) as T;
   };
+  /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
+   *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
+   *  reference does. */
   const automationAccountIssue = async (
     root: string,
     task: { runner?: ProviderId; agentProfile?: string },
