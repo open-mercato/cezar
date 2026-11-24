@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { cezarHomeDir } from '../paths.ts';
 import { graphIssues, graphToSteps, workflowGraphFileSchema } from './graph.ts';
 import { ASSESS_IMPACT_WORKFLOW, BUILT_IN_GRAPH_WORKFLOWS } from './templates.ts';
 import {
@@ -14,23 +15,22 @@ import {
 
 export const WORKFLOWS_DIR = '.ai/cezar/workflows';
 
+/** The machine-wide workflows directory (#1984): `~/.cezar/workflows`, optionally a symlink to a versioned checkout. */
+export function globalWorkflowsDir(): string {
+  return join(cezarHomeDir(), 'workflows');
+}
+
 export interface WorkflowLoadIssue {
   path: string;
   message: string;
 }
 
-/**
- * Load the workflow catalog: the built-in `quick-task` plus every
- * `.ai/cezar/workflows/*.{yaml,yml}` in the repo. File workflows win name
- * collisions with built-ins. Invalid files are reported, never fatal.
- */
-export async function loadWorkflows(
-  repoRoot: string,
-): Promise<{ workflows: WorkflowDef[]; issues: WorkflowLoadIssue[] }> {
-  const dir = resolve(repoRoot, WORKFLOWS_DIR);
-  const issues: WorkflowLoadIssue[] = [];
-  const fromFiles: WorkflowDef[] = [];
-
+async function readWorkflowDir(
+  dir: string,
+  scope: 'project' | 'global',
+  fromFiles: WorkflowDef[],
+  issues: WorkflowLoadIssue[],
+): Promise<void> {
   let entries: string[] = [];
   try {
     entries = await readdir(dir);
@@ -69,6 +69,7 @@ export async function loadWorkflows(
           steps: graphToSteps(graphDoc.data),
           graph: { nodes, edges, ...(layout ? { layout } : {}) },
           source: 'file',
+          ...(scope === 'global' ? { scope } : {}),
           path,
         });
         continue;
@@ -86,11 +87,41 @@ export async function loadWorkflows(
         issues.push({ path, message: issue });
         continue;
       }
-      fromFiles.push({ ...normalized, source: 'file', path });
+      fromFiles.push({ ...normalized, source: 'file', ...(scope === 'global' ? { scope } : {}), path });
     } catch (err) {
       issues.push({ path, message: err instanceof Error ? err.message : String(err) });
     }
   }
+}
+
+/**
+ * Load the workflow catalog: the built-in `quick-task` plus every
+ * `.ai/cezar/workflows/*.{yaml,yml}` in the repo, then the global `~/.cezar/workflows`
+ * (project wins a name clash, global entries carry `scope: 'global'`). File workflows win name
+ * collisions with built-ins. Invalid files are reported, never fatal.
+ */
+export async function loadWorkflows(
+  repoRoot: string,
+  globalDir: string = globalWorkflowsDir(),
+): Promise<{ workflows: WorkflowDef[]; issues: WorkflowLoadIssue[] }> {
+  const issues: WorkflowLoadIssue[] = [];
+  const projectDefs: WorkflowDef[] = [];
+  const globalDefs: WorkflowDef[] = [];
+  await readWorkflowDir(resolve(repoRoot, WORKFLOWS_DIR), 'project', projectDefs, issues);
+  // Same name: the project wins, then global, then built-ins — mirrors skills (#1984).
+  const projectNames = new Set(projectDefs.map((w) => w.name));
+  const globalIssues: WorkflowLoadIssue[] = [];
+  await readWorkflowDir(globalDir, 'global', globalDefs, globalIssues);
+  issues.push(...globalIssues);
+  const seenGlobal = new Set<string>();
+  const fromFiles = [
+    ...projectDefs,
+    ...globalDefs.filter((w) => {
+      if (projectNames.has(w.name) || seenGlobal.has(w.name)) return false;
+      seenGlobal.add(w.name);
+      return true;
+    }),
+  ];
 
   const fileNames = new Set(fromFiles.map((w) => w.name));
   const workflows = [

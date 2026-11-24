@@ -108,6 +108,8 @@ export const workflowDefSchema = z.object({
    *  (`graphToSteps`) so every step-reading path keeps working. Absent on v1 workflows. */
   graph: workflowGraphSchema.optional(),
   source: z.enum(['built-in', 'file']),
+  /** `global` = loaded from `~/.cezar/workflows` (read-only here, #1984); absent = this project's own. */
+  scope: z.enum(['project', 'global']).optional(),
   path: z.string().optional(),
 });
 
