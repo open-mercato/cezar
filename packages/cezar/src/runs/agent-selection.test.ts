@@ -77,6 +77,17 @@ describe('workflowAgentSwitch', () => {
     expect(first.overrides.codex).toBeUndefined();
   });
 
+  it('drops an earlier override model when models are locked', () => {
+    const record = run();
+    const first = workflowAgentSwitch(record, 'claude', codex, 'claude');
+    const switched = { ...record, ...codex, agentSwitch: { summary: 'First switch', workflow: true as const, workflowSelection: first } };
+    const target = { runner: 'codex', agentProfile: 'another' } as const;
+    expect(workflowAgentSwitch(switched, 'codex', target, 'claude').overrides.unpinned)
+      .toMatchObject({ model: codex.model, reasoningEffort: codex.reasoningEffort });
+    expect(workflowAgentSwitch(switched, 'codex', target, 'claude', false).overrides.unpinned)
+      .toEqual({ ...target, model: null, reasoningEffort: null });
+  });
+
   it('switches both originally pinned Codex steps and steps moved there by the first switch', () => {
     const record = run();
     const first = workflowAgentSwitch(record, 'claude', codex, 'claude');

@@ -5155,7 +5155,7 @@ export class RunManager {
     const step = run.steps.find((candidate) => candidate.id === handoff.continuationStepId);
     if (step?.status !== 'pending') return;
     this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt: new Date().toISOString() });
-    this.store.updateRun(runId, { agentSwitch: { summary: handoff.summary } });
+    this.store.updateRun(runId, { agentSwitch: { ...handoff, continuationStepId: undefined, continuationInput: undefined } });
   }
 
   private armCancellationGrace(runId: string, state: ActiveRun): void {
@@ -5876,7 +5876,7 @@ export class RunManager {
         if (retryLoop && !workflow.graph) this.store.updateStep(runId, checkpoint.id, { retriesUsed: 0 });
       }
       const requeue = Boolean(savedWorkflow || state && checkpoint && (checkpoint.type === 'agent' || checkRepair?.checkId === checkpoint.id));
-      const workflowSelection = workflowAgentSwitch(run, current.runner, input, defaultRunner ?? 'claude');
+      const workflowSelection = workflowAgentSwitch(run, current.runner, input, defaultRunner ?? 'claude', !modelsLocked);
       this.clearAutoResume(runId);
       this.store.updateRun(runId, {
         ...selection, modelIdentity: undefined, actualModel: undefined, fallbackEpisode: undefined,

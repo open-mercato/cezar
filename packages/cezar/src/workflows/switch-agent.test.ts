@@ -621,7 +621,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)).toMatchObject({ status: 'cancelled', steps: [
       { id: 'work', status: 'done' }, { id: 'continue-1', status: 'cancelled' }, { id: 'continue-2', status: 'cancelled' },
     ] });
-    expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBeUndefined();
+    expect(store.getRun(id)?.agentSwitch).toEqual({ summary: expect.stringContaining('Switched from claude') });
     expect(store.readEvents(id)).toContainEqual(expect.objectContaining({ message: 'run cancelled during agent switch' }));
   });
 

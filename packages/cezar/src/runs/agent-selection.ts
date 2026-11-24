@@ -11,6 +11,8 @@ export function workflowAgentSwitch(
   from: RunnerId,
   target: WorkflowSwitchInput,
   defaultRunner: RunnerId,
+  /** False when agent models are locked: an earlier override's model must not carry over. */
+  keepModels = true,
 ): WorkflowAgentSwitch {
   const previous = run.agentSwitch?.workflowSelection;
   const original = previous?.original ?? {
@@ -24,7 +26,7 @@ export function workflowAgentSwitch(
     const old = overrides[slot];
     const effective = old?.runner ?? (slot === 'unpinned' ? original.runner : slot);
     if (effective !== from) continue;
-    const keepsRunner = effective === target.runner;
+    const keepsRunner = keepModels && effective === target.runner;
     overrides[slot] = {
       runner: target.runner,
       agentProfile: target.agentProfile,
