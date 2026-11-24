@@ -96,6 +96,11 @@ const BACKEND_NAMES: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot',
 };
 
+/** The product name a user knows a backend by, or undefined for one without a fixed name. */
+export function agentBackendName(backend: string | undefined): string | undefined {
+  return BACKEND_NAMES[backend ?? ''];
+}
+
 /**
  * What the user can do about an account- or conversation-state failure, or undefined when the
  * class has nothing to add (a transient failure, a bug, a usage limit whose reset the provider named —
@@ -109,7 +114,7 @@ export function accountStateHint(
   const name = BACKEND_NAMES[backend ?? ''];
   switch (failure) {
     case 'auth':
-      return `${name ?? 'The agent'} is not signed in or its login expired — sign in again (Settings → Agent accounts, or the agent's own login command in a terminal), then Continue this task`;
+      return `${name ?? 'The agent'} is not signed in or its login expired — sign in again (Settings → Agents → Accounts, or the agent's own login command in a terminal), then Continue this task`;
     case 'billing':
       return `the ${name ?? 'agent'} account has run out of credit — top up its balance or switch this task to another account, then Continue`;
     case 'usage_limit':

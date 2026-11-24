@@ -121,4 +121,14 @@ describe('Secrets settings', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete STAGING_TOKEN' }))
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/secrets/STAGING_TOKEN'))).toBe(true))
   })
+
+  it('renders the form with the shared Input inside a FormRow and a danger-ghost Delete per row', async () => {
+    setup()
+    await screen.findByText('OPENAI_API_KEY')
+    expect(screen.getByLabelText('Name').getAttribute('data-slot')).toBe('input')
+    expect(screen.getByLabelText('Value').getAttribute('data-slot')).toBe('input')
+    expect(screen.getByLabelText('Name').closest('[data-slot="form-row"]')).not.toBeNull()
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Delete OPENAI_API_KEY' }).getAttribute('data-variant')).toBe('danger-ghost')
+  })
 })

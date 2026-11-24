@@ -222,6 +222,8 @@ async function sample(): Promise<void> {
         }
       }
     }
+  } catch {
+    // a synchronous execFile throw (spawn UNKNOWN on Windows) must not become an unhandled rejection (#2312)
   } finally {
     sampling = false;
   }
@@ -233,6 +235,7 @@ async function sample(): Promise<void> {
 function runPs(): Promise<string | null> {
   if (process.platform === 'win32') {
     return new Promise((resolve) => {
+      try {
       execFile(
         'powershell',
         [
@@ -243,14 +246,21 @@ function runPs(): Promise<string | null> {
         { maxBuffer: 16 * 1024 * 1024, windowsHide: true },
         (err, stdout) => resolve(err ? null : stdout),
       );
+      } catch {
+        resolve(null); // execFile can throw synchronously (#2312)
+      }
     });
   }
   return new Promise((resolve) => {
-    execFile(
-      'ps',
-      ['-axo', 'pid=,ppid=,rss=,%cpu='],
-      { maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout) => resolve(err ? null : stdout),
-    );
+    try {
+      execFile(
+        'ps',
+        ['-axo', 'pid=,ppid=,rss=,%cpu='],
+        { maxBuffer: 16 * 1024 * 1024 },
+        (err, stdout) => resolve(err ? null : stdout),
+      );
+    } catch {
+      resolve(null); // execFile can throw synchronously (#2312)
+    }
   });
 }

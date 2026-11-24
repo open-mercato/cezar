@@ -7,7 +7,7 @@ import { runArtifactsEventSchema, runArtifactsResponseSchema } from '@open-merca
 import { MAX_ARTIFACT_BYTES } from '../runs/artifacts.ts';
 import { artifactsDir, RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
-import { artifactCsp, artifactsBaseUrl, artifactsFrame, openArtifact } from './artifacts.ts';
+import { artifactCsp, artifactsBaseUrl, artifactsFrame, openArtifact, sameFileInside } from './artifacts.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
@@ -168,6 +168,17 @@ describe('GET /runs/:id/artifacts[/:name]', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
+  it('derives the image source from the Host it saw and ignores X-Forwarded-Host in local mode (#1920, #426)', async () => {
+    writeFileSync(join(dir, 'report.html'), '<img src="shots/a.png">');
+    const res = await app.request(`http://localhost:5173/api/v1/runs/${runId}/artifacts/report.html`, {
+      headers: { host: 'localhost:5173', 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.status).toBe(200);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain(`img-src data: blob: http://localhost:5173/api/v1/runs/${runId}/artifacts/`);
+    expect(csp).not.toContain('evil.example');
+  });
+
   it('serves the no-CDN CSP when CEZ_ARTIFACTS_CDN=0', async () => {
     process.env.CEZ_ARTIFACTS_CDN = '0';
     writeFileSync(join(dir, 'report.html'), '<p>hi</p>');
@@ -310,5 +321,39 @@ describe('the artifacts SSE frame', () => {
     expect(runArtifactsEventSchema.parse(JSON.parse(data))).toEqual({ type: 'artifacts', runId, ...listing });
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+  });
+});
+
+describe('sameFileInside — win32 dev mismatch (#2359)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cez-sfi-'));
+    mkdirSync(join(root, 'shots'));
+    writeFileSync(join(root, 'shots', 'a.png'), 'x');
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const file = () => join(root, 'shots', 'a.png');
+  // win32: path stat() reports dev 0, the handle's fstat the volume serial.
+  const winStat = async () => ({ dev: 0, ino: 7, size: 1 });
+
+  it('accepts a nested file on win32 despite dev 0 vs the volume serial', async () => {
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 7, size: 1 }, 'win32', winStat)).toBe(true);
+  });
+
+  it('still refuses a swapped file on win32 (ino or size differs)', async () => {
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 8, size: 1 }, 'win32', winStat)).toBe(false);
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 7, size: 2 }, 'win32', winStat)).toBe(false);
+  });
+
+  it('keeps the containment guard on win32', async () => {
+    mkdirSync(join(root, 'a', 'b'), { recursive: true });
+    writeFileSync(join(root, 'a', 'b', 'c.png'), 'x');
+    expect(await sameFileInside(root, join(root, 'a', 'b', 'c.png'), { dev: 1, ino: 7, size: 1 }, 'win32', winStat)).toBe(false);
+  });
+
+  it('keeps comparing dev on POSIX', async () => {
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 7, size: 1 }, 'linux', winStat)).toBe(false);
+    expect(await sameFileInside(root, file(), { dev: 0, ino: 7, size: 1 }, 'linux', winStat)).toBe(true);
   });
 });

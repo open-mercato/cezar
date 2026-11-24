@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
-import { ToolsMenu, diskNote, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
+import { ToolsMenu, ToolsMenuItems, diskNote, forgeNote, toolsBlocker, toolsTone, toolsTooltip } from './tools-menu'
 
 afterEach(cleanup)
 
@@ -47,7 +47,7 @@ const HEALTH: HealthResponse = {
     },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, phonePairing: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const ALL_GOOD: HealthResponse = {
@@ -299,7 +299,7 @@ describe('ToolsMenu in the app shell', () => {
     return render(
       <ThemeProvider>
         <MemoryRouter initialEntries={['/']}>
-          <AppShell toolsMenu={<ToolsMenu health={HEALTH} forge={HEALTH.forge} />}>
+          <AppShell toolsMenu={<ToolsMenuItems health={HEALTH} forge={HEALTH.forge} />}>
             <p>route content</p>
           </AppShell>
         </MemoryRouter>
@@ -307,12 +307,13 @@ describe('ToolsMenu in the app shell', () => {
     )
   }
 
-  it('sits in the desktop sidebar footer', () => {
+  it('sits under the desktop sidebar footer\u2019s ⋯ menu, as a submenu', () => {
     renderShell()
     const footer = document.querySelector(
       '[data-slot="sidebar"] [data-slot="sidebar-footer"]'
     ) as HTMLElement
-    expect(footer.querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+    fireEvent.pointerDown(within(footer).getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    expect(screen.getByRole('menu').querySelector('[data-slot="tools-menu"]')?.textContent).toBe('Tools')
   })
 
   it('comes along into the mobile drawer — same component, both framings', async () => {
@@ -320,7 +321,8 @@ describe('ToolsMenu in the app shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
 
     const drawer = await screen.findByRole('dialog', { name: 'Navigation' })
-    expect(drawer.querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+    fireEvent.pointerDown(within(drawer).getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    expect(screen.getByRole('menu').querySelector('[data-slot="tools-menu"]')).not.toBeNull()
   })
 })
 
@@ -350,6 +352,17 @@ describe('disk space', () => {
     const NEARLY_FULL: HealthResponse = { ...ALL_GOOD, disk: { freeBytes: 0, totalBytes: 500 * GIB, level: 'critical' } }
     expect(toolsBlocker(NEARLY_FULL)).toBe('disk almost full — under 100 MB free')
     expect(diskNote(NEARLY_FULL)).toMatch(/^Only under 100 MB free on/)
+  })
+
+  it('carries the disk guard warning when reclaiming was not enough, even with the level ok', () => {
+    const WARNED: HealthResponse = {
+      ...ALL_GOOD,
+      disk: { freeBytes: 40 * GIB, totalBytes: 500 * GIB, level: 'ok', worktreesBytes: 21 * GIB, guardWarning: 'Disk almost full — 21.0 GB in task worktrees' },
+    }
+    expect(diskNote(WARNED)).toMatch(/^Disk almost full — 21\.0 GB in task worktrees\. Every idle task worktree/)
+    expect(toolsBlocker(WARNED)).toBeNull()
+    expect(toolsTone(WARNED)).toBe('pending')
+    expect(toolsTooltip(WARNED)).toBe('cezar v0.1.3 · Disk almost full — 21.0 GB in task worktrees')
   })
 
   it('goes amber and links to Settings → Worktrees', async () => {

@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
@@ -17,8 +19,16 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
+/** The `codex` binary for runs, model discovery and the usage probe; the bundled mock under
+ *  CEZ_DRY_RUN=1, so a signed-in CLI is never driven by a dry run (#1898). */
 export function resolveCodexExecutable(override?: string): string {
-  return override ?? process.env.CEZ_CODEX_BIN ?? 'codex';
+  return override ?? process.env.CEZ_CODEX_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockCodexPath() : 'codex');
+}
+
+/** Path to the bundled mock (`scripts/mock-codex-app-server.mjs`), for CEZ_DRY_RUN=1. */
+export function mockCodexPath(): string {
+  // here = <pkg>/dist/core (built) or <pkg>/src/core (tsx dev).
+  return resolvePath(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'mock-codex-app-server.mjs');
 }
 
 export function buildCodexAppServerEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
@@ -30,10 +40,11 @@ export function spawnCodexAppServer(
   bin: string,
   cwd: string,
   extraEnv?: Record<string, string>,
+  isolatedEnv?: NodeJS.ProcessEnv,
 ): ChildProcessWithoutNullStreams {
   try {
-    const env = buildCodexAppServerEnv(extraEnv);
-    const [file, argv] = disclaimedCommand(bin, ['app-server'], env);
+    const env = isolatedEnv ?? buildCodexAppServerEnv(extraEnv);
+    const [file, argv] = disclaimedCommand(bin, ['app-server', ...(isolatedEnv ? ['--strict-config'] : [])], env);
     return nodeSpawn(file, argv, { cwd, env });
   } catch (error) {
     throw codexSpawnError(error, bin);
@@ -86,12 +97,13 @@ export class CodexAppServerRpc {
     return true;
   }
 
-  async initialize(): Promise<void> {
-    await this.request('initialize', {
+  async initialize(): Promise<Record<string, unknown>> {
+    const identity = await this.request('initialize', {
       clientInfo: { name: 'cezar', title: 'cezar', version: '0.1.0' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
+    return identity;
   }
 
   rejectPending(message = 'codex app-server exited'): void {
@@ -148,7 +160,7 @@ export function endCodexAppServer(
 }
 
 export function waitForCodexAppServerExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
-  if (child.exitCode != null) return Promise.resolve(child.exitCode);
+  if (child.exitCode != null || child.signalCode != null) return Promise.resolve(child.exitCode);
   return new Promise((resolve) => {
     let done = false;
     const finish = (code: number | null) => {

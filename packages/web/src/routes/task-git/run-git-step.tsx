@@ -7,7 +7,14 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useReferenceStatus } from '@/components/reference-status'
 import { toast } from '@/components/ui/toaster'
 import { useActiveForge } from '@/lib/active-forge'
-import { gitActionPolicy, trunkGitActionPolicy, type GitAction, type GitActionId } from '@/lib/git-actions'
+import {
+  gitActionPolicy,
+  trunkBranchGitActionPolicy,
+  trunkGitActionPolicy,
+  type GitAction,
+  type GitActionId,
+  type GitActionState,
+} from '@/lib/git-actions'
 import { ownedTaskPr } from '@/lib/tasks-table'
 
 import { useAskAnswer } from '../task-thread/ask-answer'
@@ -18,6 +25,7 @@ import {
   inPlacePrPrompt,
   inPlaceUpdatePrompt,
   isRunActive,
+  landBranchPrompt,
   pushPrompt,
   resolveConflictsPrompt,
   updateBranchPrompt,
@@ -113,15 +121,23 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   const config = useConfig()
   // An in-place task in an auto-land project: its step is Commit to the base branch (spec
   // 2026-10-20-trunk-based-projects).
-  const trunk =
-    !run.worktreePath &&
-    run.worktree === false &&
-    !run.readOnly &&
-    config.data?.landing === 'auto' &&
-    config.data.landingBlocked === null
+  const autoLandProject = config.data?.landing === 'auto' && config.data.landingBlocked === null
+  const trunk = !run.worktreePath && run.worktree === false && !run.readOnly && autoLandProject
   const trunkBase = config.data?.baseBranch ?? repo.data?.info?.branch ?? 'main'
   // A trunk task reads the shared checkout, which other tasks land from too: keep it live.
   const status = useRunGitStatus(run.id, (Boolean(run.worktreePath) || trunk) && !finished, isRunActive(run.status) || trunk)
+  // A worktree task in that project still lands on the base, through its agent — but not a dispatch
+  // child, whose work goes back to its parent (spec 2026-09-10-dispatch).
+  const trunkBranchCandidate = Boolean(run.worktreePath) && !run.readOnly && !run.dispatch?.parentRunId && autoLandProject
+  // It lands only by a push to the remote `ahead` is counted against (`baseRemote`, a remote NAME),
+  // and only when the local base tracks that same remote (`baseTracked`) — where `landInPlace`
+  // pushes; a fork clone counting against the canonical repo keeps Create PR. With no base remote
+  // `ahead` reads the local base, which the main checkout holds and no push can move. And only when
+  // the task is based on that base: a task off `develop` would never read as landed on `main`.
+  const baseRemote = status.data?.baseTracked === true ? status.data.baseRemote : undefined
+  const trunkBranch = trunkBranchCandidate && baseRemote !== undefined && basedOn(run.baseBranch, trunkBase, baseRemote)
+  // Until git status answers, which step applies is unknown: no button rather than a wrong one.
+  const trunkBranchLoading = trunkBranchCandidate && status.isLoading
   const queryClientForStatus = useQueryClient()
   // A turn that just ended (or a landing that just settled) changed what there is to commit; the
   // last poll may predate it, and a stale "2 uncommitted" offers Commit on a clean tree.
@@ -133,6 +149,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // Every git step is a prompt to this task's own agent, through the same seam as the PR chip's
   // "Resolve conflicts": a live message, or a continue for a finished task.
   const agent = useAskAnswer(run, undefined, 'git_step')
+  // Unlike an ask answer, a git step has a server fallback, so it waits for the real answer (#719).
+  const agentBlockedBy = agent.blockedBy ?? (agent.providerPending ? 'provider' : undefined)
+  const agentReason = agent.reason ?? (agent.providerPending ? 'Checking agent providers…' : undefined)
   const queryClient = useQueryClient()
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
   const flight = useSyncExternalStore(subscribeFlights, () => flights.get(run.id) ?? null)
@@ -191,7 +210,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     // Any step in flight — from any surface — blocks them all: mid-turn the button can turn into
     // the NEXT step (Commit and push → Push once the commit lands), and that click would repeat
     // the agent's own work.
-    if (flights.has(run.id) || agent.blockedBy) return
+    if (flights.has(run.id) || agentBlockedBy) return
     if (agent.isPending) {
       toast('Another message to the task is still being delivered — try again in a moment')
       return
@@ -245,7 +264,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   const createPr = useMutation({
     mutationFn: (draft: boolean) => createRunPr(run.id, { draft }),
     onSuccess: (result, draft) => {
-      toast(`${draft ? 'Draft PR' : 'PR'} created — ${result.url}`)
+      toast(result.updated ? `PR updated — ${result.url}` : `${draft ? 'Draft PR' : 'PR'} created — ${result.url}`)
       void invalidateRuns() // the record now carries pullRequestUrl → the policy moves past Create PR
     },
     onError,
@@ -254,7 +273,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // A 409 from `/git/status` is the server saying the worktree is gone — the same answer as the
   // Changes tab's 409, and every action greys out with that reason.
   const refused = status.isError && status.error instanceof ApiError && status.error.status === 409
-  const agentBlocked = agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined
+  const agentBlocked = agentBlockedBy ? (agentReason ?? 'the agent cannot be reached') : undefined
   const trunkAction = trunk
     ? trunkGitActionPolicy({
         status: run.status,
@@ -267,7 +286,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
         assessment: run.subject !== undefined,
       })
     : null
-  const action = gitActionPolicy({
+  const branchState: GitActionState = {
     status: run.status,
     hasWorktree: !refused,
     branch: run.branch,
@@ -280,9 +299,10 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     prUrl,
     prStatus,
     prConflicting: prEntry.conflicting,
-    agentBlocked: agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined,
+    agentBlocked: agentBlockedBy ? (agentReason ?? 'the agent cannot be reached') : undefined,
     assessment: run.subject !== undefined,
-  })
+  }
+  const action = trunkBranch ? trunkBranchGitActionPolicy(branchState, trunkBase) : gitActionPolicy(branchState)
 
   // The step in flight, if any: its button shows a spinner and refuses a second click.
   const pending: GitActionId | null =
@@ -291,7 +311,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
 
   const onAction = (id: GitActionId) => {
     // The agent runs every git step itself; the server only stands in when it cannot be reached.
-    const viaServer = Boolean(agent.blockedBy)
+    const viaServer = Boolean(agentBlockedBy)
     if (trunk) {
       if (id === 'land') {
         if (!land.isPending) land.mutate()
@@ -308,6 +328,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     }
     switch (id) {
       case 'land':
+        if (trunkBranch && baseRemote) {
+          void promptAgent(id, () => landBranchPrompt(trunkBase, baseRemote, config.data?.requiredChecks ?? []))
+        }
         break
       case 'commit':
       case 'commit-push':
@@ -343,9 +366,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   }
 
   return {
-    action: trunk ? trunkAction : run.worktreePath ? action : null,
+    action: trunk ? trunkAction : run.worktreePath && !trunkBranchLoading ? action : null,
     pending,
-    byAgent: !agent.blockedBy,
+    byAgent: !agentBlockedBy,
     onAction,
     commitOpen,
     // Rendered by the host OUTSIDE any menu: a dialog mounted inside a dropdown's content would
@@ -361,4 +384,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
       />
     ),
   }
+}
+
+/** Whether a task's recorded base is the trunk: `main`, or `<remote>/main` for the base remote's name. */
+export function basedOn(baseBranch: string | undefined, trunkBase: string, remote: string): boolean {
+  return baseBranch === trunkBase || baseBranch === `${remote}/${trunkBase}`
 }

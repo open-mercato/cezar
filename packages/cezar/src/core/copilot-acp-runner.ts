@@ -1,3 +1,4 @@
+import { readOnlyPermissionOutcome } from './junie-runner.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { dirname, resolve as resolvePath } from 'node:path';
@@ -109,8 +110,9 @@ export class CopilotAcpRunner implements AgentRunner {
  * Permission modes are out of scope for this phase (Q15), and a partial mapping would look like a
  * sandbox while behaving like `--allow-all-tools`, which is worse than the honest version.
  */
-export function buildCopilotArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories'>): string[] {
-  const args = ['--acp', '--allow-all-tools', '--no-auto-update'];
+export function buildCopilotArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories' | 'enforceReadOnly'>): string[] {
+  const grant = spec.enforceReadOnly ? ['--deny-tool', 'write', '--deny-tool', 'shell'] : ['--allow-all-tools'];
+  const args = ['--acp', ...grant, '--no-auto-update'];
   if (spec.model) args.push('--model', spec.model);
   // Copilot refuses to start on an `--add-dir` that does not exist (telemetry 3db0206b); Claude
   // tolerates one, so a missing runs dir or TMPDIR is skipped here rather than fatal.
@@ -194,6 +196,9 @@ class CopilotAcpSession implements AgentSession {
     this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
+    this.child.once('exit', () => {
+      this.isOpen = false;
+    });
     // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
     this.child.stdin.on('error', () => {});
     this.child.on('error', (error: NodeJS.ErrnoException) => {
@@ -493,6 +498,7 @@ class CopilotAcpSession implements AgentSession {
       return { error: { code: -32601, message: `Method not found: ${String(request.method)}` } };
     }
     const options = Array.isArray(request.params.options) ? request.params.options.filter(isRecord) : [];
+    if (this.spec.enforceReadOnly) return { result: { outcome: readOnlyPermissionOutcome(options) } };
     const choice =
       options.find((o) => o.kind === 'allow_always') ?? options.find((o) => o.kind === 'allow_once') ?? options[0];
     const title =

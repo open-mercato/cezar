@@ -6,6 +6,7 @@ import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
+import { worktreeInUse } from './worktree-in-use.ts';
 
 /**
  * Git worktree per task (spec 006). Each run gets its own branch
@@ -431,12 +432,14 @@ export function worktreeSizeBytes(path: string): Promise<number | null> {
   });
 }
 
-/** Remove a task worktree and its branch. Best effort — never throws. */
+/** Remove a task worktree and its branch. Best effort — never throws. A worktree a running cezar
+ *  or node process uses is left alone (`worktree-in-use.ts`); callers already check the dir is gone. */
 export async function removeWorktree(
   repoRoot: string,
   worktreePath: string,
   branch?: string,
 ): Promise<void> {
+  if (existsSync(worktreePath) && await worktreeInUse(worktreePath).catch(() => null)) return;
   await git(repoRoot, ['worktree', 'remove', '--force', worktreePath]);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
   await git(repoRoot, ['worktree', 'prune']);
@@ -564,6 +567,14 @@ export async function autosaveCommit(
     `cezar autosave (${reason})`,
   ]);
   return commit.ok ? 'committed' : 'failed';
+}
+
+/** Does the worktree hold content no commit has? Unreadable state counts as yes: automatic
+ *  retention must never discard on uncertainty (#2215). A directory that is gone holds nothing. */
+export async function worktreeHasUnpreservedWork(dir: string): Promise<boolean> {
+  if (!existsSync(dir)) return false;
+  const status = await git(dir, ['status', '--porcelain', '--untracked-files=all']);
+  return !status.ok || status.stdout.trim().length > 0;
 }
 
 /** Return paths currently changed in the worktree, including untracked files. */
@@ -750,6 +761,20 @@ export async function worktreeDiff(
 }
 
 /**
+ * `worktreeDiff` for a task whose tree was reclaimed (spec 2026-11-19-worktree-disk-usage): the
+ * kept branch against its merge-base with the base, read from the main repo without a checkout.
+ */
+export async function branchDiff(repoRoot: string, baseBranch: string, branch: string, cap = DIFF_CAP): Promise<string> {
+  if (!isSafeGitRef(baseBranch) || !isSafeGitRef(branch)) return '(diff failed: refusing option-like ref)';
+  const mergeBase = await git(repoRoot, ['merge-base', baseBranch, branch]);
+  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+  const res = await git(repoRoot, ['diff', base, branch]);
+  if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
+  if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
+  return res.stdout;
+}
+
+/**
  * `git diff --stat` version of `worktreeDiff` (spec 010 — the variant
  * comparison columns). Same merge-base anchoring, and it stays whole-branch
  * for a reason of its own: variants are sibling cezar worktrees, each on its
@@ -920,7 +945,7 @@ export async function pruneOrphans(
     const checkedOut = registered.find((item) => canonicalPath(item.path) === canonicalPath(path))?.branch;
     const branch = checkedOut?.startsWith('refs/heads/') ? checkedOut.slice('refs/heads/'.length) : branchFor(entry.name);
     await removeWorktree(repoRoot, path, branch);
-    removed.push(entry.name);
+    if (!existsSync(path)) removed.push(entry.name); // a worktree in use stays (worktree-in-use.ts)
   }
   return removed;
 }

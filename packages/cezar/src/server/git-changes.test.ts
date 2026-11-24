@@ -655,6 +655,20 @@ describe('session git API routes', () => {
     const behind = await apiRequest(app, `/api/v1/runs/${run.id}/git/status`);
     expect(((await behind.json()) as { behind: number }).behind).toBe(2);
 
+    // With a remote-tracking base the route names the remote it counted against (#2428); the local
+    // answer above carries no `baseRemote` key at all.
+    const bare = mkdtempSync(join(tmpdir(), 'cez-gitstatus-route-remote-'));
+    try {
+      g(bare, 'init', '--bare', '-q');
+      g(worktree, 'remote', 'add', 'origin', bare);
+      g(worktree, 'push', '-q', 'origin', 'main');
+      const remote = await apiRequest(app, `/api/v1/runs/${run.id}/git/status`);
+      expect(await remote.json()).toMatchObject({ behind: 2, baseRemote: 'origin', baseTracked: false });
+    } finally {
+      g(worktree, 'remote', 'remove', 'origin');
+      rmSync(bare, { recursive: true, force: true });
+    }
+
     expect((await apiRequest(app, '/api/v1/runs/nope/git/status')).status).toBe(404);
 
     // A run whose isolated worktree is gone answers the server's own 409, like /changes does.
@@ -1431,6 +1445,102 @@ describe('commitAll / pushCurrentBranch — direct degradation paths', () => {
   });
 });
 
+describe('pushCurrentBranch — a rebased branch (#1758)', () => {
+  function setup() {
+    const remote = mkdtempSync(join(tmpdir(), 'cez-lease-remote-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cez-lease-'));
+    execFileSync('git', ['init', '--bare', '-q', remote]);
+    initRepo(dir);
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    g(dir, 'remote', 'add', 'origin', remote);
+    g(dir, 'checkout', '-q', '-b', 'cez/x');
+    writeFileSync(join(dir, 'b.txt'), 'b\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'work');
+    return { remote, dir };
+  }
+
+  it('force-with-leases after the branch was amended, so the PR gets the rewritten commits', async () => {
+    const { remote, dir } = setup();
+    try {
+      expect((await pushCurrentBranch(dir)).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'work, rewritten');
+      const res = await pushCurrentBranch(dir, { leaseRewrites: true });
+      expect(res.ok).toBe(true);
+      expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('work, rewritten');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('the repo-root push, without the option, still refuses a rewritten branch', async () => {
+    const { remote, dir } = setup();
+    try {
+      expect((await pushCurrentBranch(dir)).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'work, rewritten');
+      expect((await pushCurrentBranch(dir)).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('work');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('never rewrites a default branch, even with the option', async () => {
+    const { remote, dir } = setup();
+    try {
+      g(dir, 'checkout', '-q', '-B', 'main');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true })).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'main, rewritten');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true })).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'main').trim()).toBe('work');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('never rewrites the task\'s own base branch, even one named neither main nor master', async () => {
+    const { remote, dir } = setup();
+    try {
+      g(dir, 'checkout', '-q', '-B', 'develop');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true, baseBranch: 'origin/develop' })).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'develop, rewritten');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true, baseBranch: 'origin/develop' })).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'develop').trim()).toBe('work');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('never overwrites a remote tip this branch never held', async () => {
+    const { remote, dir } = setup();
+    const other = mkdtempSync(join(tmpdir(), 'cez-lease-other-'));
+    try {
+      expect((await pushCurrentBranch(dir)).ok).toBe(true);
+      execFileSync('git', ['clone', '-q', '-b', 'cez/x', remote, join(other, 'c')]);
+      const c = join(other, 'c');
+      writeFileSync(join(c, 'theirs.txt'), 't\n');
+      g(c, 'add', '-A');
+      g(c, '-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-m', 'theirs');
+      g(c, 'push', '-q', 'origin', 'cez/x');
+      g(dir, 'fetch', '-q', 'origin');
+      g(dir, 'commit', '--amend', '-m', 'work, rewritten');
+      const res = await pushCurrentBranch(dir, { leaseRewrites: true });
+      expect(res.ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('theirs');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('worktreeGitStatus — what has not left the worktree', () => {
   it('counts uncommitted files (untracked and renamed included) and reports no upstream as null', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-'));
@@ -1500,7 +1610,7 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'reset', '-q', '--hard', fork);
       g(dir, 'checkout', '-q', 'task');
       expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1 });
-      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 1, ahead: 0 });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 1, ahead: 0, baseRemote: 'origin' });
 
       // The task commits its own work: ahead counts only what the branch would propose.
       writeFileSync(join(dir, 'task.txt'), 't\n');
@@ -1508,7 +1618,7 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'commit', '-qm', 'task work');
       expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1, ahead: 1 });
 
-      expect(await worktreeGitStatus(dir, fork)).toMatchObject({ behind: null, ahead: null });
+      expect(await worktreeGitStatus(dir, fork)).not.toHaveProperty('baseRemote');
       expect(await worktreeGitStatus(dir, 'no-such-branch')).toMatchObject({ behind: null, ahead: null });
       expect(await worktreeGitStatus(dir)).toMatchObject({ behind: null, ahead: null });
     } finally {
@@ -1545,12 +1655,47 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'reset', '-q', '--hard', forkPoint);
       g(dir, 'checkout', '-q', '-b', 'task');
 
-      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 2 });
-      expect(await worktreeGitStatus(dir, 'upstream/main')).toMatchObject({ behind: 2 });
+      // `baseRemote` names the remote counted, so a land pushes where `ahead` is measured (#2428).
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 2, baseRemote: 'upstream' });
+      expect(await worktreeGitStatus(dir, 'upstream/main')).toMatchObject({ behind: 2, baseRemote: 'upstream' });
       // An old record that named the fork explicitly still measures against it.
-      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 0 });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 0, baseRemote: 'origin' });
+      // `baseTracked`: does the local base track the counted remote — where `landInPlace` pushes?
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ baseRemote: 'upstream', baseTracked: false });
+      g(dir, 'config', 'branch.main.remote', 'origin');
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ baseRemote: 'upstream', baseTracked: false });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ baseRemote: 'origin', baseTracked: true });
+      g(dir, 'config', 'branch.main.remote', 'upstream');
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ baseRemote: 'upstream', baseTracked: true });
     } finally {
       for (const d of [fork, canonical, dir]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('a base remote whose <remote>/<base> was never fetched counts the local base and names no remote', async () => {
+    const canonical = mkdtempSync(join(tmpdir(), 'cez-gitstatus-unfetched-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-unfetched-clone-'));
+    try {
+      g(canonical, 'init', '--bare', '-q');
+      initRepo(dir);
+      writeFileSync(join(dir, 'a.txt'), 'a\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'base');
+      g(dir, 'branch', '-M', 'main');
+      g(dir, 'remote', 'add', 'origin', canonical);
+      g(dir, 'config', 'remote.origin.gh-resolved', 'base');
+      g(dir, 'config', 'branch.main.remote', 'origin');
+      g(dir, 'checkout', '-q', '-b', 'task');
+      writeFileSync(join(dir, 't.txt'), 't\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'task');
+      // No `origin/main` ref exists: the counts read the local `main`, and no remote is claimed.
+      const status = await worktreeGitStatus(dir, 'main');
+      expect(status).toMatchObject({ behind: 0, ahead: 1 });
+      expect(status).not.toHaveProperty('baseRemote');
+      expect(status).not.toHaveProperty('baseTracked');
+    } finally {
+      for (const d of [canonical, dir]) rmSync(d, { recursive: true, force: true });
     }
   });
 

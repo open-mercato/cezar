@@ -11,6 +11,14 @@
     />
     <!-- Relative so Vite bundles the legacy logo out of web/ instead of duplicating it under a public dir. -->
     <link rel="icon" href="/icon.svg" />
+    <!-- use-credentials: behind a Basic gate the default anonymous manifest fetch gets a 401 (#1762). -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- The standalone fallback for an iOS that cannot read the manifest. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="cezar" />
+    <meta name="theme-color" content="#0d0d0d" />
     <title>cezar</title>
     <!-- Theme before first paint — no flash. Mirrors resolveTheme()/applyResolvedTheme() in
          src/lib/theme.ts; keep the two in sync. Shares the legacy cockpit's `cez-theme` key
@@ -24,23 +32,80 @@
             (pref === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
           document.documentElement.classList.toggle('light', light)
           document.documentElement.style.colorScheme = light ? 'light' : 'dark'
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute('content', light ? '#ffffff' : '#0d0d0d')
         } catch (e) {
           // Storage or matchMedia unavailable — the default dark tokens already apply.
         }
-        // Accent + density + reading width before first paint, from the localStorage MIRROR of ui-state.json
+        // Density + reading width before first paint, from the localStorage MIRROR of ui-state.json
         // (src/lib/appearance.ts owns the contract; keep the two in sync). Defaults are the
         // absence of the attribute, so only the known deviations are stamped. A pre-upgrade
         // `cez-width=narrow` mirror can flash once before the server migration settles.
         try {
-          if (localStorage.getItem('cez-accent') === 'violet')
-            document.documentElement.dataset.accent = 'violet'
           var density = localStorage.getItem('cez-density')
           if (density === 'compact' || density === 'ultra')
             document.documentElement.dataset.density = density
           if (localStorage.getItem('cez-width') === 'narrow')
             document.documentElement.dataset.width = 'narrow'
         } catch (e) {
-          // Storage unavailable — lime/comfortable defaults already apply.
+          // Storage unavailable — the comfortable/full defaults already apply.
+        }
+      })()
+    </script>
+    <!-- Boot guard: a shell whose /assets/* files are gone (cezar updated under a cached page) runs no
+         code at all, so the app's own stale-build reload never runs and the page stays black. Reload
+         once; if that lands on the same failure, say so with a way out. main.tsx reuses the fallback
+         for a crash that unmounts the whole app. Tested in src/boot-guard.test.ts. -->
+    <script id="cez-boot-guard">
+      (function () {
+        var KEY = 'cez-boot-reload-at'
+        var shown = false
+        function fallback() {
+          if (shown) return
+          var root = document.getElementById('root')
+          if (!root) {
+            document.addEventListener('DOMContentLoaded', fallback)
+            return
+          }
+          shown = true
+          var mobile = /CezarMobile\//.test(navigator.userAgent)
+          root.innerHTML =
+            '<div role="alert" style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;font:15px/1.4 system-ui,sans-serif;color:#e5e5e5;background:#0d0d0d">' +
+            '<strong style="font-size:18px">cezar could not start</strong>' +
+            '<span style="opacity:.8">Its files did not load. cezar may have just been updated or restarted.</span>' +
+            '<button type="button" id="cez-boot-reload" style="font:inherit;padding:10px 20px;border-radius:10px;border:0;background:#fff;color:#000">Reload</button>' +
+            (mobile ? '<a href="cezar://servers" style="color:#e5e5e5">Your cezars</a>' : '') +
+            '</div>'
+          document.getElementById('cez-boot-reload').onclick = function () {
+            location.reload()
+          }
+        }
+        window.__cezBootFallback = fallback
+        function recover() {
+          try {
+            var last = Number(sessionStorage.getItem(KEY))
+            if (!(last > 0 && Date.now() - last < 60000)) {
+              sessionStorage.setItem(KEY, String(Date.now()))
+              location.reload()
+              return
+            }
+          } catch (e) {
+            // No storage, no loop guard: show the way out instead of reloading.
+          }
+          fallback()
+        }
+        function failed(e) {
+          var el = e.target
+          if (!el || (el.tagName !== 'SCRIPT' && el.tagName !== 'LINK')) return
+          if (el.tagName === 'LINK' && !/stylesheet|modulepreload/.test(el.rel)) return
+          if (!/\/assets\//.test(el.src || el.href || '')) return
+          recover()
+        }
+        window.addEventListener('error', failed, true)
+        // The entry ran, so every file it needed loaded: later chunk failures are lazyRoute's.
+        window.__cezBootDone = function () {
+          window.removeEventListener('error', failed, true)
         }
       })()
     </script>

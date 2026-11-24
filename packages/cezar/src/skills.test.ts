@@ -6,6 +6,7 @@ import {
   BUILTIN_SKILLS_DIR,
   discoverSkills,
   filterImportedTeamSkills,
+  layerSkillExtensions,
   parseFrontmatter,
   readImportedSkills,
   type Skill,
@@ -313,5 +314,110 @@ describe('built-in skill directory', () => {
   it('a missing package dir is an empty tier, never an error', async () => {
     const skills = await discoverSkills(await repo(), join(tmpdir(), 'cez-no-such-skills-dir'));
     expect(skills.some((s) => s.name === 'change-impact')).toBe(false);
+  });
+});
+
+describe('project commands (spec 2026-11-05-project-slash-commands)', () => {
+  async function repoWith(files: Record<string, string>): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'cez-commands-'));
+    tempDirs.push(root);
+    for (const [rel, text] of Object.entries(files)) {
+      await mkdir(join(root, rel, '..'), { recursive: true });
+      await writeFile(join(root, rel), text, 'utf8');
+    }
+    return root;
+  }
+  const builtin = join(tmpdir(), 'cez-no-builtin-skills');
+
+  it('lists a spec-kit command as a project command named after its file', async () => {
+    const root = await repoWith({ '.claude/commands/speckit.specify.md': '---\ndescription: Specify\n---\nDo $ARGUMENTS' });
+    const found = (await discoverSkills(root, builtin)).find((s) => s.name === 'speckit.specify');
+    expect(found).toMatchObject({ kind: 'command', source: 'agents', description: 'Specify', body: 'Do $ARGUMENTS' });
+    expect(found?.variants).toEqual([{ runner: 'claude', path: join(root, '.claude/commands/speckit.specify.md') }]);
+  });
+
+  it('lets a built-in skill beat a same-named command', async () => {
+    const root = await repoWith({ '.claude/commands/change-impact.md': 'command' });
+    const found = (await discoverSkills(root)).find((s) => s.name === 'change-impact');
+    expect(found?.kind).toBeUndefined();
+  });
+
+  it('only counts *.prompt.md under .github/prompts', async () => {
+    const root = await repoWith({
+      '.github/prompts/README.md': 'docs',
+      '.github/prompts/review.prompt.md': 'review it',
+    });
+    const names = (await discoverSkills(root, builtin)).filter((s) => s.kind === 'command').map((s) => s.name);
+    expect(names).toEqual(['review']);
+  });
+
+  it('keeps one entry per name with a variant per agent, and a real skill wins', async () => {
+    const root = await repoWith({
+      '.claude/commands/review.md': 'claude body',
+      '.codex/prompts/review.md': 'codex body',
+      '.github/prompts/review.prompt.md': 'copilot body',
+      '.ai/skills/plan.md': 'real skill',
+      '.claude/commands/plan.md': 'command',
+    });
+    const all = await discoverSkills(root, builtin);
+    const review = all.find((s) => s.name === 'review');
+    expect(all.filter((s) => s.name === 'review')).toHaveLength(1);
+    expect(review?.body).toBe('claude body');
+    expect(review?.variants?.map((v) => v.runner)).toEqual(['claude', 'codex', 'copilot']);
+    expect(all.find((s) => s.name === 'plan')).toMatchObject({ body: 'real skill', source: 'ai' });
+    expect(all.find((s) => s.name === 'plan')?.kind).toBeUndefined();
+  });
+});
+
+describe('layerSkillExtensions (repo extensions of shared skills)', () => {
+  const skill = (name: string, source: Skill['source'], body: string): Skill => ({
+    name, source, body, path: `/${source}/${name}/SKILL.md`,
+  });
+  const winner = (lists: Skill[][], pool: Skill[] = []) => layerSkillExtensions(lists, pool).flat()[0];
+
+  it('a declared extension becomes the shared skill, carrying the extension', () => {
+    const local = skill('om-x', 'ai', 'I extend the shared `om-x` skill with stricter verdicts.');
+    const shared = skill('om-x', 'team', 'Workflow. Apply `.ai/skills/om-x/SKILL.md` when present.');
+    expect(winner([[local], [shared]])).toMatchObject({ source: 'team', body: shared.body, extension: { path: local.path } });
+  });
+
+  it('an extension that says it extends the shared skill layers too, from the ungated team pool', () => {
+    const local = skill('om-x', 'ai', 'This file extends the shared `om-x` skill.');
+    // Curated out of the picker (absent from the lists) is still installed.
+    expect(winner([[local]], [skill('om-x', 'team', 'Workflow.')])).toMatchObject({ source: 'team', extension: { path: local.path } });
+  });
+
+  it('a repo skill extending some other shared thing is not an extension of a shared skill', () => {
+    const local = skill('button-rules', 'ai', 'Use when a change extends the shared Button component.');
+    expect(winner([[local]])).toBe(local);
+    // Naming another skill is not naming itself either.
+    expect(winner([[skill('om-x', 'ai', 'This file extends the shared `om-xy` skill.')]])?.missingShared).toBeUndefined();
+  });
+
+  it('a plain repo override still wins when the shared skill documents the extension path', () => {
+    const local = skill('om-x', 'ai', 'My own version.');
+    const shared = skill('om-x', 'team', 'Workflow. Apply `.ai/skills/om-x/SKILL.md` when present.');
+    expect(winner([[local], [shared]])).toBe(local);
+  });
+
+  it('an extension with no shared skill is flagged, never posing as it', () => {
+    const local = skill('om-x', 'ai', 'Repo-local extension of the shared `om-x` skill.');
+    // The `.agents/skills` mirror of the same file is not a shared copy.
+    expect(winner([[local], [skill('om-x', 'agents', local.body)]])).toMatchObject({ source: 'ai', missingShared: true });
+  });
+
+  it('discoverSkills resolves an Open Mercato-style override to the installed shared skill', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'cez-skill-ext-'));
+    tempDirs.push(repo);
+    await mkdir(join(repo, '.ai/skills/om-y'), { recursive: true });
+    await writeFile(
+      join(repo, '.ai/skills/om-y/SKILL.md'),
+      '---\nname: om-y\ndescription: Repo-local extension of the shared `om-y` skill.\n---\nRules.\n',
+    );
+    await mkdir(join(repo, '.agents/skills/om-y'), { recursive: true });
+    await writeFile(join(repo, '.agents/skills/om-y/SKILL.md'), '---\nname: om-y\n---\nShared workflow.\n');
+    const found = (await discoverSkills(repo)).find((s) => s.name === 'om-y');
+    expect(found).toMatchObject({ source: 'agents', extension: { path: join(repo, '.ai/skills/om-y/SKILL.md') } });
+    expect(found?.body).toContain('Shared workflow.');
   });
 });

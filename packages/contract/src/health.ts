@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity', 'gemini', 'kimi']);
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */
@@ -49,6 +49,12 @@ export const capabilitiesSchema = z.object({
    */
   designMode: z.boolean(),
   followups: z.boolean(),
+  /**
+   * `true` means Settings offers Connect a phone: `CEZ_RELAY=0` is not set. The relay address is a
+   * setting, reported by `GET /workspace/phones` (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`).
+   * Always false in a relay scope, so a phone cannot pair another phone.
+   */
+  phonePairing: z.boolean(),
   singleProject: z.boolean(),
   /**
    * `true` means `CEZ_AUTOMATIONS=1` opted this server into GitHub automations (#801). Off — the
@@ -58,6 +64,10 @@ export const capabilitiesSchema = z.object({
    * REQUIRED for the same reason as `tokenMetrics` below: this server always sends it.
    */
   automations: z.boolean(),
+  /** Managers (spec 2026-10-31-managers): default-on, `CEZ_MANAGERS=0` off. */
+  managers: z.boolean().optional(),
+  /** The server can raise an OS notification here, so a manager's browser one would be a double. */
+  managerSystemNotifications: z.boolean().optional(),
   /** Project lifecycle notifications; independent of graph notify steps. */
   webhooks: z.boolean(),
   /** Present on unsupported server platforms, regardless of the opt-in flag. */
@@ -100,8 +110,30 @@ export const diskInfoSchema = z.object({
   totalBytes: z.number(),
   level: z.enum(['ok', 'low', 'critical']),
   worktreesBytes: z.number().optional(),
+  /**
+   * The disk guard's warning (spec 2026-11-19-worktree-disk-usage, decision 3): set while a guard
+   * threshold is still crossed after it reclaimed every idle tree it could, e.g. "Disk almost
+   * full — 17.0 GB in task worktrees". Independent of `level`.
+   */
+  guardWarning: z.string().optional(),
 });
 export type DiskInfo = z.infer<typeof diskInfoSchema>;
+
+/** `GET /api/v1/workspace/disk-guard` — the guard's thresholds and its last pass. Every field but
+ *  `thresholds` is absent until the first pass has answered (or where `statfs` cannot). */
+export const diskGuardStatusSchema = z.object({
+  thresholds: z.object({ minFreePercent: z.number(), minFreeGb: z.number(), maxWorktreesGb: z.number() }),
+  checkedAt: z.string().optional(),
+  /** Free and total bytes of the tightest volume holding task worktrees. */
+  freeBytes: z.number().optional(),
+  totalBytes: z.number().optional(),
+  /** Every project's task worktrees, from cached `du` sizes. */
+  worktreesBytes: z.number().optional(),
+  /** The last pass that reclaimed anything. */
+  lastAction: z.object({ at: z.string(), reclaimed: z.number().int().nonnegative(), freedBytes: z.number().optional() }).optional(),
+  warning: z.string().optional(),
+});
+export type DiskGuardStatusResponse = z.infer<typeof diskGuardStatusSchema>;
 
 /**
  * `GET /api/v1/health` — the CORS-open discovery endpoint (BACKWARD_COMPATIBILITY.md §2).
@@ -128,5 +160,14 @@ export const healthResponseSchema = z.object({
   instanceId: z.string().optional(),
   /** Absent where `statfs` is unavailable or fails. */
   disk: diskInfoSchema.optional(),
+  /**
+   * What waits on the user, counts only — sent to an authenticated reader alone (a phone through
+   * the relay, or a hosted cockpit) and absent in local mode, where health is CORS-open. Absent
+   * means "unknown". `waiting` is the push badge's own total; `failed` the cockpit's failed rows.
+   */
+  attention: z.object({
+    waiting: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+  }).optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

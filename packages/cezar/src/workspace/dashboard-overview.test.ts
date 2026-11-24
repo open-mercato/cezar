@@ -40,6 +40,7 @@ it('uses finish dates for outcomes, excludes scheduled retries and preserves cur
     row('failed', { status: 'failed' }),
     row('retry', { status: 'failed', autoResumeAt: at }),
     row('asked', { status: 'failed', awaitingAnswerSince: at }),
+    row('idle', { status: 'failed', idleClosedAt: at }),
     row('waiting', { status: 'waiting', finishedAt: undefined }),
     row('archived-waiting', { status: 'waiting', archived: true }),
     row('running', { status: 'running', finishedAt: undefined }),

@@ -21,7 +21,7 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 describe('worktree retention fires on a terminal transition (#483)', () => {
   let repoRoot: string;
   let store: RunStore;
-  let manager: RunManager;
+  let manager: RunManager | undefined;
   const savedEnv: Record<string, string | undefined> = {};
 
   beforeAll(async () => {
@@ -40,10 +40,10 @@ describe('worktree retention fires on a terminal transition (#483)', () => {
       'utf8',
     );
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    manager = new RunManager(store, repoRoot);
   });
 
   afterAll(() => {
+    manager?.dispose();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -66,6 +66,9 @@ describe('worktree retention fires on a terminal transition (#483)', () => {
     expect(existsSync(older.path)).toBe(true);
     expect(existsSync(newer.path)).toBe(true);
     expect(existsSync(review.path)).toBe(true);
+    // Built after seeding: a live manager reclaims on any finished transition (#2003), which would
+    // race the preconditions above; this test pins the `dropActive` trigger.
+    manager = new RunManager(store, repoRoot);
 
     // Start and finish a real run (in repoRoot, no worktree of its own).
     const workflow: WorkflowDef = {

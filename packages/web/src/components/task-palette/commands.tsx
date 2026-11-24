@@ -5,6 +5,7 @@ import {
   ColumnsIcon,
   CopyIcon,
   ExternalLinkIcon,
+  FolderMinusIcon,
   LoaderCircleIcon,
   LayoutGridIcon,
   LinkIcon,
@@ -19,17 +20,19 @@ import {
   TextCursorInputIcon,
   Trash2Icon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import type { ReactNode } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { openInIcon, type OpenInChoice } from '@/components/open-in-menu'
 import type { GitAction, GitActionId } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
-import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
+import { canRemoveTaskWorktree, isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
 import { GIT_ACTION_ICONS, GIT_ACTION_PENDING_LABELS } from '@/routes/task-git/git-toolbar'
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewAliases, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
 import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
+import { archiveDetail } from '@/lib/archive-copy'
 
 /**
  * Everything ⌘P can do to one task (spec 2026-10-17-task-palette), as a pure function of the run
@@ -39,6 +42,45 @@ import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
  */
 
 export type TaskCommandGroup = 'actions' | 'git' | 'views' | 'layout' | 'open' | 'copy'
+
+/**
+ * The task header's ⋯ menu (design 2026-11, Proposal 9): the palette's actions and git steps,
+ * with their labels and shortcuts, in three groups — never a second list that can drift. Views,
+ * layouts, Open in and the copies stay the palette's (and the strip's, the Layout menu's, the
+ * Open in button's). Null for a command the menu does not carry.
+ */
+export type TaskMenuGroup = 'actions' | 'git' | 'task'
+
+export const TASK_MENU_GROUPS: readonly { id: TaskMenuGroup; heading: string }[] = [
+  { id: 'actions', heading: 'Actions' },
+  { id: 'git', heading: 'Git' },
+  { id: 'task', heading: 'Task' },
+]
+
+export function menuGroupOf(command: Pick<TaskCommand, 'id' | 'group' | 'hidden'>): TaskMenuGroup | null {
+  if (command.hidden) return null
+  // The task itself — kept, archived, deleted — closes the menu, Delete last.
+  if (command.id === 'archive' || command.id === 'delete') return 'task'
+  // The takeover command lives with the actions: it is how a reader takes the task over.
+  if (command.id === 'copy:resume') return 'actions'
+  // Resume-in-terminal too — on a phone, where the Open in… button is not drawn (PHONE_ONLY).
+  if (command.id === 'open:terminal-resume') return 'actions'
+  if (command.group === 'actions') return 'actions'
+  if (command.group === 'git') return 'git'
+  return null
+}
+
+/** ⋯ menu rows drawn on phones only: on desktop the Open in… button beside the menu carries them. */
+export const PHONE_ONLY_MENU_COMMANDS: ReadonlySet<string> = new Set(['open:terminal-resume'])
+
+/** `commands` as the ⋯ menu lists them: the three groups in order, each in the palette's order,
+ *  empty groups dropped. */
+export function taskMenuGroups(commands: readonly TaskCommand[]): { id: TaskMenuGroup; heading: string; commands: TaskCommand[] }[] {
+  return TASK_MENU_GROUPS.map((group) => ({
+    ...group,
+    commands: commands.filter((command) => menuGroupOf(command) === group.id),
+  })).filter((group) => group.commands.length > 0)
+}
 
 export const TASK_COMMAND_GROUPS: readonly { id: TaskCommandGroup; heading: string }[] = [
   { id: 'actions', heading: 'Actions' },
@@ -60,6 +102,8 @@ export interface TaskCommand {
   shortcut?: string
   /** Why it cannot run right now; the row stays, greyed out, with this as its hint. */
   unavailable?: string
+  /** A second line the ⋯ menu shows under the label — what the row will do. `mono` for code. */
+  detail?: { text: string; mono?: boolean }
   danger?: boolean
   /** A toggle that is ON (pinned, unread, archived, full view). */
   pressed?: boolean
@@ -84,6 +128,8 @@ export interface TaskCommandHandlers {
   confirmStop: () => void
   confirmDelete: () => void
   resumeInTerminal: () => void
+  /** Open the worktree-removal dialog (#1600). */
+  removeWorktree: () => void
   gitAction: (id: GitActionId) => void
   openIn: (targetId: string) => void
   navigate: (to: string) => void
@@ -107,6 +153,8 @@ export interface TaskCommandInput {
   prUrl?: string
   /** An absolute link to this task, for Copy link. */
   taskUrl: string
+  /** The project's archived-task lifetime in days (0 = never), when known: Archive mentions it. */
+  archivedDeleteDays?: number
 }
 
 const icon = (Icon: typeof PinIcon) => <Icon aria-hidden="true" />
@@ -124,7 +172,7 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
   return [...commands, ...tabCommands(strip, commands)]
 }
 
-function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
+function actionCommands({ run, workspace, archivedDeleteDays }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const flags = runActionFlags(run)
   const live = isRunActive(run.status) ? 'Stop the task first' : undefined
   const gated = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
@@ -167,6 +215,7 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
       label: run.archived ? 'Unarchive' : 'Archive',
       icon: icon(ArchiveIcon),
       pressed: Boolean(run.archived),
+      ...(run.archived ? {} : { detail: { text: archiveDetail(archivedDeleteDays) } }),
       ...(live ? { unavailable: live } : {}),
       perform: on.archive,
     },
@@ -223,7 +272,7 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
   return commands
 }
 
-function gitCommands({ git, gitPending, prUrl }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
+function gitCommands({ run, git, gitPending, prUrl }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const commands: TaskCommand[] = git
     ? [git, ...(git.alternatives ?? [])].map((step) => {
         // The shown step carries the in-flight one's label: mid-turn the policy can already have
@@ -252,6 +301,17 @@ function gitCommands({ git, gitPending, prUrl }: TaskCommandInput, on: TaskComma
       icon: icon(ExternalLinkIcon),
       keywords: ['pr', 'github'],
       perform: () => on.openUrl(prUrl),
+    })
+  }
+  // Reclaim keeps the task and its branch; the dialog says what goes (#1600).
+  if (canRemoveTaskWorktree(run)) {
+    commands.push({
+      id: 'remove-worktree',
+      group: 'git',
+      label: 'Remove worktree…',
+      icon: icon(FolderMinusIcon),
+      keywords: ['worktree', 'reclaim', 'disk'],
+      perform: on.removeWorktree,
     })
   }
   return commands
@@ -297,7 +357,7 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
 function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null, terminalAvailable: boolean): readonly ViewId[] {
   return (
     workspace?.views ??
-    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable))
+    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || hasWorkflowGraph(run)) && (view !== 'terminal' || terminalAvailable))
   )
 }
 
@@ -385,7 +445,7 @@ function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
   return commands
 }
 
-function openCommands({ canResume, openChoices }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
+function openCommands({ run, canResume, openChoices }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const commands: TaskCommand[] = []
   if (canResume) {
     commands.push({
@@ -395,6 +455,21 @@ function openCommands({ canResume, openChoices }: TaskCommandInput, on: TaskComm
       icon: icon(SquareTerminalIcon),
       keywords: ['open', 'cli', 'resume'],
       perform: on.resumeInTerminal,
+    })
+  }
+  // The `cd … && claude --resume …` line the header used to print on every closed task: one copy
+  // away instead, for a terminal cezar cannot open (hosted mode, another machine).
+  const hint = resumeHint(run)
+  if (hint) {
+    // "Copy", not "Take over in terminal": it opens nothing, and the command it copies is shown.
+    commands.push({
+      id: 'copy:resume',
+      group: 'open',
+      label: 'Copy take-over command',
+      icon: icon(CopyIcon),
+      keywords: ['copy', 'resume', 'command', 'terminal', 'take over'],
+      detail: { text: hint, mono: true },
+      perform: () => on.copy(hint, 'Resume command'),
     })
   }
   for (const choice of openChoices) {
@@ -420,7 +495,6 @@ function copyCommands({ run, prUrl, taskUrl }: TaskCommandInput, on: TaskCommand
     ...copy('link', 'Copy task link', taskUrl, 'Task link', LinkIcon),
     ...copy('branch', 'Copy branch name', run.branch, 'Branch name'),
     ...copy('path', 'Copy worktree path', run.worktreePath, 'Worktree path'),
-    ...copy('resume', 'Copy resume command', resumeHint(run), 'Resume command'),
     ...copy('pr', 'Copy pull request link', prUrl, 'Pull request link', LinkIcon),
     ...copy('id', 'Copy task id', run.id, 'Task id'),
   ]

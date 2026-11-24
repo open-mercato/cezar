@@ -33,6 +33,7 @@ export function ReferenceOverflow({
   taskTitle,
   hidden,
   projectId,
+  conflictActionFor,
 }: {
   references: readonly OverflowReference[]
   taskTitle: string
@@ -40,6 +41,8 @@ export function ReferenceOverflow({
   /** The references' own project — named by a surface standing outside it (All tasks spans the
    *  registry). Omitted, the chips answer from the surrounding `ReferenceStatusProvider`. */
   projectId?: string
+  /** Each listed chip's `conflictAction`, so a conflicting PR behind `+N` can still be resolved. */
+  conflictActionFor?: (reference: OverflowReference) => React.ReactNode
 }) {
   const [open, setOpen] = React.useState(false)
   // How it was opened decides whether focus moves into the list. A CLICK should hand the keyboard
@@ -111,6 +114,7 @@ export function ReferenceOverflow({
               reference={reference}
               taskTitle={taskTitle}
               projectId={projectId}
+              conflictAction={conflictActionFor?.(reference)}
             />
           ))}
         </span>

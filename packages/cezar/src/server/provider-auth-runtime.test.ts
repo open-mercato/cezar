@@ -51,6 +51,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  omp: '18.4.2',
   antigravity: 'Please sign in',
   // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
   gemini: '0.60.0',
@@ -58,7 +59,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'kimi') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'omp' || executable === 'kimi') return executable;
   if (executable === 'agent') return 'cursor';
   if (executable === 'gemini') return 'gemini';
   throw new Error(`unexpected executable: ${executable}`);
@@ -84,11 +85,17 @@ describe('watchProviderRuntimeAuthFailures', () => {
   let providerAuth: ProviderAuthService;
   const unwatchers: Array<() => void> = [];
   const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let ompAgentDir: string;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cez-provider-auth-runtime-'));
     store = RunStore.open(join(root, '.ai/cezar'));
     delete process.env.CEZ_DRY_RUN;
+    // omp reads its login evidence off the host: pin an agent.db so the suite is hermetic.
+    ompAgentDir = mkdtempSync(join(tmpdir(), 'cez-omp-agent-'));
+    writeFileSync(join(ompAgentDir, 'agent.db'), '');
+    process.env.PI_CODING_AGENT_DIR = ompAgentDir;
     const runCommand = vi.fn<RunProviderCommand>(async (executable) => ({
       stdout: CONNECTED_OUTPUT[providerForExecutable(executable)],
       stderr: '',
@@ -105,6 +112,9 @@ describe('watchProviderRuntimeAuthFailures', () => {
     for (const unwatch of unwatchers.splice(0)) unwatch();
     store.flush();
     rmSync(root, { recursive: true, force: true });
+    rmSync(ompAgentDir, { recursive: true, force: true });
+    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });

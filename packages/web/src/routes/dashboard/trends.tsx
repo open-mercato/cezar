@@ -1,4 +1,4 @@
-import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { DisclosureChevron, disclosureSummary, FilterSelect, Freshness, PERIOD_OPTIONS, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
 import { Table2, ChevronDown } from 'lucide-react'
 import { formatAmount, formatHours } from './format'
@@ -80,7 +80,7 @@ function BarRow({
           )
         })}
       </div>
-      <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+      <div className="mt-1 flex justify-between text-label text-muted-foreground">
         <span>{formatDate(series[0]!.date)}</span>
         <span>{formatDate(series.at(-1)!.date)}</span>
       </div>
@@ -140,7 +140,7 @@ function TrendMetricChart({
   const reported = series.reduce((n, p) => n + (p[field]?.reportedTasks ?? 0), 0)
   return (
     <div className="rounded-xl border p-3">
-      <p className={`text-xs font-medium ${accent.text}`}>{labels[metric]}</p>
+      <p className={`text-label font-medium ${accent.text}`}>{labels[metric]}</p>
       <div className="mt-2">
         <BarRow
           series={series}
@@ -158,7 +158,7 @@ function TrendMetricChart({
         />
       </div>
       {reported === 0 && (
-        <p className="mt-2 text-xs text-muted-foreground">No reports in this period.</p>
+        <p className="mt-2 text-label text-muted-foreground">No reports in this period.</p>
       )}
     </div>
   )
@@ -174,13 +174,13 @@ function ThroughputChart({ series }: { series: DashboardCostSeriesPoint[] }) {
   return (
     <div className="rounded-xl border p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-xs font-medium text-success">Completed tasks</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-label font-medium text-success">Completed tasks</p>
+        <p className="text-label text-muted-foreground">
           {totalCompleted} done · avg cycle{' '}
           {avgCycleHours === null ? 'unavailable' : formatHours(avgCycleHours)}
         </p>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-label text-muted-foreground">
         {timed}/{totalCompleted} completed tasks have valid cycle times.
       </p>
       <div className="mt-2">
@@ -207,7 +207,7 @@ function ThroughputChart({ series }: { series: DashboardCostSeriesPoint[] }) {
         />
       </div>
       {totalCompleted === 0 && (
-        <p className="mt-2 text-xs text-muted-foreground">No tasks finished in this period.</p>
+        <p className="mt-2 text-label text-muted-foreground">No tasks finished in this period.</p>
       )}
     </div>
   )
@@ -234,16 +234,7 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
     <Card className="gap-0 py-0">
       <div className={widgetHeader}>
         <h2 className={widgetHeading}>Trends</h2>
-        <label className={filterLabel}>
-          Period
-          <FilterSelect
-            value={period}
-            onChange={(e) => setPeriod(e.target.value as TrendPeriod)}
-          >
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </FilterSelect>
-        </label>
+        <FilterSelect<TrendPeriod> label="Period" value={period} onValueChange={setPeriod} options={PERIOD_OPTIONS} />
       </div>
       <div className="space-y-4 p-4 text-sm">
         {data && (
@@ -294,7 +285,7 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
           />
         )}
 
-        <details className="text-xs text-muted-foreground">
+        <details className="text-label text-muted-foreground">
           <summary data-export-heading="Metric definitions" className={`${disclosureSummary} py-2`}>
             <DisclosureChevron />
             How these metrics work
@@ -315,7 +306,7 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
           </p>
         )}
         {data && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-label text-muted-foreground">
             <Freshness at={data.asOf} />
           </p>
         )}
@@ -338,7 +329,7 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
             <details className="group rounded-lg border bg-muted/20 print:block">
               <summary
                 data-export-heading="Daily data"
-                className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-xs font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+                className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-label font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
               >
                 <Table2 className="size-4" aria-hidden="true" /> View data table
                 <ChevronDown

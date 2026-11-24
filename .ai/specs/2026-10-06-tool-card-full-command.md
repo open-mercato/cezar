@@ -1,6 +1,6 @@
 # Full command in expanded tool cards
 
-Issue: #1306 · Extends `2026-07-14-cockpit-ui-redesign.md` (tool cards, #381)
+Issue: #1306, #1931 · Extends `2026-07-14-cockpit-ui-redesign.md` (tool cards, #381)
 
 ## Goal
 
@@ -25,13 +25,16 @@ multi-line commands (loops, `&&` chains, heredocs) cannot be read anywhere in th
 - **Height cap.** The expanded command is capped at `max-h-48` (~10 lines) and scrolls
   inside the header, so a giant heredoc cannot take over the thread.
 - **Copy.** A `CopyCommandButton` renders beside the trigger (a sibling, since a button cannot
-  nest a button), only while the full command is expanded. It writes the full command with
-  `navigator.clipboard.writeText`, shows a check mark for 1.5 s, and never toggles the card.
+  nest a button) on every execute card that has a command. It writes the full command from the
+  raw input (never the capped title) with `navigator.clipboard.writeText`, shows a check mark
+  for 1.5 s, and never toggles the card. While the full command is expanded it is always
+  visible; otherwise (#1931) it is revealed on row hover or focus on pointer devices
+  (`@media (hover: hover)`) and always visible on touch, so a short command is copyable too.
 - **When the command alone makes a card expandable.** Only when the one-line header cannot
   show it whole: the command differs from the title's detail, contains a newline, or is longer
   than 80 characters. A short command with no output stays locked as before (chevron hidden,
-  trigger disabled). A short command with output still expands to its output, with no copy
-  button and no header change.
+  trigger disabled) but still carries the copy button. A short command with output still
+  expands to its output, with no header change.
 - **Empty body.** When the command is the only detail, the body wrapper is hidden
   (`empty:hidden`), so no empty strip renders under the header.
 - **Default-open policy is unchanged.** `defaultOpen` still opens only a running execute with
@@ -70,7 +73,9 @@ Unit tests (`thread-items.test.tsx`):
 - the full command shown exactly once when expanded, never alongside the capped title;
 - argv input joined; title fallback when the input has no command;
 - a long running command expandable before any output;
-- a short command with output: no copy button, no header change;
+- a short command with output: no header change, copy button still present;
+- a collapsed short command with no output copies without toggling; a collapsed long command
+  copies the raw input; non-execute cards have no copy button;
 - short commands with no output, and declined cards with no detail, stay locked;
 - copy writes the full command, leaves the card open, and shows "Copied".
 

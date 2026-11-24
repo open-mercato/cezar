@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
-import { useContinueRun, useSendMessage } from '@/api/queries'
+import { useContinueRun, useProviderStatus, useSendMessage } from '@/api/queries'
 import type { ApiRun, RunRecord } from '@open-mercato/cezar-api-client'
 
 import {
@@ -76,6 +76,9 @@ export interface AskAnswerDelivery {
   /** Set when the answer cannot be delivered at all; the card renders `reason` and stays inert. */
   blockedBy?: AskBlockedReason
   reason?: string
+  /** A resume whose provider status is still loading: sendable (#719), but a caller choosing
+   *  between the agent and a server fallback has no answer yet. */
+  providerPending: boolean
   /** A delivery is in flight — the option chips and Send stay disabled until it settles. */
   isPending: boolean
   /** The server's own words for the last failed delivery, cleared when a new one starts. */
@@ -116,6 +119,8 @@ export function useAskAnswer(
   projectId?: string,
   /** `message_sent`'s label: what the message is, for telemetry's closed set. */
   surface: 'ask_answer' | 'git_step' = 'ask_answer',
+  /** The card being answered: the server closes exactly that ask (Questions inbox). */
+  askRequestId?: string,
 ): AskAnswerDelivery {
   // `projectId` only from a surface standing OUTSIDE the run's project — the global Tasks page.
   // Everywhere else the scope is already the run's own and naming it would be noise.
@@ -123,6 +128,7 @@ export function useAskAnswer(
   const resume = useContinueRun(run.id, projectId)
   const activeProvider = useActiveProviderAvailability(run)
   const existingProvider = useExistingProviderAvailability(run)
+  const providerStatus = useProviderStatus()
   const [error, setError] = useState<string | undefined>(undefined)
   const [delivering, setDelivering] = useState(false)
   const deliveringRef = useRef(false)
@@ -149,7 +155,7 @@ export function useAskAnswer(
     }
     // No runner override: the server keeps the run's own backend and model, so answering a
     // question cannot silently switch engines when another provider happens to be connected.
-    return resume.mutateAsync({ text }).then((result) => {
+    return resume.mutateAsync({ text, ...(askRequestId ? { askRequestId } : {}) }).then((result) => {
       trackMessageSent(surface)
       return result
     })
@@ -169,7 +175,7 @@ export function useAskAnswer(
         return undefined
       }
       try {
-        await sendMessage.mutateAsync({ text })
+        await sendMessage.mutateAsync({ text, ...(askRequestId ? { askRequestId } : {}) })
         trackMessageSent(surface)
       } catch (sendError) {
         // The cached record said "live" but the session had already closed — resume instead
@@ -198,6 +204,7 @@ export function useAskAnswer(
 
   return {
     mode,
+    providerPending: mode === 'resume' && providerStatus.isPending,
     blockedBy,
     reason,
     isPending: delivering || sendMessage.isPending || resume.isPending,

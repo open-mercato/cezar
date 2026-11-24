@@ -1,7 +1,7 @@
 // A contract VALUE, not a type: which runners cezar can interrogate for a live catalog is decided
 // once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
 // disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
-import { runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { runnerDiscoversModels, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
   CreateRunInput,
@@ -57,6 +57,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'omp', label: 'omp', desc: 'OMP (RPC)' },
   { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
   { id: 'gemini', label: 'gemini', desc: 'Gemini CLI (ACP)' },
   { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
@@ -112,6 +113,13 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   // stays free text for anything the account is entitled to.
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
+  ],
+  // omp is pi's successor: the same `provider/model` convention, no host catalog in cezar yet.
+  // Presets are answered by the host's configured providers, so anything dated here would be one
+  // release away from a model the user's provider does not serve — the shared `provider/model`
+  // ids are not EXCLUSIVE to omp, exactly like pi's.
+  omp: [
+    { id: '', label: 'auto', desc: 'Use your omp default model' },
   ],
   // Antigravity's slugs (`gemini-3.8-flash-high`, …) come from `agy models` for the signed-in
   // account; nothing dated is listed here, and the field stays free text for any slug it prints.
@@ -234,6 +242,11 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   kimi: 'Kimi',
 }
 
+/** Display name for runner-native wording ("Claude default"); every effort runner discovers models. */
+export function discoveryRunnerLabel(runner: Runner): string {
+  return runnerDiscoversModels(runner) ? DISCOVERY_RUNNER_LABEL[runner] : runner
+}
+
 export function modelCatalogStatus(
   runner: Runner,
   catalog?: RunnerModelCatalogResponse,
@@ -246,13 +259,13 @@ export function modelCatalogStatus(
   return undefined
 }
 
-/** The App Server advertises effort levels per Codex model, never per runner. */
+/** Effort levels are advertised per discovered model (Codex `model/list`, Claude `list_models`), never per runner. */
 export function reasoningEffortsForModel(
   runner: Runner,
   model: string,
   catalog: RunnerModelCatalogResponse | undefined,
 ): readonly ReasoningEffortOption[] {
-  if (runner !== 'codex' || model === '' || catalog?.runner !== 'codex') return []
+  if (!runnerSupportsReasoningEffort(runner) || model === '' || catalog?.runner !== runner) return []
   return catalog.models.find((candidate) => candidate.id === model)?.reasoningEfforts ?? []
 }
 

@@ -26,7 +26,7 @@ function Switch({
         data-slot="switch-thumb"
         className={cn(
           // `bg-background` covers both themes: in dark it equals --primary-foreground, so the thumb
-          // reads correctly on the lime checked track without a `dark:` variant.
+          // reads correctly on the violet checked track without a `dark:` variant.
           "pointer-events-none block rounded-full bg-background ring-0 transition-transform group-data-[size=default]/switch:size-4 group-data-[size=sm]/switch:size-3 data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0"
         )}
       />

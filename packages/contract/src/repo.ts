@@ -247,8 +247,9 @@ const worktreeRunStatusSchema = z.enum([
 ]);
 
 /** One materialized task worktree in the management panel (#483). `sizeBytes` is null when `du`
- *  is unavailable (Windows / missing). `reclaimable` = finished, has a directory, not yet
- *  reclaimed (retention's rule). */
+ *  is unavailable (Windows / missing). `reclaimable` = not active, has a directory, not yet
+ *  reclaimed, not pinned and not in use — what archive, the disk guard and `cez worktrees reclaim`
+ *  may take. */
 export const worktreeInfoSchema = z.object({
   runId: z.string(),
   title: z.string(),
@@ -256,21 +257,66 @@ export const worktreeInfoSchema = z.object({
   branch: z.string().nullable(),
   sizeBytes: z.number().nullable(),
   finishedAt: z.string().nullable(),
+  /** Latest of the run's record stamps and its event log's mtime — age retention's clock. */
+  lastActivityAt: z.string(),
   reclaimable: z.boolean(),
+  /** Present when a running cezar or node process uses this worktree: why it is protected from
+   *  retention and explicit removal. Gone again once nothing runs from it. */
+  inUse: z.string().optional(),
 });
 export type WorktreeInfo = z.infer<typeof worktreeInfoSchema>;
 
 /** `GET /api/v1/worktrees` (#483): the worktrees on disk, their total size (null when any
- *  degraded), and the current keep-limit (0 = unlimited). */
+ *  degraded), the current keep-limit (0 = unlimited) and age limit in days (0 = off). */
 export const worktreesResponseSchema = z.object({
   worktrees: z.array(worktreeInfoSchema),
   totalBytes: z.number().nullable(),
   keep: z.number(),
+  idleDays: z.number(),
 });
 export type WorktreesResponse = z.infer<typeof worktreesResponseSchema>;
 
-/** `POST /api/v1/worktrees/reclaim` (#483): the run ids whose directory was reclaimed. */
+/** `POST /api/v1/worktrees/reclaim` body. Empty = the configured retention (count + age).
+ *  `olderThanDays` reclaims every reclaimable tree idle that long; `allInactive` every reclaimable
+ *  tree; `runIds` exactly those; `dryRun` reports what would go without touching anything. */
+export const reclaimWorktreesInputSchema = z.object({
+  olderThanDays: z.number().min(0).max(3650).optional(),
+  allInactive: z.boolean().optional(),
+  runIds: z.array(z.string().min(1)).max(1000).optional(),
+  dryRun: z.boolean().optional(),
+}).passthrough();
+export type ReclaimWorktreesInput = z.infer<typeof reclaimWorktreesInputSchema>;
+
+/** `POST /api/v1/worktrees/reclaim` (#483): the run ids whose directory was reclaimed (or, on a
+ *  dry run, would be). */
 export const reclaimWorktreesResponseSchema = z.object({
   reclaimed: z.array(z.string()),
+  dryRun: z.boolean().optional(),
 });
 export type ReclaimWorktreesResponse = z.infer<typeof reclaimWorktreesResponseSchema>;
+
+/** `POST /api/v1/worktrees/prune` (`cez worktrees prune`): `git worktree prune`, then the run ids
+ *  whose orphan directory under `.ai/cezar/worktrees/` (no task record) was removed. No body. */
+export const pruneWorktreesResponseSchema = z.object({
+  removed: z.array(z.string()),
+});
+export type PruneWorktreesResponse = z.infer<typeof pruneWorktreesResponseSchema>;
+
+/** `POST /api/v1/runs/archived/delete-expired` body: archived tasks older than `olderThanDays`
+ *  (default: the configured lifetime) are deleted; `dryRun` reports without deleting. */
+export const deleteExpiredArchivedInputSchema = z.object({
+  olderThanDays: z.number().min(0).max(36500).optional(),
+  dryRun: z.boolean().optional(),
+});
+export type DeleteExpiredArchivedInput = z.infer<typeof deleteExpiredArchivedInputSchema>;
+
+/** Its answer: the tasks deleted (or that would be), the branches kept and why, and the tasks
+ *  left in place and why. */
+export const deleteExpiredArchivedResponseSchema = z.object({
+  deleted: z.array(z.string()),
+  keptBranches: z.array(z.object({ runId: z.string(), branch: z.string(), reason: z.string() })),
+  skipped: z.array(z.object({ runId: z.string(), reason: z.string() })),
+  days: z.number(),
+  dryRun: z.boolean(),
+});
+export type DeleteExpiredArchivedResponse = z.infer<typeof deleteExpiredArchivedResponseSchema>;

@@ -255,6 +255,9 @@ describe('mapCodexNotification edge cases', () => {
   it('maps turn frames onto stop reasons per §7.1', () => {
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'completed' } } }, 'end_turn'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'error' } } }, 'error'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1' }, error: { message: 'boom' } } }, 'error'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed' }, error: { message: 'usage limit reached' } } }, 'error'],
       [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'interrupted' } } }, 'cancelled'],
       [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed', error: { message: 'boom' } } } }, 'error'],
       [{ method: 'turn/failed', params: { turn: { id: 't1', status: 'failed' }, error: { message: 'boom' } } }, 'error'],
@@ -366,6 +369,34 @@ describe('mapCodexNotification edge cases', () => {
         stopReason: 'end_turn',
         usage: { input: 8, output: 2, total: 10 },
       },
+    ]);
+  });
+
+  it('attributes a reroute only to the matching main-thread turn', () => {
+    let state = codexSessionStarted('main', createCodexUiState(), 'configured-model').state;
+    const map = (method: string, params: Record<string, unknown>) => {
+      const result = mapCodexNotification({ method, params }, state);
+      state = result.state;
+      return result.events;
+    };
+    const start = (id: string) => map('turn/started', { threadId: 'main', turn: { id } });
+    const complete = (id: string) => map('turn/completed', { threadId: 'main', turn: { id } });
+    const reroute = (turnId: string, threadId: string, toModel: string) =>
+      map('model/rerouted', { threadId, turnId, toModel });
+
+    start('t1');
+    expect(reroute('t1', 'main', 'serving-model')).toEqual([]);
+    reroute('t1', 'child', 'child-model');
+    reroute('stale-turn', 'main', 'stale-model');
+    expect(complete('stale-turn')).toEqual([
+      { type: 'turn.completed', turnId: 'stale-turn', stopReason: 'end_turn' },
+    ]);
+    expect(complete('t1')).toEqual([
+      { type: 'turn.completed', turnId: 't1', stopReason: 'end_turn', models: [{ model: 'serving-model' }] },
+    ]);
+    start('t2');
+    expect(complete('t2')).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', models: [{ model: 'configured-model' }] },
     ]);
   });
 
@@ -790,9 +821,11 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
     expect(v1Types).toContain('turn-end');
     expect(v1Types).toContain('done');
 
-    // v2 rides alongside: session.started exactly once and first (the
-    // thread/started notification and the thread/start result path dedup).
-    expect(v2[0]).toEqual({ type: 'session.started', sessionId: 'th_mock_1', backend: 'codex' });
+    // The fixture sends thread/started before the model-bearing thread/start result.
+    // The runner opens the v2 session once, with the model, before any turn events.
+    expect(v2[0]).toEqual({
+      type: 'session.started', sessionId: 'th_mock_1', backend: 'codex', model: 'gpt-mock-codex',
+    });
     expect(v2.filter((e) => e.type === 'session.started')).toHaveLength(1);
     expect(v2.some((e) => e.type === 'turn.started' && e.turnId === 'turn_mock_1')).toBe(true);
     expect(v2).toContainEqual({ type: 'item.delta', itemId: 'item_c1', field: 'output', delta: ' M src/example.ts\n' });
@@ -813,6 +846,8 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
       turnId: 'turn_mock_1',
       stopReason: 'end_turn',
       usage: { input: 1200, output: 300, total: 1500 },
+      // The thread/start result names the model "auto" resolved to; every turn echoes it.
+      models: [{ model: 'gpt-mock-codex' }],
     });
   }, 30_000);
 
@@ -857,7 +892,9 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
     const v2Started = v2.filter((event) => event.type === 'turn.started');
     const v2Completed = v2.filter((event) => event.type === 'turn.completed');
     expect(v2Started).toEqual([{ type: 'turn.started', turnId: 'turn_mock_1' }]);
-    expect(v2Completed).toEqual([{ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' }]);
+    expect(v2Completed).toEqual([
+      { type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn', models: [{ model: 'gpt-mock-codex' }] },
+    ]);
   }, 30_000);
 
   it('keeps autonomous full-access permissions when resuming a thread', async () => {

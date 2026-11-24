@@ -238,7 +238,7 @@ export function stepsIssue(steps: WorkflowStepDef[]): string | null {
 }
 
 /** Tools an agent step gets when the workflow doesn't say otherwise. */
-export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'];
+export { DEFAULT_ALLOWED_TOOLS } from '../core/agent-runner.ts';
 
 /** The zero-config workflow: one agent step that just does the task. */
 export const QUICK_TASK_WORKFLOW: WorkflowDef = {

@@ -8,6 +8,7 @@ import { RunStore } from '../runs/store.ts';
 import { RunManager, AUTO_RESUME_GRACE_MS } from './run.ts';
 import { loadUsageWindows, saveUsageWindows } from '../workspace/usage-windows.ts';
 import { deferredHoldUntil } from '../automations/deferred-reset.ts';
+import { readLedger } from '../usage-ledger/store.ts';
 import type { ScheduleAutomationDefinition } from '../automations/types.ts';
 
 vi.mock('../core/codex-usage-probe.ts', () => ({ probeCodexUsageWindows: vi.fn(), probeCodexIdentity: vi.fn() }));
@@ -48,10 +49,14 @@ async function callback(deferred = false, launched = deferred) {
   const seam = manager as unknown as { agentEnvForStep(id: string, backend: 'codex'): Promise<{ onUsageWindows?: (o: UsageWindowsObservation) => void }> };
   return (await seam.agentEnvForStep(run.id, 'codex')).onUsageWindows;
 }
-it('an ordinary Codex step spawns no identity probe and captures no usage windows (#1340)', async () => {
-  expect(await callback()).toBeUndefined();
+it('an ordinary Codex step spawns no identity probe and stores no reset windows (#1340)', async () => {
+  // Its readings still reach the plan-usage ledger (spec 2026-11-19-plan-usage), passively.
+  const emit = (await callback())!;
+  await emit(observation(Date.now(), false));
   expect(probeCodexUsageWindows).not.toHaveBeenCalled();
   expect(probeCodexIdentity).not.toHaveBeenCalled();
+  expect(loadUsageWindows({ ...binding(), identity: undefined })).toBeNull();
+  expect(readLedger(1).filter((r) => r.t === 'reading').map((r) => r.t === 'reading' && r.account)).toEqual(['codex:default']);
 });
 it('scheduled Codex observations preserve identity and postpone a previously scheduled reset', async () => {
   const now = Date.now();
@@ -141,4 +146,22 @@ it('a launched scheduled run does not re-verify the binding on later steps', asy
   vi.mocked(probeCodexIdentity).mockResolvedValue({ identity: otherIdentity });
   expect(await callback(true)).toBeDefined();
   expect(probeCodexIdentity).not.toHaveBeenCalled();
+});
+
+it('records a failed check as a failed plan attempt only on the run\'s own tracked plan account', async () => {
+  const { setAccountTracking, resetLedgerCaches } = await import('../usage-ledger/store.ts');
+  resetLedgerCaches();
+  const internals = manager as unknown as {
+    planUsageTracker(runId: string, account: { provider: 'claude'; key: string }): unknown;
+    recordFailedPlanAttempt(runId: string): void;
+  };
+  const failures = () => readLedger(1).filter((r) => r.t === 'attempt-failed');
+  internals.recordFailedPlanAttempt('no-plan-run');
+  expect(failures()).toEqual([]);
+  internals.planUsageTracker('r1', { provider: 'claude', key: 'claude:default' });
+  internals.recordFailedPlanAttempt('r1');
+  expect(failures()).toHaveLength(1);
+  setAccountTracking('claude:default', false);
+  internals.recordFailedPlanAttempt('r1');
+  expect(failures()).toHaveLength(1);
 });

@@ -53,6 +53,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
   // Antigravity lists nothing: its slugs come from `agy models` for the signed-in account.
   copilot: [],
+  // omp is pi's successor with the same `provider/model` convention and no default provider
+  // (#387's reasoning for pi applies verbatim); its picker gets the same structural guard.
+  omp: [],
   antigravity: [],
   // The ids Gemini CLI 0.60 lists in its ACP `session/new` answer (`models.availableModels`), minus
   // its own `auto` (cezar's implicit `''`) — the composer's `MODELS_BY_RUNNER.gemini`.

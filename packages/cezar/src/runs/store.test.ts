@@ -4,7 +4,8 @@ import { threadId } from 'node:worker_threads';
 import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from './store.ts';
+import { readRunIndexFromDisk } from './run-index.ts';
+import { reconcileLoadedRun, RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
@@ -156,6 +157,26 @@ describe('RunStore — directional usage persistence', () => {
       usageInvocationEpoch: 1,
       reasoningEffort: 'medium',
     });
+  });
+
+  it('merges live gauge readings onto the record and round-trips them', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'live', steps: [] });
+    const limits = [{ window: 'five_hour', utilization: 0.2, resetsAt: '2026-10-23T10:00:00.000Z' }];
+    store.setLiveUsage(run.id, { limits });
+    store.setLiveUsage(run.id, { contextTokens: 5000 });
+    store.setLiveUsage(run.id, { contextWindow: 200000 });
+    expect(store.getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000, contextWindow: 200000 });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000 });
+  });
+
+  it('keeps per-request and per-turn token splits off the record (they are manager turn stats)', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'live', steps: [] });
+    store.setLiveUsage(run.id, { contextTokens: 5000, cacheWriteTokens: 4000 });
+    store.setLiveUsage(run.id, { turnTokens: { cacheReadTokens: 1, cacheWriteTokens: 2, outputTokens: 3 } });
+    expect(store.getRun(run.id)?.liveUsage).toEqual({ contextTokens: 5000, at: expect.any(String) });
   });
 
   it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
@@ -1973,6 +1994,89 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
+describe('RunStore — waitingSince', () => {
+  let dataDir: string;
+  const AT = '2026-10-05T10:00:00.000Z';
+  const ask = (requestId: string) => ({ requestId, askedAt: AT, questions: [{ question: 'Which?' }] }) as RunRecord['attentionRequest'];
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-waiting-'));
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse(AT) });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const later = (ms: number) => vi.setSystemTime(Date.parse(AT) + ms);
+  const parked = (store: RunStore): string => {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'waiting' });
+    return run.id;
+  };
+
+  it('stamps entering `waiting`, and holds through writes that are not a new wait', () => {
+    const store = RunStore.open(dataDir);
+    const id = parked(store);
+    expect(store.getRun(id)?.waitingSince).toBe(AT);
+    later(1000);
+    store.updateRun(id, { status: 'waiting', activity: undefined });
+    store.updateRun(id, { error: 'noise' });
+    expect(store.getRun(id)?.waitingSince).toBe(AT);
+  });
+
+  it('a new wait gets a new stamp, after a turn or on a new question', () => {
+    const store = RunStore.open(dataDir);
+    const id = parked(store);
+    later(1000);
+    store.updateRun(id, { status: 'running' });
+    expect(store.getRun(id)?.waitingSince).toBeUndefined();
+    store.updateRun(id, { status: 'waiting', attentionRequest: ask('one') });
+    const second = store.getRun(id)?.waitingSince;
+    expect(second).not.toBe(AT);
+    later(2000);
+    store.updateRun(id, { status: 'waiting', attentionRequest: ask('two') });
+    expect(store.getRun(id)?.waitingSince).not.toBe(second);
+  });
+
+  it('survives the session closing on the question, and goes with the answer or a plain failure', () => {
+    const store = RunStore.open(dataDir);
+    const id = parked(store);
+    later(1000);
+    const closedAt = new Date().toISOString();
+    store.updateRun(id, { status: 'failed', finishedAt: closedAt, awaitingAnswerSince: closedAt });
+    store.flush();
+    expect(store.getRun(id)?.waitingSince).toBe(AT);
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.waitingSince).toBe(AT);
+    store.updateRun(id, { status: 'queued' });
+    expect(store.getRun(id)?.waitingSince).toBeUndefined();
+
+    const other = parked(store);
+    store.updateRun(other, { status: 'failed' });
+    expect(store.getRun(other)?.waitingSince).toBeUndefined();
+  });
+
+  it('a legacy wait with no stamp is closed at its last step, not its start', () => {
+    const run = {
+      ...RunStore.open(dataDir).createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }),
+      status: 'waiting' as const,
+      startedAt: AT,
+      steps: [{ id: 's', name: 's', kind: 'agent' as const, status: 'waiting' as const, iterations: 1, tokensUsed: 0, startedAt: AT, finishedAt: '2026-10-05T10:05:00.000Z' }],
+    } as RunRecord;
+    reconcileLoadedRun(run);
+    expect(run.finishedAt).toBe('2026-10-05T10:05:00.000Z');
+  });
+
+  it('goes when the task is archived, with the question it belonged to', () => {
+    const store = RunStore.open(dataDir);
+    const id = parked(store);
+    store.updateRun(id, { status: 'failed', finishedAt: AT, awaitingAnswerSince: AT });
+    store.setArchived(id, true);
+    expect(store.getRun(id)?.waitingSince).toBeUndefined();
+  });
+});
+
 /**
  * `awaitingAnswerSince`: a `failed` run whose session closed on an unanswered `CEZ:ASK`. The
  * cockpit keeps it under "needs you", so the store owns the invariant that only a `failed` run
@@ -2055,6 +2159,45 @@ describe('RunStore — awaitingAnswerSince', () => {
     expect(reopened.getRun(parked.id)?.askParked).toBeUndefined();
     expect(reopened.getRun(plain.id)?.status).toBe('failed');
     expect(reopened.getRun(plain.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('a cold read of any wait lands on the same instant every time', () => {
+    const store = RunStore.open(dataDir);
+    const asked = store.createRun({ title: 'q', workflow: 'quick-task', task: 'q', steps: [] });
+    store.updateRun(asked.id, {
+      status: 'waiting',
+      attentionRequest: { requestId: 'q1', askedAt: AT, questions: [{ question: 'Which?' }] } as RunRecord['attentionRequest'],
+    });
+    store.flush();
+
+    const read = () => readRunIndexFromDisk(dataDir).find((run) => run.id === asked.id);
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 1000 });
+    const first = read();
+    vi.setSystemTime(Date.now() + 60_000);
+    const second = read();
+    vi.useRealTimers();
+    // A native question is a question to a cold reader too, the way `recover()` reads it.
+    expect(first?.awaitingAnswerSince).toBeDefined();
+    expect(first?.waitingSince).toBe(store.getRun(asked.id)?.waitingSince);
+    expect(second?.finishedAt).toBe(first?.finishedAt);
+  });
+
+  it('a record older than `waitingSince` still reads the same way twice', () => {
+    const store = RunStore.open(dataDir);
+    const parked = store.createRun({ title: 'p', workflow: 'quick-task', task: 'p', steps: [] });
+    store.updateRun(parked.id, { status: 'waiting', askParked: true });
+    store.flush();
+    const path = join(dataDir, 'runs.json');
+    const legacy = (JSON.parse(readFileSync(path, 'utf8')) as Array<Record<string, unknown>>).map(({ waitingSince: _dropped, ...rest }) => rest);
+    writeFileSync(path, JSON.stringify(legacy));
+
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse(AT) });
+    const first = readRunIndexFromDisk(dataDir)[0];
+    vi.setSystemTime(Date.parse(AT) + 60_000);
+    const second = readRunIndexFromDisk(dataDir)[0];
+    vi.useRealTimers();
+    expect(first?.awaitingAnswerSince).toBeDefined();
+    expect(second?.awaitingAnswerSince).toBe(first?.awaitingAnswerSince);
   });
 
   it('drops a stray value from a non-failed record on load', () => {
@@ -2889,6 +3032,27 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
       delete process.env.CEZ_RUNS_KEEP;
     }
   });
+
+  it('never prunes a pinned run past CEZ_RUNS_KEEP', () => {
+    process.env.CEZ_RUNS_KEEP = '5';
+    try {
+      const store = RunStore.open(dataDir);
+      let clock = Date.parse('2026-01-01T00:00:00.000Z');
+      vi.setSystemTime((clock += 1_000));
+      const keep = store.createRun({ title: 'pinned', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(keep.id, { status: 'done' });
+      store.setPinned(keep.id, true);
+      for (let i = 0; i < 20; i++) {
+        vi.setSystemTime((clock += 1_000));
+        store.updateRun(store.createRun({ title: `r${i}`, workflow: 'quick-task', task: 't', steps: [] }).id, {
+          status: 'done',
+        });
+      }
+      expect(store.getRun(keep.id)?.pinned).toBe(true);
+    } finally {
+      delete process.env.CEZ_RUNS_KEEP;
+    }
+  });
 });
 
 describe('RunStore — index lock failures', () => {
@@ -3019,5 +3183,32 @@ describe('RunStore — index lock failures', () => {
     const run = store.createRun({ title: 'after container restart', workflow: 'test', task: 'test', steps: [] });
     expect(() => store.flushCreatedRun(run)).not.toThrow();
     expect(existsSync(leftover)).toBe(false);
+  });
+});
+
+describe('step tool-policy persistence', () => {
+  it('round-trips effective grants while keeping older steps without a policy readable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const store = RunStore.open(dir);
+      const record = store.createRun({ title: 'restricted', workflow: 'nested', task: 'read', steps: [{ id: 'nested::read', name: 'Read', kind: 'agent' }] });
+      const policy = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'], enforceReadOnly: true };
+      store.updateStep(record.id, 'nested::read', { toolPolicy: policy });
+      store.flush();
+      const reopened = RunStore.open(dir);
+      expect(reopened.getRun(record.id)?.steps[0]?.toolPolicy).toEqual(policy);
+      reopened.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('keeps a run whose stored policy carries a key from a newer cezar, dropping only that key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const step = { id: 'read', name: 'Read', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, toolPolicy: { allowedTools: ['Read'], futureKey: true } };
+      writeFileSync(join(dir, 'runs.json'), JSON.stringify([{ ...LEGACY_RUN, steps: [step] }]), 'utf8');
+      const store = RunStore.open(dir);
+      expect(store.getRun(LEGACY_RUN.id)?.steps[0]?.toolPolicy).toEqual({ allowedTools: ['Read'] });
+      store.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

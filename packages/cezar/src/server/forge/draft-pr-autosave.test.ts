@@ -159,6 +159,21 @@ describe('createDraftPr draft flag', () => {
     expect(outcome.ok).toBe(true);
     expect(argv()).not.toContain('--draft');
   });
+
+  it('pushes instructions applied after the task already opened its PR', async () => {
+    const pullRequestUrl = 'https://github.com/acme/demo/pull/9';
+    writeFileSync(join(repo, 'a.txt'), 'gate instructions applied\n');
+    const initial = input(false);
+    const outcome = await createDraftPr({
+      ...initial,
+      run: { ...initial.run, pullRequestUrl },
+      updateExisting: true,
+    });
+    expect(outcome).toEqual({ ok: true, url: pullRequestUrl, dryRun: false, updated: true });
+    expect(existsSync(join(bin, 'argv'))).toBe(false);
+    const { stdout } = await run('git', ['--git-dir', remote, 'show', 'cez/abc123:a.txt']);
+    expect(stdout).toBe('gate instructions applied\n');
+  });
 });
 
 /** `gh pr create` failing (telemetry c1929fec, e4fa39ad): publishing must not strand a task
@@ -217,7 +232,7 @@ describe('createDraftPr recovery', () => {
       '[{"url":"https://github.com/acme/demo/pull/5","headRepositoryOwner":{"login":"acme"}}]',
     );
     const outcome = await createDraftPr(input());
-    expect(outcome).toEqual({ ok: true, url: 'https://github.com/acme/demo/pull/5', dryRun: false });
+    expect(outcome).toEqual({ ok: true, url: 'https://github.com/acme/demo/pull/5', dryRun: false, updated: true });
   });
 
   it('retries once when GitHub cannot see the just-pushed head yet', async () => {

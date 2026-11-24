@@ -152,6 +152,18 @@ describe('useRunEvents — subscription', () => {
     expect(runs[0]?.status).toBe('running')
   })
 
+  it('reports a history-truncated frame and ignores a malformed one (#882)', () => {
+    const frames: unknown[] = []
+    renderHook(() => useRunEvents('run-1', { onTruncated: (frame) => frames.push(frame) }))
+    const source = FakeEventSource.last
+
+    source.emit('history-truncated', 'not json{')
+    source.emit('history-truncated', '{"firstSeq":-1,"afterSeq":0}')
+    source.emit('history-truncated', '{"firstSeq":400,"afterSeq":0}')
+
+    expect(frames).toEqual([{ firstSeq: 400, afterSeq: 0 }])
+  })
+
   it('survives a malformed frame — one bad line costs one line', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
@@ -486,6 +498,48 @@ describe('useRunEvents — compaction handoff', () => {
     }))
     await flushEvents()
     expect(onCompact).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useRunEvents — history-truncated (#882)', () => {
+  it('reports the gap and keeps the events on both sides of it', async () => {
+    const onTruncated = vi.fn()
+    const { result } = renderHook(() => useRunEvents('run-1', { onTruncated }))
+    const source = FakeEventSource.last
+
+    source.emit('run-event', line(2, 'stdout', { text: 'before' }))
+    source.emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 2 }))
+    source.emit('run-event', line(50, 'stdout', { text: 'after' }))
+    await flushEvents()
+
+    expect(onTruncated).toHaveBeenCalledExactlyOnceWith({ firstSeq: 50, afterSeq: 2 })
+    expect(result.current.map(({ seq }) => seq)).toEqual([2, 50])
+  })
+
+  it('ignores a malformed frame and a frame from a replaced socket', () => {
+    const onTruncated = vi.fn()
+    renderHook(() => useRunEvents('run-1', { onTruncated }))
+    const first = FakeEventSource.last
+
+    first.emit('history-truncated', 'nope{')
+    first.emit('history-truncated', JSON.stringify({ firstSeq: 'x', afterSeq: 0 }))
+    first.close()
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    first.emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 0 }))
+
+    expect(FakeEventSource.instances).toHaveLength(2)
+    expect(onTruncated).not.toHaveBeenCalled()
+  })
+
+  it('counts the frame as liveness', () => {
+    renderHook(() => useRunEvents('run-1'))
+    const source = FakeEventSource.last
+
+    act(() => vi.advanceTimersByTime(30_000))
+    source.emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 0 }))
+    act(() => vi.advanceTimersByTime(30_000))
+
+    expect(FakeEventSource.instances).toHaveLength(1)
   })
 })
 

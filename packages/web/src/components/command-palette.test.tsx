@@ -110,7 +110,7 @@ function health(forgeAvailable: boolean | 'cold', automations = false): HealthRe
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable === 'cold' ? { kind: 'github' } : forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, webhooks: false, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, phonePairing: false, singleProject: false, automations, webhooks: false, dispatch: false },
   }
 }
 
@@ -209,10 +209,30 @@ describe('opening and closing', () => {
     expect(await screen.findByPlaceholderText(/Search projects, tasks/)).toBeTruthy()
   })
 
-  it('does not open while the user is typing in an input', () => {
+  it('opens from a focused text field and claims the chord from the browser (#2321)', () => {
+    renderPalette()
+    const ev = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true, bubbles: true })
+
+    fireEvent(screen.getByTestId('outside-input'), ev)
+
+    expect(dialog()).not.toBeNull()
+    expect(ev.defaultPrevented).toBe(true)
+  })
+
+  it('opens on ⌘K from a text field on a Mac', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
     renderPalette()
 
     fireEvent.keyDown(screen.getByTestId('outside-input'), { key: 'k', metaKey: true })
+
+    expect(dialog()).not.toBeNull()
+  })
+
+  it('leaves Control-K to the macOS text system in a text field', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    renderPalette()
+
+    fireEvent.keyDown(screen.getByTestId('outside-input'), { key: 'k', ctrlKey: true })
 
     expect(dialog()).toBeNull()
   })
@@ -258,19 +278,19 @@ describe('Views group', () => {
     expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear')
   })
 
-  it('leads with New task and its C hint, then the 9 nav destinations and Global settings', async () => {
+  it('leads with New task and its C hint, then the 10 nav destinations and Global settings', async () => {
     renderPalette({ automations: true })
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
     // The GitHub row waits on the health answer (forge gate) — settle before asserting.
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(11),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(12),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     // New task FIRST — an empty query pre-selects it, so ⌘K then Enter starts a task.
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/assets', '/automations', '/skills', '/workflows', '/settings',
+      '/new', '/', '/tasks', '/inbox', '/git', '/github', '/assets', '/automations', '/skills', '/workflows', '/settings',
       '/settings/global',
     ])
     expect(views[0]?.textContent).toContain('New task')
@@ -286,11 +306,11 @@ describe('Views group', () => {
     await screen.findByRole('dialog')
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(11),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/assets', '/skills', '/workflows', '/settings', '/settings/global',
+      '/new', '/', '/tasks', '/inbox', '/git', '/github', '/assets', '/skills', '/workflows', '/settings', '/settings/global',
     ])
   })
 
@@ -299,7 +319,7 @@ describe('Views group', () => {
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(11),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(12),
     )
 
     const newTaskRows = [...document.querySelectorAll('[data-nav-to="/new"]')]
@@ -336,7 +356,7 @@ describe('Views group', () => {
     await screen.findByRole('dialog')
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(8),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
     )
     const targets = [...document.querySelectorAll('[data-slot="palette-view"]')].map((view) =>
       view.getAttribute('data-nav-to'),
@@ -510,8 +530,8 @@ describe('Tasks group', () => {
 
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-new', 'r-old'])
-    // The dot is deriveAttention's, not a re-derivation: waiting → pending, done → success.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    // The dot is deriveAttention's, not a re-derivation: waiting → info, done → success.
+    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
     expect(tasks[1]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
 
     fireEvent.click(tasks[0] as HTMLElement)
@@ -1009,8 +1029,8 @@ describe('Tasks across projects', () => {
 
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-mine', 'r-shop'])
-    // review → violet, not the index's stale running.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    // review → info, not the index's stale running (violet).
+    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
   })
 
   it('lists the boot project once from an unscoped screen like global settings', async () => {
@@ -1126,6 +1146,20 @@ describe('Skills group', () => {
     fireEvent.click(document.querySelector('[data-skill="project-review"]') as HTMLElement)
 
     expect(location()).toBe('/new?skill=project-review')
+    await waitFor(() => expect(dialog()).toBeNull())
+  })
+
+  it('marks a missing shared skill and opens its project catalog entry', async () => {
+    renderPalette({
+      entry: '/p/acme/',
+      skills: [skill({ name: 'om-auto-review-pr', source: 'ai', missingShared: true })],
+    })
+    openWith({ metaKey: true })
+
+    const option = await screen.findByRole('option', { name: /om-auto-review-pr\s*Shared skill missing/ })
+    fireEvent.click(option)
+
+    expect(location()).toBe('/p/acme/skills?skill=om-auto-review-pr')
     await waitFor(() => expect(dialog()).toBeNull())
   })
 

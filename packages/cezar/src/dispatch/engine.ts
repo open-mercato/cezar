@@ -50,6 +50,17 @@ export function inFlightChildren(runs: readonly RunRecord[], parentId: string): 
   return childrenOf(runs, parentId).filter((run) => IN_FLIGHT_STATUSES.includes(run.status));
 }
 
+/** A child still moving on its own. Narrower than in-flight: a `waiting` child is parked on a
+ *  human (its own `CEZ:ASK`, its cap, the empty-turn breaker) and will not settle without one. */
+const PROGRESSING_STATUSES: readonly string[] = ['queued', 'running'];
+
+/** What a parent is SUPERVISING (spec 2026-09-10-dispatch, A15): the children that will settle —
+ *  and so wake it with a report — without anyone's help. A `waiting` child must not count, or it
+ *  holds the parent's supervision exemption open for as long as nobody answers it. */
+export function progressingChildren(runs: readonly RunRecord[], parentId: string): RunRecord[] {
+  return childrenOf(runs, parentId).filter((run) => PROGRESSING_STATUSES.includes(run.status));
+}
+
 /**
  * What a parent may still hand out: `budgetUsd − costUsd − Σ children.budgetUsd` (spec §Budget).
  *
@@ -107,7 +118,7 @@ export function childTaskEnvelope(
   }
   if (child.review_of?.length) lines.push(`- Review of: ${child.review_of.join(', ')}`);
   if (child.scope) lines.push(`- Scope: ${child.scope}`);
-  if (child.allowed_tools?.length) lines.push(`- Allowed tools: ${child.allowed_tools.join(', ')}`);
+  if (child.allowed_tools !== undefined) lines.push(`- Allowed tools: ${child.allowed_tools.join(', ') || '(none)'}`);
   if (child.max_cost !== undefined) lines.push(`- Max cost: ${usd(child.max_cost)}`);
   if (child.success_criteria) lines.push(`- Success criteria: ${child.success_criteria}`);
   if (child.required_evidence) lines.push(`- Required evidence: ${child.required_evidence}`);

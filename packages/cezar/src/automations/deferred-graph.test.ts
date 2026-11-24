@@ -155,9 +155,9 @@ it('refuses to schedule an explicit reasoning effort while models are locked', a
   vi.stubEnv('CEZ_AGENT_MODELS_LOCKED', '1');
   await expect(resolveDeferredExecution(root, { ...task, reasoningEffort: 'high' })).rejects.toThrow('locked');
 });
-it('refuses to schedule an explicit reasoning effort on a non-Codex runner', async () => {
+it('refuses to schedule an explicit reasoning effort on a runner without an effort control', async () => {
   graph('parent', [{ type: 'agent', prompt: 'parent' }]);
-  await expect(resolveDeferredExecution(root, { ...task, runner: 'claude', reasoningEffort: 'high' })).rejects.toThrow('only supported by the Codex runner');
+  await expect(resolveDeferredExecution(root, { ...task, runner: 'opencode', reasoningEffort: 'high' })).rejects.toThrow('only supported by the Codex and Claude runners');
 });
 it.each([true, false])('rejects multiple accounts of one runner regardless of child-first order (%s)', async childFirst => {
   writeFileSync(join(root, 'home/agent-accounts.json'), JSON.stringify({ accounts: [{ id: 'work', provider: 'claude', label: 'Work', configDir: join(root, 'override') }], selections: {}, defaults: {} }));
