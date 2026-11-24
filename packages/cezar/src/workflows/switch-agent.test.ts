@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { compileV1 } from './graph.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -177,5 +178,28 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     const run = store.getRun(id)!;
     expect(run.worktreePath).toBeTruthy();
     expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { cwd: run.worktreePath, resume: false } });
+  });
+
+  it('retries the failed agent node when model validation stopped a graph before launch', async () => {
+    const graph = compileV1(workflow.steps);
+    const { id } = store.createRun({ title: 'Original', task: 'Review the build', workflow: 'custom',
+      runner: 'claude', steps: [
+        { id: 'work', name: 'Work', kind: 'agent' },
+        { id: 'review', name: 'Review', kind: 'agent' },
+      ],
+    });
+    // The engine pins a session id before model validation and records the tool policy later.
+    store.updateStep(id, 'work', { status: 'failed', iterations: 1, backend: 'claude', sessionId: 'never-opened' });
+    store.updateRun(id, {
+      status: 'failed', error: 'unsupported model', workflowDef: { ...workflow, graph },
+      graphState: { taken: ['work.failed->'], loops: {} },
+    });
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    await vi.waitFor(() => expect(sessions.length > 0 || store.getRun(id)?.status === 'failed').toBe(true), wait);
+    expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'review']);
+    expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { resume: false, model: 'gpt-6.2-sol' } });
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]).toMatchObject({ backend: 'codex' });
   });
 });

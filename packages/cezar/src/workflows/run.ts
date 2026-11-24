@@ -5727,10 +5727,17 @@ export class RunManager {
     const summary = `Switched from ${current.runner} (${from.join(', ')}) to ${input.runner} (${to.join(', ')}) by ${input.changedBy}`;
     const job = this.pendingJobs.get(runId);
     const previousContinuation = this.pendingContinuations.get(runId);
-    const cursor = run.graphState?.cursor;
+    const walk = run.graphState;
+    // A provider/model failure can leave a pinned session id even if nothing ever launched.
+    // Resume an unwired failure at that exact agent node so its tool policy and later steps survive.
+    const failedAgent = run.status === 'failed' && walk?.taken.at(-1)
+      ? run.steps.find((step) => step.kind === 'agent' && step.status === 'failed' && walk.taken.at(-1) === `${step.id}.failed->`)
+      : undefined;
+    const cursor = walk?.cursor ?? failedAgent?.id;
     const stoppedBeforeSession = (run.status === 'failed' || run.status === 'cancelled') && !run.steps.some((step) => step.sessionId);
-    const savedWorkflow = !state && !this.starting.has(runId) && !previousContinuation
-      && (stoppedBeforeSession || (isIdleParked(run) && cursor))
+    const savedWorkflow = (!state || state.turnSettled && state.workflow && !state.cancelled)
+      && !this.starting.has(runId) && !previousContinuation
+      && (failedAgent || stoppedBeforeSession || (isIdleParked(run) && cursor))
       ? run.workflowDef : undefined;
     const workflow = job?.workflow ?? (!state?.cancelled && !state?.turnSettled ? state?.workflow : undefined) ?? savedWorkflow;
     const selection = {
@@ -5747,6 +5754,7 @@ export class RunManager {
       this.store.updateRun(runId, {
         ...selection, modelIdentity: undefined, actualModel: undefined, fallbackEpisode: undefined,
         agentSwitch: { summary, workflow: true },
+        ...(failedAgent && walk ? { graphState: { ...walk, cursor: failedAgent.id } } : {}),
         ...(requeue ? { status: 'queued', currentStepId: undefined, activity: undefined, finishedAt: undefined, error: undefined } : {}),
       });
       if (job) this.pendingJobs.set(runId, { workflow, input: { ...job.input, ...selection, usageLimitResume: undefined } });
