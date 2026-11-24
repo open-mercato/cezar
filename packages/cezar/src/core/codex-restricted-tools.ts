@@ -34,6 +34,8 @@ const SHELL_TIMEOUT_MS = 120_000;
 // The read path's guard (`codexBashArgv`); a newline stays legal for a heredoc body.
 const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
 const SHELL_OUTPUT_CAP = 256_000;
+// A detached Windows child gets its own console window and has no process group to signal.
+const STAGE_GROUPS = process.platform !== 'win32';
 
 export interface PipelineOptions {
   cwd: string;
@@ -73,7 +75,7 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     const children: ChildProcess[] = [];
     const killOne = (child: ChildProcess) => {
       // The group outlives its leader while a forked grandchild (gh's git, a pager) still holds a pipe.
-      if (child.pid) try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is gone */ }
+      if (STAGE_GROUPS && child.pid) try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is gone */ }
       child.kill('SIGKILL');
     };
     const killAll = () => { for (const child of children) killOne(child); };
@@ -102,7 +104,7 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     try {
       for (; stage < pipeline.length; stage++) {
         const [bin, ...args] = pipeline[stage]!;
-        const child = start(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+        const child = start(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: STAGE_GROUPS, windowsHide: true });
         children.push(child);
         // EMFILE/ENFILE: node returns a child without stdio and reports the error a tick later.
         if (!child.stdin || !child.stdout || !child.stderr) throw new Error('no stdio (out of file descriptors?)');

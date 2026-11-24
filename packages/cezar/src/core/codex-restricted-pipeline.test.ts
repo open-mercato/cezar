@@ -33,6 +33,17 @@ function failingSecondStage(failure: 'throw' | 'no-stdio'): { spawn: typeof spaw
   return { spawn: fake, first: () => first };
 }
 
+it('spawns each stage in its own process group except on Windows, where detached opens a console', async () => {
+  const seen: Array<{ detached?: boolean; windowsHide?: boolean }> = [];
+  const recording = ((bin: string, args: readonly string[], options: { detached?: boolean; windowsHide?: boolean }) => {
+    seen.push({ detached: options.detached, windowsHide: options.windowsHide });
+    return spawn(bin, args, options);
+  }) as unknown as typeof spawn;
+  const ran = await runPipeline([[node, '-e', "process.stdout.write('ok')"]], undefined, opts({ spawn: recording }));
+  expect(ran).toEqual({ ok: true, text: 'ok' });
+  expect(seen).toEqual([{ detached: process.platform !== 'win32', windowsHide: true }]);
+});
+
 describe.skipIf(process.platform === 'win32')('runPipeline', () => {
   it.each([
     ['an argv', [['touch', 'STARTED'], ['cat', 'a\0b']], undefined],
