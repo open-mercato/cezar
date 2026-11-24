@@ -6128,8 +6128,11 @@ export class RunManager {
   private launchContinuation(runId: string, opening: PendingContinuation, queued = false): void {
     const ownerToken = Symbol('run-owner');
     this.openingContinuations.set(runId, opening);
-    const launch = queued ? this.hydrateQueuedContinuation(runId, opening) : opening;
-    void outsideRelayScope(() => this.runContinuation(runId, launch, ownerToken)).catch((err: unknown) => {
+    const hydrated = queued ? this.hydrateQueuedContinuation(runId, opening) : undefined;
+    void outsideRelayScope(() => this.runContinuation(
+      runId, opening.stepId, opening.sessionId, opening.backend, hydrated?.prompt ?? opening.prompt, opening.images,
+      hydrated?.persistedImages, hydrated?.persistedAttachments, ownerToken,
+    )).catch((err: unknown) => {
       this.failOwnedContinuation(runId, ownerToken, err instanceof Error ? err.message : String(err));
       if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
     }).finally(() => {
@@ -6140,10 +6143,15 @@ export class RunManager {
 
   private async runContinuation(
     runId: string,
-    opening: PendingContinuation & { persistedImages?: ContentBlock[]; persistedAttachments?: PersistedAttachment[] },
-    effectiveOwnerToken: symbol,
+    stepId: string,
+    sessionId: string | undefined,
+    backend: RunnerId,
+    prompt: string,
+    images: PastedContent[] = [],
+    persistedImages: ContentBlock[] = [],
+    persistedAttachments: PersistedAttachment[] = [],
+    effectiveOwnerToken = Symbol('run-owner'),
   ): Promise<void> {
-    const { stepId, sessionId, backend, prompt, images = [], persistedImages = [], persistedAttachments = [] } = opening;
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
     // Retention (#483) may have reclaimed this run's worktree directory while
@@ -6166,7 +6174,7 @@ export class RunManager {
       this.active.set(runId, preparing); this.starting.delete(runId);
       const preparationController = new AbortController();
       preparing.interrupt = () => preparationController.abort();
-      const pending = this.openingContinuations.get(runId) ?? opening;
+      const pending = this.openingContinuations.get(runId) ?? { stepId, sessionId, backend, prompt, images };
       const gate = await this.lifecycle.prepare(runId, beforePreparation.baseBranch ?? 'HEAD', {
         kind: 'continuation', runId, ...pending,
       }, preparationController.signal, {branch: beforePreparation.branch});
