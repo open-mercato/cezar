@@ -2893,7 +2893,8 @@ export class ManagerEngine {
     return { text, ...(forward ? { forward } : {}) };
   }
 
-  async createTask(id: string, input: ManagerCreateTaskInput, prefer?: { runner?: string; agentProfile?: string }): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+  /** `retry`: the task being retried — its pair ranks first while still allowed, and its model and effort stay only on its runner. */
+  async createTask(id: string, input: ManagerCreateTaskInput, retry?: { runner?: string; agentProfile?: string; allowed: boolean }): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const readOnly = managerAccessOf(scope.manager, input.projectId) === 'read';
@@ -2918,13 +2919,16 @@ export class ManagerEngine {
     let fallback: Array<{ provider: RunnerId; profileId: string }> | undefined;
     if (agents && candidates) {
       // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
-      const rank = (agent: ManagerTaskAgent) => (prefer && agent.runner === prefer.runner && agent.agentProfile === prefer.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
+      const rank = (agent: ManagerTaskAgent) => (retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
       const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
       const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
       choice = chooseTaskAgent(options, { explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now });
       const picked = choice.chosen;
-      fallback = allowed.filter((option) => option !== picked && !(option.runner === picked.runner && option.account === picked.account))
+      // An explicit --runner or --account keeps a usage-limit fallback on that runner.
+      const sameRunner = input.runner !== undefined || input.agentProfile !== undefined;
+      fallback = allowed.filter((option) => option !== picked && !(option.runner === picked.runner && option.account === picked.account)
+        && (!sameRunner || option.runner === picked.runner))
         .map((option) => ({ provider: option.runner, profileId: option.account }));
     }
     const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
@@ -2934,7 +2938,7 @@ export class ManagerEngine {
     if (accountIssue) return accountIssue;
     choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
     // A retry moved to another runner keeps none of the old runner's model and effort.
-    const carried = !prefer || prefer.runner === undefined || prefer.runner === runner ? input : { ...input, model: undefined, effort: undefined };
+    const carried = !retry || retry.runner === undefined || retry.runner === runner ? input : { ...input, model: undefined, effort: undefined };
     const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
     if (carried.model || carried.effort) {
       const issue = await this.modelIssue(runner, carried.model, carried.effort);
@@ -3136,7 +3140,7 @@ export class ManagerEngine {
       ...(pinned && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
-    }, allowed ? { runner: run.runner, agentProfile: run.agentProfile } : undefined);
+    }, { runner: run.runner, agentProfile: run.agentProfile, allowed });
     if (!('error' in created)) this.managerActed(id, { tasks: [followKey(input.projectId, run.id)] }, 'you retried that task since');
     return created;
   }

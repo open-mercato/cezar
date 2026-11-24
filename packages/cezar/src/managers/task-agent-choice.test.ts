@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest';
+import { chooseTaskAgent, type AccountOption } from './task-agent-choice.ts';
+
+const NOW = Date.parse('2099-01-01T00:00:00.000Z');
+const LATER = NOW + 3_600_000;
+const SOONER = NOW + 600_000;
+const first: AccountOption = { runner: 'claude', agentProfile: 'first', account: 'first', label: 'Work' };
+const second: AccountOption = { runner: 'claude', agentProfile: 'second', account: 'second', label: 'Home' };
+const automatic: AccountOption = { runner: 'codex', account: 'default', label: 'default account' };
+const held = (option: AccountOption, until: number): AccountOption => ({ ...option, until });
+
+describe('chooseTaskAgent', () => {
+  it('keeps the list order: the first account with capacity', () => {
+    expect(chooseTaskAgent([first, second], { explicitAccount: false, fromSettings: true, now: NOW }))
+      .toEqual({ chosen: first, reason: 'default from manager settings: claude Work' });
+  });
+
+  it('skips an out-of-limits account for the next one and says so', () => {
+    const choice = chooseTaskAgent([held(first, LATER), second], { explicitAccount: false, fromSettings: true, now: NOW });
+    expect(choice.chosen).toBe(second);
+    expect(choice.reason).toBe('default from manager settings: claude Work out of limits until 2099-01-01T01:00:00.000Z, used claude Home');
+    expect(choice.queuedUntil).toBeUndefined();
+  });
+
+  it('a hold that already expired is capacity', () => {
+    expect(chooseTaskAgent([held(first, NOW - 1), second], { explicitAccount: false, fromSettings: true, now: NOW }).chosen.account).toBe('first');
+  });
+
+  it('every account exhausted: the one that resets first, queued', () => {
+    const choice = chooseTaskAgent([held(first, LATER), held(second, SOONER)], { explicitAccount: false, fromSettings: true, now: NOW });
+    expect(choice.chosen.account).toBe('second');
+    expect(choice.queuedUntil).toBe(SOONER);
+    expect(choice.reason).toContain('every allowed account is out of limits');
+    expect(choice.warning).toBeUndefined();
+  });
+
+  it('an explicit account wins; out of limits it queues and names a free allowed one', () => {
+    const limited = held(first, LATER);
+    const choice = chooseTaskAgent([limited], { explicitAccount: true, fromSettings: true, allowed: [limited, second], now: NOW });
+    expect(choice.chosen).toBe(limited);
+    expect(choice.queuedUntil).toBe(LATER);
+    expect(choice.warning).toBe('claude Work is out of usage limits until 2099-01-01T01:00:00.000Z; claude Home has capacity (--runner claude --account second)');
+    expect(chooseTaskAgent([first], { explicitAccount: true, fromSettings: true, allowed: [first, second], now: NOW }))
+      .toEqual({ chosen: first, reason: 'explicit --account' });
+  });
+
+  it('an explicit account with no free alternative queues without a warning', () => {
+    const choice = chooseTaskAgent([held(first, LATER)], { explicitAccount: true, fromSettings: true, allowed: [held(first, LATER), held(second, SOONER)], now: NOW });
+    expect(choice.warning).toBeUndefined();
+    expect(choice.queuedUntil).toBe(LATER);
+  });
+
+  it('the automatic account: no --account in the suggested flags, and Automatic selection named', () => {
+    expect(chooseTaskAgent([automatic], { explicitAccount: false, fromSettings: false, now: NOW }))
+      .toEqual({ chosen: automatic, reason: 'automatic selection: codex default account' });
+    const choice = chooseTaskAgent([held(first, LATER)], { explicitAccount: true, fromSettings: true, allowed: [held(first, LATER), automatic], now: NOW });
+    expect(choice.warning).toContain('codex default account has capacity (--runner codex)');
+  });
+
+  it('refuses an empty candidate list', () => {
+    expect(() => chooseTaskAgent([], { explicitAccount: false, fromSettings: true, now: NOW })).toThrow();
+  });
+});

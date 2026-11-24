@@ -4189,6 +4189,15 @@ export class RunManager {
       return;
     }
     this.store.updateRun(runId, { status: 'failed', finishedAt: new Date().toISOString(), fallbackEpisode: { attempted: [...attempted], done: true } });
+    // A manager's list ran out (signed out, removed, disabled): wait for the reset as without fallback.
+    if (snapshot.source === 'manager' && startFailure === undefined) {
+      const failed = this.store.getRun(runId);
+      if (failed && parseUsageLimit(failed.error)) {
+        this.store.appendEvent(runId, { type: 'note', message: 'no other account in the manager’s settings for new tasks can continue now' });
+        this.armUsageLimitResume(failed);
+        if (this.store.getRun(runId)?.autoResumeAt) return;
+      }
+    }
     const resets = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > Date.now())
       .map((hold) => `${label(hold.account)} resets at ${formatWakeInstant(new Date(hold.until))}`).join('; ');
     this.store.appendEvent(runId, {
