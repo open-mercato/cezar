@@ -161,7 +161,7 @@ import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEO
 import { assessedWithoutChanges, diffHasChanges, reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveAccountId, resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { recordedProfileFor } from '../server/recorded-profile.ts';
-import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID, defaultAgentAccountStore, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
 import {
   candidateKey,
   eligibleFallbackCandidates,
@@ -1066,6 +1066,18 @@ function autoResumeCap(reason: AutoResumeReason | undefined, error?: string): nu
  * copy lives on `RunRecord.autoResumeAt`. Server-side formatting is honest here because cezar is
  * local-first: the process and the browser reading it are the same machine.
  */
+/** A dispatched child's copy of its parent's manager policy: on the child's runner a fallback keeps
+ *  the CHILD's model (or the runner default), never the parent's. */
+function childFallbackPolicy(policy: NonNullable<RunRecord['fallbackPolicy']>, runner: RunnerId, model: string | undefined): NonNullable<RunRecord['fallbackPolicy']> {
+  return {
+    ...policy,
+    candidates: policy.candidates.map(({ model: parentModel, ...candidate }) => ({
+      ...candidate,
+      ...(candidate.provider === runner ? (model ? { model } : {}) : parentModel ? { model: parentModel } : {}),
+    })),
+  };
+}
+
 function formatWakeInstant(at: Date): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'long' }).format(at);
 }
@@ -1103,7 +1115,7 @@ export interface StartRunInput {
   inheritedFallbackPolicy?: RunRecord['fallbackPolicy'];
   /** The manager's agent choice: a timeline note, and its other allowed accounts for a usage limit
    *  (absent: the project's own fallback policy). */
-  managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string }> };
+  managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string; model?: string }> };
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -3630,7 +3642,8 @@ export class RunManager {
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       ...(parent.startedByManager ? { startedByManager: parent.startedByManager } : {}),
       // Never the project's policy: that could move the child to an account outside the manager's list.
-      ...(parent.startedByManager && parent.fallbackPolicy?.source === 'manager' ? { inheritedFallbackPolicy: parent.fallbackPolicy } : {}),
+      ...(parent.startedByManager && parent.fallbackPolicy?.source === 'manager'
+        ? { inheritedFallbackPolicy: childFallbackPolicy(parent.fallbackPolicy, childRunner ?? 'claude', childModel) } : {}),
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
@@ -4100,8 +4113,11 @@ export class RunManager {
     // Admission's own filter (held, removed, out of the manager's list). An unread accounts file
     // cannot prove removal here; admission re-checks it, plus disabled providers and sign-in, and
     // arms the reset-time resume when nothing is left.
-    const accounts = this.accountStore ?? { accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider })) } as unknown as AgentAccountStore;
-    return eligibleFallbackCandidates(policy, attempted, held, accounts).eligible.length > 0;
+    const accounts = this.accountStore ?? {
+      ...defaultAgentAccountStore(),
+      accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider, configDir: '', label: '', addedAt: '' })),
+    } as AgentAccountStore;
+    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot).eligible.length > 0;
   }
 
   private finishFallbackAdmission(runId: string, message: string): void {
@@ -4156,7 +4172,7 @@ export class RunManager {
     if (startFailure === undefined && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
-    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts);
+    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot);
     for (const skip of skipped) {
       attempted.add(candidateKey(skip.candidate));
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(candidateKey(skip.candidate))} — ${skip.reason}` });

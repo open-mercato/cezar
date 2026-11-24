@@ -284,6 +284,15 @@ describe('automatic agent fallback', () => {
       expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
     }, 40_000);
 
+    it('a bare { runner } left in the list is the default account only, so a removed named account is not a target', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => [{ runner: 'claude' }]);
+      manager = new RunManager(store, repoRoot);
+      const started = managerTask([{ provider: 'claude', profileId: 'second' }]);
+      await resumesAtReset(started.id);
+      expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
+    }, 40_000);
+
     it('still falls back while the account is in the manager’s current list', async () => {
       registerAccounts(['second']);
       setManagerTaskAccountsLookup(() => [{ runner: 'claude', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'second' }]);
@@ -307,6 +316,25 @@ describe('automatic agent fallback', () => {
         expect(policy).toEqual(store.getRun(parent.id)?.fallbackPolicy);
         expect(policy).toMatchObject({ source: 'manager', managerId: 'm1', enabled: fallback.length > 0 });
       }
+    }, 40_000);
+
+    it('a dispatched child with its own model keeps it on a same-runner fallback, not the parent’s', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const parent = manager.startRun(workflow, {
+        task: 'mock:monitoring waiting on my tasks', model: 'opus', startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'second', model: 'opus' }] },
+      });
+      store.updateRun(parent.id, { dispatch: { rootRunId: parent.id } });
+      await until(() => store.getRun(parent.id)?.activity === 'monitoring', 'parent parked');
+      const own = manager.dispatch(parent.id, { objective: 'mock:done child', model: 'sonnet' });
+      if ('refused' in own) throw new Error(own.refused);
+      expect(store.getRun(own.id)?.fallbackPolicy?.candidates).toEqual([{ provider: 'claude', profileId: 'second', model: 'sonnet' }]);
+      // A child that names no model inherits the parent's on the same runner, and its fallback with it.
+      const inherited = manager.dispatch(parent.id, { objective: 'mock:done child two' });
+      if ('refused' in inherited) throw new Error(inherited.refused);
+      expect(store.getRun(inherited.id)?.model).toBe('opus');
+      expect(store.getRun(inherited.id)?.fallbackPolicy?.candidates).toEqual([{ provider: 'claude', profileId: 'second', model: 'opus' }]);
     }, 40_000);
 
     it('the limit a manager sees is the semaphore’s merged deadline under the queue’s own key', async () => {

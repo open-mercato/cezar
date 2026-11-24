@@ -211,10 +211,8 @@ import { managerAccountLimit } from '../managers/account-limit.ts';
 /** Proves a request came from this process's manager engine (`POST /runs` `managerAgent`). Never leaves the process. */
 const MANAGER_AGENT_HEADER = 'x-cezar-manager-agent';
 const MANAGER_AGENT_TOKEN = randomUUID();
-function managerAgentTokenMatches(value: string | undefined): boolean {
-  return value !== undefined && value.length === MANAGER_AGENT_TOKEN.length
-    && timingSafeEqual(Buffer.from(value), Buffer.from(MANAGER_AGENT_TOKEN));
-}
+// Byte lengths, not string lengths: a non-ASCII header must be a 403, never a timingSafeEqual throw.
+const managerAgentTokenMatches = (value: string | undefined): boolean => matchesPrivateToken(value, MANAGER_AGENT_TOKEN);
 import {
   createManagedAccountDir,
   isManagedAccountDir,

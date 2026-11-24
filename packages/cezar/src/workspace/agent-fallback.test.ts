@@ -13,7 +13,7 @@ import {
   setManagerTaskAccountsLookup,
   type AgentFallbackPolicy,
 } from './agent-fallback.ts';
-import type { AgentAccountStore } from './agent-accounts.ts';
+import { defaultAgentAccountStore, type AgentAccountStore } from './agent-accounts.ts';
 
 let home: string;
 let repo: string;
@@ -236,7 +236,20 @@ describe('a manager fallback policy', () => {
     expect(eligibleFallbackCandidates(policy, new Set(), new Set(), accounts)).toEqual({
       eligible: [], skipped: [{ candidate: policy.candidates[0], reason: 'no longer in the manager’s settings for new tasks' }],
     });
-    setManagerTaskAccountsLookup(() => [{ runner: 'claude' }]);
+    setManagerTaskAccountsLookup(() => [{ runner: 'claude', agentProfile: 'second' }]);
     expect(eligibleFallbackCandidates(policy, new Set(), new Set(), accounts).eligible).toHaveLength(1);
+  });
+
+  it('a bare { runner } entry is that runner’s resolved default account, not every account on it', () => {
+    const store = { ...defaultAgentAccountStore(), accounts: [{ id: 'second', provider: 'claude', configDir: '/x', label: 'Second', addedAt: '' }] } as AgentAccountStore;
+    setManagerTaskAccountsLookup(() => [{ runner: 'claude' }]);
+    expect(eligibleFallbackCandidates(policy, new Set(), new Set(), store, '/repo')).toEqual({
+      eligible: [], skipped: [{ candidate: policy.candidates[0], reason: 'no longer in the manager’s settings for new tasks' }],
+    });
+    const toDefault = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }], 'm1');
+    expect(eligibleFallbackCandidates(toDefault, new Set(), new Set(), store, '/repo').eligible).toHaveLength(1);
+    // The project's selection makes `second` the default: then the bare entry is `second`.
+    const selected = { ...store, selections: { '/repo': { claude: 'second' } } } as unknown as AgentAccountStore;
+    expect(eligibleFallbackCandidates(policy, new Set(), new Set(), selected, '/repo').eligible).toHaveLength(1);
   });
 });

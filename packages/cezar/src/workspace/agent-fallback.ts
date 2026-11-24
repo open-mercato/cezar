@@ -15,6 +15,7 @@ import { agentFallbackPolicyPath, assertCezarHomeWriteIsSandboxed } from '../pat
 import { atomicWriteJsonSync } from './config.ts';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from './agent-accounts.ts';
+import { resolveAccountId } from './agent-profiles.ts';
 
 export type AgentFallbackCandidate = { provider: ProviderId; profileId: string; model?: string };
 export type AgentFallbackPolicy = {
@@ -37,8 +38,17 @@ export function setManagerTaskAccountsLookup(lookup: ManagerTaskAccountsLookup |
 function currentManagerList(snapshot: AgentFallbackPolicy) {
   return snapshot.managerId && managerTaskAccounts ? managerTaskAccounts(snapshot.managerId) : undefined;
 }
-const inManagerList = (list: ReadonlyArray<{ runner: string; agentProfile?: string }>, c: AgentFallbackCandidate) =>
-  list.some((entry) => entry.runner === c.provider && (entry.agentProfile === undefined || entry.agentProfile === c.profileId));
+/** A bare `{ runner }` entry is that runner's resolved default account — the one the manager engine
+ *  resolves for it (`resolveAccountId`, as the queue's key does) — never every account on the runner. */
+function inManagerList(
+  list: ReadonlyArray<{ runner: string; agentProfile?: string }>,
+  c: AgentFallbackCandidate,
+  accounts: AgentAccountStore | null,
+  repoRoot: string | undefined,
+): boolean {
+  return list.some((entry) => entry.runner === c.provider && (entry.agentProfile
+    ?? (accounts ? resolveAccountId(accounts, { provider: c.provider, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID)) === c.profileId);
+}
 
 const candidateSchema = z.object({
   provider: z.enum(PROVIDER_IDS),
@@ -285,6 +295,8 @@ export function eligibleFallbackCandidates(
   attempted: ReadonlySet<string>,
   heldAccounts: ReadonlySet<string>,
   accounts: AgentAccountStore | null,
+  /** The task's project: a bare manager entry resolves to this project's default account. */
+  repoRoot?: string,
 ): { eligible: AgentFallbackCandidate[]; skipped: FallbackSkip[] } {
   const eligible: AgentFallbackCandidate[] = [];
   const skipped: FallbackSkip[] = [];
@@ -293,7 +305,7 @@ export function eligibleFallbackCandidates(
   for (const candidate of policy.candidates) {
     const key = candidateKey(candidate);
     if (attempted.has(key)) continue;
-    if (managerList === null || (managerList && !inManagerList(managerList, candidate))) {
+    if (managerList === null || (managerList && !inManagerList(managerList, candidate, accounts, repoRoot))) {
       skipped.push({ candidate, reason: 'no longer in the manager’s settings for new tasks' }); continue;
     }
     if (heldAccounts.has(key)) { skipped.push({ candidate, reason: 'waiting out its own usage limit' }); continue; }

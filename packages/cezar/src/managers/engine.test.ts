@@ -3395,6 +3395,17 @@ describe('ManagerEngine', () => {
         expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'first', model: 'opus' });
       });
 
+      it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
+        const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({
+          runner: 'codex',
+          managerAgent: { fallback: [{ provider: 'claude', profileId: 'first', model: 'opus' }, { provider: 'claude', profileId: 'second', model: 'opus' }] },
+        });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      });
+
       it('a same-runner fallback keeps the requested model; another runner starts on its own default', async () => {
         const engine = limited({});
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);

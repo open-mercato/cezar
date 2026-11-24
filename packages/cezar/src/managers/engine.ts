@@ -2948,10 +2948,12 @@ export class ManagerEngine {
       const dropped = [input.model && `--model ${input.model}`, input.effort && `--effort ${input.effort}`].filter(Boolean).join(' and ');
       choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: meant for ${intendedRunner}, not ${runner}` };
     }
-    // The requested model follows a fallback on the same runner; another runner starts on its own default.
+    // The requested model follows a fallback on the runner it was written for, even when a limit skip
+    // landed the task elsewhere; any other runner starts on its own default.
+    const modelRunner = intendedRunner ?? runner;
     const fallback = fallbackOptions?.map((option) => ({
       provider: option.runner, profileId: option.account,
-      ...(carried.model && option.runner === runner ? { model: carried.model } : {}),
+      ...(input.model && option.runner === modelRunner ? { model: input.model } : {}),
     }));
     const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
     if (carried.model || carried.effort) {
