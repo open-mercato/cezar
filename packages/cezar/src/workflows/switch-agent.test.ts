@@ -4,12 +4,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AGENT_MODELS_LOCKED_ENV } from '../core/agent-model-policy.ts';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { compileV1, graphToSteps } from './graph.ts';
+import { READ_ONLY_TOOLS } from './landing.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -391,6 +393,28 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     ]);
   });
 
+  it.each([false, true])('switches the account on Continue with the expected model and effort (locked: %s)', async (locked) => {
+    vi.stubEnv(AGENT_MODELS_LOCKED_ENV, locked ? '1' : '0');
+    await addWorkAccount('codex');
+    const id = finishedRun();
+    store.updateRun(id, { runner: 'codex', model: 'gpt-5.1-codex', reasoningEffort: 'low' });
+    store.updateStep(id, 'work', {
+      backend: 'codex', profileId: 'default', model: selection.model, reasoningEffort: selection.reasoningEffort,
+    });
+    const accountSwitch = { runner: 'codex', agentProfile: 'work', changedBy: selection.changedBy } as const;
+    if (locked) {
+      expect(manager.switchAgent(id, { ...accountSwitch, model: selection.model })).toHaveProperty('error', expect.stringContaining('models are locked'));
+    }
+    expect(manager.switchAgent(id, accountSwitch)).toHaveProperty('summary');
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { resume: false } });
+    expect(sessions[0]!.spec.model).toBe(locked ? undefined : selection.model);
+    expect(sessions[0]!.spec.reasoningEffort).toBe(locked ? undefined : selection.reasoningEffort);
+    expect(store.getRun(id)?.steps.at(-1)).toMatchObject({ id: 'continue-1', profileId: 'work' });
+    sessions[0]!.settle();
+    await expectFinished(id, ['work', 'continue-1']);
+  });
+
   it.each(['starting', 'prepare', 'lease'] as const)('keeps a dequeued Continue through a switch while it awaits %s', async (phase) => {
     const id = finishedRun();
     const tree = join(root, 'existing-worktree');
@@ -706,12 +730,51 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)?.agentSwitch?.checkRepair).toBeUndefined();
   });
 
-  it('gives the repaired check a fresh onFail retry budget', async () => {
-    const withRetries = { ...workflow, steps: [
-      workflow.steps[0]!,
-      { id: 'verify', command: 'test -f ready', onFail: { retry: 'work', max: 1 } },
-      workflow.steps[1]!,
+  it.each(['saved', 'last agent', 'read-only'] as const)('keeps the %s tool policy on a failed-check repair spawn', async (policy) => {
+    const workerTools = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['npm test'] };
+    const reviewTools = { allowedTools: ['Read', 'Grep', 'Bash'], bashAllowlist: ['git diff'] };
+    const definition = { ...workflow, steps: [
+      { ...workflow.steps[0]!, ...workerTools },
+      { id: 'verify', command: 'test -f ready' },
+      { ...workflow.steps[1]!, ...reviewTools },
     ] } satisfies WorkflowDef;
+    const readOnly = policy === 'read-only';
+    const { id } = manager.startRun(definition, {
+      task: 'Implement it', ...(readOnly ? { worktree: false, readOnly: true, enforceReadOnly: true } : {}),
+    });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    if (!readOnly) expect(sessions[0]!.spec).toMatchObject(workerTools);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)?.status).toBe('failed');
+    // Legacy steps may lack the snapshot. A persisted enforcement flag must still apply
+    // when the surrounding run is writable.
+    store.updateStep(id, 'work', { toolPolicy: policy === 'saved' ? { ...workerTools, enforceReadOnly: true } : undefined });
+    expect(manager.switchAgent(id, { runner: 'claude', agentProfile: 'default', changedBy: selection.changedBy })).toHaveProperty('summary');
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]!.spec.userPrompt).toContain('fixing the failed check "verify"');
+    const expected = readOnly ? { allowedTools: READ_ONLY_TOOLS, enforceReadOnly: true }
+      : policy === 'saved' ? { ...workerTools, enforceReadOnly: true } : reviewTools;
+    expect(sessions[1]!.spec).toMatchObject(expected);
+    if (readOnly) expect(sessions[1]!.spec.bashAllowlist).toBeUndefined();
+    if ('enforceReadOnly' in expected && expected.enforceReadOnly) {
+      expect(sessions[1]!.spec.env?.GH_TOKEN).toBe('');
+      expect(sessions[1]!.spec.mcpServers).toEqual([]);
+      expect(sessions[1]!.spec.bypassPermissions).toBeUndefined();
+    }
+    expect(store.getRun(id)?.steps.at(-1)?.toolPolicy).toEqual(expected);
+  });
+
+  it.each(['step list', 'saved graph'] as const)('gives the repaired check a fresh onFail retry budget (%s)', async (format) => {
+    const workerTools = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['npm test'] };
+    const base = { ...workflow, steps: [
+      { ...workflow.steps[0]!, ...workerTools },
+      { id: 'verify', command: 'test -f ready || exit 7', onFail: { retry: 'work', max: 1, retryOn: [7] } },
+      { ...workflow.steps[1]!, allowedTools: ['Read'], bashAllowlist: [] },
+    ] } satisfies WorkflowDef;
+    const savedGraph = format === 'saved graph';
+    const graph = compileV1(base.steps);
+    const withRetries = savedGraph ? { ...base, graph, steps: graphToSteps(graph) } : base;
     const { id } = manager.startRun(withRetries, { task: 'Implement it' });
     for (let count = 1; count <= 2; count++) {
       await vi.waitFor(() => expect(sessions).toHaveLength(count), wait);
@@ -719,23 +782,36 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     }
     await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'failed' }), wait);
     await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
-    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')).toMatchObject({ retriesUsed: 1, iterations: 2 });
+    if (savedGraph) {
+      // Recover a graph whose retry loop was exhausted, with legacy steps that have no tool snapshot.
+      store.updateStep(id, 'work', { toolPolicy: undefined });
+      await restart();
+      expect(store.getRun(id)?.workflowDef?.graph).toBeDefined();
+    }
+    const retriesUsed = () => savedGraph
+      ? store.getRun(id)?.graphState?.loops['verify-retry']
+      : store.getRun(id)?.steps.find((step) => step.id === 'verify')?.retriesUsed;
+    // The saved graph counts the exhausting visit too. The v1 step counts actual retries.
+    expect(retriesUsed()).toBe(savedGraph ? 2 : 1);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.iterations).toBe(2);
     expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
     const repairId = store.getRun(id)?.agentSwitch?.checkRepair?.stepId;
     expect(repairId).toBeTruthy();
     await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
-    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.retriesUsed).toBe(0);
+    expect(retriesUsed()).toBe(0);
     expect(sessions[2]!.spec.userPrompt).toContain('fixing the failed check "verify"');
+    expect(sessions[2]!.spec).toMatchObject(workerTools);
     sessions[2]!.settle();
     await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
     expect(store.getRun(id)?.currentStepId).toBe('work');
-    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.retriesUsed).toBe(1);
+    expect(retriesUsed()).toBe(1);
     writeFileSync(join(sessions[3]!.spec.cwd, 'ready'), '');
     sessions[3]!.settle();
     await vi.waitFor(() => expect(sessions).toHaveLength(5), wait);
     sessions[4]!.settle();
     await expectFinished(id, ['work', 'verify', 'review', repairId!]);
-    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')).toMatchObject({ retriesUsed: 1, iterations: 4 });
+    expect(retriesUsed()).toBe(1);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.iterations).toBe(4);
   });
 
   it('retries a failed task with no prior session through its original workflow', async () => {

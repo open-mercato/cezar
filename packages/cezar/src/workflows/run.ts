@@ -791,6 +791,26 @@ interface ActiveRun {
   };
 }
 
+function savedContinuationTools(run: RunRecord | undefined, owner?: StepState): StepToolPolicy | undefined {
+  return owner ? owner.toolPolicy : [...(run?.steps ?? [])].reverse().find((step) => step.kind === 'agent' && step.toolPolicy)?.toolPolicy;
+}
+
+function resolveAgentStepTools(
+  state: Pick<ActiveRun, 'readOnly' | 'enforceReadOnly'>,
+  definition?: Pick<WorkflowStepDef, 'allowedTools' | 'bashAllowlist'>,
+  saved?: StepToolPolicy,
+): StepToolPolicy {
+  const enforceReadOnly = state.enforceReadOnly || saved?.enforceReadOnly;
+  const enforcement = enforceReadOnly ? { enforceReadOnly: true } : {};
+  if (state.readOnly) return { allowedTools: [...READ_ONLY_TOOLS], ...enforcement };
+  if (saved) return { ...saved, ...enforcement };
+  return {
+    allowedTools: [...(definition?.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
+    ...(definition?.bashAllowlist !== undefined ? { bashAllowlist: [...definition.bashAllowlist] } : {}),
+    ...enforcement,
+  };
+}
+
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
  *  Turns taken while the run supervises progressing children spend `MAX_SUPERVISED_CONTINUES`
  *  instead (spec 2026-09-10-dispatch, A15). Exported so the tests assert against the real cap
@@ -6708,20 +6728,13 @@ export class RunManager {
         ? undefined
         : defSteps.find((s) => s.id === owningStep?.id)
           ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
-    const savedTools = owningStep?.toolPolicy ?? (!owningStep
-      ? [...(record?.steps ?? [])].reverse().find(s => s.kind === 'agent' && s.toolPolicy)?.toolPolicy : undefined);
+    const savedTools = savedContinuationTools(record, owningStep);
     if (continueBackend === 'codex' && record?.workflowDef?.graph && !savedTools &&
       (!owningStep || (!owningStep.id.startsWith('continue-') && !defSteps?.some(s => s.id === owningStep.id)))) {
       failBeforeSpawn('codex: cannot restore this legacy graph step’s tool policy safely; start a new restricted task');
       return;
     }
-    const continuationTools: StepToolPolicy = state.readOnly ? {
-      allowedTools: [...READ_ONLY_TOOLS], ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
-    } : savedTools ?? {
-      allowedTools: [...(toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
-      ...(toolsStep?.bashAllowlist !== undefined ? { bashAllowlist: [...toolsStep.bashAllowlist] } : {}),
-      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
-    };
+    const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
@@ -7529,7 +7542,14 @@ export class RunManager {
     const repair = repairRun?.agentSwitch?.checkRepair;
     if (repairRun && repair && resumeNode?.id === repair.checkId && !state.cancelled) {
       const step = { id: repair.stepId, name: 'Repair failed check', model: repairRun.model };
-      const iteration = (repairRun.steps.find((candidate) => candidate.id === step.id)?.iterations ?? 0) + 1;
+      const repairStep = repairRun.steps.find((candidate) => candidate.id === step.id);
+      const savedTools = repairStep?.toolPolicy ?? savedContinuationTools(repairRun);
+      const failureTarget = graph.nodes.find((node) => node.id === edgeFrom(graph, repair.checkId, 'fail')?.to);
+      const retryId = failureTarget?.type === 'loop' ? edgeFrom(graph, failureTarget.id, 'repeat')?.to : failureTarget?.id;
+      const retryNode = graph.nodes.find((node) => node.id === retryId);
+      const toolsStep = retryNode?.type === 'agent' ? retryNode
+        : [...(repairRun.workflowDef?.steps ?? [])].reverse().find((candidate) => stepKind(candidate) === 'agent');
+      const iteration = (repairStep?.iterations ?? 0) + 1;
       this.store.updateRun(runId, { currentStepId: step.id });
       this.store.updateStep(runId, step.id, { status: 'running', iterations: iteration, startedAt: new Date().toISOString() });
       emit({ type: 'step-start', stepId: step.id, name: step.name, kind: 'agent', iteration });
@@ -7540,10 +7560,14 @@ export class RunManager {
       const interrupted = ctx.usageLimitResume?.id === step.id ? ctx.usageLimitResume : undefined;
       const resumeSessionId = RESUMABLE_BACKENDS.has(taskBackend) ? interrupted?.sessionId : undefined;
       const failure = await this.runAgentStep(runId, state, {
-        ...step, prompt: `Continue by fixing the failed check "${label}" in this worktree before verification runs again.\n\n{{task}}`,
+        ...step,
+        allowedTools: toolsStep?.allowedTools,
+        bashAllowlist: toolsStep?.bashAllowlist,
+        prompt: `Continue by fixing the failed check "${label}" in this worktree before verification runs again.\n\n{{task}}`,
       }, input, skills, this.store.redactRunText(runId, output), false, emit, startImages, taskBackend, extraSystemPrompt, undefined, startAttachments, {
         resumeSessionId,
         usageLimitResume: interrupted,
+        savedTools,
         portableContext: resumeSessionId ? undefined : freshContinuationContext(repairRun, events, this.attachmentsDir(runId)),
         workflowAgent: { agentProfile: repairRun.agentProfile, replaced: true },
       });
@@ -8892,6 +8916,7 @@ export class RunManager {
       usageLimitResume?: StepState;
       portableContext?: string;
       workflowAgent?: { agentProfile?: string; replaced: boolean };
+      savedTools?: StepToolPolicy;
     },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
@@ -9340,11 +9365,7 @@ export class RunManager {
       const refusal = readOnlyWorkflowRefusal(stepDef, stepBackend);
       if (refusal) return refusal;
     }
-    const stepTools: StepToolPolicy = {
-      allowedTools: [...(state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS)],
-      ...(!state.readOnly && step.bashAllowlist !== undefined ? { bashAllowlist: [...step.bashAllowlist] } : {}),
-      ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
-    };
+    const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools);
     this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
@@ -9376,16 +9397,16 @@ export class RunManager {
           images,
           cwd: state.cwd,
           ...stepTools,
-          ...(state.bypassPermissions ? { bypassPermissions: true } : {}),
+          ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             stepProfile.env,
           ),
-          env: state.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
+          env: stepTools.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
           onUsageWindows: stepProfile.onUsageWindows,
-          mcpServers: state.enforceReadOnly ? [] : stepMcp,
+          mcpServers: stepTools.enforceReadOnly ? [] : stepMcp,
           model: backendModel,
           reasoningEffort,
           sessionId: launchSessionId,
