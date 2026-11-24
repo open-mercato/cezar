@@ -562,7 +562,12 @@ export async function runManagerCommand(
           if (created.agent) {
             const { agent } = created;
             io.log(`agent: --runner ${agent.runner}${agent.agentProfile ? ` --account ${agent.agentProfile}` : ' (automatic account)'} — ${agent.label}; ${agent.reason}`);
-            if (agent.queuedUntil) io.log(`queued: no allowed account has capacity; the task starts when ${agent.label} resets at ${agent.queuedUntil}`);
+            // A warning means another allowed account is free: only this explicit one is waiting.
+            if (agent.queuedUntil) {
+              io.log(created.warning
+                ? `queued: ${agent.label} is out of usage limits; the task starts when it resets at ${agent.queuedUntil}`
+                : `queued: no allowed account has capacity; the task starts when ${agent.label} resets at ${agent.queuedUntil}`);
+            }
           }
           if (created.warning) io.log(`warning: ${created.warning}`);
           return 0;

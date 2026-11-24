@@ -206,6 +206,7 @@ import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
+import { managerAccountLimit } from '../managers/account-limit.ts';
 import {
   createManagedAccountDir,
   isManagedAccountDir,
@@ -374,7 +375,6 @@ import {
   defaultAgentProfile,
   listAgentProfiles,
   profileDirState,
-  resolveAccountId,
   resolveProfileEnvForRoot,
   resolveStoredProfile,
   sameProfileDir,
@@ -9198,17 +9198,7 @@ export function createApp(deps: ServerDeps) {
       return 'error' in account ? account.error : null;
     },
     // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
-    accountLimit: async (runner, agentProfile, repoRoot) => {
-      const store = await loadAgentAccounts().catch(() => undefined);
-      const account = agentProfile ?? (store ? resolveAccountId(store, { provider: runner, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID);
-      const named = store?.accounts.find((entry) => entry.id === account && entry.provider === runner);
-      const until = deps.semaphore?.accountHolds().deadlines?.get(`${runner}:${account}`);
-      return {
-        account,
-        label: named?.label || (account === DEFAULT_AGENT_ACCOUNT_ID ? 'default account' : account),
-        ...(until !== undefined && until > Date.now() ? { until } : {}),
-      };
-    },
+    accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
       return managerLoopback.request(path, init);

@@ -238,9 +238,18 @@ describe('cez manager', () => {
     expect(logs).toEqual([
       '[[task:alpha/new]]',
       'agent: --runner claude --account first — Work; explicit --account; claude Work is out of limits',
-      'queued: no allowed account has capacity; the task starts when Work resets at 2099-01-01T05:00:00.000Z',
+      'queued: Work is out of usage limits; the task starts when it resets at 2099-01-01T05:00:00.000Z',
       `warning: ${reply.warning}`,
     ]);
+    // Without a free alternative there is no warning, and the queue line says so.
+    const { warning: _warning, ...exhausted } = reply;
+    const allHeld = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/tasks')
+      ? Response.json(exhausted, { status: 201 })
+      : Response.json(snapshot)) as unknown as typeof fetch;
+    const second = harness({}, {}, [], { fetch: allHeld });
+    expect(await second.run('task', 'create', '--project', 'alpha', 'Do it')).toBe(0);
+    expect(second.logs).toContain('queued: no allowed account has capacity; the task starts when Work resets at 2099-01-01T05:00:00.000Z');
+    expect(second.logs.some((line) => line.startsWith('warning:'))).toBe(false);
     logs.length = 0;
     expect(await run('status')).toBe(0);
     expect(logs).toContain('account  --runner claude --account first  Work  out of usage limits until 2099-01-01T05:00:00.000Z');

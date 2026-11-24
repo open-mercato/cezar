@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cezarHomeDir } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
 import { putAgentFallbackPolicy, type AgentFallbackPolicy } from '../workspace/agent-fallback.ts';
-import { RunManager } from './run.ts';
+import { RunManager, setFallbackProviderCheck } from './run.ts';
+import { managerAccountLimit } from '../managers/account-limit.ts';
 import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -72,6 +73,7 @@ describe('automatic agent fallback', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    setFallbackProviderCheck(undefined);
     if (manager) {
       for (const { id } of store.listRuns()) manager.cancel(id);
       await until(() => store.listRuns().every(({ id }) => !manager?.isActive(id)), 'runs to stop');
@@ -190,6 +192,40 @@ describe('automatic agent fallback', () => {
       await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'auto-resume to arm');
       expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
       expect(store.getRun(started.id)?.status).toBe('failed');
+    }, 40_000);
+
+    it('keeps the reset-time auto-resume when the only other allowed account is signed out', async () => {
+      registerAccounts(['second']);
+      setFallbackProviderCheck(async (_provider, profileId) => (profileId === 'second' ? 'not signed in' : null));
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(workflow, {
+        task: 'mock:limit', worktree: false, startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'second' }] },
+      });
+      await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'auto-resume to arm');
+      const record = store.getRun(started.id);
+      expect(record?.status).toBe('failed');
+      expect(record?.agentProfile).toBeUndefined();
+      expect(messages(started.id)).toContain('fallback skipped claude · Second — not signed in');
+      expect(messages(started.id).some((m) => m.startsWith('no fallback agent could continue'))).toBe(false);
+      expect(messages(started.id).some((m) => m.startsWith('usage limit reached — resuming automatically'))).toBe(true);
+    }, 40_000);
+
+    it('reports the account limit under the key the queue holds, named and automatic accounts alike', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const named = manager.startRun(workflow, { task: 'mock:limit', worktree: false, agentProfile: 'second' });
+      const automatic = manager.startRun(workflow, { task: 'mock:limit', worktree: false });
+      await until(() => Boolean(store.getRun(named.id)?.autoResumeAt && store.getRun(automatic.id)?.autoResumeAt), 'both accounts held');
+      const holds = () => manager!.accountHolds();
+      const second = await managerAccountLimit(holds, 'claude', 'second', repoRoot);
+      expect(second).toMatchObject({ account: 'second', label: 'Second' });
+      expect(second.until).toBe(holds().deadlines?.get('claude:second'));
+      expect(second.until).toBeGreaterThan(Date.now());
+      const discovered = await managerAccountLimit(holds, 'claude', undefined, repoRoot);
+      expect(discovered).toMatchObject({ account: 'default', label: 'default account' });
+      expect(discovered.until).toBeGreaterThan(Date.now());
+      expect(await managerAccountLimit(holds, 'codex', undefined, repoRoot)).not.toHaveProperty('until');
     }, 40_000);
 
     it('an empty allowed remainder never falls back outside the list, even with project fallback on', async () => {
