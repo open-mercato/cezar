@@ -41,7 +41,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
-import { NowRoute } from './routes/now/now'
+import { NowRoute, nowScopeFromState } from './routes/now/now'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
 // Dashboard charts, drag controls and exports are paid for only on this route.
@@ -316,12 +316,11 @@ function LegacyPathRedirect() {
     // its project is still worth waiting for.
     if (projects.data === undefined && !projects.isError) return <ScopeResolving />
 
-    const restored = locationToRestore(
-      readStoredLastLocation(),
-      projects.data,
-      resolvedBoot,
-    )
-    if (restored !== null) return <Navigate to={restored} replace />
+    // A Now scope handoff (the bottom bar) asks for Now itself, not the last page this browser was on.
+    const restored = nowScopeFromState(location.state) === undefined
+      ? locationToRestore(readStoredLastLocation(), projects.data, resolvedBoot)
+      : null
+    if (restored !== null) return <Navigate to={restored} replace state={location.state} />
 
     // Nothing remembered. The boot folder is the landing project only while the registry lists
     // it: since `/api/v1/projects` stopped listing an unregistered boot folder once the user has
@@ -330,7 +329,7 @@ function LegacyPathRedirect() {
     // The most recently opened registered project is what the sidebar leads with, so it is what
     // a bare launch opens. `/p/<bootProject>/` and every legacy deep link below still resolve.
     const landing = bareRootLanding(projects.data, boot)
-    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace />
+    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace state={location.state} />
   }
 
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
@@ -340,6 +339,8 @@ function LegacyPathRedirect() {
     <Navigate
       to={`/p/${encodeURIComponent(boot)}${path}${location.search}${location.hash}`}
       replace
+      // A handoff in state (the bottom bar's Now scope) survives the hop into the project.
+      state={location.state}
     />
   )
 }

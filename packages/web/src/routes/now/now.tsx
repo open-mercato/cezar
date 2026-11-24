@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArchiveIcon, ArrowRightIcon, ListChecksIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import * as React from 'react'
+import { useLocation, useNavigate as useRouterNavigate } from 'react-router'
 
 import { archiveFinished, continueRun } from '@/api/client'
 import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@/api/queries'
@@ -708,6 +709,12 @@ function FinishedRowView({ run }: { run: RunRecord }) {
   )
 }
 
+/** `{ nowScope }` in a navigation's state, from the bottom bar's quick actions. */
+export function nowScopeFromState(state: unknown): NowScope | undefined {
+  const value = (state as { nowScope?: unknown } | null)?.nowScope
+  return value === 'all' || value === 'project' ? value : undefined
+}
+
 /**
  * Now wired to live data: `useRuns()` (kept fresh by the global SSE stream — no polling of its
  * own), the project's name from the registry, the archive-finished mutation the table uses, and
@@ -728,7 +735,7 @@ export function NowRoute() {
   }, [activeProjectId, health.data])
   const queryClient = useQueryClient()
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-  const archive = useMutation({ mutationFn: archiveFinished, onSuccess: invalidate })
+  const archive = useMutation({ mutationFn: () => archiveFinished(), onSuccess: invalidate })
   // An empty Continue is the footer's one-click retry; the idle-teardown retry window is the
   // ask card's (ask-answer.ts) — a stale row can hit `run is still active` a beat too early.
   const retry = useMutation({
@@ -760,6 +767,20 @@ export function NowRoute() {
   const managersOn = health.data?.capabilities?.managers === true
   const managers = useManagers(managersOn)
   const [scope, setScope] = React.useState<NowScope>(readNowScope)
+  // The bottom bar's "Needs you — all projects" quick action hands the scope over in history state,
+  // once: it is cleared from the entry so Back or a reload keeps the user's later choice.
+  const location = useLocation()
+  // The router's own navigate: `location.pathname` is already project-prefixed.
+  const navigate = useRouterNavigate()
+  const askedScope = nowScopeFromState(location.state)
+  React.useEffect(() => {
+    if (askedScope === undefined) return
+    setScope(askedScope)
+    saveNowScope(askedScope)
+    const rest: Record<string, unknown> = { ...(location.state as Record<string, unknown>) }
+    delete rest.nowScope
+    void navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: Object.keys(rest).length > 0 ? rest : null })
+  }, [askedScope, location, navigate])
   const here = activeProjectId ?? health.data?.bootProject
   const managerConnected = React.useCallback(
     (managerId: string) => here !== undefined && (managers.data?.managers.find((manager) => manager.id === managerId)?.connectedProjectIds.includes(here) ?? false),
