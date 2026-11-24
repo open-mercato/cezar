@@ -59,7 +59,7 @@ const exited = (child: ChildProcess): boolean => child.exitCode !== null || chil
 const killGroup = (group: number): void => { try { process.kill(group, 'SIGKILL'); } catch { /* the group is gone */ } };
 
 const TASKKILL_TIMEOUT_MS = 5_000;
-// One kill in flight per stage: a second taskkill for the same pid only widens the reuse window.
+// Deduplicate async taskkill calls to narrow the pid reuse window.
 const pendingKills = new WeakSet<ChildProcess>();
 const hardKill = (child: ChildProcess): void => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
 
@@ -69,12 +69,11 @@ const hardKill = (child: ChildProcess): void => { try { child.kill('SIGKILL'); }
  * A stage that already exited is never targeted by pid: a reaped pid (and an emptied group) may
  * belong to someone else by now; on POSIX its leftovers were killed as it exited (`onStageExit`).
  *
- * Windows has no process group and Node no job object, so `taskkill /T` walks the tree from the
- * live stage and the stage dies only after it. Accepted risk: a stage that exits on its own while
- * `taskkill.exe` starts (tens of ms) frees its pid, and a reused pid's tree could be hit. It is
- * narrowed to the timeout, abort, cap and server-exit paths: one `taskkill` per stage, a liveness
- * check right before it, and `tree: false` (a handle-based kill) on the reader-quit path, where the
- * writer is already exiting on a broken pipe.
+ * Windows has no process group and Node no job object, so `taskkill /T` walks the live stage's
+ * tree. An async `taskkill` can hit a reused pid if the stage exits while it starts. Server exit
+ * uses `spawnSync`, which blocks the event loop and keeps the stage's handle open.
+ * The reader-quit path uses `tree: false`, killing the writer by handle and leaving all of its
+ * descendants alive.
  */
 export function killStage(child: ChildProcess, opts: { sync?: boolean; tree?: boolean } & StageKillDeps = {}): void {
   if (!child.pid || exited(child) || opts.tree === false) { hardKill(child); return; }
@@ -84,13 +83,14 @@ export function killStage(child: ChildProcess, opts: { sync?: boolean; tree?: bo
     hardKill(child);
     return;
   }
-  if (pendingKills.has(child)) return;
+  // Dormant in production while codex-app-server-runner.ts refuses restricted Codex on Windows.
   const { file, args } = plan.taskkill;
   if (opts.sync) {
     try { (opts.spawnSync ?? spawnSync)(file, args, { stdio: 'ignore', windowsHide: true, timeout: TASKKILL_TIMEOUT_MS }); } catch { /* fall through */ }
     hardKill(child);
     return;
   }
+  if (pendingKills.has(child)) return;
   pendingKills.add(child);
   let after = false;
   let bound: NodeJS.Timeout | undefined;
@@ -149,13 +149,15 @@ export function liveStageCount(): number {
  * PATH entry (`.`) does the same anywhere.
  */
 export function resolveProgram(bin: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string | undefined {
-  const paths = platform === 'win32' ? win32 : posix;
+  const windows = platform === 'win32';
+  const paths = windows ? win32 : posix;
   if (paths.isAbsolute(bin)) return bin;
   if (bin.includes('/') || bin.includes('\\')) return undefined;
   const search = env.PATH ?? env.Path ?? '';
-  const extensions = platform === 'win32' ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)] : [''];
-  for (const dir of search.split(platform === 'win32' ? ';' : ':')) {
-    if (!dir || !paths.isAbsolute(dir)) continue;
+  const extensions = windows ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), ''] : [''];
+  for (const entry of search.split(windows ? ';' : ':')) {
+    const dir = windows ? entry.replace(/^"(.*)"$/, '$1') : entry;
+    if (!paths.isAbsolute(dir)) continue;
     for (const extension of extensions) {
       const candidate = paths.join(dir, bin + extension);
       try {

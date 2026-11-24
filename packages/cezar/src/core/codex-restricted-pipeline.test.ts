@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,11 @@ import type { BrokeredShell } from './agent-runner.ts';
 import { compileCodexRestrictedPolicy } from './codex-restricted-policy.ts';
 import { CodexReadBroker, killLiveStages, killStage, liveStageCount, onStageExit, PIPELINE_REFUSED, resolveProgram, runPipeline, stageKillPending, stageKillPlan, taskkillPath, wholeUtf8, type PipelineOptions } from './codex-restricted-tools.ts';
 import { managerShellPlan } from '../managers/bash-policy.ts';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, statSync: vi.fn(actual.statSync), accessSync: vi.fn(actual.accessSync) };
+});
 
 const node = process.execPath;
 const dirs: string[] = [];
@@ -427,6 +432,21 @@ describe('stage kill plans', () => {
     expect(sync).toHaveBeenCalledWith(taskkillPath(), ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
   });
 
+  it('on Windows kills the stage synchronously at server exit even with taskkill pending', () => {
+    const { child, kill } = fakeChild();
+    const { killer, spawn: start } = fakeTaskkill();
+    const sync = vi.fn(() => ({})) as unknown as typeof import('node:child_process').spawnSync;
+    killStage(child, { platform: 'win32', spawn: start });
+    try {
+      expect(stageKillPending(child)).toBe(true);
+      killStage(child, { platform: 'win32', sync: true, spawnSync: sync });
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(kill).toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      killer.emit('exit', 0);
+    }
+  });
+
   it.each([['win32'], ['linux']] as const)('never targets an exited stage\'s pid on %s', (platform) => {
     for (const state of [{ exitCode: 0 }, { signalCode: 'SIGTERM' }]) {
       const { child, kill } = fakeChild(state);
@@ -469,6 +489,26 @@ describe('resolveProgram', () => {
     expect(resolveProgram('sub\\tool.exe', { PATH: 'C:\\Windows' }, 'win32')).toBeUndefined();
     expect(resolveProgram('plain', { PATH: dir }, 'linux')).toBeUndefined();
     expect(resolveProgram('rg', { PATH: 'tools;.' }, 'win32')).toBeUndefined();
+  });
+  const windowsDir = 'C:\\Program Files\\cezar';
+  const windowsBin = `${windowsDir}\\cez-manager`;
+  it.each([
+    { scenario: 'prefers PATHEXT to an extensionless shim', path: windowsDir, extensions: ['', '.EXE', '.CMD'] },
+    { scenario: 'accepts quoted absolute PATH entries', path: `"tools";"${windowsDir}"`, extensions: ['.CMD'] },
+  ])('on Windows $scenario', ({ path, extensions }) => {
+    const file = statSync(node);
+    const candidates = extensions.map((extension) => windowsBin + extension);
+    const stat = vi.mocked(statSync).mockImplementation((candidate) => {
+      if (typeof candidate === 'string' && candidates.includes(candidate)) return file;
+      throw new Error('file not found');
+    });
+    const access = vi.mocked(accessSync).mockImplementation(() => {});
+    try {
+      expect(resolveProgram('cez-manager', { PATH: path, PATHEXT: '.CMD;.EXE' }, 'win32')).toBe(`${windowsBin}.CMD`);
+    } finally {
+      stat.mockReset();
+      access.mockReset();
+    }
   });
   it('lets the read broker run nothing it cannot find on PATH', async () => {
     const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Grep'] })!, { cwd: tempDir() }, { PATH: '' });

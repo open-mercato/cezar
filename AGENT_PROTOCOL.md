@@ -163,9 +163,11 @@ Notable fields (full doc-comments in the source):
   Bash sandbox, a Codex manager's does not, so a sandbox network allowlist does not cover it. Under
   `CEZ_CODEX_NETWORK=0` only `offlinePrograms` run (a manager's: `cez-manager` and its pipe filters).
   Every program, there and in the read broker, is resolved from absolute `PATH` entries only, never
-  the working directory. On Windows, `taskkill /T` walks a stage's tree before the stage dies
-  (accepted risk: a stage exiting on its own during that start can free its pid), and a child a
-  stage left holding stdout keeps the call to its timeout and is not killed.
+  the working directory. Restricted Codex refuses Windows today. The dormant Windows path uses
+  `taskkill /T` to walk a live stage's tree. Async teardown can race with pid reuse. Synchronous
+  teardown at server exit keeps the stage's handle open. If a reader quits, the writer is killed
+  by handle and its descendants survive. A child that holds stdout open after its stage exits
+  keeps the call to its timeout and survives.
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
 

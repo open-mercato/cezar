@@ -534,8 +534,9 @@ describe('cez-manager --file stays inside the manager', () => {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const home = mkdtempSync(join(tmpdir(), 'cez-manager-file-'));
+    const base = join(home, 'managers', 'm1');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(join(base, 'workdir'));
     try {
-      const base = join(home, 'managers', 'm1');
       mkdirSync(join(base, 'workdir', 'files'), { recursive: true });
       mkdirSync(join(base, 'attachments'), { recursive: true });
       writeFileSync(join(base, 'workdir', 'files', 'task.md'), 'objective');
@@ -543,6 +544,12 @@ describe('cez-manager --file stays inside the manager', () => {
       const secret = join(home, 'secret.txt');
       writeFileSync(secret, 'do not read');
       symlinkSync(secret, join(base, 'workdir', 'files', 'link.md'));
+      const otherWorkdir = join(home, 'managers', 'm2', 'workdir');
+      const siblingWorkdir = join(base, 'workdir-x');
+      for (const dir of [otherWorkdir, siblingWorkdir]) {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'task.md'), 'out of scope');
+      }
       const env = { CEZ_HOME: home, CEZ_MANAGER_ID: 'm1' };
       expect(await readManagerFile(join(base, 'workdir', 'files', 'task.md'), env)).toBe('objective');
       expect(await readManagerFile(join(base, 'attachments', 'note.txt'), env)).toBe('attached');
@@ -551,11 +558,16 @@ describe('cez-manager --file stays inside the manager', () => {
       }
       // Through the command: the default reader is the confined one.
       const { run, errors, calls } = harness({ CEZ_HOME: home });
+      expect(await run('task', 'create', '--file', 'files/task.md', 'Summarize')).toBe(0);
+      expect(calls.at(-1)?.body).toMatchObject({ task: 'Summarize\n\nobjective' });
       const before = calls.length;
-      expect(await run('task', 'create', '--file', secret, 'Summarize')).toBe(1);
-      expect(errors.join()).toContain(`cannot read ${secret}: only files in the manager's workdir`);
+      for (const path of [secret, join(otherWorkdir, 'task.md'), join(siblingWorkdir, 'task.md')]) {
+        expect(await run('task', 'create', '--file', path, 'Summarize')).toBe(1);
+        expect(errors.at(-1)).toContain(`cannot read ${path}: only files in the manager's workdir`);
+      }
       expect(calls.filter((call) => call.method === 'POST')).toHaveLength(calls.slice(0, before).filter((call) => call.method === 'POST').length);
     } finally {
+      cwd.mockRestore();
       rmSync(home, { recursive: true, force: true });
     }
   });
