@@ -28,7 +28,10 @@ function failingSecondStage(failure: 'throw' | 'no-stdio'): { spawn: typeof spaw
   const fake = ((bin: string, args: readonly string[], options: object) => {
     if (!first) return (first = spawn(bin, args, options));
     if (failure === 'throw') throw new Error('spawn E2BIG');
-    return Object.assign(new EventEmitter(), { stdin: null, stdout: null, stderr: null, pid: undefined, exitCode: null, signalCode: null, kill: () => true });
+    // Node reports EMFILE on the child a tick later; an unheard 'error' would crash the process.
+    const broken = new EventEmitter();
+    process.nextTick(() => broken.emit('error', new Error('spawn EMFILE')));
+    return Object.assign(broken, { stdin: null, stdout: null, stderr: null, pid: undefined, exitCode: null, signalCode: null, kill: () => true });
   }) as unknown as typeof spawn;
   return { spawn: fake, first: () => first };
 }

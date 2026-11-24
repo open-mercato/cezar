@@ -73,9 +73,11 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     let code: number | null = null;
     let settled = false;
     const children: ChildProcess[] = [];
+    // A closed stage's pgid may already belong to an unrelated group; never signal it again.
+    const closed = new Set<ChildProcess>();
     const killOne = (child: ChildProcess) => {
       // The group outlives its leader while a forked grandchild (gh's git, a pager) still holds a pipe.
-      if (STAGE_GROUPS && child.pid) try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is gone */ }
+      if (STAGE_GROUPS && child.pid && !closed.has(child)) try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is gone */ }
       child.kill('SIGKILL');
     };
     const killAll = () => { for (const child of children) killOne(child); };
@@ -106,6 +108,8 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
         const [bin, ...args] = pipeline[stage]!;
         const child = start(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: STAGE_GROUPS, windowsHide: true });
         children.push(child);
+        // Listen at once: a child that fails below still emits 'error' a tick later, and unheard it crashes the server.
+        child.on('error', (error) => { failure ??= `${pipeline[children.indexOf(child)]![0]}: ${error.message.slice(0, 200)}`; });
         // EMFILE/ENFILE: node returns a child without stdio and reports the error a tick later.
         if (!child.stdin || !child.stdout || !child.stderr) throw new Error('no stdio (out of file descriptors?)');
       }
@@ -126,8 +130,8 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
       });
       child.stderr!.on('data', (chunk: Buffer) => { if (errBytes < 16_000) { err.push(chunk); errBytes += chunk.length; } });
       child.stdin!.on('error', () => {});
-      child.on('error', (error) => { failure ??= `${pipeline[index]![0]}: ${error.message.slice(0, 200)}`; });
       child.on('close', (exit) => {
+        closed.add(child);
         if (!next) code = exit;
         // A shell's SIGPIPE: a reader that quit (`| head`) ends the writers before it, or they block on a full pipe.
         for (const upstream of children.slice(0, index)) if (upstream.exitCode === null && upstream.signalCode === null) killOne(upstream);
