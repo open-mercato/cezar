@@ -10,6 +10,7 @@ import { deriveAttention } from '@/lib/attention'
 import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 
 import { NowRoute, NowView } from './now'
+import { NOW_SCOPE_KEY } from './now-attention-model'
 
 const NOW = Date.parse('2026-11-11T14:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -416,6 +417,20 @@ describe('NowRoute', () => {
       </QueryClientProvider>,
     )
   }
+
+  it('takes the scope a navigation hands over, and remembers it (bottom bar quick actions)', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }))))
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[{ pathname: '/p/cezar/', state: { nowScope: 'all' } }]}>
+          <Routes>
+            <Route path="/p/:projectId/" element={<NowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
+  })
 
   it('hides the New task button when health says Manager is available', async () => {
     renderRouteWith({ managers: true })

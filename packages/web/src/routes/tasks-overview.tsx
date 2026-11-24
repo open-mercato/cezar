@@ -177,6 +177,7 @@ export function TasksOverview({
   hasScheduledTasks = !!scheduledTasks,
   firstRun,
   initialQuery = '',
+  initialStatuses,
   cacheStatus,
   managersAvailable = false,
   planUsage,
@@ -193,6 +194,8 @@ export function TasksOverview({
   runs: RunRecord[] | undefined
   /** The search Now hands over (`/tasks?q=`); the box stays session-local after that. */
   initialQuery?: string
+  /** The Status facet a link pre-selects (`/tasks?status=running`, the bottom bar's quick actions). */
+  initialStatuses?: readonly string[]
   scheduledTasks?: React.ReactNode
   hasScheduledTasks?: boolean
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding): replaces the plain
@@ -251,7 +254,8 @@ export function TasksOverview({
     [],
   )
   // The facets are session-local, like the search text; only the origin is remembered.
-  const [filters, setFilters] = React.useState<TaskTableFilters>(NO_TASK_FILTERS)
+  const [filters, setFilters] = React.useState<TaskTableFilters>(() =>
+    initialStatuses?.length ? { ...NO_TASK_FILTERS, statuses: [...initialStatuses] } : NO_TASK_FILTERS)
   // Session-local like the facets; Recent on every fresh visit.
   const [sortBy, setSortBy] = React.useState<SortBy>('recent')
   const all = runs ?? NO_RUNS
@@ -1877,7 +1881,9 @@ function BranchSkeleton() {
  */
 export function TasksOverviewRoute() {
   const runs = useRuns()
-  const initialQuery = new URLSearchParams(useLocation().search).get('q') ?? ''
+  const search = new URLSearchParams(useLocation().search)
+  const initialQuery = search.get('q') ?? ''
+  const statusParam = search.get('status') ?? ''
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   // Project-scoped, unlike health. Unknown (still loading) counts as git so a fresh task's
@@ -1897,7 +1903,7 @@ export function TasksOverviewRoute() {
     void queryClient.invalidateQueries({ queryKey: [actionScope, 'runs'] })
   }, [actionScope, queryClient])
   const archive = useMutation({
-    mutationFn: archiveFinished,
+    mutationFn: () => archiveFinished(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
   // "Mark all read" (#unread-done-items): one call stamps every unread finished run; the
@@ -1980,6 +1986,9 @@ export function TasksOverviewRoute() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TasksOverview
+        // A new `?status=` while already here (a quick action) re-seeds the facets.
+        key={statusParam}
+        initialStatuses={statusParam ? statusParam.split(',').filter(Boolean) : undefined}
         managersAvailable={health.data?.capabilities?.managers === true}
         scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
         hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}

@@ -13,6 +13,17 @@ import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, managerOriginOf, type Ma
 import { lastProjectIndex } from '@/lib/phone-app'
 import { stripProjectPrefix } from '@/lib/project-router'
 import { MANAGER_NOW_PATH } from '@/routes/manager/manager-now-model'
+import {
+  ManagerQuickActions,
+  MoreQuickActions,
+  NowQuickActions,
+  QuickActionsBackdrop,
+  QuickActionsHint,
+  TabQuickMenu,
+  TasksQuickActions,
+  useTabQuickActions,
+  type QuickTab,
+} from '@/components/tab-quick-actions'
 import { cn } from '@/lib/utils'
 
 const ITEM =
@@ -62,6 +73,11 @@ export function PhoneBottomBar({
   const navigate = useNavigate()
   const runId = matchPath({ path: '/tasks/:id/*', end: true }, stripProjectPrefix(location.pathname))?.params.id
   const origin = useThreadOrigin(runId, location.state)
+  const quick = useTabQuickActions()
+  const slots = React.useRef<Partial<Record<QuickTab, HTMLElement | null>>>({})
+  // Navigating (a menu choice, Back) closes it.
+  const { setOpen: setQuickOpen } = quick
+  React.useEffect(() => setQuickOpen(null), [location.key, setQuickOpen])
   if (keyboardOpen) return null
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
   // The current page first: the store is written in an effect, after this render.
@@ -76,8 +92,28 @@ export function PhoneBottomBar({
   const managerHref = origin
     ? `/manager/${encodeURIComponent(origin.id)}`
     : !manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'
-  const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string, count: number | null = null, absolute = false) => (
+  const menu = (tab: QuickTab, align: 'start' | 'center' | 'end', children: React.ReactNode) => (
+    <TabQuickMenu
+      tab={tab}
+      open={quick.open === tab}
+      onOpenChange={(open) => quick.setOpen(open ? tab : null)}
+      align={align}
+      returnFocus={() => slots.current[tab]?.querySelector<HTMLElement>('a,button') ?? null}
+    >
+      {children}
+    </TabQuickMenu>
+  )
+  const slot = (tab: QuickTab, element: React.ReactNode, quickMenu: React.ReactNode) => (
+    <div ref={(node) => { slots.current[tab] = node }} data-slot="bottom-bar-tab" data-held={quick.open === tab || undefined} className="relative flex min-w-0 flex-1 rounded-xl data-held:bg-accent/60">
+      {element}
+      {quickMenu}
+      {/* Once per bar, inside a tab slot so the bar's children stay its four tabs. */}
+      {tab === 'now' ? <><QuickActionsHint /><QuickActionsBackdrop open={quick.open !== null} /></> : null}
+    </div>
+  )
+  const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string, count: number | null = null, absolute = false, tab: QuickTab = 'now') => (
     <Link
+      {...quick.bind(tab)}
       to={absolute ? to : `${index}${to}`}
       aria-current={active === area ? 'page' : undefined}
       aria-label={count ? `${label}, ${count} ${count === 1 ? 'thing needs' : 'things need'} you` : undefined}
@@ -97,8 +133,17 @@ export function PhoneBottomBar({
     </Link>
   )
   return (
-    <nav aria-label="App" data-slot="phone-bottom-bar" className={cn('flex border-t border-border bg-background', !everyWidth && 'md:hidden')}>
-      {manager ? item(MANAGER_NOW_PATH, 'Now', CircleDotIcon, '/', nowCount, true) : item('', 'Now', CircleDotIcon, '/', nowCount)}
+    <nav
+      aria-label="App"
+      data-slot="phone-bottom-bar"
+      // No native link callout or preview: it showed the shell's loopback URL (#tab-bar-quick-actions).
+      className={cn('relative z-50 flex border-t border-border bg-background select-none [-webkit-touch-callout:none]', !everyWidth && 'md:hidden')}
+    >
+      {slot(
+        'now',
+        manager ? item(MANAGER_NOW_PATH, 'Now', CircleDotIcon, '/', nowCount, true) : item('', 'Now', CircleDotIcon, '/', nowCount),
+        menu('now', 'start', <NowQuickActions index={index} nowCount={nowCount} />),
+      )}
       {managerTasks ? (
         <button
           type="button"
@@ -107,6 +152,7 @@ export function PhoneBottomBar({
           aria-expanded={managerTasks.expanded}
           data-slot="bottom-bar-manager-tasks"
           onClick={managerTasks.open}
+          onContextMenu={(event) => event.preventDefault()}
           className={ITEM}
         >
           <ListChecksIcon className="size-5" aria-hidden="true" />
@@ -120,34 +166,43 @@ export function PhoneBottomBar({
             </span>
           ) : null}
         </button>
-      ) : item('tasks', 'Tasks', ListChecksIcon, '/tasks')}
-      <Link
-        to={managerHref}
-        aria-current={managerCurrent ? 'page' : undefined}
-        onClick={(event) => {
-          if (!manager) noteManagerEntry('bottom_bar')
-          if (!backToOrigin || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-          event.preventDefault()
-          void navigate(-1)
-        }}
-        data-slot="bottom-bar-manager"
-        className={cn(ITEM, managerCurrent && CURRENT)}
-      >
-        <BotIcon className="size-5" aria-hidden="true" />
-        Manager
-        {attention ? (
-          <span data-slot="bottom-bar-attention" className="absolute top-2 left-[calc(50%+8px)] flex">
-            <span className={cn('size-1.5 rounded-full', MANAGER_ATTENTION_DOT[attention])} aria-hidden="true" />
-            <span className="sr-only">{MANAGER_ATTENTION_TEXT[attention]}</span>
-          </span>
-        ) : null}
-      </Link>
+      ) : slot('tasks', item('tasks', 'Tasks', ListChecksIcon, '/tasks', null, false, 'tasks'), menu('tasks', 'center', <TasksQuickActions index={index} />))}
+      {slot(
+        'manager',
+        <Link
+          {...quick.bind('manager')}
+          to={managerHref}
+          aria-current={managerCurrent ? 'page' : undefined}
+          onClick={(event) => {
+            if (!manager) noteManagerEntry('bottom_bar')
+            if (!backToOrigin || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+            event.preventDefault()
+            void navigate(-1)
+          }}
+          data-slot="bottom-bar-manager"
+          className={cn(ITEM, managerCurrent && CURRENT)}
+        >
+          <BotIcon className="size-5" aria-hidden="true" />
+          Manager
+          {attention ? (
+            <span data-slot="bottom-bar-attention" className="absolute top-2 left-[calc(50%+8px)] flex">
+              <span className={cn('size-1.5 rounded-full', MANAGER_ATTENTION_DOT[attention])} aria-hidden="true" />
+              <span className="sr-only">{MANAGER_ATTENTION_TEXT[attention]}</span>
+            </span>
+          ) : null}
+        </Link>,
+        menu('manager', 'center', <ManagerQuickActions />),
+      )}
       {/* Not a SheetTrigger: Radix keeps one trigger ref, and this one unmounts with the keyboard,
           which would strand the top bar's focus return. */}
-      <button type="button" aria-haspopup="dialog" aria-expanded={menuOpen} onClick={onMore} className={ITEM}>
-        <EllipsisIcon className="size-5" aria-hidden="true" />
-        More
-      </button>
+      {slot(
+        'more',
+        <button {...quick.bind('more')} type="button" aria-haspopup="dialog" aria-expanded={menuOpen} onClick={onMore} className={ITEM}>
+          <EllipsisIcon className="size-5" aria-hidden="true" />
+          More
+        </button>,
+        menu('more', 'end', <MoreQuickActions index={index} />),
+      )}
     </nav>
   )
 }

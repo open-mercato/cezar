@@ -102,6 +102,14 @@ describe('TasksOverview — the branch cell', () => {
 })
 
 describe('TasksOverview — sorting', () => {
+  it('pre-selects the Status facet a link names (the bottom bar\'s quick actions)', () => {
+    renderOverview({
+      initialStatuses: ['review'],
+      runs: [run({ id: 'a', status: 'review' }), run({ id: 'b', status: 'failed' }), run({ id: 'c', status: 'review' })],
+    })
+    expect([...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) => row.getAttribute('data-run-id')).sort()).toEqual(['a', 'c'])
+  })
+
   it('sorts by recent activity by default, and by creation (Created) from the toolbar', () => {
     renderOverview({
       runs: [
