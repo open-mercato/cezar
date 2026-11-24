@@ -57,6 +57,24 @@ describe('chooseTaskAgent', () => {
     expect(choice.warning).toContain('codex default account has capacity (--runner codex)');
   });
 
+  it('an explicit account whose hold already expired is capacity: no queue, no warning', () => {
+    expect(chooseTaskAgent([held(first, NOW - 1)], { explicitAccount: true, fromSettings: true, allowed: [held(first, NOW - 1), second], now: NOW }))
+      .toEqual({ chosen: held(first, NOW - 1), reason: 'explicit --account' });
+  });
+
+  it('decided: an explicit out-of-limits account with no free alternative queues with no warning (the queue line says it all)', () => {
+    const choice = chooseTaskAgent([held(first, LATER)], { explicitAccount: true, fromSettings: true, allowed: [held(first, LATER)], now: NOW });
+    expect(choice).not.toHaveProperty('warning');
+    expect(choice.reason).toContain('so the task waits in the queue');
+  });
+
+  it('automatic selection with its account out of limits queues on it, worded for one account', () => {
+    const choice = chooseTaskAgent([held(automatic, LATER)], { explicitAccount: false, fromSettings: false, now: NOW });
+    expect(choice.chosen.account).toBe('default');
+    expect(choice.queuedUntil).toBe(LATER);
+    expect(choice.reason).toBe('automatic selection: codex default account out of limits until 2099-01-01T01:00:00.000Z; the task waits in the queue until it resets');
+  });
+
   it('refuses an empty candidate list', () => {
     expect(() => chooseTaskAgent([], { explicitAccount: false, fromSettings: true, now: NOW })).toThrow();
   });

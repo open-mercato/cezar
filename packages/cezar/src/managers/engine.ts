@@ -2916,7 +2916,9 @@ export class ManagerEngine {
     const root = scope.source?.root;
     const now = this.now();
     let choice: TaskAgentChoice | undefined;
-    let fallback: Array<{ provider: RunnerId; profileId: string }> | undefined;
+    let fallbackOptions: AccountOption[] | undefined;
+    /** The runner a --model/--effort was written for: the one picked when every account has capacity. */
+    let intendedRunner: string | undefined;
     if (agents && candidates) {
       // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
       const rank = (agent: ManagerTaskAgent) => (retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
@@ -2924,12 +2926,12 @@ export class ManagerEngine {
       const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
       const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
       choice = chooseTaskAgent(options, { explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now });
+      intendedRunner = retry?.runner ?? input.runner ?? options[0]?.runner;
       const picked = choice.chosen;
       // An explicit --runner or --account keeps a usage-limit fallback on that runner.
       const sameRunner = input.runner !== undefined || input.agentProfile !== undefined;
-      fallback = allowed.filter((option) => option !== picked && !(option.runner === picked.runner && option.account === picked.account)
-        && (!sameRunner || option.runner === picked.runner))
-        .map((option) => ({ provider: option.runner, profileId: option.account }));
+      fallbackOptions = allowed.filter((option) => option !== picked && !(option.runner === picked.runner && option.account === picked.account)
+        && (!sameRunner || option.runner === picked.runner));
     }
     const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
     const agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
@@ -2937,8 +2939,20 @@ export class ManagerEngine {
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
     choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
-    // A retry moved to another runner keeps none of the old runner's model and effort.
-    const carried = !retry || retry.runner === undefined || retry.runner === runner ? input : { ...input, model: undefined, effort: undefined };
+    intendedRunner ??= retry?.runner;
+    // A task that lands on another runner than its model and effort were meant for (a limit skip,
+    // or a retry) keeps none of them: they would be refused, or wrong, on this runner.
+    const moved = intendedRunner !== undefined && intendedRunner !== runner && Boolean(input.model || input.effort);
+    const carried = moved ? { ...input, model: undefined, effort: undefined } : input;
+    if (moved) {
+      const dropped = [input.model && `--model ${input.model}`, input.effort && `--effort ${input.effort}`].filter(Boolean).join(' and ');
+      choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: meant for ${intendedRunner}, not ${runner}` };
+    }
+    // The requested model follows a fallback on the same runner; another runner starts on its own default.
+    const fallback = fallbackOptions?.map((option) => ({
+      provider: option.runner, profileId: option.account,
+      ...(carried.model && option.runner === runner ? { model: carried.model } : {}),
+    }));
     const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
     if (carried.model || carried.effort) {
       const issue = await this.modelIssue(runner, carried.model, carried.effort);

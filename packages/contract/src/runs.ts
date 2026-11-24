@@ -249,6 +249,8 @@ export const runRecordSchema = z.object({
     revocation: z.string().nullable(),
     /** `manager`: the starting manager's allowed task accounts, whose settings are the consent. */
     source: z.literal('manager').optional(),
+    /** The manager whose current list a `manager` policy is checked against at fallback time. */
+    managerId: z.string().optional(),
   }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
@@ -1360,6 +1362,7 @@ export const createRunInputBaseSchema = z
       fallback: z.array(z.object({
         provider: runnerSchema,
         profileId: z.string().min(1).max(64),
+        model: z.string().min(1).max(200).optional(),
       })).max(10).optional(),
     }).optional(),
   });

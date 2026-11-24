@@ -61,7 +61,9 @@ export function chooseTaskAgent(
   const soonest = candidates.reduce((best, option) => (option.until! < best.until! ? option : best));
   return {
     chosen: soonest,
-    reason: `${source}: every allowed account is out of limits (${skippedText}); queued on ${accountName(soonest)}, the first to reset`,
+    reason: candidates.length === 1
+      ? `${source}: ${skippedText}; the task waits in the queue until it resets`
+      : `${source}: every allowed account is out of limits (${skippedText}); queued on ${accountName(soonest)}, the first to reset`,
     queuedUntil: soonest.until,
   };
 }

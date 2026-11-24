@@ -1099,6 +1099,8 @@ export interface StartRunInput {
   systemPrompt?: string;
   /** Manager provenance also carries the task's restrictions to descendants and continuations. */
   startedByManager?: RunRecord['startedByManager'];
+  /** A dispatched child of a manager's task keeps its parent's manager fallback policy. */
+  inheritedFallbackPolicy?: RunRecord['fallbackPolicy'];
   /** The manager's agent choice: a timeline note, and its other allowed accounts for a usage limit
    *  (absent: the project's own fallback policy). */
   managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string }> };
@@ -2128,8 +2130,9 @@ export class RunManager {
       // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
       // A manager's task falls back within the manager's own allowed accounts (spec 2026-10-31-managers).
       // An allowed-accounts list never falls back outside itself, so `[]` means no fallback at all.
-      fallbackPolicy: input.startedByManager && input.managerAgent?.fallback
-        ? managerFallbackPolicy(input.managerAgent.fallback)
+      fallbackPolicy: input.startedByManager && input.inheritedFallbackPolicy?.source === 'manager' ? input.inheritedFallbackPolicy
+        : input.startedByManager && input.managerAgent?.fallback
+        ? managerFallbackPolicy(input.managerAgent.fallback, input.startedByManager.id)
         : ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
@@ -3626,6 +3629,8 @@ export class RunManager {
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       ...(parent.startedByManager ? { startedByManager: parent.startedByManager } : {}),
+      // Never the project's policy: that could move the child to an account outside the manager's list.
+      ...(parent.startedByManager && parent.fallbackPolicy?.source === 'manager' ? { inheritedFallbackPolicy: parent.fallbackPolicy } : {}),
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
@@ -4090,7 +4095,13 @@ export class RunManager {
     const origin = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
     const attempted = new Set([...(run.fallbackEpisode?.attempted ?? []), origin]);
     const held = this.semaphore.accountHolds().deadline;
-    return (run.fallbackPolicy?.candidates ?? []).some((c) => !attempted.has(candidateKey(c)) && !held.has(candidateKey(c)));
+    const policy = run.fallbackPolicy as AgentFallbackPolicy | undefined;
+    if (!policy) return false;
+    // Admission's own filter (held, removed, out of the manager's list). An unread accounts file
+    // cannot prove removal here; admission re-checks it, plus disabled providers and sign-in, and
+    // arms the reset-time resume when nothing is left.
+    const accounts = this.accountStore ?? { accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider })) } as unknown as AgentAccountStore;
+    return eligibleFallbackCandidates(policy, attempted, held, accounts).eligible.length > 0;
   }
 
   private finishFallbackAdmission(runId: string, message: string): void {

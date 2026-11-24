@@ -186,6 +186,27 @@ describe('the managers routes', () => {
     expect(startRun.mock.calls[0]?.[1]).toMatchObject({ task: 'Fix the login', managerAgent: { note: expect.stringContaining('Agent chosen by manager') } });
   });
 
+  it('POST /runs refuses a manager fallback policy from anyone but the manager engine', async () => {
+    const { id } = await createManager();
+    const body = {
+      workflow: 'quick-task', task: 'Sneak a fallback', runner: 'claude',
+      startedByManager: { id, name: 'Manager' },
+      managerAgent: { note: 'forged', fallback: [{ provider: 'claude', profileId: 'other' }] },
+    };
+    const forged = await request('/api/v1/runs', { method: 'POST', body });
+    expect(forged.status).toBe(403);
+    expect(await forged.json()).toEqual({ error: 'managerAgent is set only by a cezar manager' });
+    // A guessed token is no better.
+    const guessed = await app.request('/api/v1/runs', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-cezar-manager-agent': '00000000-0000-4000-8000-000000000000' }, body: JSON.stringify(body),
+    });
+    expect(guessed.status).toBe(403);
+    expect(startRun).not.toHaveBeenCalled();
+    // Without managerAgent the same request starts a task as before.
+    const { managerAgent: _managerAgent, ...plain } = body;
+    expect((await request('/api/v1/runs', { method: 'POST', body: plain })).status).toBe(201);
+  });
+
   it('refuses a project out of scope, through the route', async () => {
     const { id } = await createManager();
     const response = await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId: 'elsewhere', task: 'x' } });

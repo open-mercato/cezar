@@ -3381,6 +3381,35 @@ describe('ManagerEngine', () => {
         expect(retried).not.toHaveProperty('warning');
       });
 
+      it('--model and --effort are dropped, not refused, when a limit skip lands the task on another runner', async () => {
+        const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus', effort: 'high' });
+        expect(created).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work', reason: expect.stringContaining('--model opus and --effort high dropped: meant for claude, not codex') } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+        expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+        // On the runner it was meant for, the model stays.
+        const own = limited({});
+        await engine.createTask(await managerWith(own), { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'first', model: 'opus' });
+      });
+
+      it('a same-runner fallback keeps the requested model; another runner starts on its own default', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({ model: 'opus', managerAgent: { fallback: [{ provider: 'claude', profileId: 'second', model: 'opus' }, { provider: 'codex', profileId: 'work' }] } });
+        expect((requests.at(-1)?.body as { managerAgent: { fallback: object[] } }).managerAgent.fallback[1]).not.toHaveProperty('model');
+      });
+
+      it('a manager with one allowed account sends fallback: [] so the task never falls back outside the list', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [{ runner: 'claude' as const, agentProfile: 'first' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [] } });
+      });
+
       it('an explicit --runner or --account keeps fallback on that runner', async () => {
         const engine = limited({});
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
