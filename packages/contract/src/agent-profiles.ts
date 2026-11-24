@@ -68,6 +68,11 @@ export const agentProfileSchema = z.object({
   looksValid: z.boolean(),
   /** True for the profile cezar discovers from the environment. Never stored, never deletable. */
   isDefault: z.boolean(),
+  /** cezar made this account's folder under `~/.cezar/agent-homes` and deletes it on removal
+   *  (spec 2026-11-24-add-account-in-cockpit). */
+  managed: z.literal(true).optional(),
+  /** Added from the cockpit, sign-in not confirmed yet: not offered in pickers. */
+  pending: z.literal(true).optional(),
   /** This account's own authentication state — two Claude logins answer independently.
    *
    *  **Absent until the probe has warmed.** Every probe shells out to an agent CLI, and this
@@ -108,6 +113,9 @@ export type AgentAccountSelection = z.infer<typeof agentAccountSelectionSchema>;
  */
 export const agentProfilesResponseSchema = z.object({
   editable: z.boolean(),
+  /** `false` for a paired phone: `configDir`/`path` are empty and `files` is empty, because host
+   *  paths never cross the relay (spec 2026-11-24-add-account-in-cockpit). Absent = paths present. */
+  hostPaths: z.literal(false).optional(),
   profiles: z.array(agentProfileSchema),
   /** Providers that can carry more than one account at all — what "Add account" is offered for.
    *  OpenCode is absent: its credentials live in a SQLite DB behind a separate `OPENCODE_DB`, so

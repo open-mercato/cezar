@@ -443,3 +443,38 @@ describe('dry run', () => {
     expect(JSON.stringify(h.events)).not.toContain(SECRET);
   });
 });
+
+describe('accounts added from the cockpit (spec 2026-11-24-add-account-in-cockpit)', () => {
+  it('marks a named account signed in once the sign-in is confirmed, never the default', async () => {
+    const markSignedIn = vi.fn(async () => {});
+    const h = harness({ markSignedIn });
+    await h.manager.start({ provider: 'cursor', profileId: 'work' }, LOCAL);
+    expect(h.manager.isLive('cursor', 'work')).toBe(true);
+    h.children[0]!.exit(0);
+    await flush();
+    expect(h.last().phase).toBe('connected');
+    expect(markSignedIn).toHaveBeenCalledWith('cursor', 'work');
+    expect(h.manager.isLive('cursor', 'work')).toBe(false);
+
+    await h.manager.accountConnected('claude', 'default');
+    expect(markSignedIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mark an account whose sign-in was rejected', async () => {
+    const markSignedIn = vi.fn(async () => {});
+    const h = harness({ markSignedIn, confirmConnected: async () => false });
+    await h.manager.start({ provider: 'cursor', profileId: 'work' }, LOCAL);
+    h.children[0]!.exit(0);
+    await flush();
+    expect(h.last()).toMatchObject({ phase: 'failed', reason: 'rejected' });
+    expect(markSignedIn).not.toHaveBeenCalled();
+  });
+
+  it('cancelAccount stops a running sign-in and kills its process', async () => {
+    const h = harness();
+    await h.manager.start({ provider: 'cursor', profileId: 'work' }, LOCAL);
+    h.manager.cancelAccount('cursor', 'work');
+    expect(h.last().phase).toBe('cancelled');
+    expect(h.children[0]!.killed).toBe(true);
+  });
+});
