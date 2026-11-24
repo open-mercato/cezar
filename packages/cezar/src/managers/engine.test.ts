@@ -3631,12 +3631,14 @@ describe('ManagerEngine', () => {
       expect(await engine.switchTask(id, { ...input, agentProfile: 'project-work' })).toMatchObject({ status: 403 });
     });
 
-    it("keeps the task's effort when a switch changes only the account, and drops it with a new model or runner", async () => {
+    it('forwards only explicit model and effort pins so an account switch preserves per-step settings', async () => {
       const id = await create(withRuns([]), 0);
       const engine = withRuns([run('owned', { runner: 'claude', model: 'opus', reasoningEffort: 'high', startedByManager: { id, name: 'Manager' } })]);
       const input = { projectId: 'alpha', runId: 'owned' };
       await engine.switchTask(id, { ...input, agentProfile: 'default' });
-      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', model: 'opus', reasoningEffort: 'high' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'default' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
       await engine.switchTask(id, { ...input, agentProfile: 'default', effort: 'low' });
       expect(requests.at(-1)?.body).toMatchObject({ reasoningEffort: 'low' });
       await engine.switchTask(id, { ...input, model: 'claude-sonnet-5' });

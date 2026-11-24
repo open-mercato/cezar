@@ -3139,7 +3139,7 @@ export class ManagerEngine {
     if (!run) return { error: 'task not found', status: 404 };
     if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
       return {
-        error: `task ${input.runId} was not started by this manager, so it cannot cancel it. Ask the user to cancel it, or to allow "Cancel any task" in your settings`,
+        error: `task ${input.runId} was not started by this manager, so it cannot cancel it. Ask the user to cancel it, or to allow "Cancel or switch any task" in your settings`,
         status: 403,
       };
     }
@@ -3174,7 +3174,7 @@ export class ManagerEngine {
       return { error: `${projectId} is read-only for this manager: it cannot switch task agents there`, status: 403 };
     }
     if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
-      return { error: `task ${run.id} was not started by this manager. Ask the user to switch it, or to allow "Cancel any task" in your settings`, status: 403 };
+      return { error: `task ${run.id} was not started by this manager. Ask the user to switch it, or to allow "Cancel or switch any task" in your settings`, status: 403 };
     }
     const current = taskAgentSelection(run, run.runner ?? (await loadConfig(repoRoot)).defaultRunner);
     const runner = input.runner ?? current.runner;
@@ -3196,12 +3196,8 @@ export class ManagerEngine {
     }
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
-    // Model and effort flags name the requested runner. Inherited values belong to the old runner.
-    const keepsRunner = runner === current.runner && !agentModelsLocked(repoRoot);
-    const model = input.model ?? (keepsRunner ? current.model : undefined);
-    const effort = input.effort ?? (keepsRunner && model === current.model
-      ? (['low', 'medium', 'high', 'max'] as const).find((level) => level === current.reasoningEffort)
-      : undefined);
+    // Send only explicit pins. The workflow resolves inherited pins independently for each step.
+    const { model, effort } = input;
     const issue = model || effort ? await this.modelIssue(runner, model, effort) : undefined;
     if (issue) return issue;
     const response = await this.forward(`/p/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(run.id)}/switch-agent`, {

@@ -423,9 +423,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           </label>
           <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
             <OctagonXIcon aria-hidden="true" className="size-3.5 shrink-0" />
-            <span className="flex-1" title="Let it cancel tasks it did not start, in its write projects">Cancel any task</span>
+            <span className="flex-1" title="Let it cancel or switch the agent of tasks it did not start in its write projects. A switch can move work to another vendor or use another account’s quota.">Cancel or switch any task</span>
             <Switch
-              aria-label="Cancel any task"
+              aria-label="Cancel or switch any task"
               checked={manager.cancelAnyTask === true}
               onCheckedChange={(cancelAnyTask) => update.mutate({ cancelAnyTask })}
             />

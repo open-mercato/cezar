@@ -534,7 +534,11 @@ describe('a relay request is a hosted request', () => {
     it('every run start leaves the scope', () => {
       const run = readFileSync(join(root, 'workflows/run.ts'), 'utf8');
       const starts = run.match(/.*this\.(?:execute|runContinuation)\(.*/g) ?? [];
-      expect(starts.length).toBe(3);
+      // Immediate and queued continuations both launch through the same helper.
+      expect(starts).toEqual(expect.arrayContaining([
+        expect.stringContaining('outsideRelayScope(() => this.execute('),
+        expect.stringContaining('outsideRelayScope(() => this.runContinuation('),
+      ]));
       for (const line of starts) expect(line).toContain('outsideRelayScope(');
     });
   });
