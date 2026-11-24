@@ -23,7 +23,9 @@ family, because folder paths reveal the host's layout.
 
 ## Design
 
-**Add account** opens a three-step dialog (a full-height sheet on a phone):
+The existing **Add account** button (Settings → Agents → Accounts card, `accounts-add`) opens a three-step dialog
+instead of the folder-path dialog. On a phone it's a full-height sheet. Settings gets no new page, nav item or button
+(owner, 2026-11-24).
 
 1. **Agent and name.** Pick an agent that can carry accounts, then name the account. Agents that can't carry accounts
    are listed, disabled, with the reason. An *Advanced: use a folder that is already signed in* disclosure keeps today's
@@ -47,8 +49,7 @@ installed (with the install hint), timeout, and the hosted refusal. Two states a
   warns and offers *Keep both* or *Remove this one*. It never blocks, because two folders on one login is legal.
 - **Cancel**: the dialog asks first, then deletes what it created.
 
-Entry points: Settings → Agent accounts (a header button and a per-agent **+**), and "Add account…" at the end of
-every account picker (task, manager, reconnect *Use another account*).
+Other entry points open the same dialog: "Add account…" at the end of every account picker (task, manager, reconnect *Use another account*).
 
 ## Mechanism
 
@@ -115,10 +116,9 @@ never takes a client path, so `checkProfileDir`'s browse-root containment doesn'
 
 ## Decisions for the owner
 
-1. **Placement**: a dialog wizard from Settings (A, recommended), an inline row (B), or a full page (C).
-2. **Phone access**: open the path-free, managed-only subset of the accounts family to paired phones (recommended:
+1. **Phone access**: open the path-free, managed-only subset of the accounts family to paired phones (recommended:
    yes).
-3. **Removing a managed account** logs out and deletes its folder (recommended: yes, with the folder named in the
+2. **Removing a managed account** logs out and deletes its folder (recommended: yes, with the folder named in the
    confirm dialog).
-4. **OMP and Kimi**: offer them with the terminal hand-off (recommended), or hide them until a headless login is
+3. **OMP and Kimi**: offer them with the terminal hand-off (recommended), or hide them until a headless login is
    verified.

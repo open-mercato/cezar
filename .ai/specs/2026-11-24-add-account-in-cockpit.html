@@ -159,7 +159,7 @@ dl.id dt{color:var(--soft-foreground)}dl.id dd{margin:0}
   <p class="lead">Click <b>Add account</b>, pick an agent and sign in. cezar makes a private folder for the account and runs the agent's own login in it. You see the link and any code, paste the code back if the vendor asks for one, and the account is ready, with its identity and plan shown. It works the same on a phone through the relay. Spec: <code>.ai/specs/2026-11-24-add-account-in-cockpit.md</code>.</p>
   <div class="grad-rule"></div>
   <div class="toc">
-    <a href="#today">1 · Today</a><a href="#placement">2 · Where it lives (variants)</a><a href="#flow">3 · The flow, every state</a><a href="#entry">4 · Other entry points</a><a href="#tech">5 · Technical plan</a><a href="#decide">6 · Recommendation &amp; decisions</a>
+    <a href="#today">1 · Today</a><a href="#placement">2 · Where it lives</a><a href="#flow">3 · The flow, every state</a><a href="#entry">4 · Other entry points</a><a href="#tech">5 · Technical plan</a><a href="#decide">6 · Recommendation &amp; decisions</a>
   </div>
 
   <div class="controls">
@@ -169,10 +169,11 @@ dl.id dt{color:var(--soft-foreground)}dl.id dd{margin:0}
   </div>
 
   <h2 id="today">1 · Today</h2>
-  <p class="lead">Settings → Agent accounts → <b>Add account</b> asks for a <i>config folder</i>. The folder has to be signed in from a terminal (<code>CLAUDE_CONFIG_DIR=~/.claude-work claude</code>), either before or through Connect. A paired phone gets no accounts at all (<code>accountsEnabled()</code> refuses relay scope, because folder paths reveal the host's layout). The sign-in UI itself already exists. The reconnect card (#2314) runs the vendor's login headless and shows a browser tab, a device code, a paste-code field or a terminal hand-off. This design reuses that body. What it adds is the <b>account creation</b> around it.</p>
+  <p class="lead">Settings → Agents → Accounts → <b>Add account</b> asks for a <i>config folder</i>. The folder has to be signed in from a terminal (<code>CLAUDE_CONFIG_DIR=~/.claude-work claude</code>), either before or through Connect. A paired phone gets no accounts at all (<code>accountsEnabled()</code> refuses relay scope, because folder paths reveal the host's layout). The sign-in UI itself already exists. The reconnect card (#2314) runs the vendor's login headless and shows a browser tab, a device code, a paste-code field or a terminal hand-off. This design reuses that body. What it adds is the <b>account creation</b> around it.</p>
 
-  <h2 id="placement">2 · Where it lives (variants)</h2>
-  <div class="vargrid" id="placements"></div>
+  <h2 id="placement">2 · Where it lives</h2>
+  <p class="lead">Exactly where it is today: Settings → <b>Agents</b> → the <b>Accounts</b> card → <b>Add account</b>. Settings gains no new page, nav item or button. The button opens the wizard instead of the folder-path dialog, and the path dialog becomes the wizard's <i>Advanced</i> option.</p>
+  <div class="vargrid" id="placements" style="margin-top:14px"></div>
 
   <h2 id="flow">3 · The flow, every state</h2>
   <p class="lead">The same component appears as a dialog on desktop and as a full-height sheet on a phone. Switch <b>Agent</b> and <b>Cockpit</b> above to see each sign-in method. The step-2 body is the reconnect card's <code>SigningBody</code>, reused.</p>
@@ -237,14 +238,13 @@ dl.id dt{color:var(--soft-foreground)}dl.id dd{margin:0}
 
   <h2 id="decide">6 · Recommendation &amp; decisions</h2>
   <div class="note">
-    <p style="margin:6px 0"><b>Recommendation: variant A.</b> A three-step dialog from Settings → Agent accounts, the same component as a full-height sheet on a phone, managed folders by default, and the folder path moved behind <i>Advanced</i>. It reuses the reconnect card's signing body without changes, so the two flows can't drift apart.</p>
+    <p style="margin:6px 0"><b>Recommendation.</b> A three-step dialog behind the existing <b>Add account</b> button in Settings → Agents → Accounts, the same component as a full-height sheet on a phone, managed folders by default, and the folder path moved behind <i>Advanced</i>. It reuses the reconnect card's signing body without changes, so the two flows can't drift apart.</p>
   </div>
   <table style="margin-top:14px">
     <tr><th>#</th><th>Decision</th><th>Recommended</th><th>Alternative</th></tr>
-    <tr><td>1</td><td>Placement</td><td>A: dialog wizard (phone: sheet)</td><td>B: inline row · C: full page</td></tr>
-    <tr><td>2</td><td>Paired phones get the path-free, managed-only part of the accounts family</td><td>Yes</td><td>Keep phones out (no adding from a phone)</td></tr>
-    <tr><td>3</td><td>Removing a managed account logs out and deletes its folder</td><td>Yes, with the folder named in the confirm dialog</td><td>Keep the folder</td></tr>
-    <tr><td>4</td><td>OMP and Kimi (no headless login)</td><td>Offer them with the terminal hand-off</td><td>Hide them until a headless login is verified</td></tr>
+    <tr><td>1</td><td>Paired phones get the path-free, managed-only part of the accounts family</td><td>Yes</td><td>Keep phones out (no adding from a phone)</td></tr>
+    <tr><td>2</td><td>Removing a managed account logs out and deletes its folder</td><td>Yes, with the folder named in the confirm dialog</td><td>Keep the folder</td></tr>
+    <tr><td>3</td><td>OMP and Kimi (no headless login)</td><td>Offer them with the terminal hand-off</td><td>Hide them until a headless login is verified</td></tr>
   </table>
 </div>
 
@@ -370,38 +370,28 @@ function dialog(st) {
 function sheet(st) {
   const r = S.runner
   return `<div class="phone"><div class="status"><span>9:41</span><span>●●● ▮</span></div>
-    <div class="appbar">‹ Agent accounts</div><div class="content soft">…</div><div class="dim"></div>
+    <div class="appbar">‹ Agents</div><div class="content soft">…</div><div class="dim"></div>
     <div class="sheet full"><div class="grab"></div><h5>${mark(r)} Add agent account</h5>${stepper(st.step)}${st.body}<div class="foot">${st.foot}</div></div></div>`
 }
 
 function settingsShell(blur, mini) {
-  const acct = (name, pill) => `<div class="acct"><div class="n">${name}</div>${pill}</div>`
+  const acct = (m, name, pill) => `<div class="acct">${m}<div class="n">${name}</div>${pill}</div>`
   return `<div class="settings" style="${blur ? 'filter:blur(.5px)' : ''}">
-    <div class="snav"><div>General</div><div class="on">Agent accounts</div><div>Agent config</div><div>Phone</div></div>
-    <div class="spane"><div class="phead"><h4>Agent accounts</h4><button class="btn c sm">+ Add account</button></div>
-      <div class="agent"><div class="h">${mark('claude')} Claude Code <span class="sp"></span><button class="btn g sm">+</button></div>
-        ${acct('Default <span class="soft small">· ada@home.example</span>', '<span class="pill ok">Signed in</span>')}</div>
-      <div class="agent"><div class="h">${mark('codex')} Codex <span class="sp"></span><button class="btn g sm">+</button></div>
-        ${acct('Default', '<span class="pill ok">Signed in</span>')}</div>
+    <div class="snav"><div>General</div><div class="on">Agents</div><div>Projects</div><div>Phone</div></div>
+    <div class="spane">
+      <div class="agent"><div class="h">Installed on this machine <span class="pill">4</span><span class="sp"></span><span class="soft small">Claude Code · Codex · …</span></div></div>
+      <div class="agent"><div class="h">Accounts <span class="sp"></span><button class="btn sm" style="border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 25%,transparent)">Add account</button></div>
+        ${acct(mark('claude'), 'Claude Code · Default <span class="soft small">· ada@home.example</span>', '<span class="pill ok">Signed in</span>')}
+        ${acct(mark('codex'), 'Codex · Default', '<span class="pill ok">Signed in</span>')}
+        <div class="acct soft small">Add a second login to keep a work account beside a personal one…</div></div>
+      <div class="agent"><div class="h soft">Global instructions</div></div>
     </div></div>`
 }
 
 function placements() {
-  const A = `<div class="win mini"><div class="bar"><i></i><i></i><i></i></div>${settingsShell(false)}</div>`
-  const B = `<div class="win mini"><div class="bar"><i></i><i></i><i></i></div><div class="settings"><div class="snav"><div class="on">Agent accounts</div></div><div class="spane">
-    <div class="agent"><div class="h">${mark('claude')} Claude Code</div>
-      <div class="acct"><div class="n">Default</div><span class="pill ok">Signed in</span></div>
-      <div class="acct"><div class="n">Work</div><span class="pill wait">Signing in…</span></div>
-      <div class="inline-signing body small">Open the sign-in link in your browser · <u>Copy link</u> · <u>Cancel</u></div>
-      <div class="acct soft">+ Add Claude Code account</div></div></div></div></div>`
-  const C = `<div class="win mini"><div class="bar"><i></i><i></i><i></i></div><div class="pagebody">
-    <div class="soft small">Settings › Agent accounts › New</div><h4 style="margin:6px 0">Add agent account</h4>${stepper(1)}
-    <p class="body small">Full-page stepper at <code>/settings/global/accounts/new</code>. Same steps, more room for the identity and usage summary.</p></div></div>`
-  const card = (t, rec, html, pro, con) => `<div><p class="label">${t} ${rec ? '<span class="rec">Recommended</span>' : ''}</p>${html}<p class="cap"><b>+</b> ${pro}<br><b>−</b> ${con}</p></div>`
+  const now = `<div class="win mini"><div class="bar"><i></i><i></i><i></i></div>${settingsShell(false)}</div>`
   document.getElementById('placements').innerHTML =
-    card('A · Dialog wizard from Settings', true, A, 'One header button plus a per-agent +. A modal keeps the three steps in focus, and the same component becomes a phone sheet. Reachable from every account picker.', 'Modal: the user can\'t browse elsewhere while signing in (Cancel or a closed tab are handled, see below).') +
-    card('B · Inline row', false, B, 'No modal: the new row appears at once, and signing happens inside the list.', 'Picking the agent and name needs an inline form too. Cramped on a phone, and there\'s no natural place for the Ready summary.') +
-    card('C · Full page', false, C, 'Room for explanations. Deep-linkable.', 'Heavier navigation for a one-minute task, and it\'s awkward to open from a task or manager picker and then return.')
+    `<div><p class="label">Settings → Agents → Accounts (unchanged)</p>${now}<p class="cap">The highlighted button is today's <code>accounts-add</code>. It opens the wizard below. A new account shows up in this same list, as "Signing in…" until it's verified.</p></div>`
 }
 
 function entries() {
@@ -415,15 +405,15 @@ function entries() {
     <div style="font-weight:600;display:flex;gap:6px;align-items:center">${mark('claude')} Claude Code · Default is signed out <span class="pill bad">Login expired</span></div>
     <div class="row"><button class="btn c sm">Reconnect Default</button><button class="btn sm">Use another account ▾</button></div>
     <div class="small soft" style="margin-top:8px">Menu: Work · Signed in &nbsp;|&nbsp; <b style="color:var(--foreground)">＋ Add an account…</b></div></div></div>`
-  const phone = `<div class="phone" style="height:560px"><div class="status"><span>9:41</span><span>●●● ▮</span></div><div class="appbar">‹ Settings</div>
-    <div class="content"><div class="phead"><b>Agent accounts</b><button class="btn c sm">+ Add</button></div>
+  const phone = `<div class="phone" style="height:560px"><div class="status"><span>9:41</span><span>●●● ▮</span></div><div class="appbar">‹ Agents</div>
+    <div class="content"><div class="phead"><b>Accounts</b><button class="btn sm">Add account</button></div>
     <div class="agent"><div class="h">${mark('claude')} Claude Code</div><div class="acct"><div class="n">Default</div><span class="pill ok">Signed in</span></div><div class="acct"><div class="n">Work</div><span class="pill ok">Signed in</span></div></div>
     <div class="agent"><div class="h">${mark('codex')} Codex</div><div class="acct"><div class="n">Default</div><span class="pill ok">Signed in</span></div></div>
     <p class="xs soft">Rows on a phone show the name, identity and status. Folder paths are never sent over the relay.</p></div></div>`
   document.getElementById('entries').innerHTML =
     `<div><p class="label">Task and manager account picker</p>${picker}<p class="cap">"Add account…" opens the same dialog. On success the new account is selected in the picker that opened it.</p></div>` +
     `<div><p class="label">Reconnect card · Use another account</p>${reconnect}<p class="cap">When there's no other account to switch to, adding one is the way out.</p></div>` +
-    `<div><p class="label">Phone · Settings → Agent accounts</p>${phone}<p class="cap">Newly reachable on a phone: a path-free listing, Add (managed only) and Remove (managed only).</p></div>`
+    `<div><p class="label">Phone · Settings → Agents → Accounts</p>${phone}<p class="cap">Newly reachable on a phone: a path-free listing, Add (managed only) and Remove (managed only).</p></div>`
 }
 
 function render() {
