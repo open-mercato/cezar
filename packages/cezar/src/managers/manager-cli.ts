@@ -123,7 +123,8 @@ Starts a task.
   --account <id>     the agent account id (default selects the discovered account)
   --model <m>        a model id or alias the runner can use, e.g. opus; refused with the valid ones otherwise
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
-  --dispatch         start it as the root of a dispatch tree${CONTENT_HELP}`,
+  --dispatch         start it as the root of a dispatch tree, only for work worth splitting;
+                     ignored in a trunk-based project, whose tasks work in its checkout${CONTENT_HELP}`,
   'task say': `cez manager task say --project <id> <run> [flags] "<text>"
 
 Messages a running task, or continues a finished one with the text.
@@ -526,6 +527,7 @@ export async function runManagerCommand(
           });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
           if (created.forwarded) io.log(forwardedLine(created.forwarded));
+          if (created.notice) io.log(created.notice);
           return 0;
         }
         if (sub === 'say') {

@@ -46,8 +46,8 @@ and four minis with no count; six show `+1`.
 The shape a widget should mirror. `model` is `null` for the third state, where nothing shows.
 
 ```
-primary  { id, name, avatar, face, text, badge? }   pill 1
-minis    [{ id, name, avatar, face }]  (0–4)        pill 2, absent when empty
+primary  { id, name, avatar, mascot?, face, text, badge? }   pill 1
+minis    [{ id, name, avatar, mascot?, face }]  (0–4)        pill 2, absent when empty
 overflow number                                     pill 2's "+N"
 active   [same as primary]                          the open list, primary first
 ```
@@ -59,20 +59,32 @@ active   [same as primary]                          the open list, primary first
   `pill2.placement: "below"` hangs it under pill 1 instead.
 - **Open**: one sheet grows out of the housing, 440 wide, up to six rows of face, name, text and
   badge or status, then scrolls. Pill 2 folds into it.
-- **No notch**: the same shapes float as capsules at top centre, 6 below the menu bar.
+- **No notch**: the same shapes float as capsules at top centre, 2pt inside the menu bar strip, so
+  the collapsed pills never reach the frontmost app's toolbar below it (a browser's tabs). The strip
+  is `visibleFrame`'s gap. A screen that reports none has an auto-hidden bar (or is full screen), so
+  its top strip belongs to the app: the panel is ordered out until the pointer reaches the top edge
+  and macOS reveals the bar, then the pills show in that 24pt strip until the pointer leaves it.
+  Only the open list, shown while the pointer is on it, reaches below.
 
 Screenshots: `assets/notch/`, one per state.
 
 ## Faces
 
-Built from the cockpit's avatar (`faces.js`; a test fails if it drifts from `manager-avatar.tsx`).
+The same picture the cockpit's `ManagerAvatar` draws. A manager with a `mascot` shows that
+portrait (`ui/notch/mascots/`, the cockpit's `portrait-96.webp`, byte-checked by a test); the shell
+passes only a mascot it bundles, so a newer one falls back rather than breaking. A legacy manager
+with no mascot keeps its persona (`faces.js`, checked against `manager-avatar.tsx`). The state cues
+go around a portrait, never over it, and the portrait itself moves: it has no eyes to blink, so
+it breathes, sways and glows instead.
 
-| State | Pose | Motion |
+| State | Pose | Motion (persona / portrait) |
 | --- | --- | --- |
-| idle | dimmed | a blink every 6s |
-| working | | looks side to side, gentle bob |
-| needs-you | wide eyes, amber ring | bounces, the ring pulses |
-| error | crossed eyes, desaturated, red ring | shudders twice |
+| idle | dimmed | a blink every 6s / breathes every 4s |
+| working | | looks side to side / sways side to side; both bob gently |
+| needs-you | amber ring (a persona widens its eyes) | bounces, the ring pulses / the portrait also swells and glows amber |
+| error | desaturated, red ring; a persona crosses its eyes, a portrait slumps and gets a red × badge | shudders twice; the badge throbs |
+
+`motion-list.gif` and `motion-pills.gif` in `assets/notch/` record one cycle of each.
 
 Reduce Motion stops all of it and keeps every pose, and replaces the spring with a fade.
 

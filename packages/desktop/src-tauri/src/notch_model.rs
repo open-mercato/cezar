@@ -10,6 +10,9 @@ pub const MAX_MINIS: usize = 4;
 pub const TEXT_LIMIT: usize = 48;
 /// `error` sticks until the manager's next turn, so only a fresh one counts as active.
 pub const ERROR_ACTIVE_MINUTES: u64 = 30;
+/// `managerMascotSchema`: the portraits bundled in `ui/notch/mascots/`. Anything else, including a
+/// newer sidecar's mascot this shell lacks, falls back to the `avatar` face rather than a broken image.
+pub const MASCOTS: [&str; 9] = ["base", "builder", "analyst", "guardian", "dispatcher", "reviewer", "automator", "planner", "scout"];
 
 /// The fields of `ManagerSummary` this module reads. Unknown keys, and fields a newer or older
 /// sidecar lacks, must not lose the row: every field defaults.
@@ -19,12 +22,29 @@ pub struct ManagerRow {
     pub id: String,
     pub name: String,
     pub avatar: u8,
+    /// The cockpit's portrait; absent on legacy managers, which keep their `avatar` face.
+    pub mascot: Option<String>,
     pub status: String,
     pub preview: Option<String>,
     pub pending_actions: u32,
     pub pending_questions: u32,
+    /// What Now still counts for this manager after dismissals, snoozes and Probably done
+    /// (spec 2026-11-23-needs-you-triage). An older sidecar omits it: the pending counts stand in.
+    pub needs_you: Option<NeedsYou>,
     pub last_activity_at: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct NeedsYou {
+    pub approvals: u32,
+    pub questions: u32,
+}
+
+/// The approvals and questions that still need the user, as the Now and phone badges count them.
+fn waiting(row: &ManagerRow) -> (u32, u32) {
+    row.needs_you.map_or((row.pending_actions, row.pending_questions), |needs| (needs.approvals, needs.questions))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -42,6 +62,8 @@ pub struct Entry {
     pub id: String,
     pub name: String,
     pub avatar: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mascot: Option<String>,
     pub face: Face,
     /// The `preview` line, or a status sentence when there is none.
     pub text: String,
@@ -56,6 +78,8 @@ pub struct Mini {
     pub id: String,
     pub name: String,
     pub avatar: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mascot: Option<String>,
     pub face: Face,
 }
 
@@ -73,8 +97,13 @@ pub struct NotchModel {
     pub active: Vec<Entry>,
 }
 
+fn mascot_of(row: &ManagerRow) -> Option<String> {
+    row.mascot.as_deref().filter(|mascot| MASCOTS.contains(mascot)).map(str::to_string)
+}
+
 fn pending_count(row: &ManagerRow) -> u32 {
-    row.pending_actions.saturating_add(row.pending_questions)
+    let (approvals, questions) = waiting(row);
+    approvals.saturating_add(questions)
 }
 
 /// One face per manager. What the user must act on outranks what the manager is doing.
@@ -124,7 +153,8 @@ fn plural(count: u32, one: &str) -> String {
 }
 
 fn badge_of(row: &ManagerRow) -> Option<String> {
-    let parts: Vec<String> = [(row.pending_actions, "approval"), (row.pending_questions, "question")]
+    let (approvals, questions) = waiting(row);
+    let parts: Vec<String> = [(approvals, "approval"), (questions, "question")]
         .into_iter()
         .filter(|(count, _)| *count > 0)
         .map(|(count, label)| plural(count, label))
@@ -162,7 +192,7 @@ pub fn shape(rows: &[ManagerRow], error_since: &str) -> Option<NotchModel> {
         .iter()
         .map(|row| {
             let face = face_of(row);
-            Entry { id: row.id.clone(), name: row.name.clone(), avatar: row.avatar, face, text: text_of(row, face), badge: badge_of(row) }
+            Entry { id: row.id.clone(), name: row.name.clone(), avatar: row.avatar, mascot: mascot_of(row), face, text: text_of(row, face), badge: badge_of(row) }
         })
         .collect();
     let primary = entries.first()?.clone();
@@ -170,7 +200,7 @@ pub fn shape(rows: &[ManagerRow], error_since: &str) -> Option<NotchModel> {
     let minis = others
         .iter()
         .take(MAX_MINIS)
-        .map(|entry| Mini { id: entry.id.clone(), name: entry.name.clone(), avatar: entry.avatar, face: entry.face })
+        .map(|entry| Mini { id: entry.id.clone(), name: entry.name.clone(), avatar: entry.avatar, mascot: entry.mascot.clone(), face: entry.face })
         .collect();
     Some(NotchModel { primary, minis, overflow: others.len().saturating_sub(MAX_MINIS), active: entries })
 }
@@ -291,6 +321,30 @@ mod tests {
         waiting.pending_questions = 1;
         assert_eq!(badge_of(&waiting).as_deref(), Some("2 approvals · 1 question"));
         assert_eq!(badge_of(&row("1", "idle")), None);
+    }
+
+    /// A dismissed, snoozed or probably-done card leaves the notch as it leaves the Now badge.
+    #[test]
+    fn needs_you_wins_over_the_raw_pending_counts() {
+        let dismissed = ManagerRow { pending_actions: 1, pending_questions: 2, needs_you: Some(NeedsYou { approvals: 0, questions: 1 }), ..row("1", "idle") };
+        assert_eq!(badge_of(&dismissed).as_deref(), Some("1 question"));
+        assert_eq!(face_of(&dismissed), Face::NeedsYou);
+        let cleared = ManagerRow { needs_you: Some(NeedsYou::default()), ..dismissed.clone() };
+        assert_eq!(badge_of(&cleared), None);
+        assert_eq!(face_of(&cleared), Face::Idle);
+        let parsed = parse_list(r#"{"managers":[{"id":"m","pendingActions":2,"pendingQuestions":0,"needsYou":{"approvals":0,"questions":0}}]}"#).unwrap();
+        assert_eq!(face_of(&parsed[0]), Face::Idle);
+    }
+
+    #[test]
+    fn the_cockpit_mascot_rides_along_and_an_unknown_one_falls_back_to_the_face() {
+        let mut builder = row("1", "working");
+        builder.mascot = Some("builder".into());
+        let mut unknown = row("2", "working");
+        unknown.mascot = Some("../etc".into());
+        let model = shape(&[builder, unknown, row("3", "working")], SINCE).unwrap();
+        assert_eq!(model.primary.mascot.as_deref(), Some("builder"));
+        assert_eq!(model.minis.iter().map(|m| m.mascot.as_deref()).collect::<Vec<_>>(), [None, None]);
     }
 
     #[test]

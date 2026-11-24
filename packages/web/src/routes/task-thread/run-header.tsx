@@ -8,6 +8,7 @@ import {
   PencilIcon,
   SquareTerminalIcon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
@@ -653,7 +654,7 @@ function OpenInMenuForRun({
  *  (`stripGroups`), as links to each view's page. */
 function FallbackTabs({ run, tab, terminalAvailable }: { run: ApiRun; tab: RunTab; terminalAvailable: boolean }) {
   const views = FIXED_VIEW_ORDER.filter(
-    (view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable),
+    (view) => (view !== 'graph' || hasWorkflowGraph(run)) && (view !== 'terminal' || terminalAvailable),
   )
   const activeView: ViewId | 'notes' = tab === 'preview' ? 'browser' : tab
   const groups = stripGroups(stripTabs(views))

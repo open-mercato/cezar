@@ -15,6 +15,7 @@ import {
   resumeCommand,
   resumeHint,
   runActionFlags,
+  landBranchPrompt,
 } from './run-actions'
 
 const step = (extra: Partial<StepState> = {}): StepState => ({
@@ -344,5 +345,20 @@ describe('lifecycle action exclusion', () => {
     expect(runActionFlags(record)).toMatchObject({finish:false,continueRun:false,terminal:false,cancel:false,deleteRun:false})
     expect(resumeHint(record)).toBeUndefined()
     expect(cliTargetResumes(record, 'claude')).toBe(false)
+  })
+})
+
+describe('landBranchPrompt', () => {
+  it('rebases onto and pushes to the remote git status measured against, never a literal origin', () => {
+    const prompt = landBranchPrompt('main', 'upstream', ['npm test', 'npm run lint'])
+    expect(prompt).toContain('fetch upstream and rebase this branch onto upstream/main')
+    expect(prompt).toContain('`git push upstream HEAD:main`')
+    expect(prompt).toContain('run the required checks (`npm test`, `npm run lint`) and stop without pushing if any fails')
+    expect(prompt).not.toMatch(/\borigin\b/)
+  })
+
+  it('still asks for the project checks when none are configured', () => {
+    expect(landBranchPrompt('trunk', 'origin')).toContain("run the project's checks and stop without pushing if any fails")
+    expect(landBranchPrompt('trunk', 'origin')).toContain('`git push origin HEAD:trunk`')
   })
 })

@@ -1,0 +1,120 @@
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { attentionOverridesResponseSchema, attentionResponseSchema, healthResponseSchema } from '@open-mercato/cezar-contract';
+import { createAttentionOverrideStore } from '../attention/overrides.ts';
+import { RunStore } from '../runs/store.ts';
+import { runInRelayScope } from '../relay/scope.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { reportPrClosed } from './forge/pr-closed.ts';
+import { createApp, WorkspaceEventBus } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+
+vi.mock('../core/backend-detect.ts', () => ({ detectEnvironment: async () => [] }));
+
+const DAY = 24 * 60 * 60_000;
+
+// Needs you triage (spec 2026-11-23-needs-you-triage): the override routes, end to end.
+describe('attention override routes', () => {
+  const savedDry = process.env.CEZ_DRY_RUN;
+  let repoRoot: string;
+  let store: RunStore;
+  let quietRunId: string;
+
+  beforeEach(() => {
+    process.env.CEZ_DRY_RUN = '1';
+    repoRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-attention-overrides-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    const run = store.createRun({ title: 'Fix login', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'waiting', waitingSince: new Date().toISOString() });
+    // Past the default Older days (7): Probably done.
+    quietRunId = store.createRun({ title: 'Old wait', workflow: 'quick-task', task: 't', steps: [] }).id;
+    store.updateRun(quietRunId, { status: 'waiting' });
+    // The store stamps the wait's start on the status change; this one began nine days ago.
+    store.updateRun(quietRunId, { waitingSince: new Date(Date.now() - 9 * DAY).toISOString() });
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+    if (savedDry === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDry;
+  });
+
+  const build = () => {
+    const workspaceEvents = new WorkspaceEventBus();
+    const events: string[] = [];
+    workspaceEvents.on((event) => { if (event === 'attention-change') events.push(event); });
+    const attentionOverrides = createAttentionOverrideStore(() => join(repoRoot, 'attention-overrides.json'));
+    const app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', attentionOverrides, workspaceEvents });
+    const list = async () => attentionResponseSchema.strict().parse(await (await apiRequest(app, '/api/v1/workspace/attention')).json());
+    const post = async (path: string, body: unknown) => {
+      const response = await apiRequest(app, path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as unknown };
+    };
+    const phoneCount = async () => (await runInRelayScope({ deviceId: 'phone' }, async () =>
+      healthResponseSchema.parse(await (await apiRequest(app, '/api/v1/health')).json()))).attention?.waiting;
+    return { app, list, post, events, phoneCount };
+  };
+
+  it('hides a dismissed item from the list, its count and the phone, and brings it back on clear', async () => {
+    const { list, post, events, phoneCount } = build();
+    const before = await list();
+    const task = before.items.find((item) => item.kind === 'task' && !item.settled)!;
+    expect(before.counts.total).toBe(1);
+    expect(await phoneCount()).toBe(1);
+
+    const set = await post('/api/v1/workspace/attention/overrides', { key: task.key, mode: 'dismiss', projectId: task.projectId, runId: task.runId });
+    expect(set.status).toBe(200);
+    expect(attentionOverridesResponseSchema.parse(set.body).overrides).toMatchObject([{ key: task.key, runId: task.runId }]);
+    const hidden = await list();
+    expect(hidden.items.some((item) => item.key === task.key)).toBe(false);
+    expect(hidden.counts.total).toBe(0);
+    expect(await phoneCount()).toBe(0);
+    // The cockpit hears it, not only a phone.
+    expect(events.length).toBeGreaterThan(0);
+
+    expect((await post('/api/v1/workspace/attention/overrides/clear', { key: task.key })).status).toBe(200);
+    expect((await list()).counts.total).toBe(1);
+  }, 30_000);
+
+  it('snoozes until a time, and wakes the cockpit when the snooze ends', async () => {
+    const { list, post, events } = build();
+    const task = (await list()).items.find((item) => item.kind === 'task' && !item.settled)!;
+    const until = new Date(Date.now() + 200).toISOString();
+    expect((await post('/api/v1/workspace/attention/overrides', { key: task.key, mode: 'dismiss', until })).status).toBe(200);
+    expect((await list()).items.some((item) => item.key === task.key)).toBe(false);
+    events.length = 0;
+    // The wake fires a second after the snooze ends, with no read in between.
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 4_000, interval: 50 });
+    expect((await list()).items.some((item) => item.key === task.key)).toBe(true);
+  }, 30_000);
+
+  it('"keep" puts a Probably done item back in the count', async () => {
+    const { list, post } = build();
+    const quiet = (await list()).items.find((item) => item.runId === quietRunId)!;
+    expect(quiet.settled?.why).toBe('quiet');
+    expect(quiet.settled?.detail).toBe('Quiet for 9 days');
+    await post('/api/v1/workspace/attention/overrides', { key: quiet.key, mode: 'keep' });
+    const kept = (await list()).items.find((item) => item.runId === quietRunId)!;
+    expect(kept.settled).toBeUndefined();
+    expect(kept.counted).toBe(true);
+  }, 30_000);
+
+  it('refuses a bad mode, a malformed until, and an empty or oversized key', async () => {
+    const { post } = build();
+    const path = '/api/v1/workspace/attention/overrides';
+    expect((await post(path, { key: 'k', mode: 'hide' })).status).toBe(400);
+    expect((await post(path, { key: 'k', mode: 'dismiss', until: 'tomorrow' })).status).toBe(400);
+    expect((await post(path, { key: '', mode: 'dismiss' })).status).toBe(400);
+    expect((await post(path, { key: 'k'.repeat(401), mode: 'dismiss' })).status).toBe(400);
+    expect((await post(`${path}/clear`, { key: '' })).status).toBe(400);
+  }, 30_000);
+
+  it('tells the cockpit when a PR closes', () => {
+    const { events } = build();
+    reportPrClosed(repoRoot, 5, 'merged');
+    expect(events).toEqual(['attention-change']);
+  }, 30_000);
+});
