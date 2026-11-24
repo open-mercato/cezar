@@ -20,13 +20,14 @@ export function headKind(manager: HeadCounts): HeadKind | null {
 }
 
 /**
- * The approvals and questions that still need the user, as the Now and phone badges count them
- * (spec 2026-11-23-needs-you-triage): not dismissed, snoozed or probably done, Notify on. From the
+ * The approvals and questions still waiting, as Now lists them (spec 2026-11-23-needs-you-triage): not
+ * dismissed, snoozed or probably done; a muted manager's stay, uncounted only in the badges. From the
  * attention list when the cockpit has it, else the managers route's own `needsYou`, else the raw counts.
  */
 export function withLiveCounts(managers: readonly ManagerSummary[], items: readonly AttentionItem[] | undefined): ManagerSummary[] {
   return managers.map((manager) => {
-    const live = items?.filter((item) => item.managerId === manager.id && item.counted && !item.settled)
+    // Not `counted`: a muted manager's cards stay listed, as the mute toast says.
+    const live = items?.filter((item) => item.managerId === manager.id && !item.settled)
     const counts = live
       ? { approvals: live.filter((item) => item.kind === 'approval').length, questions: live.filter((item) => item.kind === 'question').length }
       : manager.needsYou

@@ -242,6 +242,10 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
     expect(currentTaskPr({ pullRequestUrl: 'https://github.com/o/r/pull/7', markerRefs: { pr: 3 } })).toBe(7);
     expect(currentTaskPr({ markerRefs: { pr: 3 } })).toBe(3);
     expect(currentTaskPr({ prRefs: [{ number: 99, origin: 'derived', at: at(1) }] })).toBeUndefined();
+    // Legacy refs share the run's createdAt: a tie goes to created over marker (review 2, finding 4).
+    const same = at(30);
+    expect(currentTaskPr({ prRefs: [{ number: 7, origin: 'created', at: same }, { number: 8, origin: 'marker', at: same }] })).toBe(7);
+    expect(currentTaskPr({ prRefs: [{ number: 8, origin: 'marker', at: same }, { number: 7, origin: 'created', at: same }] })).toBe(7);
   });
 
   it('keeps a task dismissed after its dismissed question’s card closes (review finding 3)', () => {
@@ -266,8 +270,10 @@ describe('probably done (spec 2026-11-23-needs-you-triage)', () => {
       overrides: [{ key: 'question:m:mgr:q3', mode: 'dismiss', at: ago(1) }],
     }));
     expect(managerNeedsYou(list.items, 'mgr')).toEqual({ approvals: 1, questions: 1 });
+    // Muted: still listed for the notch, out of the badges only (review 2, finding 3).
     const muted = buildAttentionList(sources({ questions: [question('m:mgr:q1')], managers: [{ id: 'mgr', name: 'Shop manager', important: 0, notify: false }] }));
-    expect(managerNeedsYou(muted.items, 'mgr')).toEqual({ approvals: 0, questions: 0 });
+    expect(managerNeedsYou(muted.items, 'mgr')).toEqual({ approvals: 0, questions: 1 });
+    expect(muted.counts.total).toBe(0);
   });
 
   it('hides a dismissed item until its key changes, and "keep" overrides the detection', () => {

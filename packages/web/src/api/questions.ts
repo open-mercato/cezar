@@ -161,7 +161,14 @@ export interface PendingDismissal {
   error?: string
 }
 
-type Entry = PendingDismissal & { timer?: ReturnType<typeof setTimeout>; remaining: number; startedAt: number; queryClient: QueryClient }
+type Entry = PendingDismissal & {
+  timer?: ReturnType<typeof setTimeout>
+  remaining: number
+  startedAt: number
+  queryClient: QueryClient
+  /** Runs where the close fails, mounted or not: Needs you un-hides its row (spec 2026-11-23-needs-you-triage). */
+  onFailed?: (error: string) => void
+}
 
 const dismissals = new Map<string, Entry>()
 let snapshot: readonly PendingDismissal[] = []
@@ -214,6 +221,11 @@ async function commit(key: string): Promise<void> {
     }
     // The card comes back with the reason: a dismissal that did not land must not look done.
     entry.error = failure instanceof Error ? failure.message : String(failure)
+    try {
+      entry.onFailed?.(entry.error)
+    } catch {
+      // the caller's recovery must not stop the card coming back
+    }
     entry.paused = true
     publish()
     void entry.queryClient.invalidateQueries({ queryKey: questionKeys.all })
@@ -259,11 +271,19 @@ function watchClosedElsewhere(queryClient: QueryClient): void {
   })
 }
 
-export function scheduleDismiss(queryClient: QueryClient, key: string, label: string): void {
+export function scheduleDismiss(queryClient: QueryClient, key: string, label: string, opts?: { onFailed?: (error: string) => void }): void {
   const existing = dismissals.get(key)
-  if (existing && !existing.error) return
+  if (existing && !existing.error) {
+    // Already on its way (the Questions page, a card): this caller still hears a failure.
+    const later = opts?.onFailed
+    if (later) {
+      const earlier = existing.onFailed
+      existing.onFailed = earlier ? (error) => { earlier(error); later(error) } : later
+    }
+    return
+  }
   clearTimeout(existing?.timer)
-  const entry: Entry = { key, label, paused: false, remaining: DISMISS_UNDO_MS, startedAt: Date.now(), queryClient }
+  const entry: Entry = { key, label, paused: false, remaining: DISMISS_UNDO_MS, startedAt: Date.now(), queryClient, ...(opts?.onFailed ? { onFailed: opts.onFailed } : {}) }
   watchClosedElsewhere(queryClient)
   dismissals.set(key, entry)
   arm(entry)

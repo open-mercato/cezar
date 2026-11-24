@@ -55,6 +55,8 @@ export const runPrRefSchema = z.object({
   at: z.string(),
 });
 export type RunPrRef = z.infer<typeof runPrRefSchema>;
+/** Which of a task's PR associations speaks for it, best first: one it created, then one it declared. */
+export const RUN_PR_REF_RANK: Record<RunPrRef['origin'], number> = { created: 0, marker: 1, legacy: 2, derived: 3 };
 
 export const runStatusSchema = z.enum([
   'queued',
