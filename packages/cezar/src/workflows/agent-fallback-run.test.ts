@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cezarHomeDir } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
-import { putAgentFallbackPolicy, setManagerTaskAccountsLookup, type AgentFallbackPolicy } from '../workspace/agent-fallback.ts';
+import { managerFallbackPolicy, putAgentFallbackPolicy, setManagerTaskAccountsLookup, type AgentFallbackPolicy } from '../workspace/agent-fallback.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager, setFallbackProviderCheck } from './run.ts';
 import { managerAccountLimit } from '../managers/account-limit.ts';
@@ -699,6 +699,34 @@ describe('automatic agent fallback', () => {
     expect(store.getRun(id)?.error).toBe('automatic fallback failed — probe failed');
     expect(store.getRun(id)?.fallbackEpisode?.pending).toBeUndefined();
   });
+
+  it('hands a task to the explicitly selected agent when its manager fallback is still being admitted', async () => {
+    registerAccounts(['second']);
+    const policy = managerFallbackPolicy([{ provider: 'claude', profileId: 'second', model: 'opus' }], 'manager');
+    setManagerTaskAccountsLookup(() => [
+      { runner: 'claude', agentProfile: 'second' },
+      { runner: 'codex', agentProfile: 'default' },
+    ]);
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+    // Keep the admitted successor in the queue so this assertion stops at the handoff.
+    semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => {} });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    let release!: (value: string | null) => void;
+    const gate = new Promise<string | null>((resolve) => { release = resolve; });
+    const check = vi.spyOn(manager as unknown as { fallbackProviderRefusal(): Promise<string | null> }, 'fallbackProviderRefusal').mockReturnValue(gate);
+    const id = await failedRun({
+      worktree: false, model: 'opus', fallbackPolicy: policy, startedByManager: { id: 'manager', name: 'Release Manager' },
+    });
+    decide(id);
+    await until(() => check.mock.calls.length > 0, 'provider check starts');
+    expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'Release Manager' })).toHaveProperty('summary');
+    release(null);
+    await until(() => !(manager as unknown as { fallbackPending: Set<string> }).fallbackPending.has(id), 'selection settles');
+    expect(store.getRun(id)).toMatchObject({ status: 'queued', runner: 'codex', agentProfile: 'default', fallbackPolicy: policy });
+    expect(store.getRun(id)?.fallbackEpisode).toBeUndefined();
+    expect(store.getRun(id)?.model).toBeUndefined();
+    expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
+  }, 40_000);
 
   it('finishes an admission a restart interrupted, without reusing an agent it had already tried', async () => {
     registerAccounts(['second', 'third']);

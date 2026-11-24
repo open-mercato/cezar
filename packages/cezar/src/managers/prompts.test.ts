@@ -33,6 +33,12 @@ describe('watchPrompt and the manager goal', () => {
 });
 
 describe('managerSystemPrompt and the manager goal', () => {
+  it('routes agent changes and retries in place to the agent selection commands', () => {
+    const prompt = managerSystemPrompt(manager(''), []);
+    expect(prompt).toContain('use `cez-manager task switch`. Do not cancel and recreate it.');
+    expect(prompt).toContain('use `task retry` with the agent flags. This keeps the task id.');
+  });
+
   it('frames watching and merges as the default and puts the goal above it', () => {
     const prompt = managerSystemPrompt(manager(GOAL), []);
     expect(prompt).toContain('Unless the user\'s goal near the end of this prompt says otherwise, you watch the repositories below');

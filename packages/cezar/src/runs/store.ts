@@ -1,4 +1,4 @@
-import { RUN_PR_REF_RANK, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -365,6 +365,7 @@ export const runRecordSchema = z.object({
   /** Why a `cancelled` run was stopped and who stopped it, when the canceller said (`POST /runs/:id/cancel`). */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: runAgentSwitchSchema.optional(),
   /**
    * When the current wait on the user began: stamped by `updateRun` on entering `waiting` or on a
    * new question while there, so a wait has an identity even without a question. It outlives the

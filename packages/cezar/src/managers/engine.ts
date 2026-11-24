@@ -32,6 +32,7 @@ import {
   type ManagerMessagesResponse,
   type ManagerProposeActionInput,
   type ManagerRetryTaskInput,
+  type ManagerSwitchTaskInput,
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
@@ -40,6 +41,7 @@ import {
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
+  type SwitchRunAgentResponse,
   type QuestionClosed,
   type QuestionStale,
   type UpdateManagerInput,
@@ -52,6 +54,8 @@ import {
 } from '@open-mercato/cezar-contract';
 import type { AttentionKind, AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
+import { taskAgentSelection } from '../runs/agent-selection.ts';
+import { loadConfig } from '../config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -2025,10 +2029,11 @@ export class ManagerEngine {
     const final = event.state === 'done' || event.state === 'review' || event.state === 'needs-you' ? finalAssistantText(dataDir, run.id) : undefined;
     const clipped = final && final.length > TASK_REPORT_TEXT_LIMIT ? `${final.slice(0, TASK_REPORT_TEXT_LIMIT)}…` : final;
     const important = event.state === 'failed' || event.state === 'needs-you';
+    const switched = run.agentSwitch?.summary;
     this.postDirect(id, {
       messageId,
       turn: 'watch',
-      text: `${card}\n\n**${state}**${clipped ? `\n\n${clipped}` : ''}`,
+      text: `${card}\n\n**${state}**${switched ? `\n\n${switched}` : ''}${clipped ? `\n\n${clipped}` : ''}`,
       ...(important ? { headline: `${title}: ${TASK_STATE_LINE[event.state].toLowerCase()}${detail ? ` (${detail})` : ''}`.slice(0, HEADLINE_LIMIT) } : {}),
       fields: { taskReport: { projectId, runId: run.id, state: event.state, ...(root ? { rootRunId: root.id } : {}) } },
       attentionKeys: event.attentionKeys,
@@ -3129,14 +3134,76 @@ export class ManagerEngine {
     };
   }
 
-  /** A failed or cancelled task started again as a new one: same objective, workflow, runner, model, effort. */
+  async switchTask(id: string, input: ManagerSwitchTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const run = findRun(scope.source?.runs() ?? [], input.runId);
+    if (!scope.source || !run) return { error: 'task not found', status: 404 };
+    return this.changeTaskAgent(scope.manager, scope.source.root, run, input);
+  }
+
+  private async changeTaskAgent(manager: Manager, repoRoot: string, run: RunRecord, input: ManagerSwitchTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+    const { projectId } = input;
+    if (managerAccessOf(manager, projectId) === 'read') {
+      return { error: `${projectId} is read-only for this manager: it cannot switch task agents there`, status: 403 };
+    }
+    if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
+      return { error: `task ${run.id} was not started by this manager. Ask the user to switch it, or to allow "Cancel any task" in your settings`, status: 403 };
+    }
+    const current = taskAgentSelection(run, run.runner ?? (await loadConfig(repoRoot)).defaultRunner);
+    const runner = input.runner ?? current.runner;
+    if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    const currentAccount = runner === current.runner ? current.agentProfile : undefined;
+    const candidates = manager.taskAgents?.filter((agent) => agent.runner === runner);
+    // An account-less entry allows the project's resolved account, just as in fallback admission.
+    const automatic = candidates?.some((agent) => agent.agentProfile === undefined)
+      ? (await this.accountOption(runner, undefined, repoRoot)).account
+      : undefined;
+    const allowed = candidates?.map((agent) => agent.agentProfile ?? automatic ?? DEFAULT_AGENT_ACCOUNT_ID);
+    const preferredAccount = runner === current.runner ? currentAccount ?? automatic : undefined;
+    const agentProfile = input.agentProfile ?? (allowed
+      ? allowed.find((account) => account === preferredAccount) ?? allowed[0]
+      : currentAccount);
+    if ((allowed && (agentProfile === undefined || !allowed.includes(agentProfile)))
+      || (!allowed && manager.taskRunner && manager.taskRunner !== runner)) {
+      return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
+    }
+    const accountIssue = await this.accountIssue(runner, agentProfile);
+    if (accountIssue) return accountIssue;
+    // Model and effort flags name the requested runner. Inherited values belong to the old runner.
+    const keepsRunner = runner === current.runner && !agentModelsLocked(repoRoot);
+    const model = input.model ?? (keepsRunner ? current.model : undefined);
+    const effort = input.effort ?? (keepsRunner && model === current.model
+      ? (['low', 'medium', 'high', 'max'] as const).find((level) => level === current.reasoningEffort)
+      : undefined);
+    const issue = model || effort ? await this.modelIssue(runner, model, effort) : undefined;
+    if (issue) return issue;
+    const response = await this.forward(`/p/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(run.id)}/switch-agent`, {
+      method: 'POST',
+      body: {
+        runner, agentProfile, model,
+        reasoningEffort: effort,
+        changedBy: manager.name,
+      },
+    });
+    if (!response.ok) return ManagerEngine.refusalOf(response);
+    const { summary } = (await response.json()) as SwitchRunAgentResponse;
+    this.rememberTaskSource(manager.id, projectId, run.id);
+    this.managerActed(manager.id, { tasks: [followKey(projectId, run.id)] }, 'you switched that task’s agent since');
+    return { projectId, runId: run.id, notice: summary };
+  }
+
+  /** With agent flags, reopen the same failed task. A plain retry repeats the workflow from scratch. */
   async retryTask(id: string, input: ManagerRetryTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const run = findRun(scope.source?.runs() ?? [], input.runId);
-    if (!run) return { error: 'task not found', status: 404 };
+    if (!scope.source || !run) return { error: 'task not found', status: 404 };
     if (run.status !== 'failed' && run.status !== 'cancelled') {
       return { error: `task ${input.runId} is ${run.status}: only a failed or cancelled task can be retried. Use \`task say\` to continue it`, status: 409 };
+    }
+    if (input.runner || input.agentProfile || input.model || input.effort) {
+      return this.changeTaskAgent(scope.manager, scope.source.root, run, input);
     }
     if (run.workflow === '(planned)') return { error: 'an inline plan cannot be retried: start a new task with its objective instead', status: 409 };
     const effort = run.reasoningEffort && (['low', 'medium', 'high', 'max'] as const).find((level) => level === run.reasoningEffort);

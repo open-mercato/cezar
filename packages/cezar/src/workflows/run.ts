@@ -1,4 +1,4 @@
-import type { StepToolPolicy } from '@open-mercato/cezar-contract';
+import type { StepToolPolicy, SwitchRunAgentInput } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
@@ -109,6 +109,7 @@ import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+import { taskAgentSelection } from '../runs/agent-selection.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
@@ -596,7 +597,13 @@ interface ContinueRunOptions {
   agentProfile?: string;
 }
 
+class AgentAccountUnavailableError extends Error {}
+
 interface ActiveRun {
+  /** The actual definition this owner is walking, including the dequeue-time refresh. */
+  workflow?: WorkflowDef;
+  /** A successor already recorded and waiting for this owner to release its session and lease. */
+  switchingAgent?: true;
   /** Skills this session already counted as `skill_used` (telemetry); lazily created, so neither
    *  construction site (`execute`, `runContinuation`) has to know about it. */
   trackedSkills?: Set<string>;
@@ -1466,6 +1473,8 @@ export const VARIANT_HINTS: Record<string, string | undefined> = {
 
 const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+const SWITCH_AGENT_PROMPT =
+  'Continue this task on the newly selected agent. Use the handoff, conversation and existing worktree to pick up the work. If a user decision was pending, wait for their answer.';
 
 interface PendingContinuation {
   stepId: string;
@@ -1475,6 +1484,11 @@ interface PendingContinuation {
   /** Attachments the user pasted into the follow-up composer — images to view, files (#950) to
    *  be given the path of. Persisted when the continuation actually opens, not here. */
   images: PastedContent[];
+}
+
+interface ManualAgentHandoff {
+  summary: string;
+  previousContinuation?: PendingContinuation;
 }
 
 /** What re-reading a message's persisted attachments yields: viewable blocks for the images, and
@@ -1989,6 +2003,9 @@ export class RunManager {
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
+    if (run?.agentSwitch && backend === run.runner && profileId !== undefined && profileId !== resolved.profile.id) {
+      throw new AgentAccountUnavailableError(`The selected ${backend} account no longer exists (${profileId}). Switch the task to an available account.`);
+    }
     const bound = run?.deferredBinding?.accounts.find(a => a.runner === backend);
     if (run && deferredBindingActive(run, this.store.listRuns())) {
       const nativePi = backend === 'pi';
@@ -2556,7 +2573,9 @@ export class RunManager {
           void outsideRelayScope(() => this.execute(runId, workflow, input, ownerToken)).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
-            if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
+            if (!state || state.ownerToken !== ownerToken) return;
+            if (state.switchingAgent) { this.dropActive(runId, state); return; }
+            if (state.cancelled) return;
             this.publishRunFailure(runId, {
               status: 'failed',
               error: `engine crashed: ${message}`,
@@ -2599,7 +2618,8 @@ export class RunManager {
     // A reserved fallback successor may have no session yet (its predecessor ran out first);
     // it re-queues as a fresh continuation rather than reviving the workflow from the top.
     const reservedFallback = queuedContinuation !== undefined && run.fallbackEpisode?.current?.stepId === queuedContinuation.id;
-    if (queuedContinuation && (sessionStep?.sessionId || reservedFallback)) {
+    const switched = queuedContinuation !== undefined && run.agentSwitch?.continuationStepId === queuedContinuation.id;
+    if (queuedContinuation && (sessionStep?.sessionId || reservedFallback || switched)) {
       const backend = run.runner ?? 'claude';
       const sessionBackend = sessionStep?.backend ?? backend;
       // Same rule as `continueRun`: a session created under another account than the run's
@@ -2608,9 +2628,9 @@ export class RunManager {
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
+        sessionId: !switched && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
         backend,
-        prompt: RESTART_CONTINUATION_PROMPT,
+        prompt: switched ? SWITCH_AGENT_PROMPT : RESTART_CONTINUATION_PROMPT,
         images: [],
       });
       this.enqueue(run.id);
@@ -2890,8 +2910,12 @@ export class RunManager {
   private abandonCancelledStart(runId: string): boolean {
     if (!this.cancelledStarting.delete(runId)) return false;
     this.starting.delete(runId);
-    this.redeliverDeferred(runId, 'the run was cancelled');
-    this.reportSettledChildToParent(runId);
+    if (this.pendingContinuations.has(runId) && this.store.getRun(runId)?.status === 'queued') {
+      this.enqueue(runId);
+    } else {
+      this.redeliverDeferred(runId, 'the run was cancelled');
+      this.reportSettledChildToParent(runId);
+    }
     this.releaseSlot();
     return true;
   }
@@ -2899,7 +2923,9 @@ export class RunManager {
   /** Fence a continuation failure to the async owner that started it. */
   private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
-    if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
+    if (!state || state.ownerToken !== ownerToken) return;
+    if (state.switchingAgent) { this.dropActive(runId, state); return; }
+    if (state.cancelled) return;
     this.publishRunFailure(runId, {
       status: 'failed',
       error: `continue crashed: ${message}`,
@@ -2951,6 +2977,11 @@ export class RunManager {
     this.lastNamerKey.delete(runId);
     this.pendingBranchNames.delete(runId);
     this.forceStarted.delete(runId);
+    if (state?.switchingAgent && this.store.getRun(runId)?.status === 'queued') {
+      this.enqueue(runId);
+      this.releaseSlot();
+      return;
+    }
     // The run's slot is gone from busySlots() as of the deletes above — hand it
     // to the workspace's oldest queued run, in ANY project. Every terminal path
     // funnels through here, so this one call covers them all.
@@ -4194,13 +4225,11 @@ export class RunManager {
       }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
       this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
-      const switched = this.continueRun(runId, {
-        text: AGENT_FALLBACK_PROMPT,
+      const switched = this.queueAgentHandoff(runId, {
         runner: candidate.provider as RunnerId,
-        // Auto clears the previous agent's pin rather than carrying it to another provider.
-        model: candidate.model ?? '',
+        model: candidate.model,
         agentProfile: candidate.profileId,
-      }, true, { freshSessionAllowed: true });
+      }, AGENT_FALLBACK_PROMPT);
       if (!switched.ok) {
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${switched.error ?? 'unknown error'}` });
         continue;
@@ -4368,6 +4397,9 @@ export class RunManager {
   private queuedUsageLimitResume(run: RunRecord): boolean {
     const step = this.interruptedWorkflowStep(run);
     const cursor = run.graphState?.cursor;
+    if (run.agentSwitch?.workflow && step && (step.backend !== run.runner || step.profileId !== run.agentProfile || step.model !== run.model)) {
+      return false;
+    }
     return step !== undefined && (cursor === undefined || cursor === step.id);
   }
 
@@ -5047,8 +5079,16 @@ export class RunManager {
         return this.cancelAutoResume(runId);
       }
       this.cancelledStarting.add(runId);
+      this.pendingContinuations.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+      return true;
+    }
+    if (state.switchingAgent) {
+      this.pendingJobs.delete(runId);
+      this.pendingContinuations.delete(runId);
+      this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled during agent switch' });
       return true;
     }
     state.cancelled = true;
@@ -5076,23 +5116,23 @@ export class RunManager {
     // replacement while a non-cooperative provider is still alive would violate maxParallel.
     if (!state.sessionEverOpened || !state.session) {
       this.dropActive(runId, state);
-    } else {
-      state.cancellationTimer = setTimeout(() => {
-        if (this.active.get(runId) !== state || !state.cancelled) return;
-        const session = state.session;
-        if (!session) return;
-        session.hardStop?.();
-        const reapSettled = () => {
-          if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
-        };
-        // Handle both fulfillment and rejection: a bare finally() creates a new
-        // rejected promise when a provider teardown fails, producing an orphaned
-        // unhandled rejection during cancellation.
-        void session.result.then(reapSettled, reapSettled);
-      }, CANCEL_GRACE_MS);
-      state.cancellationTimer.unref?.();
-    }
+    } else this.armCancellationGrace(runId, state);
     return true;
+  }
+
+  private armCancellationGrace(runId: string, state: ActiveRun): void {
+    if (state.cancellationTimer) clearTimeout(state.cancellationTimer);
+    state.cancellationTimer = setTimeout(() => {
+      if (this.active.get(runId) !== state || !state.cancelled) return;
+      const session = state.session;
+      if (!session) return;
+      session.hardStop?.();
+      const reapSettled = () => {
+        if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
+      };
+      void session.result.then(reapSettled, reapSettled);
+    }, CANCEL_GRACE_MS);
+    state.cancellationTimer.unref?.();
   }
 
   /** Process-local proof, not merely a deadline left in the run record. */
@@ -5432,7 +5472,8 @@ export class RunManager {
     // through the settle tail, but `dropActive` resumes with the message (telemetry 2a1bd85a).
     const sessionGap = state !== undefined && !state.cancelled && !state.session?.open
       && (!this.waiting.has(runId) || state.turnSettled === true) && !this.lifecycle.isBlocked(runId);
-    if (!startingUp && !sessionGap) return false;
+    const switching = (state?.switchingAgent || this.cancelledStarting.has(runId)) && this.store.getRun(runId)?.status === 'queued';
+    if (!startingUp && !sessionGap && !switching) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
     // Accepted is the reply's moment; the later flush must not count it twice.
     if (!options.replyNoted && (options.userReply || options.askRequestId)) this.noteAskReply(runId, messageText(content), options.askRequestId);
@@ -5730,6 +5771,107 @@ export class RunManager {
     return false;
   }
 
+  /** Switch the queued job or hand the live run over after its current owner releases the tree. */
+  switchAgent(runId: string, input: SwitchRunAgentInput & { agentProfile: string }, defaultRunner?: RunnerId): { summary: string } | { error: string } {
+    const run = this.store.getRun(runId);
+    if (!run) return { error: 'task not found' };
+    if (this.lifecycle.isBlocked(runId)) return { error: 'Resolve the worktree lifecycle operation first' };
+    if (agentModelsLocked(this.repoRoot) && (input.model || input.reasoningEffort)) return { error: AGENT_MODELS_LOCKED_ERROR };
+    if (input.model && modelConflictsWithRunner(input.model, input.runner)) return { error: `model '${input.model}' is not a ${input.runner} model` };
+    if (input.reasoningEffort && !runnerSupportsReasoningEffort(input.runner)) return { error: REASONING_EFFORT_UNSUPPORTED_ERROR };
+    const refusal = run.enforceReadOnly ? undefined : readOnlyWorkflowRefusal(run.workflowDef, input.runner);
+    if (refusal) return { error: refusal };
+    const state = this.active.get(runId);
+    if (state?.switchingAgent || this.cancelledStarting.has(runId)) return { error: 'the task is already stopping' };
+    const current = taskAgentSelection(run, defaultRunner);
+    const from = [current.actualModel || current.model || 'auto', current.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID];
+    const to = [input.model || 'auto', input.agentProfile];
+    const summary = `Switched from ${current.runner} (${from.join(', ')}) to ${input.runner} (${to.join(', ')}) by ${input.changedBy}`;
+    const job = this.pendingJobs.get(runId);
+    const previousContinuation = this.pendingContinuations.get(runId);
+    const walk = run.graphState;
+    // A provider/model failure can leave a pinned session id even if nothing ever launched.
+    // Resume an unwired failure at that exact agent node so its tool policy and later steps survive.
+    const failedAgent = run.status === 'failed' && walk?.taken.at(-1)
+      ? run.steps.find((step) => step.kind === 'agent' && step.status === 'failed' && walk.taken.at(-1) === `${step.id}.failed->`)
+      : undefined;
+    const cursor = walk?.cursor ?? failedAgent?.id;
+    const stoppedBeforeSession = (run.status === 'failed' || run.status === 'cancelled') && !run.steps.some((step) => step.sessionId);
+    const savedWorkflow = (!state || state.turnSettled && state.workflow && !state.cancelled)
+      && !this.starting.has(runId) && !previousContinuation
+      && (failedAgent || stoppedBeforeSession || (isIdleParked(run) && cursor))
+      ? run.workflowDef : undefined;
+    const workflow = job?.workflow ?? (!state?.cancelled && !state?.turnSettled ? state?.workflow : undefined) ?? savedWorkflow;
+    const selection = {
+      runner: input.runner,
+      agentProfile: input.agentProfile,
+      model: input.model || undefined,
+      reasoningEffort: input.reasoningEffort,
+    };
+    if (workflow) {
+      const graph = workflow.graph ?? compileV1(workflow.steps);
+      const checkpoint = cursor && graph.nodes.some((node) => node.id === cursor && node.type === 'agent') ? cursor : undefined;
+      const requeue = Boolean(state && checkpoint || savedWorkflow);
+      this.clearAutoResume(runId);
+      this.store.updateRun(runId, {
+        ...selection, modelIdentity: undefined, actualModel: undefined, fallbackEpisode: undefined,
+        agentSwitch: { summary, workflow: true },
+        ...(failedAgent && walk ? { graphState: { ...walk, cursor: failedAgent.id } } : {}),
+        ...(requeue ? { status: 'queued', currentStepId: undefined, activity: undefined, finishedAt: undefined, error: undefined } : {}),
+      });
+      if (job) this.pendingJobs.set(runId, { workflow, input: { ...job.input, ...selection, usageLimitResume: undefined } });
+      if (requeue) {
+        if (checkpoint) this.store.updateStep(runId, checkpoint, { status: 'pending', finishedAt: undefined, error: undefined });
+        this.pendingJobs.set(runId, { workflow, input: this.workflowInput(run) });
+        if (state) this.stopForAgentSwitch(runId, state);
+        else this.enqueue(runId);
+      }
+    } else {
+      if (!run.worktreePath && run.worktree !== false && !run.steps.some((step) => step.sessionId) && !previousContinuation
+        && !state && !this.starting.has(runId) && run.status !== 'queued') {
+        return { error: 'the task has no worktree or agent session to resume' };
+      }
+      const stoppedSteps = state || this.starting.has(runId) ? run.steps.filter((step) =>
+        step.status === 'running' || step.status === 'waiting' || (step.status === 'pending' && step.id.startsWith('continue-'))) : [];
+      const result = this.queueAgentHandoff(runId, selection, SWITCH_AGENT_PROMPT, { summary, previousContinuation });
+      if (!result.ok) return { error: result.error ?? 'could not switch agent' };
+      for (const step of stoppedSteps) {
+        this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt: new Date().toISOString() });
+      }
+      if (state) this.stopForAgentSwitch(runId, state);
+      else if (this.starting.has(runId)) this.cancelledStarting.add(runId);
+    }
+    this.store.appendEvent(runId, { type: 'lifecycle', tone: 'info', message: summary });
+    this.store.flush();
+    void this.pump();
+    return { summary };
+  }
+
+  private stopForAgentSwitch(runId: string, state: ActiveRun): void {
+    state.switchingAgent = true;
+    state.cancelled = true;
+    state.continueOnDrop = undefined;
+    this.clearIdleTimer(state);
+    try { state.interrupt(); } catch { /* The owner still has to release its lease. */ }
+    if (state.session) this.armCancellationGrace(runId, state);
+  }
+
+  /** Manual switches and admitted fallback candidates use the same continuation and queue. */
+  private queueAgentHandoff(
+    runId: string,
+    selection: Pick<SwitchRunAgentInput, 'runner' | 'model' | 'reasoningEffort'> & { agentProfile: string },
+    prompt: string,
+    manual?: ManualAgentHandoff,
+  ): { ok: boolean; error?: string } {
+    return this.startContinuation(runId, {
+      ...selection,
+      // Auto clears the previous agent's model and effort when no new selection pins them.
+      model: selection.model ?? '',
+      text: manual?.previousContinuation?.prompt ?? prompt,
+      images: manual?.previousContinuation?.images,
+    }, true, { freshSessionAllowed: true, agentSwitch: manual });
+  }
+
   /**
    * "Continue" (spec 003): reopen a finished run's claude session in-process
    * (`claude --resume <sessionId>`) as a new synthetic step. The session then
@@ -5752,19 +5894,18 @@ export class RunManager {
   private startContinuation(
     runId: string,
     opts: ContinueRunOptions = {},
-    /** Restart recovery may discover several interrupted tasks at once. Those
-     *  continuations are queued; an explicit user Continue remains immediate. */
+    /** Recovery and agent handoffs use the queue. The cockpit's Continue remains immediate. */
     deferForCapacity = false,
-    /** Engine-only: the agent fallback may open a fresh session on a task whose agent ran out
-     *  before it ever produced one. Never reachable from the HTTP route. */
-    internal: { freshSessionAllowed?: boolean } = {},
+    /** The fallback and manual switch can open a fresh session even on a pre-launch failure. */
+    internal: { freshSessionAllowed?: boolean; agentSwitch?: ManualAgentHandoff } = {},
   ): { ok: boolean; error?: string } {
     if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
     if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.reasoningEffort?.trim())) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     const run = this.store.getRun(runId);
-    if (this.active.has(runId) || this.starting.has(runId)) {
+    const agentSwitch = internal.agentSwitch;
+    if (!agentSwitch && (this.active.has(runId) || this.starting.has(runId))) {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
       // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
       const unwinding = this.active.get(runId);
@@ -5792,13 +5933,13 @@ export class RunManager {
     }
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!CONTINUABLE_STATUSES.includes(run.status) && !isIdleParked(run)
+    if (!agentSwitch && !CONTINUABLE_STATUSES.includes(run.status) && !isIdleParked(run)
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
     if (!sessionStep?.sessionId) {
-      if (run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
+      if (!agentSwitch && run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
         void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
         return {ok: true};
       }
@@ -5825,7 +5966,7 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
+    const resume = !agentSwitch && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -5894,7 +6035,7 @@ export class RunManager {
     // bound UNATTENDED resumes.
     this.clearAutoResume(runId);
     // A human turn resets attempted candidates; the policy snapshot and account holds remain.
-    if (!deferForCapacity && run.fallbackEpisode) this.store.updateRun(runId, { fallbackEpisode: undefined });
+    if ((!deferForCapacity || agentSwitch) && run.fallbackEpisode) this.store.updateRun(runId, { fallbackEpisode: undefined });
 
     if (isIdleParked(run)) {
       // The parked turn is over; the reopen is a new step, like any Continue.
@@ -5902,13 +6043,14 @@ export class RunManager {
       for (const step of run.steps) {
         if (step.status === 'waiting' || step.status === 'running') this.store.updateStep(runId, step.id, { status: 'done', finishedAt: at });
       }
-      this.clearPendingAsk(runId);
+      if (!agentSwitch) this.clearPendingAsk(runId);
     }
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
-    const stepId = `continue-${continuations + 1}`;
+    const priorStep = agentSwitch?.previousContinuation?.stepId;
+    const stepId = priorStep ?? `continue-${continuations + 1}`;
     // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
     // step that owns the session (#1488); '' is the explicit "auto".
-    this.store.addStep(runId, {
+    if (!priorStep) this.store.addStep(runId, {
       id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
     });
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
@@ -5921,8 +6063,8 @@ export class RunManager {
           : (sessionStep?.backend === undefined || sessionStep.backend === targetRunner
               ? sessionStep?.reasoningEffort
               : undefined) ?? run.reasoningEffort;
-    if (continuationReasoningEffort) {
-      this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort });
+    if (continuationReasoningEffort || priorStep) {
+      this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort, ...(priorStep ? { model: opts.model } : {}) });
     }
     const prompt = opts.text?.trim() || 'Continue.';
     const images = opts.images ?? [];
@@ -5934,12 +6076,16 @@ export class RunManager {
         prompt,
         images,
       });
-      this.queue.push(runId);
+      if (!agentSwitch || (!priorStep && !this.active.has(runId) && !this.starting.has(runId))) this.queue.push(runId);
       this.store.updateRun(runId, {
         status: 'queued',
         error: undefined,
         finishedAt: undefined,
         currentStepId: undefined,
+        ...(agentSwitch ? {
+          activity: undefined, modelIdentity: undefined, actualModel: undefined,
+          agentSwitch: { summary: agentSwitch.summary, continuationStepId: stepId },
+        } : {}),
       });
       return { ok: true };
     }
@@ -6077,6 +6223,7 @@ export class RunManager {
     if (state.cwd === this.repoRoot) {
       state.autoLand = await this.landingPolicy(record, continueConfig);
     }
+    if (state.switchingAgent) { this.dropActive(runId, state); return; }
     // Show the Continue as running and the message in the thread BEFORE any wait for the tree, so
     // a held message is never invisible (#2396). Keep the settled state for a Stop during the wait.
     const settledRun = record && { status: record.status, error: record.error, finishedAt: record.finishedAt, currentStepId: record.currentStepId, activity: record.activity };
@@ -6130,6 +6277,7 @@ export class RunManager {
         const acquired = await this.acquireRepoRoot(runId, state);
         state.continuationWait = false;
         if (!acquired) {
+          if (state.switchingAgent) { this.dropActive(runId, state); return; }
           // Stopped while waiting: nothing ran, so the task goes back to what it was (#2396).
           if (waited && settledRun) {
             this.store.updateRun(runId, settledRun);
@@ -6523,7 +6671,7 @@ export class RunManager {
         recordedProfileId: resumedProfileId,
       });
     } catch (err) {
-      if (!(err instanceof AgentTempDirError) && !(err instanceof TrackerAgentBindingError)) throw err;
+      if (!(err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError || err instanceof AgentAccountUnavailableError)) throw err;
       failBeforeSpawn(err.message);
       return;
     }
@@ -6539,7 +6687,7 @@ export class RunManager {
     const continuePrivateMcp = !record?.workflowDef || !isReadOnlyWorkflow(record.workflowDef);
     const runner = createRunner(continueBackend);
     const continueMcp = continuePrivateMcp ? await this.privateMcpForLaunch(continueBackend, onEvent) : [];
-    if (state.cancelled) return;
+    if (state.cancelled) { this.dropActive(runId, state); return; }
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
     // A continuation's opening message becomes the session's `userPrompt` and never passes
@@ -6676,6 +6824,7 @@ export class RunManager {
       state.turnSettled = true;
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       if (this.active.get(runId) !== state) return;
+      if (state.switchingAgent) return;
       if (state.cancelled) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
@@ -6748,10 +6897,12 @@ export class RunManager {
 
   private async execute(runId: string, workflow: WorkflowDef, input: StartRunInput, ownerToken?: symbol): Promise<void> {
     const original = this.store.getRun(runId);
+    const switchedWorkflow = original?.agentSwitch?.workflow === true;
     // Only a job queued as a usage-limit resume re-enters its interrupted agent (#1300); the
     // step/session checkpoint survives missing optional attempt accounting.
     const resumeStep = input.usageLimitResume && original ? this.interruptedWorkflowStep(original) : undefined;
     const state: ActiveRun = {
+      workflow,
       ownerToken: ownerToken ?? Symbol('run-owner'),
       cancelled: false,
       interrupt: () => undefined,
@@ -6775,8 +6926,8 @@ export class RunManager {
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
-    const taskBackend: RunnerId = input.runner ?? config.defaultRunner;
-    const effortIssue = agentModelsLocked(this.repoRoot)
+    const taskBackend: RunnerId = (original?.agentSwitch?.workflow ? original.runner : input.runner) ?? config.defaultRunner;
+    const effortIssue = agentModelsLocked(this.repoRoot) || original?.agentSwitch?.workflow
       ? undefined
       : reasoningEffortIssue(workflow, taskBackend, input.reasoningEffort);
     if (effortIssue) {
@@ -6823,7 +6974,8 @@ export class RunManager {
     // read-only rule rides along, so a Continue (which reads the record) keeps it.
     // A usage-limit resume reuses the recorded prompt verbatim, as Continue does: the record holds
     // only the composed form, and re-composing it would repeat its landing/read-only parts.
-    const extraSystemPrompt = resumeStep && original?.systemPrompt !== undefined
+    const resumedWorkflow = switchedWorkflow && original?.graphState?.cursor !== undefined;
+    const extraSystemPrompt = (resumeStep || resumedWorkflow) && original?.systemPrompt !== undefined
       ? original.systemPrompt
       : composeSystemPrompt(
         resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt),
@@ -6849,8 +7001,8 @@ export class RunManager {
     }
     this.store.updateRun(runId, {
       status: 'running',
-      startedAt: resumeStep ? original?.startedAt : new Date().toISOString(),
-      runner: taskBackend,
+      startedAt: (resumeStep || resumedWorkflow ? original?.startedAt : undefined) ?? new Date().toISOString(),
+      runner: original?.agentSwitch?.workflow ? original.runner : taskBackend,
       systemPrompt: extraSystemPrompt,
       modelIdentity,
     });
@@ -6866,12 +7018,12 @@ export class RunManager {
       return;
     }
     let switchInPlaceTo: string | undefined;
-    if (resumeStep) {
+    if (resumeStep || resumedWorkflow) {
       await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
       const worktreePath = this.store.getRun(runId)?.worktreePath;
       if (worktreePath && existsSync(worktreePath)) state.cwd = worktreePath;
     }
-    if (resumeStep && state.cwd !== this.repoRoot) {
+    if ((resumeStep || resumedWorkflow) && state.cwd !== this.repoRoot) {
       // Reuse the tree as the agent left it, including a branch it checked out itself — under the
       // same agent lease the fresh path and `runContinuation` hold, so no reclaim races the agent.
       state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
@@ -6902,7 +7054,7 @@ export class RunManager {
         emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
         // Pin the starting commit: the session's Changes and Commits views use it
         // as their stable lower bound while reading the current working copy.
-        const startingCommit = resumeStep ? undefined : await getHeadCommit(repo.root);
+        const startingCommit = resumeStep || resumedWorkflow ? undefined : await getHeadCommit(repo.root);
         if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
       }
     } else if (repo) {
@@ -7109,6 +7261,11 @@ export class RunManager {
         : this.store.getRun(runId)?.graphState,
       usageLimitResume: resumeStep,
     });
+    if (state.switchingAgent) {
+      this.clearAutosaveTimer(state);
+      this.dropActive(runId, state);
+      return;
+    }
 
     // How a mid-workflow ask park (#917) ended, read once before the settlement
     // below clears it. A LIVE park never reaches this line: the parked session
@@ -7142,6 +7299,7 @@ export class RunManager {
     // workflow was unwinding, and a same-id continuation may now own the record.
     // No settlement branch below may touch that newer owner.
     if (this.active.get(runId) !== state) return;
+    if (state.switchingAgent) { this.dropActive(runId, state); return; }
 
     // Same window as `runContinuation`'s: whatever settles below is final once teardown lets go.
     state.turnSettled = true;
@@ -7426,31 +7584,43 @@ export class RunManager {
         if (rendered.prompt) rendered.prompt = renderNodeRefs(rendered.prompt, outputs);
         const verdicts = node.verdicts ?? [];
         if (verdicts.length) rendered.prompt = `${rendered.prompt ?? '{{task}}'}\n\n${verdictInstruction(verdicts)}`;
-        const backend = node.runner ?? taskBackend;
+        const run = this.store.getRun(runId);
+        const switched = run?.agentSwitch?.workflow === true && run.runner !== undefined;
+        const backend = switched ? run.runner! : node.runner ?? taskBackend;
+        const agentInput = switched ? { ...input, model: run.model, reasoningEffort: run.reasoningEffort } : input;
+        if (switched) {
+          rendered.runner = backend;
+          rendered.model = run.model;
+          rendered.reasoningEffort = undefined;
+        }
+        const interrupted = resuming && ctx.usageLimitResume?.id === node.id ? ctx.usageLimitResume : undefined;
+        const portableContext = switched && resuming && !interrupted
+          ? freshContinuationContext(run, this.store.readEvents(runId), this.attachmentsDir(runId))
+          : undefined;
         const lastTurn = { text: '' };
         const failure = await this.runAgentStep(
           runId,
           state,
           rendered,
-          input,
+          agentInput,
           skills,
           checkFailure,
           isTerminalAgent(graph, node.id),
           emit,
           startImages,
-          taskBackend,
+          switched ? backend : taskBackend,
           extraSystemPrompt,
           stepIdx >= 0 ? chainStepNote(workflow.steps, stepIdx) : undefined,
           startAttachments,
-          resuming && ctx.usageLimitResume?.id === node.id
+          interrupted
             ? {
-                ...(RESUMABLE_BACKENDS.has(backend) ? { resumeSessionId: ctx.usageLimitResume.sessionId } : {}),
+                ...(RESUMABLE_BACKENDS.has(backend) ? { resumeSessionId: interrupted.sessionId } : {}),
                 lastTurn,
-                usageLimitResume: ctx.usageLimitResume,
+                usageLimitResume: interrupted,
               }
-            : resuming
+            : resuming && !switched
               ? this.resumeInterruptedAgent(runId, node, backend, rendered, lastTurn)
-              : { resumeSessionId: this.graphResumeSession(runId, node, backend, emit), lastTurn },
+              : { lastTurn, portableContext, resumeSessionId: portableContext ? undefined : this.graphResumeSession(runId, node, backend, emit) },
         );
         startImages = undefined;
         checkFailure = null;
@@ -7481,13 +7651,13 @@ export class RunManager {
               runId,
               state,
               { ...rendered, prompt: `You did not end with a verdict. ${verdictInstruction(verdicts)}` },
-              input,
+              agentInput,
               skills,
               null,
               false,
               emit,
               undefined,
-              taskBackend,
+              switched ? backend : taskBackend,
               extraSystemPrompt,
               undefined,
               [],
@@ -8358,7 +8528,11 @@ export class RunManager {
     let why: string | undefined;
     if (!rec?.sessionId) why = `"${target}" has no session yet`;
     else if ((rec.backend ?? backend) !== backend) why = `"${target}" ran on ${rec.backend}, this node on ${backend}`;
-    else if (!RESUMABLE_BACKENDS.has(backend)) why = `${backend} cannot resume a session`;
+    else {
+      const run = this.store.getRun(runId);
+      if (run?.agentSwitch?.workflow && run.agentProfile !== (rec.profileId ?? DEFAULT_AGENT_ACCOUNT_ID)) why = `"${target}" used a different account`;
+    }
+    if (!why && !RESUMABLE_BACKENDS.has(backend)) why = `${backend} cannot resume a session`;
     if (why) {
       emit({ type: 'note', stepId: node.id, message: `session.continue: starting fresh — ${why}` });
       return undefined;
@@ -8602,7 +8776,7 @@ export class RunManager {
     /** Graph-workflow hooks (spec 2026-09-30-workflow-node-editor): reopen an earlier session
      *  instead of minting one, and hand back the last turn's text for verdict parsing.
      *  `usageLimitResume` reopens a step a usage limit interrupted (#1300). */
-    graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState },
+    graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState; portableContext?: string },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
     let systemPrompt: string | undefined;
@@ -8616,6 +8790,7 @@ export class RunManager {
       slash: leadingSlashSkillName(rawPrompt),
       text: rawPrompt,
     });
+    if (state.cancelled) return 'cancelled';
     const { installed, missingShared } = provision;
     if (installed.length) {
       emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
@@ -8684,6 +8859,9 @@ export class RunManager {
     if (attachments.length) {
       userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`;
     }
+    if (graphHooks?.portableContext) {
+      userPrompt = `${graphHooks.portableContext}\n\n${SWITCH_AGENT_PROMPT}\n\n## Current workflow step\n${userPrompt}`;
+    }
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const backend = step.runner ?? taskBackend;
@@ -8694,6 +8872,7 @@ export class RunManager {
       sessionId,
       backend,
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(this.store.getRun(runId)?.agentSwitch?.workflow ? { reasoningEffort, model: step.model, actualModel: undefined, modelIdentity: undefined } : {}),
     });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
@@ -9004,6 +9183,7 @@ export class RunManager {
         agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
+      if (state.cancelled) return 'cancelled';
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
       // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`
@@ -9031,9 +9211,10 @@ export class RunManager {
         ...(resumeStep ? { recordedProfileId: resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}),
       });
     } catch (err) {
-      if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;
+      if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError || err instanceof AgentAccountUnavailableError) return err.message;
       throw err;
     }
+    if (state.cancelled) return 'cancelled';
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     // A read-only workflow is only as read-only as the backend holding its tool limits.

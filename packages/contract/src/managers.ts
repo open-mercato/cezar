@@ -225,7 +225,7 @@ export const managerSchema = z.object({
   confirm: managerOwnConfirmSchema.optional(),
   /** Absent or empty: no chip row at all. */
   quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
-  /** `task cancel` may stop tasks it did not start, in its connected write projects. Absent = own only. */
+  /** `task cancel` and `task switch` may act on other tasks in connected write projects. Absent = own only. */
   cancelAnyTask: z.boolean().optional(),
   /** Read-only `gh` patterns the user allowed beyond the built-in policy. Absent = none. */
   bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
@@ -649,6 +649,7 @@ export const managerSnapshotTaskSchema = z.object({
   /** Why it was cancelled, and by whom, when `task cancel` said so. */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: z.string().optional(),
 });
 export type ManagerSnapshotTask = z.infer<typeof managerSnapshotTaskSchema>;
 
@@ -809,9 +810,21 @@ export const managerCancelTaskResponseSchema = z.object({
 });
 export type ManagerCancelTaskResponse = z.infer<typeof managerCancelTaskResponseSchema>;
 
-/** `cez manager task retry`: a new task with a failed one's objective, workflow, runner, model and effort. */
-export const managerRetryTaskInputSchema = z.object({ projectId: boundedId, runId: boundedId });
+export const managerRetryTaskInputSchema = z.object({
+  projectId: boundedId,
+  runId: boundedId,
+  runner: runnerInput.optional(),
+  agentProfile: z.string().min(1).max(64).optional(),
+  model: modelInput.optional(),
+  effort: managerTaskEffortSchema.optional(),
+});
 export type ManagerRetryTaskInput = z.infer<typeof managerRetryTaskInputSchema>;
+
+export const managerSwitchTaskInputSchema = managerRetryTaskInputSchema.refine(
+  (input) => Boolean(input.runner || input.agentProfile || input.model || input.effort),
+  { message: 'choose a runner, account, model or effort' },
+);
+export type ManagerSwitchTaskInput = z.infer<typeof managerSwitchTaskInputSchema>;
 
 export const managerProposeActionInputSchema = z.object({
   action: managerActionRequestSchema,

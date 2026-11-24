@@ -52,6 +52,7 @@ import {
   managerFollowTaskInputSchema,
   managerCancelTaskInputSchema,
   managerRetryTaskInputSchema,
+  managerSwitchTaskInputSchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -151,6 +152,7 @@ import {
   type AttachmentEntry,
   type AttachmentInput,
   continueInputSchema,
+  switchRunAgentInputSchema,
   cancelRunInputSchema,
   createRunInputSchema,
   type ContinueResponse,
@@ -208,7 +210,7 @@ import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
 import { managerAccountLimit } from '../managers/account-limit.ts';
 
-/** Proves a request came from this process's manager engine (`POST /runs` `managerAgent`). Never leaves the process. */
+/** Authenticates the manager engine's in-process calls that assign or switch a task's agent. */
 const MANAGER_AGENT_HEADER = 'x-cezar-manager-agent';
 const MANAGER_AGENT_TOKEN = randomUUID();
 // Byte lengths, not string lengths: a non-ASCII header must be a 403, never a timingSafeEqual throw.
@@ -5910,6 +5912,26 @@ export function createApp(deps: ServerDeps) {
       return c.json({ finished: true });
     })
 
+    .post('/runs/:id/switch-agent', paramZodValidator(runIdParamSchema), jsonZodValidator(switchRunAgentInputSchema), async (c) => {
+      if (!managerAgentTokenMatches(c.req.header(MANAGER_AGENT_HEADER))) {
+        return c.json({ error: 'switch-agent is available only to a cezar manager' }, 403);
+      }
+      const { root: repoRoot, store, manager } = c.get('project');
+      const { id } = c.req.valid('param');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const input = c.req.valid('json');
+      const account = input.agentProfile === undefined
+        ? await resolveProfileEnvForRoot(repoRoot, input.runner)
+        : await resolveWorkspaceProfile(input.runner, input.agentProfile);
+      if ('error' in account) return c.json({ error: account.error }, 400);
+      const blocked = await providerActionError([input.runner], { repoRoot, profileFor: () => account.profile.id });
+      if (blocked) return c.json({ error: blocked }, 409);
+      const defaultRunner = run.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const switched = manager.switchAgent(id, { ...input, agentProfile: account.profile.id }, defaultRunner);
+      return 'error' in switched ? c.json({ error: switched.error }, 409) : c.json(switched);
+    })
+
     // An in-place task's Commit to the base branch (spec 2026-10-20-trunk-based-projects).
     .post('/runs/:id/land', async (c) => {
       const { store, manager } = c.get('project');
@@ -9581,6 +9603,10 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/managers/:id/task-cancel', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCancelTaskInputSchema), async (c) => {
       const cancelled = await managerEngine.cancelTask(c.req.valid('param').id, c.req.valid('json'));
       return 'error' in cancelled ? c.json({ error: cancelled.error }, cancelled.status) : c.json(cancelled);
+    })
+    .post('/workspace/managers/:id/task-switch', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerSwitchTaskInputSchema), async (c) => {
+      const switched = await managerEngine.switchTask(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in switched ? c.json({ error: switched.error }, switched.status) : c.json(switched);
     })
     .post('/workspace/managers/:id/task-retry', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerRetryTaskInputSchema), async (c) => {
       const created = await managerEngine.retryTask(c.req.valid('param').id, c.req.valid('json'));
