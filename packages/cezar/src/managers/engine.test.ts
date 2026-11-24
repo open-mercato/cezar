@@ -3330,7 +3330,7 @@ describe('ManagerEngine', () => {
         expect(created).not.toHaveProperty('warning');
         expect(requests.at(-1)?.body).toMatchObject({
           runner: 'claude', agentProfile: 'first',
-          managerAgent: { note: expect.stringContaining('default from manager settings'), fallback: [{ provider: 'claude', profileId: 'second' }] },
+          managerAgent: { note: expect.stringContaining('default from manager settings'), fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] },
         });
       });
 
@@ -3340,7 +3340,7 @@ describe('ManagerEngine', () => {
         const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
         expect(created).toMatchObject({ agent: { agentProfile: 'second', reason: 'default from manager settings: claude first login out of limits until 2099-01-01T05:00:00.000Z, used claude second login' } });
         expect(created).not.toHaveProperty('agent.queuedUntil');
-        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }] } });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] } });
       });
 
       it('an explicit --account wins, with a warning naming an allowed account with capacity', async () => {
@@ -3381,14 +3381,15 @@ describe('ManagerEngine', () => {
         expect(retried).not.toHaveProperty('warning');
       });
 
-      it('--model and --effort are dropped, not refused, when a limit skip lands the task on another runner', async () => {
+      it('after a limit skip to another runner only what that runner refuses is dropped, never the task', async () => {
         const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
         const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus', effort: 'high' });
-        expect(created).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work', reason: expect.stringContaining('--model opus and --effort high dropped: meant for claude, not codex') } });
-        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+        expect(created).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work', reason: expect.stringContaining('--model opus dropped: not valid on codex') } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', reasoningEffort: 'high' });
         expect(requests.at(-1)?.body).not.toHaveProperty('model');
-        expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+        // A bad flag where nothing moved is still refused with the valid choices.
+        expect(await engine.createTask(await managerWith(limited({})), { projectId: 'alpha', task: 'Fix it', model: 'gpt-5.1-codex' })).toMatchObject({ status: 400 });
         // On the runner it was meant for, the model stays.
         const own = limited({});
         await engine.createTask(await managerWith(own), { projectId: 'alpha', task: 'Fix it', model: 'opus' });
@@ -3401,7 +3402,7 @@ describe('ManagerEngine', () => {
         await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
         expect(requests.at(-1)?.body).toMatchObject({
           runner: 'codex',
-          managerAgent: { fallback: [{ provider: 'claude', profileId: 'first', model: 'opus' }, { provider: 'claude', profileId: 'second', model: 'opus' }] },
+          managerAgent: { fallback: [{ provider: 'claude', profileId: 'first', model: 'opus' }, { provider: 'claude', profileId: 'second', model: 'opus' }, { provider: 'codex', profileId: 'work' }] },
         });
         expect(requests.at(-1)?.body).not.toHaveProperty('model');
       });
@@ -3410,38 +3411,48 @@ describe('ManagerEngine', () => {
         const engine = limited({});
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
         await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
-        expect(requests.at(-1)?.body).toMatchObject({ model: 'opus', managerAgent: { fallback: [{ provider: 'claude', profileId: 'second', model: 'opus' }, { provider: 'codex', profileId: 'work' }] } });
-        expect((requests.at(-1)?.body as { managerAgent: { fallback: object[] } }).managerAgent.fallback[1]).not.toHaveProperty('model');
+        expect(requests.at(-1)?.body).toMatchObject({ model: 'opus', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first', model: 'opus' }, { provider: 'claude', profileId: 'second', model: 'opus' }, { provider: 'codex', profileId: 'work' }] } });
+        expect((requests.at(-1)?.body as { managerAgent: { fallback: object[] } }).managerAgent.fallback[2]).not.toHaveProperty('model');
       });
 
-      it('a manager with one allowed account sends fallback: [] so the task never falls back outside the list', async () => {
+      it('a manager with one allowed account lists only that account, so the task never falls back outside the list', async () => {
         const engine = limited({});
         const id = await managerWith(engine, [{ runner: 'claude' as const, agentProfile: 'first' }]);
         await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
-        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [] } });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }] } });
       });
 
       it('an explicit --runner or --account keeps fallback on that runner', async () => {
         const engine = limited({});
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
         await engine.createTask(id, { projectId: 'alpha', task: 'No flags' });
-        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'second' }, { provider: 'codex', profileId: 'work' }] } });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }, { provider: 'codex', profileId: 'work' }] } });
         await engine.createTask(id, { projectId: 'alpha', task: 'Codex only', runner: 'codex' });
-        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', managerAgent: { fallback: [] } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', managerAgent: { fallback: [{ provider: 'codex', profileId: 'work' }] } });
         await engine.createTask(id, { projectId: 'alpha', task: 'This Claude', agentProfile: 'second' });
-        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }] } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] } });
         await engine.createTask(id, { projectId: 'alpha', task: 'Claude', runner: 'claude' });
-        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'second' }] } });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] } });
       });
 
-      it('a retry whose old account was deselected drops the old runner’s model and effort on another runner', async () => {
+      it('a retry whose old account was deselected drops what the new runner refuses', async () => {
         const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'gone', model: 'opus', reasoningEffort: 'high', steps: [] } as unknown as RunRecord;
         const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [old] }] });
         const id = await managerWith(engine, [{ runner: 'codex' as const, agentProfile: 'work' }]);
         expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'old' })).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work' } });
-        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+        // opus is not a codex model; high is a valid codex effort, so it stays.
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', reasoningEffort: 'high' });
         expect(requests.at(-1)?.body).not.toHaveProperty('model');
-        expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+      });
+
+      it('a codex model with claude first at its limit keeps the model on codex and off the claude fallback', async () => {
+        const engine = limited({ 'claude:first': RESET });
+        const id = await managerWith(engine, [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'gpt-5.1-codex' });
+        expect(created).toMatchObject({ agent: { runner: 'codex', agentProfile: 'work' } });
+        expect(created).not.toHaveProperty('agent.reason', expect.stringContaining('dropped'));
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', model: 'gpt-5.1-codex', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'codex', profileId: 'work', model: 'gpt-5.1-codex' }] } });
+        expect((requests.at(-1)?.body as { managerAgent: { fallback: object[] } }).managerAgent.fallback[0]).not.toHaveProperty('model');
       });
 
       it('status lists the allowed accounts and which are out of limits', async () => {

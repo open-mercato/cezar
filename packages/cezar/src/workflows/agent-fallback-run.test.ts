@@ -243,7 +243,20 @@ describe('automatic agent fallback', () => {
     it('keeps the reset-time auto-resume when the only other allowed account was deleted', async () => {
       registerAccounts([]);
       manager = new RunManager(store, repoRoot);
-      await resumesAtReset(managerTask([{ provider: 'claude', profileId: 'removed' }]).id);
+      const started = managerTask([{ provider: 'claude', profileId: 'default' }, { provider: 'claude', profileId: 'removed' }]);
+      await resumesAtReset(started.id);
+      // The removed account was never started on: no continuation, and the run still names no account.
+      const record = store.getRun(started.id)!;
+      expect(record.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
+      expect(record.fallbackEpisode?.current).toBeUndefined();
+      expect(messages(started.id).some((m) => m.includes('· removed') && m.includes('continues this task'))).toBe(false);
+    }, 40_000);
+
+    it('a list holding only the task’s own account waits for the reset, never claims a fallback', async () => {
+      manager = new RunManager(store, repoRoot);
+      const started = managerTask([{ provider: 'claude', profileId: 'default' }]);
+      await resumesAtReset(started.id);
+      expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
     }, 40_000);
 
     it('keeps the reset-time auto-resume when the only other allowed account is on a disabled provider', async () => {
@@ -335,6 +348,44 @@ describe('automatic agent fallback', () => {
       if ('refused' in inherited) throw new Error(inherited.refused);
       expect(store.getRun(inherited.id)?.model).toBe('opus');
       expect(store.getRun(inherited.id)?.fallbackPolicy?.candidates).toEqual([{ provider: 'claude', profileId: 'second', model: 'opus' }]);
+    }, 40_000);
+
+    it('a child on another listed account falls back to the parent’s account, never to itself', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const parent = manager.startRun(workflow, {
+        task: 'mock:monitoring waiting on my tasks', startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'default' }, { provider: 'claude', profileId: 'second' }] },
+      });
+      store.updateRun(parent.id, { dispatch: { rootRunId: parent.id } });
+      await until(() => store.getRun(parent.id)?.activity === 'monitoring', 'parent parked');
+      const child = manager.dispatch(parent.id, { objective: 'fix the bug mock:limit', account: 'second' });
+      if ('refused' in child) throw new Error(child.refused);
+      await until(() => store.getRun(child.id)?.fallbackEpisode?.current !== undefined, 'child successor reserved');
+      expect(store.getRun(child.id)?.agentProfile).toBe('default');
+      expect(store.getRun(child.id)?.fallbackEpisode?.attempted).toEqual(['claude:second', 'claude:default']);
+      expect(messages(child.id)).toContain('claude · Second reached its usage limit — claude · Default · auto model continues this task');
+    }, 40_000);
+
+    it('a child’s copy: its own model on its runner, the engine-checked model on another runner', async () => {
+      manager = new RunManager(store, repoRoot);
+      const parent = manager.startRun(workflow, {
+        task: 'mock:monitoring waiting on my tasks', model: 'opus', startedByManager,
+        managerAgent: { note: 'chosen', fallback: [
+          { provider: 'claude', profileId: 'default', model: 'opus' },
+          { provider: 'codex', profileId: 'default', model: 'gpt-5.1-codex' },
+          { provider: 'opencode', profileId: 'default' },
+        ] },
+      });
+      store.updateRun(parent.id, { dispatch: { rootRunId: parent.id } });
+      await until(() => store.getRun(parent.id)?.activity === 'monitoring', 'parent parked');
+      const child = manager.dispatch(parent.id, { objective: 'mock:done child', model: 'sonnet' });
+      if ('refused' in child) throw new Error(child.refused);
+      expect(store.getRun(child.id)?.fallbackPolicy?.candidates).toEqual([
+        { provider: 'claude', profileId: 'default', model: 'sonnet' },
+        { provider: 'codex', profileId: 'default', model: 'gpt-5.1-codex' },
+        { provider: 'opencode', profileId: 'default' },
+      ]);
     }, 40_000);
 
     it('the limit a manager sees is the semaphore’s merged deadline under the queue’s own key', async () => {

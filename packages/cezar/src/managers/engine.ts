@@ -2922,8 +2922,8 @@ export class ManagerEngine {
     const now = this.now();
     let choice: TaskAgentChoice | undefined;
     let fallbackOptions: AccountOption[] | undefined;
-    /** The runner a --model/--effort was written for: the one picked when every account has capacity. */
-    let intendedRunner: string | undefined;
+    /** The runner picked when every listed account has capacity: --model/--effort are refused, not dropped, there. */
+    let firstRunner: string | undefined;
     if (agents && candidates) {
       // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
       const rank = (agent: ManagerTaskAgent) => (retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
@@ -2931,12 +2931,14 @@ export class ManagerEngine {
       const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
       const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
       choice = chooseTaskAgent(options, { explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now });
-      intendedRunner = retry?.runner ?? input.runner ?? options[0]?.runner;
+      firstRunner = options[0]?.runner;
       const picked = choice.chosen;
       // An explicit --runner or --account keeps a usage-limit fallback on that runner.
       const sameRunner = input.runner !== undefined || input.agentProfile !== undefined;
-      fallbackOptions = allowed.filter((option) => option !== picked && !(option.runner === picked.runner && option.account === picked.account)
-        && (!sameRunner || option.runner === picked.runner));
+      // The whole list, the task's own account included: admission skips whichever account just ran
+      // out, so a dispatched child on another listed account still falls back to this one.
+      fallbackOptions = allowed.filter((option, index) => (!sameRunner || option.runner === picked.runner)
+        && allowed.findIndex((other) => other.runner === option.runner && other.account === option.account) === index);
     }
     const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
     const agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
@@ -2944,27 +2946,31 @@ export class ManagerEngine {
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
     choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
-    intendedRunner ??= retry?.runner;
-    // A task that lands on another runner than its model and effort were meant for (a limit skip,
-    // or a retry) keeps none of them: they would be refused, or wrong, on this runner.
-    const moved = intendedRunner !== undefined && intendedRunner !== runner && Boolean(input.model || input.effort);
-    const carried = moved ? { ...input, model: undefined, effort: undefined } : input;
-    if (moved) {
-      const dropped = [input.model && `--model ${input.model}`, input.effort && `--effort ${input.effort}`].filter(Boolean).join(' and ');
-      choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: meant for ${intendedRunner}, not ${runner}` };
+    // --model/--effort are checked on the runner the task really landed on. A runner the flags did not
+    // pin (a limit skip off the first listed runner, a retry on another runner) drops only what fails
+    // there; anywhere else a bad flag is refused with the valid choices, as before.
+    const unpinned = (firstRunner !== undefined && !input.runner && firstRunner !== runner)
+      || (retry?.runner !== undefined && retry.runner !== runner);
+    let carried = input;
+    if (input.model || input.effort) {
+      const issue = await this.modelIssue(runner, input.model, input.effort);
+      if (issue && !unpinned) return issue;
+      if (issue) {
+        const model = input.model && !(await this.modelIssue(runner, input.model, undefined)) ? input.model : undefined;
+        const effort = input.effort && !(await this.modelIssue(runner, model, input.effort)) ? input.effort : undefined;
+        carried = { ...input, model, effort };
+        const dropped = [input.model && !model && `--model ${input.model}`, input.effort && !effort && `--effort ${input.effort}`].filter(Boolean).join(' and ');
+        choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: not valid on ${runner}` };
+      }
     }
-    // The requested model follows a fallback on the runner it was written for, even when a limit skip
-    // landed the task elsewhere; any other runner starts on its own default.
-    const modelRunner = intendedRunner ?? runner;
-    const fallback = fallbackOptions?.map((option) => ({
-      provider: option.runner, profileId: option.account,
-      ...(input.model && option.runner === modelRunner ? { model: input.model } : {}),
-    }));
+    // A fallback entry carries the requested model only where that runner accepts it.
+    const modelValidOn = new Map<string, boolean>();
+    const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
+    for (const option of fallbackOptions ?? []) {
+      if (input.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, input.model, undefined)));
+      fallback!.push({ provider: option.runner, profileId: option.account, ...(input.model && modelValidOn.get(option.runner) ? { model: input.model } : {}) });
+    }
     const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
-    if (carried.model || carried.effort) {
-      const issue = await this.modelIssue(runner, carried.model, carried.effort);
-      if (issue) return issue;
-    }
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
     // A dispatch root always gets its own worktree, which overrides a trunk-based project's in-place
     // workspace: no Commit to the base branch, no auto-land. The project's model wins over the flag.
