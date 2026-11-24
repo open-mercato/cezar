@@ -161,10 +161,12 @@ export function ProjectsPicker({
   )
 }
 
-/** The runner a manager with no pin uses: the machine default, as a task would. */
+/** The runner a manager's own turns use: its pin, else the machine default — except Codex, which
+ *  cannot fence a manager turn, so the server answers on Claude Code instead (#2330). */
 export function useManagerRunner(pinned: string | undefined): Runner {
   const health = useHealth()
-  return (pinned as Runner | undefined) ?? health.data?.defaultRunner ?? 'claude'
+  const runner = (pinned as Runner | undefined) ?? health.data?.defaultRunner ?? 'claude'
+  return runner === 'codex' ? 'claude' : runner
 }
 
 function useManagerRunners() {

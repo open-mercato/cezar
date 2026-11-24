@@ -385,6 +385,9 @@ export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
 const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
+export const CODEX_MANAGER_REFUSAL = 'Codex cannot run a manager: it cannot fence a manager turn to its cez-manager commands. Pick Claude Code for the manager; Codex stays available for the tasks it starts.';
+const CODEX_MANAGER_NOTICE = 'Codex cannot run a manager, so this manager now runs on Claude Code. Its new tasks still start on Codex.';
+const CODEX_DEFAULT_NOTICE = 'Codex, this machine’s default agent, cannot run a manager, so this manager runs on Claude Code. Its new tasks still start on Codex.';
 
 /** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
 const ATTACHMENT_BASE64_LIMIT = 7_000_000;
@@ -597,6 +600,7 @@ export class ManagerEngine {
     if (this.started || this.disposed) return;
     this.started = true;
     // A SIGKILL leaves the lease until it goes stale, so a quick restart has to look again.
+    for (const manager of this.deps.store.list()) if (manager.runner === 'codex') this.leaveCodex(manager.id);
     if (!this.recover()) {
       this.recoveryTimer = setTimeout(() => this.recover(), LEASE_STALE_MS + 5_000);
       this.recoveryTimer.unref?.();
@@ -847,6 +851,25 @@ export class ManagerEngine {
 
   // ---- definitions -------------------------------------------------------------------------
 
+  /**
+   * Codex cannot run a manager (#2330): nothing in it can fence the turn to `cez-manager` and the
+   * granted reads. A stored Codex pin moves to Claude Code once, with a notice, and drops the
+   * model and account that belonged to Codex.
+   */
+  private leaveCodex(id: string): void {
+    let moved = false;
+    this.deps.store.update(id, (manager) => {
+      if (manager.runner !== 'codex') return manager;
+      moved = true;
+      const { model: _model, agentProfile, ...rest } = manager;
+      // Its tasks defaulted to Codex through the pin; they still do.
+      const tasks = manager.taskRunner || manager.taskAgents ? {}
+        : agentProfile ? { taskAgents: [{ runner: 'codex' as const, agentProfile }] } : { taskRunner: 'codex' as const };
+      return { ...rest, ...tasks, runner: 'claude', updatedAt: this.iso() };
+    });
+    if (moved) this.addNotice(id, CODEX_MANAGER_NOTICE);
+  }
+
   private async accountIssue(runner: string | undefined, agentProfile: string | undefined): Promise<ManagerRefusal | undefined> {
     if (runner !== undefined && !isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
     if (agentProfile === undefined) return undefined;
@@ -864,6 +887,7 @@ export class ManagerEngine {
   }
 
   async create(input: CreateManagerInput, ctx: ManagerTelemetryContext = {}): Promise<ManagerSummary | ManagerRefusal> {
+    if (input.runner === 'codex') return { error: CODEX_MANAGER_REFUSAL, status: 400 };
     const issue = await this.accountIssue(input.runner, input.agentProfile) ?? await this.taskAccountsIssue(input.taskAgents);
     if (issue) return issue;
     const first = this.deps.store.list().length === 0;
@@ -911,6 +935,7 @@ export class ManagerEngine {
       this.emitSummary(id, generation, summary);
       return summary;
     }
+    if (input.runner === 'codex') return { error: CODEX_MANAGER_REFUSAL, status: 400 };
     const issue = await this.accountIssue(
       input.runner === null ? undefined : (input.runner ?? current.runner),
       input.agentProfile === null ? undefined : input.agentProfile,
@@ -1509,9 +1534,8 @@ export class ManagerEngine {
     const cause = result.error ? failureCause(result.error, result.text) : undefined;
     const failed = cause && !turn.stopped && !resetAt ? this.recordFailure(id, kind, cause, result.runner) : undefined;
     // A rejected login renders the reconnect card, and a reconnect of that account re-runs the chat.
-    const authFailure = failed && !turn.timedOut && classifyManagerFailure(cause!) === 'auth'
-      ? { provider: result.runner ?? await this.runnerOf(manager), profileId: manager.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID }
-      : undefined;
+    const agent = failed && !turn.timedOut && classifyManagerFailure(cause!) === 'auth' ? await this.turnAgentOf(manager) : undefined;
+    const authFailure = agent ? { provider: result.runner ?? agent.runner, profileId: agent.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID } : undefined;
     if (kind === 'chat' && chat) {
       store.updateState(id, (state) => ({
         ...state,
@@ -2216,16 +2240,23 @@ export class ManagerEngine {
     onProgress: (progress: Progress) => void,
   ): Promise<DriveResult> {
     const { store } = this.deps;
-    const runner = await this.runnerOf(manager);
-    // Every manager turn requires a tool fence, including chats and unattended watches.
-    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError('a manager needs its cez-manager shell fence, which Codex cannot enforce', 'Refusing this manager turn; no model turn was started. Pick Claude Code for this manager.')), runner };
-    const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
+    // Every manager turn requires a tool fence, chats and unattended watches alike; Codex has none.
+    if (manager.runner === 'codex') {
+      this.leaveCodex(id);
+      manager = store.get(id) ?? manager;
+    }
+    const { runner, agentProfile } = await this.turnAgentOf(manager);
+    if (manager.runner === undefined && runner !== await this.runnerOf(manager)
+      && !store.messages(id).some((message) => message.kind === 'notice' && message.text === CODEX_DEFAULT_NOTICE)) {
+      this.addNotice(id, CODEX_DEFAULT_NOTICE);
+    }
+    const sessionKey = `${runner}|${agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
     const resumeId = state.sessionKey === sessionKey && this.resumes(turn.kind, state.sessions[turn.kind]) ? state[field] : undefined;
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
-    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
+    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, agentProfile) : { env: {} };
     // Codex is refused above; Claude is the one manager runner with plan limits today.
     const planProvider = runner === 'claude' ? runner : undefined;
     const planProfile = 'profile' in profile ? profile.profile : undefined;
@@ -2583,8 +2614,8 @@ export class ManagerEngine {
 
   /** The Claude config dir a turn would import from: the manager's account, not the server's own. */
   private async claudeConfigDir(manager: Manager): Promise<string | undefined> {
-    const runner = await this.runnerOf(manager);
-    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
+    const { runner, agentProfile } = await this.turnAgentOf(manager);
+    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, agentProfile) : { env: {} };
     return (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR;
   }
 
@@ -2620,6 +2651,13 @@ export class ManagerEngine {
     return manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : this.deps.defaultRunner();
   }
 
+  /** Who answers the manager's own turns: Codex has no fence for them, so Claude Code (#2330). */
+  private async turnAgentOf(manager: Manager): Promise<{ runner: RunnerId; agentProfile?: string }> {
+    const runner = await this.runnerOf(manager);
+    if (runner === 'codex') return { runner: 'claude' };
+    return { runner, ...(manager.agentProfile !== undefined ? { agentProfile: manager.agentProfile } : {}) };
+  }
+
   /** Every Claude session's init, chat, watch, job, probe and call alike: the status churns. */
   private observeConnectors(id: string, event: Extract<AgentEvent, { type: 'mcp-servers' }>): ObservedConnectors | undefined {
     if (!this.deps.store.get(id)) return undefined;
@@ -2634,7 +2672,7 @@ export class ManagerEngine {
 
   async connectors(id: string): Promise<ManagerConnectorsResponse | undefined> {
     const manager = this.deps.store.get(id);
-    return manager ? this.connectorsOf(manager, await this.runnerOf(manager)) : undefined;
+    return manager ? this.connectorsOf(manager, (await this.turnAgentOf(manager)).runner) : undefined;
   }
 
   /** A Claude session with no tools, ended as soon as its init reports the servers: no model turn is needed. */
@@ -2642,9 +2680,9 @@ export class ManagerEngine {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
     if (manager.inactive) return { error: MANAGER_INACTIVE, status: 409 };
-    const runner = await this.runnerOf(manager);
+    const { runner, agentProfile } = await this.turnAgentOf(manager);
     if (runner !== 'claude') return this.connectorsOf(manager, runner);
-    const profile = await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile);
+    const profile = await resolveProfileEnvForRoot(undefined, runner, agentProfile);
     let session: AgentSession | undefined;
     let seen = false;
     const stop = () => {
@@ -2685,13 +2723,13 @@ export class ManagerEngine {
     const manager = store.get(id);
     if (!manager) return { ok: false, result: 'manager not found' };
     if (manager.inactive) return { ok: false, result: 'This manager is inactive: reactivate it to run the call.' };
-    const runner = await this.runnerOf(manager);
+    const { runner, agentProfile } = await this.turnAgentOf(manager);
     if (runner !== 'claude') return { ok: false, result: CONNECTORS_CLAUDE_ONLY };
     const name = action.connectorName ?? connectorDisplayName(action.connector, store.state(id).connectors);
     const unavailable = { ok: false, result: `${name} is temporarily unavailable. Try again when it reconnects.` };
     const tool = connectorToolName(action.connector, action.tool);
     const approved = canonicalJson(action.args);
-    const profile = await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile);
+    const profile = await resolveProfileEnvForRoot(undefined, runner, agentProfile);
     const fence = connectorCallFence(tool, action.args);
     const inputs = new Map<string, unknown>();
     const results: Array<{ input: unknown; result: string; isError: boolean }> = [];
@@ -3090,7 +3128,7 @@ export class ManagerEngine {
       if (managerConnectorToolMode(scope.manager.connectors?.[input.action.connector], input.action.tool) === 'allow') {
         return { error: `${connectorToolName(input.action.connector, input.action.tool)} is granted without asking: call it directly instead of proposing it`, status: 400 };
       }
-      if ((await this.runnerOf(scope.manager)) !== 'claude') return { error: CONNECTORS_CLAUDE_ONLY, status: 409 };
+      if ((await this.turnAgentOf(scope.manager)).runner !== 'claude') return { error: CONNECTORS_CLAUDE_ONLY, status: 409 };
     }
     const action = await this.stampAction(id, input.action);
     if ('error' in action) return action;
