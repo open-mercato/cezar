@@ -847,8 +847,8 @@ function applyProjectPatch(
  * every project's reference to it server-side, so a projects cache left alone would keep showing
  * a selection that no longer exists.
  */
-function useAgentProfileMutation<TVariables>(
-  mutationFn: (variables: TVariables) => Promise<unknown>,
+function useAgentProfileMutation<TVariables, TData = unknown>(
+  mutationFn: (variables: TVariables) => Promise<TData>,
 ) {
   const queryClient = useQueryClient()
   return useMutation({

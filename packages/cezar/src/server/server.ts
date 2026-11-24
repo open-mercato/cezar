@@ -206,6 +206,14 @@ import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
+import {
+  createManagedAccountDir,
+  isManagedAccountDir,
+  logoutManagedAccount,
+  markAccountSignedIn,
+  removeManagedAccountDir,
+  sweepPendingAccounts,
+} from '../workspace/managed-accounts.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import { workflowCapabilities } from '../workflows/capabilities.ts';
 import {
@@ -659,8 +667,13 @@ const projectIdSchema = z.union([z.literal('default'), z.string().regex(PROJECT_
 const createAgentProfileSchema = z.object({
   provider: z.enum(PROVIDER_IDS),
   label: z.string().trim().max(200).optional(),
-  configDir: z.string().trim().min(1).max(4096),
-}).strict();
+  configDir: z.string().trim().min(1).max(4096).optional(),
+  /** cezar makes the folder itself (spec 2026-11-24-add-account-in-cockpit); no `configDir`. */
+  managed: z.literal(true).optional(),
+}).strict().refine(
+  (value) => (value.configDir === undefined) === (value.managed === true),
+  'send configDir, or managed: true',
+);
 
 /** `POST …/agent-profiles/:id/open` — a catalog id (or `folder`) plus an optional open target. */
 const openAgentAccountFileSchema = z.object({
@@ -1679,8 +1692,14 @@ export function createApp(deps: ServerDeps) {
   const trackerWatches = new TrackerWatches(trackers, deps.socketHub);
   // The one place a relay request narrows (spec 2026-11-01-relay-qr-pairing § One new principal).
   const capabilities = () => narrowForRelay(resolveCapabilities(process.env, bindHost));
-  // Account management needs the machine, so no flag opens it to a phone.
-  const accountsEnabled = () => !inRelayScope() && agentAccountsEnabled(process.env, bindHost);
+  // Account management needs the machine; a phone gets only the managed subset below.
+  // One read of the boundary for both closures below (relay/authorization.test.ts counts them).
+  const accountsAllowed = () => agentAccountsEnabled(process.env, bindHost);
+  const accountsEnabled = () => !inRelayScope() && accountsAllowed();
+  /** A paired phone may list (without host paths), add and remove accounts cezar manages
+   *  (spec 2026-11-24-add-account-in-cockpit); folder paths never cross the relay. */
+  const phoneAccounts = () => inRelayScope() && accountsAllowed();
+  const accountsVisible = () => accountsEnabled() || phoneAccounts();
   // The task terminal's registry (spec `2026-10-07-task-workspace` §6): one per server, because a
   // shell outlives the request that opened it and belongs to the host, not to a project context.
   const detectedUrls = new DetectedUrls();
@@ -2430,10 +2449,14 @@ export function createApp(deps: ServerDeps) {
     openTerminal: (command) => openTerminal(bootRoot, command),
     watchTerminal: (provider, profile) => watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }),
     readIdentity: (provider, configDir) => readAccountIdentity(provider, configDir),
+    // The cockpit refetches accounts on the session's `connected` event.
+    markSignedIn: async (provider, profileId) => { await markAccountSignedIn(provider, profileId); },
     dryRun: () => process.env.CEZ_DRY_RUN === '1',
   });
 
   deps.onDispose?.(() => loginSessions.dispose());
+  // Accounts added from the cockpit whose sign-in never finished (spec 2026-11-24-add-account-in-cockpit).
+  void sweepPendingAccounts({ isLive: (provider, id) => loginSessions.isLive?.(provider, id) ?? false }).catch(() => []);
   const blockedOnAccount = async (provider: ProviderId, profileId: string): Promise<boolean> =>
     (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId))
     || (await workspaceProjectSources({ salvageColdRuns: true })).some((project) => project.available
@@ -2679,12 +2702,15 @@ export function createApp(deps: ServerDeps) {
   };
 
   /** Build the wire row for one resolved profile: its dir state plus whatever auth is cached. */
-  const agentProfileBody = async (profile: ResolvedAgentProfile) => ({
+  const agentProfileBody = async (profile: ResolvedAgentProfile, options: { hostPaths?: boolean } = {}) => ({
     id: profile.id,
     provider: profile.provider,
     label: profile.label,
-    configDir: profile.configDir,
-    path: profile.path,
+    // A phone never receives a host path (spec 2026-11-24-add-account-in-cockpit).
+    configDir: options.hostPaths === false ? '' : profile.configDir,
+    path: options.hostPaths === false ? '' : profile.path,
+    ...(profile.managed ? { managed: true as const } : {}),
+    ...(profile.pending ? { pending: true as const } : {}),
     ...(await profileDirState(profile.provider, profile.path)),
     isDefault: profile.isDefault,
     // CACHED auth only — this listing must never pay a CLI spawn.
@@ -2705,7 +2731,7 @@ export function createApp(deps: ServerDeps) {
         : providerAuth.peekProfileStatus(profile.provider, profile.id);
       return cached ? { status: cached } : {};
     })(),
-    files: await accountFiles(profile),
+    files: options.hostPaths === false ? [] : await accountFiles(profile),
   });
 
   /**
@@ -2833,7 +2859,8 @@ export function createApp(deps: ServerDeps) {
       return c.json(result);
     })
     .get('/workspace/agent-profiles', async (c) => {
-      const editable = accountsEnabled();
+      const hostPaths = !inRelayScope();
+      const editable = accountsVisible();
       // Hosted mode without the explicit permission withholds the listing entirely rather than
       // serving it read-only: the paths are the host disclosure, so an empty list is the only
       // honest answer.
@@ -2851,15 +2878,17 @@ export function createApp(deps: ServerDeps) {
         }
       }
       const profiles = editable
-        ? await Promise.all(listAgentProfiles(store, PROVIDER_IDS).map(agentProfileBody))
+        ? await Promise.all(listAgentProfiles(store, PROVIDER_IDS).map((profile) => agentProfileBody(profile, { hostPaths })))
         : [];
       return c.json({
         editable,
+        ...(hostPaths ? {} : { hostPaths: false as const }),
         profiles,
         profileCapableProviders: [...PROFILE_CAPABLE_PROVIDERS],
         // Which account each project uses, keyed by repo root. Served here rather than on the
         // project registry because it lives in the same file as the accounts it names.
-        selections: editable ? store.selections : {},
+        // Keyed by repo root, so a phone gets none.
+        selections: editable && hostPaths ? store.selections : {},
         /** The machine-wide fallback, for repos that have chosen nothing. Withheld in hosted mode
          *  on the same terms as the rest of this family. */
         defaults: editable ? store.defaults : {},
@@ -2867,8 +2896,53 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/workspace/agent-profiles', jsonZodValidator(() => createAgentProfileSchema), async (c) => {
+      const body = c.req.valid('json');
+      if (body.managed) {
+        // cezar picks the folder, so no client path is ever involved: a paired phone may do this.
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
+        if (!supportsProfiles(body.provider)) {
+          return c.json({ error: `${body.provider} cannot carry more than one account` }, 400);
+        }
+        let made: AgentAccount | undefined;
+        try {
+          const taken = (await loadAgentAccounts()).accounts.map((a) => a.id);
+          let id = allocateAgentProfileId(body.label || body.provider, taken);
+          let dir: string | undefined;
+          // A folder left behind under this id is never adopted: take the next id instead.
+          for (let attempt = 0; dir === undefined; attempt++) {
+            try {
+              dir = await createManagedAccountDir(body.provider, id);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 20) throw err;
+              taken.push(id);
+              id = allocateAgentProfileId(body.label || body.provider, taken);
+            }
+          }
+          await mergeWriteAgentAccounts((store) => {
+            // Lost a race for this id: the folder stays empty and the boot sweep never sees it.
+            if (store.accounts.some((a) => a.id === id)) return;
+            made = {
+              id,
+              provider: body.provider,
+              configDir: dir,
+              label: body.label?.trim() || id,
+              addedAt: new Date().toISOString(),
+              managed: true,
+              pending: true,
+            };
+            store.accounts.push(made);
+          });
+        } catch (err) {
+          return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+        if (!made) return c.json({ error: 'account could not be saved; try again' }, 409);
+        const fresh = await agentProfileBody(resolveStoredProfile(made), { hostPaths: !inRelayScope() });
+        return c.json({ profile: fresh }, 201);
+      }
       if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
-      const { provider, configDir, label } = c.req.valid('json');
+      const { provider, label } = body;
+      const configDir = body.configDir;
+      if (configDir === undefined) return c.json({ error: 'send configDir, or managed: true' }, 400);
       if (!supportsProfiles(provider)) {
         return c.json({ error: `${provider} cannot carry more than one account` }, 400);
       }
@@ -2992,7 +3066,7 @@ export function createApp(deps: ServerDeps) {
         recheck: queryValue.refine((v) => v === undefined || v === '1'),
       }), { message: 'refresh and recheck must be 1 when provided' }),
       async (c) => {
-        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         const query = c.req.valid('query');
@@ -3041,7 +3115,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id/details',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         return c.json(await readAccountIdentity(account.provider, account.path));
@@ -3164,8 +3238,23 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
         const id = c.req.param('id');
+        let target: AgentAccount | undefined;
+        try {
+          target = (await loadAgentAccounts()).accounts.find((a) => a.id === id);
+        } catch {
+          // unreadable store: the merge-write below answers
+        }
+        // The flag alone is hand-editable: a managed row must also live under agent-homes/.
+        const managed = target?.managed === true && await isManagedAccountDir(target);
+        // A phone removes only accounts cezar made; anything else names a host folder.
+        if (!accountsEnabled() && !managed) return c.json(hostedProfileRefusal, 409);
+        // Log out first, so a Keychain item tied to the folder does not outlive it.
+        if (target && managed) {
+          loginSessions.cancelAccount?.(target.provider, target.id);
+          if (process.env.CEZ_DRY_RUN !== '1') await logoutManagedAccount(target);
+        }
         let removed = false;
         // Captured inside the mutator, because after the write there is nothing left to ask which
         // provider this account belonged to — and the eviction below is keyed by it.
@@ -3196,6 +3285,7 @@ export function createApp(deps: ServerDeps) {
         // re-added account with the same id read the deleted one's state — its incident included.
         if (removedProvider) providerAuth.forgetProfile(removedProvider, id);
         else providerAuth.forgetProfileStatus(removedProvider, id);
+        if (target && managed) await removeManagedAccountDir(target.configDir).catch(() => false);
         return c.json({ removed: true as const, id });
       },
     );

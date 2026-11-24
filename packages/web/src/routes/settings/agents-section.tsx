@@ -121,7 +121,7 @@ function AgentsForm({
       <FallbackField
         policy={fallback.data}
         loadError={fallback.isError ? fallback.error : null}
-        profiles={profiles.data?.profiles ?? []}
+        profiles={(profiles.data?.profiles ?? []).filter((profile) => !profile.pending)}
         providerStatus={providerStatus}
         catalogs={catalogs}
         modelsLocked={config.modelsLocked}

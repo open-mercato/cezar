@@ -55,6 +55,8 @@ export interface LoginSessionDeps {
   /** `CEZ_REMOTE_AGENT_ACCOUNTS=1` on a hosted cockpit. */
   remoteAccountsEnabled(): boolean;
   emit(event: 'agent-login' | 'account-reconnected', payload: unknown): void;
+  /** A confirmed sign-in makes an account added from the cockpit usable (spec 2026-11-24). */
+  markSignedIn?(provider: ProviderId, profileId: string): Promise<void>;
   /** Connect's terminal hand-off (local only). */
   openTerminal?(command: string): Promise<boolean>;
   /** Connect's login watcher; it reports back through {@link LoginSessionManager.accountConnected}. */
@@ -232,6 +234,7 @@ export class LoginSessionManager {
    * paths observe it; an open session for the account is marked connected.
    */
   async accountConnected(provider: ProviderId, profileId: string): Promise<ReconnectResumed> {
+    await this.markSignedIn(provider, profileId);
     const resumed = await this.reconnected(provider, profileId);
     const entry = this.byAccount.get(`${provider}\u0000${profileId}`);
     if (entry && !ENDED.has(entry.session.phase) && entry.session.phase !== 'verifying') {
@@ -347,9 +350,27 @@ export class LoginSessionManager {
         return;
       }
     }
+    await this.markSignedIn(provider, entry.profile.id);
     const resumed = await this.reconnected(provider, entry.profile.id);
     if (ENDED.has(entry.session.phase)) return;
     this.finish(entry, 'connected', undefined, resumed);
+  }
+
+  private async markSignedIn(provider: ProviderId, profileId: string): Promise<void> {
+    if (profileId === 'default' || !this.deps.markSignedIn) return;
+    await this.deps.markSignedIn(provider, profileId).catch(() => {});
+  }
+
+  /** Stop a running sign-in for an account that is being removed. */
+  cancelAccount(provider: ProviderId, profileId: string): void {
+    const entry = this.byAccount.get(`${provider}\u0000${profileId}`);
+    if (entry && !ENDED.has(entry.session.phase)) this.finish(entry, 'cancelled');
+  }
+
+  /** True while a sign-in for this account is still running (the pending-account sweep keeps it). */
+  isLive(provider: ProviderId, profileId: string): boolean {
+    const entry = this.byAccount.get(`${provider}\u0000${profileId}`);
+    return entry !== undefined && !ENDED.has(entry.session.phase);
   }
 
   private reconnected(provider: ProviderId, profileId: string): Promise<ReconnectResumed> {
