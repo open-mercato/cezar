@@ -4,6 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './popover'
 
+// jsdom has no safe area; a test sets one to stand in for the iPhone status bar.
+const safeArea = vi.hoisted(() => ({ top: 0 }))
+vi.mock('@/lib/popover-placement', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/popover-placement')>()),
+  safeAreaTop: () => safeArea.top,
+}))
+
 /**
  * Element sizes and rects are stubbed so Radix's own collision logic (floating-ui's flip,
  * clipped to `visualViewport`) really runs: `data-side` is the side floating-ui settled on,
@@ -47,6 +54,7 @@ function sizeOf(el: HTMLElement): { width: number; height: number } | null {
 beforeEach(() => {
   natural = 474
   width = 300
+  safeArea.top = 0
   rects = { trigger: { x: 16, top: 180, width: 240, height: 36 } }
   // A real frame later, as in a browser: Radix's own visualViewport listener recomputes in the
   // event itself, and that compute settles before the next frame re-picks the side.
@@ -57,10 +65,6 @@ beforeEach(() => {
   Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true })
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
     return sizeOf(this)?.height ?? 0
-  })
-  // A 1px border: scrollHeight is the border-box height minus 2px, as in a browser.
-  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    return this.dataset.slot === 'popover-content' ? contentHeight(this) - 2 : 0
   })
   vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
     return sizeOf(this)?.width ?? 0
@@ -84,6 +88,10 @@ async function renderOpen(content: ReactNode) {
   await frame()
   return () => screen.getByText('menu').closest<HTMLElement>('[data-slot="popover-content"]')!
 }
+
+/** The height Radix's own size middleware found on the settled side, padding included. */
+const radixRoom = (content: HTMLElement) =>
+  content.parentElement!.style.getPropertyValue('--radix-popper-available-height')
 
 const switcher = (props: Partial<React.ComponentProps<typeof PopoverContent>> = {}) => (
   <Popover open>
@@ -158,8 +166,8 @@ describe('PopoverContent placement against the visual viewport', () => {
     expect(content().style.maxHeight).toBe('436px')
   })
 
-  it('does not count a list capped by its own max-height, so a menu that fits stays below unclamped', async () => {
-    // Desktop: 390px below, 494px above. The 342px menu holds a 400px list capped at 300px.
+  it('measures only the content box: an inner list with hidden rows does not make a fitting menu flip or clamp', async () => {
+    // Desktop: 390px below, 494px above; the 342px menu fits below whole.
     Object.defineProperty(window, 'innerHeight', { value: 932, configurable: true })
     viewport.height = 932
     rects.trigger = { x: 16, top: 500, width: 240, height: 36 }
@@ -174,12 +182,40 @@ describe('PopoverContent placement against the visual viewport', () => {
         </PopoverContent>
       </Popover>,
     )
+    // 600px of hidden rows: counting them would read 942px and clamp the menu to 390px.
     const list = screen.getByTestId('list')
-    vi.spyOn(list, 'scrollHeight', 'get').mockReturnValue(400)
+    vi.spyOn(list, 'scrollHeight', 'get').mockReturnValue(900)
     vi.spyOn(list, 'clientHeight', 'get').mockReturnValue(300)
-    await keyboard(932) // re-measure with the inner scroller in place
+    await keyboard(932) // re-measure with the inner list in place
     expect(content().dataset.side).toBe('bottom')
     expect(content().style.maxHeight).toBe('')
+  })
+
+  it('takes a numeric collisionPadding off the room once, in the clamp and in Radix (composer options)', async () => {
+    const content = await renderOpen(switcher({ collisionPadding: 8 }))
+    await keyboard(507) // 285px below the trigger, minus 8px padding
+    expect(content().dataset.side).toBe('bottom')
+    expect(content().style.maxHeight).toBe('277px')
+    expect(radixRoom(content())).toBe('277px')
+  })
+
+  it('takes a per-side collisionPadding off the matching edge', async () => {
+    rects.trigger = { x: 16, top: 420, width: 240, height: 36 }
+    const content = await renderOpen(switcher({ collisionPadding: { top: 20, bottom: 30 } }))
+    await keyboard(507) // 15px below after padding, 394px above after padding: flips
+    expect(content().dataset.side).toBe('top')
+    expect(content().style.maxHeight).toBe('394px')
+    expect(radixRoom(content())).toBe('394px')
+  })
+
+  it('keeps a flipped menu below the safe-area top, in the clamp and in Radix', async () => {
+    safeArea.top = 47
+    rects.trigger = { x: 16, top: 420, width: 240, height: 36 }
+    const content = await renderOpen(switcher())
+    await keyboard(507) // 45px below; 414px above, 367px of it under the status bar's inset
+    expect(content().dataset.side).toBe('top')
+    expect(content().style.maxHeight).toBe('367px')
+    expect(radixRoom(content())).toBe('367px')
   })
 
   it("counts the content's border, so a menu 1px taller than the room is clamped rather than overflowing", async () => {

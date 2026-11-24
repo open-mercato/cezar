@@ -90,18 +90,23 @@ describe('naturalHeight', () => {
   /** A content element whose border-box height is 340px rendered, or `clamped` under an inline max-height. */
   function content(clamped: number) {
     const el = document.createElement('div')
-    // A capped inner list (CommandList's own max-height) hides 600px it never shows.
-    const list = document.createElement('div')
-    list.style.overflowY = 'auto'
-    vi.spyOn(list, 'scrollHeight', 'get').mockReturnValue(900)
-    vi.spyOn(list, 'clientHeight', 'get').mockReturnValue(300)
-    el.appendChild(list)
     vi.spyOn(el, 'offsetHeight', 'get').mockImplementation(() => (el.style.maxHeight ? clamped : 340))
     return el
   }
 
-  it('is the rendered height, not counting what a self-capped inner list hides', () => {
+  it('is the border-box height of the content', () => {
     expect(naturalHeight(content(340))).toBe(340)
+  })
+
+  it("never adds an inner list's hidden overflow (a list capped by its own max-height)", () => {
+    const el = content(340)
+    const list = document.createElement('div')
+    list.style.overflowY = 'auto'
+    // CommandList capped at 300px over 900px of rows: summing its overflow would read 940.
+    vi.spyOn(list, 'scrollHeight', 'get').mockReturnValue(900)
+    vi.spyOn(list, 'clientHeight', 'get').mockReturnValue(300)
+    el.appendChild(list)
+    expect(naturalHeight(el)).toBe(340)
   })
 
   it('measures with the placement clamp lifted and puts the clamp back', () => {
@@ -113,9 +118,10 @@ describe('naturalHeight', () => {
     expect(el.style.overflowY).toBe('auto')
   })
 
-  it('lets a 340px menu flip to the side that holds it even with a capped inner list', () => {
-    const natural = naturalHeight(content(250))
-    const placement = choosePopoverPlacement({ anchorTop: 520, anchorBottom: 556, viewTop: 0, viewBottom: 812, sideOffset: 4, naturalHeight: natural, preferred: 'bottom' })
+  it('lets a clamped 340px menu flip to the side that holds it whole', () => {
+    const el = content(250)
+    el.style.maxHeight = '250px'
+    const placement = choosePopoverPlacement({ anchorTop: 520, anchorBottom: 556, viewTop: 0, viewBottom: 812, sideOffset: 4, naturalHeight: naturalHeight(el), preferred: 'bottom' })
     expect(placement).toEqual({ side: 'top', maxHeight: 516 })
   })
 })
