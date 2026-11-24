@@ -1468,6 +1468,11 @@ interface PendingContinuation {
   images: PastedContent[];
 }
 
+interface ManualAgentHandoff {
+  summary: string;
+  previousContinuation?: PendingContinuation;
+}
+
 /** What re-reading a message's persisted attachments yields: viewable blocks for the images, and
  *  a path for every attachment including the files that have no block. */
 interface PersistedAttachments {
@@ -4170,13 +4175,11 @@ export class RunManager {
       }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
       this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
-      const switched = this.continueRun(runId, {
-        text: AGENT_FALLBACK_PROMPT,
+      const switched = this.queueAgentHandoff(runId, {
         runner: candidate.provider as RunnerId,
-        // Auto clears the previous agent's pin rather than carrying it to another provider.
-        model: candidate.model ?? '',
+        model: candidate.model,
         agentProfile: candidate.profileId,
-      }, true, { freshSessionAllowed: true });
+      }, AGENT_FALLBACK_PROMPT);
       if (!switched.ok) {
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${switched.error ?? 'unknown error'}` });
         continue;
@@ -5771,11 +5774,7 @@ export class RunManager {
       }
       const stoppedSteps = state || this.starting.has(runId) ? run.steps.filter((step) =>
         step.status === 'running' || step.status === 'waiting' || (step.status === 'pending' && step.id.startsWith('continue-'))) : [];
-      const result = this.startContinuation(runId, {
-        ...selection, model: selection.model ?? '', reasoningEffort: selection.reasoningEffort ?? '',
-        text: previousContinuation?.prompt ?? SWITCH_AGENT_PROMPT,
-        images: previousContinuation?.images,
-      }, true, { freshSessionAllowed: true, agentSwitch: { summary, previousContinuation } });
+      const result = this.queueAgentHandoff(runId, selection, SWITCH_AGENT_PROMPT, { summary, previousContinuation });
       if (!result.ok) return { error: result.error ?? 'could not switch agent' };
       for (const step of stoppedSteps) {
         this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt: new Date().toISOString() });
@@ -5796,6 +5795,22 @@ export class RunManager {
     this.clearIdleTimer(state);
     try { state.interrupt(); } catch { /* The owner still has to release its lease. */ }
     if (state.session) this.armCancellationGrace(runId, state);
+  }
+
+  /** Manual switches and admitted fallback candidates use the same continuation and queue. */
+  private queueAgentHandoff(
+    runId: string,
+    selection: Pick<SwitchRunAgentInput, 'runner' | 'model' | 'reasoningEffort'> & { agentProfile: string },
+    prompt: string,
+    manual?: ManualAgentHandoff,
+  ): { ok: boolean; error?: string } {
+    return this.startContinuation(runId, {
+      ...selection,
+      // Auto clears the previous agent's model and effort when no new selection pins them.
+      model: selection.model ?? '',
+      text: manual?.previousContinuation?.prompt ?? prompt,
+      images: manual?.previousContinuation?.images,
+    }, true, { freshSessionAllowed: true, agentSwitch: manual });
   }
 
   /**
@@ -5820,11 +5835,10 @@ export class RunManager {
   private startContinuation(
     runId: string,
     opts: ContinueRunOptions = {},
-    /** Restart recovery may discover several interrupted tasks at once. Those
-     *  continuations are queued; an explicit user Continue remains immediate. */
+    /** Recovery and agent handoffs use the queue. The cockpit's Continue remains immediate. */
     deferForCapacity = false,
     /** The fallback and manual switch can open a fresh session even on a pre-launch failure. */
-    internal: { freshSessionAllowed?: boolean; agentSwitch?: { summary: string; previousContinuation?: PendingContinuation } } = {},
+    internal: { freshSessionAllowed?: boolean; agentSwitch?: ManualAgentHandoff } = {},
   ): { ok: boolean; error?: string } {
     if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
     if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.reasoningEffort?.trim())) {

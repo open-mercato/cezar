@@ -490,6 +490,24 @@ describe('automatic agent fallback', () => {
     expect(store.getRun(id)?.fallbackEpisode?.pending).toBeUndefined();
   });
 
+  it('hands a task to the explicitly selected agent when automatic fallback is still being admitted', async () => {
+    registerAccounts(['second']);
+    const policy = await enable([{ provider: 'claude', profileId: 'second' }]);
+    manager = new RunManager(store, repoRoot);
+    let release!: (value: string | null) => void;
+    const gate = new Promise<string | null>((resolve) => { release = resolve; });
+    const check = vi.spyOn(manager as unknown as { fallbackProviderRefusal(): Promise<string | null> }, 'fallbackProviderRefusal').mockReturnValue(gate);
+    const id = await failedRun({ worktree: false });
+    decide(id);
+    await until(() => check.mock.calls.length > 0, 'provider check starts');
+    expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'Release Manager' })).toHaveProperty('summary');
+    release(null);
+    await until(() => !(manager as unknown as { fallbackPending: Set<string> }).fallbackPending.has(id), 'selection settles');
+    expect(store.getRun(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', fallbackPolicy: policy });
+    expect(store.getRun(id)?.fallbackEpisode).toBeUndefined();
+    expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
+  }, 40_000);
+
   it('finishes an admission a restart interrupted, without reusing an agent it had already tried', async () => {
     registerAccounts(['second', 'third']);
     await enable([{ provider: 'claude', profileId: 'second' }, { provider: 'claude', profileId: 'third' }]);
