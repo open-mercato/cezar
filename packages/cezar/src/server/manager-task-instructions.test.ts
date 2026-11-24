@@ -21,6 +21,9 @@ const SKILL = 'Inspect the changed module before editing.';
 const GUARD = 'Do not merge pull requests or enable automations';
 const BASE = '/api/v1/workspace/managers';
 
+/** Manager tool routes answer only to a live turn's token (spec 2026-11-20 § 3.1): tests call them as that turn would. */
+const MANAGER_TOOL_PATH = /\/workspace\/managers\/([^/?]+)\/(?:snapshot|task|tasks|task-message|follows|task-cancel|task-retry|actions$|actions\?|jobs\/|action-ops|rename|automations)/;
+
 describe('manager task instruction propagation through the HTTP API and workflow engine', () => {
   let root: string;
   let store: RunStore;
@@ -30,9 +33,13 @@ describe('manager task instruction propagation through the HTTP API and workflow
   let specs: AgentRunSpec[];
   let sessions: AgentSession[];
 
-  const request = (path: string, body: unknown) => app.request(path, {
-    method: 'POST', headers: { 'content-type': 'application/json', host: '127.0.0.1' }, body: JSON.stringify(body),
-  });
+  const request = (path: string, body: unknown) => {
+    const managerId = MANAGER_TOOL_PATH.exec(path)?.[1];
+    const turn: Record<string, string> = managerId ? { 'x-cez-manager-turn': engine.issueTurnToken(managerId, 'chat').token } : {};
+    return app.request(path, {
+      method: 'POST', headers: { 'content-type': 'application/json', host: '127.0.0.1', ...turn }, body: JSON.stringify(body),
+    });
+  };
 
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), 'cez-manager-instructions-'));

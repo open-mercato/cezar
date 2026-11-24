@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { automationReportSchema } from './automations.ts';
 import { attachmentListSchema } from './runs.ts';
 import { runnerSchema } from './runners.ts';
 import { questionAboutSchema, questionCardReplaces, questionClosedSchema, questionStaleSchema } from './questions.ts';
@@ -193,6 +194,38 @@ export const managerBashDenialSchema = z.object({
 });
 export type ManagerBashDenial = z.infer<typeof managerBashDenialSchema>;
 
+/** What a proposal may change, grouped for the capability list and, later, the policy (spec 2026-11-20-manager-admin-actions). */
+export const managerActionCategorySchema = z.enum([
+  'pull-requests', 'automations', 'jobs', 'connectors',
+  'projects', 'project-settings', 'workspace-settings', 'accounts', 'managers', 'phones', 'skills', 'workflows', 'worktrees',
+]);
+export type ManagerActionCategory = z.infer<typeof managerActionCategorySchema>;
+export const managerActionRiskSchema = z.enum(['low', 'medium', 'high']);
+export type ManagerActionRisk = z.infer<typeof managerActionRiskSchema>;
+
+/**
+ * Auto-approval (spec 2026-11-20 § 4), stored but never applied yet: every proposal asks. No route
+ * writes it; a hand-written one changes nothing until the policy ships.
+ */
+export const managerAutoApproveRuleSchema = z.object({
+  id: z.string().min(1).max(64),
+  match: z.union([
+    z.object({ categories: z.array(managerActionCategorySchema).min(1), maxRisk: z.enum(['low', 'medium']) }),
+    z.object({ types: z.array(z.string().min(1).max(80)).min(1) }),
+  ]),
+  projects: z.union([z.literal('connected'), z.array(boundedId)]),
+  /** Only changes the user asked for in the chat; the enum leaves room, the ceiling does not. */
+  provenance: z.literal('chat'),
+  limit: z.object({ perDay: z.number().int().min(1).max(50) }).optional(),
+  until: z.string().optional(),
+});
+export type ManagerAutoApproveRule = z.infer<typeof managerAutoApproveRuleSchema>;
+export const managerAutoApproveSchema = z.object({
+  rules: z.array(managerAutoApproveRuleSchema).max(32),
+  paused: z.object({ since: z.string(), reason: z.enum(['limit', 'user', 'undo-burst']) }).optional(),
+});
+export type ManagerAutoApprove = z.infer<typeof managerAutoApproveSchema>;
+
 /** The user-owned definition, persisted in `~/.cezar/managers.json`. */
 export const managerSchema = z.object({
   id: managerIdSchema,
@@ -235,6 +268,8 @@ export const managerSchema = z.object({
   inactive: z.object({ since: z.string() }).optional(),
   /** The last reactivation: the floor every check and job due time counts from, so nothing overdue fires at once. */
   activeSince: z.string().optional(),
+  /** Absent = always ask, which is all v1 does (spec 2026-11-20 § 4). A bad value is dropped, never the manager. */
+  autoApprove: managerAutoApproveSchema.optional().catch(undefined),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -329,6 +364,8 @@ export const updateManagerInputSchema = z.object({
   active: z.boolean().optional(),
   /** With `active: true`: run one forced check on reactivation (one model call). */
   catchUp: z.literal(true).optional(),
+  /** Auto-approval is not writable yet (spec 2026-11-20 § 4): sending it is a `400`, never a silent drop. */
+  autoApprove: z.never({ error: 'automatic approval is not available yet: every proposal asks' }).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
 
@@ -507,6 +544,9 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     action: managerActionRequestSchema,
     /** The manager's reason, shown on the approval card. */
     reason: z.string().optional(),
+    /** The server's fingerprint of the stamped action. A cockpit that can show this type sends it back
+     *  as the decision's `seen` (spec 2026-11-20 § 2.2); absent on cards from before it. */
+    pin: z.string().optional(),
     status: managerActionStatusSchema,
     /** The outcome sentence once it left `pending`. */
     result: z.string().optional(),
@@ -575,6 +615,9 @@ export const managerActionDecisionInputSchema = z.object({
   decision: z.enum(['approve', 'reject', 'dismiss']),
   /** With `dismiss`: only when the card's pull request is no longer open, else `409`. */
   onlyIfStale: z.boolean().optional(),
+  /** The card's `pin`, sent only by a cockpit that can show this card's type (spec 2026-11-20 § 2.2).
+   *  A different pin is `409`; a type older cockpits cannot show refuses an approve without it. */
+  seen: z.string().max(200).optional(),
 });
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;
 
@@ -800,6 +843,87 @@ export const managerProposeActionResponseSchema = z.object({
   /** Other managers whose chats already wait on a card for the same PR or automation. */
   alsoWaitingIn: z.array(z.string()).optional(),
 });
+
+/** One kind of proposal this manager may make, as `cez manager propose --help` lists it (spec 2026-11-20 § 5.3). */
+export const managerActionOpSchema = z.object({
+  type: z.string(),
+  category: managerActionCategorySchema,
+  risk: managerActionRiskSchema,
+  /** No policy may ever approve it without the user (spec 2026-11-20 § 4.3). */
+  pinnedAsk: z.boolean(),
+  scope: z.enum(['project', 'workspace', 'manager']),
+  summary: z.string(),
+  /** The command that proposes it, with placeholders. */
+  usage: z.string(),
+  /** False when this manager cannot propose it now (`reason` says why): read-only everywhere, no connector granted, a non-Claude runner. */
+  available: z.boolean(),
+  reason: z.string().optional(),
+});
+export type ManagerActionOp = z.infer<typeof managerActionOpSchema>;
+export const managerActionOpsResponseSchema = z.object({ ops: z.array(managerActionOpSchema) });
+export type ManagerActionOpsResponse = z.infer<typeof managerActionOpsResponseSchema>;
+
+/** `cez manager rename`: its own name only, never the rest of its definition. */
+export const managerRenameInputSchema = z.strictObject({ name: z.string().trim().min(1).max(80) });
+export type ManagerRenameInput = z.infer<typeof managerRenameInputSchema>;
+
+/**
+ * `cez manager automation …` writes, checked on the server (spec 2026-11-20 § 3.6): a connected write
+ * project, never enabled, linked only to this manager. The definition itself is the automation
+ * route's to validate. `any`, not `unknown`: see `connector-call`'s args.
+ */
+const managerAutomationDefinitionSchema = z.record(z.string(), z.any());
+export const managerAutomationCreateInputSchema = z.object({ projectId: boundedId, definition: managerAutomationDefinitionSchema });
+export type ManagerAutomationCreateInput = z.infer<typeof managerAutomationCreateInputSchema>;
+export const managerAutomationUpdateInputSchema = z.object({ projectId: boundedId, definition: managerAutomationDefinitionSchema });
+export type ManagerAutomationUpdateInput = z.infer<typeof managerAutomationUpdateInputSchema>;
+export const managerAutomationReportInputSchema = z.object({
+  projectId: boundedId,
+  report: automationReportSchema.nullable(),
+});
+export type ManagerAutomationReportInput = z.infer<typeof managerAutomationReportInputSchema>;
+/** Preview only: a manager never launches an automation's matches. */
+export const managerAutomationCheckInputSchema = z.object({ projectId: boundedId });
+export type ManagerAutomationCheckInput = z.infer<typeof managerAutomationCheckInputSchema>;
+/** Pausing only ever narrows what runs, so it needs no card; a read-only project still refuses it. */
+export const managerAutomationPauseInputSchema = z.object({ projectId: boundedId });
+export type ManagerAutomationPauseInput = z.infer<typeof managerAutomationPauseInputSchema>;
+export const managerAutomationParamSchema = z.object({ id: managerIdSchema, automationId: boundedId });
+
+/**
+ * The change log (spec 2026-11-20 § 3.3): every proposal decided and every direct write a manager
+ * made, in `~/.cezar/admin-audit.ndjson`.
+ */
+export const managerChangeSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  managerId: z.string(),
+  managerName: z.string(),
+  /** A proposal's action type, or the direct write (`rename`, `job-remove`, `automation-create`, …). */
+  type: z.string(),
+  kind: z.enum(['proposal', 'direct']),
+  /** What it changed, for the history's filter; absent on lines written before it. */
+  category: managerActionCategorySchema.optional(),
+  /** The card, for a proposal. */
+  actionId: z.string().optional(),
+  projectId: z.string().optional(),
+  summary: z.string(),
+  /** The manager's own words, verbatim: agent text, never cezar's. */
+  reason: z.string().optional(),
+  outcome: z.enum(['done', 'failed', 'rejected', 'dismissed']),
+  result: z.string().optional(),
+  /** Who settled it: the user's decision, the manager's own direct write, or cezar closing a stale card. */
+  by: z.enum(['user', 'manager', 'cezar']),
+});
+export type ManagerChange = z.infer<typeof managerChangeSchema>;
+export const managerChangesQuerySchema = z.object({
+  managerId: managerIdSchema.optional(),
+  projectId: boundedId.optional(),
+  category: managerActionCategorySchema.optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+export const managerChangesResponseSchema = z.object({ changes: z.array(managerChangeSchema) });
+export type ManagerChangesResponse = z.infer<typeof managerChangesResponseSchema>;
 
 export const managerTaskDetailQuerySchema = z.object({
   projectId: boundedId,

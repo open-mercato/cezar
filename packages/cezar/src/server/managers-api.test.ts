@@ -32,11 +32,16 @@ describe('the managers routes', () => {
   let app: ReturnType<typeof createApp>;
   const saved = { CEZ_HOME: process.env.CEZ_HOME, CEZ_DRY_RUN: process.env.CEZ_DRY_RUN, CEZ_MANAGERS: process.env.CEZ_MANAGERS };
 
-  const request = (path: string, init?: { method?: string; body?: unknown }) => app.request(path, {
+  const request = (path: string, init?: { method?: string; body?: unknown; headers?: Record<string, string> }) => app.request(path, {
     method: init?.method ?? 'GET',
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, ...init?.headers },
     ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
   });
+  /** A manager tool route, called as its own live chat turn would: with that turn's token (spec 2026-11-20 § 3.1). */
+  const tool = (path: string, init?: { method?: string; body?: unknown }) => {
+    const managerId = path.slice(BASE.length + 1).split('/')[0]!;
+    return request(path, { ...init, headers: { 'x-cez-manager-turn': engine.issueTurnToken(managerId, 'chat').token } });
+  };
   const createManager = async (body: unknown = { instructions: 'Watch', projects: 'all' }) => {
     const response = await request(BASE, { method: 'POST', body });
     expect(response.status).toBe(201);
@@ -178,7 +183,7 @@ describe('the managers routes', () => {
   it('starts a task through the real POST /runs, in process', async () => {
     const { id } = await createManager();
     const [projectId] = ((await (await request(`${BASE}/${id}`)).json()) as { connectedProjectIds: string[] }).connectedProjectIds;
-    const response = await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Fix the login' } });
+    const response = await tool(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Fix the login' } });
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ projectId, runId: 'run-1' });
     expect(startRun).toHaveBeenCalledOnce();
@@ -187,7 +192,7 @@ describe('the managers routes', () => {
 
   it('refuses a project out of scope, through the route', async () => {
     const { id } = await createManager();
-    const response = await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId: 'elsewhere', task: 'x' } });
+    const response = await tool(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId: 'elsewhere', task: 'x' } });
     expect(response.status).toBe(403);
     expect(startRun).not.toHaveBeenCalled();
   });
@@ -197,14 +202,14 @@ describe('the managers routes', () => {
     const [projectId] = connectedProjectIds;
     expect(await (await request(`${BASE}/${id}`)).json()).toMatchObject({ taskRunner: 'codex' });
     const path = `${BASE}/${id}/tasks`;
-    expect((await request(path, { method: 'POST', body: { projectId, task: 'Use my selection', runner: 'claude' } })).status).toBe(201);
+    expect((await tool(path, { method: 'POST', body: { projectId, task: 'Use my selection', runner: 'claude' } })).status).toBe(201);
     expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
     const automatic = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskRunner: null, runner: 'codex' } });
     expect(automatic.status).toBe(200);
     expect(await automatic.json()).not.toHaveProperty('taskRunner');
-    expect((await request(path, { method: 'POST', body: { projectId, task: 'Use the manager backend' } })).status).toBe(201);
+    expect((await tool(path, { method: 'POST', body: { projectId, task: 'Use the manager backend' } })).status).toBe(201);
     expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'codex' });
-    expect((await request(path, { method: 'POST', body: { projectId, task: 'Choose another agent', runner: 'claude' } })).status).toBe(201);
+    expect((await tool(path, { method: 'POST', body: { projectId, task: 'Choose another agent', runner: 'claude' } })).status).toBe(201);
     expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'claude' });
   });
 
@@ -222,7 +227,7 @@ describe('the managers routes', () => {
     const managerPath = `${BASE}/${id}`;
     expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskRunner: runner });
     const spawn = async (requested?: string) => {
-      const response = await request(`${managerPath}/tasks`, {
+      const response = await tool(`${managerPath}/tasks`, {
         method: 'POST', body: { projectId, task: 'Spawn with the selected agent', ...(requested ? { runner: requested } : {}) },
       });
       expect(response.status).toBe(201);
@@ -256,13 +261,13 @@ describe('the managers routes', () => {
     const { id, connectedProjectIds: [projectId] } = await createManager({ instructions: '', projects: 'all', runner: 'codex', agentProfile: 'default', taskAgents: agents, cronMinutes: 0 });
     expect(new ManagerStore().get(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', taskAgents: agents });
     for (const agent of agents) {
-      expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Use this exact account', ...agent } })).status).toBe(201);
+      expect((await tool(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Use this exact account', ...agent } })).status).toBe(201);
       expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject(agent);
     }
     expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents: [{ runner: 'codex', agentProfile: first }] } })).status).toBe(400);
     const before = startRun.mock.calls.length;
     for (const agent of [{ runner: 'opencode' }, { runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: first }]) {
-      expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Outside the allowed set', ...agent } })).status).toBe(403);
+      expect((await tool(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Outside the allowed set', ...agent } })).status).toBe(403);
     }
     expect(startRun).toHaveBeenCalledTimes(before);
     await request(`${BASE}/${id}`, { method: 'PATCH', body: { name: 'Renamed' } });
@@ -270,7 +275,7 @@ describe('the managers routes', () => {
     const clear = await request(`${BASE}/${id}`, { method: 'PATCH', body: { taskAgents: null, taskRunner: null } });
     expect(await clear.json()).not.toHaveProperty('taskAgents');
     expect(new ManagerStore().get(id)).not.toHaveProperty('taskAgents');
-    expect((await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Automatic account choice', runner: 'claude', agentProfile: 'default' } })).status).toBe(201);
+    expect((await tool(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Automatic account choice', runner: 'claude', agentProfile: 'default' } })).status).toBe(201);
     expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ runner: 'claude', agentProfile: 'default' });
   });
 
@@ -286,7 +291,7 @@ describe('the managers routes', () => {
   it('merges only through the decision route, on the same code the GitHub tab uses', async () => {
     const { id, connectedProjectIds } = await createManager();
     const [projectId] = connectedProjectIds;
-    const proposed = await request(`${BASE}/${id}/actions`, { method: 'POST', body: { action: { type: 'merge-pr', projectId, number: 128 }, reason: 'green' } });
+    const proposed = await tool(`${BASE}/${id}/actions`, { method: 'POST', body: { action: { type: 'merge-pr', projectId, number: 128 }, reason: 'green' } });
     expect(proposed.status).toBe(201);
     const { actionId } = (await proposed.json()) as { actionId: string };
 
@@ -297,6 +302,182 @@ describe('the managers routes', () => {
 
     const again = await request(`${BASE}/${id}/actions/${actionId}/decision`, { method: 'POST', body: { decision: 'approve' } });
     expect(again.status).toBe(409);
+  });
+
+  describe('phase 0 of manager admin actions (spec 2026-11-20-manager-admin-actions)', () => {
+    const AUDIT = '/api/v1/workspace/admin-audit';
+    const changes = async (query = '') => ((await (await request(`${AUDIT}${query}`)).json()) as { changes: Array<Record<string, unknown>> }).changes;
+    const schedule = { name: 'Nightly deps', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump deps', workflow: 'quick-task' } };
+
+    it('logs every decided proposal with who decided it and the manager\'s own reason', async () => {
+      const { id, connectedProjectIds } = await createManager();
+      const [projectId] = connectedProjectIds;
+      const propose = async (number: number) => ((await (await tool(`${BASE}/${id}/actions`, { method: 'POST', body: { action: { type: 'merge-pr', projectId, number }, reason: 'green' } })).json()) as { actionId: string }).actionId;
+      const merged = await propose(128);
+      await request(`${BASE}/${id}/actions/${merged}/decision`, { method: 'POST', body: { decision: 'approve' } });
+      const rejected = await propose(129);
+      await request(`${BASE}/${id}/actions/${rejected}/decision`, { method: 'POST', body: { decision: 'reject' } });
+      expect(await changes()).toEqual([
+        expect.objectContaining({ type: 'merge-pr', kind: 'proposal', actionId: rejected, projectId, outcome: 'rejected', by: 'user', reason: 'green', summary: `Merge of ${projectId}#129` }),
+        expect.objectContaining({ type: 'merge-pr', kind: 'proposal', actionId: merged, projectId, outcome: 'done', by: 'user', result: 'Merged #128', managerId: id }),
+      ]);
+      // A proposal still waiting is not a change yet.
+      await propose(130);
+      expect(await changes()).toHaveLength(2);
+      expect(await changes('?managerId=someone-else')).toEqual([]);
+      expect((await changes('?category=pull-requests')).map((entry) => entry.category)).toEqual(['pull-requests', 'pull-requests']);
+      expect(await changes('?category=automations')).toEqual([]);
+      expect(await changes(`?projectId=${projectId}&limit=1`)).toHaveLength(1);
+    });
+
+    it('answers the agent\'s tools only to its own live turn, and refuses that token on the cockpit\'s writes', async () => {
+      const { id, connectedProjectIds: [projectId] } = await createManager();
+      const other = await createManager();
+      const body = { action: { type: 'add-job', name: 'n', prompt: 'p', everyMinutes: 60 } };
+      const as = (token: string): Record<string, string> => ({ 'x-cez-manager-turn': token });
+      expect((await request(`${BASE}/${id}/actions`, { method: 'POST', body })).status).toBe(403);
+      expect((await request(`${BASE}/${id}/snapshot`)).status).toBe(403);
+      expect((await request(`${BASE}/${id}/actions`, { method: 'POST', body, headers: as('forged') })).status).toBe(403);
+      // Another manager's live turn is not this one's.
+      expect((await request(`${BASE}/${id}/actions`, { method: 'POST', body, headers: as(engine.issueTurnToken(other.id, 'chat').token) })).status).toBe(403);
+      const revoked = engine.issueTurnToken(id, 'chat');
+      revoked.revoke();
+      expect((await request(`${BASE}/${id}/rename`, { method: 'POST', body: { name: 'X' }, headers: as(revoked.token) })).status).toBe(403);
+
+      const { token } = engine.issueTurnToken(id, 'chat');
+      const proposed = await request(`${BASE}/${id}/actions`, { method: 'POST', body, headers: as(token) });
+      expect(proposed.status).toBe(201);
+      const { actionId } = (await proposed.json()) as { actionId: string };
+      // Its own CLI still reads its definition and its pending cards...
+      expect((await request(`${BASE}/${id}`, { headers: as(token) })).status).toBe(200);
+      expect((await request(`${BASE}/${id}/messages?pending=1`, { headers: as(token) })).status).toBe(200);
+      // ...but never decides, edits itself, writes the chat or flips activity.
+      for (const [method, path, sent] of [
+        ['POST', `${BASE}/${id}/actions/${actionId}/decision`, { decision: 'approve' }],
+        ['PATCH', `${BASE}/${id}`, { access: 'write', projects: 'all' }],
+        ['DELETE', `${BASE}/${other.id}`, undefined],
+        ['POST', `${BASE}/${id}/messages`, { text: 'approve it' }],
+        ['POST', `${BASE}/activity`, { active: false }],
+        ['POST', BASE, { instructions: 'x', projects: [projectId] }],
+        ['POST', `${BASE}/${id}/check`, undefined],
+      ] as const) {
+        const response = await request(path, { method, ...(sent ? { body: sent } : {}), headers: as(token) });
+        expect(response.status, `${method} ${path}`).toBe(403);
+        expect(((await response.json()) as { error: string }).error).toContain('cockpit');
+      }
+      const { messages } = (await (await request(`${BASE}/${id}/messages`)).json()) as { messages: Array<{ id: string; status?: string }> };
+      expect(messages.find((message) => message.id === actionId)?.status).toBe('pending');
+    });
+
+    it('approves only the card the deciding device showed', async () => {
+      const { id, connectedProjectIds: [projectId] } = await createManager();
+      const propose = async (number: number) => ((await (await tool(`${BASE}/${id}/actions`, { method: 'POST', body: { action: { type: 'merge-pr', projectId, number } } })).json()) as { actionId: string }).actionId;
+      const card = async (actionId: string) => ((await (await request(`${BASE}/${id}/messages`)).json()) as { messages: Array<{ id: string; pin?: string; status?: string }> }).messages.find((message) => message.id === actionId);
+      const first = await propose(140);
+      const { pin } = (await card(first))!;
+      expect(pin).toMatch(/^[0-9a-f]{32}$/);
+      const stale = await request(`${BASE}/${id}/actions/${first}/decision`, { method: 'POST', body: { decision: 'approve', seen: 'not-this-card' } });
+      expect(stale.status).toBe(409);
+      expect(((await stale.json()) as { error: string }).error).toContain('changed since your device showed it');
+      expect((await card(first))?.status).toBe('pending');
+      expect((await request(`${BASE}/${id}/actions/${first}/decision`, { method: 'POST', body: { decision: 'approve', seen: pin } })).status).toBe(200);
+      expect((await card(first))?.status).toBe('done');
+      // The four existing types stay approvable by a cockpit that predates `seen`.
+      const second = await propose(141);
+      expect((await request(`${BASE}/${id}/actions/${second}/decision`, { method: 'POST', body: { decision: 'approve' } })).status).toBe(200);
+      expect((await card(second))?.status).toBe('done');
+    });
+
+    it('lists what a manager may propose, and why not', async () => {
+      const { id } = await createManager();
+      const response = await tool(`${BASE}/${id}/action-ops`);
+      expect(response.status).toBe(200);
+      const { ops } = (await response.json()) as { ops: Array<{ type: string; available: boolean; reason?: string; pinnedAsk: boolean }> };
+      expect(ops.map((op) => op.type)).toEqual(['merge-pr', 'enable-automation', 'add-job', 'connector-call']);
+      expect(ops.every((op) => op.pinnedAsk)).toBe(true);
+      expect(ops.find((op) => op.type === 'connector-call')).toMatchObject({ available: false, reason: expect.any(String) });
+      // No live turn of a missing manager: the token check answers before the route.
+      expect((await request(`${BASE}/missing/action-ops`)).status).toBe(403);
+    });
+
+    it('refuses to store an auto-approval policy: every proposal asks', async () => {
+      const { id } = await createManager();
+      const patched = await request(`${BASE}/${id}`, { method: 'PATCH', body: { autoApprove: { rules: [] } } });
+      expect(patched.status).toBe(400);
+      expect(new ManagerStore().get(id)).not.toHaveProperty('autoApprove');
+    });
+
+    it('renames through its own route, name only, and logs it', async () => {
+      const { id } = await createManager();
+      expect((await tool(`${BASE}/${id}/rename`, { method: 'POST', body: { name: 'Release Manager', access: 'write' } })).status).toBe(400);
+      const renamed = await tool(`${BASE}/${id}/rename`, { method: 'POST', body: { name: 'Release Manager' } });
+      expect(await renamed.json()).toEqual({ ok: true });
+      expect(new ManagerStore().get(id)?.name).toBe('Release Manager');
+      expect(await changes()).toEqual([expect.objectContaining({ type: 'rename', kind: 'direct', by: 'manager', outcome: 'done' })]);
+    });
+
+    it('creates and edits automations paused, linked only to itself, and logs both', async () => {
+      const { id, connectedProjectIds } = await createManager();
+      const [projectId] = connectedProjectIds;
+      const created = await tool(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId, definition: { ...schedule, enable: true, enabled: true } } });
+      expect(created.status).toBe(201);
+      const { automation } = (await created.json()) as { automation: { id: string; enabled: boolean; revision: number } };
+      expect(automation.enabled).toBe(false);
+      // Enable it the user's way, then a manager's edit pauses it again.
+      expect((await request(`/api/v1/p/${projectId}/automations/${automation.id}/enable`, { method: 'POST' })).status).toBe(200);
+      const current = ((await (await request(`/api/v1/p/${projectId}/automations/${automation.id}`)).json()) as { automation: { revision: number } }).automation;
+      const updated = await tool(`${BASE}/${id}/automations/${automation.id}`, { method: 'PUT', body: { projectId, definition: { ...schedule, name: 'Nightly', enabled: true, expectedRevision: current.revision } } });
+      expect(updated.status).toBe(200);
+      expect(((await updated.json()) as { automation: { enabled: boolean; name: string } }).automation).toMatchObject({ enabled: false, name: 'Nightly' });
+
+      const foreign = await tool(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId, definition: { ...schedule, report: { managerId: 'someone-else', mode: 'post-result' } } } });
+      expect(foreign.status).toBe(403);
+      const foreignLink = await tool(`${BASE}/${id}/automations/${automation.id}/report`, { method: 'PUT', body: { projectId, report: { managerId: 'someone-else', mode: 'none' } } });
+      expect(foreignLink.status).toBe(403);
+      const ownLink = await tool(`${BASE}/${id}/automations/${automation.id}/report`, { method: 'PUT', body: { projectId, report: { managerId: id, mode: 'none' } } });
+      expect(ownLink.status).toBe(200);
+      expect((await changes()).map((change) => change.type)).toEqual(['automation-report', 'automation-update', 'automation-create']);
+    });
+
+    it('pauses an automation in a write project and logs it, but never one in a read-only project', async () => {
+      const { id, connectedProjectIds } = await createManager();
+      const [projectId] = connectedProjectIds;
+      const created = ((await (await request(`/api/v1/p/${projectId}/automations`, { method: 'POST', body: { ...schedule, enable: true } })).json()) as { automation: { id: string; enabled: boolean } }).automation;
+      expect(created.enabled).toBe(true);
+      const paused = await tool(`${BASE}/${id}/automations/${created.id}/pause`, { method: 'POST', body: { projectId } });
+      expect(paused.status).toBe(200);
+      expect(((await paused.json()) as { automation: { enabled: boolean } }).automation.enabled).toBe(false);
+      expect(await changes()).toEqual([expect.objectContaining({ type: 'automation-pause', kind: 'direct', by: 'manager', projectId })]);
+      const reader = await createManager({ instructions: 'Watch', projects: 'all', access: 'read' });
+      const refused = await tool(`${BASE}/${reader.id}/automations/${created.id}/pause`, { method: 'POST', body: { projectId } });
+      expect(refused.status).toBe(403);
+    });
+
+    it('never unlinks or takes over an automation that reports to another manager', async () => {
+      const { id, connectedProjectIds } = await createManager();
+      const other = await createManager();
+      const [projectId] = connectedProjectIds;
+      const created = ((await (await request(`/api/v1/p/${projectId}/automations`, { method: 'POST', body: { ...schedule, report: { managerId: other.id, mode: 'post-result' } } })).json()) as { automation: { id: string } }).automation;
+      const unlink = await tool(`${BASE}/${id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: null } });
+      expect(unlink.status).toBe(403);
+      const takeOver = await tool(`${BASE}/${id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: { managerId: id, mode: 'post-result' } } });
+      expect(takeOver.status).toBe(403);
+      // Its owner may still unlink it.
+      expect((await tool(`${BASE}/${other.id}/automations/${created.id}/report`, { method: 'PUT', body: { projectId, report: null } })).status).toBe(200);
+    });
+
+    it('refuses automation writes on a read-only project or one it is not connected to, and still previews', async () => {
+      const { id, connectedProjectIds } = await createManager({ instructions: 'Watch', projects: 'all', access: 'read' });
+      const [projectId] = connectedProjectIds;
+      const refused = await tool(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId, definition: schedule } });
+      expect(refused.status).toBe(403);
+      expect(((await refused.json()) as { error: string }).error).toContain('read-only');
+      expect((await tool(`${BASE}/${id}/automations`, { method: 'POST', body: { projectId: 'elsewhere', definition: schedule } })).status).toBe(403);
+      // Reading is allowed: the preview reaches the automation route (which has nothing to preview here).
+      const preview = await tool(`${BASE}/${id}/automations/missing/check`, { method: 'POST', body: { projectId } });
+      expect(preview.status).toBe(404);
+      expect(await changes()).toEqual([]);
+    });
   });
 
   it('a forged decision from another origin never reaches the engine', async () => {

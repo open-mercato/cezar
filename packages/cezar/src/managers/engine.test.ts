@@ -215,6 +215,27 @@ describe('ManagerEngine', () => {
       expect(spec?.cwd).toBe(join(home, 'managers', id, 'workdir'));
     });
 
+    it('gives each turn its own token, live only while the turn runs (spec 2026-11-20 § 3.1)', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      engine.send(id, 'hi');
+      await settled(engine);
+      engine.send(id, 'again');
+      await settled(engine);
+      const [first, second] = backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN_TOKEN);
+      expect(first).toMatch(/^[0-9a-f-]{36}$/);
+      expect(second).toMatch(/^[0-9a-f-]{36}$/);
+      expect(second).not.toBe(first);
+      // Both turns settled: neither token opens a tool route any more.
+      expect(engine.turnOfToken(first)).toBeUndefined();
+      expect(engine.turnOfToken(second)).toBeUndefined();
+      const live = engine.issueTurnToken(id, 'watch');
+      expect(engine.turnOfToken(live.token)).toEqual({ managerId: id, kind: 'watch' });
+      live.revoke();
+      expect(engine.turnOfToken(live.token)).toBeUndefined();
+      expect(engine.turnOfToken(undefined)).toBeUndefined();
+    });
+
     it('logs refused Bash calls and lets the user allow a read-only pattern from them', async () => {
       const engine = makeEngine();
       const id = await create(engine);

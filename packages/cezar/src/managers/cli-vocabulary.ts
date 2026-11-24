@@ -3,7 +3,7 @@
  * them to tell routing from lookups (spec 2026-11-21-manager-short-sessions-and-memory § 2.3).
  */
 
-export const MANAGER_COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
+export const MANAGER_COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'propose', 'rename', 'memory', 'history'] as const;
 export const MANAGER_TASK_SUBCOMMANDS = ['create', 'say', 'cancel', 'retry', 'follow', 'unfollow'] as const;
 export const MANAGER_JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
 export const MANAGER_MEMORY_SUBCOMMANDS = ['list', 'set', 'remove'] as const;
@@ -25,6 +25,8 @@ export const MANAGER_SUBCOMMANDS: Partial<Record<Command, readonly string[]>> = 
 export const MANAGER_ROUTES: Partial<Record<Command, true | ReadonlySet<string>>> = {
   merge: true,
   'propose-action': true,
+  // The generic proposal (spec 2026-11-20 § 2): every kind of card, so it acts.
+  propose: true,
   rename: true,
   task: new Set(['create', 'say', 'follow', 'unfollow', 'cancel', 'retry']),
   job: new Set(['add', 'remove']),

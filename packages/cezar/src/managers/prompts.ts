@@ -49,6 +49,7 @@ The cez-manager commands:
   cez-manager automation --project <id> enable <automation id>                  PROPOSES enabling it
   cez-manager job add --name <n> --every <minutes> "<prompt>"                    PROPOSES a saved job
   cez-manager job list | job remove <id>
+  cez-manager propose --help                          every kind of change you may PROPOSE now; the commands above are its shorthands
   cez-manager rename "<role>"                         your name in the sidebar
   cez-manager memory list | memory set <key> --kind preference|feedback|decision|pointer "<text>" [--why "…"] | memory remove <key>
                                                       what you carry into every new session (same key replaces)

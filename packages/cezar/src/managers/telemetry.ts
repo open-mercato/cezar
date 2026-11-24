@@ -51,7 +51,8 @@ export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 
 // Quick prompts have no label: the server enforces a closed set, and they are not a turn setting.
 // Neither does the active toggle: it is not a stored setting (spec 2026-11-19-manager-deactivate).
-const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials' | 'active' | 'catchUp'>, ManagerSettingField> = {
+// `autoApprove` is refused by the route until the policy ships (spec 2026-11-20).
+const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials' | 'active' | 'catchUp' | 'autoApprove'>, ManagerSettingField> = {
   cronMinutes: 'watch',
   runner: 'runner',
   taskRunner: 'runner',

@@ -240,6 +240,10 @@ A merge card also lists the tasks behind its pull request, the one that opened i
 
 Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
 
+Cezar records every decision on a card in a change log: what the card was, the manager's reason, who decided it and the outcome. It also records the changes a manager makes without a card: renaming itself, creating or editing a paused automation, linking one to its chat, and removing a job. Open **Settings → Behaviour → Change history** to read it, newest first, filtered by manager, project or kind. Each decided card links back to its place in the chat. The log lives in `~/.cezar/admin-audit.ndjson`, and secret values are removed before a line is written.
+
+You approve a card only as your device showed it. If the card changed since your screen loaded it, or this device runs a cezar too old to show what the card would do, the approval is refused and the card keeps waiting.
+
 ## Connectors
 
 A connector is an MCP server your Claude session already has: a claude.ai connector such as Gmail, Google Calendar or Google Drive, or an MCP server from your own Claude config. Every connector starts at **Off**, so a manager cannot use one until you grant it. Open the manager's gear menu and select **Connectors…** to see them; select **Refresh** when the list is empty or out of date.
