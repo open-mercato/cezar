@@ -176,7 +176,8 @@ function PopoverContent({
     padding,
   })
   // Clamped only when the room is short; the content (or a flex-shrinking inner list) scrolls.
-  const clamp = placement && placement.maxHeight < natural ? { maxHeight: placement.maxHeight, overflowY: "auto" as const } : null
+  const room = placement?.maxHeight ?? null
+  const clamp = room !== null && room < natural ? { maxHeight: room, overflowY: "auto" as const } : null
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content

@@ -1,9 +1,14 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Popover, PopoverContent, PopoverTrigger } from './popover'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './popover'
 
-/** A drivable visualViewport: the test opens and closes the keyboard like Safari does. */
+/**
+ * Element sizes and rects are stubbed so Radix's own collision logic (floating-ui's flip,
+ * clipped to `visualViewport`) really runs: `data-side` is the side floating-ui settled on,
+ * not just the one we asked for.
+ */
 class StubViewport extends EventTarget {
   width = 390
   offsetLeft = 0
@@ -18,25 +23,52 @@ class StubViewport extends EventTarget {
   }
 }
 
-const NATURAL = 474
 let viewport: StubViewport
-let triggerRect = { top: 180, bottom: 216 }
+/** The content's unclamped border-box height and its width. */
+let natural = 474
+let width = 300
+/** Rects by `data-testid`, plus the trigger by its slot. */
+let rects: Record<string, { x: number; top: number; width: number; height: number }> = {}
+
+function contentHeight(el: HTMLElement): number {
+  const cap = Number.parseFloat(el.style.maxHeight)
+  return Number.isFinite(cap) ? Math.min(natural, cap) : natural
+}
+
+function sizeOf(el: HTMLElement): { width: number; height: number } | null {
+  if (el.dataset.slot === 'popover-content') return { width, height: contentHeight(el) }
+  if (el.hasAttribute('data-radix-popper-content-wrapper')) {
+    const content = el.firstElementChild as HTMLElement | null
+    return content ? { width, height: contentHeight(content) } : null
+  }
+  return null
+}
 
 beforeEach(() => {
-  triggerRect = { top: 180, bottom: 216 }
-  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
-    cb(0)
-    return 0
-  })
+  natural = 474
+  width = 300
+  rects = { trigger: { x: 16, top: 180, width: 240, height: 36 } }
+  // A real frame later, as in a browser: Radix's own visualViewport listener recomputes in the
+  // event itself, and that compute settles before the next frame re-picks the side.
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number)
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id))
   Object.defineProperty(window, 'innerHeight', { value: 858, configurable: true })
   viewport = new StubViewport(858)
   Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true })
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    return sizeOf(this)?.height ?? 0
+  })
+  // A 1px border: scrollHeight is the border-box height minus 2px, as in a browser.
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    return this.dataset.slot === 'popover-content' ? NATURAL : 0
+    return this.dataset.slot === 'popover-content' ? contentHeight(this) - 2 : 0
+  })
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+    return sizeOf(this)?.width ?? 0
   })
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (this.dataset.slot !== 'popover-trigger') return new DOMRect(0, 0, 0, 0)
-    return new DOMRect(16, triggerRect.top, 240, triggerRect.bottom - triggerRect.top)
+    const key = this.dataset.testid ?? (this.dataset.slot === 'popover-trigger' ? 'trigger' : '')
+    const rect = rects[key]
+    return rect ? new DOMRect(rect.x, rect.top, rect.width, rect.height) : new DOMRect(0, 0, 0, 0)
   })
 })
 
@@ -47,31 +79,45 @@ afterEach(() => {
   Object.defineProperty(window, 'visualViewport', { value: null, configurable: true })
 })
 
-function renderOpen() {
-  render(
-    <Popover open>
-      <PopoverTrigger>Projects</PopoverTrigger>
-      <PopoverContent sideOffset={6}>menu</PopoverContent>
-    </Popover>,
-  )
+async function renderOpen(content: ReactNode) {
+  render(content)
+  await frame()
   return () => screen.getByText('menu').closest<HTMLElement>('[data-slot="popover-content"]')!
 }
 
+const switcher = (props: Partial<React.ComponentProps<typeof PopoverContent>> = {}) => (
+  <Popover open>
+    <PopoverTrigger>Projects</PopoverTrigger>
+    <PopoverContent sideOffset={6} {...props}>
+      menu
+    </PopoverContent>
+  </Popover>
+)
+
+/** Open (or close) the keyboard: Safari shrinks only the visual viewport. */
 async function keyboard(height: number) {
   await act(async () => {
     viewport.height = height
     viewport.dispatchEvent(new Event('resize'))
   })
+  await frame()
+}
+
+/** Let the scheduled frame run and Radix's position settle. */
+async function frame() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  await act(async () => {})
 }
 
 describe('PopoverContent placement against the visual viewport', () => {
   it('stays below the trigger and shrinks when the keyboard opens under it', async () => {
-    const content = renderOpen()
-    await act(async () => {})
+    const content = await renderOpen(switcher())
     expect(content().dataset.side).toBe('bottom')
     expect(content().style.maxHeight).toBe('')
 
-    await keyboard(507) // 285px left between the trigger and the keys
+    await keyboard(507) // 285px left between the trigger and the keys, 174px above
     expect(content().dataset.side).toBe('bottom')
     expect(content().style.maxHeight).toBe('285px')
 
@@ -81,16 +127,93 @@ describe('PopoverContent placement against the visual viewport', () => {
   })
 
   it('flips above only once the keyboard leaves no usable room below, and back when it closes', async () => {
-    triggerRect = { top: 420, bottom: 456 }
-    const content = renderOpen()
-    await act(async () => {})
+    rects.trigger = { x: 16, top: 420, width: 240, height: 36 }
+    const content = await renderOpen(switcher())
     expect(content().dataset.side).toBe('bottom')
 
     await keyboard(507) // 45px below, 414px above
     expect(content().dataset.side).toBe('top')
     expect(content().style.maxHeight).toBe('414px')
 
-    await keyboard(858)
+    await keyboard(858) // 396px below, 414px above: below holds the usable minimum
     expect(content().dataset.side).toBe('bottom')
+    expect(content().style.maxHeight).toBe('396px')
+  })
+
+  it('places a side="top" popover against its PopoverAnchor, not the trigger (composer)', async () => {
+    rects.trigger = { x: 16, top: 100, width: 40, height: 20 }
+    rects.composer = { x: 16, top: 440, width: 300, height: 40 }
+    const content = await renderOpen(
+      <Popover open>
+        <PopoverAnchor asChild>
+          <div data-testid="composer">
+            <PopoverTrigger>/</PopoverTrigger>
+          </div>
+        </PopoverAnchor>
+        <PopoverContent side="top">menu</PopoverContent>
+      </Popover>,
+    )
+    await keyboard(507) // 436px above the composer, 23px between it and the keys
+    expect(content().dataset.side).toBe('top')
+    expect(content().style.maxHeight).toBe('436px')
+  })
+
+  it('does not count a list capped by its own max-height, so a menu that fits stays below unclamped', async () => {
+    // Desktop: 390px below, 494px above. The 342px menu holds a 400px list capped at 300px.
+    Object.defineProperty(window, 'innerHeight', { value: 932, configurable: true })
+    viewport.height = 932
+    rects.trigger = { x: 16, top: 500, width: 240, height: 36 }
+    natural = 342
+    const content = await renderOpen(
+      <Popover open>
+        <PopoverTrigger>Pick</PopoverTrigger>
+        <PopoverContent sideOffset={6}>
+          <div data-testid="list" style={{ overflowY: 'auto', maxHeight: 300 }}>
+            menu
+          </div>
+        </PopoverContent>
+      </Popover>,
+    )
+    const list = screen.getByTestId('list')
+    vi.spyOn(list, 'scrollHeight', 'get').mockReturnValue(400)
+    vi.spyOn(list, 'clientHeight', 'get').mockReturnValue(300)
+    await keyboard(932) // re-measure with the inner scroller in place
+    expect(content().dataset.side).toBe('bottom')
+    expect(content().style.maxHeight).toBe('')
+  })
+
+  it("counts the content's border, so a menu 1px taller than the room is clamped rather than overflowing", async () => {
+    Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    viewport.height = 600
+    rects.trigger = { x: 16, top: 217, width: 240, height: 36 } // 341px below, 211px above
+    natural = 342
+    const content = await renderOpen(switcher())
+    expect(content().dataset.side).toBe('bottom')
+    expect(content().style.maxHeight).toBe('341px')
+  })
+
+  it('never clamps to a bare border: with no room either way it opens unclamped on the larger side', async () => {
+    rects.trigger = { x: 16, top: 40, width: 240, height: 60 }
+    const content = await renderOpen(switcher())
+    await keyboard(100) // 0px below the trigger, 34px above it
+    expect(content().style.maxHeight).toBe('')
+    expect(content().style.maxHeight).not.toBe('0px')
+  })
+
+  it('leaves avoidCollisions={false} to Radix: no flip, no clamp', async () => {
+    rects.trigger = { x: 16, top: 420, width: 240, height: 36 }
+    const content = await renderOpen(switcher({ avoidCollisions: false }))
+    await keyboard(507)
+    expect(content().dataset.side).toBe('bottom')
+    expect(content().style.maxHeight).toBe('')
+  })
+
+  it("leaves left/right popovers to Radix's own flip", async () => {
+    width = 200
+    rects.trigger = { x: 250, top: 180, width: 100, height: 36 } // no room on the right
+    const content = await renderOpen(switcher({ side: 'right' }))
+    await keyboard(507)
+    expect(content().dataset.side).toBe('left')
+    expect(content().style.maxHeight).toBe('')
   })
 })

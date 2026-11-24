@@ -55,6 +55,17 @@ describe('choosePopoverPlacement — keyboard-reduced visual viewport', () => {
     expect(placement).toEqual({ side: 'top', maxHeight: 596 })
   })
 
+  it('never clamps to 0: with no room below and a sliver above it opens unclamped on the larger side', () => {
+    // A 100px-tall visible band; the trigger fills its bottom 60px.
+    const placement = choosePopoverPlacement({ anchorTop: 40, anchorBottom: 100, viewTop: 0, viewBottom: 100, sideOffset: 6, naturalHeight: 474, preferred: 'bottom' })
+    expect(placement).toEqual({ side: 'top', maxHeight: null })
+  })
+
+  it('flips to a clearly larger side without clamping it below the floor', () => {
+    const placement = choosePopoverPlacement({ anchorTop: 66, anchorBottom: 100, viewTop: 0, viewBottom: 100, sideOffset: 6, naturalHeight: 474, preferred: 'bottom' })
+    expect(placement).toEqual({ side: 'top', maxHeight: null })
+  })
+
   it('honors a preferred top side the same way', () => {
     const composer = { anchorTop: 440, anchorBottom: 480, sideOffset: 4 }
     const placement = choosePopoverPlacement({ ...composer, viewTop: band.top, viewBottom: band.bottom, naturalHeight: 300, preferred: 'top' })
@@ -76,7 +87,7 @@ describe('visibleBand', () => {
 })
 
 describe('naturalHeight', () => {
-  /** A content element whose scroll height is 340px rendered, or `clamped` under an inline max-height. */
+  /** A content element whose border-box height is 340px rendered, or `clamped` under an inline max-height. */
   function content(clamped: number) {
     const el = document.createElement('div')
     // A capped inner list (CommandList's own max-height) hides 600px it never shows.
@@ -85,7 +96,7 @@ describe('naturalHeight', () => {
     vi.spyOn(list, 'scrollHeight', 'get').mockReturnValue(900)
     vi.spyOn(list, 'clientHeight', 'get').mockReturnValue(300)
     el.appendChild(list)
-    vi.spyOn(el, 'scrollHeight', 'get').mockImplementation(() => (el.style.maxHeight ? clamped : 340))
+    vi.spyOn(el, 'offsetHeight', 'get').mockImplementation(() => (el.style.maxHeight ? clamped : 340))
     return el
   }
 

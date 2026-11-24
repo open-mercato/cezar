@@ -30,14 +30,16 @@ export interface PopoverPlacementInput {
 
 export interface PopoverPlacement {
   side: PopoverSide
-  /** The room on `side`: the content's max height there. */
-  maxHeight: number
+  /** The room on `side`: the content's max height there, or null to leave it unclamped. */
+  maxHeight: number | null
 }
 
 /** Below this the menu is not worth opening on the preferred side if the other one is roomier. */
 export const POPOVER_MIN_HEIGHT = 160
 /** How much larger the other side must be before the menu flips to it. */
 export const POPOVER_FLIP_MARGIN = 48
+/** Never clamp below this: a sliver of a menu is worse than one that overflows. */
+export const POPOVER_CLAMP_FLOOR = 80
 
 export function choosePopoverPlacement(input: PopoverPlacementInput): PopoverPlacement {
   const below = Math.max(0, Math.floor(input.viewBottom - input.anchorBottom - input.sideOffset))
@@ -50,8 +52,11 @@ export function choosePopoverPlacement(input: PopoverPlacementInput): PopoverPla
   if (otherRoom >= input.naturalHeight) return { side: other, maxHeight: otherRoom }
   const usable = Math.min(input.naturalHeight, input.minHeight ?? POPOVER_MIN_HEIGHT)
   if (preferredRoom >= usable) return { side: input.preferred, maxHeight: preferredRoom }
-  if (otherRoom >= preferredRoom + POPOVER_FLIP_MARGIN) return { side: other, maxHeight: otherRoom }
-  return { side: input.preferred, maxHeight: preferredRoom }
+  const clamp = (room: number) => (room >= POPOVER_CLAMP_FLOOR ? room : null)
+  if (otherRoom >= preferredRoom + POPOVER_FLIP_MARGIN) return { side: other, maxHeight: clamp(otherRoom) }
+  if (preferredRoom >= POPOVER_CLAMP_FLOOR) return { side: input.preferred, maxHeight: preferredRoom }
+  // Too little room either way: the larger side, unclamped (Radix's overflowing behavior).
+  return { side: otherRoom > preferredRoom ? other : input.preferred, maxHeight: null }
 }
 
 /** The subset of `window` the band reads — stubbable. */
@@ -75,14 +80,15 @@ export function visibleBand(
 /**
  * The content's height without the placement clamp: measured with the inline max-height lifted
  * (restored before anything paints), so a list shrunk by the clamp reports its real height while
- * one capped by its own max-height (CommandList) is not counted past that cap.
+ * one capped by its own max-height (CommandList) is not counted past that cap. `offsetHeight`
+ * includes the border, which Radix's own overflow check counts too.
  */
 export function naturalHeight(el: HTMLElement): number {
   const { maxHeight, overflowY } = el.style
-  if (!maxHeight) return el.scrollHeight
+  if (!maxHeight) return el.offsetHeight
   el.style.maxHeight = ''
   el.style.overflowY = ''
-  const height = el.scrollHeight
+  const height = el.offsetHeight
   el.style.maxHeight = maxHeight
   el.style.overflowY = overflowY
   return height
