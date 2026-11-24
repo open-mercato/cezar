@@ -7,9 +7,18 @@ import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
 import { CODEX_DISABLED_FEATURES } from './codex-restricted-policy.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
+import { currentRestrictedPlatform, restrictedPlatformSupported, samePath, type RestrictedPlatform } from './codex-restricted-platform.ts';
 
 // System and package-manager bins only (Homebrew, Linuxbrew, Nix); never a repo or worktree dir.
 const SEALED_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin', '/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin', '/nix/var/nix/profiles/default/bin', '/run/current-system/sw/bin'].join(':');
+
+// Fixed admin-owned Windows locations only (Git for Windows, GitHub CLI, ripgrep via winget are not trusted: user-writable).
+function sealedPath(platform: RestrictedPlatform, env: NodeJS.ProcessEnv): string {
+  if (platform.os !== 'win32') return SEALED_PATH;
+  const root = env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows';
+  const files = env.ProgramFiles || env.PROGRAMFILES || 'C:\\Program Files';
+  return [`${root}\\System32`, root, `${files}\\Git\\cmd`, `${files}\\GitHub CLI`].join(';');
+}
 
 const PROVIDER_KEYS = new Set(['name', 'base_url', 'wire_api', 'env_key', 'requires_openai_auth', 'http_headers', 'env_http_headers', 'query_params', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'supports_websockets']);
 const AUTH_ENV = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'];
@@ -59,13 +68,17 @@ export function restrictedCodexModelConfig(text: string): { config: Record<strin
   return { config, authEnv };
 }
 
-function credentialLink(source: string, target: string): void {
+function credentialLink(source: string, target: string, platform: RestrictedPlatform): void {
   try {
     const current = lstatSync(target);
-    if (!current.isSymbolicLink() || resolve(readlinkSync(target)) !== source) throw new Error('unexpected credential file');
+    if (!current.isSymbolicLink() || !samePath(platform, readlinkSync(target), source)) throw new Error('unexpected credential file');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('codex: isolated credential link is invalid; refusing this session');
-    if (existsSync(source)) symlinkSync(source, target, 'file');
+    try { if (existsSync(source)) symlinkSync(source, target, 'file'); } catch (linkErr) {
+      // Windows symlinks need Developer Mode or elevation; a copy would fork refreshed tokens, so refuse (#2368).
+      if (platform.os === 'win32') throw new CodexToolPolicyError('restricted execution on Windows needs symbolic links for the isolated credential files (enable Developer Mode)');
+      throw linkErr;
+    }
   }
 }
 
@@ -73,8 +86,12 @@ function credentialLink(source: string, target: string): void {
 export function prepareRestrictedCodexHome(
   spec: Pick<AgentRunSpec, 'cwd' | 'env'>,
   hostEnv: NodeJS.ProcessEnv = process.env,
+  platform: RestrictedPlatform = currentRestrictedPlatform(),
 ): RestrictedCodexHome {
-  if (existsSync('/etc/codex') && readdirSync('/etc/codex').length) throw new CodexToolPolicyError('system Codex policies cannot be isolated');
+  if (!restrictedPlatformSupported(platform)) throw new CodexToolPolicyError('restricted execution is unavailable on this platform');
+  const nullDevice = platform.os === 'win32' ? 'NUL' : '/dev/null';
+  // Windows managed policy locations are unverifiable here; the requirements/system-layer protocol checks cover them.
+  if (platform.os !== 'win32' && existsSync('/etc/codex') && readdirSync('/etc/codex').length) throw new CodexToolPolicyError('system Codex policies cannot be isolated');
   const inherited = { ...hostEnv, ...spec.env };
   const dry = hostEnv.CEZ_DRY_RUN === '1';
   const originalHome = inherited.HOME || homedir();
@@ -110,11 +127,11 @@ export function prepareRestrictedCodexHome(
     features: Object.fromEntries(CODEX_DISABLED_FEATURES.map(key => [key, false])),
     projects: { [cwd]: { trust_level: 'untrusted' } },
     shell_environment_policy: { inherit: 'none', set: {
-      HOME: shellHome, PATH: SEALED_PATH,
-      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_COUNT: '4',
+      HOME: shellHome, PATH: sealedPath(platform, inherited),
+      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullDevice, GIT_CONFIG_COUNT: '4',
       GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: 'false',
       GIT_CONFIG_KEY_1: 'core.pager', GIT_CONFIG_VALUE_1: 'cat',
-      GIT_CONFIG_KEY_2: 'core.hooksPath', GIT_CONFIG_VALUE_2: '/dev/null',
+      GIT_CONFIG_KEY_2: 'core.hooksPath', GIT_CONFIG_VALUE_2: nullDevice,
       GIT_CONFIG_KEY_3: 'protocol.allow', GIT_CONFIG_VALUE_3: 'never',
       GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0',
       GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat', GH_BROWSER: 'false',
@@ -122,14 +139,20 @@ export function prepareRestrictedCodexHome(
     } },
   };
   const configPath = join(path, 'config.toml');
-  const configFd = openSync(configPath, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  // Without O_NOFOLLOW (Windows) refuse a pre-existing link explicitly before opening.
+  if (constants.O_NOFOLLOW === undefined || platform.os === 'win32') {
+    try { if (lstatSync(configPath).isSymbolicLink()) throw new Error('codex: isolated config file must not be a symlink'); } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+  }
+  const configFd = openSync(configPath, constants.O_WRONLY | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600);
   try {
     if (!fstatSync(configFd).isFile()) throw new Error('codex: invalid isolated config file');
     fchmodSync(configFd, 0o600);
     ftruncateSync(configFd, 0);
     writeFileSync(configFd, stringify(config as Parameters<typeof stringify>[0]));
   } finally { closeSync(configFd); }
-  credentialLink(join(nativeHome, 'auth.json'), join(path, 'auth.json'));
+  credentialLink(join(nativeHome, 'auth.json'), join(path, 'auth.json'), platform);
   // Build this environment from scratch: a host opt-in to full inheritance cannot widen it.
   const env: NodeJS.ProcessEnv = {};
   for (const name of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', ...(!dry ? AUTH_ENV : []), ...model.authEnv]) {
@@ -138,14 +161,14 @@ export function prepareRestrictedCodexHome(
   env.HOME = shellHome;
   env.USERPROFILE = shellHome;
   env.CODEX_HOME = path;
-  env.SHELL = '/bin/sh';
+  if (platform.os !== 'win32') env.SHELL = '/bin/sh';
   // Keep shell startup and XDG config out of the real account, including on machines with global XDG vars.
   env.XDG_CONFIG_HOME = join(shellHome, '.config');
   const ghHome = join(path, 'gh');
   mkdirSync(ghHome, { recursive: true, mode: 0o700 });
   if (lstatSync(ghHome).isSymbolicLink()) throw new Error('codex: isolated GitHub config must not be symlinked');
   const nativeGh = dry ? join(nativeHome, 'gh') : resolve(inherited.GH_CONFIG_DIR || join(inherited.XDG_CONFIG_HOME || join(originalHome, '.config'), 'gh'));
-  credentialLink(join(nativeGh, 'hosts.yml'), join(ghHome, 'hosts.yml'));
+  credentialLink(join(nativeGh, 'hosts.yml'), join(ghHome, 'hosts.yml'), platform);
   const shellEnv = record(record(config.shell_environment_policy).set) as Record<string, string>;
   const toolEnv: NodeJS.ProcessEnv = { ...shellEnv, GH_CONFIG_DIR: ghHome };
   for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_HOST', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'LANG', 'LC_ALL']) {

@@ -130,6 +130,10 @@ jobs:
         if: runner.os == 'Windows'
         run: npm test -- packages/cezar/src/webhooks --no-file-parallelism --testTimeout=180000 --hookTimeout=30000
 
+      # Platform-injected restricted Codex checks must pass natively on every OS (#2368).
+      - name: Run the restricted Codex platform suite
+        run: npm test -- packages/cezar/src/core/codex-restricted-platform
+
       - name: Verify test home isolation
         run: npm test -- packages/cezar/src/workspace/home-safety --no-file-parallelism
 
