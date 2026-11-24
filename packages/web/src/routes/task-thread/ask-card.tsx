@@ -1,7 +1,9 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { CheckIcon } from 'lucide-react'
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { type ReactNode, useContext, useEffect, useId, useRef, useState } from 'react'
 
-import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { questionKey, type ApiRun } from '@open-mercato/cezar-api-client'
+import { scheduleDismiss, undoDismiss, usePendingDismissals, useQuestions } from '@/api/questions'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -9,10 +11,14 @@ import { deriveAttention } from '@/lib/attention'
 import { composerEnterSends, useEnterInsertsNewline } from '@/lib/enter-key'
 import { useLocation } from 'react-router'
 
-import { Link } from '@/lib/project-router'
+import { Link, useActiveProjectId } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
+import { DismissingNote, QuietClosedAsk, StaleNote } from '@/routes/questions/question-states'
+
 import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
+import { AskTextContext } from './ask-text'
+import { ASK_MORE_INFO_ANSWER, AskAnswerSummary, askAnswerLines } from './ask-answer-summary'
 import {
   type AskQuestionAnswer,
   type AskSelections,
@@ -23,10 +29,7 @@ import {
 import type { ThreadAsk } from './thread-state'
 import type { UiAskQuestion } from '@open-mercato/cezar-api-client'
 
-/** What "Need more info" sends; the CEZ:ASK instructions (`handoff.ts`) tell the agent to
- *  explain the question and ask it again. */
-export const ASK_MORE_INFO_ANSWER =
-  'I need more information to answer this — please explain the context and ask again.'
+export { ASK_MORE_INFO_ANSWER }
 
 const EMPTY_ANSWER: AskQuestionAnswer = { labels: [] }
 
@@ -74,6 +77,36 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   // provider-status subscription) only mounts for a question that can still be answered.
   // Threads accumulate asks; every resolved one would otherwise carry live machinery for a
   // question nobody can answer again.
+  // Closed by the server for any reason but a plain answer: one quiet line (Questions inbox).
+  if (ask.closed && (ask.closed.reason !== 'answered' || ask.closed.answeredIn)) {
+    return (
+      <QuietClosedAsk
+        closed={ask.closed}
+        questions={ask.questions}
+        asker="agent"
+        link={ask.closed.reason === 'replaced' ? (
+          <Link to={{ hash: '#ask' }} data-slot="ask-closed-newer" className="font-medium text-foreground underline underline-offset-4">Go to the newer question ↓</Link>
+        ) : undefined}
+      />
+    )
+  }
+  const lines = ask.resolved && ask.answer ? askAnswerLines(ask, ask.answer) : null
+  if (lines) {
+    return (
+      <div
+        data-slot="ask-card"
+        data-resolved="true"
+        className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3.5 py-2.5 text-label text-muted-foreground"
+      >
+        <span className="flex items-center gap-1 text-soft-foreground">
+          <CheckIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          Answered
+        </span>
+        <AskAnswerSummary questions={ask.questions} lines={lines} slot="ask-answers" />
+      </div>
+    )
+  }
+  // A reply in the user's own words: read back as they typed it.
   if (ask.resolved) {
     return (
       <div
@@ -92,16 +125,35 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   return <PendingAsk ask={ask} run={run} />
 }
 
+/** The inbox key of a task's question: the listed item's when cached, else built from the route's project. */
+function useTaskQuestionKey(run: ApiRun, requestId: string): string | undefined {
+  const listed = useQuestions(false).data?.open.find((item) => item.source.kind === 'task' && item.source.runId === run.id && item.key.endsWith(`:${requestId}`))
+  const projectId = useActiveProjectId()
+  if (listed) return listed.key
+  return projectId ? questionKey({ kind: 'task', projectId, runId: run.id, requestId }) : undefined
+}
+
 /** The unanswered card: option chips wired to whichever delivery seam the run's state allows. */
 function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
-  const delivery = useAskAnswer(run)
+  const delivery = useAskAnswer(run, undefined, 'ask_answer', ask.id)
+  const queryClient = useQueryClient()
+  const key = useTaskQuestionKey(run, ask.id)
+  const dismissing = usePendingDismissals().find((entry) => entry.key === key && !entry.error)
+  // A typed reply flags the card on the run record rather than closing it (Questions inbox spec).
+  const stale = run.asks?.find((record) => record.requestId === ask.id && !record.closed)?.stale
+  if (key && dismissing) return <DismissingNote label={dismissing.label} onUndo={() => undoDismiss(key)} />
   return (
-    <AskForm
-      ask={ask}
-      ownerId={run.id}
-      delivery={delivery}
-      asker={ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
-    />
+    <>
+      {stale && key ? (
+        <StaleNote detail={stale.detail} disabled={delivery.isPending} onDismiss={() => scheduleDismiss(queryClient, key, ask.questions[0]?.header ?? 'Question')} />
+      ) : null}
+      <AskForm
+        ask={ask}
+        ownerId={run.id}
+        delivery={delivery}
+        asker={ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
+      />
+    </>
   )
 }
 
@@ -111,12 +163,18 @@ export function AskForm({
   ownerId,
   delivery,
   asker,
+  composerBelow = true,
+  framed = true,
 }: {
   ask: Pick<ThreadAsk, 'id' | 'questions'>
   /** Keys the held picks, so they outlive a virtualized row. */
   ownerId: string
   delivery: Pick<AskAnswerDelivery, 'mode' | 'blockedBy' | 'reason' | 'isPending' | 'error' | 'send'>
   asker: string
+  /** A composer sits under the card (a chat): the hint offers it. The Questions inbox has none. */
+  composerBelow?: boolean
+  /** The host draws its own frame and status (a manager card, a Questions row): no box, no asker row. */
+  framed?: boolean
 }) {
   const blocked = delivery.blockedBy !== undefined
   const questions = ask.questions
@@ -157,8 +215,7 @@ export function AskForm({
   const { hash } = useLocation()
   useEffect(() => {
     if (hash !== '#ask' || !card.current) return
-    card.current.scrollIntoView?.({ block: 'center' })
-    card.current.querySelector<HTMLElement>('button, input, textarea')?.focus()
+    revealAskCard(card.current)
   }, [hash])
 
   return (
@@ -169,19 +226,25 @@ export function AskForm({
       data-delivery={delivery.mode}
       aria-busy={delivery.isPending || undefined}
       data-tone={ASKING.tone}
-      className="rounded-lg border border-info/30 bg-info/5 px-4 pt-3.5 pb-3.5"
+      className={framed ? 'rounded-lg border border-info/30 bg-info/5 px-4 pt-3.5 pb-3.5' : undefined}
     >
-      <div className="mb-2.5 flex items-center gap-2">
-        <StatusDot tone={ASKING.tone} pulse={ASKING.pulse} />
-        {/* Ink, not the accent: a tinted word on the tinted card is under 2:1 as small text. */}
-        <span data-slot="ask-asker" className="text-label font-semibold text-foreground">{asker}</span>
-        {/* A one-tap pick disables every chip at once; say why. */}
-        {delivery.isPending ? (
-          <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-muted-foreground">
-            Sending…
-          </span>
-        ) : null}
-      </div>
+      {framed || delivery.isPending ? (
+        <div className="mb-2.5 flex items-center gap-2">
+          {framed ? (
+            <>
+              <StatusDot tone={ASKING.tone} pulse={ASKING.pulse} />
+              {/* Ink, not the accent: a tinted word on the tinted card is under 2:1 as small text. */}
+              <span data-slot="ask-asker" className="text-label font-semibold text-foreground">{asker}</span>
+            </>
+          ) : null}
+          {/* A one-tap pick disables every chip at once; say why. */}
+          {delivery.isPending ? (
+            <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-muted-foreground">
+              Sending…
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex flex-col gap-4">
         {questions.map((question, index) => (
           <AskQuestionBlock
@@ -225,7 +288,7 @@ export function AskForm({
           >
             {resuming
               ? 'the session has ended — sending reopens it'
-              : `${questions.length > 1 ? 'answer each question' : 'pick one or more'} — or type a reply below`}
+              : `${questions.length > 1 ? 'answer each question' : 'pick one or more'}${composerBelow ? ' — or type a reply below' : ''}`}
           </span>
         </div>
       )}
@@ -276,6 +339,7 @@ function AskQuestionBlock({
   onSubmit: (answer: AskQuestionAnswer) => void
 }) {
   const multiSelect = question.multiSelect === true
+  const text = useContext(AskTextContext)
   const newlineOnEnter = useEnterInsertsNewline()
   const questionId = useId()
   const otherOpen = answer.other !== undefined
@@ -326,7 +390,7 @@ function AskQuestionBlock({
         ) : null}
       </div>
       <p id={questionId} className="mb-2.5 break-words text-body font-semibold text-foreground">
-        {question.question}
+        {text.render(question.question)}
         {multiSelect ? <span className="sr-only"> (select all that apply)</span> : null}
       </p>
       <div className="flex flex-col gap-2">
@@ -359,7 +423,7 @@ function AskQuestionBlock({
             <Textarea
               ref={otherInput}
               rows={2}
-              aria-label={`Your own answer: ${question.question}`}
+              aria-label={`Your own answer: ${text.plain(question.question)}`}
               placeholder="Type your own answer"
               value={answer.other}
               disabled={disabled}
@@ -412,19 +476,14 @@ function AskChoice({
   disabled: boolean
   onClick: () => void
 }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      aria-pressed={selected}
-      onClick={onClick}
-      className={cn(
-        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none',
-        'focus-visible:ring-[3px] focus-visible:ring-ring/50',
-        'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
-        selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
-      )}
-    >
+  const text = useContext(AskTextContext)
+  const descriptionId = useId()
+  const box = cn(
+    'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none pointer-coarse:min-h-11',
+    selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
+  )
+  const content = (
+    <>
       <span className="flex min-w-0 items-start gap-2 text-ui font-semibold text-foreground">
         {checkbox ? (
           <span
@@ -437,11 +496,53 @@ function AskChoice({
             {selected ? '✓' : ''}
           </span>
         ) : null}
-        <span className="min-w-0 break-words">{label}</span>
+        <span className="min-w-0 break-words">{text.render(label, 'option')}</span>
       </span>
       {description ? (
-        <span className="min-w-0 break-words text-label text-muted-foreground">{description}</span>
+        <span id={descriptionId} className="min-w-0 break-words text-label text-muted-foreground">{text.render(description, 'option')}</span>
       ) : null}
+    </>
+  )
+  // A chip is a link of its own, and a link inside a button is neither: the button lies over the
+  // whole option and the chips sit above it, so a click on a chip opens it and anywhere else picks.
+  if (text.interactive(label) || (description !== undefined && text.interactive(description))) {
+    return (
+      <div
+        data-slot="ask-choice"
+        className={cn(
+          box,
+          'relative has-[>button:hover]:border-primary/50 has-[>button:hover]:bg-primary/[0.06]',
+          'has-[>button:focus-visible]:ring-[3px] has-[>button:focus-visible]:ring-ring/50',
+          disabled && 'opacity-50',
+        )}
+      >
+        <button
+          type="button"
+          disabled={disabled}
+          aria-pressed={selected}
+          aria-label={text.plain(label)}
+          {...(description ? { 'aria-describedby': descriptionId } : {})}
+          onClick={onClick}
+          className="absolute inset-0 rounded-md outline-none"
+        />
+        {content}
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      data-slot="ask-choice"
+      disabled={disabled}
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        box,
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
+      )}
+    >
+      {content}
     </button>
   )
 }
@@ -477,4 +578,16 @@ function AskExtraChoice({
       {children}
     </button>
   )
+}
+
+/** Bring an open question card into view and hand it the focus (the `#ask` deep link, the header's Answer). */
+export function revealAskCard(card: HTMLElement): void {
+  card.scrollIntoView?.({ block: 'center' })
+  card.querySelector<HTMLElement>('button, input, textarea')?.focus()
+}
+
+/** The latest unresolved question card inside `root`, or null when none is mounted. */
+export function latestOpenAskCard(root: ParentNode): HTMLElement | null {
+  const cards = root.querySelectorAll<HTMLElement>('[data-slot="ask-card"][data-resolved="false"]')
+  return cards.length > 0 ? cards[cards.length - 1]! : null
 }

@@ -1,0 +1,3 @@
+# The start watchdog and the page checks it reads, with the relay status words it maps.
+ios/App/App/Shell/*.swift
+ios/App/App/Shell/Relay/*.swift

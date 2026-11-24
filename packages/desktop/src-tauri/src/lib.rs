@@ -31,6 +31,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+mod cli_command;
 mod disclaim;
 mod node_runtime;
 #[cfg(target_os = "macos")]
@@ -43,7 +45,7 @@ mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
 use telemetry::Failure;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -55,8 +57,21 @@ const LOG_TAIL: usize = 60;
 /// beside the app whenever it can; a busy one falls through to the next few, then to any.
 const PREFERRED_PORTS: std::ops::Range<u16> = 4321..4331;
 const PACKAGE: &str = "@open-mercato/cezar";
-/// System-wide: bring the cockpit forward on its new-task composer from any app.
-const NEW_TASK_SHORTCUT: &str = "CmdOrCtrl+Alt+N";
+/// System-wide: bring the cockpit forward on its new-task composer from any app. Never Ctrl+Alt+key
+/// off macOS: there Ctrl+Alt is AltGr, and a global hotkey on it steals typed characters (Alt+N is
+/// "ń" on a Polish layout) from every app (#2409). Win/Super+Shift+N is unused by the OSes.
+#[cfg(target_os = "macos")]
+const NEW_TASK_SHORTCUT: &str = "Cmd+Alt+N";
+#[cfg(not(target_os = "macos"))]
+const NEW_TASK_SHORTCUT: &str = "Super+Shift+N";
+
+/// True when a chord pairs Ctrl and Alt (AltGr on Windows/Linux) with a key.
+#[cfg(test)]
+fn is_altgr_chord(chord: &str) -> bool {
+    let parts: Vec<String> = chord.split('+').map(|p| p.trim().to_ascii_lowercase()).collect();
+    let has = |names: &[&str]| parts.iter().any(|p| names.contains(&p.as_str()));
+    has(&["ctrl", "control", "cmdorctrl", "commandorcontrol"]) && has(&["alt", "option"])
+}
 
 /// Everything the supervisor thread and the menu handler share.
 struct Shell {
@@ -380,23 +395,21 @@ fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
     let versions_menu = Submenu::with_id(app, "versions", "Versions", true)?;
     *shell.versions_menu.lock().unwrap() = Some(versions_menu.clone());
     refresh_versions_menu(app, shell);
-    let app_menu = Submenu::with_items(
-        app,
-        "Cezar",
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &update_item,
-            &versions_menu,
-            &open_item,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
+    let about = PredefinedMenuItem::about(app, None, None)?;
+    let separators = [PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?];
+    let (hide, hide_others, quit) = (PredefinedMenuItem::hide(app, None)?, PredefinedMenuItem::hide_others(app, None)?, PredefinedMenuItem::quit(app, None)?);
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&about, &separators[0], &update_item, &versions_menu, &open_item];
+    // The terminal command (`cli_command.rs`): the bundle's shim linked onto the PATH, like VS Code's `code`.
+    #[cfg(target_os = "macos")]
+    let cli_items = (
+        PredefinedMenuItem::separator(app)?,
+        MenuItem::with_id(app, "install-cli", "Install 'cez' command in PATH…", true, None::<&str>)?,
+        MenuItem::with_id(app, "uninstall-cli", "Uninstall 'cez' command", true, None::<&str>)?,
+    );
+    #[cfg(target_os = "macos")]
+    items.extend([&cli_items.0 as &dyn IsMenuItem<tauri::Wry>, &cli_items.1, &cli_items.2]);
+    items.extend([&separators[1] as &dyn IsMenuItem<tauri::Wry>, &hide, &hide_others, &separators[2], &quit]);
+    let app_menu = Submenu::with_items(app, "Cezar", true, &items)?;
     // Without an Edit menu the webview has no Cmd+C / Cmd+V on macOS.
     let edit_menu = Submenu::with_items(
         app,
@@ -793,6 +806,14 @@ pub fn run() {
                     }
                 });
             }
+            #[cfg(target_os = "macos")]
+            id @ ("install-cli" | "uninstall-cli") => {
+                let Ok(resources) = app.path().resource_dir() else { return };
+                let shim_dir = resources.join("bin");
+                let install = id == "install-cli";
+                // osascript dialogs block until answered: never on the main thread.
+                std::thread::spawn(move || if install { cli_command::install(shim_dir) } else { cli_command::uninstall(shim_dir) });
+            }
             "update-cezar" => {
                 let app = app.clone();
                 let shell = shell_for_menu.clone();
@@ -1002,6 +1023,9 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 }
             });
         } else {
+            if matches!(child.try_wait(), Ok(Some(status)) if status.code() == Some(0)) && attach_to_running(&window, &shell, &log) {
+                return;
+            }
             let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
             let failure = match child.try_wait() {
                 Ok(Some(status)) => Failure::new("sidecar_exited_at_start", format!("The cockpit process exited with {status} before answering."))
@@ -1039,6 +1063,7 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 splash_reset(&window, "Restarting cezar…", "Switching to the newly installed version.");
                 continue;
             }
+            Some(0) if attach_to_running(&window, &shell, &log) => return,
             Some(code) => {
                 let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
                 fail(&window, "cezar stopped", &stopped_detail(code), &tail, stopped_failure(code));
@@ -2248,6 +2273,40 @@ fn stopped_failure(code: i32) -> Option<Failure> {
     (code != 0).then(|| Failure::new("sidecar_exited", stopped_detail(code)).with("exit_code", code))
 }
 
+/// The URL a sidecar that handed off to an ALREADY-RUNNING cockpit announced before exiting 0
+/// (`cezar-handoff: <url>`, written by the CLI). Only loopback http is ever attached to
+/// (telemetry f3893dd3).
+fn handoff_url(lines: &[String]) -> Option<url::Url> {
+    let raw = lines.iter().rev().find_map(|line| line.trim().strip_prefix("cezar-handoff:"))?.trim();
+    let url = url::Url::parse(raw).ok()?;
+    let loopback = match url.host()? {
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+        url::Host::Domain(name) => name == "localhost",
+    };
+    (url.scheme() == "http" && loopback && url.port().is_some()).then_some(url)
+}
+
+/// A clean exit after a hand-off is not a stop: the window joins the cockpit that is already up.
+/// The pipe readers may trail the exit by a moment, so the log is polled briefly.
+fn attach_to_running(window: &WebviewWindow, shell: &Shell, log: &Mutex<VecDeque<String>>) -> bool {
+    for _ in 0..10 {
+        let lines = log.lock().unwrap().iter().cloned().collect::<Vec<_>>();
+        if let Some(url) = handoff_url(&lines) {
+            // The marker is only a claim: trust the port (and IPC via is_own_origin) once a cezar answers there.
+            let port = url.port().unwrap_or_default();
+            if health_version(port).is_none() {
+                return false;
+            }
+            shell.port.store(port, Ordering::SeqCst);
+            let _ = window.navigate(url);
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 /// The page's `report` mode, after adding what only the shell knows: the active cezar and where
 /// Node came from.
 fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
@@ -2310,6 +2369,39 @@ mod tests {
         );
     }
 
+    fn lines(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|line| line.to_string()).collect()
+    }
+
+    /// Telemetry f3893dd3: exit 0 after "cockpit already running" is a hand-off to attach to.
+    #[test]
+    fn a_handoff_announcement_names_the_cockpit_to_attach_to() {
+        let log = lines(&[
+            "  cockpit already running (pid 1066794) — opened admin-v2",
+            "  cockpit → http://127.0.0.1:4321/p/admin-v2/",
+            "cezar-handoff: http://127.0.0.1:4321/p/admin-v2/",
+        ]);
+        assert_eq!(handoff_url(&log).map(|u| u.to_string()).as_deref(), Some("http://127.0.0.1:4321/p/admin-v2/"));
+        assert!(handoff_url(&lines(&["cezar-handoff: http://localhost:4400/"])).is_some());
+        assert!(handoff_url(&lines(&["cezar-handoff: http://[::1]:4400/"])).is_some());
+    }
+
+    #[test]
+    fn only_loopback_http_with_a_port_is_attached_to() {
+        for bad in [
+            "cezar-handoff: https://127.0.0.1:4321/",
+            "cezar-handoff: http://example.com:4321/",
+            "cezar-handoff: http://127.0.0.1/",
+            "cezar-handoff: file:///etc/passwd",
+            "cezar-handoff: not a url",
+        ] {
+            assert!(handoff_url(&lines(&[bad])).is_none(), "{bad}");
+        }
+        // The human line alone is not a machine contract; a plain stop has no hand-off.
+        assert!(handoff_url(&lines(&["  cockpit → http://127.0.0.1:4321/"])).is_none());
+        assert!(handoff_url(&[]).is_none());
+    }
+
     #[test]
     fn a_clean_exit_is_a_stop_not_an_error_report() {
         assert!(stopped_failure(0).is_none());
@@ -2326,6 +2418,17 @@ mod tests {
             "window.dispatchEvent(new CustomEvent('cezar:switch-task', { detail: \"next\" }))"
         );
         assert_eq!(TASK_SWITCH_SHORTCUTS.map(|(_, direction)| direction), ["previous", "next"]);
+    }
+
+    /// #2409: Ctrl+Alt is AltGr off macOS, so the new-task chord must never be one.
+    #[test]
+    fn the_new_task_chord_is_not_altgr() {
+        assert!(!is_altgr_chord(NEW_TASK_SHORTCUT));
+        assert!(is_altgr_chord("CmdOrCtrl+Alt+N"));
+        assert!(is_altgr_chord("Ctrl+Alt+N"));
+        assert!(!is_altgr_chord("Cmd+Alt+N"));
+        assert!(!is_altgr_chord("Super+Shift+N"));
+        assert!(NEW_TASK_SHORTCUT.parse::<Shortcut>().is_ok());
     }
 
     #[test]

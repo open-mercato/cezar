@@ -108,7 +108,8 @@ const TITLES: Record<OutcomeKind, string> = {
   review: 'Finished · needs your review',
   done: 'Done',
   cancelled: 'Cancelled',
-  idle: 'Closed after inactivity',
+  // Legacy idle close is housekeeping (spec 2026-11-04-idle-closed-attention-state).
+  idle: 'Session closed',
   failed: 'Failed',
 }
 
@@ -173,7 +174,7 @@ export function OutcomeCard({
     >
       <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
         <StatusDot
-          tone={kind === 'done' || kind === 'cancelled' ? 'neutral' : attention.tone}
+          tone={kind === 'done' || kind === 'cancelled' || kind === 'idle' ? 'neutral' : attention.tone}
           pulse={kind === 'review' && attention.pulse}
           aria-label={attention.label}
         />
@@ -277,7 +278,6 @@ export function OutcomeCard({
                 <Link to={changesTo} data-action="review">Review changes</Link>
               </Button>
             ) : null}
-            {kind === 'idle' ? retry : null}
           </>
         )}
         {!run.archived ? (

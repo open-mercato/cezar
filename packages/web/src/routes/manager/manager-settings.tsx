@@ -1,5 +1,5 @@
-import { BellIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
+import { BellIcon, BotIcon, BrainIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { useCallback, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
 import {
@@ -31,7 +31,12 @@ import { MascotPicker } from './mascot-picker'
 
 import { SheetContent } from './manager-approval'
 import { ConnectorsDialog } from './manager-connectors'
-import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { MemoryDialog } from './manager-memory'
+import { ShellAccessDialog } from './manager-shell-access'
+import { PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { ManagerAgentDialog } from './manager-agent-dialog'
+import { activityMenuLabel, useManagerActivityActions } from './manager-activity'
+import { isInactive } from '@/lib/managers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -312,12 +317,14 @@ export function PersonaDialog({
 }
 
 /** A menu action, drawn like the picker rows above it: one icon column, one weight. */
-function MenuRow({ icon, danger, onClick, children }: { icon: ReactNode; danger?: boolean; onClick: () => void; children: ReactNode }) {
+function MenuRow({ icon, danger, disabled, title, slot, onClick, children }: { icon: ReactNode; danger?: boolean; disabled?: boolean; title?: string; slot?: string; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
-      data-slot="manager-menu-row"
-      className={cn(PICKER_TRIGGER, 'w-full [&>svg]:size-3.5 [&>svg]:shrink-0', danger && 'text-danger hover:text-danger')}
+      data-slot={slot ?? 'manager-menu-row'}
+      disabled={disabled}
+      title={title}
+      className={cn(PICKER_TRIGGER, 'w-full [&>svg]:size-3.5 [&>svg]:shrink-0 disabled:opacity-50', danger && 'text-danger hover:text-danger')}
       onClick={onClick}
     >
       {icon}
@@ -336,37 +343,34 @@ export function useCheckNow(managerId: string): () => void {
   }, [managerId])
 }
 
-/** What the rest of the screen can open in the gear: a failed check's "Switch account" lands on
- *  the account picker, the Watching panel's "+" on the jobs dialog. */
+/** A failed check's "Switch account" focuses the dialog's account field; Watching's "+" opens jobs. */
 export interface ManagerSettingsHandle {
   openAccount: () => void
   openJobs: () => void
+  /** A sidebar row's Settings…: the gear menu itself. */
+  openMenu: () => void
 }
 
-/** The gear: the Figma's four pickers, then what a manager's lifetime needs beyond them. */
+/** The gear groups agent choices in one dialog beside the manager's other settings. */
 export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void; ref?: Ref<ManagerSettingsHandle> }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'connectors' | 'prompts' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'agent' | 'rename' | 'jobs' | 'connectors' | 'memory' | 'shell' | 'prompts' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const connectorCount = Object.values(manager.connectors ?? {}).filter((grant) => grant.level !== 'off').length
   const trigger = useRef<HTMLButtonElement>(null)
-  const menu = useRef<HTMLDivElement>(null)
-  // Set by `openAccount`: the picker exists only once the popover has rendered.
-  const focusAccount = useRef(false)
-  useEffect(() => {
-    if (!menuOpen || !focusAccount.current) return
-    focusAccount.current = false
-    menu.current?.querySelector<HTMLElement>('[data-slot="manager-account-picker"]')?.focus()
-  }, [menuOpen])
+  const [focusAccount, setFocusAccount] = useState(false)
   useImperativeHandle(ref, () => ({
     openAccount: () => {
-      focusAccount.current = true
-      setMenuOpen(true)
+      setFocusAccount(true)
+      setMenuOpen(false)
+      setDialog('agent')
     },
-    openJobs: () => setDialog('jobs'),
+    openJobs: () => { setMenuOpen(false); setDialog('jobs') },
+    openMenu: () => setMenuOpen(true),
   }), [])
-  const openDialog = (next: 'rename' | 'jobs' | 'connectors' | 'prompts' | 'delete') => {
+  const openDialog = (next: 'agent' | 'rename' | 'jobs' | 'connectors' | 'memory' | 'shell' | 'prompts' | 'delete') => {
+    setFocusAccount(false)
     setMenuOpen(false)
     setDialog(next)
   }
@@ -379,6 +383,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
     if (!open) setDialog(null)
   }
   const checkNow = useCheckNow(manager.id)
+  const activity = useManagerActivityActions(returnFocus)
+  const inactive = isInactive(manager)
+  const { label: activityLabel, Icon: ActivityIcon } = activityMenuLabel(manager)
   const confirmDelete = () => {
     remove.mutate(undefined, {
       onError: (error) => toast(errorMessage(error), { tone: 'danger' }),
@@ -392,14 +399,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
             <SettingsIcon aria-hidden="true" className="size-5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent ref={menu} align="end" className="flex w-64 flex-col items-stretch gap-0.5 p-2" data-slot="manager-settings-menu">
+        <PopoverContent align="end" className="flex w-64 flex-col items-stretch gap-0.5 p-2" data-slot="manager-settings-menu">
           <ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} />
-          <ModelPicker {...pickModel(manager)} onChange={onPatch} />
-          <AccountPicker
-            {...(manager.runner ? { runner: manager.runner } : {})}
-            {...(manager.agentProfile ? { agentProfile: manager.agentProfile } : {})}
-            onChange={onPatch}
-          />
+          <MenuRow icon={<BotIcon aria-hidden="true" />} onClick={() => openDialog('agent')}>Manager agent…</MenuRow>
           <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
           <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
             <BellIcon aria-hidden="true" className="size-3.5 shrink-0" />
@@ -436,16 +438,31 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           <MenuRow icon={<PlugIcon aria-hidden="true" />} onClick={() => openDialog('connectors')}>
             Connectors{connectorCount > 0 ? ` (${connectorCount})` : ''}…
           </MenuRow>
+          <MenuRow icon={<BrainIcon aria-hidden="true" />} onClick={() => openDialog('memory')}>Memory…</MenuRow>
+          <MenuRow icon={<TerminalIcon aria-hidden="true" />} onClick={() => openDialog('shell')}>
+            Shell access{manager.bashDenials?.length ? ` (${manager.bashDenials.length} refused)` : ''}…
+          </MenuRow>
           <MenuRow icon={<MessageSquareTextIcon aria-hidden="true" />} onClick={() => openDialog('prompts')}>
             Prompt buttons{manager.quickPrompts?.length ? ` (${manager.quickPrompts.length})` : ''}…
           </MenuRow>
-          <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} onClick={checkNow}>Check now</MenuRow>
+          <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} disabled={inactive} {...(inactive ? { title: 'Reactivate to check' } : {})} onClick={checkNow}>Check now</MenuRow>
+          <MenuRow
+            slot="manager-menu-activity"
+            icon={<ActivityIcon aria-hidden="true" />}
+            onClick={() => {
+              setMenuOpen(false)
+              void activity.toggle(manager)
+            }}
+          >
+            {activityLabel}
+          </MenuRow>
           <MenuRow icon={<Trash2Icon aria-hidden="true" />} danger onClick={() => openDialog('delete')}>Delete…</MenuRow>
           {manager.costUsd > 0 ? (
             <p className="px-1.5 pt-1 text-meta text-muted-foreground">Spent ${manager.costUsd.toFixed(2)}</p>
           ) : null}
         </PopoverContent>
       </Popover>
+      {dialog === 'agent' ? <ManagerAgentDialog manager={manager} onPatch={onPatch} onClose={() => setDialog(null)} onCloseAutoFocus={returnFocus} focusAccount={focusAccount} /> : null}
       {dialog === 'rename' ? (
         <PersonaDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(patch) => update.mutateAsync(patch)} />
       ) : null}
@@ -455,9 +472,14 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       {dialog === 'connectors' ? (
         <ConnectorsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(connectors) => update.mutateAsync({ connectors })} />
       ) : null}
+      {dialog === 'memory' ? <MemoryDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} /> : null}
+      {dialog === 'shell' ? (
+        <ShellAccessDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onUpdate={(patch) => update.mutateAsync(patch)} />
+      ) : null}
       {dialog === 'prompts' ? (
         <QuickPromptsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(quickPrompts) => update.mutateAsync({ quickPrompts })} />
       ) : null}
+      {activity.dialog}
       <AlertDialog open={dialog === 'delete'} onOpenChange={closeDialog}>
         <AlertDialogContent onCloseAutoFocus={returnFocus}>
           <AlertDialogHeader>
@@ -474,13 +496,4 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       </AlertDialog>
     </>
   )
-}
-
-/** The optional keys `exactOptionalPropertyTypes` won't take as `undefined`. */
-export function pickModel(manager: Pick<ManagerSummary, 'runner' | 'model' | 'effort'>) {
-  return {
-    ...(manager.runner ? { runner: manager.runner } : {}),
-    ...(manager.model ? { model: manager.model } : {}),
-    ...(manager.effort ? { effort: manager.effort } : {}),
-  }
 }

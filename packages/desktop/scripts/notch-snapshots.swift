@@ -1,5 +1,7 @@
-// See notch-snapshots.mjs: one offscreen WKWebView, one PNG per state.
+// See notch-snapshots.mjs: one offscreen WKWebView, one PNG per state, and one GIF per `recording`.
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 import WebKit
 
 setvbuf(stdout, nil, _IONBF, 0)
@@ -43,14 +45,32 @@ let backdrop = """
   })()
   """
 
+/// A state with `recording` is one frame of that GIF: its animations are frozen at `at` ms.
+var recordings: [String: [CGImage]] = [:]
+var recordingOrder: [String] = []
+
+func writeRecordings() {
+  for name in recordingOrder {
+    let frames = recordings[name]!
+    let url = output.appendingPathComponent("\(name).gif") as CFURL
+    let gif = CGImageDestinationCreateWithURL(url, UTType.gif.identifier as CFString, frames.count, nil)!
+    CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+    for frame in frames {
+      CGImageDestinationAddImage(gif, frame, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.1]] as CFDictionary)
+    }
+    if !CGImageDestinationFinalize(gif) { print("gif failed:", name); exit(1) }
+    print("wrote", name, "(\(frames.count) frames)")
+  }
+}
+
 func shoot(_ index: Int) {
-  guard index < states.count else { NSApp.terminate(nil); return }
+  guard index < states.count else { writeRecordings(); NSApp.terminate(nil); return }
   let state = states[index]
   let housing = state["housing"] as! [String: Double]
   let expanded = state["expanded"] as? Bool ?? false
   let floating = housing["width"]! == 0
   let script = """
-    document.getElementById('bar').style.height = \(floating ? "'25px'" : "'37px'");
+    document.getElementById('bar').style.height = \(floating ? "'30px'" : "'37px'");
     document.getElementById('cam').style.display = \(floating ? "'none'" : "'block'");
     window.__notch.render({ layout: \(json(layout)), housing: \(json(housing)), model: null });
     window.__notch.setExpanded(false);
@@ -60,10 +80,22 @@ func shoot(_ index: Int) {
     """
   view.evaluateJavaScript(script) { _, error in
     if let error { print("render failed:", error) }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+    let at = state["at"] as? Double
+    let freeze = at.map { "document.getAnimations().forEach((a) => { a.pause(); a.currentTime = \($0) }); 0" } ?? "0"
+    DispatchQueue.main.asyncAfter(deadline: .now() + (at == nil ? 0.9 : 0.15)) {
+      view.evaluateJavaScript(freeze) { _, _ in
       let configuration = WKSnapshotConfiguration()
-      configuration.rect = CGRect(x: 0, y: 0, width: panel["width"]!, height: cropHeight)
+      let crop = state["crop"] as? [String: Double]
+      configuration.rect = crop.map { CGRect(x: $0["x"]!, y: $0["y"]!, width: $0["width"]!, height: $0["height"]!) }
+        ?? CGRect(x: 0, y: 0, width: panel["width"]!, height: cropHeight)
       view.takeSnapshot(with: configuration) { image, error in
+        if let recording = state["recording"] as? String, let image,
+          let frame = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+          if recordings[recording] == nil { recordingOrder.append(recording) }
+          recordings[recording, default: []].append(frame)
+          shoot(index + 1)
+          return
+        }
         guard let image, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
           let png = bitmap.representation(using: .png, properties: [:]) else {
           print("snapshot failed:", error ?? "no image"); exit(1)
@@ -71,6 +103,7 @@ func shoot(_ index: Int) {
         try! png.write(to: output.appendingPathComponent("\(state["name"]!).png"))
         print("wrote", state["name"]!)
         shoot(index + 1)
+      }
       }
     }
   }

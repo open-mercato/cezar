@@ -1,9 +1,9 @@
 import { RefreshCwIcon } from 'lucide-react'
-import { useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { useHealth, useScheduleSelfUpdate, useSelfUpdate } from '@/api/queries'
 import { Button } from '@/components/ui/button'
-import { buildSkew, subscribeBuildSkew } from '@/lib/build-identity'
+import { buildReloadWarning, buildSkew, reloadUpdatedPage, subscribeBuildSkew } from '@/lib/build-identity'
 
 function inDesktopApp(): boolean {
   return typeof window !== 'undefined' && ('__CEZ_DESKTOP__' in window || !!document.documentElement.dataset.cezDesktop)
@@ -27,13 +27,41 @@ export function BuildSkewBanner() {
 }
 
 function ReloadPage() {
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState(buildReloadWarning)
+  const inFlight = useRef(false)
+  useEffect(() => {
+    if (!pending) return
+    const timer = window.setTimeout(() => {
+      inFlight.current = false
+      setPending(false)
+      setError('Reload did not finish. Check your connection and try again. In CezarBot, close and reopen this server if it continues.')
+    }, 30_000)
+    return () => window.clearTimeout(timer)
+  }, [pending])
+  const reload = async () => {
+    if (inFlight.current) return
+    inFlight.current = true
+    setPending(true)
+    setError(null)
+    try {
+      await reloadUpdatedPage()
+    } catch (cause) {
+      inFlight.current = false
+      setPending(false)
+      setError(cause instanceof Error && cause.message.startsWith('The updated cockpit')
+        ? cause.message
+        : 'Cannot reach cezar to reload. Check your connection, wait for the computer to reconnect, then try again.')
+    }
+  }
   return (
     <>
       <span className="min-w-0">
         cezar was updated.<span className="text-muted-foreground"> This page is from the previous version.</span>
+        {error ? <span role="alert" className="text-destructive"> {error}</span> : null}
       </span>
-      <Button size="sm" variant="outline" className="ml-auto" onClick={() => window.location.reload()}>
-        Reload
+      <Button size="sm" variant="outline" className="ml-auto" disabled={pending} onClick={() => void reload()}>
+        {pending ? 'Reloading…' : 'Reload'}
       </Button>
     </>
   )

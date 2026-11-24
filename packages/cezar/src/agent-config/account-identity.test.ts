@@ -167,6 +167,14 @@ describe('readAccountIdentity', () => {
   });
 
   describe('cursor', () => {
+    it('explains a login without display fields instead of returning an empty panel', async () => {
+      const identity = await readAccountIdentity('cursor', join(home, '.cursor'), {
+        runCommand: async () => ({ stdout: '{"isAuthenticated":true}', stderr: '', exitCode: 0 }),
+      });
+      expect(identity).toMatchObject({ available: false, fields: [] });
+      expect(identity.reason).toContain('does not expose account details');
+    });
+
     it('reads email, name and plan from agent status/about JSON — named fields only', async () => {
       const identity = await readAccountIdentity('cursor', join(home, '.cursor'), {
         runCommand: async (args) => {

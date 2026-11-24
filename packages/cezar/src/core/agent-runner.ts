@@ -50,6 +50,9 @@ export function isRunnerId(value: string): value is RunnerId {
   return (RUNNER_IDS as readonly string[]).includes(value);
 }
 
+/** Historical default: unrestricted shell access, not a capability boundary. */
+export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'];
+
 export interface AgentRunSpec {
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
@@ -71,6 +74,12 @@ export interface AgentRunSpec {
   /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
    *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
   bashHookCommand?: string;
+  /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
+   *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
+  bypassPermissions?: boolean;
+  /** Claude only: `sandbox.excludedCommands` patterns, for a command that must reach the loopback
+   *  cockpit the user's Bash sandbox blocks (a manager's `cez-manager`). Other backends ignore it. */
+  sandboxExcludedCommands?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control
@@ -83,6 +92,10 @@ export interface AgentRunSpec {
   /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
+  /** Claude only: load no MCP server and no claude.ai connector (`--strict-mcp-config` with no
+   *  config). For a manager turn that may call none: their tool lists and instructions otherwise
+   *  fill its context on every turn (spec 2026-11-21-manager-short-sessions-and-memory § 2.4). */
+  noMcpServers?: boolean;
   /** Claude only: extra settings (e.g. a `PreToolUse` hook) for `--settings`, written to a `0600`
    *  temp file, never inline in argv. Other backends ignore it, so never rely on it elsewhere. */
   claudeSettings?: Record<string, unknown>;
@@ -107,7 +120,7 @@ export interface AgentRunSpec {
 }
 
 /**
- * Backends without a dedicated system-prompt channel (codex app-server,
+ * Backends without a replaceable system-prompt channel (codex app-server,
  * opencode serve) deliver `spec.systemPrompt` as a leading block of the
  * opening user message — the documented per-backend mapping (spec §protocol
  * v2: claude = `--append-system-prompt`, codex/opencode = prepended here).
@@ -234,8 +247,12 @@ export interface AgentUsageWindow {
 export interface AgentUsageStatus {
   /** Tokens in the main agent's context after its latest message. */
   contextTokens?: number;
+  /** Of `contextTokens`, what that request wrote to the prompt cache (Claude only). */
+  cacheWriteTokens?: number;
   contextWindow?: number;
   limits?: AgentUsageWindow[];
+  /** A finished turn's own totals (Claude's result frame): what a manager turn's stats record. */
+  turnTokens?: { cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number };
 }
 
 export interface AgentToolCallRecord {

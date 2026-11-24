@@ -105,6 +105,7 @@ function serve(answers: Answers = {}) {
   }
   const config: WorkspaceConfigResponse = {
     branding: { name: 'cezar', logoUrl: null },
+    computerName: 'Test Mac',
     agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
@@ -125,7 +126,7 @@ function serve(answers: Answers = {}) {
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
-      worktreeRetentionDefault: 10,
+      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
     },
   }
   const json = (payload: unknown, status = 200) =>

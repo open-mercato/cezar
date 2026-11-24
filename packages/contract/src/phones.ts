@@ -1,0 +1,271 @@
+import { z } from 'zod';
+import { phonePushPrefsSchema } from './attention.ts';
+
+/** Settings > Connect a phone (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`). */
+
+export const phonePlatformSchema = z.enum(['android', 'ios']);
+export type PhonePlatform = z.infer<typeof phonePlatformSchema>;
+
+export const phoneDeviceParamSchema = z.object({ deviceId: z.string().regex(/^[A-Za-z0-9_-]{22}$/) });
+export const phonePairingParamSchema = z.object({ id: z.uuid() });
+
+/**
+ * The terms a relay account accepts (RELAY_PROTOCOL.md § 18). The one place their URLs and version
+ * live: Settings links them and `POST /v1/accounts` sends `version`.
+ */
+export const RELAY_TERMS = {
+  version: '2026-11-13',
+  termsUrl: 'https://openmercatocloud.com/terms',
+  privacyUrl: 'https://openmercatocloud.com/privacy',
+} as const;
+
+/**
+ * `off` means no socket, which is the normal state with no phone paired. `email-unconfirmed` and
+ * `account-required` are the relay's 4451 once the account grace is over (§ 18); `suspended` is the
+ * operator's, retried hourly at most.
+ */
+export const relayStatusSchema = z.enum([
+  'off', 'connecting', 'connected', 'unreachable', 'replaced', 'rate-limited', 'quota', 'disabled', 'update-required', 'locked', 'error',
+  'email-unconfirmed', 'account-required', 'suspended',
+]);
+export type RelayStatus = z.infer<typeof relayStatusSchema>;
+
+export const phonePairingStatusSchema = z.enum([
+  'waiting', 'handshaking', 'confirm', 'approving', 'approved', 'denied', 'expired', 'cancelled', 'failed',
+]);
+export type PhonePairingStatus = z.infer<typeof phonePairingStatusSchema>;
+
+export const phonePairingFailureSchema = z.enum([
+  'device-limit', 'relay-error', 'timeout', 'cancelled', 'contested', 'bad-payload', 'tunnel-unsupported', 'phone-left',
+  'terms-required',
+]);
+export type PhonePairingFailure = z.infer<typeof phonePairingFailureSchema>;
+
+/** Never the secret, the code or the QR string: this shape rides SSE and `GET /workspace/phones`. */
+export const phonePairingSchema = z.object({
+  id: z.string(),
+  status: phonePairingStatusSchema,
+  expiresAt: z.string(),
+  method: z.enum(['qr', 'code']).optional(),
+  phone: z.object({ name: z.string(), platform: phonePlatformSchema }).optional(),
+  digits: z.string().optional(),
+  failure: phonePairingFailureSchema.optional(),
+});
+export type PhonePairing = z.infer<typeof phonePairingSchema>;
+
+export const phoneSchema = z.object({
+  deviceId: z.string(),
+  label: z.string(),
+  platform: phonePlatformSchema,
+  addedAt: z.string(),
+  lastSeenAt: z.string().optional(),
+  connected: z.boolean(),
+  /** The phone handed over a push grant (spec R5). Absent when it has none. */
+  push: z.literal(true).optional(),
+  /** Which kinds push, which count on the icon, quiet hours (spec 2026-11-20-phone-notifications-inbox). */
+  prefs: phonePushPrefsSchema,
+});
+export type Phone = z.infer<typeof phoneSchema>;
+
+/**
+ * `GET`, `PUT` and `DELETE /workspace/phone/push`: the calling phone's own push grant, reachable
+ * only from inside its relay session (spec 2026-11-01-relay-qr-pairing, R5).
+ */
+export const phonePushStateSchema = z.object({
+  /** False under `CEZ_PUSH=0`: the phone keeps no grant for this server. */
+  available: z.boolean(),
+  /** cezar's Ed25519 relay key, base64url: `cezarKey` in `POST /v1/push-grants`. Present when available. */
+  cezarKey: z.string().optional(),
+  /** The grant cezar holds for this phone, if any. */
+  grantId: z.string().optional(),
+  /** Unix seconds; the phone renews once under 30 days remain. */
+  grantExpiresAt: z.number().int().optional(),
+  /** The manager the latest push was about, so a tap opens it. An opaque id, never in the push. */
+  managerId: z.string().optional(),
+});
+export type PhonePushState = z.infer<typeof phonePushStateSchema>;
+
+export const setPhonePushGrantInputSchema = z.object({
+  grant: z.string().min(1).max(4096),
+  grantId: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
+  expiresAt: z.number().int().positive(),
+}).strict();
+/** `event: signal` on `GET /workspace/phone/signals`: sent instead of a push while that stream is open. */
+export const phoneSignalEventSchema = z.object({ managerId: z.string().optional() });
+export type PhoneSignalEvent = z.infer<typeof phoneSignalEventSchema>;
+
+export type SetPhonePushGrantInput = z.infer<typeof setPhonePushGrantInputSchema>;
+
+/** Where `relayOrigin` came from. `env-invalid` is a set `CEZ_RELAY_URL` that § 9.1 refuses; `none` is `CEZ_RELAY=0`. */
+export const relayAddressSourceSchema = z.enum(['env', 'env-invalid', 'settings', 'default', 'none']);
+export type RelayAddressSource = z.infer<typeof relayAddressSourceSchema>;
+
+/**
+ * Local only, never a network call. `attached`: a token is held. `prompt`: phones paired before
+ * accounts existed and the user has not been asked yet, so the cockpit asks once.
+ */
+export const relayAccountLocalSchema = z.object({
+  attached: z.boolean(),
+  /** Sent as the account's `label` and shown while pairing: the saved name, else the computer's own. */
+  computerName: z.string(),
+  email: z.string().optional(),
+  termsVersion: z.string().optional(),
+  prompt: z.literal(true).optional(),
+});
+export type RelayAccountLocal = z.infer<typeof relayAccountLocalSchema>;
+
+/**
+ * What the relay socket last did, from cezar's own memory of it: never a call to the relay. Times are
+ * ISO strings; `reason` is a short code (`no-pong`, `closed`, `refused`, a relay `error` code).
+ */
+export const relayDiagnosticsSchema = z.object({
+  /** While connected: since when. */
+  connectedAt: z.string().optional(),
+  /** Reconnect attempts since the socket was last up for a minute; absent at 0. */
+  attempt: z.number().int().optional(),
+  /** When the next connect is scheduled, while one is. */
+  nextRetryAt: z.string().optional(),
+  lastDown: z.object({ at: z.string(), reason: z.string(), code: z.number().int().optional() }).optional(),
+  /** The last 4451 (§ 18), so a blocked computer says which account gate held it. */
+  lastBlock: z.object({ at: z.string(), reason: z.string() }).optional(),
+  /**
+   * Counted in memory since this cezar first opened the socket: data frames to and from phones since
+   * local midnight, and the share of that time the socket was up (0–1).
+   */
+  stats: z.object({ since: z.string(), relayedToday: z.number().int(), uptime: z.number() }).optional(),
+});
+export type RelayDiagnostics = z.infer<typeof relayDiagnosticsSchema>;
+
+/**
+ * Keep this computer awake for your phone: a `caffeinate -i` while a phone is paired (macOS only).
+ * `enabled` is the user's choice, `active` whether the assertion is held now, `unavailable` why it never can be.
+ */
+export const relayKeepAwakeSchema = z.object({
+  enabled: z.boolean(),
+  active: z.boolean(),
+  unavailable: z.enum(['not-macos', 'switched-off', 'dry-run', 'missing']).optional(),
+});
+export type RelayKeepAwake = z.infer<typeof relayKeepAwakeSchema>;
+
+export const setRelayKeepAwakeInputSchema = z.object({ enabled: z.boolean() }).strict();
+export type SetRelayKeepAwakeInput = z.infer<typeof setRelayKeepAwakeInputSchema>;
+
+export const phonesResponseSchema = z.object({
+  /** Empty only for an invalid `CEZ_RELAY_URL`, which `relaySource` says. */
+  relayOrigin: z.string(),
+  relaySource: relayAddressSourceSchema,
+  relay: z.object({ status: relayStatusSchema, detail: z.string().optional() }).extend(relayDiagnosticsSchema.shape),
+  keepAwake: relayKeepAwakeSchema,
+  phones: z.array(phoneSchema),
+  pairing: phonePairingSchema.nullable(),
+  /** Grants a `too-many-grants` answer left alive, kept for R5 and shown as a warning. */
+  undeniedGrants: z.number().optional(),
+  /** What this computer knows of its relay account without asking the relay (§ 18). */
+  account: relayAccountLocalSchema,
+});
+export type PhonesResponse = z.infer<typeof phonesResponseSchema>;
+
+// ---- relay account (RELAY_PROTOCOL.md § 18) ----------------------------------------------------
+
+export const relayAccountStateSchema = z.enum(['confirmed', 'pending', 'blocked']);
+export type RelayAccountState = z.infer<typeof relayAccountStateSchema>;
+
+/** The relay's status object, as it sent it. Times are Unix seconds. */
+export const relayAccountStatusSchema = z.object({
+  state: relayAccountStateSchema,
+  email: z.string().nullable(),
+  termsVersion: z.string().nullable(),
+  acceptedAt: z.number().nullable(),
+  confirmedAt: z.number().nullable(),
+  graceEndsAt: z.number().nullable(),
+  secondsLeft: z.number().nullable(),
+  /** Added 2026-11-13; an older relay leaves them out. */
+  label: z.string().nullable().optional(),
+  /** While a confirmed computer moves to another email, when the old confirmation stops covering it. */
+  handoverEndsAt: z.number().nullable().optional(),
+  suspended: z.boolean().optional(),
+});
+export type RelayAccountStatus = z.infer<typeof relayAccountStatusSchema>;
+
+/**
+ * `GET /workspace/phones/account` and the account actions. `status` is null when the relay could not
+ * be asked; `problem` then says why. `unsupported`: the relay has no accounts (a custom relay).
+ */
+export const relayAccountResponseSchema = z.object({
+  local: relayAccountLocalSchema,
+  status: relayAccountStatusSchema.nullable(),
+  problem: z.enum(['unreachable', 'unavailable', 'unsupported', 'no-keys']).optional(),
+  /** `POST /workspace/phones/account`: whether a link went out, and when one may be sent again. */
+  linkSent: z.boolean().optional(),
+  retryAfter: z.number().optional(),
+});
+export type RelayAccountResponse = z.infer<typeof relayAccountResponseSchema>;
+
+export const setRelayAccountInputSchema = z.object({
+  email: z.string().trim().min(3).max(254).regex(/^[^@\s]+@[^@\s]+$/),
+  termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,32}$/),
+  accepted: z.literal(true),
+}).strict();
+export type SetRelayAccountInput = z.infer<typeof setRelayAccountInputSchema>;
+
+/** Cleaned to the relay's rules on the server; empty goes back to the computer's own name. */
+export const setComputerNameInputSchema = z.object({ name: z.string().max(200) }).strict();
+export type SetComputerNameInput = z.infer<typeof setComputerNameInputSchema>;
+
+/** `resend`: when the new link expires, Unix seconds. */
+export const relayAccountResendResponseSchema = z.object({ expiresAt: z.number() });
+export type RelayAccountResendResponse = z.infer<typeof relayAccountResendResponseSchema>;
+
+/** Every refused account action: `code` is the relay's, so the screen can name the case. */
+export const relayAccountErrorSchema = z.object({
+  error: z.string(),
+  code: z.string().optional(),
+  retryAfter: z.number().optional(),
+});
+export type RelayAccountError = z.infer<typeof relayAccountErrorSchema>;
+
+/** Carries a credential, like the code below. Sent once, `no-store`, and never logged. */
+export const startPhonePairingResponseSchema = z.object({
+  id: z.string(),
+  qr: z.string(),
+  relayOrigin: z.string(),
+  expiresAt: z.string(),
+});
+export type StartPhonePairingResponse = z.infer<typeof startPhonePairingResponseSchema>;
+
+/** The typed code, opened only on request so an unused one costs the relay nothing (§ 9.2). */
+export const phonePairingCodeResponseSchema = z.object({ code: z.string(), relayOrigin: z.string() });
+export type PhonePairingCodeResponse = z.infer<typeof phonePairingCodeResponseSchema>;
+
+export const renamePhoneInputSchema = z.object({ label: z.string().trim().min(1).max(64) }).strict();
+export type RenamePhoneInput = z.infer<typeof renamePhoneInputSchema>;
+
+const relayAddressSchema = z.string().trim().min(1).max(300);
+
+/** `null` goes back to the default. `dropPhones` is the user's answer to the warning: without it, paired phones refuse the change. */
+export const setRelayAddressInputSchema = z.object({
+  address: relayAddressSchema.nullable(),
+  dropPhones: z.boolean().optional(),
+}).strict();
+export type SetRelayAddressInput = z.infer<typeof setRelayAddressInputSchema>;
+
+export const testRelayAddressInputSchema = z.object({ address: relayAddressSchema }).strict();
+export type TestRelayAddressInput = z.infer<typeof testRelayAddressInputSchema>;
+
+export const relayTestFailureSchema = z.enum([
+  'invalid-address', 'unreachable', 'not-a-relay', 'incompatible', 'rate-limited', 'disabled', 'refused',
+]);
+export type RelayTestFailure = z.infer<typeof relayTestFailureSchema>;
+
+export const testRelayAddressResponseSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), origin: z.string(), protocol: z.number() }),
+  z.object({ ok: z.literal(false), reason: relayTestFailureSchema }),
+]);
+export type TestRelayAddressResponse = z.infer<typeof testRelayAddressResponseSchema>;
+
+export const phoneOkResponseSchema = z.object({ ok: z.literal(true) });
+export type PhoneOkResponse = z.infer<typeof phoneOkResponseSchema>;
+
+/** `phone-pairing` on `/workspace/events`: something on the screen changed. Withheld from a relay scope. */
+export const phonePairingEventSchema = z.object({ pairing: phonePairingSchema.nullable() });
+export type PhonePairingEvent = z.infer<typeof phonePairingEventSchema>;

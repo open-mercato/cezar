@@ -1,14 +1,15 @@
-import { ClockIcon, PlusIcon } from 'lucide-react'
-import { useEffect, useMemo, type ReactNode } from 'react'
-import { Link } from 'react-router'
+import { ArrowRightIcon, ClockIcon, PlusIcon } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Link, useLocation } from 'react-router'
 
 import { rememberReferenceStatuses, useProjects, useRunsIndex } from '@/api/queries'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { deriveAttention } from '@/lib/attention'
+import { managerTaskCount, managerTasksPath, toGlobalTasks } from '@/lib/global-tasks'
 import { cn } from '@/lib/utils'
 import { shortAge } from '@/lib/format'
 import {
@@ -21,6 +22,7 @@ import {
 } from '@/lib/managers'
 import { taskReferences } from '@/lib/tasks-table'
 import { runTitle } from '@/lib/task-groups'
+import { useTaskOrigin } from '@/lib/task-origin'
 import { useNow } from '@/lib/use-now'
 import { managerAccessOf, type ManagerMessage, type ManagerSummary, type RunRecord } from '@open-mercato/cezar-api-client'
 
@@ -75,11 +77,12 @@ type WatchingProps = {
  */
 export function WatchingPanel({ id, ...props }: WatchingProps & { id: string }) {
   return (
+    // `relative`: its `sr-only` text scrolls with it instead of stretching the page.
     <aside
       id={id}
       data-slot="manager-watching"
       aria-label="Watching"
-      className="group/watching flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
+      className="group/watching relative flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
     >
       <WatchingSections {...props} />
     </aside>
@@ -97,28 +100,122 @@ export function WatchingSheet({
   everyWidth = false,
   ...props
 }: WatchingProps & { open: boolean; onOpenChange: (open: boolean) => void; everyWidth?: boolean }) {
+  const location = useLocation()
+  const managerHistoryBack = (location.state as Record<string, unknown> | null)?.managerWatchingPushed === true
+  const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight, top: 0 })
+  const [expanded, setExpanded] = useState(false)
+  const [sheetNode, setSheetNode] = useState<HTMLDivElement | null>(null)
+  const drag = useRef<{ x: number; y: number; at: number; id: number } | null>(null)
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const compact = viewport.width < 600
+  useEffect(() => {
+    if (!open) return
+    setExpanded(false)
+    const resize = () => {
+      const visual = window.visualViewport
+      setViewport({ width: window.innerWidth, height: visual?.height ?? window.innerHeight, top: visual?.offsetTop ?? 0 })
+      drag.current = null
+      if (visual && window.innerHeight - visual.height > 120) setExpanded(true)
+    }
+    resize()
+    window.addEventListener('resize', resize)
+    window.visualViewport?.addEventListener('resize', resize)
+    window.visualViewport?.addEventListener('scroll', resize)
+    return () => {
+      window.removeEventListener('resize', resize)
+      window.visualViewport?.removeEventListener('resize', resize)
+      window.visualViewport?.removeEventListener('scroll', resize)
+    }
+  }, [open])
+  useLayoutEffect(() => {
+    if (!open || !compact || expanded || viewport.height < 600 || !sheetNode) return
+    const header = sheetNode.querySelector<HTMLElement>('[data-slot="sheet-header"]')
+    const body = sheetNode.querySelector<HTMLElement>('[data-touch]')
+    const footer = sheetNode.querySelector<HTMLElement>('[data-slot="manager-watching-sheet-all-tasks"]')
+    if (!header || !body || !footer) return
+    const measure = () => {
+      // offsetHeight excludes the opening animation's translation. Reserve two readable task
+      // rows as well as the pinned controls; text scaling must not collapse the scroll area.
+      const rows = [...body.querySelectorAll<HTMLElement>('[data-slot="manager-watching-task-row"]')].slice(0, 2)
+      const rowHeight = rows.reduce((sum, row) => sum + row.offsetHeight, 0)
+      const headingHeight = body.querySelector<HTMLElement>('h3')?.offsetHeight ?? 0
+      const bodyStyle = getComputedStyle(body)
+      const sheetStyle = getComputedStyle(sheetNode)
+      const bodyPadding = parseFloat(bodyStyle.paddingTop) + parseFloat(bodyStyle.paddingBottom)
+      const sheetPadding = parseFloat(sheetStyle.paddingTop) + parseFloat(sheetStyle.paddingBottom)
+      const minimumBody = Math.min(body.scrollHeight, Math.max(128, rowHeight + headingHeight) + bodyPadding)
+      if (header.offsetHeight + footer.offsetHeight + sheetPadding + minimumBody > viewport.height * .6) {
+        // Stay expanded for this opening even if content later shrinks.
+        setExpanded(true)
+      }
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    // The body has one stable, naturally sized sections wrapper. Observing it catches sections
+    // mounted after opening as well as text/row changes inside already mounted sections.
+    for (const element of [header, footer, body, ...body.children]) observer.observe(element)
+    return () => observer.disconnect()
+  }, [open, compact, expanded, viewport.height, sheetNode])
+
+  const height = compact
+    ? (expanded || viewport.height < 600 ? viewport.height - 12 : viewport.height * .6)
+    : Math.min(720, viewport.height - 48)
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
+        ref={setSheetNode}
         side="bottom"
+        showCloseButton={false}
+        aria-modal="true"
         data-slot="manager-watching-sheet"
-        // `dvh`: the URL bar and the keyboard must not push the sheet's top off screen.
-        // CezarBot has no column at `lg`: the sheet is its way to the tasks on a landscape iPad.
-        className={cn('max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none', !everyWidth && 'lg:hidden')}
-        // The sheet itself takes focus: a ring on its first control reads as a selection on touch.
+        style={{ top: compact ? viewport.top + viewport.height - height : viewport.top + viewport.height / 2, height: compact ? height : undefined, maxHeight: height }}
+        className={cn('bottom-auto gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none motion-reduce:animate-none motion-reduce:transition-none min-[600px]:inset-x-auto min-[600px]:left-1/2 min-[600px]:w-[calc(100%-48px)] min-[600px]:max-w-[640px] min-[600px]:-translate-x-1/2 min-[600px]:rounded-xl min-[600px]:-translate-y-1/2', !everyWidth && 'lg:hidden')}
         onOpenAutoFocus={(event) => {
+          returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
           event.preventDefault()
           const sheet = event.currentTarget as HTMLElement | null
           sheet?.focus({ preventScroll: true })
         }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          if (returnFocus.current?.isConnected) returnFocus.current.focus({ preventScroll: true })
+        }}
       >
-        <SheetHeader className="px-4 pt-4 pb-2">
-          <SheetTitle>{props.manager.name}</SheetTitle>
-          <SheetDescription className="sr-only">The tasks this manager started and what it watches.</SheetDescription>
+        <SheetHeader
+          className="shrink-0 touch-none px-4 pt-2 pb-2"
+          onPointerDown={(event) => {
+            if (event.target instanceof Element && event.target.closest('button, a')) return
+            if (!event.isPrimary || event.button !== 0) return
+            drag.current = { x: event.clientX, y: event.clientY, at: event.timeStamp, id: event.pointerId }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerCancel={() => { drag.current = null }}
+          onPointerUp={(event) => {
+            const start = drag.current
+            drag.current = null
+            if (!start || start.id !== event.pointerId) return
+            const dy = event.clientY - start.y
+            const dx = Math.abs(event.clientX - start.x)
+            if (dy > 12 && dy > dx && (dy >= 80 || dy / Math.max(1, event.timeStamp - start.at) >= .5)) onOpenChange(false)
+          }}
+        >
+          {compact ? <span aria-hidden="true" className="mx-auto mb-1 h-1 w-10 rounded-full bg-muted-foreground/40" /> : null}
+          <div className="flex items-center gap-2">
+            <SheetTitle className="min-w-0 flex-1 break-words">Tasks · {props.manager.name}</SheetTitle>
+            <SheetClose asChild><Button variant="ghost" className="min-h-12 shrink-0">Close</Button></SheetClose>
+          </div>
+          <SheetDescription className="sr-only">The tasks this manager started and what it watches. Swipe down from the header or use Close.</SheetDescription>
+          {compact && !expanded && viewport.height >= 600 ? <Button variant="ghost" className="min-h-12" onClick={() => setExpanded(true)}>Expand</Button> : null}
         </SheetHeader>
-        <div data-touch="" className="group/watching flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
-          <WatchingSections {...props} tasksFirst />
+        <div data-touch="" className="group/watching flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
+          <div className="flex shrink-0 flex-col gap-4">
+            <WatchingSections {...props} tasksFirst />
+          </div>
         </div>
+        <Button asChild variant="ghost" className="min-h-12 shrink-0 whitespace-normal">
+          <Link data-slot="manager-watching-sheet-all-tasks" to={managerTasksPath(props.manager.id)} replace state={{ manager: { id: props.manager.id, name: props.manager.name }, managerHistoryBack }}>View all tasks</Link>
+        </Button>
       </SheetContent>
     </Sheet>
   )
@@ -137,6 +234,8 @@ function WatchingSections({
   onAddJob,
   tasksFirst = false,
 }: WatchingProps & { tasksFirst?: boolean }) {
+  const location = useLocation()
+  const managerHistoryBack = !tasksFirst || (location.state as Record<string, unknown> | null)?.managerWatchingPushed === true
   const now = useNow(30_000)
   const registry = useProjects().data?.projects
   const runsIndex = useRunsIndex().data
@@ -174,10 +273,16 @@ function WatchingSections({
   useEffect(() => {
     if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
   }, [indexedStatuses])
+  // What the Tasks table opens on for this manager, counted by the table's own filter.
+  const [taskOrigin] = useTaskOrigin()
+  const allCount = useMemo(
+    () => managerTaskCount(toGlobalTasks(runs ?? [], registry ?? [], [manager]), manager.id, taskOrigin),
+    [runs, registry, manager, taskOrigin],
+  )
   const result = lastCheckResult(messages, manager.lastCheckAt, loadedAll)
   const next = manager.cronMinutes > 0 ? nextCheckLabel(manager.nextCheckAt, new Date(now)) : ''
   const origin: ManagerOrigin = { id: manager.id, name: manager.name }
-  const tasks = started.length > 0 ? (
+  const tasks = started.length > 0 || manager.followedTasks.length > 0 ? (
     <Section title="Tasks it started">
       <ReferenceStatusProvider requests={prRequests}>
         {startedRows.map(({ projectId, runId, run, title, prs: [pr] }) => {
@@ -187,7 +292,8 @@ function WatchingSections({
             <div key={`${projectId}/${runId}`} data-slot="manager-watching-task-row" className="border-b border-border last:border-b-0">
               <Link
                 to={taskPath(projectId, runId)}
-                state={{ manager: origin }}
+                replace={tasksFirst}
+                state={{ manager: origin, managerHistoryBack }}
                 data-slot="manager-watching-task"
                 className={cn('flex min-h-8 items-center gap-2 px-2.5 py-1.5 text-xs no-underline outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset', ROW_TOUCH)}
               >
@@ -208,6 +314,18 @@ function WatchingSections({
           )
         })}
       </ReferenceStatusProvider>
+      {manager.followedTasks.length > 0 ? (
+        <Link
+          to={managerTasksPath(manager.id)}
+          replace={tasksFirst}
+          state={{ manager: origin, managerHistoryBack }}
+          data-slot="manager-watching-all-tasks"
+          className={cn('flex min-h-8 items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted-foreground no-underline outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset', ROW_TOUCH)}
+        >
+          <span className="flex-1">View all ({allCount})</span>
+          <ArrowRightIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        </Link>
+      ) : null}
     </Section>
   ) : null
   return (

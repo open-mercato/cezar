@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectScopeProvider } from '@/api/project-scope-context'
@@ -113,6 +113,11 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
+/** The router's current hash, so a test can see where a header action sent the user. */
+function HashProbe() {
+  return <div data-slot="hash-probe">{useLocation().hash}</div>
+}
+
 function renderHeader(
   record: ApiRun,
   onMarkedUnread?: () => void,
@@ -137,6 +142,7 @@ function renderHeader(
           {/* Delete lands on the task list (\`/tasks\`), not Now (\`/\`). */}
           <Route path="/tasks" element={<div data-slot="home-probe" />} />
         </Routes>
+        <HashProbe />
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -180,6 +186,7 @@ const bridge = (overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBrid
   splitView: null,
   terminal: { allowed: false, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
   focusComposer: vi.fn(),
+  focusQuestion: null,
   openFile: vi.fn(),
   markedUnread: vi.fn(),
   ...overrides,
@@ -479,6 +486,24 @@ describe('the primary action follows the state (design 2026-11, Proposal 3)', ()
     expect(workspace.focusComposer).toHaveBeenCalledTimes(2)
   })
 
+  it('"Answer" focuses the open question card, not the composer (#2297)', () => {
+    stubFetch()
+    const focusQuestion = vi.fn()
+    const workspace = { ...bridge(), focusQuestion }
+    publishTaskWorkspace(workspace)
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(focusQuestion).toHaveBeenCalledTimes(1)
+    expect(workspace.focusComposer).not.toHaveBeenCalled()
+  })
+
+  it('"Answer" outside a workspace deep-links to the question card (#2297)', () => {
+    stubFetch()
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(document.querySelector('[data-slot="hash-probe"]')?.textContent).toBe('#ask')
+  })
+
   it('"Open PR" is the primary once the PR exists and nothing is left to push', async () => {
     stubFetch({
       '/api/v1/health': () => jsonResponse({ bootProject: 'acme', forge: { kind: 'github', available: true } }),
@@ -581,6 +606,7 @@ describe('the status word (Proposal 7): open states only', () => {
     ['review', run('review'), 'Needs review'],
     ['waiting', run('waiting'), 'Asked'],
     ['a closed, unanswered question', run('failed', { awaitingAnswerSince: '2026-07-14T13:00:00.000Z' }), 'Asked'],
+    ['parked on an expired login', run('waiting', { parked: { kind: 'auth', provider: 'claude', profileId: 'work', at: '2026-07-14T13:00:00.000Z' } }), 'Needs sign-in'],
     ['budget stop', run('waiting', { costUsd: 12, dispatch: { rootRunId: 'p', parentRunId: 'p', budgetUsd: 10, overBudget: true } }), 'Budget reached'],
     ['running, one step', run('running'), 'Running'],
     ['running, several steps', run('running', { steps: [step({ id: 'a', name: 'Plan', status: 'done' }), step({ id: 'b', name: 'Verify', status: 'running' })] }), 'Running · Verify'],
@@ -611,10 +637,21 @@ describe('the status word (Proposal 7): open states only', () => {
     expect(words[1]?.className).toContain('md:hidden')
   })
 
+  it('an idle-closed task reads "Done", the close only a neutral tooltip', () => {
+    stubFetch()
+    renderHeader(run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }))
+    expect(document.querySelector('[data-slot="pill"]')).toBeNull()
+    const words = [...document.querySelectorAll('[data-slot="run-status-word"]')]
+    expect(words.map((word) => word.textContent)).toEqual(['Done', 'Done'])
+    expect(words[0]?.getAttribute('title')).toContain('closed after inactivity')
+    expect(document.body.textContent).not.toMatch(/\bIdle\b|closed · idle/i)
+  })
+
   it.each([
     ['done', run('done'), 'Done'],
     ['cancelled', run('cancelled'), 'Cancelled'],
-    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), 'Closed · idle'],
+    // An idle close is not a status: the calm outcome, the close only as a tooltip.
+    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), 'Done'],
     ['an open state has its chip instead', run('review'), null],
     ['failed has its chip instead', run('failed'), null],
   ] as const)('closed status word: %s', (_name, record, word) => {
@@ -1268,6 +1305,140 @@ describe('the facts line', () => {
     expect(createPr).not.toBeNull()
     expect(createPr!.getAttribute('aria-disabled')).not.toBe('true')
     expect(menu.textContent).not.toContain('no supported forge remote')
+  })
+
+  // A trunk task waiting on the user shows Answer AND its git step, and that step is Commit to main —
+  // also for a task that got its own worktree there (a manager's --dispatch root, #2426), whose agent
+  // lands the branch. A project that is not trunk-based keeps Create PR.
+  describe('a trunk-based project with the Answer button showing', () => {
+    const project = (landing: 'auto' | null, landingBlocked: string | null = null) => ({
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true }, checks: [{ name: 'gh', available: true }] }),
+      '/api/v1/config': () =>
+        jsonResponse(landing
+          ? { profile: 'trunk', taskWorkspace: 'in-place', landing, landingBlocked, baseBranch: 'main', defaultRunner: 'claude', requiredChecks: ['npm test'] }
+          : { profile: null, taskWorkspace: null, landing: null, landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' }),
+      '/api/v1/repo': () => jsonResponse({ info: { root: '/repo', branch: 'main', remote: 'git@github.com:acme/repo.git' } }),
+      // `baseRemote` is the remote NAME the counts read, as the server sends it for an `origin/main` ref.
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin', baseTracked: true }),
+    })
+    const worktreeTask = { worktreePath: '/repo/.ai/cezar/worktrees/r1', branch: 'cez/r1', baseBranch: 'main' }
+    const gitButton = (action: string) => document.querySelector(`[data-slot="git-button"] [data-action="${action}"]`)
+
+    it('an in-place task offers Commit to main', async () => {
+      stubFetch(project('auto'))
+      renderHeader(run('waiting', { worktree: false }))
+      expect(primaryRow().getByRole('button', { name: 'Answer' })).toBeTruthy()
+      await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
+      expect(gitButton('create-pr')).toBeNull()
+    })
+
+    it('a worktree task offers Commit to main, sent to its agent, with Create PR under the chevron', async () => {
+      const sent = stubFetch(project('auto'))
+      renderHeader(run('waiting', worktreeTask))
+      expect(primaryRow().getByRole('button', { name: 'Answer' })).toBeTruthy()
+      await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
+      fireEvent.pointerDown(document.querySelector('[data-slot="git-button"] [aria-label="More ways to commit to main"]')!)
+      const menu = await screen.findByRole('menu')
+      expect(menu.querySelector('[data-action="create-pr"]')).not.toBeNull()
+      fireEvent.keyDown(menu, { key: 'Escape' })
+      fireEvent.click(gitButton('land')!)
+      await waitFor(() =>
+        expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('Commit to main:'))).toBe(true),
+      )
+      const prompt = JSON.stringify(sent.find((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('Commit to main:'))?.body)
+      expect(prompt).toContain('npm test')
+      // The remote git status named (`baseRemote`), not one the prompt assumed.
+      expect(prompt).toContain('git push origin HEAD:main')
+    })
+
+    it('a read-only worktree task, or a project whose auto-land is blocked, keeps Create PR', async () => {
+      stubFetch(project('auto'))
+      renderHeader(run('waiting', { ...worktreeTask, readOnly: true }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+      cleanup()
+      stubFetch(project('auto', 'auto-land is not honored: .ai/cezar/config.json is tracked by git'))
+      renderHeader(run('waiting', worktreeTask))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('a dispatch child keeps Create PR: its work goes back to its parent, not to main', async () => {
+      stubFetch(project('auto'))
+      renderHeader(run('waiting', { ...worktreeTask, dispatch: { rootRunId: 'root', parentRunId: 'root', kind: 'implement' } }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('a worktree task based on another branch (develop) keeps Create PR: its ahead never reads main', async () => {
+      stubFetch(project('auto'))
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'develop' }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('a clone whose main tracks upstream lands there, on the remote git status measured against', async () => {
+      const sent = stubFetch({
+        ...project('auto'),
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'upstream', baseTracked: true }),
+      })
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'upstream/main' }))
+      await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
+      fireEvent.click(gitButton('land')!)
+      await waitFor(() =>
+        expect(sent.some((request) => request.method === 'POST' && JSON.stringify(request.body ?? '').includes('git push upstream HEAD:main'))).toBe(true),
+      )
+    })
+
+    it('a fork clone whose main tracks the fork keeps Create PR: landInPlace would push to the fork, not upstream', async () => {
+      stubFetch({
+        ...project('auto'),
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 1, baseRemote: 'upstream', baseTracked: false }),
+      })
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'upstream/main' }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('a task based on origin/main: no button while git status loads, then Commit to main from the remote name', async () => {
+      let answer: (response: Response) => void = () => {}
+      const pending = new Promise<Response>((resolve) => { answer = resolve })
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => pending as unknown as Response })
+      // The repo's `remote` is a URL — never the name a base ref is spelled with.
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'origin/main' }))
+      expect(primaryRow().getByRole('button', { name: 'Answer' })).toBeTruthy()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(document.querySelector('[data-slot="git-button"]')).toBeNull()
+      await act(async () => answer(jsonResponse({ uncommitted: 1, unpushed: 0, behind: 0, ahead: 0, baseRemote: 'origin', baseTracked: true })))
+      await waitFor(() => expect(gitButton('land')?.textContent).toBe('Commit to main'))
+    })
+
+    it('with no base remote (a local-only repo, or a base ref never fetched) the branch keeps its own step', async () => {
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null, behind: 0, ahead: 1 }) })
+      renderHeader(run('waiting', { ...worktreeTask, baseBranch: 'origin/main' }))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+      // A local `main` base with no remote: `ahead` reads the main checkout's branch, which no push moves.
+      cleanup()
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null, behind: 0, ahead: 1 }) })
+      renderHeader(run('waiting', worktreeTask))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('a failed git status still leaves the branch step (Create PR), not an empty slot', async () => {
+      stubFetch({ ...project('auto'), '/api/v1/runs/r1/git/status': () => jsonResponse({ error: 'boom' }, 500) })
+      renderHeader(run('waiting', worktreeTask))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
+
+    it('outside a trunk-based project the same worktree task keeps Create PR', async () => {
+      stubFetch(project(null))
+      renderHeader(run('waiting', worktreeTask))
+      await waitFor(() => expect(gitButton('create-pr')).not.toBeNull())
+      expect(gitButton('land')).toBeNull()
+    })
   })
 
   it('the title row reserves the git button’s height, so the header does not jump without it', () => {
@@ -2153,6 +2324,19 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
     expect(tabs.getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/tasks/r1/graph')
+  })
+
+  it('tabs: Graph is hidden for a one-step definition (quick-task) and shown for a multi-step one (#2246)', () => {
+    stubFetch()
+    const one = renderHeader(run('done', { workflowDef: { name: 'quick-task', source: 'built-in', steps: [{ id: 'do', prompt: '{{task}}' }] } }))
+    expect(within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement).queryByRole('link', { name: 'Graph' })).toBeNull()
+    one.unmount()
+    renderHeader(
+      run('done', {
+        workflowDef: { name: 'two', source: 'file', steps: [{ id: 'a', prompt: 'a' }, { id: 'b', prompt: 'b' }] },
+      }),
+    )
+    expect(within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement).getByRole('link', { name: 'Graph' })).toBeTruthy()
   })
 
   it('copies the branch name from its header chip and confirms it in the tooltip', async () => {

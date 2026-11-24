@@ -180,3 +180,20 @@ describe('project commands — $ARGUMENTS and variants', () => {
     expect(skillSystemPrompt(command('Spec: $ARGUMENTS'), { args: 'a task' })).toContain('Spec: a task');
   });
 });
+
+describe('skillSystemPrompt — repo extensions of shared skills', () => {
+  const base = { name: 'om-auto-review-pr', body: 'Shared workflow.', source: 'team' as const };
+
+  it("names the repo's extension on top of the shared skill", () => {
+    const out = skillSystemPrompt({ ...base, extension: { path: '/repo/.ai/skills/om-auto-review-pr/SKILL.md' } });
+    expect(out).toContain('apply /repo/.ai/skills/om-auto-review-pr/SKILL.md');
+    expect(out.trimEnd().endsWith('Shared workflow.')).toBe(true);
+  });
+
+  it('tells the agent to stop rather than improvise when only the extension exists', () => {
+    const out = skillSystemPrompt({ ...base, source: 'ai', body: 'Extension rules.', missingShared: true });
+    expect(out).toContain('shared skill `om-auto-review-pr` is not installed');
+    expect(out).toContain('Stop the requested skill workflow');
+    expect(out).not.toContain('Extension rules.');
+  });
+});

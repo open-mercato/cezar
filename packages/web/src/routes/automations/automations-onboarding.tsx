@@ -238,7 +238,6 @@ const INK: Record<AttentionTone, string> = {
   success: 'text-success',
   danger: 'text-danger',
   pending: 'text-pending-strong',
-  idle: 'text-conflict',
   neutral: 'text-muted-foreground',
 }
 

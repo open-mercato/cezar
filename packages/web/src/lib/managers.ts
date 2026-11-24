@@ -37,6 +37,7 @@ export const UNKNOWN_PROJECT = '_'
 
 export interface ManagerReferenceProject {
   id: string
+  name?: string
   repoUrl?: string
 }
 
@@ -45,6 +46,19 @@ const BARE_NUMBER = /(?<![\w/#&[])#(\d{1,7})\b/g
 const PR_WORD_BEFORE = /\b(?:PRs?|pull requests?)\s*$/i
 const GITHUB_URL = /(?<![("<[])(https:\/\/github\.com\/[^\s/]+\/[^\s/]+)\/(pull|issues)\/(\d+)(?![\w/])/g
 const INLINE_CODE = /(`[^`]*`)/
+/** `frontends/2902` or `frontends#2902`: it names its project, so it is safe to resolve when that
+ *  project is connected. Not a path, a URL, a marker's inside or a markdown link's text or target. */
+const PROJECT_NUMBER = /(?<![\w./:#@[-])(?<!\]\()([A-Za-z0-9][\w.-]*)[/#](\d{1,7})(?![\w/\]])/g
+
+/** A connected project named by its id, else by a name no other connected project shares: two
+ *  clones of one repo can both be `frontends`, and a guess would link the wrong one. */
+function namedProject(name: string, projects: readonly ManagerReferenceProject[]): ManagerReferenceProject | undefined {
+  const wanted = name.toLowerCase()
+  const byId = projects.find((project) => project.id.toLowerCase() === wanted)
+  if (byId) return byId
+  const byName = projects.filter((project) => project.name?.toLowerCase() === wanted)
+  return byName.length === 1 ? byName[0] : undefined
+}
 
 /** An inline reference becomes a hash link, which `ManagerLink` paints as a chip: splitting the
  *  markdown around it would break the paragraph or list item it sits in. */
@@ -71,6 +85,11 @@ function bareReferences(line: string, project: string, projects: readonly Manage
       const owner = projects.find((candidate) => candidate.repoUrl === repo)
       if (!owner) return url
       return `[#${number}](${kind === 'pull' ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX}${encodeURIComponent(owner.id)}/${number})`
+    }).replace(PROJECT_NUMBER, (match, name: string, number: string, at: number, whole: string) => {
+      const owner = namedProject(name, projects)
+      if (!owner) return match
+      const prefix = PR_WORD_BEFORE.test(whole.slice(0, at)) ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX
+      return `[#${number}](${prefix}${encodeURIComponent(owner.id)}/${number})`
     })
     return linked.replace(BARE_NUMBER, (match, number: string, at: number, whole: string) => {
       const prefix = PR_WORD_BEFORE.test(whole.slice(0, at)) ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX
@@ -168,6 +187,118 @@ export function parseManagerText(
   return segments
 }
 
+// ---- references in card text ---------------------------------------------------------------
+
+/** A run of card text: plain words, or a reference that paints as the chat's chip. */
+export type InlineReference =
+  | { kind: 'text'; text: string }
+  | { kind: 'pr' | 'issue'; projectId: string; number: number }
+  | { kind: 'task'; projectId: string; runId: string }
+
+const REFERENCE_NUMBER = /^\d{1,7}$/
+
+/** The project a card's bare `#12` belongs to: the one any of its texts names, else the only one. */
+export function referenceProjectOf(texts: readonly string[], projects: readonly ManagerReferenceProject[]): string {
+  return replyProject(texts.join('\n'), projects)
+}
+
+/** What the user reads where a marker cannot be a chip: `#12`, never brackets or nothing. The
+ *  server measures card limits with the same words (`askVisibleText` in `core/ask.ts`). */
+function markerText(kind: string, id: string): string {
+  if (kind === 'task') return `task ${id.slice(0, 8)}`
+  if (REFERENCE_NUMBER.test(id)) return `#${id}`
+  return `${kind === 'pr' ? 'PR' : 'issue'} ${id}`
+}
+
+/** Bare `#12`s, `project/12`s and GitHub URLs in a stretch of card text, resolved as `bareReferences` does. */
+function bareInline(text: string, project: string, projects: readonly ManagerReferenceProject[]): InlineReference[] {
+  const out: InlineReference[] = []
+  const pushText = (value: string) => {
+    if (value === '') return
+    const last = out.at(-1)
+    if (last?.kind === 'text') last.text += value
+    else out.push({ kind: 'text', text: value })
+  }
+  text.split(INLINE_CODE).forEach((part, index) => {
+    if (index % 2 === 1) return pushText(part)
+    const pattern = new RegExp(`${GITHUB_URL.source}|${BARE_NUMBER.source}|${PROJECT_NUMBER.source}`, 'g')
+    let at = 0
+    for (const match of part.matchAll(pattern)) {
+      const start = match.index
+      let reference: InlineReference | null = null
+      if (match[1] !== undefined) {
+        const owner = projects.find((candidate) => candidate.repoUrl === match[1])
+        if (owner) reference = { kind: match[2] === 'pull' ? 'pr' : 'issue', projectId: owner.id, number: Number(match[3]) }
+      } else if (match[5] !== undefined) {
+        const owner = namedProject(match[5], projects)
+        if (owner) reference = { kind: PR_WORD_BEFORE.test(part.slice(0, start)) ? 'pr' : 'issue', projectId: owner.id, number: Number(match[6]) }
+      } else if (project !== UNKNOWN_PROJECT) {
+        // A card has no use for a chip that links nowhere: an unknown project stays words.
+        reference = { kind: PR_WORD_BEFORE.test(part.slice(0, start)) ? 'pr' : 'issue', projectId: project, number: Number(match[4]) }
+      }
+      if (!reference) continue
+      pushText(part.slice(at, start))
+      out.push(reference)
+      at = start + match[0].length
+    }
+    pushText(part.slice(at))
+  })
+  return out
+}
+
+/**
+ * Card text (a `CEZ:ASK` question or option, a proposal's reason) is plain, not markdown, so it is
+ * split rather than rewritten into links. Markers and bare `#12`s follow the chat's rules, but only
+ * a connected project becomes a chip: anything else falls back to the words it stands for.
+ */
+export function parseInlineReferences(
+  text: string,
+  projects: readonly ManagerReferenceProject[],
+  project: string = referenceProjectOf([text], projects),
+): InlineReference[] {
+  const out: InlineReference[] = []
+  const pushText = (value: string) => {
+    for (const piece of bareInline(value, project, projects)) {
+      const last = out.at(-1)
+      if (piece.kind === 'text' && last?.kind === 'text') last.text += piece.text
+      else out.push(piece)
+    }
+  }
+  let at = 0
+  for (const match of text.matchAll(TOKEN)) {
+    const [raw, kind, projectId, id] = match as unknown as [string, string, string, string]
+    pushText(text.slice(at, match.index))
+    at = match.index + raw.length
+    const connected = projects.some((candidate) => candidate.id === projectId)
+    if (connected && kind === 'task') out.push({ kind: 'task', projectId, runId: id })
+    else if (connected && REFERENCE_NUMBER.test(id)) out.push({ kind: kind as 'pr' | 'issue', projectId, number: Number(id) })
+    else {
+      const last = out.at(-1)
+      const words = markerText(kind, id)
+      if (last?.kind === 'text') last.text += words
+      else out.push({ kind: 'text', text: words })
+    }
+  }
+  pushText(text.slice(at))
+  return out
+}
+
+/** The words a card text reads as, every marker swapped for what its chip says (`#12`). */
+export function inlineReferenceText(text: string): string {
+  return text.replace(TOKEN, (_raw, kind: string, _project: string, id: string) => markerText(kind, id))
+}
+
+/** Every PR and issue some card texts paint, for the status lookup that colours their chips. */
+export function inlineReferenceRequests(parts: readonly InlineReference[][]): Array<{ projectId: string; kind: 'PR' | 'Issue'; number: number }> {
+  const seen = new Map<string, { projectId: string; kind: 'PR' | 'Issue'; number: number }>()
+  for (const piece of parts.flat()) {
+    if (piece.kind !== 'pr' && piece.kind !== 'issue') continue
+    const kind = piece.kind === 'pr' ? 'PR' : 'Issue'
+    seen.set(`${piece.projectId} ${kind} ${piece.number}`, { projectId: piece.projectId, kind, number: piece.number })
+  }
+  return [...seen.values()]
+}
+
 /** Undo `inlineReferences`' path, or null for a link that is not a cockpit reference. */
 export function parseReferenceLink(href: string | undefined, prefix: string): { projectId: string; id: string } | null {
   if (!href?.startsWith(prefix)) return null
@@ -215,6 +346,19 @@ export function retryOf(messages: readonly ManagerMessage[]): { messageId: strin
     if (message.kind === 'user' && message.text.trim()) asked.unshift(message.text.trim())
   }
   return asked.length > 0 ? { messageId: last.id, text: asked.join('\n\n') } : undefined
+}
+
+/** Ids of the newest auth-failed chat turn per account since its last reconnect: those draw the
+ *  live reconnect card, older ones a quiet line (spec 2026-11-18-inline-account-reconnect, one card
+ *  per account). Only chat turns: a reconnect replays those, never a watch or a job. */
+export function liveAuthFailures(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const newest = new Map<string, string>()
+  for (const message of messages) {
+    if (message.kind !== 'assistant' || message.turn !== 'chat') continue
+    if (message.authFailure) newest.set(`${message.authFailure.provider}:${message.authFailure.profileId}`, message.id)
+    else if (message.reconnectedFrom) newest.delete(`${message.reconnectedFrom.provider}:${message.reconnectedFrom.profileId}`)
+  }
+  return new Set(newest.values())
 }
 
 // ---- labels --------------------------------------------------------------------------------
@@ -300,6 +444,9 @@ export function actionConfirms(setting: ManagerConfirm | undefined, type: string
 export interface ManagerOrigin {
   id: string
   name: string
+  /** The manager's filtered Tasks table the task was opened from (`/tasks?manager=…`). */
+  tasks?: string
+  decision?: string
 }
 
 const origins = new Map<string, ManagerOrigin>()
@@ -307,11 +454,17 @@ const origins = new Map<string, ManagerOrigin>()
 /** A task's tabs are URLs of their own and router state doesn't follow them, so the first arrival
  *  is remembered for the session. */
 export function resolveManagerOrigin(runId: string, state: unknown): ManagerOrigin | undefined {
-  const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
-  if (typeof origin?.id === 'string' && typeof origin.name === 'string') {
-    origins.set(runId, { id: origin.id, name: origin.name })
-  }
+  const origin = managerOriginOf(state)
+  if (origin) origins.set(runId, origin)
   return origins.get(runId)
+}
+
+/** The manager this history entry was opened from, if any. */
+export function managerOriginOf(state: unknown): ManagerOrigin | undefined {
+  const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
+  if (typeof origin?.id !== 'string' || typeof origin.name !== 'string') return undefined
+  const tasks = typeof origin.tasks === 'string' && origin.tasks.startsWith('/tasks?') ? origin.tasks : undefined
+  return { id: origin.id, name: origin.name, ...(tasks ? { tasks } : {}), ...(typeof origin.decision === 'string' ? { decision: origin.decision } : {}) }
 }
 
 export function clearManagerOrigins(): void {
@@ -329,10 +482,11 @@ export function managerAttention(manager: AttentionCounts): ManagerAttention | n
 }
 
 /** The strongest reason across managers: one waiting approval outranks any amount of news. */
-export function managersAttention(managers: readonly AttentionCounts[] | undefined): ManagerAttention | null {
+export function managersAttention(managers: readonly (AttentionCounts & Pick<ManagerSummary, 'inactive'>)[] | undefined): ManagerAttention | null {
   let found: ManagerAttention | null = null
   for (const manager of managers ?? []) {
-    const attention = managerAttention(manager)
+    // An inactive manager's approvals still wait on the user; its questions and news do not.
+    const attention = isInactive(manager) ? (manager.pendingActions > 0 ? 'needs-you' : null) : managerAttention(manager)
     if (attention === 'needs-you') return attention
     found ??= attention
   }
@@ -345,7 +499,25 @@ export const MANAGER_ATTENTION_DOT: Record<ManagerAttention, string> = { 'needs-
 /** Screen-reader words for the dot, read as part of the row's name. */
 export const MANAGER_ATTENTION_TEXT: Record<ManagerAttention, string> = { 'needs-you': ', needs you', unread: ', unread' }
 
+// ---- deactivation (spec 2026-11-19-manager-deactivate) -------------------------------------
+
+export const isInactive = (manager: Pick<ManagerSummary, 'inactive'> | undefined): boolean => manager?.inactive !== undefined
+
+/** The dot an inactive manager shows while it holds cards: grey, never the blue that waits on you. */
+export const MANAGER_INACTIVE_DOT = 'bg-muted-foreground'
+
+/** Active managers, then the inactive ones under their divider; each half keeps its order. */
+export function splitByActivity<T extends Pick<ManagerSummary, 'inactive'>>(managers: readonly T[]): { active: T[]; inactive: T[] } {
+  return { active: managers.filter((manager) => !isInactive(manager)), inactive: managers.filter(isInactive) }
+}
+
+export function inactiveSinceLabel(manager: Pick<ManagerSummary, 'inactive'>, now: Date = new Date()): string {
+  const since = manager.inactive ? managerMessageTime(manager.inactive.since, now) : ''
+  return since ? `Inactive · since ${since}` : 'Inactive'
+}
+
 export function managerRowPreview(manager: ManagerSummary): string {
+  if (isInactive(manager)) return inactiveSinceLabel(manager)
   // Counts open ask cards, and one card can hold several questions: word it per answer.
   if (manager.pendingQuestions > 0) {
     return manager.pendingQuestions === 1 ? 'Waiting for your answer' : `Waiting for ${manager.pendingQuestions} answers`

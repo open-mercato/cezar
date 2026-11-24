@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
+import type { UiEvent } from './ui-events.ts';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
 import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
@@ -225,27 +226,34 @@ describe('resuming a thread another Codex process still holds', () => {
   );
   const resume = async (locked: string) => {
     const events: AgentEvent[] = [];
+    const uiEvents: UiEvent[] = [];
     const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0, resumeLockRetryMs: [5, 5] }).startSession(
       { userPrompt: 'continue', cwd: process.cwd(), sessionId: 'th_old', resume: true, env: { MOCK_CODEX_RESUME_LOCKED: locked } },
       (event) => events.push(event),
-      { autoEndAfterFirstTurn: true },
+      { autoEndAfterFirstTurn: true, onUiEvent: (event) => uiEvents.push(event) },
     );
     const result = await session.result;
-    return { events, result };
+    return { events, uiEvents, result };
   };
 
   it('resumes the same thread once the other writer lets go', async () => {
-    const { events, result } = await resume('2');
+    const { events, uiEvents, result } = await resume('2');
     expect(result.sessionId).toBe('th_old');
     expect(events).toContainEqual({ type: 'session', sessionId: 'th_old' });
+    expect(uiEvents[0]).toEqual({
+      type: 'session.started', backend: 'codex', sessionId: 'th_old', model: 'gpt-mock-resumed',
+    });
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(result.text).toBe('Checking the working tree.');
   }, 15_000);
 
   it('continues in a fork of the thread when the lock is never released', async () => {
-    const { events, result } = await resume('always');
+    const { events, uiEvents, result } = await resume('always');
     expect(result.sessionId).toBe('fork_of_th_old');
     expect(events).toContainEqual({ type: 'session', sessionId: 'fork_of_th_old' });
+    expect(uiEvents[0]).toEqual({
+      type: 'session.started', backend: 'codex', sessionId: 'fork_of_th_old', model: 'gpt-mock-forked',
+    });
     expect(events.some((e) => e.type === 'note' && e.message.includes('continuing in a fork'))).toBe(true);
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(result.text).toBe('Checking the working tree.');
@@ -395,6 +403,27 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
     new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
   );
 
+  it('keeps the final answer last when abandoned commentary was never completed (#2197)', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    let ended: () => void = () => {};
+    const turnEnd = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    const session = runner.startSession(
+      { userPrompt: 'mock:abandoned-commentary go', cwd: process.cwd() },
+      (event) => {
+        events.push(event);
+        if (event.type === 'turn-end') ended();
+      },
+    );
+    await turnEnd;
+    const texts = events.filter((e) => e.type === 'text').map((e) => (e as { text: string }).text);
+    expect(texts).toEqual(['abandoned fragment', 'Still working.\nCEZ:MONITORING']);
+    session.end();
+    await session.result.catch(() => undefined);
+  }, 20_000);
+
   it('surfaces a refused follow-up turn/start as an error, not a quiet note', async () => {
     const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
     const events: AgentEvent[] = [];
@@ -483,6 +512,37 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
 
     expect(events.some((e) => e.type === 'error')).toBe(false);
   }, 20_000);
+});
+
+describe('Codex instruction App Server mapping', () => {
+  it.each([
+    { resume: false, instructions: 'Do not run the full test suite.', locked: undefined },
+    { resume: true, instructions: 'Do not run the full test suite.', locked: undefined },
+    { resume: true, instructions: 'Updated instructions: run only focused tests.', locked: 'always' },
+    { resume: true, instructions: undefined, locked: undefined },
+  ])('preserves native guidance and delivers current instructions once ($resume, $instructions, locked=$locked)', async ({ resume, instructions, locked }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cezar-codex-instructions-'));
+    const file = join(dir, 'requests.ndjson');
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0, resumeLockRetryMs: [1] }).startSession({
+      userPrompt: 'Fix the regression', systemPrompt: instructions, cwd: process.cwd(),
+      ...(resume ? { resume: true, sessionId: 'th_saved' } : {}),
+      env: { CEZ_MOCK_CODEX_REQUESTS_FILE: file, ...(locked ? { MOCK_CODEX_RESUME_LOCKED: locked } : {}) },
+    }, undefined, { autoEndAfterFirstTurn: true });
+    try {
+      await session.result;
+      const requests = requestsFrom(file);
+      expect(paramsFor(requests, resume ? 'thread/resume' : 'thread/start')).not.toHaveProperty('developerInstructions');
+      if (locked) expect(paramsFor(requests, 'thread/fork')).not.toHaveProperty('developerInstructions');
+      const turn = JSON.stringify(paramsFor(requests, 'turn/start'));
+      if (instructions) expect(turn.split(instructions)).toHaveLength(2);
+      else expect(turn).not.toContain('instructions');
+      expect(turn).toContain('Fix the regression');
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Codex reasoning effort App Server mapping', () => {
@@ -742,7 +802,7 @@ describe('the artifacts directory under the Codex sandbox (spec 2026-10-22-html-
     });
   });
 
-  it('leaves the default full-access overrides byte-identical', () => {
+  it('keeps the default full-access policy', () => {
     expect(codexThreadOverrides(spec, undefined, {})).toEqual({
       model: 'gpt-5',
       cwd: '/wt',

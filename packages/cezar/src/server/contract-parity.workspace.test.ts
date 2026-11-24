@@ -32,10 +32,12 @@ import type {
 import type { runsIndexResponseSchema } from '@open-mercato/cezar-contract';
 import type {
   configResponseSchema,
+  diskGuardStatusSchema,
   hostUsageSchema,
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
+  providerConnectSchema,
   providerUpdateResponseSchema,
   providerStatusResponseSchema,
   runnerModelCatalogResponseSchema,
@@ -142,6 +144,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type StageUploadBody = InferRequestType<typeof client.api.v1.workspace.uploads.$post>['json'];
   type DeleteUpload200 = InferResponseType<(typeof client.api.v1.workspace.uploads)[':uploadId']['$delete'], 200>;
   type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
+  type DiskGuard200 = InferResponseType<(typeof client.api.v1.workspace)['disk-guard']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
   type WorkspaceUiState200 = InferResponseType<(typeof client.api.v1.workspace)['ui-state']['$get'], 200>;
@@ -189,6 +192,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     200
   >;
   type ProviderConnect200 = InferResponseType<typeof client.api.v1.providers.connect.$post, 200>;
+  type ProviderConnectBody = InferRequestType<typeof client.api.v1.providers.connect.$post>['json'];
   type ProviderUpdate200 = InferResponseType<
     (typeof client.api.v1.providers)[':provider']['update']['$post'],
     200
@@ -273,6 +277,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // the request half: a real `File`, not whatever `parseBody()` used to hand the handler
     Assert<Exact<z.input<typeof brandingLogoUploadSchema>, BrandingLogoUploadBody>>,
     Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
+    Assert<Exact<z.infer<typeof diskGuardStatusSchema>, DiskGuard200>>,
     // the two open GUI-pref bags — GET and the merged answer the PUT sends back
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, UiState200>>,
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, SetUiState200>>,
@@ -303,6 +308,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderRetry200>>,
     Assert<Exact<z.infer<typeof providerConnectResponseSchema>, ProviderConnect200>>,
+    Assert<Exact<z.infer<typeof providerConnectSchema>, ProviderConnectBody>>,
     Assert<Exact<z.infer<typeof providerUpdateResponseSchema>, ProviderUpdate200>>,
     Assert<Exact<z.infer<typeof runnerModelCatalogResponseSchema>, Models200>>,
     Assert<Exact<z.infer<typeof openTargetsResponseSchema>, OpenTargets200>>,

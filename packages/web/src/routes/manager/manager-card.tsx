@@ -47,7 +47,7 @@ export function ManagerCard({
           <span data-slot="manager-card-status" className="ml-auto flex shrink-0 items-center gap-1.5 text-xs font-normal text-muted-foreground">{status}</span>
         ) : null}
       </div>
-      <div data-slot="manager-card-body" className="flex flex-col gap-2 px-3.5 py-2.5">{children}</div>
+      <div data-slot="manager-card-body" className="flex min-w-0 flex-col gap-2 px-3.5 py-2.5 wrap-anywhere">{children}</div>
       {actions ? (
         <div data-slot="manager-card-actions" className="flex gap-2 px-3.5 pt-0.5 pb-3">{actions}</div>
       ) : null}

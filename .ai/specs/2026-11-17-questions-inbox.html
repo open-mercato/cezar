@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Questions inbox: design (2026-11-17)</title>
+<style>
+/* Tokens copied from packages/web/src/styles/index.css (dark default, .light flips). */
+:root{color-scheme:dark;--background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--sidebar:#171717;--muted:#262626;--muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;--primary:#6457e8;--primary-foreground:#fff;--violet:#8f86e8;--ring:#8f86e8;--danger:#ef4444;--danger-strong:#f87171;--success:#10b981;--success-strong:#34d399;--pending:#fbbf24;--pending-strong:#fbbf24;--info:#93c5fd;--closed:#858585;--merged:#a371f7;--conflict:#fb923c;
+--sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;--mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+--r-sm:8px;--r:10px;--r-lg:12px;--r-xl:16px;--shadow-modal:0 16px 48px 0 rgba(0,0,0,.45)}
+.light{color-scheme:light;--background:#fff;--foreground:#171717;--card:#fff;--card-2:#fbfbfb;--sidebar:#fafafa;--muted:#f7f7f7;--muted-foreground:#5c5c5c;--soft-foreground:#767676;--border:#ebebeb;--primary:#5b52c7;--violet:#5b52c7;--ring:#5b52c7;--info:#1d4ed8;--pending-strong:#b45309;--success-strong:#047857;--danger-strong:#b91c1c;--closed:#3d3d3d;--conflict:#c2410c;--shadow-modal:0 16px 48px 0 rgba(0,0,0,.12)}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+a{color:inherit}
+:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 50%,transparent)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--soft-foreground)}
+.t-micro{font-size:10px}.t-meta{font-size:11px}.t-label{font-size:12px}.t-ui{font-size:13px}.t-body{font-size:14px}
+.muted{color:var(--muted-foreground)}.soft{color:var(--soft-foreground)}
+.tab{font-variant-numeric:tabular-nums}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.s14{width:14px;height:14px}svg.i.s20{width:20px;height:20px}
+
+/* ---------- doc chrome (not part of the cockpit) ---------- */
+.doc{max-width:1320px;margin:0 auto;padding:28px 28px 80px}
+.doc-top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:14px;padding:10px 28px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--background) 88%,transparent);backdrop-filter:blur(8px)}
+.doc-top .brand{font-weight:700;letter-spacing:-.01em}
+.doc-top nav{display:flex;gap:4px;flex-wrap:wrap;margin-left:12px}
+.doc-top nav a{font-size:12px;text-decoration:none;color:var(--muted-foreground);padding:4px 8px;border-radius:6px}
+.doc-top nav a:hover{background:var(--muted);color:var(--foreground)}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;padding:2px;background:var(--card)}
+.seg button{border:0;background:transparent;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:500;color:var(--muted-foreground);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--muted);color:var(--foreground)}
+h1.doc-h{font-size:28px;letter-spacing:-.02em;margin:18px 0 6px}
+.lede{color:var(--muted-foreground);max-width:820px;font-size:15px;margin:0 0 8px}
+section.doc-s{margin-top:56px}
+section.doc-s>h2{font-size:20px;letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:baseline;gap:10px}
+section.doc-s>h2 .num{font-family:var(--mono);font-size:12px;color:var(--violet)}
+section.doc-s>p.sub{margin:0 0 18px;color:var(--muted-foreground);max-width:860px}
+.state-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+.callout{border:1px solid var(--border);border-left:3px solid var(--violet);background:var(--card);border-radius:10px;padding:12px 14px;font-size:13px;color:var(--muted-foreground)}
+.callout b{color:var(--foreground)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+@media (max-width:1100px){.grid2,.grid4{grid-template-columns:1fr}}
+.caption{font-size:12px;color:var(--soft-foreground);margin:8px 2px 0}
+table.notes{width:100%;border-collapse:collapse;font-size:13px}
+table.notes th,table.notes td{text-align:left;vertical-align:top;padding:9px 10px;border-bottom:1px solid var(--border)}
+table.notes th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--soft-foreground);font-weight:600}
+table.notes td{color:var(--muted-foreground)}table.notes td:first-child{color:var(--foreground);font-weight:500}
+code,.mono{font-family:var(--mono);font-size:12px}
+code{background:var(--muted);padding:1px 5px;border-radius:5px}
+pre{font-family:var(--mono);font-size:12px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow:auto;color:var(--muted-foreground);line-height:1.55}
+.notes-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:1100px){.notes-grid{grid-template-columns:1fr}}
+.note{border:1px solid var(--border);background:var(--card);border-radius:12px;padding:14px 16px}
+.note h3{margin:0 0 6px;font-size:14px}
+.note p,.note li{color:var(--muted-foreground);font-size:13px}
+.note ul{padding-left:18px;margin:6px 0}
+
+/* ---------- cockpit primitives ---------- */
+.frame{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--background);box-shadow:var(--shadow-modal)}
+.app{display:grid;grid-template-columns:264px minmax(0,1fr);height:820px}
+.sidebar{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.sb-top{display:flex;align-items:center;gap:8px;padding:12px 14px 10px}
+.wordmark{font-weight:700;font-size:16px;letter-spacing:.02em}
+.mode{display:flex;margin:0 12px 10px;border:1px solid var(--border);border-radius:8px;padding:2px;background:var(--background)}
+.mode span{flex:1;text-align:center;font-size:12px;font-weight:500;padding:4px 0;border-radius:6px;color:var(--muted-foreground)}
+.mode span.on{background:var(--muted);color:var(--foreground)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border-radius:var(--r);border:1px solid transparent;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;text-decoration:none;transition:background .15s,border-color .15s}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-primary:disabled{background:var(--muted);color:var(--muted-foreground);box-shadow:inset 0 0 0 1px var(--border);cursor:default;filter:none}
+.btn-outline{background:var(--card);border-color:var(--border)}
+.btn-outline:hover{background:var(--muted)}
+.btn-ghost{background:transparent;color:var(--muted-foreground)}
+.btn-ghost:hover{background:var(--muted);color:var(--foreground)}
+.btn-sm{height:28px;padding:0 10px;font-size:12px}
+.btn-icon{width:28px;padding:0}
+.nav-row{display:flex;align-items:center;gap:10px;height:34px;width:100%;padding:0 10px;border-radius:var(--r);font-size:13px;font-weight:500;color:var(--muted-foreground);border:0;background:transparent;text-decoration:none;cursor:pointer}
+.nav-row:hover{background:var(--muted);color:var(--foreground)}
+.nav-row.on{background:var(--muted);color:var(--foreground);font-weight:600}
+.count{margin-left:auto;border-radius:999px;padding:1px 6px;font-size:10px;font-weight:600;font-variant-numeric:tabular-nums;background:var(--muted);color:var(--muted-foreground)}
+.count.live{background:var(--info);color:var(--background)}
+.mgr-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 8px;border-radius:var(--r);text-decoration:none}
+.mgr-row:hover{background:var(--muted)}
+.mgr-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mgr-prev{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted-foreground)}
+.mgr-prev.info{color:var(--info)}
+.av{border-radius:999px;display:inline-flex;align-items:center;justify-content:center;flex:none;font-size:15px;line-height:1}
+.av30{width:30px;height:30px}.av32{width:32px;height:32px}.av24{width:24px;height:24px;font-size:12px}.av40{width:40px;height:40px;font-size:19px}
+.av-a{background:linear-gradient(135deg,#b4f372,#bc9aff)}.av-b{background:linear-gradient(135deg,#93c5fd,#6457e8)}.av-c{background:linear-gradient(135deg,#fbbf24,#fb923c)}
+.task-glyph{width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--card-2);display:inline-flex;align-items:center;justify-content:center;color:var(--muted-foreground)}
+.dot{width:6px;height:6px;border-radius:99px;display:inline-block;flex:none}
+.dot-info{background:var(--info)}.dot-pending{background:var(--pending)}.dot-violet{background:var(--violet)}
+.dot.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot.pulse{animation:none}*{transition:none!important}}
+
+.main{min-width:0;overflow:auto;background:var(--background)}
+.page{max-width:820px;margin:0 auto;padding:24px 24px 48px;display:flex;flex-direction:column;gap:20px}
+.page-h{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.page-h h1{font-size:20px;margin:0;font-weight:600}
+.page-h .status{font-size:14px;color:var(--muted-foreground);margin:2px 0 0}
+.xlink{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted-foreground);text-decoration:none;border:1px solid var(--border);border-radius:999px;padding:3px 10px;background:var(--card)}
+.xlink:hover{color:var(--foreground)}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.chip-f{border:1px solid var(--border);background:var(--card);color:var(--muted-foreground);border-radius:999px;padding:3px 10px;font-size:12px;font-weight:500;cursor:pointer}
+.chip-f[aria-pressed="true"]{background:var(--muted);color:var(--foreground);border-color:color-mix(in srgb,var(--foreground) 18%,var(--border))}
+.switch{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground);margin-left:auto;cursor:pointer;user-select:none}
+.switch .track{width:28px;height:16px;border-radius:99px;background:var(--muted);border:1px solid var(--border);position:relative;transition:background .15s}
+.switch .track::after{content:"";position:absolute;top:1px;left:1px;width:12px;height:12px;border-radius:99px;background:var(--muted-foreground);transition:transform .15s,background .15s}
+.switch[aria-checked="true"] .track{background:var(--primary);border-color:var(--primary)}
+.switch[aria-checked="true"] .track::after{transform:translateX(12px);background:#fff}
+.days{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--card)}
+.days button{border:0;background:transparent;width:20px;height:20px;cursor:pointer;color:var(--muted-foreground)}
+.days span{min-width:22px;text-align:center;font-size:12px;font-variant-numeric:tabular-nums;color:var(--foreground)}
+
+.group{display:flex;flex-direction:column;gap:10px}
+.group-h{display:flex;align-items:center;gap:10px}
+.group-h .gname{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.group-h .gmeta{font-size:12px;color:var(--muted-foreground);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.proj{font-family:var(--mono);font-size:11px;border:1px solid var(--border);border-radius:5px;padding:0 5px;color:var(--muted-foreground)}
+
+.q{border:1px solid var(--border);background:var(--card);border-radius:var(--r-xl);overflow:hidden;transition:opacity .2s}
+.q-h{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border)}
+.q-h .age{font-size:12px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.q-h .acts{margin-left:auto;display:flex;gap:2px}
+.q-b{padding:12px 14px 14px;display:flex;flex-direction:column;gap:16px}
+.hdr{border-radius:6px;background:var(--primary);color:var(--primary-foreground);padding:2px 6px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+.hdr.static{background:var(--muted);color:var(--muted-foreground)}
+.qtext{font-size:14px;font-weight:600;margin:4px 0 10px}
+.opts{display:flex;flex-direction:column;gap:8px}
+.opts.two{display:grid;grid-template-columns:1fr 1fr}
+.choice{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;border:1px solid var(--border);background:var(--card);border-radius:var(--r);padding:9px 12px;cursor:pointer;transition:border-color .15s,background .15s}
+.choice:hover{border-color:color-mix(in srgb,var(--primary) 50%,transparent);background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.choice[aria-pressed="true"]{border-color:color-mix(in srgb,var(--primary) 60%,transparent);background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.choice .cl{display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:600}
+.choice .cd{font-size:12px;color:var(--muted-foreground)}
+.box{width:16px;height:16px;border-radius:4px;border:1px solid var(--soft-foreground);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none;margin-top:1px}
+.choice[aria-pressed="true"] .box{background:var(--primary);border-color:var(--primary);color:#fff}
+.extra{display:flex;gap:8px;flex-wrap:wrap}
+.xchoice{border:1px dashed var(--border);background:var(--card);border-radius:var(--r);padding:5px 12px;font-size:12px;font-weight:500;color:var(--muted-foreground);cursor:pointer}
+.xchoice:hover,.xchoice[aria-pressed="true"]{border-color:color-mix(in srgb,var(--primary) 60%,transparent);background:color-mix(in srgb,var(--primary) 6%,transparent);color:var(--foreground)}
+textarea.other{width:100%;min-height:56px;resize:vertical;border:1px solid var(--border);background:var(--background);color:var(--foreground);border-radius:var(--r);padding:8px 10px;font:13px var(--sans)}
+.sendrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.hint{font-size:11px;color:var(--muted-foreground)}
+.sending{opacity:.6;pointer-events:none}
+
+.dismissed-row{display:flex;align-items:center;gap:10px;border:1px dashed var(--border);border-radius:var(--r-xl);padding:10px 14px;font-size:13px;color:var(--muted-foreground);background:var(--card-2)}
+.dismissed-row .bar{flex:1;height:2px;background:var(--border);border-radius:2px;overflow:hidden;max-width:90px}
+.dismissed-row .bar i{display:block;height:100%;background:var(--muted-foreground);animation:drain 6s linear forwards}
+@keyframes drain{from{width:100%}to{width:0}}
+
+.fold{border-top:1px solid var(--border);padding-top:14px;display:flex;flex-direction:column;gap:10px}
+.fold-btn{display:flex;align-items:center;gap:8px;border:0;background:transparent;padding:4px 2px;cursor:pointer;color:var(--muted-foreground);font-size:13px;font-weight:600;width:100%;text-align:left}
+.fold-btn:hover{color:var(--foreground)}
+.fold-btn .chev{transition:transform .15s}
+.fold-btn[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.fold-btn .why{font-weight:400;font-size:12px;color:var(--soft-foreground)}
+.closed-list{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:var(--card)}
+.crow{display:grid;grid-template-columns:140px minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px}
+.crow:last-child{border-bottom:0}
+.crow .ctext{min-width:0}
+.crow .ctext .l1{display:flex;gap:6px;align-items:center;min-width:0}
+.crow .ctext .l1 span.qq{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--foreground)}
+.crow .ctext .l2{font-size:12px;color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reason{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;border-radius:999px;padding:2px 8px;border:1px solid var(--border);color:var(--muted-foreground);white-space:nowrap;justify-self:start}
+.reason.answered{color:var(--success-strong)}
+.reason.dismissed{color:var(--muted-foreground)}
+.reason.replaced{color:var(--violet)}
+.reason.retracted{color:var(--pending-strong)}
+.reason.ended{color:var(--closed)}
+.older .q{opacity:.82}
+.srcbox{display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);background:color-mix(in srgb,var(--muted) 30%,transparent);border-radius:var(--r);padding:8px 10px}
+.srcbox .st{font-size:12px;font-weight:500;color:var(--muted-foreground)}
+.srcrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.srcrow .tt{font-size:13px;font-weight:600;min-width:0}
+.srcrow .mm{font-size:12px;color:var(--muted-foreground)}
+.srcrow .lk{display:flex;gap:12px;margin-left:auto}
+.srcrow .lk a{font-size:12px;font-weight:500;text-decoration:underline;text-underline-offset:4px}
+.phone .srcrow .lk{margin-left:0;width:100%}
+.phone .srcrow .lk a{min-height:44px;display:inline-flex;align-items:center}
+.stale{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--pending-strong);border:1px solid color-mix(in srgb,var(--pending) 35%,transparent);background:color-mix(in srgb,var(--pending) 7%,transparent);border-radius:var(--r);padding:6px 10px}
+.stale .btn{color:var(--foreground)}
+.older-note{font-size:12px;color:var(--soft-foreground)}
+
+.empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:72px 16px 40px}
+.empty .ico{width:44px;height:44px;border-radius:999px;background:var(--muted);display:flex;align-items:center;justify-content:center;color:var(--muted-foreground);margin-bottom:6px}
+.empty h2{font-size:15px;margin:0}
+.empty p{margin:0;color:var(--muted-foreground);font-size:13px;max-width:380px}
+
+.toast{position:absolute;right:18px;bottom:18px;display:flex;align-items:center;gap:12px;background:var(--card-2);border:1px solid var(--border);border-radius:12px;padding:10px 12px 10px 14px;font-size:13px;box-shadow:var(--shadow-modal);max-width:420px;z-index:5}
+.toast[hidden]{display:none}
+
+/* ---------- phone ---------- */
+.phones{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start}
+.phone{width:375px;height:780px;border-radius:44px;border:10px solid #050505;background:var(--background);overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:var(--shadow-modal);outline:1px solid var(--border)}
+.light .phone{border-color:#1b1b1b}
+.ph-status{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 26px;font-size:13px;font-weight:600;flex:none}
+.ph-top{display:flex;align-items:center;gap:8px;padding:6px 12px 10px;border-bottom:1px solid var(--border);flex:none}
+.ph-top h2{font-size:17px;margin:0;font-weight:600}
+.ph-body{flex:1;overflow:auto;padding:12px 12px 20px;display:flex;flex-direction:column;gap:14px}
+.ph-bar{display:flex;border-top:1px solid var(--border);background:var(--background);flex:none;padding-bottom:18px}
+.ph-bar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 0 4px;font-size:10px;font-weight:500;color:var(--muted-foreground);text-decoration:none;position:relative}
+.ph-bar a.on{color:var(--foreground)}
+.ph-bar .adot{position:absolute;top:8px;left:calc(50% + 8px)}
+.phone .q-b{padding:12px}
+.phone .choice{padding:11px 12px;min-height:44px}
+.phone .xchoice{min-height:44px;padding:0 14px}
+.phone .btn{min-height:44px}
+.phone .opts.two{grid-template-columns:1fr}
+.phone .crow{grid-template-columns:1fr;gap:4px}
+.phone .toast{left:10px;right:10px;bottom:96px;max-width:none}
+.ws-rows{border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:var(--card)}
+.ws-row{display:flex;align-items:center;gap:12px;padding:0 14px;min-height:52px;border-bottom:1px solid var(--border);font-size:14px;font-weight:500;text-decoration:none}
+.ws-row:last-child{border-bottom:0}
+.ws-row .sub{font-size:12px;color:var(--muted-foreground);font-weight:400}
+
+/* ---------- chat ---------- */
+.chat{max-width:720px;margin:0 auto;padding:22px;display:flex;flex-direction:column;gap:14px}
+.bubble-a{font-size:14px;color:var(--foreground);max-width:620px}
+.bubble-u{align-self:flex-end;background:var(--muted);border-radius:16px;padding:8px 12px;font-size:14px;max-width:460px}
+.mcard{border:1px solid var(--border);background:var(--card);border-radius:var(--r-xl);overflow:hidden;font-size:14px}
+.mcard.info{border-color:color-mix(in srgb,var(--info) 50%,transparent)}
+.mcard-h{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);font-weight:600}
+.mcard-h .st{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:400;color:var(--muted-foreground)}
+.mcard-b{padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px}
+.quiet{display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);border-radius:var(--r-lg);padding:9px 12px;font-size:12px;color:var(--muted-foreground);background:transparent}
+.quiet .top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.quiet .top b{font-weight:600;color:var(--muted-foreground)}
+.quiet .qline{color:var(--soft-foreground);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--soft-foreground) 60%,transparent)}
+.quiet a{color:var(--foreground);text-underline-offset:3px}
+.flash{animation:flash 1.4s ease-out}
+@keyframes flash{0%{box-shadow:0 0 0 3px color-mix(in srgb,var(--info) 60%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
+
+/* ---------- compare ---------- */
+.cmp{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:16px;display:flex;flex-direction:column;gap:12px}
+.cmp h3{margin:0;font-size:15px;display:flex;align-items:center;gap:8px}
+.rec{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:2px 8px;background:var(--primary);color:var(--primary-foreground)}
+.mini{display:grid;grid-template-columns:150px 1fr;border:1px solid var(--border);border-radius:10px;overflow:hidden;height:210px;background:var(--background)}
+.mini .ms{background:var(--sidebar);border-right:1px solid var(--border);padding:10px 8px;display:flex;flex-direction:column;gap:3px}
+.mini .ms .nav-row{height:26px;font-size:11px;padding:0 8px}
+.mini .mm{padding:12px;display:flex;flex-direction:column;gap:8px}
+.skel{height:34px;border-radius:8px;background:var(--card);border:1px solid var(--border)}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border)}
+.tabs span{font-size:11px;padding:5px 8px;color:var(--muted-foreground);border-bottom:2px solid transparent}
+.tabs span.on{color:var(--foreground);border-color:var(--violet);font-weight:600}
+.pc{font-size:13px;color:var(--muted-foreground);margin:0;padding-left:18px}
+.pc li{margin:3px 0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-q" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-cc" viewBox="0 0 24 24"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24"><path d="M7 7h10v10M7 17 17 7"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4M3 7l2 2 4-4M13 6h8M13 12h8M13 18h8"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="i-task" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></symbol>
+  <symbol id="i-skip" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8V4zM19 5v14"/></symbol>
+  <symbol id="i-hour" viewBox="0 0 24 24"><path d="M5 22h14M5 2h14M17 22v-4.17a2 2 0 0 0-.59-1.42L12 12l-4.41 4.41A2 2 0 0 0 7 17.83V22M7 2v4.17a2 2 0 0 0 .59 1.42L12 12l4.41-4.41A2 2 0 0 0 17 6.17V2"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><rect width="6" height="6" x="9" y="9"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+</svg>
+
+<header class="doc-top">
+  <span class="brand">Questions inbox · design</span>
+  <nav aria-label="Sections">
+    <a href="#desktop">Desktop</a><a href="#mobile">Mobile</a><a href="#chat">In chat</a><a href="#rules">Auto-close</a><a href="#approvals">vs Approvals</a><a href="#notes">Notes</a>
+  </nav>
+  <span style="margin-left:auto" class="seg" role="group" aria-label="Theme">
+    <button type="button" data-theme="dark" aria-pressed="true">Dark</button>
+    <button type="button" data-theme="light" aria-pressed="false">Light</button>
+  </span>
+</header>
+
+<main class="doc">
+  <h1 class="doc-h">A Questions inbox, next to Approvals</h1>
+  <p class="lede">One place for every question waiting on you, from managers (<code>CEZ:ASK</code> decision cards) and from tasks (ask cards, parked <code>waiting</code>). A question closes when it is answered, dismissed, replaced, retracted or its task ends. Counts only include live questions.</p>
+  <div class="callout">The mockups below are <b>interactive and share one state</b>. Answer, dismiss (with undo) or toggle “Older” on the desktop page, and the sidebar badge, page header and phone update together. That is the count-sync rule this design proposes.</div>
+
+  <!-- ================= DESKTOP ================= -->
+  <section class="doc-s" id="desktop">
+    <h2><span class="num">01</span> Desktop: sidebar and Questions page</h2>
+    <p class="sub">Questions lives in manager mode’s <b>Workspace</b> group, between Approvals and Jobs. Each source is one group. A card is the same <code>AskForm</code> the chat uses, so one-tap single choice, multi-select, Other… and Need more info all work as they do today.</p>
+    <div class="state-bar">
+      <span class="seg" role="group" aria-label="Page state">
+        <button type="button" data-state="full" aria-pressed="true">Several sources</button>
+        <button type="button" data-state="empty" aria-pressed="false">Empty</button>
+      </span>
+      <button type="button" class="btn btn-outline btn-sm" id="reset">Reset demo</button>
+      <span class="hint">Try: click an option on “Design”, tick two platforms and add Other on “Platforms”, dismiss a card, note the amber “may be out of date” cards at the end of their groups, expand Closed.</span>
+    </div>
+    <div class="frame" style="position:relative">
+      <div class="app">
+        <aside class="sidebar" aria-label="Sidebar mockup">
+          <div class="sb-top"><span class="wordmark">cezar</span><span class="soft t-meta" style="margin-left:auto">⌘K</span></div>
+          <div class="mode" aria-hidden="true"><span>Projects</span><span class="on">Manager</span></div>
+          <div style="padding:0 12px 8px"><a class="btn btn-primary" style="width:100%" href="#desktop"><svg class="i s14"><use href="#i-plus"/></svg>New manager</a></div>
+          <div style="flex:1;overflow:auto;padding:0 10px 8px">
+            <div class="eyebrow" style="padding:4px 8px">Managers · 3</div>
+            <div id="sb-managers"></div>
+            <div class="eyebrow" style="padding:12px 12px 4px">Workspace</div>
+            <a class="nav-row" href="#approvals"><svg class="i"><use href="#i-cc"/></svg>Approvals<span class="count live">2<span class="sr-only"> pending approvals</span></span></a>
+            <a class="nav-row on" href="#desktop" aria-current="page" id="sb-questions"><svg class="i"><use href="#i-q"/></svg>Questions<span class="count live tab" id="sb-qcount">4</span></a>
+            <a class="nav-row" href="#desktop"><svg class="i"><use href="#i-clock"/></svg>Jobs<span class="count">3</span></a>
+            <a class="nav-row" href="#desktop"><svg class="i"><use href="#i-set"/></svg>Manager settings</a>
+          </div>
+          <div style="border-top:1px solid var(--border);padding:10px 14px;display:flex;align-items:center;gap:8px" class="t-meta muted"><span class="dot" style="background:var(--success)"></span>cezar · 3 running</div>
+        </aside>
+        <div class="main" id="desk-main"></div>
+      </div>
+      <div class="toast" id="desk-toast" role="status" aria-live="polite" hidden></div>
+    </div>
+    <p class="caption">Workspace counts turn info-blue when they are above zero (the colour the manager rows already use for “waits on you”) and go back to the muted pill at zero. The Approvals count changes the same way.</p>
+  </section>
+
+  <!-- ================= MOBILE ================= -->
+  <section class="doc-s" id="mobile">
+    <h2><span class="num">02</span> Mobile and the CezarBot shell</h2>
+    <p class="sub">On a phone the Manager tab’s index has a Workspace block at the top: <b>Questions</b> and <b>Approvals</b>, each a row with its count. Questions opens a full screen with the same groups. Tap targets are 44px, cards are full width, and option grids collapse to one column. The CezarBot app shell renders the same <code>/manager</code> routes, so this screen is shared, not a second implementation.</p>
+    <div class="phones">
+      <div>
+        <div class="phone" aria-label="Phone: Manager index">
+          <div class="ph-status"><span>9:41</span><span>●●● ▮</span></div>
+          <div class="ph-top"><h2>Manager</h2><a class="btn btn-ghost btn-icon" style="margin-left:auto" href="#mobile" aria-label="New manager"><svg class="i"><use href="#i-plus"/></svg></a></div>
+          <div class="ph-body">
+            <div class="ws-rows">
+              <a class="ws-row" href="#mobile"><svg class="i s20 muted"><use href="#i-q"/></svg><span style="flex:1">Questions<br><span class="sub" id="ph-qsub">From 3 managers and 1 task</span></span><span class="count live tab" id="ph-qcount">4</span><svg class="i soft"><use href="#i-chev"/></svg></a>
+              <a class="ws-row" href="#approvals"><svg class="i s20 muted"><use href="#i-cc"/></svg><span style="flex:1">Approvals<br><span class="sub">Merge #2281, enable “Nightly QA”</span></span><span class="count live">2</span><svg class="i soft"><use href="#i-chev"/></svg></a>
+            </div>
+            <div class="eyebrow" style="padding:4px 4px 0">Managers · 3</div>
+            <div id="ph-managers" style="display:flex;flex-direction:column;gap:2px"></div>
+          </div>
+          <div class="ph-bar" id="ph-bar-1"></div>
+        </div>
+        <p class="caption">Manager index (also the CezarBot home). Manager rows take their blue preview line from the same live count.</p>
+      </div>
+      <div>
+        <div class="phone" aria-label="Phone: Questions" style="position:relative">
+          <div class="ph-status"><span>9:41</span><span>●●● ▮</span></div>
+          <div class="ph-top"><a class="btn btn-ghost btn-icon" href="#mobile" aria-label="Back to Manager"><svg class="i"><use href="#i-back"/></svg></a><h2>Questions</h2><span class="muted t-ui tab" id="ph-qhead" style="margin-left:2px">4</span></div>
+          <div class="ph-body" id="ph-main"></div>
+          <div class="ph-bar" id="ph-bar-2"></div>
+          <div class="toast" id="ph-toast" role="status" aria-live="polite" hidden></div>
+        </div>
+        <p class="caption">The Questions screen shares state with the desktop mock above. Answer on either one and both update.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CHAT ================= -->
+  <section class="doc-s" id="chat">
+    <h2><span class="num">03</span> A closed card inside a manager chat</h2>
+    <p class="sub">A closed card drops the card frame, the blue edge and the options. One quiet line says why it closed and points to what replaced it. The question text is struck through so it no longer reads as a prompt. Task threads render the same states in their ask card.</p>
+    <div class="grid2">
+      <div class="frame">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border)"><span class="av av30 av-a">🦊</span><b class="t-ui">Mobile app creator</b><span class="t-meta muted">· watching 4 tasks</span></div>
+        <div class="chat" style="height:600px;overflow:auto">
+          <div class="bubble-a">Here is the onboarding draft v1: three screens, permissions up front.</div>
+          <div class="quiet" id="chat-old">
+            <div class="top"><svg class="i s14"><use href="#i-swap"/></svg><b>Closed: replaced</b><span>· 14:02</span><span class="hdr static">Design</span></div>
+            <div class="qline">Approve onboarding layout v1?</div>
+            <div>A newer “Design” question replaced this one. <a href="#chat-new" id="jump-new">Go to the newer question ↓</a></div>
+          </div>
+          <div class="bubble-u">Permissions up front feels heavy. Can it ask later?</div>
+          <div class="bubble-a">Fair. v2 defers notifications until the first task finishes, and v3 also drops the account step.</div>
+          <div class="quiet">
+            <div class="top"><svg class="i s14"><use href="#i-swap"/></svg><b>Closed: replaced</b><span>· 14:31</span><span class="hdr static">Design</span></div>
+            <div class="qline">Approve onboarding layout v2?</div>
+            <div>Replaced by v3. <a href="#chat-new">Go to the newer question ↓</a></div>
+          </div>
+          <section class="mcard info" id="chat-new" tabindex="-1">
+            <div class="mcard-h"><svg class="i muted"><use href="#i-q"/></svg>Your decision<span class="st"><span class="dot dot-info"></span>Open</span></div>
+            <div class="mcard-b">
+              <div><span class="hdr">Design</span></div>
+              <div class="qtext" style="margin:2px 0 4px">Which onboarding layout should ship in 0.2?</div>
+              <div class="opts">
+                <button class="choice" type="button"><span class="cl">v3: two screens, no account step</span><span class="cd">Notifications asked after the first finished task.</span></button>
+                <button class="choice" type="button"><span class="cl">v2: three screens, deferred permissions</span></button>
+              </div>
+              <div class="extra"><button class="xchoice" type="button">Other…</button><button class="xchoice" type="button">Need more info</button></div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="eyebrow">The other closed states, same quiet shape</div>
+        <div class="quiet">
+          <div class="top"><svg class="i s14"><use href="#i-skip"/></svg><b>Closed: dismissed by you</b><span>· 2h ago</span><span class="hdr static">Budget</span></div>
+          <div class="qline">Raise the nightly QA budget to $8?</div>
+          <div>The manager was told you skipped it.</div>
+        </div>
+        <div class="quiet">
+          <div class="top"><svg class="i s14"><use href="#i-undo"/></svg><b>Closed: withdrawn by the manager</b><span>· 35m ago</span><span class="hdr static">Release</span></div>
+          <div class="qline">Cut 0.13.0 today or wait for #2280?</div>
+          <div>“#2280 merged, so the question is moot.”</div>
+        </div>
+        <div class="quiet">
+          <div class="top"><svg class="i s14"><use href="#i-stop"/></svg><b>Closed: task ended</b><span>· yesterday</span><span class="hdr static">Retry</span></div>
+          <div class="qline">Retry the flaky e2e or skip it?</div>
+          <div>“Fix relay reconnect loop” was cancelled.</div>
+        </div>
+        <div class="quiet">
+          <div class="top"><svg class="i s14 " style="color:var(--success-strong)"><use href="#i-check"/></svg><b>Answered</b><span>· 3h ago</span><span class="hdr static">Shell</span></div>
+          <div>Shell: <span style="color:var(--foreground)">zsh</span></div>
+        </div>
+        <div class="quiet">
+          <div class="top"><svg class="i s14"><use href="#i-hour"/></svg><b>Closed: expired</b><span>· 20m ago</span><span class="hdr static">Merge</span></div>
+          <div class="qline">Merge #2290 now or wait for the QA run?</div>
+          <div>PR #2290 was merged, and the card was waiting on it.</div>
+        </div>
+        <div class="quiet">
+          <div class="top"><svg class="i s14" style="color:var(--success-strong)"><use href="#i-check"/></svg><b>Answered in the task</b><span>· 1h ago</span><span class="hdr static">Storage</span></div>
+          <div>Answered in “Migrate push tokens”: <span style="color:var(--foreground)">Relay KV</span>. <a href="#chat">Open task ↗</a></div>
+        </div>
+        <div class="eyebrow" style="margin-top:8px">After a free-text reply: may be out of date</div>
+        <section class="mcard info">
+          <div class="mcard-h"><svg class="i muted"><use href="#i-q"/></svg>Your decision<span class="st"><span class="dot dot-info"></span>Open</span></div>
+          <div class="mcard-b">
+            <div class="stale"><svg class="i s14"><use href="#i-hour"/></svg><span style="flex:1">May be out of date: you replied 4m after it was asked.</span><button class="btn btn-ghost btn-sm" type="button">Dismiss as out of date</button></div>
+            <div><span class="hdr">Base</span></div>
+            <div class="qtext" style="margin:2px 0 4px">Branch the mobile work off main or release/v0.12.x?</div>
+          </div>
+        </section>
+        <p class="caption" style="margin-top:0">A reply does not close the card, because cezar cannot know what the reply answered. The card is flagged instead, and the manager is asked on its next turn (usually the one your reply starts) to close it or ask again. This changes today’s behaviour, where a composer reply closes every open card in that chat (<code>engine.test.ts</code>).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= RULES ================= -->
+  <section class="doc-s" id="rules">
+    <h2><span class="num">04</span> How a question closes</h2>
+    <p class="sub">The goal: <b>the main list holds only questions that still need you.</b> Proven-stale cards close themselves. Suspected-stale cards stay in the list and still count, but sort last with an amber note. The agent is asked to confirm or close them. The server decides every state except Older, so every surface agrees on what is live.</p>
+    <table class="notes">
+      <thead><tr><th>Reason</th><th>Trigger</th><th>What the agent sees</th><th>Closed label</th></tr></thead>
+      <tbody>
+        <tr><td>Answered</td><td>An answer sent from a card, in the inbox or in the chat. Today’s <code>askId</code> path is unchanged.</td><td>The answer, as now.</td><td><span class="reason answered">Answered</span> plus the picks</td></tr>
+        <tr><td>Answered elsewhere</td><td>A manager card that <b>relays</b> a task’s question declares it: <code>"about": [{"task": "&lt;project&gt;/&lt;runId&gt;", "ask": "&lt;card id&gt;"}]</code>. The manager’s snapshot already lists the task’s open question with that id. The pair is <b>one question</b>: answering either copy closes both. The same applies if the task’s question closes any other way (replaced, withdrawn, task ended).</td><td>Answered in the task: the task gets the answer, and the manager gets a note (“answered in the task: …”) on its next turn. Answered on the manager’s card: cezar delivers the answer to the task directly, so it does not depend on the manager forwarding it, and the manager sees it as today.</td><td><span class="reason answered">Answered</span> “in task X” or “in Manager’s chat”</td></tr>
+        <tr><td>Dismissed</td><td>Dismiss in the inbox or on the card. It has a 6 s undo, and nothing is sent until the undo window ends.</td><td>A <b>cezar note</b>: “The user skipped your question «Design». Don’t wait for an answer; decide yourself, or ask again later only if it still blocks you.” See notes §B for delivery.</td><td><span class="reason dismissed">Dismissed</span></td></tr>
+        <tr><td>Replaced</td><td>A newer <code>CEZ:ASK</code> in the <b>same chat or run</b> with the same card <code>id</code>. The prompts ask agents to give each card a stable id and reuse it when asking again, because real re-asks rename headers (“22971 post” became “22971”). Without ids, a newer card whose headers cover <b>every</b> header of the older card replaces it. A card that only partly overlaps stays open.</td><td>Nothing. The agent asked again.</td><td><span class="reason replaced">Replaced</span> → link to the newer card</td></tr>
+        <tr><td>Retracted</td><td>The agent prints <code>CEZ:ASK-CLOSE &lt;id&gt; [reason]</code> (proposal below).</td><td>Nothing. The agent asked for it.</td><td><span class="reason retracted">Withdrawn</span> plus the agent’s reason</td></tr>
+        <tr><td>Task ended</td><td>The run reaches <code>done</code> or <code>review</code>, is cancelled, archived or deleted. A run closed as <code>failed</code> with <code>idleClosedAt</code> or <code>awaitingAnswerSince</code> is <b>not</b> ended (#2286), because Continue still answers it. A run with any other <code>failed</code> status also stays open, since Continue can pick it up.</td><td>Nothing. There is no session to tell.</td><td><span class="reason ended">Task ended</span> plus how it ended</td></tr>
+        <tr><td>Expired</td><td>The card <b>declares</b> what it is about: <code>"about": [{"pr": 2891}]</code> (or a task or issue), and that work is merged, closed or finished. This is the same check Approvals uses to drop a merge whose PR is no longer open. There is no time-based expiry. A PR or task the card only <i>mentions</i> never closes it, because “task X is done, what next?” is exactly the question that matters then. It flags the card instead.</td><td>Nothing. The work it asked about is finished.</td><td><span class="reason ended">Expired</span> plus what happened (“PR #2891 merged”)</td></tr>
+        <tr><td>May be out of date <span class="soft">(flag, not closed)</span></td><td>Something the server can only <b>suspect</b>. The user replied in that chat after the card was asked. Or the task carried on without an answer (more turns, or no longer waiting on this question). Or the task’s branch got new commits since. Or the manager started tasks or asked for approvals on the same thing since. Or a PR or task the card only mentions (no <code>about</code>) finished.</td><td>On its next turn the agent gets its open cards with the reason each one may be out of date, and is asked to confirm. It closes the card (<code>CEZ:ASK-CLOSE &lt;id&gt; answered in chat</code>) or asks again.</td><td>Not closed and <b>still counted</b>. The card gets an amber note with the reason, sorts last in its group, and offers one-click <b>Dismiss as out of date</b>.</td></tr>
+        <tr><td>Older <span class="soft">(toggle)</span></td><td>Unanswered for longer than N days. The toggle is on at 7 days by default. Computed from <code>askedAt</code> and never stored, so turning the toggle off restores the counts.</td><td>Nothing. The question is still open and still answerable.</td><td>Not closed. It moves to the “Older” group and stops counting toward badges.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= APPROVALS ================= -->
+  <section class="doc-s" id="approvals">
+    <h2><span class="num">05</span> How it relates to Approvals</h2>
+    <p class="sub">There are two shapes. I recommend <b>A</b>.</p>
+    <div class="grid2">
+      <div class="cmp">
+        <h3>A. Two pages, side by side <span class="rec">Recommended</span></h3>
+        <div class="mini" aria-hidden="true">
+          <div class="ms"><div class="eyebrow t-micro" style="font-size:9px;padding:2px 6px">Workspace</div>
+            <span class="nav-row"><svg class="i s14"><use href="#i-cc"/></svg>Approvals<span class="count live">2</span></span>
+            <span class="nav-row on"><svg class="i s14"><use href="#i-q"/></svg>Questions<span class="count live">4</span></span>
+            <span class="nav-row"><svg class="i s14"><use href="#i-clock"/></svg>Jobs</span></div>
+          <div class="mm"><b class="t-ui">Questions</b><span class="xlink" style="align-self:flex-start;font-size:10px">2 approvals waiting →</span><div class="skel"></div><div class="skel"></div><div class="skel" style="opacity:.5"></div></div>
+        </div>
+        <ul class="pc">
+          <li>The verbs differ. An approval merges a PR or enables an automation and must go through the <code>decision</code> route. A question is only an answer. Keeping them apart keeps the riskier action visually separate.</li>
+          <li>Two counts tell you which kind of thing is waiting before you click.</li>
+          <li>The name “Inbox” is already used by follow-ups (<code>/inbox</code>, <code>CEZ_FOLLOWUPS</code>). A second “Inbox” would clash.</li>
+          <li>Each page links to the other with a chip in its header (“2 approvals waiting →”).</li>
+          <li>Phone: two rows at the top of the Manager index (see 02).</li>
+        </ul>
+      </div>
+      <div class="cmp">
+        <h3>B. One “Needs you” page with tabs</h3>
+        <div class="mini" aria-hidden="true">
+          <div class="ms"><div class="eyebrow t-micro" style="font-size:9px;padding:2px 6px">Workspace</div>
+            <span class="nav-row on"><svg class="i s14"><use href="#i-inbox"/></svg>Needs you<span class="count live">6</span></span>
+            <span class="nav-row"><svg class="i s14"><use href="#i-clock"/></svg>Jobs</span></div>
+          <div class="mm"><b class="t-ui">Needs you</b><div class="tabs"><span>Approvals 2</span><span class="on">Questions 4</span></div><div class="skel"></div><div class="skel"></div></div>
+        </div>
+        <ul class="pc">
+          <li>One badge and one place to go: slightly calmer chrome.</li>
+          <li>The single count hides which kind is waiting, and it duplicates the “Now” tab’s needs-you badge in project mode.</li>
+          <li>It needs a rename (“Inbox” is taken) and a redirect for <code>/manager/approvals</code> (BACKWARD_COMPATIBILITY §2 lists it).</li>
+          <li>Tab state has to survive deep links (“Open in context” and back).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= NOTES ================= -->
+  <section class="doc-s" id="notes">
+    <h2><span class="num">06</span> Notes</h2>
+    <div class="notes-grid">
+      <div class="note">
+        <h3>A. Data model: where open questions live</h3>
+        <ul>
+          <li><b>Manager cards</b> stay as they are: an <code>assistant</code> message with <code>ask</code>. They gain <code>askClosed?: { reason: 'dismissed'|'replaced'|'retracted', at, replacedBy?, note? }</code>. The rule <code>openAsk</code> (engine.ts) becomes <code>ask && askAnswer === undefined && askClosed === undefined</code>. <code>pendingQuestions</code> follows automatically.</li>
+          <li><b>Task asks</b> are currently resolved on the client (“the next user message closes the card”). They become server state: a capped <code>RunRecord.asks[]</code> (last 10: <code>requestId, askedAt, questions, answeredAt?, closed?</code>) in <code>runs.json</code>. A new <code>ask.closed {requestId, reason, …}</code> UiEvent is appended to the run’s NDJSON, so a replayed thread draws the quiet card. AGENT_PROTOCOL.md gains the event.</li>
+          <li><b>Read model:</b> a workspace-level route, <code>GET /api/v1/workspace/questions</code>, returns <code>{ open[], closed[] }</code>. Closed covers the last 7 days, capped at 50. Each item has a stable key (<code>m:&lt;managerId&gt;:&lt;messageId&gt;</code> or <code>r:&lt;projectId&gt;:&lt;runId&gt;:&lt;requestId&gt;</code>), its source, <code>askedAt</code>, the questions and its state. It is built from the manager engine plus the workspace dashboard’s cross-project run scan. Zod schemas go in <code>packages/contract</code>, and the route is chained into a family (single-mount).</li>
+          <li><b>Writes:</b> answers reuse the existing routes (manager send with <code>askId</code>, run message). The only new write is <code>POST /api/v1/workspace/questions/:key/dismiss</code>. Undo is a client-side delay before the POST, so there is no reopen route and no wasted agent turn.</li>
+          <li><b>Relayed copies:</b> a manager card with <code>about.ask</code> links to the task’s question key. The read model merges the pair into one item (under the task, with an “also in &lt;manager&gt;’s chat” chip), so it counts once. Closing either copy closes the other in the same write.</li>
+          <li>Older is a ui-state preference (<code>questionsOlderAfterDays</code>: absent = 7, <code>0</code> = off). It is never stored on a question.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <h3>B. Telling the agent: dismiss and close</h3>
+        <ul>
+          <li><b>Manager:</b> the dismiss note is stored as a <code>note</code> message (shown in the chat as “You skipped «Design»”) and prepended to the <b>next</b> turn’s prompt. It does not start a turn by itself, so it adds no cost.</li>
+          <li><b>Task parked <code>waiting</code> on that ask:</b> the note is delivered as the user’s message and wakes the run (one turn), the same as an answer. Otherwise the task would wait forever, which is the problem being fixed.</li>
+          <li><b>Task closed (idle or awaiting answer):</b> dismiss closes the card and the badge but does <b>not</b> resume the session. The note is queued (<code>queuedMessages</code>) and goes out with the next Continue.</li>
+          <li><b>Task that already moved on</b> (not waiting on this ask): the card is closed and no message is sent.</li>
+          <li>Replaced, retracted and ended send nothing. The agent caused the close, or no session is left.</li>
+          <li>The dispatch and manager prompts gain two lines: give each card an <code>id</code>, and use <code>CEZ:ASK-CLOSE</code> to withdraw a card.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <h3>C. Retraction mechanism (proposal)</h3>
+        <pre>CEZ:ASK-CLOSE design-v2 superseded by the v3 card
+CEZ:ASK-CLOSE Release #2280 merged, moot</pre>
+        <ul>
+          <li>One marker line, parsed in the same place as <code>CEZ:ASK</code> (<code>workflows/run.ts</code> and the manager engine). It works the same for every runner and needs no tool permission.</li>
+          <li>The argument is the card’s optional <code>id</code> (already allowed in the <code>CEZ:ASK</code> JSON) or, as a fallback, a header in that chat or run. It only closes cards from the <b>same</b> source. An unknown id is ignored and leaves a warning event. The text after the id becomes the visible reason (max 140 characters).</li>
+          <li>Re-asking with the same <code>id</code> replaces the card (rule 1), so most agents never need the close marker.</li>
+          <li><code>cez-manager ask close &lt;id&gt;</code> is not needed for v1. A manager ends its turn with text anyway, and the marker keeps one path for managers and tasks. It can be added later as a thin alias.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <h3>D. Counts stay in sync</h3>
+        <ul>
+          <li>One server function, <code>liveQuestions()</code>, counts open questions that are not Older. It feeds <code>ManagerSummary.pendingQuestions</code>, the Questions badge, the needs-you count, the desktop notch, native notifications and the phone push badge (<code>RELAY_PROTOCOL</code> badge count).</li>
+          <li>Live updates use one new WebSocket topic, <code>questions</code>, published only on change with <code>{ live, older }</code>. Local mode subscribes once at the root, like <code>health</code>. Remote mode reconciles over SSE and refetches on run and manager events.</li>
+          <li>Closing a question re-sends the push badge, and on desktop it withdraws the matching OS notification where the platform allows it.</li>
+          <li>The sidebar text “Waiting for N answers” reads the same <code>pendingQuestions</code>, so it can no longer count obsolete cards.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <h3>E. Accessibility</h3>
+        <ul>
+          <li>Each source group is a <code>&lt;section aria-label&gt;</code>. Each card is a <code>role="group"</code> labelled by its question. Options are <code>aria-pressed</code> toggles, as in <code>AskChoice</code>.</li>
+          <li>Dismiss and answer announce through a polite live region (“Dismissed «Design». Undo available for 6 seconds.”). Undo is focusable and reachable with the keyboard before the timeout, and the timeout pauses while focus is inside the toast.</li>
+          <li>When a card leaves the open list, focus moves to the next card’s first option, or to the page heading if none is left. This is the same rule Approvals uses.</li>
+          <li>Closed and Older are disclosure buttons (<code>aria-expanded</code>). Reasons are text, never colour alone. Tap targets are 44px at <code>pointer: coarse</code>. Dark and light tokens are the cockpit’s own.</li>
+          <li>“Open in context” uses the existing <code>#decision-&lt;id&gt;</code> anchor and focuses the card, which flashes briefly unless reduced motion is on.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <h3>G. Relevance: proved, suspected, confirmed</h3>
+        <ul>
+          <li><b>Proved</b> means the server closes the card itself, with no model call. Only a <b>declared</b> <code>about</code> (PR, task or issue) reaching a final state does this, checked with the reference-state polling cezar already does for its chips. There is no time-based expiry, since none of the real open cards had a natural deadline.</li>
+          <li><b>Suspected</b> means a <code>mayBeStale: { why, since }</code> flag on the question. It is computed from data the server already has: a later user message in that chat, later turns or commits on the task, later manager actions. The card stays in the list and in the counts, sorted last with an amber note.</li>
+          <li><b>Confirmed</b> is the agent’s job. On each manager check and each task turn, cezar lists the agent’s open cards (with any out-of-date flag): “close what no longer needs the user: <code>CEZ:ASK-CLOSE &lt;id&gt; &lt;reason&gt;</code>”. Managers already get a snapshot at each check, so this adds a few lines, not a model call.</li>
+          <li>Answering a card that closed in the meantime (a stale tab) returns 409, as for an outdated merge, and the card redraws as closed. There is no confirm step before answering a flagged card, and no age stamp on the answer.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <h3>F. Gating and scope</h3>
+        <ul>
+          <li>Task questions exist even when managers are off (<code>CEZ_MANAGERS=0</code>). In that case the Questions entry moves into the project sidebar’s Workspace group, and the route stays <code>/questions</code> (workspace-level).</li>
+          <li>No new <code>CEZ_*</code> flag. The page adds no network access and no timer, and Older is computed.</li>
+          <li>Phase 2 tests cover each close rule (replaced by id, by covered headers, partial overlap stays open, retracted, ended for done/cancelled/archived, idle-closed stays open), dismiss for each delivery path, undo, and count parity across summary, badge and push.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const NOW = Date.now(), MIN = 60000, DAY = 1440 * MIN
+  const SOURCES = {
+    mob: { kind: 'manager', name: 'Mobile app creator', av: '🦊', avc: 'av-a', meta: 'manager' },
+    rel: { kind: 'manager', name: 'Release captain', av: '🦉', avc: 'av-b', meta: 'manager' },
+    qa:  { kind: 'manager', name: 'Nightly QA', av: '🐝', avc: 'av-c', meta: 'manager' },
+    t1:  { kind: 'task', name: 'Fix relay reconnect loop', project: 'cezar', meta: 'task · waiting' },
+    t2:  { kind: 'task', name: 'Migrate push tokens', project: 'cezar-mobile', meta: 'task · running' },
+  }
+  const seed = () => [
+    { id: 'q1', src: 'mob', age: 14 * MIN, tasks: [{ title: 'Onboarding redesign', project: 'cezar-mobile', status: 'review' }], qs: [{ header: 'Design', question: 'Which onboarding layout should ship in 0.2?', options: [
+      { label: 'v3: two screens, no account step', description: 'Notifications asked after the first finished task.' },
+      { label: 'v2: three screens, deferred permissions' } ] }] },
+    { id: 'q2', src: 'mob', age: 52 * MIN, tasks: [{ title: 'Beta build pipeline', project: 'cezar-mobile', status: 'running' }], qs: [{ header: 'Platforms', multi: true, question: 'Which platforms should the 0.2 beta build target?', options: [
+      { label: 'iOS' }, { label: 'Android' }, { label: 'iPadOS' }, { label: 'macOS (Catalyst)' } ] }] },
+    { id: 'q3', src: 't1', age: 25 * MIN, alsoIn: 'rel', qs: [{ header: 'Backoff', question: 'The relay reconnects in a tight loop after sleep. Which backoff should I use?', options: [
+      { label: 'Exponential, capped at 30 s', description: 'Matches the iOS client.' }, { label: 'Fixed 5 s' }, { label: 'Jittered exponential, capped at 60 s' } ] }] },
+    { id: 'q4', src: 'rel', age: 3 * 60 * MIN, tasks: [{ title: 'Cut release 0.13.0', project: 'cezar', status: 'waiting' }, { title: 'Release notes draft', project: 'cezar', status: 'review' }], qs: [
+      { header: 'Version', question: 'Is the next cut 0.13.0 or 0.12.4?', options: [{ label: '0.13.0' }, { label: '0.12.4' }] },
+      { header: 'Notes', question: 'Include the managers redesign in the highlights?', options: [{ label: 'Yes, lead with it' }, { label: 'Mention it briefly' }, { label: 'Leave it out' }] } ] },
+    { id: 'q5', src: 'qa', age: 9 * DAY, tasks: [{ title: 'Nightly e2e run', project: 'cezar', status: 'failed' }], qs: [{ header: 'Flaky', question: 'Quarantine the three flaky e2e specs until someone owns them?', options: [{ label: 'Quarantine' }, { label: 'Keep them running' }] }] },
+    { id: 'q6', src: 'rel', age: 12 * DAY, qs: [{ header: 'Cadence', question: 'Move release cuts from weekly to every two weeks?', options: [{ label: 'Every two weeks' }, { label: 'Keep weekly' }] }] },
+    // flagged "may be out of date": still counted, sorted last in its group, with the reason
+    { id: 'p1', src: 'mob', age: 40 * MIN, suspect: 'you replied in this chat 4m after it was asked', qs: [{ header: 'Base', question: 'Branch the mobile work off main or release/v0.12.x?', options: [{ label: 'main' }, { label: 'release/v0.12.x' }] }] },
+    { id: 'p2', src: 't2', age: 2 * 60 * MIN, suspect: 'the task carried on: 3 more turns and 2 commits since', qs: [{ header: 'Storage', question: 'Keep push tokens in the relay KV or move them to D1?', options: [{ label: 'Relay KV' }, { label: 'D1' }] }] },
+    // already closed
+    { id: 'c0', src: 'rel', age: 2 * 60 * MIN, closed: { reason: 'expired', at: 20 * MIN, detail: 'PR #2290 merged, and the card was waiting on it' }, qs: [{ header: 'Merge', question: 'Merge #2290 now or wait for the QA run?', options: [] }] },
+    { id: 'c1', src: 'mob', age: 3 * 60 * MIN, closed: { reason: 'replaced', at: 31 * MIN, detail: 'Replaced by the newer “Design” card (v3)' }, qs: [{ header: 'Design', question: 'Approve onboarding layout v2?', options: [] }] },
+    { id: 'c2', src: 'mob', age: 5 * 60 * MIN, closed: { reason: 'replaced', at: 2 * 60 * MIN, detail: 'Replaced by the newer “Design” card (v2)' }, qs: [{ header: 'Design', question: 'Approve onboarding layout v1?', options: [] }] },
+    { id: 'c3', src: 'rel', tasks: [{ title: 'Cut release 0.13.0', project: 'cezar', status: 'waiting' }], age: 6 * 60 * MIN, closed: { reason: 'retracted', at: 35 * MIN, detail: 'Withdrawn: “#2280 merged, so the question is moot.”' }, qs: [{ header: 'Release', question: 'Cut 0.13.0 today or wait for #2280?', options: [] }] },
+    { id: 'c4', src: 't1', age: 26 * 60 * MIN, closed: { reason: 'ended', at: 20 * 60 * MIN, detail: '“Bump Expo SDK” was cancelled', srcName: 'Bump Expo SDK' }, qs: [{ header: 'Retry', question: 'Retry the flaky e2e or skip it?', options: [] }] },
+    { id: 'c5', src: 't1', age: 30 * 60 * MIN, closed: { reason: 'ended', at: 22 * 60 * MIN, detail: '“Docs: relay page” was archived', srcName: 'Docs: relay page' }, qs: [{ header: 'Scope', question: 'Document the keep-awake toggle too?', options: [] }] },
+    { id: 'c6', src: 'qa', age: 4 * 60 * MIN, closed: { reason: 'dismissed', at: 2 * 60 * MIN, detail: 'Dismissed by you · the manager was told' }, qs: [{ header: 'Budget', question: 'Raise the nightly QA budget to $8?', options: [] }] },
+    { id: 'c8', src: 'mob', age: 90 * MIN, closed: { reason: 'answered', at: 70 * MIN, detail: 'Answered in task “Migrate push tokens”: Relay KV' }, qs: [{ header: 'Storage', question: 'Keep push tokens in the relay KV or move them to D1?', options: [] }] },
+    { id: 'c7', src: 'mob', age: 4 * 60 * MIN, closed: { reason: 'answered', at: 3 * 60 * MIN, detail: 'Answered: zsh' }, qs: [{ header: 'Shell', question: 'Which shell should the build scripts assume?', options: [] }] },
+  ]
+  let S
+  const reset = () => {
+    S = { items: seed(), answers: {}, filter: 'all', older: true, days: 7, showClosed: false, showOlder: false, empty: false, pendingDismiss: {}, sending: {} }
+  }
+  reset()
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+  const ago = (ms) => ms < MIN ? 'now' : ms < 60 * MIN ? `${Math.round(ms / MIN)}m` : ms < DAY ? `${Math.round(ms / 60 / MIN)}h` : `${Math.round(ms / DAY)}d`
+  const icon = (id, cls = '') => `<svg class="i ${cls}"><use href="#i-${id}"/></svg>`
+  const items = () => S.empty ? [] : S.items
+  const isOpen = (q) => !q.closed && !S.pendingDismiss[q.id]
+  const isOlder = (q) => S.older && q.age > S.days * DAY
+  const live = () => items().filter((q) => isOpen(q) && !isOlder(q))
+  const olderList = () => items().filter((q) => isOpen(q) && isOlder(q))
+  const closedList = () => items().filter((q) => q.closed).sort((a, b) => a.closed.at - b.closed.at)
+  const passes = (q) => S.filter === 'all' || (S.filter === 'managers') === (SOURCES[q.src].kind === 'manager')
+  const ans = (q, i) => (S.answers[q.id] ??= {})[i] ??= { labels: [], other: undefined, more: false }
+  const oneTap = (q) => q.qs.length === 1 && !q.qs[0].multi
+  const answered = (a) => a.labels.length > 0 || (a.other ?? '').trim() !== '' || a.more
+
+  function avatar(src, size = 'av30') {
+    const s = SOURCES[src]
+    return s.kind === 'manager' ? `<span class="av ${size} ${s.avc}" aria-hidden="true">${s.av}</span>` : `<span class="task-glyph" aria-hidden="true">${icon('task', 's14')}</span>`
+  }
+
+  // The chat's "Source task" block (decision-sources.tsx), so a question jumps to its task in one click.
+  function sources(q) {
+    if (!q.tasks?.length) return ''
+    return `<div class="srcbox"><span class="st">Source ${q.tasks.length === 1 ? 'task' : 'tasks'}</span>${q.tasks.map((t) => `<div class="srcrow"><span style="min-width:0"><span class="tt" style="display:block">${esc(t.title)}</span><span class="mm">${esc(t.project)} · ${esc(t.status)}</span></span><span class="lk"><a href="#chat">Inspect task<span class="sr-only">: ${esc(t.title)}</span></a><a href="#chat">Reports and assets</a></span></div>`).join('')}</div>`
+  }
+
+  function card(q, mobile) {
+    if (S.pendingDismiss[q.id]) {
+      return `<div class="dismissed-row" data-q="${q.id}">${icon('skip', 's14')}<span style="flex:1">Dismissed <b>${esc(q.qs[0].header)}</b>. ${SOURCES[q.src].kind === 'manager' ? 'The manager' : 'The task'} will be told you skipped it.</span><span class="bar" aria-hidden="true"><i></i></span><button class="btn btn-outline btn-sm" data-act="undo" data-q="${q.id}">${icon('undo', 's14')}Undo</button></div>`
+    }
+    const sending = S.sending[q.id]
+    const tap = oneTap(q)
+    const blocks = q.qs.map((qq, i) => {
+      const a = ans(q, i)
+      const opts = qq.options.map((o) => `<button type="button" class="choice" aria-pressed="${a.labels.includes(o.label)}" data-act="pick" data-q="${q.id}" data-i="${i}" data-l="${esc(o.label)}"><span class="cl">${qq.multi ? `<span class="box" aria-hidden="true">${a.labels.includes(o.label) ? '✓' : ''}</span>` : ''}<span>${esc(o.label)}</span></span>${o.description ? `<span class="cd">${esc(o.description)}</span>` : ''}</button>`).join('')
+      const short = !mobile && qq.options.every((o) => !o.description && o.label.length < 26) && qq.options.length > 1
+      return `<div role="group" aria-label="${esc(qq.question)}">
+        <div style="display:flex;align-items:center;gap:8px"><span class="hdr">${esc(qq.header)}</span>${qq.multi ? '<span class="t-micro soft" style="margin-left:auto">select all that apply</span>' : ''}</div>
+        <div class="qtext">${esc(qq.question)}</div>
+        <div class="opts ${short ? 'two' : ''}">${opts}</div>
+        <div class="extra" style="margin-top:8px"><button type="button" class="xchoice" aria-pressed="${a.other !== undefined}" data-act="other" data-q="${q.id}" data-i="${i}">Other…</button><button type="button" class="xchoice" aria-pressed="${a.more}" data-act="more" data-q="${q.id}" data-i="${i}">Need more info</button></div>
+        ${a.other !== undefined ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:8px"><textarea class="other" data-act="otxt" data-q="${q.id}" data-i="${i}" placeholder="Type your own answer" aria-label="Your own answer: ${esc(qq.question)}">${esc(a.other)}</textarea>${tap ? `<div><button class="btn btn-primary btn-sm" data-act="send" data-q="${q.id}" ${answered(a) ? '' : 'disabled'}>Send answer</button></div>` : ''}</div>` : ''}
+      </div>`
+    }).join('')
+    const all = q.qs.every((_, i) => answered(ans(q, i)))
+    const missing = q.qs.filter((_, i) => !answered(ans(q, i))).map((qq) => qq.header)
+    const footer = tap ? '' : `<div class="sendrow"><button class="btn btn-primary btn-sm" data-act="send" data-q="${q.id}" ${all ? '' : 'disabled'}>Send answer</button><span class="hint">${missing.length ? `unanswered: ${esc(missing.join(', '))}` : 'ready to send'}</span></div>`
+    const s = SOURCES[q.src]
+    return `<article class="q ${sending ? 'sending' : ''}" data-q="${q.id}" aria-busy="${!!sending}">
+      <div class="q-h"><span class="dot dot-info ${sending ? '' : 'pulse'}" aria-hidden="true"></span><span class="t-label" style="font-weight:600">${sending ? 'Sending…' : 'Open'}</span><span class="age">· asked ${ago(q.age)} ago</span>${q.alsoIn ? `<span class="xlink" style="padding:1px 8px" title="One question, shown once. Answering here also closes the copy in that chat."><span aria-hidden="true">${SOURCES[q.alsoIn].av}</span>also in ${esc(SOURCES[q.alsoIn].name)}’s chat</span>` : ''}
+        <span class="acts"><a class="btn btn-ghost btn-sm" href="#chat" data-act="ctx" title="Open in ${s.kind === 'manager' ? 'chat' : 'task'}">${icon('out', 's14')}${mobile ? '' : 'Open in context'}</a><button class="btn btn-ghost btn-sm" data-act="dismiss" data-q="${q.id}" aria-label="Dismiss question ${esc(q.qs[0].header)}">${icon('x', 's14')}${mobile ? '' : 'Dismiss'}</button></span></div>
+      <div class="q-b">${sources(q)}${q.suspect ? `<div class="stale">${icon('hour', 's14')}<span style="flex:1">May be out of date: ${esc(q.suspect)}. The agent is asked to confirm on its next turn.</span><button class="btn btn-ghost btn-sm" data-act="dismiss" data-q="${q.id}">Dismiss as out of date</button></div>` : ''}${blocks}${footer}</div>
+    </article>`
+  }
+
+  const byRelevance = (a, b) => (!!a.suspect - !!b.suspect) || b.age - a.age
+
+  function groups(list, mobile) {
+    const order = []
+    for (const q of list.filter(passes).sort(byRelevance)) if (!order.includes(q.src)) order.push(q.src)
+    return order.map((src) => {
+      const s = SOURCES[src]
+      const qs = list.filter((q) => q.src === src && passes(q))
+      .sort(byRelevance)
+      const n = qs.filter((q) => !S.pendingDismiss[q.id]).length
+      const meta = s.kind === 'manager' ? `manager · ${n} open` : `<span class="proj">${esc(s.project)}</span> task · <span class="dot dot-info"></span> waiting ${ago(qs[0].age)}`
+      return `<section class="group" aria-label="${esc(s.name)}">
+        <div class="group-h">${avatar(src, 'av32')}<div style="min-width:0;flex:1"><div class="gname">${esc(s.name)}</div><div class="gmeta">${meta}</div></div>
+        <a class="btn btn-outline btn-sm" href="#chat">${s.kind === 'manager' ? 'Open chat' : 'Open task'}</a></div>
+        ${qs.map((q) => card(q, mobile)).join('')}
+      </section>`
+    }).join('')
+  }
+
+  function closedSection() {
+    const c = closedList().filter(passes)
+    if (!c.length) return ''
+    const label = { answered: 'Answered', dismissed: 'Dismissed', replaced: 'Replaced', retracted: 'Withdrawn', ended: 'Task ended', expired: 'Expired' }
+    const ic = { answered: 'check', dismissed: 'skip', replaced: 'swap', retracted: 'undo', ended: 'stop', expired: 'hour' }
+    const rows = c.map((q) => `<div class="crow"><span class="reason ${q.closed.reason}">${icon(ic[q.closed.reason], 's14')}${label[q.closed.reason]}</span>
+      <div class="ctext"><div class="l1"><span class="hdr static">${esc(q.qs[0].header)}</span><span class="qq">${esc(q.qs[0].question)}</span></div>
+      <div class="l2">${esc(q.closed.srcName ?? SOURCES[q.src].name)}${q.tasks?.length ? ` · task <a href="#chat">${esc(q.tasks[0].title)}</a>` : ''} · ${esc(q.closed.detail)} · ${ago(q.closed.at)} ago</div></div>
+      <a class="btn btn-ghost btn-sm" href="#chat" aria-label="Open in context">${icon('out', 's14')}</a></div>`).join('')
+    return `<div class="fold"><button class="fold-btn" data-act="toggle-closed" aria-expanded="${S.showClosed}">${icon('chev', 's14 chev')}Closed · ${c.length}<span class="why">answered, dismissed, replaced, withdrawn, expired or task ended · last 7 days</span></button>
+      ${S.showClosed ? `<div class="closed-list">${rows}</div>` : ''}</div>`
+  }
+
+  function olderSection(mobile) {
+    const o = olderList().filter(passes)
+    if (!o.length) return ''
+    return `<div class="fold older"><button class="fold-btn" data-act="toggle-older" aria-expanded="${S.showOlder}">${icon('chev', 's14 chev')}${icon('hour', 's14')}Older · ${o.length}<span class="why">unanswered for more than ${S.days} days · not counted in badges</span></button>
+      ${S.showOlder ? groups(o, mobile) : ''}</div>`
+  }
+
+  function emptyState() {
+    const c = closedList().length
+    return `<div class="empty"><div class="ico">${icon('q', 's20')}</div><h2>No open questions</h2><p>Questions from your managers and tasks appear here, so you can answer them without opening each chat.</p>${c ? `<button class="btn btn-ghost btn-sm" data-act="toggle-closed" style="margin-top:8px">See ${c} closed</button>` : ''}</div>`
+  }
+
+  function page(mobile) {
+    const L = live(), open = [...L, ...items().filter((q) => S.pendingDismiss[q.id])]
+    const srcN = new Set(L.map((q) => q.src)).size
+    const header = mobile ? '' : `<header class="page-h"><div style="flex:1;min-width:0"><h1 tabindex="-1" id="qh">Questions</h1>
+        <p class="status" role="status">${L.length ? `${L.length} open ${L.length === 1 ? 'question' : 'questions'} from ${srcN} ${srcN === 1 ? 'source' : 'sources'}` : 'Nothing is waiting on you'}</p></div>
+        <a class="xlink" href="#approvals">${icon('cc', 's14')}2 approvals waiting →</a></header>`
+    const toolbar = `<div class="toolbar">
+        ${['all', 'managers', 'tasks'].map((f) => `<button class="chip-f" data-act="filter" data-f="${f}" aria-pressed="${S.filter === f}">${f[0].toUpperCase() + f.slice(1)}</button>`).join('')}
+        ${mobile ? '' : `<span class="switch" role="switch" tabindex="0" aria-checked="${S.older}" data-act="older"><span class="track" aria-hidden="true"></span>Move to Older after</span><span class="days" aria-label="Days before Older"><button data-act="days" data-d="-1" aria-label="Fewer days">−</button><span>${S.days}</span><button data-act="days" data-d="1" aria-label="More days">+</button></span><span class="t-meta muted">days</span>`}
+      </div>`
+    if (!open.length && !olderList().length) return header + (S.empty ? '' : toolbar) + emptyState() + (S.showClosed && !S.empty ? closedSection() : '')
+    return header + toolbar + groups(open, mobile) + olderSection(mobile) + closedSection()
+  }
+
+  function mgrRows(el, phone) {
+    const rows = Object.entries(SOURCES).filter(([, s]) => s.kind === 'manager').map(([id, s]) => {
+      const n = live().filter((q) => q.src === id).length
+      const prev = n ? (n === 1 ? 'Waiting for your answer' : `Waiting for ${n} answers`) : id === 'qa' ? 'Nightly run passed · 14 checks' : 'Released 0.12.3 notes draft'
+      return `<a class="mgr-row" href="#desktop" ${phone ? 'style="min-height:60px"' : ''}><span class="av av30 ${s.avc}" aria-hidden="true">${s.av}</span><span style="min-width:0"><span class="mgr-name" style="display:block">${esc(s.name)}</span><span class="mgr-prev ${n ? 'info' : ''}" style="display:block">${prev}</span></span><span style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">${n ? '<span class="dot dot-info"></span>' : ''}<span class="t-meta muted tab">${id === 'mob' ? '14m' : id === 'rel' ? '3h' : '9d'}</span></span></a>`
+    }).join('')
+    el.innerHTML = rows
+  }
+
+  function phoneBar(el, attention) {
+    el.innerHTML = `<a href="#mobile">${icon('dot', 's20')}Now</a><a href="#mobile">${icon('list', 's20')}Tasks</a><a href="#mobile" class="on">${icon('bot', 's20')}Manager${attention ? '<span class="adot"><span class="dot dot-info"></span></span>' : ''}</a><a href="#mobile">${icon('more', 's20')}More</a>`
+  }
+
+  function render() {
+    const n = live().length
+    const dm = document.getElementById('desk-main'), pm = document.getElementById('ph-main')
+    const focusKey = document.activeElement?.dataset?.act === 'otxt' ? `${document.activeElement.dataset.q}:${document.activeElement.dataset.i}:${document.activeElement.closest('#ph-main') ? 'p' : 'd'}` : null
+    const caret = focusKey ? document.activeElement.selectionStart : 0
+    dm.innerHTML = `<div class="page">${page(false)}</div>`
+    pm.innerHTML = page(true)
+    for (const id of ['sb-qcount', 'ph-qcount']) {
+      const el = document.getElementById(id)
+      el.textContent = n
+      el.className = `count tab ${n ? 'live' : ''}`
+    }
+    document.getElementById('sb-questions').setAttribute('aria-label', `Questions, ${n} open`)
+    document.getElementById('ph-qhead').textContent = n || ''
+    const srcN = new Set(live().map((q) => q.src))
+    const m = [...srcN].filter((s) => SOURCES[s].kind === 'manager').length, t = srcN.size - m
+    document.getElementById('ph-qsub').textContent = n ? [m && `${m} ${m === 1 ? 'manager' : 'managers'}`, t && `${t} ${t === 1 ? 'task' : 'tasks'}`].filter(Boolean).join(' and ').replace(/^/, 'From ') : 'Nothing waiting'
+    mgrRows(document.getElementById('sb-managers'), false)
+    mgrRows(document.getElementById('ph-managers'), true)
+    phoneBar(document.getElementById('ph-bar-1'), n > 0)
+    phoneBar(document.getElementById('ph-bar-2'), n > 0)
+    if (focusKey) {
+      const [q, i, where] = focusKey.split(':')
+      const el = document.querySelector(`${where === 'p' ? '#ph-main' : '#desk-main'} textarea[data-q="${q}"][data-i="${i}"]`)
+      if (el) { el.focus(); el.setSelectionRange(caret, caret) }
+    }
+  }
+
+  const timers = {}
+  function toast(msg, undoId) {
+    for (const id of ['desk-toast', 'ph-toast']) {
+      const t = document.getElementById(id)
+      t.hidden = false
+      t.innerHTML = `<span style="flex:1">${msg}</span>${undoId ? `<button class="btn btn-outline btn-sm" data-act="undo" data-q="${undoId}">Undo</button>` : ''}`
+      clearTimeout(timers[id])
+      timers[id] = setTimeout(() => { t.hidden = true }, 6000)
+    }
+  }
+
+  function focusAfter(id, root) {
+    const next = root?.querySelector('.q .choice, .q .xchoice')
+    ;(next ?? document.getElementById('qh'))?.focus({ preventScroll: true })
+  }
+
+  function send(qid) {
+    const q = S.items.find((x) => x.id === qid)
+    const text = q.qs.map((qq, i) => {
+      const a = ans(q, i)
+      const parts = [...a.labels, ...(a.other?.trim() ? [a.other.trim()] : []), ...(a.more ? ['Need more info'] : [])]
+      return `${qq.header}: ${parts.join(', ')}`
+    }).join('; ')
+    S.sending[qid] = true
+    render()
+    setTimeout(() => {
+      delete S.sending[qid]
+      q.closed = { reason: 'answered', at: 0, detail: `Answered: ${text.replace(/^[^:]+: /, '')}` }
+      render()
+      toast(`Answer sent to ${esc(SOURCES[q.src].name)}.`)
+      focusAfter(qid, document.getElementById('desk-main'))
+    }, 700)
+  }
+
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act],[data-theme],[data-state]')
+    if (!el) return
+    if (el.dataset.theme) {
+      document.documentElement.classList.toggle('light', el.dataset.theme === 'light')
+      document.querySelectorAll('[data-theme]').forEach((b) => b.setAttribute('aria-pressed', b === el))
+      return
+    }
+    if (el.dataset.state) {
+      S.empty = el.dataset.state === 'empty'
+      document.querySelectorAll('[data-state]').forEach((b) => b.setAttribute('aria-pressed', b === el))
+      return render()
+    }
+    const act = el.dataset.act, qid = el.dataset.q, i = +el.dataset.i
+    const q = S.items.find((x) => x.id === qid)
+    switch (act) {
+      case 'pick': {
+        const a = ans(q, i), l = el.dataset.l
+        if (q.qs[i].multi) a.labels = a.labels.includes(l) ? a.labels.filter((x) => x !== l) : [...a.labels, l]
+        else { a.labels = [l]; a.other = undefined; a.more = false }
+        if (oneTap(q)) return send(qid)
+        return render()
+      }
+      case 'other': { const a = ans(q, i); a.other = a.other === undefined ? '' : undefined; if (!q.qs[i].multi && a.other !== undefined) a.labels = []; render()
+        document.querySelector(`#${el.closest('#ph-main') ? 'ph-main' : 'desk-main'} textarea[data-q="${qid}"][data-i="${i}"]`)?.focus(); return }
+      case 'more': { const a = ans(q, i); a.more = !a.more; if (a.more) { a.labels = []; a.other = undefined } if (a.more && oneTap(q)) return send(qid); return render() }
+      case 'send': return send(qid)
+      case 'dismiss': {
+        S.pendingDismiss[qid] = true
+        render()
+        toast(`Dismissed «${esc(q.qs[0].header)}». ${SOURCES[q.src].kind === 'manager' ? 'The manager' : 'The task'} will be told you skipped it.`, qid)
+        clearTimeout(timers[qid])
+        timers[qid] = setTimeout(() => {
+          if (!S.pendingDismiss[qid]) return
+          delete S.pendingDismiss[qid]
+          q.closed = { reason: 'dismissed', at: 0, detail: `Dismissed by you · ${SOURCES[q.src].kind === 'manager' ? 'the manager' : 'the task'} was told` }
+          render()
+        }, 6000)
+        document.querySelector(`#desk-main [data-act="undo"][data-q="${qid}"]`)?.focus({ preventScroll: true })
+        return
+      }
+      case 'undo': {
+        clearTimeout(timers[qid]); delete S.pendingDismiss[qid]
+        for (const id of ['desk-toast', 'ph-toast']) document.getElementById(id).hidden = true
+        render()
+        document.querySelector(`#desk-main article[data-q="${qid}"] .choice`)?.focus({ preventScroll: true })
+        return
+      }
+      case 'toggle-closed': S.showClosed = !S.showClosed; return render()
+      case 'toggle-older': S.showOlder = !S.showOlder; return render()
+      case 'filter': S.filter = el.dataset.f; return render()
+      case 'older': S.older = !S.older; return render()
+      case 'days': S.days = Math.max(1, Math.min(30, S.days + +el.dataset.d)); return render()
+      case 'ctx': {
+        e.preventDefault()
+        document.getElementById('chat').scrollIntoView({ behavior: 'smooth' })
+        const c = document.getElementById('chat-new'); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); c.focus({ preventScroll: true })
+        return
+      }
+    }
+  })
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === ' ' || e.key === 'Enter') && e.target.dataset?.act === 'older') { e.preventDefault(); S.older = !S.older; render() }
+  })
+  document.addEventListener('input', (e) => {
+    if (e.target.dataset?.act !== 'otxt') return
+    const q = S.items.find((x) => x.id === e.target.dataset.q)
+    ans(q, +e.target.dataset.i).other = e.target.value
+    render()
+  })
+  document.getElementById('reset').addEventListener('click', () => { Object.values(timers).forEach(clearTimeout); reset(); document.querySelectorAll('[data-state]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.state === 'full')); render() })
+  document.getElementById('jump-new').addEventListener('click', (e) => { e.preventDefault(); const c = document.getElementById('chat-new'); c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); c.focus({ preventScroll: true }) })
+  // Demo starts with one multi-select half answered, so the "answering" state is visible at once.
+  ans(S.items[1], 0).labels = ['iOS', 'Android']
+  ans(S.items[1], 0).other = 'TestFlight internal only for iPadOS'
+  render()
+})()
+</script>
+</body>
+</html>

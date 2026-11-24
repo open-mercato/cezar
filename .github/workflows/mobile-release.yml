@@ -67,10 +67,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # npm ci and gradle run repo code; gh gets GH_TOKEN explicitly
 
       - name: Version from the tag, else package.json
         id: v
         working-directory: ${{ env.MOBILE_DIR }}
+        shell: bash # -eo pipefail: a rejected tag must fail the step, not be masked by tee
         env:
           TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
@@ -108,6 +111,8 @@ jobs:
 
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # npm ci and gradle run repo code; gh gets GH_TOKEN explicitly
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -252,7 +257,9 @@ jobs:
     name: iOS
     needs: version
     if: ${{ github.event_name == 'push' || inputs.ios }}
-    runs-on: macos-latest
+    # App Store Connect requires the iOS 27 SDK (ITMS-90725). Only the xcode-27 image ships Xcode 27;
+    # macos-26 and macos-latest stop at Xcode 26.x. Keep in step with mobile-check.yml.
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       MARKETING: ${{ needs.version.outputs.marketing }}
@@ -283,12 +290,19 @@ jobs:
       - name: Check out repository
         if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # npm ci and gradle run repo code; gh gets GH_TOKEN explicitly
 
       - name: Set up Node.js
         if: steps.gate.outputs.ready == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+
+      - name: Select Xcode 27 or later
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: ${{ env.MOBILE_DIR }}
+        run: sh scripts/select-xcode.sh 27
 
       - name: Install and sync
         if: steps.gate.outputs.ready == 'true'
@@ -323,6 +337,20 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic \
             MARKETING_VERSION="$MARKETING" CURRENT_PROJECT_VERSION="$CODE"
+
+      - name: Check the archive's SDK
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          plist="$RUNNER_TEMP/cezar.xcarchive/Products/Applications/App.app/Info.plist"
+          sdk=$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$plist")
+          xcode=$(/usr/libexec/PlistBuddy -c 'Print :DTXcode' "$plist")
+          echo "Archive built with SDK $sdk (DTXcode $xcode)"
+          version=${sdk#iphoneos}
+          if [ "${version%%.*}" -lt 27 ]; then
+            echo "::error title=iOS SDK too old::The archive was built with $sdk; App Store Connect requires iphoneos27 or later."
+            exit 1
+          fi
+          echo "::notice title=Archive SDK::$sdk (DTXcode $xcode)"
 
       - name: Export for App Store Connect
         if: steps.gate.outputs.ready == 'true'

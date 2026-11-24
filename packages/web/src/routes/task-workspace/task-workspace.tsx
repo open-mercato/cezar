@@ -7,9 +7,11 @@ import {
   SearchXIcon,
   TerminalIcon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigationType, useParams } from 'react-router'
 
+import { ManagerBackLink } from '@/routes/manager/manager-back-link'
 import { ApiError } from '@/api/client'
 import { useHealth, useMarkRunSeen, useRun, useRunArtifacts } from '@/api/queries'
 import { useRunHistory } from '@/api/run-history'
@@ -43,12 +45,13 @@ import { useDesignNotes } from '../task-preview/design-notes'
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
 import { FilesView } from '../task-git/task-files'
+import { latestOpenAskCard, revealAskCard } from '../task-thread/ask-card'
 import { useDiffComments } from '../task-thread/diff-comments'
 import { RunHeader, type RunTab } from '../task-thread/run-header'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { ThreadView } from '../task-thread/task-thread'
 import { ThreadLoading } from '../task-thread/thread-loading'
-import { reduceThread } from '../task-thread/thread-state'
+import { reduceThread, trackedAsks } from '../task-thread/thread-state'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
 import {
@@ -130,6 +133,7 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
     const notFound = run.error instanceof ApiError && run.error.status === 404
     return (
       <div data-route="task-workspace" className="flex min-h-full flex-col">
+        <div className="px-4"><ManagerBackLink runId={id ?? ''} /></div>
         <CenteredState
           icon={notFound ? <SearchXIcon /> : <MessageSquareTextIcon />}
           tone={notFound ? 'neutral' : 'danger'}
@@ -243,9 +247,9 @@ function WorkspaceView({
   const fixedViews = useMemo<readonly ViewId[]>(
     () =>
       FIXED_VIEW_ORDER.filter(
-        (view) => availableViews.includes(view) && (view !== 'graph' || Boolean(run.workflowDef)),
+        (view) => availableViews.includes(view) && (view !== 'graph' || hasWorkflowGraph(run)),
       ),
-    [availableViews, run.workflowDef],
+    [availableViews, run],
   )
   const fixedActive: ViewId | null = !layouts.ready
     ? null
@@ -629,6 +633,10 @@ function WorkspaceView({
       get focusComposer() {
         return composer() ? () => composer()?.focus() : null
       },
+      get focusQuestion() {
+        const card = stage() ? latestOpenAskCard(stage()!) : null
+        return card ? () => revealAskCard(card) : null
+      },
       openFile: (path: string) => openReference({ view: 'files', value: path }),
       markedUnread,
     }
@@ -967,12 +975,12 @@ export function ConversationColumn({
 }) {
   const history = useRunHistory(run.id)
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.visibleEvents, run.status, run.runner],
+    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner, trackedAsks: trackedAsks(run) }),
+    [history.visibleEvents, run.status, run.runner, run.asks],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.currentEvents, run.status, run.runner],
+    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner, trackedAsks: trackedAsks(run) }),
+    [history.currentEvents, run.status, run.runner, run.asks],
   )
   useRunRecordReconcile(run, history.visibleEvents)
 

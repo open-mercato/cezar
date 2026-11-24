@@ -15,9 +15,13 @@ import {
   useProjectRepoBase,
   useRunArtifacts,
   useRuns,
+  useContinueRun,
 } from '@/api/queries'
+import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
+import { ReconnectCard } from '@/components/reconnect/reconnect-card'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
 import { CenteredState } from '@/components/centered-state'
 import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
@@ -54,6 +58,7 @@ import { useRunRecordReconcile } from './run-reconcile'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
 import { JumpToLatestPill, useThreadScroll } from './thread-scroller'
+import { useThreadMyMessages } from './use-thread-my-messages'
 import {
   SessionTranscript,
   buildTranscriptRows,
@@ -64,6 +69,7 @@ import {
 import {
   latestPlanEntries,
   reduceThread,
+  trackedAsks,
   threadFilePaths,
   threadFooter,
   type ThreadAsk,
@@ -87,13 +93,14 @@ export function TaskThreadRoute() {
   const run = useRun(id)
   const history = useRunHistory(id)
   const runStatus = run.data?.status
+  const asks = trackedAsks(run.data)
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
-    [history.visibleEvents, runStatus, run.data?.runner],
+    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner, trackedAsks: asks }),
+    [history.visibleEvents, runStatus, run.data?.runner, asks],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
-    [history.currentEvents, runStatus, run.data?.runner],
+    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner, trackedAsks: asks }),
+    [history.currentEvents, runStatus, run.data?.runner, asks],
   )
 
   // Read receipt (#unread-done-items): opening a finished task's thread marks it read — the same
@@ -344,16 +351,44 @@ export function ThreadView({
     if (hash === '#reply') focusComposer()
   }, [hash, focusComposer, run.id])
   const mode = threadRenderMode(search, rows.length)
+  // A wait can ask for a plain-text reply. Without an open question card to handle #ask,
+  // reveal the latest request instead of restoring an unrelated reading position.
+  const hasAskTarget = hash === '#ask' && sections.some((section) =>
+    section.entries.some((entry) => entry.kind === 'ask' && !entry.resolved),
+  )
   const scroll = useThreadScroll(`${run.id}:main`, {
     onLoadOlder: history?.hasOlder ? history.loadOlder : undefined,
     onJumpToLatest: history?.jumpToLatest,
+    startAtLatest: hash === '#latest' || (hash === '#ask' && !hasAskTarget),
     rowKeys: rows.map(({ key }) => key),
   })
+  // "Your messages" (spec 2026-11-17-my-message-navigation): the jump pill grows into ▲ · 💬 · ▼.
+  const myMessages = useThreadMyMessages({ runId: run.id, sections, rowKeys: rows.map(({ key }) => key), history, scroll })
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
 
+  // "Use <other> instead" on a reconnect card: Continue on that account, a fresh session (spec
+  // 2026-11-18-inline-account-reconnect; 2026-07-29-agent-profiles § sessionId and profileId).
+  const continueOn = useContinueRun(run.id)
+  // The park is the source of truth: a rejection the runtime observer could not latch leaves no
+  // card in the transcript, so the dock carries it instead.
+  const parked = run.status === 'waiting' && run.parked?.kind === 'auth' ? run.parked : undefined
+  const reconnectSurface = useMemo<ReconnectSurface>(() => ({
+    kind: 'task',
+    ownId: run.id,
+    switchTo: (agentProfile: string) => continueOn.mutateAsync({ agentProfile }),
+    parked: parked ? { provider: parked.provider, profileId: parked.profileId } : null,
+  }), [continueOn.mutateAsync, run.id, parked?.provider, parked?.profileId])
+  const transcriptCard = useMemo(
+    () => parked !== undefined && thread.turns.some((turn) => turn.items.some((item) =>
+      item.kind === 'provider-auth-required' && item.state === undefined
+      && item.provider === parked.provider && (item.profileId ?? 'default') === parked.profileId)),
+    [thread.turns, parked],
+  )
+
   return (
+    <ReconnectSurfaceContext.Provider value={reconnectSurface}>
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
       {embedded ? null : <RunHeader run={run} planTally={planTally} onMarkedUnread={markedUnread} />}
 
@@ -482,7 +517,9 @@ export function ThreadView({
         overlay={
           scroll.pillVisible ? (
             <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center">
-              <JumpToLatestPill onJump={scroll.jumpToLatest} />
+              {myMessages.items.length > 0
+                ? <MyMessagesPill nav={myMessages} onLatest={scroll.jumpToLatest} />
+                : <JumpToLatestPill onJump={scroll.jumpToLatest} />}
             </div>
           ) : null
         }
@@ -506,29 +543,37 @@ export function ThreadView({
         <AutoResumeHint run={run} />
 
         {!lifecycleGate && budget ? (
-          <div
-            data-slot="budget-hint"
-            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-          >
+          <div data-slot="budget-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
-            Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            <span className={HINT_TEXT}>
+              Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            </span>
             {run.status === 'waiting' ? (
               <>
-                <span aria-hidden="true">·</span>
+                <span aria-hidden="true" className="max-sm:hidden">·</span>
                 <EndSessionButton runId={run.id} />
               </>
             ) : null}
           </div>
+        ) : !lifecycleGate && parked !== undefined ? (
+          // Parked on an expired login (spec 2026-11-18-inline-account-reconnect).
+          transcriptCard ? (
+            <div data-slot="sign-in-hint" className={HINT_ROW}>
+              <StatusDot tone="pending" />
+              <span className={HINT_TEXT}>Reconnect the account above and the task continues where it stopped</span>
+            </div>
+          ) : (
+            <div data-slot="provider-auth-required" data-profile-id={parked.profileId}>
+              <ReconnectCard provider={parked.provider} profileId={parked.profileId} place="task" />
+            </div>
+          )
         ) : !lifecycleGate && run.status === 'waiting' ? (
-          <div
-            data-slot="paused-hint"
-            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-          >
+          <div data-slot="paused-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
-            The agent is paused, waiting for your reply
+            <span className={HINT_TEXT}>The agent is paused, waiting for your reply</span>
             {/* The other answer to "your turn": not replying at all. It sits beside the hint
                 because that is the moment the choice is made — reply below, or end it here. */}
-            <span aria-hidden="true">·</span>
+            <span aria-hidden="true" className="max-sm:hidden">·</span>
             <EndSessionButton runId={run.id} />
           </div>
         ) : null}
@@ -556,13 +601,22 @@ export function ThreadView({
             pick here is exactly what the next submission sends. */}
         {!lifecycleGate ? (
           <div data-slot="session-usage" className="flex justify-end px-1">
-            <RunUsage run={run} continuationEngine={continuable ? continueAction.pills : undefined} />
+            <RunUsage
+              run={run}
+              continuationEngine={continuable ? continueAction.pills : undefined}
+              reportedModel={currentThread.sessionModel ?? thread.sessionModel}
+            />
           </div>
         ) : null}
       </TaskDock>
     </div>
+    </ReconnectSurfaceContext.Provider>
   )
 }
+
+// On a phone the hint text wraps in its own column so End session stays one tappable line beside it.
+const HINT_ROW = 'flex items-center gap-2 px-1 text-xs text-muted-foreground'
+const HINT_TEXT = 'max-sm:min-w-0 max-sm:flex-1'
 
 /** Ends a waiting session (`POST /finish`): the run completes as done, or parks at review when
  *  the worktree holds changes. A text button, like the footer's Continue — part of the hint line
@@ -576,7 +630,7 @@ function EndSessionButton({ runId }: { runId: string }) {
         data-slot="end-session"
         disabled={finish.isPending}
         onClick={() => finish.mutate()}
-        className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+        className="shrink-0 rounded-sm font-medium whitespace-nowrap text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60 pointer-coarse:max-md:min-h-11 pointer-coarse:max-md:px-2"
       >
         End session
       </button>

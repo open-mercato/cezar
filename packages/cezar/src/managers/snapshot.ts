@@ -8,6 +8,7 @@ import type {
   ManagerSnapshotTask,
   ManagerTaskReportState,
 } from '@open-mercato/cezar-contract';
+import { taskAskRecordSchema } from '@open-mercato/cezar-contract';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -73,6 +74,7 @@ function taskRow(run: RunRecord, childCount: number): ManagerSnapshotTask {
     ...(run.startedByManager ? { startedByManager: run.startedByManager.name } : {}),
     ...(run.runner ? { runner: run.runner } : {}),
     ...(run.modelIdentity ?? run.model ? { model: run.modelIdentity ?? run.model } : {}),
+    ...(run.actualModel ? { actualModel: run.actualModel } : {}),
     ...(run.reasoningEffort ? { effort: run.reasoningEffort } : {}),
     ...pullRequestOf(run),
     ...(run.cancelReason ? { cancelReason: run.cancelReason } : {}),
@@ -90,7 +92,20 @@ function pullRequestOf(run: RunRecord): { prNumber?: number; prUrl?: string } {
   return { ...(number !== undefined ? { prNumber: number } : {}), ...(url ? { prUrl: url } : {}) };
 }
 
-const childCounts = (runs: RunRecord[]): Map<string, number> => {
+/**
+ * How a task is tied to PR `number`: 0 opened it, 1 declared it (`CEZ:PR`), 2 only carries it
+ * (a derived or legacy ref); `undefined` when it does not carry it at all. The cockpit's
+ * `ownershipTier` ranks the same way.
+ */
+export function prTie(run: RunRecord, number: number): 0 | 1 | 2 | undefined {
+  const refs = run.prRefs ?? [];
+  const urlNumber = run.pullRequestUrl ? Number(PR_NUMBER.exec(run.pullRequestUrl)?.[1]) : undefined;
+  if (urlNumber === number || refs.some((ref) => ref.origin === 'created' && ref.number === number)) return 0;
+  if (run.markerRefs?.pr === number || refs.some((ref) => ref.origin === 'marker' && ref.number === number)) return 1;
+  return refs.some((ref) => ref.number === number) ? 2 : undefined;
+}
+
+const childCounts =(runs: RunRecord[]): Map<string, number> => {
   const counts = new Map<string, number>();
   for (const run of runs) {
     const parent = run.dispatch?.parentRunId;
@@ -104,6 +119,19 @@ export function snapshotTasks(runs: RunRecord[]): ManagerSnapshotTask[] {
   const counts = childCounts(runs);
   const open = runs.filter((run) => !run.archived && !run.dispatch?.parentRunId).sort(byLastActivityDesc);
   return open.slice(0, TASK_LIMIT).map((run) => taskRow(run, counts.get(run.id) ?? 0));
+}
+
+/** Finished tasks a compact listing still shows per project, newest first. */
+const RECENT_FINISHED = 20;
+const FINISHED = new Set(['done', 'cancelled']);
+
+/** Every unfinished task, plus the newest finished ones (spec 2026-11-21 § 2.4). */
+export function recentTasks<T extends { status: string; lastActivityAt?: string }>(tasks: T[]): { shown: T[]; hidden: number } {
+  const finished = tasks.filter((task) => FINISHED.has(task.status))
+    .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
+  const kept = new Set(finished.slice(0, RECENT_FINISHED));
+  const shown = tasks.filter((task) => !FINISHED.has(task.status) || kept.has(task));
+  return { shown, hidden: tasks.length - shown.length };
 }
 
 /** A run by its id, or by a prefix of at least eight characters that names only it (the branch's `cez/<id8>`). */
@@ -128,6 +156,11 @@ const WORKTREE_RECOVERY = 'Worktree scripts need attention: use Retry, Start tas
 
 const waitDetail = (run: RunRecord): string | undefined =>
   run.attentionRequest?.questions[0]?.question ?? (run.dispatch?.overBudget ? 'Budget reached' : undefined);
+
+/** An idle close is housekeeping, not news: a legacy or dispatched-child record that settled `failed`
+ *  on it is never reported (spec 2026-11-04-idle-closed-attention-state § Revision). */
+const idleClosedFailure = (run: RunRecord): boolean =>
+  run.status === 'failed' && run.idleClosedAt !== undefined && run.awaitingAnswerSince === undefined;
 
 const unseenSince = (run: RunRecord, at: string | undefined): boolean =>
   at !== undefined && (run.seenAt === undefined || Date.parse(run.seenAt) < Date.parse(at));
@@ -168,7 +201,7 @@ export function taskAttention(projectId: string, runs: RunRecord[], now: number)
     // A dispatched child reports to its parent; only a wait on the user reaches the human.
     if (run.dispatch?.parentRunId) continue;
     const finished = run.finishedAt;
-    if (run.status === 'failed' && unseenSince(run, finished) && now - Date.parse(finished ?? '') < RECENT_FAILURE_MS) {
+    if (run.status === 'failed' && !idleClosedFailure(run) && unseenSince(run, finished) && now - Date.parse(finished ?? '') < RECENT_FAILURE_MS) {
       items.push({ ...base, key: settledKey('task-failed', projectId, run), kind: 'task-failed', since: finished });
     } else if (run.status === 'review' && unseenSince(run, finished)) {
       items.push({ ...base, key: settledKey('task-review', projectId, run), kind: 'task-review', since: finished });
@@ -194,6 +227,22 @@ export interface TaskEvent {
   detail?: string;
 }
 
+/**
+ * The question a waiting task is parked on, as a manager's relayed card names it (`about.ask`,
+ * Questions inbox spec): the newest open `RunRecord.asks` entry's card id, else its `requestId`,
+ * else the dispatch Guard's. `asks` is read defensively: older records have none.
+ */
+export function openTaskAskId(run: RunRecord): string | undefined {
+  const asks = (run as { asks?: unknown }).asks;
+  if (Array.isArray(asks)) {
+    for (let index = asks.length - 1; index >= 0; index -= 1) {
+      const parsed = taskAskRecordSchema.safeParse(asks[index]);
+      if (parsed.success && !parsed.data.closed) return parsed.data.cardId ?? parsed.data.requestId;
+    }
+  }
+  return run.dispatch?.pendingAsk?.requestId;
+}
+
 /** Pure, so the live listener, the boot sweep and the watch agree on what one event is. */
 export function taskEventOf(projectId: string, run: RunRecord): TaskEvent | undefined {
   if (run.archived) return undefined;
@@ -211,7 +260,7 @@ export function taskEventOf(projectId: string, run: RunRecord): TaskEvent | unde
   const success = [settledKey('task-review', projectId, run), settledKey('task-finished', projectId, run)];
   if (run.status === 'review') return event('review', 'success', success);
   if (run.status === 'done') return event('done', 'success', success);
-  if (run.status === 'failed') return event('failed', 'failed', [settledKey('task-failed', projectId, run)]);
+  if (run.status === 'failed') return idleClosedFailure(run) ? undefined : event('failed', 'failed', [settledKey('task-failed', projectId, run)]);
   if (run.status === 'cancelled') return event('cancelled', 'cancelled', []);
   return undefined;
 }
