@@ -2,13 +2,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArchiveIcon, ArrowRightIcon, ListChecksIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import * as React from 'react'
 
-import { archiveFinished, archiveRun, cancelRun, continueRun, finishRun } from '@/api/client'
+import { archiveFinished, continueRun } from '@/api/client'
 import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@/api/queries'
 import type { AttentionItem, AttentionOverride, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
-import { answerQuestion, pauseDismiss, resumeDismiss, undoDismiss, usePendingDismissals } from '@/api/questions'
-import { applyOverrideLocally, attentionKeys, clearAttentionOverride, setAttentionOverride, useAttention } from '@/api/attention'
-import { decideManagerAction, managerKeys, markManagerRead, updateManager, useManagers } from '@/api/managers'
-import { setProjectRunRead } from '@/api/client'
+import { useAttention } from '@/api/attention'
+import { useManagers } from '@/api/managers'
 import { Segmented } from '@/components/segmented'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -39,7 +37,6 @@ import { runActionFlags } from '@/routes/task-thread/run-actions'
 import { ManagerProjectsContext } from '@/routes/manager/manager-reference'
 import { taskPath } from '@/routes/manager/manager-session-card'
 import type { ManagerReferenceProject } from '@/lib/managers'
-import { RunConfirmDialog } from '@/routes/task-thread/run-confirm-dialog'
 
 import {
   FINISHED_TODAY_CAP,
@@ -53,7 +50,7 @@ import {
   type RunningRow,
 } from './now-model'
 import { AttentionRow, type AttentionActions } from './now-attention'
-import { createTriageActions, questionCloser } from './now-triage-actions'
+import { useNeedsYouActions } from './use-needs-you-actions'
 import { DismissButton, ProbablyDoneGroup, SettledReason, SwipeRow, TriageMenu, useRowMenu, type TriageActions } from './now-triage'
 import {
   SNOOZE_LABEL,
@@ -66,7 +63,6 @@ import {
   orderNeedsYou,
   itemForRun,
   itemTarget,
-  keyedQueue,
   shortLabel,
   snoozeUntil,
   taskRowTarget,
@@ -773,59 +769,7 @@ export function NowRoute() {
     (id: string) => health.data?.projects?.find((project) => project.id === id)?.name ?? id,
     [health.data],
   )
-  const settle = React.useCallback(() => Promise.all([
-    queryClient.invalidateQueries({ queryKey: attentionKeys.all }),
-    queryClient.invalidateQueries({ queryKey: managerKeys.list }),
-  ]), [queryClient])
-  const attentionActions = React.useMemo<AttentionActions>(() => ({
-    answer: async (item, text) => {
-      if (!item.questionKey) return
-      await answerQuestion(item.questionKey, text)
-      await settle()
-    },
-    decide: async (item, decision) => {
-      if (!item.managerId || !item.actionId) return
-      await decideManagerAction(item.managerId, item.actionId, decision)
-      await settle()
-    },
-    markRead: async (item) => {
-      if (item.kind === 'message' && item.managerId) await markManagerRead(item.managerId)
-      else if (item.projectId && item.runId) await setProjectRunRead(item.projectId, item.runId, true)
-      await settle()
-    },
-  }), [settle])
-  const referenceProjects = React.useMemo(
-    () => (health.data?.projects ?? []).map((project) => ({ id: project.id, name: project.name })),
-    [health.data],
-  )
-  const managerList = managers.data?.managers ?? NO_MANAGERS
-  const pending = usePendingDismissals()
-  // An errored close shows its card again (below), as the Questions page does.
-  const pendingQuestions = React.useMemo(() => new Set(pending.filter((entry) => !entry.error).map((entry) => entry.key)), [pending])
-  const [cancelling, setCancelling] = React.useState<RunRecord | null>(null)
-  // Outlives the triage memo, so writes stay ordered across a managers refresh.
-  const writeQueue = React.useRef(keyedQueue())
-  const triage = React.useMemo<TriageActions>(() => createTriageActions({
-    queryClient,
-    setOverride: setAttentionOverride,
-    clearOverride: clearAttentionOverride,
-    applyLocally: (override) => applyOverrideLocally(queryClient, override),
-    scheduleClose: questionCloser(queryClient),
-    holdClose: (key, held) => (held ? pauseDismiss(key) : resumeDismiss(key)),
-    undoClose: undoDismiss,
-    finishRun,
-    archiveRun: (id, archived) => archiveRun(id, archived),
-    setManagerNotify: (id, notify) => updateManager(id, { notify }),
-    managerMuted: (id) => managerList.find((manager) => manager.id === id)?.notify === false,
-    confirmCancel: setCancelling,
-    copy: (text) => Promise.resolve(globalThis.navigator?.clipboard?.writeText(text)),
-    origin: globalThis.location?.origin ?? 'http://127.0.0.1',
-    toast,
-    refreshAttention: () => queryClient.invalidateQueries({ queryKey: attentionKeys.all }),
-    refreshRuns: invalidate,
-    refreshManagers: () => queryClient.invalidateQueries({ queryKey: managerKeys.list }),
-    inOrder: writeQueue.current,
-  }), [queryClient, invalidate, managerList])
+  const { attentionActions, triage, pendingQuestions, referenceProjects, stopDialog } = useNeedsYouActions()
   const onMarkAllRead = React.useCallback((items: AttentionItem[]) => {
     void Promise.allSettled(items.map((item) => attentionActions.markRead(item))).then((results) => {
       if (results.some((result) => result.status === 'rejected')) toast('Some items could not be marked read', { tone: 'danger' })
@@ -857,25 +801,7 @@ export function NowRoute() {
         managersAvailable={health.data?.capabilities?.managers === true}
 
       />
-      {cancelling ? (
-        <RunConfirmDialog
-          run={cancelling}
-          confirming="cancel"
-          onOpenChange={(open) => { if (!open) setCancelling(null) }}
-          onConfirm={() => {
-            const run = cancelling
-            setCancelling(null)
-            void cancelRun(run.id).then(
-              () => Promise.all([invalidate(), queryClient.invalidateQueries({ queryKey: attentionKeys.all })]),
-              (error: unknown) => {
-                toast(`Could not stop the task: ${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' })
-                // A 409 usually means it already ended: show what it is now.
-                void Promise.all([invalidate(), queryClient.invalidateQueries({ queryKey: attentionKeys.all })])
-              },
-            )
-          }}
-        />
-      ) : null}
+      {stopDialog}
     </ReferenceStatusProvider>
   )
 }

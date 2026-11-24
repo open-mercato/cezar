@@ -125,6 +125,10 @@ const managerNew = preloadableRoute('manager', () =>
 const managerChat = preloadableRoute('manager', () =>
   import('./routes/manager/manager-chat').then((m) => m.ManagerChatRoute),
 )
+/** Now in Manager mode: every manager's items, a filter for one (spec 2026-11-23-needs-you-triage). */
+const ManagerNowRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-now').then((m) => ({ default: m.ManagerNowRoute })),
+)
 const ManagerApprovalsRoute = lazyRoute('manager', () =>
   import('./routes/manager/manager-approvals').then((m) => ({ default: m.ManagerApprovalsRoute })),
 )
@@ -400,6 +404,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/tasks', pageLabel: 'Tasks' },
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/manager/new', pageLabel: 'New manager' },
+  { pattern: '/manager/now', pageLabel: 'Now' },
   { pattern: '/manager/approvals', pageLabel: 'Approvals' },
   { pattern: '/manager/questions', pageLabel: 'Questions' },
   { pattern: '/questions', pageLabel: 'Questions' },
@@ -815,6 +820,7 @@ export const AppRoutes = memo(function AppRoutes() {
       {/* Managers are global (spec 2026-10-31-managers): no project owns one. */}
       <Route path="/manager" element={<ManagersGate fallback={<ManagerIndexLoading />}><MobileManagerEntry /></ManagersGate>} />
       <Route path="/manager/new" element={<ManagersGate fallback={<ScreenLoading label="Loading setup…" />}><ManagerNewRoute /></ManagersGate>} />
+      <Route path="/manager/now" element={<ManagersGate fallback={<ScreenLoading label="Loading Now…" />}><ManagerNowRoute /></ManagersGate>} />
       <Route path="/manager/approvals" element={<ManagersGate fallback={<ScreenLoading label="Loading approvals…" />}><ManagerApprovalsRoute /></ManagersGate>} />
       <Route path="/manager/questions" element={<QuestionsGate managersRoute />} />
       <Route path="/questions" element={<QuestionsGate managersRoute={false} />} />

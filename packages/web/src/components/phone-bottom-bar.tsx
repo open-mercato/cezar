@@ -12,6 +12,7 @@ import { noteManagerEntry } from '@/lib/manager-telemetry'
 import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, managerOriginOf, type ManagerAttention, type ManagerOrigin } from '@/lib/managers'
 import { lastProjectIndex } from '@/lib/phone-app'
 import { stripProjectPrefix } from '@/lib/project-router'
+import { MANAGER_NOW_PATH } from '@/routes/manager/manager-now-model'
 import { cn } from '@/lib/utils'
 
 const ITEM =
@@ -66,16 +67,18 @@ export function PhoneBottomBar({
   // The current page first: the store is written in an effect, after this render.
   const index = lastProjectIndex(locationToSave(location, projects.data) ?? readStoredLastLocation(), projects.data, bootProject)
   // The global table is Tasks too: a manager's "View all" lands there.
-  const active = origin ? null : activeNavPath(stripProjectPrefix(location.pathname))
-  const managerCurrent = manager || origin !== undefined
+  // In Manager mode Now is the managers' own (spec 2026-11-23-needs-you-triage), never a project's.
+  const managerNow = manager && location.pathname === MANAGER_NOW_PATH
+  const active = origin ? null : managerNow ? '/' : manager ? null : activeNavPath(stripProjectPrefix(location.pathname))
+  const managerCurrent = (manager && !managerNow) || origin !== undefined
   // Straight from that chat, Back is the way: the chat keeps its place and history stays linear.
   const backToOrigin = (location.state as Record<string, unknown> | null)?.managerHistoryBack !== false && origin !== undefined && managerOriginOf(location.state)?.id === origin.id && location.key !== 'default'
   const managerHref = origin
     ? `/manager/${encodeURIComponent(origin.id)}`
     : !manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'
-  const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string, count: number | null = null) => (
+  const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string, count: number | null = null, absolute = false) => (
     <Link
-      to={`${index}${to}`}
+      to={absolute ? to : `${index}${to}`}
       aria-current={active === area ? 'page' : undefined}
       aria-label={count ? `${label}, ${count} ${count === 1 ? 'thing needs' : 'things need'} you` : undefined}
       className={cn(ITEM, active === area && CURRENT)}
@@ -95,7 +98,7 @@ export function PhoneBottomBar({
   )
   return (
     <nav aria-label="App" data-slot="phone-bottom-bar" className={cn('flex border-t border-border bg-background', !everyWidth && 'md:hidden')}>
-      {item('', 'Now', CircleDotIcon, '/', nowCount)}
+      {manager ? item(MANAGER_NOW_PATH, 'Now', CircleDotIcon, '/', nowCount, true) : item('', 'Now', CircleDotIcon, '/', nowCount)}
       {managerTasks ? (
         <button
           type="button"

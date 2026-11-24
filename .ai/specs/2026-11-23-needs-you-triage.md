@@ -83,6 +83,20 @@ text showed raw `[[pr:…]]` markers.
 - Card titles render `[[pr:…]]`/`[[task:…]]` through the manager chat's reference renderer, against
   the projects health lists.
 
+## Manager mode's Now (owner decision 2026-11-23)
+
+- Now opened from Manager mode (the sidebar's Workspace Now, the phone bar's Now tab) is `/manager/now`,
+  never a project's Now: Manager mode stays in Manager mode. Now opened from a project is unchanged.
+- It shows **all managers** by default. A filter narrows it to one manager: a menu in the header on
+  desktop, a floating button over the list on a phone (`?manager=<id>`; an unknown id falls back to all).
+  The prototype that preselected the manager you came from was rejected as counterintuitive.
+- An item belongs to a manager when it is the manager's own (its question, approval or important
+  message) or a task it started or follows (`followedTasks`); a shared task belongs to each. Tasks no
+  manager started or follows stay in the project's Now. Rows are Now's own (answer, approve, ✕, ⋯,
+  Probably done); a task row names its manager ("Task of Scout"). Below, the managers' running tasks.
+- The Now badge in Manager mode (sidebar and phone bar) counts these items as Now counts (not
+  probably done, not uncounted). The project nav's badge keeps counting the whole list.
+
 ## Limits
 
 - PR state comes only from the in-process forge cache, never a new `gh` call. It is filled whenever

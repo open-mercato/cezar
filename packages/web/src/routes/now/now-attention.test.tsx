@@ -147,6 +147,16 @@ describe('Needs you triage (spec 2026-11-23-needs-you-triage)', () => {
     expect(row.querySelector('[data-slot="now-row-link"]')?.getAttribute('aria-label')).toBe('Earlier reviews of #2428 read nothing. How now?')
   })
 
+  it('an answer chip reads a [[pr:…]] marker as #N, and still answers with the label as written', async () => {
+    const acts = actions()
+    const card = item({ key: 'c', kind: 'question', title: 'Which?', managerId: 'shop', managerName: 'Shop manager', questionKey: 'm:shop:3', options: ['Only [[pr:cezar/2897]]', 'Neither'], header: 'Bumps' })
+    renderNow({ attention: { items: [card], total: 1 }, scope: 'all', onScope: vi.fn(), attentionActions: acts, triage: triage() })
+    const row = needsYou().querySelector('[data-key="c"]') as HTMLElement
+    expect(row.textContent).not.toContain('[[pr:')
+    fireEvent.click(within(row).getByRole('button', { name: 'Only #2897' }))
+    await waitFor(() => expect(acts.calls).toEqual(['answer:c:Bumps: Only [[pr:cezar/2897]]']))
+  })
+
   it('a question’s ✕ dismisses it with its card; the menu offers snooze', async () => {
     const acts = triage()
     renderNow({ attention: { items: ITEMS, total: 4 }, scope: 'all', onScope: vi.fn(), attentionActions: actions(), triage: acts })

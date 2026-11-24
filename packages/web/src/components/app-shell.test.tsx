@@ -857,6 +857,11 @@ describe('AppShell', () => {
       expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()
     })
 
+    it('titles Manager mode\'s Now "Now" on the phone (spec 2026-11-23-needs-you-triage)', () => {
+      renderShell('/manager/now', { managersAvailable: true })
+      expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Now')).toBeTruthy()
+    })
+
     it('shows no project header while the sidebar is open', () => {
       renderShell('/', { projectSwitcher: { activeId: 'a', activeName: 'a', projects: [{ id: 'a', name: 'a' }] } })
       expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
