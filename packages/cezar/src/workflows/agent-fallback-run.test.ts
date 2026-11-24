@@ -365,6 +365,8 @@ describe('automatic agent fallback', () => {
       expect(store.getRun(child.id)?.agentProfile).toBe('default');
       expect(store.getRun(child.id)?.fallbackEpisode?.attempted).toEqual(['claude:second', 'claude:default']);
       expect(messages(child.id)).toContain('claude · Second reached its usage limit — claude · Default · auto model continues this task');
+      // The manager list holds the child's own account; skipping it is expected, so no note says so.
+      expect(messages(child.id).some((m) => m.includes('it is the agent that just reached its limit'))).toBe(false);
     }, 40_000);
 
     it('a child’s copy: its own model on its runner, the engine-checked model on another runner', async () => {

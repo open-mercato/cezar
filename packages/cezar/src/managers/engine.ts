@@ -2968,8 +2968,14 @@ export class ManagerEngine {
           return false;
         };
         const refusedHere = (model?: string, effort?: string) => this.modelIssue(runner, model, effort);
-        if (!retry && input.model && (await refusedHere(input.model)) && !(await usable((other) => this.modelIssue(other, input.model, undefined)))) return issue;
-        if (!retry && input.effort && (await refusedHere(undefined, input.effort)) && !(await usable((other) => this.modelIssue(other, undefined, input.effort)))) return issue;
+        // Refused as if nothing had moved: the valid choices of the first listed runner, not the landed one.
+        const asFirst = (firstRunner ?? runner) as RunnerId;
+        if (!retry && input.model && (await refusedHere(input.model)) && !(await usable((other) => this.modelIssue(other, input.model, undefined)))) {
+          return (await this.modelIssue(asFirst, input.model, undefined)) ?? issue;
+        }
+        if (!retry && input.effort && (await refusedHere(undefined, input.effort)) && !(await usable((other) => this.modelIssue(other, undefined, input.effort)))) {
+          return (await this.modelIssue(asFirst, undefined, input.effort)) ?? issue;
+        }
         const model = input.model && !(await this.modelIssue(runner, input.model, undefined)) ? input.model : undefined;
         const effort = input.effort && !(await this.modelIssue(runner, model, input.effort)) ? input.effort : undefined;
         carried = { ...input, model, effort };

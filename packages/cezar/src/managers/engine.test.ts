@@ -3416,20 +3416,27 @@ describe('ManagerEngine', () => {
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
         const posts = () => requests.filter((request) => request.method === 'POST').length;
         const before = posts();
-        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus-typo' })).toMatchObject({ status: 400, error: expect.stringContaining("'opus-typo'") });
-        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'ultra' as 'high' })).toMatchObject({ status: 400 });
+        const typo = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus-typo' });
+        const effort = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'ultra' as 'high' });
+        // The first listed runner's choices, as when nothing moved — never the landed codex runner's.
+        expect(typo).toEqual({ status: 400, error: "unknown model 'opus-typo' for claude. Valid: fable, opus, sonnet, haiku" });
+        expect(effort).toEqual({ status: 400, error: "effort 'ultra' is not available for claude. Valid: low, high" });
         expect(posts()).toBe(before);
       });
 
       it('--runner narrowed to exhausted accounts while another allowed account is free: queued with a warning', async () => {
-        const engine = limited({ 'codex:work': RESET });
-        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const engine = limited({ 'codex:work': RESET + 60_000, 'codex:team': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }, { runner: 'codex' as const, agentProfile: 'team' }]);
         const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'codex' });
-        expect(created).toMatchObject({
-          agent: { runner: 'codex', agentProfile: 'work', queuedUntil: '2099-01-01T05:00:00.000Z' },
+        // The exact reply the manager-cli test replays.
+        expect(created).toEqual({
+          projectId: 'alpha', runId: 'new-run',
+          agent: {
+            runner: 'codex', agentProfile: 'team', account: 'team', label: 'team login', queuedUntil: '2099-01-01T05:00:00.000Z',
+            reason: 'default from manager settings: every allowed account for --runner codex is out of limits (codex work login out of limits until 2099-01-01T05:01:00.000Z; codex team login out of limits until 2099-01-01T05:00:00.000Z); queued on codex team login, the first to reset',
+          },
           warning: '--runner codex has no account with capacity until 2099-01-01T05:00:00.000Z; claude first login has capacity (--runner claude --account first)',
         });
-        expect((created as { agent: { reason: string } }).agent.reason).not.toContain('every allowed account is');
       });
 
       it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
