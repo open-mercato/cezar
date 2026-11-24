@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Seed the demo. Runs as the cezar-demo user (reset.sh calls it through runuser):
+# Seed the store-review demo. On the VPS it runs as the cezar-demo user (reset.sh calls it through
+# runuser); local.sh runs it on a Mac with DEMO_LOCAL=1.
 #
-#   seed.sh repo            # create the demo git repository (cezar stopped: it is the service's WorkingDirectory)
-#   seed.sh tasks [--force] # through cezar's HTTP API on loopback: finished, waiting and scheduled tasks, and a manager
+#   seed.sh repos           # create the three sample git repositories (before cezar starts)
+#   seed.sh tasks [--force] # through cezar's HTTP API on loopback: projects, tasks in every state, a manager
+#   seed.sh tick            # every 2 h (cezar-demo-tick.timer): keep one task running, so the demo looks alive
 #
-# Every task runs against the bundled mock agent (CEZ_DRY_RUN=1). `mock:done` and `mock:ask` are the
-# mock's own markers (packages/cezar/scripts/mock-claude.mjs): the first ends the turn with CEZ:DONE so
-# the task settles in review, the second parks it on a question card.
+# Agents are the bundled mock in its demo mode (CEZ_DEMO=1, packages/cezar/scripts/mock-claude.mjs): every
+# reply says it is a demo. A hidden `<!-- demo:… -->` tag in a task's text picks its script.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -14,113 +15,45 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/common.sh"
 cd /
 
-[ "$(id -un)" = "$DEMO_USER_NAME" ] || die "run seed.sh as $DEMO_USER_NAME (reset.sh does: runuser -u $DEMO_USER_NAME -- …)"
+if [ "${DEMO_LOCAL:-}" != 1 ]; then
+  [ "$(id -un)" = "$DEMO_USER_NAME" ] || die "run seed.sh as $DEMO_USER_NAME (reset.sh does: runuser -u $DEMO_USER_NAME -- …)"
+fi
 
-# ---- repo ---------------------------------------------------------------------------------------
-seed_repo() {
-  # The default Claude profile must exist even for the mock: scheduling a task (Start later) checks
-  # the account's directory is readable (automations/deferred-start.ts, bindDeferredPlan).
+# ---- repos --------------------------------------------------------------------------------------
+make_repo() {
+  local message=$2 dir=$DEMO_PROJECTS/$1
+  shift 2
+  [ -d "$dir/.git" ] && return 0
+  mkdir -p "$dir"
+  while [ $# -ge 2 ]; do
+    mkdir -p "$dir/$(dirname "$1")"
+    printf '%s\n' "$2" >"$dir/$1"
+    shift 2
+  done
+  git -C "$dir" init -q -b main
+  git -C "$dir" add -A
+  git -C "$dir" -c user.name='Cezar Demo' -c user.email=demo@cezar.invalid commit -q -m "$message"
+  log "Created $dir"
+}
+
+seed_repos() {
+  # The default Claude profile must exist even for the mock (automations/deferred-start.ts).
   mkdir -p "$DEMO_ROOT/.claude"
-  if [ -d "$DEMO_REPO/.git" ]; then
-    log "Demo repository already exists at $DEMO_REPO"
-    return 0
-  fi
-  mkdir -p "$DEMO_REPO/src" "$DEMO_REPO/test"
-
-  cat >"$DEMO_REPO/README.md" <<'EOF'
-# tasklist
-
-A tiny command-line to-do list. It is the sample project of the cezar demo server: every change you
-see in the cockpit was made by cezar's built-in mock agent, so nothing here is real work.
-
-```bash
-node src/cli.js add "Buy milk"
-node src/cli.js list
-node src/cli.js done 1
-npm test
-```
-EOF
-
-  cat >"$DEMO_REPO/package.json" <<'EOF'
-{
-  "name": "tasklist",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "bin": { "tasklist": "src/cli.js" },
-  "scripts": { "test": "node --test test/" }
-}
-EOF
-
-  cat >"$DEMO_REPO/src/tasks.js" <<'EOF'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-
-export function load(file) {
-  return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
+  make_repo todo-cli 'Initial to-do CLI' \
+    README.md $'# todo-cli\n\nA tiny command-line to-do list. Sample project of the cezar demo: nothing here is real work.' \
+    package.json '{ "name": "todo-cli", "version": "0.1.0", "private": true, "type": "module", "scripts": { "test": "node --test test/" } }' \
+    src/cli.js $'#!/usr/bin/env node\n// TODO: add --json\nconsole.log("todo-cli");' \
+    test/cli.test.js $'import { test } from "node:test";\ntest("placeholder", () => {});'
+  make_repo storefront 'Storefront skeleton' \
+    README.md $'# storefront\n\nA sample web shop for the cezar demo. Nothing here is real.' \
+    src/checkout.js $'export function total(items) {\n  return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}' \
+    src/cart.js 'export const cart = [];'
+  make_repo docs-site 'Docs site skeleton' \
+    README.md $'# docs-site\n\nSample documentation site for the cezar demo.' \
+    docs/getting-started.md $'# Getting started\n\nInstall, then run.'
 }
 
-export function save(file, tasks) {
-  writeFileSync(file, `${JSON.stringify(tasks, null, 2)}\n`);
-}
-
-export function add(tasks, title) {
-  const id = tasks.reduce((max, task) => Math.max(max, task.id), 0) + 1;
-  return [...tasks, { id, title, done: false }];
-}
-
-// Known bug, left for the demo: completing a finished task un-completes it.
-export function complete(tasks, id) {
-  return tasks.map((task) => (task.id === id ? { ...task, done: !task.done } : task));
-}
-EOF
-
-  cat >"$DEMO_REPO/src/cli.js" <<'EOF'
-#!/usr/bin/env node
-import { add, complete, load, save } from './tasks.js';
-
-const FILE = process.env.TASKLIST_FILE ?? 'tasks.json';
-const [command, ...rest] = process.argv.slice(2);
-let tasks = load(FILE);
-
-if (command === 'add') {
-  tasks = add(tasks, rest.join(' '));
-  save(FILE, tasks);
-} else if (command === 'done') {
-  tasks = complete(tasks, Number(rest[0]));
-  save(FILE, tasks);
-} else if (command === 'list' || command === undefined) {
-  for (const task of tasks) console.log(`${task.done ? '[x]' : '[ ]'} ${task.id}. ${task.title}`);
-} else {
-  console.error('usage: tasklist add <title> | done <id> | list');
-  process.exit(2);
-}
-EOF
-
-  cat >"$DEMO_REPO/test/tasks.test.js" <<'EOF'
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { add, complete } from '../src/tasks.js';
-
-test('add numbers tasks from 1', () => {
-  assert.deepEqual(add([], 'Buy milk'), [{ id: 1, title: 'Buy milk', done: false }]);
-});
-
-test('complete marks a task done', () => {
-  assert.equal(complete(add([], 'x'), 1)[0].done, true);
-});
-EOF
-
-  printf 'node_modules/\ntasks.json\n' >"$DEMO_REPO/.gitignore"
-
-  git -C "$DEMO_REPO" init -q -b main
-  git -C "$DEMO_REPO" add -A
-  git -C "$DEMO_REPO" -c user.name='Cezar Demo' -c user.email=demo@cezar.invalid \
-    commit -q -m 'Initial tasklist CLI'
-  log "Created $DEMO_REPO"
-}
-
-# ---- tasks --------------------------------------------------------------------------------------
-# POST, and fail loudly on anything but the expected status.
+# ---- API helpers ----------------------------------------------------------------------------------
 post() {
   local path=$1 body=$2 want=${3:-201} resp
   resp=$(api POST "$path" "$body")
@@ -131,15 +64,48 @@ post() {
   api_body "$resp"
 }
 
-start_task() {
-  local text=$1 body
-  body=$(jq -n --arg task "$text" '{workflow: "quick-task", task: $task}')
-  post /runs "$body" | jq -r '.id'
+project_id() { # the registered id of a project directory
+  api_body "$(api GET /projects)" | jq -r --arg root "$DEMO_PROJECTS/$1" '[.projects[]? // .[]? | select(.root == $root or (.root | endswith("/" + ($root | split("/") | last))))][0].id // empty'
 }
+
+start_task() { # project dir name, task text → run id
+  local project=$1 text=$2 id body
+  id=$(project_id "$project")
+  [ -n "$id" ] || { warn "project $project is not registered"; return 1; }
+  body=$(jq -n --arg task "$text" '{workflow: "quick-task", task: $task}')
+  post "/p/$id/runs" "$body" | jq -r '.id'
+}
+
+wait_settled() { # wait until nothing but the long task is busy
+  local i busy
+  for ((i = 0; i < 90; i++)); do
+    busy=0
+    for project in todo-cli storefront docs-site; do
+      id=$(project_id "$project")
+      n=$(api_body "$(api GET "/p/$id/runs")" | jq '[.[] | select((.status == "queued" or .status == "running") and ((.task // "") | contains("demo:long") | not))] | length')
+      busy=$((busy + n))
+    done
+    [ "$busy" = 0 ] && return 0
+    sleep 2
+  done
+  warn "$busy task(s) still busy; they will settle on their own"
+}
+
+open_pr() { # fake in a dry run: no push, no GitHub call
+  local project=$1 run=$2 id
+  id=$(project_id "$project")
+  post "/p/$id/runs/$run/pr" '{}' 201 >/dev/null || warn "could not open the demo PR for $run"
+}
+
+# ---- tasks --------------------------------------------------------------------------------------
+LONG_TASK=$'Refactor the storage layer\n\nMove reading and writing tasks behind one small module, and keep every test green.\n\n<!-- demo:long -->'
 
 seed_tasks() {
   local force=${1:-} existing
   wait_for_health 90 || die "cezar is not answering on $DEMO_API"
+  for project in storefront docs-site; do
+    [ -n "$(project_id "$project")" ] || post /projects "$(jq -n --arg root "$DEMO_PROJECTS/$project" '{root: $root}')" 200 >/dev/null || true
+  done
 
   existing=$(api_body "$(api GET /runs)" | jq 'length')
   if [ "$existing" != 0 ] && [ "$force" != --force ]; then
@@ -148,57 +114,55 @@ seed_tasks() {
   fi
 
   log "Starting demo tasks"
-  start_task $'Add a --json flag to the list command\n\nScripts should be able to read the list. Print the tasks as a JSON array when --json is passed, and add a test.\n\nmock:done' >/dev/null || true
-  start_task $'Fix: completing a finished task un-completes it\n\n`tasklist done 1` run twice should leave task 1 done. Fix complete() in src/tasks.js and cover it with a test.\n\nmock:done' >/dev/null || true
-  start_task $'Write a short CONTRIBUTING.md\n\nExplain how to run the tests and how to propose a change.\n\nmock:ask' >/dev/null || true
-  start_task $'Add a due date to tasks\n\nLet `tasklist add` take an optional --due YYYY-MM-DD and show it in the list.' >/dev/null || true
+  local json_flag due checkout coupon
+  json_flag=$(start_task todo-cli $'Add a --json flag to the list command\n\nScripts should be able to read the list as JSON.\n\n<!-- demo:done -->') || true
+  start_task todo-cli $'Write a short CONTRIBUTING.md\n\nExplain how to run the tests and how to propose a change.' >/dev/null || true
+  due=$(start_task todo-cli $'Add a due date to tasks\n\nLet `add` take an optional --due date and show it in the list.\n\n<!-- demo:reply -->') || true
+  checkout=$(start_task storefront $'Fix rounding in the checkout total\n\nPrices like 0.1 + 0.2 show as 0.30000000000000004.\n\n<!-- demo:done -->') || true
+  coupon=$(start_task storefront $'Add coupon codes to the cart\n\nA coupon takes a percentage off the total.') || true
+  start_task docs-site $'Add a FAQ page\n\nCollect the five questions users ask most.\n\n<!-- demo:done -->' >/dev/null || true
+  wait_settled
+  [ -n "${json_flag:-}" ] && open_pr todo-cli "$json_flag"
+  [ -n "${checkout:-}" ] && open_pr storefront "$checkout"
+  : "${due:=}" "${coupon:=}"
 
-  # A scheduled task: shows the deferred-start ("start later") flow, and never runs before the
-  # next nightly reset wipes it.
-  local date preview revision key body
-  date=$(date -u -d '+2 days' +%F)
-  body=$(jq -n --arg date "$date" \
-    '{task: {workflow: "quick-task", task: "Upgrade the test runner\n\nMove the tests to the newest node:test features and remove anything deprecated.\n\nmock:done"},
-      start: {kind: "at", date: $date, hour: 9, minute: 0}}')
-  if preview=$(post /deferred-start/preview "$body" 200) &&
-    [ "$(printf '%s' "$preview" | jq -r '.available')" = true ]; then
-    revision=$(printf '%s' "$preview" | jq -r '.previewRevision')
-    key=$(cat /proc/sys/kernel/random/uuid)
-    body=$(printf '%s' "$body" | jq --arg rev "$revision" --arg key "$key" '. + {previewRevision: $rev, idempotencyKey: $key}')
-    post /deferred-start "$body" >/dev/null && log "Scheduled a task for $date 09:00 (server time)"
-  else
-    warn "could not schedule the deferred task: ${preview:-no preview}"
-  fi
+  start_task todo-cli "$LONG_TASK" >/dev/null || true
 
-  # The app opens on /manager (StartDecision.java), so give it someone to talk to.
-  local managers manager_id
+  local managers manager_id body
   managers=$(api_body "$(api GET /workspace/managers)" | jq '.managers | length')
   if [ "$managers" = 0 ]; then
     body=$(jq -n '{
       name: "Demo manager",
-      instructions: "You oversee the tasklist demo project. Summarize what needs attention and suggest next steps. This is a demo server: every agent is a mock.",
+      instructions: "This is a demo cezar for App Review: every agent is simulated. Summarize what needs attention.",
       projects: "all",
-      cronMinutes: 60
+      cronMinutes: 0
     }')
     if manager_id=$(post /workspace/managers "$body" | jq -r '.id'); then
-      post "/workspace/managers/$manager_id/messages" "$(jq -n '{text: "What needs my attention today?"}')" 200 >/dev/null || true
-      log "Created a manager"
+      post "/workspace/managers/$manager_id/messages" "$(jq -n '{text: "Good morning! What needs me today?"}')" 200 >/dev/null ||
+        post "/workspace/managers/$manager_id/messages" "$(jq -n '{text: "Good morning! What needs me today?"}')" 202 >/dev/null || true
+      log "Created the manager"
     fi
   fi
-
-  # Let the mock finish so the cockpit opens on settled tasks, not on a burst of spinners.
-  local i busy=1
-  for ((i = 0; i < 120; i++)); do
-    busy=$(api_body "$(api GET /runs)" | jq '[.[] | select(.status == "queued" or .status == "running")] | length')
-    [ "$busy" = 0 ] && break
-    sleep 2
+  sleep 5
+  for project in todo-cli storefront docs-site; do
+    api_body "$(api GET "/p/$(project_id "$project")/runs")" | jq -r --arg p "$project" '.[] | "  \($p)\t\(.status)\t\(.title // (.task | split("\n")[0]))"'
   done
-  [ "$busy" = 0 ] || warn "$busy task(s) still running after 4 minutes; they will settle on their own"
-  api_body "$(api GET /runs)" | jq -r '.[] | "  \(.status)\t\(.title // .task | split("\n")[0])"'
+}
+
+# Keep one task running: the previous long task finishes on its own after about 50 minutes.
+seed_tick() {
+  wait_for_health 30 || die "cezar is not answering on $DEMO_API"
+  local id running
+  id=$(project_id todo-cli)
+  running=$(api_body "$(api GET "/p/$id/runs")" | jq '[.[] | select(.status == "running" or .status == "queued")] | length')
+  if [ "$running" = 0 ]; then
+    start_task todo-cli "$LONG_TASK" >/dev/null && log "Started a new running task"
+  fi
 }
 
 case "${1:-}" in
-  repo) seed_repo ;;
+  repos) seed_repos ;;
   tasks) seed_tasks "${2:-}" ;;
-  *) printf 'usage: %s repo | tasks [--force]\n' "$0" >&2; exit 2 ;;
+  tick) seed_tick ;;
+  *) printf 'usage: %s repos | tasks [--force] | tick\n' "$0" >&2; exit 2 ;;
 esac

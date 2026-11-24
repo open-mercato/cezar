@@ -1,18 +1,22 @@
 # shellcheck shell=bash
-# Shared paths and helpers for the store-review demo (setup.sh, reset.sh, seed.sh). Sourced, never run.
+# shellcheck disable=SC2034 # variables here are used by the scripts that source this file
+# Shared paths and helpers for the store-review demo (setup.sh, reset.sh, seed.sh, local.sh). Sourced, never run.
+# Every path can be overridden from the environment, which is how local.sh runs the same seed on a Mac.
 
-DEMO_USER_NAME=cezar-demo
-DEMO_ROOT=/var/lib/cezar-demo             # the service user's home; everything the demo writes lives here
-DEMO_CEZ_HOME=$DEMO_ROOT/home             # CEZ_HOME (instead of ~/.cezar)
-DEMO_PROJECTS=$DEMO_ROOT/projects         # CEZ_BROWSE_ROOT and CEZ_PROJECTS_DIR
-DEMO_REPO=$DEMO_PROJECTS/demo-app         # the boot project (the service's WorkingDirectory)
-DEMO_OPT=/opt/cezar-demo                  # installed copies of these scripts and the pairing page
-DEMO_ETC=/etc/cezar-demo
-DEMO_CONFIG=$DEMO_ETC/demo.env            # root-only: domain and the reviewer login
-DEMO_PORT=4321
+: "${DEMO_USER_NAME:=cezar-demo}"
+: "${DEMO_ROOT:=/var/lib/cezar-demo}"          # the service user's home; everything the demo writes lives here
+: "${DEMO_CEZ_HOME:=$DEMO_ROOT/home}"           # CEZ_HOME (instead of ~/.cezar)
+: "${DEMO_PROJECTS:=$DEMO_ROOT/projects}"       # CEZ_BROWSE_ROOT and CEZ_PROJECTS_DIR
+: "${DEMO_REPO:=$DEMO_PROJECTS/todo-cli}"       # the boot project (the service's WorkingDirectory)
+: "${DEMO_PORT:=4321}"
 DEMO_API=http://127.0.0.1:$DEMO_PORT/api/v1
+DEMO_OPT=/opt/cezar-demo                       # installed copies of these scripts
+DEMO_ETC=/etc/cezar-demo
+DEMO_CONFIG=$DEMO_ETC/demo.env                 # root-only: the pairing code and the relay account email
 DEMO_SERVICE=cezar-demo.service
 DEMO_LOCK=/run/cezar-demo.lock
+# The relay account's terms (RELAY_TERMS in packages/contract/src/phones.ts), accepted by the operator.
+DEMO_TERMS_VERSION=2026-11-13
 
 log() { printf '[cezar-demo] %s\n' "$*"; }
 warn() { printf '[cezar-demo] WARNING: %s\n' "$*" >&2; }
@@ -30,35 +34,38 @@ take_lock() {
   export CEZAR_DEMO_LOCKED=1
 }
 
-# Reads KEY=VALUE lines without evaluating them, so a password may hold $, quotes or spaces.
+# A 12-character code of Crockford base32 (RELAY_PROTOCOL.md § 9.2), shown as XXXX-XXXX-XXXX.
+new_code() {
+  local alphabet=0123456789ABCDEFGHJKMNPQRSTVWXYZ code='' i byte
+  for ((i = 0; i < 12; i++)); do
+    byte=$(od -An -N1 -tu1 /dev/urandom | tr -d ' ')
+    code+=${alphabet:$((byte % 32)):1}
+  done
+  printf '%s-%s-%s' "${code:0:4}" "${code:4:4}" "${code:8:4}"
+}
+
+# Reads KEY=VALUE lines without evaluating them.
 read_config() {
-  [ -f "$DEMO_CONFIG" ] || die "$DEMO_CONFIG is missing. Create it first (see README.md, 'Credentials')."
+  [ -f "$DEMO_CONFIG" ] || die "$DEMO_CONFIG is missing; setup.sh writes it"
   local owner mode line key val
   owner=$(stat -c %u "$DEMO_CONFIG")
   mode=$(stat -c %a "$DEMO_CONFIG")
   [ "$owner" = 0 ] || die "$DEMO_CONFIG must be owned by root"
-  [ "$mode" = 600 ] || [ "$mode" = 400 ] || die "$DEMO_CONFIG must be mode 600 (it is $mode): chmod 600 $DEMO_CONFIG"
-  DEMO_DOMAIN='' DEMO_USER='' DEMO_PASSWORD='' ACME_EMAIL='' RELAY_KEEP_DAYS=3 DEMO_RELAY=0
+  [ "$mode" = 600 ] || [ "$mode" = 400 ] || die "$DEMO_CONFIG must be mode 600 (it is $mode)"
+  CEZ_RELAY_DEMO_CODE='' RELAY_EMAIL='' RELAY_KEEP_DAYS=3 CEZ_RELAY_URL=''
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in '' | '#'*) continue ;; esac
     key=${line%%=*}
     val=${line#*=}
-    # Strip one pair of surrounding quotes, nothing else.
-    case "$val" in \"*\") val=${val#\"}; val=${val%\"} ;; \'*\') val=${val#\'}; val=${val%\'} ;; esac
     case "$key" in
-      DEMO_DOMAIN | DEMO_USER | DEMO_PASSWORD | ACME_EMAIL | RELAY_KEEP_DAYS | DEMO_RELAY) printf -v "$key" '%s' "$val" ;;
+      CEZ_RELAY_DEMO_CODE | RELAY_EMAIL | RELAY_KEEP_DAYS | CEZ_RELAY_URL) printf -v "$key" '%s' "$val" ;;
       *) warn "ignoring unknown key '$key' in $DEMO_CONFIG" ;;
     esac
   done <"$DEMO_CONFIG"
-  printf '%s' "$DEMO_DOMAIN" | grep -Eq '^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$' ||
-    die "DEMO_DOMAIN must be a lowercase host name like cezar-demo.example.com"
-  # Caddy's basic_auth takes the user as a bare token, and the app sends it in a Basic header.
-  printf '%s' "$DEMO_USER" | grep -Eq '^[A-Za-z0-9._-]{3,64}$' ||
-    die "DEMO_USER must be 3-64 characters of letters, digits, '.', '_' or '-'"
-  [ "${#DEMO_PASSWORD}" -ge 16 ] || die "DEMO_PASSWORD must be at least 16 characters"
-  case "$DEMO_PASSWORD" in *[[:space:]]*) die "DEMO_PASSWORD must not contain whitespace (reviewers type it)" ;; esac
+  printf '%s' "$CEZ_RELAY_DEMO_CODE" | grep -Eq '^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$' ||
+    die "CEZ_RELAY_DEMO_CODE must look like K7QM-3XNA-9VPD"
+  printf '%s' "$RELAY_EMAIL" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+$' || die "RELAY_EMAIL must be an email address"
   case "$RELAY_KEEP_DAYS" in '' | *[!0-9]*) die "RELAY_KEEP_DAYS must be a whole number of days" ;; esac
-  case "$DEMO_RELAY" in 0 | 1) ;; *) die "DEMO_RELAY must be 0 or 1" ;; esac
 }
 
 # curl against cezar on loopback: prints the body, then the HTTP status on its own last line.
@@ -82,4 +89,23 @@ wait_for_health() {
     sleep 1
   done
   return 1
+}
+
+# Attach the demo's own relay account (RELAY_PROTOCOL.md § 18). The relay emails a confirmation
+# link to RELAY_EMAIL once; until it is clicked the demo works for 48 hours.
+attach_account() {
+  local email=$1 resp
+  # The name a phone shows for this computer while pairing and in its list.
+  api PUT /workspace/phones/computer-name '{"name":"cezar demo"}' >/dev/null || true
+  resp=$(api GET /workspace/phones)
+  if [ "$(api_body "$resp" | jq -r '.account.attached')" = true ] &&
+    [ "$(api_body "$resp" | jq -r '.account.email // empty')" = "$email" ]; then
+    return 0
+  fi
+  resp=$(api POST /workspace/phones/account "$(jq -n --arg email "$email" --arg terms "$DEMO_TERMS_VERSION" '{email: $email, termsVersion: $terms, accepted: true}')")
+  [ "$(api_status "$resp")" = 200 ] || { warn "attaching the relay account answered $(api_status "$resp"): $(api_body "$resp" | head -c 300)"; return 1; }
+}
+
+account_state() {
+  api_body "$(api POST /workspace/phones/account/check)" | jq -r '.status.state // .reason // "unknown"' 2>/dev/null || echo unknown
 }

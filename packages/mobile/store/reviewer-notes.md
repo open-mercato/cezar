@@ -1,67 +1,61 @@
 # Reviewer notes
 
-What App Review (Apple) and Play review need to use the app without our help. The demo server is set up
-by `packages/mobile/demo/` (README there). Before pasting, replace `cezar-demo.example.com` with the demo's
-`DEMO_DOMAIN` and `<password>` with its `DEMO_PASSWORD`. Keep the password out of this repository.
+What App Review (Apple) and Play review need to use the app without our help. The demo cezar is set up
+by `packages/mobile/demo/` on branch `demo/store-review` (README there). Before pasting, replace
+`XXXX-XXXX-XXXX` with the code `setup.sh` printed. The code is not a password, but keep it out of public
+metadata (description, screenshots, What's New).
 
 ## App Store Connect: App Review Information
 
-- **Sign-in required:** checked
-- **User name:** `appreview`
-- **Password:** `<password>`
+- **Sign-in required:** unchecked. There is no account to sign in to; the notes give a pairing code.
 - **Contact information:** a person who can answer within a day during review.
 - **Notes:** the text below.
 
 ## Play Console: App content > App access
 
 - **All or some functionality in my app is restricted** > **Add instructions**
-- **Name:** `Demo server`. **Username:** `appreview`. **Password:** `<password>`
-- **Any other information:** the text below. Play has no URL field, so the address must be in it.
+- **Name:** `Demo pairing code`. **Username:** leave empty. **Password:** leave empty.
+- **Any other information:** the text below.
 
 ## The notes text
-
-Delete the "Optional: pairing" part if the demo runs with `DEMO_RELAY=0`.
 
 <!-- reviewer-notes -->
 ```text
 WHAT THE APP IS
-cezar is a free, open-source tool that people run on their own computer or server to supervise AI
-coding agents. CezarBot is its companion: it connects to the user's own cezar and shows that
-server's Manager and tasks, sized for a phone. The app itself has no account sign-up. The relay asks
-for an email and terms acceptance in cezar on the computer, and stores connection/account metadata.
+cezar is a free, open-source tool that developers run on their own computer to supervise AI coding
+agents. CezarBot is its phone companion: once paired with the user's own cezar, it shows that
+cezar's Manager and tasks, so the user can answer agents' questions, approve actions and get a
+notification when an agent needs them. CezarBot does nothing on its own until it is paired.
 
 HOW IT CONNECTS
-1. Pairing through a relay (the default). On their computer the user opens cezar, Settings, Connect
-   a phone, and scans the QR code or types the short code. The phone and the computer then talk
-   through a small relay we run. Everything is end-to-end encrypted with the Noise protocol between
-   the phone and the user's computer; the relay passes encrypted data and cannot read it.
-2. Direct. A user whose cezar runs on a server with HTTPS enters its address and signs in. The
-   password is kept in the device's secure storage and answered natively, never by the web page.
+On their computer the user opens cezar, Settings, Connect a phone, and scans the QR code or types
+the short code into CezarBot. The phone and the computer then talk through a small relay we run.
+Everything is end-to-end encrypted (Noise protocol) between the phone and the user's computer; the
+relay passes encrypted data and cannot read it. Advanced users can instead enter the address of a
+cezar they host on their own server.
 
-Native features: QR pairing with the camera, the encrypted relay connection, keychain sign-in,
-several devices, notifications when cezar needs the user, and an optional app lock with biometrics.
+DEMO ACCESS (no sign-in needed)
+We run a demo cezar for review, available at any time. Its projects are samples and its agents are
+simulated: nothing you do runs a real AI model or changes real code, and every agent reply says so.
+It resets every night at 03:00 UTC.
 
-DEMO ACCESS
-We run a demo cezar for review. Its agents are simulated: nothing you do runs a real AI model or
-changes real code, and it resets every night at 03:00 UTC.
+1. Open CezarBot and tap "Enter code".
+2. Type this code:  XXXX-XXXX-XXXX
+   and tap Connect. Pairing finishes on its own; nobody needs to approve it.
+3. Accept the relay terms once. The app opens the demo's Manager.
 
-1. Open CezarBot. On "Connect to cezar", enter the server address (if the screen shows "Scan QR
-   code" and "Enter code", open "Advanced" first):
-   https://cezar-demo.example.com
-2. Tap Connect. When asked, enter the user name and password from the sign-in fields above.
-3. The app opens the Manager. Tasks are in the menu: open "Write a short CONTRIBUTING.md" to answer
-   an agent's question, or start a new task.
+Things to try
+- Manager: answer the question card, and approve the "Add job" card.
+- Tasks: open "Write a short CONTRIBUTING.md" and answer the agent's question; open a finished task
+  to see its (simulated) pull request.
+- Notifications: turn them on when the app asks (or in More > Notifications), then send the Manager
+  "Start a task to add dark mode". About 20 seconds later the new task asks you a question and the
+  phone gets a "cezar needs you" notification.
+- Several demo reviewers can pair at once. If "Enter code" ever says the code was not found, wait
+  one minute and try again: the demo reopens the code continuously.
 
-Optional: pairing the way users do, without a password
-1. In any browser, on a computer or on this phone, open
-   https://cezar-demo.example.com/demo-pair/ and sign in with the same user name and password.
-2. Tap "Show a code". In the app, choose "Enter code" and type the 12-character code within two
-   minutes.
-3. When the app shows a number, check that the page shows the same number, then tap Approve on the
-   page. The demo allows 5 codes per hour; if the page says so, use the steps above.
-
-Camera: used only to scan the pairing QR code, decoded on the device, never stored or sent.
-Notifications: optional, off until turned on per device; generic text, badge count, locally saved name.
+Camera: used only to scan the pairing QR code on a user's own computer, decoded on the device, never
+stored or sent. Notifications: optional, off until turned on; generic text and a badge count only.
 The text in the Manager is written by the user's own coding agents about the user's own code.
 ```
 <!-- /reviewer-notes -->

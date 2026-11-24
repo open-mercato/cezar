@@ -4,8 +4,8 @@
 #   sudo /opt/cezar-demo/reset.sh            # wipe and re-seed; keep the relay identity and recent phones
 #   sudo /opt/cezar-demo/reset.sh --fresh    # also forget the relay identity: every paired phone must pair again
 #
-# Survives a reset: the Caddy config and certificates, the reviewer login, the installed cezar and,
-# unless --fresh, $CEZ_HOME/relay (README.md, "What a reset keeps").
+# Survives a reset: /etc/cezar-demo (code, relay email), the installed cezar and, unless --fresh,
+# $CEZ_HOME/relay — the relay identity (cezarId), the relay account token and recent phones.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -20,7 +20,6 @@ done
 require_root
 take_lock
 read_config
-unset DEMO_PASSWORD
 
 # ---- 1. revoke old phones while cezar still runs ------------------------------------------------
 # DELETE goes through cezar so the relay hears `device-remove`; editing devices.json by hand would
@@ -61,13 +60,14 @@ fi
 install -d -o "$DEMO_USER_NAME" -g "$DEMO_USER_NAME" -m 0700 "$DEMO_ROOT" "$DEMO_CEZ_HOME" "$DEMO_PROJECTS"
 
 # ---- 3. seed -----------------------------------------------------------------------------------
-log "Creating the demo repository"
-runuser -u "$DEMO_USER_NAME" -- env HOME="$DEMO_ROOT" "$DEMO_OPT/seed.sh" repo
+log "Creating the demo repositories"
+runuser -u "$DEMO_USER_NAME" -- env HOME="$DEMO_ROOT" "$DEMO_OPT/seed.sh" repos
 
 log "Starting $DEMO_SERVICE"
 systemctl start "$DEMO_SERVICE"
 wait_for_health 90 || die "cezar did not come back. Check: journalctl -u $DEMO_SERVICE -n 100"
 
+attach_account "$RELAY_EMAIL" || warn "no relay account: the pairing code stays closed"
 log "Seeding tasks and a manager"
 runuser -u "$DEMO_USER_NAME" -- env HOME="$DEMO_ROOT" "$DEMO_OPT/seed.sh" tasks || warn "seeding tasks failed; the cockpit is up but may look empty"
 log "Reset complete"
