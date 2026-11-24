@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as bypassPolicy from '../bypass-permissions.ts';
 import { AGENT_MODELS_LOCKED_ENV } from '../core/agent-model-policy.ts';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
@@ -808,7 +809,10 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
       const configDir = join(root, '.ai', 'cezar');
       mkdirSync(configDir, { recursive: true });
       writeFileSync(join(configDir, 'config.json'), JSON.stringify({ bypassPermissions: true }));
-      if (process.getuid) vi.spyOn(process, 'getuid').mockReturnValue(501);
+      // Exercise the non-root bypass policy without affecting filesystem ownership checks.
+      const blocked = bypassPolicy.bypassPermissionsBlocked;
+      vi.spyOn(bypassPolicy, 'bypassPermissionsBlocked').mockImplementation((repoRoot, config, options) =>
+        blocked(repoRoot, config, { ...options, uid: 501 }));
     }
     const workerTools = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['npm test'] };
     const reviewTools = { allowedTools: ['Read', 'Grep', 'Bash'], bashAllowlist: ['git diff'] };
