@@ -11,14 +11,16 @@ import { cn } from '@/lib/utils'
 import { useActiveProviderAvailability } from './active-provider'
 import { useDeliverPrompt } from './deliver-prompt'
 import { DiffCommentChips } from './diff-comment-chips'
+import { QuoteChips, QuoteSelectionChip, type QuoteCapture } from '@/components/quote-selection'
+import { messageWithQuotesAndReview } from '@/lib/message-quotes'
 import {
   commentsRideWith,
   slashCommandOf,
-  messageWithReview,
   type DiffComment,
   type DiffComments,
 } from './diff-comments'
 import type { ContinueAction } from './follow-up-engine'
+import type { MessageQuotes } from './message-quotes-store'
 import { useStopRun } from './run-confirm-dialog'
 import { RunEnginePills } from './run-engine'
 import type { Draft } from './thread-draft'
@@ -38,6 +40,9 @@ export function TaskComposer({
   run,
   draft,
   diffComments,
+  messageQuotes,
+  quoteSelection,
+  onQuoteSelection,
   continueAction,
   getMentionCandidates,
   onSendingChange,
@@ -46,6 +51,10 @@ export function TaskComposer({
   run: ApiRun
   draft: Draft
   diffComments: DiffComments
+  messageQuotes: MessageQuotes
+  /** Touch only: a live selection capture the "Quote selection" chip quotes (spec 2026-11-20, § 1). */
+  quoteSelection?: QuoteCapture | null
+  onQuoteSelection?: (capture: QuoteCapture) => void
   continueAction: ContinueAction
   getMentionCandidates?: () => string[]
   /** A send started (`true`) or settled (`false`) — for a host that shows the composer only
@@ -67,9 +76,10 @@ export function TaskComposer({
   const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith)
 
   const hasDiffComments = diffComments.comments.length > 0
+  const hasMessageQuotes = messageQuotes.quotes.length > 0
   // Only to tell a registry skill from a backend's own slash command (`commentsRideWith`) —
-  // fetched only while there are comments to protect.
-  const skillCatalog = useSkills(hasDiffComments)
+  // fetched only while there are comments or quotes to protect.
+  const skillCatalog = useSkills(hasDiffComments || hasMessageQuotes)
   // Read defensively: the body is whatever the wire carried, and a non-list must never take the
   // view down — it only means "catalog unknown", which keeps a slash message's comments.
   const skillNames = useMemo(
@@ -107,6 +117,7 @@ export function TaskComposer({
   // agent is waiting on the reader, so there the button stays a reply (Finish closes the session).
   const stopRun = useStopRun(run)
   const stoppable = run.status === 'running' || run.status === 'queued'
+  const quoteChip = quoteSelection && onQuoteSelection ? <QuoteSelectionChip capture={quoteSelection} onQuote={onQuoteSelection} /> : null
 
   return (
     <>
@@ -129,24 +140,31 @@ export function TaskComposer({
           onSendingChange?.(true)
           try {
             return await draft.submit<unknown>(() => {
-              if (hasDiffComments && !commentsRideWith(text, skillNames)) {
-                toast(`Diff comments kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
+              if ((hasDiffComments || hasMessageQuotes) && !commentsRideWith(text, skillNames)) {
+                // A backend command is sent alone: anything appended would become its arguments.
+                const kept = [hasMessageQuotes ? 'Quotes' : '', hasDiffComments ? 'diff comments' : ''].filter(Boolean).join(' and ')
+                toast(`${kept.charAt(0).toUpperCase()}${kept.slice(1)} kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
                 return deliverPrompt(text, images)
               }
-              return diffComments.submit(async (held) => deliverPrompt(messageWithReview(text, held), images))
+              return messageQuotes.submit((heldQuotes) =>
+                diffComments.submit((held) => deliverPrompt(messageWithQuotesAndReview(text, heldQuotes, held), images)),
+              )
             })
           } finally {
             onSendingChange?.(false)
           }
         }}
         draftItems={
-          hasDiffComments ?
-            <DiffCommentChips
+          hasMessageQuotes || hasDiffComments || quoteChip ? <>
+            {quoteChip}
+            {hasMessageQuotes ? <QuoteChips quotes={messageQuotes.quotes} onEdit={messageQuotes.update} onRemove={messageQuotes.remove} /> : null}
+            {hasDiffComments ? <DiffCommentChips
               runId={run.id}
               comments={diffComments.comments}
               onRemove={diffComments.remove}
               onOpen={onOpenComment}
-            />
+            /> : null}
+          </>
           : undefined
         }
         disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
@@ -162,7 +180,7 @@ export function TaskComposer({
         options={{ eyebrow: 'Options', rows: optionRows }}
         // Continuing with nothing typed is the legacy one-click Continue, and pending diff comments
         // are a message on their own.
-        allowEmptySubmit={continuable || hasDiffComments}
+        allowEmptySubmit={continuable || hasDiffComments || hasMessageQuotes}
         sendAriaLabel={continuable ? 'Continue' : 'Send'}
         sendShortcut="↵"
         stop={stoppable ? { label: 'Stop the run', onStop: stopRun.request, pending: stopRun.pending } : undefined}

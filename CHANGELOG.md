@@ -9,6 +9,7 @@
 - ✨ New built-in `review-pr` workflow: give it a pull request URL and correctness, security and tests reviewers plus a judge write a verdict (approve, changes or reject), findings with `path:line` and draft review comments, without pushing, opening a PR or posting to GitHub. It runs on Claude Code and Pi, which enforce its read-only tools; other agents refuse it. *(@patzick)*
 - ✨ The workflow list reports what each workflow can do outside the machine (`capabilities`: push, open a PR, post to GitHub), so a manager can pick a safe one. *(@patzick)*
 - ✨ A manager can stop and steer the tasks it starts: `cez-manager task cancel <run> --reason "…"` cancels a task and everything it dispatched, keeps the worktree and branch, and the task shows who cancelled it and why. It cancels only its own tasks unless you turn on **Cancel any task** in its settings. `task create --model opus --effort max` (and `task say` on a finished task) picks the model and effort, refusing an unknown one with the valid choices; `task retry` restarts a failed task. Its task list now marks tasks you started yourself and the pull request each task opened, `workflows` marks what each workflow can do, and every `cez-manager` command takes `--help` and names the valid subcommands on a typo. *(@patzick)*
+- ✨ Quote part of a message: select text inside one message of a task or manager chat, select **Quote**, add a note on the chip, and send. The agent gets each quote with its message number, and the sent message shows the quotes as cards with **Jump to message**. *(@matwiatrzyk)*
 
 ## 🐛 Fixes
 - 🐛 A manager's scheduled checks follow its instructions: a manager set up for something other than watching repositories, such as a self-assessment, no longer raises open pull requests or offers to merge them, and stays silent when nothing serves its goal. A manager with no instructions, or one created from the watch presets, checks as before. *(@martaradziszewska)*
@@ -19,6 +20,7 @@
 
 - @martaradziszewska
 - @patzick
+- @matwiatrzyk
 
 # 0.19.0 (2026-11-08)
 

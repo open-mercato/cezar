@@ -29,6 +29,8 @@ import {
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered } from '@/lib/manager-telemetry'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
+import { parseQuotesMessage, type MessageQuote } from '@/lib/message-quotes'
+import { QuoteCards } from '@/components/quote-selection'
 import { AskForm } from '@/routes/task-thread/ask-card'
 import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
 import { AskAnswerSummary, askAnswerLines } from '@/routes/task-thread/ask-answer-summary'
@@ -359,13 +361,15 @@ function AssistantMessage({
       <OriginContext.Provider value={origin}>
         <ReferenceStatusProvider requests={references}>
           <ClampedBody clamp={message.taskReport !== undefined && isLong(message.text)}>
+            <div data-quote-body data-quote-role="assistant" data-quote-ref={message.seq}>
             {segments.map((segment, index) =>
               segment.kind === 'markdown' ? (
                 <Markdown key={index} components={MARKDOWN_COMPONENTS}>{segment.text}</Markdown>
               ) : (
-                <SessionCard key={index} projectId={segment.projectId} runId={segment.runId} origin={origin} />
+                <div key={index} data-quote-excluded><SessionCard projectId={segment.projectId} runId={segment.runId} origin={origin} /></div>
               ),
             )}
+            </div>
           </ClampedBody>
         </ReferenceStatusProvider>
       </OriginContext.Provider>
@@ -521,6 +525,20 @@ function ResumeHint({ managerId, at }: { managerId: string; at: string }) {
   )
 }
 
+/** A sent message's quotes render as cards after its plain-text lead (spec 2026-11-20, § 5). */
+function UserMessageText({ message, onJump }: { message: Extract<ManagerMessage, { kind: 'user' }>; onJump?: ((quote: MessageQuote) => void) | undefined }) {
+  const quoted = useMemo(() => parseQuotesMessage(message.text), [message.text])
+  const lead = quoted?.lead ?? message.text
+  return (
+    <>
+      {lead ? (
+        <p data-slot="manager-user-bubble" data-quote-body data-quote-role="user" data-quote-ref={message.seq} className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{lead}</p>
+      ) : null}
+      {quoted?.items.length ? <QuoteCards quotes={quoted.items} onJump={onJump} className="my-0 w-full max-w-[80%]" /> : null}
+    </>
+  )
+}
+
 /** One chat row. Memoized: a streaming reply re-renders only the message that grew. */
 export const ManagerMessageRow = memo(function ManagerMessageRow({
   message,
@@ -531,6 +549,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   superseded = false,
   authLive = true,
   onRetry,
+  onQuoteJump,
   planUsage,
 }: {
   message: ManagerMessage
@@ -539,6 +558,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   authLive?: boolean
   /** Sends the question again; only the newest failed chat reply has one. */
   onRetry?: (() => void) | undefined
+  onQuoteJump?: ((quote: MessageQuote) => void) | undefined
   /** An answered card whose answer, the next message, is drawn here and not as its own row. */
   answerOnCard?: boolean
   /** Connected projects: what a bare `#12` or a GitHub URL resolves against. */
@@ -551,7 +571,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
 }) {
   return (
     <ManagerProjectsContext.Provider value={projects}>
-      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} planUsage={planUsage} />
+      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} onQuoteJump={onQuoteJump} planUsage={planUsage} />
     </ManagerProjectsContext.Provider>
   )
 })
@@ -565,11 +585,13 @@ function MessageBody({
   superseded,
   authLive,
   onRetry,
+  onQuoteJump,
   planUsage,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
   onRetry: (() => void) | undefined
+  onQuoteJump: ((quote: MessageQuote) => void) | undefined
   planUsage: ReplyUsage | undefined
   answerOnCard: boolean
   superseded: boolean
@@ -582,7 +604,7 @@ function MessageBody({
       return (
         <div data-slot="manager-user" data-message-id={message.id} className="flex flex-col items-end gap-2">
           {message.text ? (
-            <p data-slot="manager-user-bubble" className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
+            <UserMessageText message={message} onJump={onQuoteJump} />
           ) : null}
           {message.attachments ? <UserAttachments managerId={origin.id} attachments={message.attachments} /> : null}
         </div>

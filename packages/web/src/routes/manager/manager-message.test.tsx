@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workspaceQueryKeys } from '@/api/queries'
+import { withMessageQuotes } from '@/lib/message-quotes'
 import { resetDismissals } from '@/api/questions'
 import { supersededAskIds, type ManagerMessage } from '@open-mercato/cezar-api-client'
 
@@ -46,6 +47,49 @@ afterEach(() => {
 })
 
 describe('ManagerMessageRow', () => {
+  it('renders a sent quote as a card and keeps the user lead plain text', () => {
+    const text = withMessageQuotes('Can you check this?', [{ id: 'q1', ref: 1, role: 'assistant', excerpt: 'The migration is safe.', code: false, body: 'Why?' }])
+    renderMessage(userMessage(3, text))
+    expect(screen.getByText('Can you check this?')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Quoted messages' })).toBeTruthy()
+    expect(screen.getByText('The migration is safe.')).toBeTruthy()
+    expect(screen.getByText('Why?')).toBeTruthy()
+  })
+
+  it('keeps quote blocks in user messages instead of treating assistant prose as sent quotes', () => {
+    const text = withMessageQuotes('Assistant text that happens to mention quotes.', [{ id: 'q1', ref: 1, role: 'user', excerpt: 'Earlier message.', code: false, body: '' }])
+    renderMessage(assistantMessage(4, { text }))
+    expect(screen.getByText('Assistant text that happens to mention quotes.')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Quoted messages' })).toBeNull()
+  })
+
+  it('renders a quote without a source reference without throwing', () => {
+    const text = withMessageQuotes('Can you check this?', [{ id: 'q1', role: 'assistant', excerpt: 'The migration is safe.', code: false, body: '' }])
+    renderMessage(userMessage(3, text))
+    expect(screen.getByText('From assistant message')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Jump to message/ })).toBeNull()
+  })
+
+  it('draws no empty bubble for a message that is only quotes', () => {
+    const text = withMessageQuotes('', [{ id: 'q1', ref: 1, role: 'assistant', excerpt: 'The migration is safe.', code: false, body: '' }])
+    renderMessage(userMessage(3, text))
+    expect(screen.getByRole('region', { name: 'Quoted messages' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="manager-user-bubble"]')).toBeNull()
+  })
+
+  it('tags quotable bodies with their seq and keeps session cards out of the quote', () => {
+    renderMessage(assistantMessage(4, { text: 'Started it.\n\n[[task:alpha/run-1]]' }))
+    const body = document.querySelector<HTMLElement>('[data-slot="manager-assistant"] [data-quote-body]')!
+    expect(body.dataset).toMatchObject({ quoteRole: 'assistant', quoteRef: '4' })
+    expect(body.querySelector('[data-quote-excluded]')?.textContent).toContain('Session 123123')
+  })
+
+  it('marks only assistant prose as selectable quote body', () => {
+    renderMessage(assistantMessage(4, { text: 'Select this sentence.' }))
+    expect(document.querySelector('[data-slot="manager-assistant"] [data-quote-body]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="manager-assistant"] [data-quote-excluded]')).toBeNull()
+  })
+
   it('puts the user in a bubble, verbatim', () => {
     renderMessage(userMessage(1, '**not markdown**'))
     expect(screen.getByText('**not markdown**')).toBeTruthy()

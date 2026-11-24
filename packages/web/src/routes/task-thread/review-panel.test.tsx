@@ -547,6 +547,49 @@ describe('the review gate and diff comments', () => {
   })
 })
 
+describe('the review gate and quotes', () => {
+  const QUOTES = [{ id: 'q1', ref: 2, role: 'assistant', excerpt: 'the port is fixed', code: false, body: 'why?' }]
+  const COMMENTS = [{ id: 'c1', path: 'src/server.ts', side: 'new', line: 7, body: 'env', excerpt: 'const port = 3000' }]
+  const withDrafts = (surfaces: Record<string, unknown[]>) =>
+    stubFetch({
+      'GET /api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: Object.fromEntries(
+            Object.entries(surfaces).map(([key, items]) => [key, { text: JSON.stringify(items), images: [], updatedAt: '2026-11-20T00:00:00.000Z' }]),
+          ),
+        }),
+    })
+  const continued = (sent: SentRequest[]) =>
+    sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')?.body as { text: string } | undefined
+
+  it('sends drafted quotes back on their own, with no notes typed', async () => {
+    const sent = withDrafts({ 'message-quotes': QUOTES })
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    await screen.findByText(/the port is fixed/)
+    fireEvent.click(sendBack)
+
+    await waitFor(() => expect(continued(sent)?.text).toMatch(/^Review feedback:\nQuoted from the conversation:/))
+    expect(screen.queryByText('Write what to change first.')).toBeNull()
+  })
+
+  it('refuses over-long notes naming the quotes and the diff comments', async () => {
+    const sent = withDrafts({ 'message-quotes': QUOTES, 'diff-comments': COMMENTS })
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+    await screen.findByText(/1 comment on the diff/)
+    await screen.findByText(/the port is fixed/)
+
+    fireEvent.change(screen.getByLabelText('Notes for the agent'), { target: { value: 'x'.repeat(100_000) } })
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    expect(await screen.findByText(/Too long with the quote and the diff comment attached/)).not.toBeNull()
+    expect(continued(sent)).toBeUndefined()
+  })
+})
+
 describe('the accept celebration', () => {
   it('review → done shows the one-shot twinkle overlay and clears it after ~1.5s', () => {
     vi.useFakeTimers()

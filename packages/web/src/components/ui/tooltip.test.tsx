@@ -23,8 +23,14 @@ describe('Tooltip', () => {
     expect(el.textContent).toContain('Pin to the top of the list')
     expect(el.className).toContain('text-label')
     expect(el.className).toContain('bg-contrast')
+    expect(el.className).toContain('w-max')
+    expect(el.className).not.toContain('w-fit')
+    expect(el.className).toContain('overflow-hidden')
+    expect(el.className).not.toContain('overflow-y-auto')
+    // w-max + overflow-hidden would clip a long URL or path sideways; it must wrap instead.
+    expect(el.className).toContain('wrap-anywhere')
     expect(el.className).toContain(TOOLTIP_MAX_WIDTH_CLASS)
-    expect(TOOLTIP_MAX_WIDTH_CLASS).toBe('max-w-[280px]')
+    expect(TOOLTIP_MAX_WIDTH_CLASS).toBe('max-w-[min(280px,calc(100vw-2rem))]')
   })
 
   it('IconTooltip is the same shape around a trigger that keeps its accessible name', () => {

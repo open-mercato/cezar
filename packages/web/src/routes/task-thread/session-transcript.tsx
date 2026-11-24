@@ -1,7 +1,11 @@
-import { memo, useMemo, type ReactNode } from 'react'
+import { createContext, memo, useCallback, useContext, useMemo, useRef, type ReactNode } from 'react'
 
 import type { ApiRun, RunArtifact, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
+import type { MessageQuote } from '@/lib/message-quotes'
 import { sameData } from '@/lib/same-data'
+import type { RunHistoryState } from '@/api/run-history'
+import { highlightJumpTarget, untilFrame } from '@/components/my-messages/use-my-messages-nav'
+import { toast } from '@/components/ui/toaster'
 
 import { byNewest } from '../task-assets/assets-model'
 import { cardableArtifacts, ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
@@ -19,6 +23,7 @@ import {
   UserBubble,
 } from './thread-items'
 import { ThreadCardCache } from './thread-open-cards'
+import { SelectionToolbar, useCoarsePointer, useMessageSelection, type QuoteCapture } from '@/components/quote-selection'
 import { threadRenderMode } from './thread-scroll'
 import { DaySeparator, TurnTime, localDayKey } from './thread-time'
 import {
@@ -28,6 +33,7 @@ import {
   type ThreadRow,
   type ThreadScrollControls,
 } from './thread-scroller'
+import { revealThreadRow } from './use-thread-my-messages'
 import type {
   ThreadAsk,
   ThreadEntry,
@@ -98,7 +104,20 @@ export interface SessionTranscriptProps {
   renderMode?: 'flat' | 'virtual'
   /** Reuse rows already derived by the main view; panel callers can omit this. */
   rowModels?: readonly TranscriptRowModel[]
+  onQuote?: (capture: QuoteCapture) => void
+  /** The host's own `useMessageSelection()` (the task thread shares it with the composer's touch
+   *  chip). Omitted: the transcript listens itself. `null` means no capture. */
+  quoteCapture?: QuoteCapture | null
+  /** The toolbar was closed (Esc, ✕) without quoting. */
+  onQuoteDismiss?: () => void
+  onJump?: (quote: MessageQuote) => void
+  /** The section holding the agent's reply to the task (`turn-fallback-1`, no seq), given only
+   *  once the history's oldest page is loaded. Its messages quote as ref 0. */
+  firstTurnScope?: string
 }
+
+/** The `data-quote-owner` a transcript stamps on its quotable bodies. */
+export const quoteOwnerOf = (runId: string, viewId: string) => `${runId}:${viewId}`
 
 /** The main run record plus reduced turns, without rendering or backend inspection. */
 export function mainTranscriptSections(run: ApiRun, thread: ThreadState): TranscriptSection[] {
@@ -281,6 +300,11 @@ export function SessionTranscript({
   scrollControls,
   renderMode,
   rowModels: providedRowModels,
+  onQuote,
+  quoteCapture,
+  onQuoteDismiss,
+  onJump,
+  firstTurnScope,
 }: SessionTranscriptProps) {
   const rowModels = useMemo(
     () => providedRowModels ?? buildTranscriptRows(sections, runId),
@@ -288,6 +312,21 @@ export function SessionTranscript({
   )
   const internalScroll = useThreadScroll(`${runId}:${viewId}`, { surface: mode })
   const controls = scrollControls ?? internalScroll
+  // Only the main document's top-level messages are quotable; panels are a non-goal (spec § Non-goals).
+  const quoteOwner = mode === 'document' && onQuote !== undefined ? quoteOwnerOf(runId, viewId) : undefined
+  const ownSelection = useMessageSelection(quoteOwner !== undefined && quoteCapture === undefined)
+  const capture = quoteCapture === undefined ? ownSelection : quoteCapture
+  const ownCapture = quoteOwner !== undefined && capture?.source.dataset.quoteOwner === quoteOwner ? capture : null
+  const coarse = useCoarsePointer()
+  // Stable, so a streaming re-render does not re-bind the toolbar's listeners.
+  const onQuoteDismissRef = useRef(onQuoteDismiss)
+  onQuoteDismissRef.current = onQuoteDismiss
+  const dismissQuote = useCallback(() => onQuoteDismissRef.current?.(), [])
+  // A stable identity, so a caller's fresh arrow does not re-render every memoized row.
+  const onJumpRef = useRef(onJump)
+  onJumpRef.current = onJump
+  const stableJump = useCallback((quote: MessageQuote) => onJumpRef.current?.(quote), [])
+  const jump = onJump !== undefined ? stableJump : undefined
   const rows = useMemo<ThreadRow[]>(
     () =>
       rowModels.map((row) => ({
@@ -298,10 +337,12 @@ export function SessionTranscript({
             row={row}
             actions={messageActions?.[row.key]}
             renderAsk={renderAsk}
+            quoteOwner={quoteOwner}
+            onJump={jump}
           />
         ),
       })),
-    [messageActions, renderAsk, rowModels, runId],
+    [messageActions, jump, quoteOwner, renderAsk, rowModels, runId],
   )
   const rowMode = renderMode ?? threadRenderMode('', rows.length)
 
@@ -314,6 +355,7 @@ export function SessionTranscript({
 
   return (
     <ThreadCardCache runId={runId}>
+      <FirstTurnScope.Provider value={firstTurnScope}>
       {mode === 'panel' ? (
         <div
           data-slot="transcript-viewport"
@@ -334,22 +376,42 @@ export function SessionTranscript({
       ) : (
         transcript
       )}
+      {ownCapture && onQuote ? (
+        <SelectionToolbar capture={ownCapture} onQuote={onQuote} onDismiss={dismissQuote} placement={coarse ? 'below' : 'above'} />
+      ) : null}
+      </FirstTurnScope.Provider>
     </ThreadCardCache>
   )
 }
+
+/** Read by message rows only: changes once, when the oldest page arrives. */
+const FirstTurnScope = createContext<string | undefined>(undefined)
+
+/** The first turn's scope when it is the agent's reply to the task: it opens before any user
+ *  message, so it has no seq (`turn-fallback-*`). Only meaningful with the oldest page loaded. */
+export function firstTurnScopeOf(turnIds: readonly string[]): string | undefined {
+  const first = turnIds[0]
+  return first?.startsWith('turn-fallback-') ? first : undefined
+}
+
+type QuoteJump = (quote: MessageQuote) => void
 
 function TranscriptRow({
   runId,
   row,
   actions,
   renderAsk,
+  quoteOwner,
+  onJump,
 }: {
   runId: string
   row: TranscriptRowModel
   actions?: TranscriptMessageActions
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  quoteOwner?: string
+  onJump?: QuoteJump
 }) {
-  return renderRowContent(runId, row, actions, renderAsk)
+  return renderRowContent(runId, row, actions, renderAsk, quoteOwner, onJump)
 }
 
 const MemoizedRow = memo(
@@ -358,6 +420,8 @@ const MemoizedRow = memo(
     before.runId === after.runId &&
     before.actions === after.actions &&
     before.renderAsk === after.renderAsk &&
+    before.quoteOwner === after.quoteOwner &&
+    before.onJump === after.onJump &&
     sameData(before.row, after.row),
 )
 
@@ -366,10 +430,12 @@ function renderRowContent(
   row: TranscriptRowModel,
   actions: TranscriptMessageActions | undefined,
   renderAsk: ((ask: ThreadAsk) => ReactNode) | undefined,
+  quoteOwner: string | undefined,
+  onJump: QuoteJump | undefined,
 ): ReactNode {
   switch (row.content.kind) {
     case 'user-message':
-      return <TranscriptUserBubble runId={runId} message={row.content.message} actions={actions} />
+      return <TranscriptUserBubble runId={runId} rowKey={row.key} message={row.content.message} actions={actions} quoteOwner={quoteOwner} onJump={onJump} />
     case 'day-separator':
       return <DaySeparator ts={row.content.ts} />
     case 'turn-time':
@@ -382,21 +448,144 @@ function renderRowContent(
     case 'artifacts':
       return <ThreadArtifactCards runId={runId} artifacts={row.content.artifacts} />
     case 'block':
-      return <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
+      return <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} quoteOwner={quoteOwner} onJump={onJump} />
     default:
       return assertNever(row.content)
   }
 }
 
+/** The `#n` of a turn scope (`turn-seq-<n>`); undefined for fallback and attributed sections. */
+function turnRef(scope: string): number | undefined {
+  const match = /^turn-seq-(\d+)$/.exec(scope)
+  return match ? Number(match[1]) : undefined
+}
+
+/** The `#n` a user row's quote carries: 0 for the task description, the turn's seq otherwise. */
+function userRowRef(key: string): number | undefined {
+  if (key === 'task') return 0
+  const match = /^turn-seq-(\d+):user$/.exec(key)
+  return match ? Number(match[1]) : undefined
+}
+
+const plainText = (text: string) => text.replace(/[`*_~#>|[\]]/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * The row a quote's jump lands on (spec § 5): its exact row when loaded; for an assistant quote,
+ * the turn's top-level message holding the excerpt's first line, else the turn's first one.
+ */
+export function quoteTargetRowKey(
+  rows: readonly TranscriptRowModel[],
+  quote: Pick<MessageQuote, 'role' | 'ref' | 'rowKey'> & { excerpt?: string },
+): string | undefined {
+  if (quote.rowKey !== undefined && rows.some((row) => row.key === quote.rowKey)) return quote.rowKey
+  if (quote.ref === undefined) return undefined
+  if (quote.ref === 0 && quote.role === 'assistant') {
+    // The reply to the task: the first turn's rows, once the oldest page is loaded.
+    const first = rows.find((row) => row.scope.startsWith('turn-'))?.scope
+    return first?.startsWith('turn-fallback-') ? pickAssistantRow(rows.filter((row) => row.scope === first), quote.excerpt) : undefined
+  }
+  if (quote.ref === 0 || quote.role === 'user') {
+    const key = quote.ref === 0 ? 'task' : `turn-seq-${quote.ref}:user`
+    return rows.some((row) => row.key === key) ? key : undefined
+  }
+  const scope = `turn-seq-${quote.ref}`
+  return pickAssistantRow(rows.filter((row) => row.scope === scope), quote.excerpt)
+}
+
+function pickAssistantRow(rows: readonly TranscriptRowModel[], excerpt: string | undefined): string | undefined {
+  const candidates = rows.filter((row) => assistantText(row) !== undefined)
+  const firstLine = plainText(excerpt?.split('\n').find((line) => line.trim() !== '') ?? '')
+  const exact = firstLine === '' ? undefined : candidates.find((row) => plainText(assistantText(row)!).includes(firstLine))
+  return (exact ?? candidates[0])?.key
+}
+
+function assistantText(row: TranscriptRowModel): string | undefined {
+  if (row.content.kind !== 'block' || row.content.block.kind !== 'entry') return undefined
+  const entry = row.content.block.entry
+  return entry.kind === 'message' && entry.role === 'assistant' ? entry.text : undefined
+}
+
+/** True once the turn is loaded as far as the quote needs. A page that starts mid-turn carries the
+ *  turn's user row as context, so only an older turn (or the task) proves its replies are all in. */
+function turnStartLoaded(rows: readonly TranscriptRowModel[], ref: number, role: MessageQuote['role']): boolean {
+  if (ref === 0) return rows.some((row) => row.key === 'task')
+  return rows.some((row) =>
+    (role === 'user' && row.key === `turn-seq-${ref}:user`) || row.key === 'task' || (turnRef(row.scope) ?? Infinity) < ref)
+}
+
+/**
+ * A sent quote's Jump to message (spec § 5): pages back until the quoted turn is loaded, then
+ * reveals the row with the landing ring (issue 2218). A source that is gone toasts and does not scroll.
+ */
+export function useQuoteJump({
+  rows,
+  history,
+  scroll,
+}: {
+  rows: readonly TranscriptRowModel[]
+  history: Pick<RunHistoryState, 'hasOlder' | 'loadOlder'> | undefined
+  scroll: Pick<ThreadScrollControls, 'scrollElRef' | 'revealRow'>
+}): QuoteJump {
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
+  const historyRef = useRef(history)
+  historyRef.current = history
+  const scrollRef = useRef(scroll)
+  scrollRef.current = scroll
+  // A newer click supersedes a jump still paging, so repeated clicks never stack loops.
+  const generation = useRef(0)
+  return useCallback((quote: MessageQuote) => {
+    const mine = ++generation.current
+    void (async () => {
+      const ref = quote.ref
+      const settled = () => {
+        const current = rowsRef.current
+        if (quote.rowKey !== undefined && current.some((row) => row.key === quote.rowKey)) return true
+        // The reply to the task is only identifiable with the oldest page loaded.
+        if (ref === 0 && quote.role === 'assistant') return false
+        return ref !== undefined && turnStartLoaded(current, ref, quote.role)
+      }
+      while (!settled() && historyRef.current?.hasOlder) {
+        const before = rowsRef.current
+        try {
+          await historyRef.current.loadOlder()
+        } catch {
+          break
+        }
+        // The page resolves before its rows render; a page that adds nothing ends the walk.
+        const grew = await untilFrame(() => rowsRef.current.length > before.length)
+        if (mine !== generation.current) return
+        if (!grew) break
+      }
+      if (mine !== generation.current) return
+      const key = quoteTargetRowKey(rowsRef.current, quote)
+      if (key === undefined) {
+        toast('That message is no longer in this transcript.', { tone: 'danger' })
+        return
+      }
+      const row = await revealThreadRow(scrollRef.current, key)
+      const target = row?.querySelector<HTMLElement>('[data-slot="user-bubble"], [data-slot="assistant-message"]') ?? row
+      if (target) highlightJumpTarget(target)
+    })()
+  }, [])
+}
+
 function TranscriptUserBubble({
   runId,
+  rowKey,
   message,
   actions,
+  quoteOwner,
+  onJump,
 }: {
   runId: string
+  rowKey: string
   message: TranscriptUserMessage
   actions?: TranscriptMessageActions
+  quoteOwner?: string
+  onJump?: QuoteJump
 }) {
+  const ref = userRowRef(rowKey)
   return (
     <UserBubble
       text={message.text}
@@ -409,6 +598,8 @@ function TranscriptUserBubble({
       removeLabel={actions?.removeLabel}
       draftRunId={actions?.draftSurface !== undefined ? runId : undefined}
       draftSurface={actions?.draftSurface}
+      {...(quoteOwner !== undefined ? { quoteSource: { owner: quoteOwner, ...(ref !== undefined ? { ref } : {}) } } : {})}
+      onJump={onJump}
     />
   )
 }
@@ -417,14 +608,19 @@ const ThreadBlockRenderer = memo(function ThreadBlockRenderer({
   block,
   scope,
   renderAsk,
+  quoteOwner,
+  onJump,
 }: {
   block: ThreadBlock
   scope: string
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  /** Set only for a top-level row: messages nested in tool cards are not quotable. */
+  quoteOwner?: string
+  onJump?: QuoteJump
 }): ReactNode {
   switch (block.kind) {
     case 'entry':
-      return <ThreadEntryRenderer entry={block.entry} scope={scope} renderAsk={renderAsk} />
+      return <ThreadEntryRenderer entry={block.entry} scope={scope} renderAsk={renderAsk} quoteOwner={quoteOwner} onJump={onJump} />
     case 'tool-card':
       return (
         <ToolCard
@@ -469,18 +665,26 @@ function ThreadEntryRenderer({
   entry,
   scope,
   renderAsk,
+  quoteOwner,
+  onJump,
 }: {
   entry: ThreadEntry
   scope: string
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  quoteOwner?: string
+  onJump?: QuoteJump
 }): ReactNode {
+  const firstTurnScope = useContext(FirstTurnScope)
   switch (entry.kind) {
-    case 'message':
+    case 'message': {
+      const ref = turnRef(scope) ?? (firstTurnScope === scope ? 0 : undefined)
+      const quoteSource = quoteOwner !== undefined ? { owner: quoteOwner, ...(ref !== undefined ? { ref } : {}) } : undefined
       return entry.role === 'assistant' ? (
-        <AssistantMessage text={entry.text} />
+        <AssistantMessage text={entry.text} quoteSource={quoteSource} />
       ) : (
-        <UserBubble text={entry.text} />
+        <UserBubble text={entry.text} quoteSource={quoteSource} onJump={onJump} />
       )
+    }
     case 'reasoning':
       return <ReasoningItem text={entry.text} />
     case 'tool':
@@ -510,12 +714,13 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled transcript variant: ${JSON.stringify(value)}`)
 }
 
-function sameThreadBlockProps(
-  previous: { block: ThreadBlock; scope: string; renderAsk?: (ask: ThreadAsk) => ReactNode },
-  next: { block: ThreadBlock; scope: string; renderAsk?: (ask: ThreadAsk) => ReactNode },
-): boolean {
+type ThreadBlockProps = { block: ThreadBlock; scope: string; renderAsk?: (ask: ThreadAsk) => ReactNode; quoteOwner?: string; onJump?: QuoteJump }
+
+function sameThreadBlockProps(previous: ThreadBlockProps, next: ThreadBlockProps): boolean {
   return (
     previous.scope === next.scope &&
+    previous.quoteOwner === next.quoteOwner &&
+    previous.onJump === next.onJump &&
     sameThreadBlock(previous.block, next.block) &&
     (!containsAsk(next.block) || previous.renderAsk === next.renderAsk)
   )

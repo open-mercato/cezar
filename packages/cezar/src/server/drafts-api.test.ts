@@ -29,7 +29,7 @@ import { apiRequest } from './loopback-request.testkit.ts';
  *  `packages/contract` is not a vitest project, so its schemas are exercised from here. */
 describe('contract/drafts.ts schemas', () => {
   it('accepts the surface vocabulary and refuses anything else', () => {
-    for (const ok of ['composer', 'review-notes', 'diff-comments', 'task-prompt', 'title', 'message:abc_1-2']) {
+    for (const ok of ['composer', 'review-notes', 'diff-comments', 'message-quotes', 'task-prompt', 'title', 'message:abc_1-2']) {
       expect(draftSurfaceSchema.safeParse(ok).success).toBe(true);
     }
     for (const bad of ['../x', 'message:../x', 'composer/../..', 'Composer', '', 'message:']) {
@@ -100,13 +100,14 @@ describe('/api/v1/runs/:id/drafts', () => {
   });
 
   it('accepts every surface in the vocabulary, including a per-message one', async () => {
-    for (const surface of ['composer', 'review-notes', 'diff-comments', 'task-prompt', 'title', 'message:abc-123']) {
+    for (const surface of ['composer', 'review-notes', 'diff-comments', 'message-quotes', 'task-prompt', 'title', 'message:abc-123']) {
       expect((await put(surface, { text: `draft for ${surface}` })).status).toBe(200);
     }
     const listed = (await (await drafts()).json()) as RunDraftsResponse;
     expect(Object.keys(listed.surfaces).sort()).toEqual([
       'composer',
       'diff-comments',
+      'message-quotes',
       'message:abc-123',
       'review-notes',
       'task-prompt',

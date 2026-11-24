@@ -34,7 +34,8 @@ import { Link } from '@/lib/project-router'
 import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
-import { parseReviewMessage } from './diff-comments'
+import { parseMessageWithQuotesAndReview } from '@/lib/message-quotes'
+import { QuoteCards, type MessageQuote } from '@/components/quote-selection'
 import { Markdown } from './markdown'
 import { ReviewCommentsBlock } from './review-comments-block'
 import { useDraft } from './thread-draft'
@@ -96,6 +97,8 @@ export function UserBubble({
   removeLabel = 'Remove message',
   draftRunId,
   draftSurface,
+  quoteSource,
+  onJump,
 }: {
   text: string
   imageCount?: number
@@ -112,6 +115,10 @@ export function UserBubble({
    *  an editor whose text is restored but stays closed is state the user cannot see. */
   draftRunId?: string
   draftSurface?: string
+  /** Present only on a top-level message of the transcript that takes quotes (spec
+   *  2026-11-20-quote-message-fragments § 1). */
+  quoteSource?: QuoteSource
+  onJump?: (quote: MessageQuote) => void
 }) {
   const missing = imageCount - images.length
   const [editing, setEditing] = useState(false)
@@ -290,7 +297,7 @@ export function UserBubble({
         </span>
       ) : null}
       {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
-      <UserText text={text} />
+      <UserText text={text} quoteSource={quoteSource} onJump={onJump} />
       {images.length > 0 ? (
         <span data-slot="user-images" className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
           {/* One list carries both kinds (#950), so the NAME decides how each entry renders: an
@@ -338,25 +345,49 @@ export function UserBubble({
  * tab) renders the review as comment cards under whatever was typed; anything else is the plain
  * Markdown it always was.
  */
-function UserText({ text }: { text: string }) {
-  const review = useMemo(() => parseReviewMessage(text), [text])
-  if (!review) return <Markdown breaks>{text}</Markdown>
+function UserText({ text, quoteSource, onJump }: { text: string; quoteSource?: QuoteSource; onJump?: (quote: MessageQuote) => void }) {
+  const parsed = useMemo(() => parseMessageWithQuotesAndReview(text), [text])
+  if (!parsed) return <QuoteBody role="user" source={quoteSource}><Markdown breaks>{text}</Markdown></QuoteBody>
+  // Wire order: typed text, quotes, then the review.
   return (
     <>
-      {review.lead !== '' ? <Markdown breaks>{review.lead}</Markdown> : null}
-      <ReviewCommentsBlock items={review.items} />
+      {parsed.lead !== '' ? <QuoteBody role="user" source={quoteSource}><Markdown breaks>{parsed.lead}</Markdown></QuoteBody> : null}
+      {parsed.quotes.length > 0 ? <QuoteCards quotes={parsed.quotes} onJump={onJump} taskDescription /> : null}
+      {parsed.comments.length > 0 ? <ReviewCommentsBlock items={parsed.comments} /> : null}
     </>
   )
 }
 
+/** Where a message sits for quoting: which transcript owns it and its turn's `#n`. */
+export interface QuoteSource {
+  owner: string
+  ref?: number
+}
+
+/** Wraps the text in the `data-quote-*` marks `captureFromSelection` reads; no wrapper at all
+ *  for a message that is not quotable. */
+function QuoteBody({ role, source, children }: { role: MessageQuote['role']; source: QuoteSource | undefined; children: ReactNode }) {
+  if (source === undefined) return children
+  return (
+    <div
+      data-quote-body=""
+      data-quote-role={role}
+      data-quote-owner={source.owner}
+      {...(source.ref === undefined ? {} : { 'data-quote-ref': String(source.ref) })}
+    >
+      {children}
+    </div>
+  )
+}
+
 /** An assistant message item, as markdown. */
-export function AssistantMessage({ text }: { text: string }) {
+export function AssistantMessage({ text, quoteSource }: { text: string; quoteSource?: QuoteSource }) {
   return (
     <div data-slot="assistant-message" className={cn('group min-w-0 leading-[1.65]', THREAD_PROSE_MEASURE)}>
       {text.trim() !== '' ? (
         <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div>
       ) : null}
-      <Markdown>{text}</Markdown>
+      <QuoteBody role="assistant" source={quoteSource}><Markdown>{text}</Markdown></QuoteBody>
     </div>
   )
 }

@@ -30,10 +30,12 @@ import { useRunGitStep } from '../task-git/run-git-step'
 import { finishTitle } from './run-actions'
 import { useContinuationProvider } from './continuation-provider'
 import { useDeliverPrompt } from './deliver-prompt'
-import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
+import type { DiffComment, DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
 import { writeClipboard } from '@/lib/clipboard'
+import type { MessageQuotes } from './message-quotes-store'
+import { messageWithQuotesAndReview, type MessageQuote } from '@/lib/message-quotes'
 
 /**
  * The review gate (spec 009, §"Task thread" review bullet) on the new surface — cezar's core
@@ -51,7 +53,7 @@ import { writeClipboard } from '@/lib/clipboard'
 /** The review gate's attention, from the one canonical function — blue, pulsing: waiting on you. */
 const REVIEW_GATE = deriveAttention({ status: 'review' })
 
-export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+export function ReviewPanel({ run, diffComments, messageQuotes }: { run: ApiRun; diffComments?: DiffComments; messageQuotes?: MessageQuotes }) {
   return (
     <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
       {/* The review gate waits on a person: the banner wears `deriveAttention`'s tone for `review`
@@ -72,14 +74,24 @@ export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?:
       </div>
 
       <RunDiff runId={run.id} />
-      <ReviewActions run={run} diffComments={diffComments} />
+      <ReviewActions run={run} diffComments={diffComments} messageQuotes={messageQuotes} />
     </section>
   )
 }
 
 // ---- notes + exits --------------------------------------------------------------------------
 
-function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+// No quotes without a host store: a store of its own here would compete with ThreadView's.
+const NO_QUOTES: MessageQuotes = {
+  ready: true,
+  quotes: [],
+  add: () => false,
+  update: () => false,
+  remove: () => {},
+  submit: (send) => send([]),
+}
+
+function ReviewActions({ run, diffComments, messageQuotes = NO_QUOTES }: { run: ApiRun; diffComments?: DiffComments; messageQuotes?: MessageQuotes }) {
   const queryClient = useQueryClient()
   const notesRef = useRef<HTMLTextAreaElement>(null)
   // Review notes are the second-longest thing anyone types into a task, and they are typed while
@@ -113,15 +125,10 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
       // and a rejected send-back leaves them in the box AND in the store.
       // The line comments go with the notes, and are dropped on the same terms: only once the
       // send-back has landed.
-      const deliver = async (held: Parameters<typeof messageWithReview>[1]) => {
-        // Checked against the cap with the prefix it actually goes out with.
-        const message = `Review feedback:\n${messageWithReview(text, held)}`
-        if (message.length > MESSAGE_TEXT_MAX) {
-          throw new Error('Too long with the diff comments attached — shorten the notes or remove some comments.')
-        }
-        return deliverPrompt(message, [])
-      }
-      return draft.submit(() => (diffComments ? diffComments.submit(deliver) : deliver([])))
+      // Checked against the cap with the prefix it actually goes out with.
+      const deliver = async (held: readonly DiffComment[], heldQuotes: readonly MessageQuote[]) =>
+        deliverPrompt(messageWithQuotesAndReview(text, heldQuotes, held, 'Review feedback:\n'), [])
+      return draft.submit(() => messageQuotes.submit((heldQuotes) => diffComments ? diffComments.submit((held) => deliver(held, heldQuotes)) : deliver([], heldQuotes)))
     },
     onSuccess: (result) => {
       if (result === null) return
@@ -149,10 +156,11 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   const openDraftPr = () => (git.byAgent ? git.onAction('create-draft-pr') : draftPr.mutate())
 
   const commentCount = diffComments?.comments.length ?? 0
+  const quoteCount = messageQuotes.quotes.length
   const submitNotes = () => {
     const text = notes.trim()
-    // Drafted line comments are feedback on their own.
-    if (text.length === 0 && commentCount === 0) {
+    // Drafted line comments and quotes are feedback on their own.
+    if (text.length === 0 && commentCount === 0 && quoteCount === 0) {
       // Legacy `alertBar('Write what to change first.')` + focus.
       toast('Write what to change first.')
       notesRef.current?.focus()
