@@ -59,7 +59,7 @@ export function RunTagsEditor({
   const resolved = useRunTags(run.tags)
   const { stateOf, toggle } = useRunTagToggle(run.id, run.tags)
   return (
-    <span data-slot="run-tags" className="inline-flex min-w-0 shrink items-center gap-1 overflow-hidden">
+    <span data-slot="run-tags" className="inline-flex min-w-0 flex-wrap items-center gap-1">
       {resolved.map((tag) => (
         <TaskTagChip key={tag.id} tag={tag} onRemove={() => toggle(tag, false)} />
       ))}

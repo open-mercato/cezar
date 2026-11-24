@@ -205,10 +205,12 @@ function RunHeaderView({
               {quietWord ? <QuietStatusWord word={quietWord} title={idleClosedDetail(run)} className="max-md:hidden" /> : null}
               {/* In the title row so a folded header still shows it (main had it here). */}
               <ImpactChip run={run} />
-              <RunTagsEditor run={run} open={tagsOpen} onOpenChange={setTagsOpen} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
-              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} onTags={() => setTagsOpen(true)} />
+              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} onTags={() => {
+                if (collapsed) setCollapsed(false)
+                setTagsOpen(true)
+              }} />
               {/* Desktop: fold the meta row and the step rail away, leaving the title and the
                   tabs — the minimalist view short of full screen. Phones keep every line. */}
               <IconTooltip label={collapsed ? 'Expand header' : 'Collapse header'}>
@@ -257,6 +259,7 @@ function RunHeaderView({
               // here tolerates an absent object. Absent stays fail-closed — the chip degrades to
               // text rather than linking into a disabled view.
               automationsAvailable={health.data?.capabilities?.automations === true}
+              tags={<RunTagsEditor run={run} open={tagsOpen} onOpenChange={setTagsOpen} />}
             />
           </div>
           {/* Status, not metadata: "this run wakes itself up at 14:20" belongs with the chip. */}
@@ -819,6 +822,7 @@ function MetaRow({
   planTally,
   budget,
   automationsAvailable,
+  tags,
 }: {
   run: ApiRun
   /** The header's resolved references (`useRunReferences`) — its PR chips are painted here. */
@@ -834,6 +838,8 @@ function MetaRow({
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
   automationsAvailable: boolean
+  /** The tag editor, last on the line: it wraps with the line instead of being clipped by the title. */
+  tags: ReactNode
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
@@ -932,6 +938,8 @@ function MetaRow({
       ),
     )
   }
+
+  parts.push(tags)
 
   return (
     <div

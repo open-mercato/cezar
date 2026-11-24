@@ -227,6 +227,24 @@ describe('collapse header — the minimalist view short of full screen', () => {
     expect(localStorage.getItem('cez:run-header-collapsed')).toBeNull()
   })
 
+  it('puts the tag editor last on the wrapping meta line, never in the clipped title row', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    expect(document.querySelector('[data-slot="run-title-row"] [data-slot="run-tags"]')).toBeNull()
+    const meta = document.querySelector('[data-slot="run-meta"]')!
+    expect(meta.lastElementChild?.getAttribute('data-slot')).toBe('run-tags')
+    expect(meta.lastElementChild!.className).not.toContain('overflow-hidden')
+  })
+
+  it('"Tags…" unfolds a folded header so the picker has its anchor', async () => {
+    localStorage.setItem('cez:run-header-collapsed', '1')
+    stubFetch()
+    renderHeader(run('done'))
+    const menu = await openMenu()
+    fireEvent.click(menu.getByRole('menuitem', { name: /Tags…/ }))
+    await waitFor(() => expect(details().className).not.toContain('md:hidden'))
+  })
+
   it('opens folded when this browser folded it last time', () => {
     localStorage.setItem('cez:run-header-collapsed', '1')
     stubFetch()
@@ -2589,7 +2607,8 @@ describe('the facts line reads cleanly on both sides of the breakpoint', () => {
           return !/(^|\s)hidden(\s|$)/.test(className)
         })
         .map((node) => node.textContent?.trim())
-    expect(reads('desktop')).toEqual(['quick-task', '·', '1 of 1 done', '·', 'cez/r1', '·', '+1 −0'])
-    expect(reads('phone')).toEqual(['Needs review', '·', '1 of 1 done', '·', '+1 −0'])
+    // The tag editor closes the line on both breakpoints (its "Tag" add button when untagged).
+    expect(reads('desktop')).toEqual(['quick-task', '·', '1 of 1 done', '·', 'cez/r1', '·', '+1 −0', '·', 'Tag'])
+    expect(reads('phone')).toEqual(['Needs review', '·', '1 of 1 done', '·', '+1 −0', '·', 'Tag'])
   })
 })
