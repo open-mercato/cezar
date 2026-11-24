@@ -22,8 +22,9 @@ export function workflowAgentSwitch(
   const overrides = { ...previous?.overrides };
   for (const slot of ['unpinned', ...RUNNER_IDS] as const) {
     const old = overrides[slot];
-    if (slot !== 'unpinned' && (old?.runner ?? slot) !== from) continue;
-    const keepsRunner = (old?.runner ?? (slot === 'unpinned' ? original.runner : slot)) === target.runner;
+    const effective = old?.runner ?? (slot === 'unpinned' ? original.runner : slot);
+    if (effective !== from) continue;
+    const keepsRunner = effective === target.runner;
     overrides[slot] = {
       runner: target.runner,
       agentProfile: target.agentProfile,
@@ -60,10 +61,15 @@ export function switchedWorkflowAgent(run: RunRecord, pin: AgentPin) {
 
 /** The agent a switch replaces, including a workflow pin the task itself did not request. */
 export function taskAgentSelection(run: RunRecord, defaultRunner: RunnerId = 'claude') {
-  const live = run.status === 'queued' ? undefined
-    : run.steps.find((step) => step.id === run.currentStepId && step.backend)
-      ?? [...run.steps].reverse().find((step) => step.backend);
+  let live = run.status === 'queued' ? undefined : run.steps.find((step) => step.id === run.currentStepId && step.backend);
+  if (!live && run.status !== 'queued') {
+    // Repair turns and graph loops can run outside the order of the stored steps.
+    for (const step of run.steps) {
+      if (step.backend && (step.startedAt ?? '') >= (live?.startedAt ?? '')) live = step;
+    }
+  }
   const queuedWorkflow = run.status === 'queued'
+    && !run.agentSwitch?.checkRepair
     && !run.steps.some((step) => step.status === 'pending' && step.id.startsWith('continue-'));
   const definition = live ? run.workflowDef?.steps.find((step) => step.id === live.id)
     : queuedWorkflow ? run.workflowDef?.steps.find((step) => step.id === run.graphState?.cursor && stepKind(step) === 'agent')

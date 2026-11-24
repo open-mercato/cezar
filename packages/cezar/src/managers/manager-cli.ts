@@ -145,7 +145,7 @@ Messages a running task, or continues a finished one with the text.
 
 Choose at least one agent flag. Switches a queued task before it starts, interrupts a live agent turn,
 or continues a settled task with its conversation. Keeps the run id, worktree, branch, and history.
-The choice applies to unfinished agent steps on the replaced runner or with no runner pin.
+The choice applies to unfinished agent steps that use the replaced runner.
 Only a task this manager started, unless the user allowed "Cancel or switch any task" in its settings.`,
   'task cancel': `cez manager task cancel --project <id> <run> [--reason "…"]
 

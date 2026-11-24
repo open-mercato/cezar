@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
+import { createWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -103,6 +105,22 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)?.steps.map((step) => [step.id, step.status])).toEqual(steps.map((step) => [step, 'done']));
   }
 
+  async function addWorkAccount(runner: 'claude' | 'codex') {
+    const configDir = join(root, `${runner}-work`);
+    mkdirSync(configDir);
+    await mergeWriteAgentAccounts((state) => {
+      state.accounts.push({ id: 'work', provider: runner, configDir, label: 'Work', addedAt: '' });
+    });
+  }
+
+  async function restart() {
+    manager.dispose();
+    store.flush();
+    store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, root, { semaphore });
+    await manager.recover();
+  }
+
   it('changes a queued task before its first launch, preserving its prompt stack and queue position', async () => {
     const blocker = manager.startRun(workflow, { task: 'first', worktree: false });
     await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
@@ -159,11 +177,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
   });
 
   it.each(['claude', 'codex'] as const)('scopes a switch to %s to the replaced runner and unpinned steps', async (runner) => {
-    const accountDir = join(root, `${runner}-work`);
-    mkdirSync(accountDir);
-    await mergeWriteAgentAccounts((accounts) => {
-      accounts.accounts.push({ id: 'work', provider: runner, configDir: accountDir, label: 'Work', addedAt: '' });
-    });
+    await addWorkAccount(runner);
     const mixed = { ...workflow, steps: [
       { ...workflow.steps[0]!, reasoningEffort: 'high' },
       { ...workflow.steps[1]!, id: 'same-runner', reasoningEffort: 'low' },
@@ -188,6 +202,173 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
       ? ['high', 'low', 'medium'] : [undefined, undefined, undefined]);
     expect(sessions[4]).toMatchObject({ backend: 'codex', spec: { model: 'gpt-6.2-sol', reasoningEffort: 'medium' } });
     expect(store.getRun(id)?.steps.map((step) => step.profileId)).toEqual(['work', 'work', 'work', 'default']);
+  });
+
+  it.each(['codex', 'opencode'] as const)('keeps unpinned Claude steps when switching a pinned Codex step to %s', async (runner) => {
+    await addWorkAccount('codex');
+    const mixed = { ...workflow, steps: [
+      { id: 'review', prompt: '{{task}}', runner: 'codex', model: 'gpt-6.2-sol', reasoningEffort: 'low' },
+      { id: 'work', prompt: '{{task}}', model: 'opus', reasoningEffort: 'high' },
+      { id: 'verify', prompt: '{{task}}' },
+    ] } satisfies WorkflowDef;
+    const { id } = manager.startRun(mixed, { task: 'Review and verify', runner: 'claude', model: 'sonnet', reasoningEffort: 'medium' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]?.backend).toBe('codex');
+    expect(manager.switchAgent(id, {
+      runner, agentProfile: runner === 'codex' ? 'work' : 'default', changedBy: selection.changedBy,
+    })).toHaveProperty('summary');
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]).toMatchObject({ backend: runner, spec: {
+      model: runner === 'codex' ? 'gpt-6.2-sol' : undefined, reasoningEffort: runner === 'codex' ? 'low' : undefined,
+    } });
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(sessions[2]).toMatchObject({ backend: 'claude', spec: { model: 'opus', reasoningEffort: 'high' } });
+    sessions[2]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    expect(sessions[3]).toMatchObject({ backend: 'claude', spec: { model: 'sonnet', reasoningEffort: 'medium' } });
+    sessions[3]!.settle();
+    await expectFinished(id, ['review', 'work', 'verify']);
+    expect(store.getRun(id)?.steps.map((step) => step.profileId)).toEqual([
+      runner === 'codex' ? 'work' : 'default', 'default', 'default',
+    ]);
+  });
+
+  it('targets the effective runner and retains explicitly selected model and effort on a second switch', async () => {
+    await addWorkAccount('codex');
+    const mixed = { ...workflow, steps: [
+      workflow.steps[0]!, { id: 'review', prompt: '{{task}}' }, { id: 'other', prompt: '{{task}}', runner: 'pi' },
+    ] } satisfies WorkflowDef;
+    const { id } = manager.startRun(mixed, { task: 'Implement it', runner: 'claude' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'work', changedBy: selection.changedBy })).toHaveProperty('summary');
+    sessions[1]!.settle();
+    for (let i = 2; i <= 3; i++) {
+      await vi.waitFor(() => expect(sessions).toHaveLength(i + 1), wait);
+      expect(sessions[i]).toMatchObject({ backend: 'codex', spec: { model: selection.model, reasoningEffort: selection.reasoningEffort } });
+      sessions[i]!.settle();
+    }
+    await vi.waitFor(() => expect(sessions).toHaveLength(5), wait);
+    expect(sessions[4]?.backend).toBe('pi');
+    sessions[4]!.settle();
+    await expectFinished(id, ['work', 'review', 'other']);
+    expect(store.getRun(id)?.steps.map((step) => step.profileId)).toEqual(['work', 'work', 'default']);
+  });
+
+  it('restores the selected runner, model and effort on older switched workflow records', async () => {
+    const mixed = { ...workflow, steps: [workflow.steps[0]!, { id: 'review', prompt: '{{task}}', runner: 'pi' }] } satisfies WorkflowDef;
+    const { id } = store.createRun({ title: 'Legacy switch', task: 'Keep working', workflow: mixed.name, worktree: false,
+      steps: mixed.steps.map((step) => ({ id: step.id, name: step.id, kind: 'agent' as const })),
+    });
+    store.updateRun(id, {
+      status: 'queued', workflowDef: mixed, runner: selection.runner, model: selection.model, agentProfile: selection.agentProfile,
+      reasoningEffort: selection.reasoningEffort, agentSwitch: { summary: 'Old switch record', workflow: true },
+    });
+    await restart();
+    for (let i = 0; i < 2; i++) {
+      await vi.waitFor(() => expect(sessions).toHaveLength(i + 1), wait);
+      expect(sessions[i]).toMatchObject({ backend: 'codex', spec: { model: selection.model, reasoningEffort: selection.reasoningEffort } });
+      sessions[i]!.settle();
+    }
+    await expectFinished(id, ['work', 'review']);
+  });
+
+  it('applies gate instructions in the switched implementer’s session', async () => {
+    await addWorkAccount('codex');
+    const graph = compileV1(workflow.steps);
+    graph.nodes.push({ id: 'approval', type: 'gate.human', message: 'Ready for review?' });
+    graph.edges.find((edge) => edge.from === 'work.done')!.to = 'approval';
+    graph.edges.push({ from: 'approval.approve', to: 'review' });
+    const { id } = manager.startRun({ ...workflow, graph, steps: graphToSteps(graph) }, { task: 'Implement it' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(manager.switchAgent(id, { ...selection, agentProfile: 'work' })).toHaveProperty('summary');
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    const worker = sessions[1]!;
+    worker.settle();
+    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'waiting', currentStepId: 'approval' }), wait);
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'Update the release note first.' }])).toBe(true);
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    const gate = sessions[2]!;
+    expect(gate).toMatchObject({ backend: 'codex', spec: {
+      resume: true, sessionId: worker.spec.sessionId, model: selection.model, reasoningEffort: selection.reasoningEffort,
+    } });
+    expect(gate.spec.userPrompt).toContain('Update the release note first.');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'approval')?.profileId).toBe('work');
+    gate.emit({ type: 'text', text: 'CEZ:VERDICT applied' });
+    gate.emit({ type: 'turn-end' });
+    gate.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    sessions[3]!.settle();
+    await expectFinished(id, ['work', 'approval', 'review']);
+  });
+
+  it('starts a fresh session when a continued workflow node would reuse another account’s session', async () => {
+    await addWorkAccount('claude');
+    const graph = compileV1([...workflow.steps, { id: 'follow-up', prompt: '{{task}}' }]);
+    const followUp = graph.nodes.find((node) => node.id === 'follow-up');
+    if (followUp?.type !== 'agent') throw new Error('missing follow-up agent in fixture');
+    followUp.session = { continue: 'work' };
+    const { id } = manager.startRun({ ...workflow, graph, steps: graphToSteps(graph) }, { task: 'Implement it' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(manager.switchAgent(id, { runner: 'claude', agentProfile: 'work', changedBy: selection.changedBy })).toHaveProperty('summary');
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    sessions[2]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    expect(sessions[3]!.spec.resume).toBe(false);
+    expect(sessions[3]!.spec.sessionId).not.toBe(sessions[0]!.spec.sessionId);
+    expect(store.readEvents(id)).toContainEqual(expect.objectContaining({
+      stepId: 'follow-up', message: 'session.continue: starting fresh — "work" used a different account',
+    }));
+    sessions[3]!.settle();
+    await expectFinished(id, ['work', 'review', 'follow-up']);
+    expect(store.getRun(id)?.steps.map((step) => step.profileId)).toEqual(['default', 'work', 'work']);
+  });
+
+  it.each([false, true])('reopens the switched session after usage-limit recovery (check repair: %s)', async (repair) => {
+    await addWorkAccount('codex');
+    const definition = repair ? { ...workflow, steps: [
+      workflow.steps[0]!, { id: 'verify', command: 'test -f ready' }, workflow.steps[1]!,
+    ] } : workflow;
+    const { id } = manager.startRun(definition, { task: 'Implement it' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    if (repair) {
+      sessions[0]!.settle();
+      await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+      expect(store.getRun(id)?.status).toBe('failed');
+    }
+    expect(manager.switchAgent(id, { ...selection, agentProfile: 'work' })).toHaveProperty('summary');
+    const repairId = store.getRun(id)?.agentSwitch?.checkRepair?.stepId;
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    sessions[1]!.emit({ type: 'error', message: 'Usage limit reached, try again in 60 minutes' });
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'failed', autoResumeReason: 'usage_limit' }), wait);
+    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
+    try {
+      (manager as unknown as { fireAutoResume(runId: string): void }).fireAutoResume(id);
+      expect(store.getRun(id)).toMatchObject({ status: 'queued', autoResumeAttempts: 1 });
+    } finally {
+      release();
+    }
+    await restart();
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(sessions[2]).toMatchObject({ backend: 'codex', spec: { resume: true, sessionId: sessions[1]!.spec.sessionId, model: selection.model } });
+    if (repair) writeFileSync(join(sessions[2]!.spec.cwd, 'ready'), '');
+    sessions[2]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    expect(sessions[3]).toMatchObject({ backend: 'codex', spec: { resume: false } });
+    sessions[3]!.settle();
+    await expectFinished(id, repair ? ['work', 'verify', 'review', repairId!] : ['work', 'review']);
+    expect(store.getRun(id)?.steps.find((step) => step.id === (repairId ?? 'work'))?.profileId).toBe('work');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'review')?.profileId).toBe('work');
   });
 
   it('hands over a live Continue after releasing its session', async () => {
@@ -323,6 +504,71 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.readEvents(id)).toContainEqual(expect.objectContaining({ message: 'run cancelled during agent switch' }));
   });
 
+  it.each(['cancel', 'restart', 'cancel after restart'] as const)('handles %s after switching during a blocked worktree setup', async (outcome) => {
+    const id = finishedRun();
+    const tree = await createWorktree(root, id, 'main');
+    store.updateRun(id, { worktreePath: tree.path, branch: tree.branch, baseBranch: tree.baseBranch });
+    const operationId = randomUUID();
+    const worktreeId = randomUUID();
+    const hold = deferred<void>();
+    vi.spyOn(manager.lifecycle, 'requiresGate').mockResolvedValue(true);
+    vi.spyOn(manager.lifecycle, 'prepare').mockImplementationOnce(async (_id, baseBranch, pendingLaunch, signal) => {
+      const now = new Date().toISOString();
+      await manager.lifecycle.store.writeWorktree({
+        schemaVersion: 1, worktreeId, runId: id, projectRoot: root, worktreePath: tree.path, branch: tree.branch,
+        generation: 1, autoCleanupSuppressed: false, activeOperationId: operationId, createdAt: now, updatedAt: now,
+      });
+      await manager.lifecycle.store.writeOperation({
+        schemaVersion: 1, id: operationId, worktreeId, generation: 1, phase: 'setup', intent: 'create', state: 'running',
+        revision: 1, createdAt: now, updatedAt: now, pendingLaunch, executions: [], successfulEntries: [], requests: [],
+      });
+      store.updateRun(id, { worktreeLifecycle: {
+        worktreeId, generation: 1, activeOperationId: operationId, phase: 'setup', state: 'running', needsAttention: false,
+      } });
+      await hold.promise;
+      expect(signal?.aborted).toBe(true);
+      return { ready: false, path: tree.path, branch: tree.branch, baseBranch, operationId };
+    });
+    const text = 'Use the attached reproduction once setup finishes';
+    expect(manager.continueRun(id, { text, images: [screenshot] })).toEqual({ ok: true });
+    try {
+      await vi.waitFor(() => expect(manager.lifecycle.isBlocked(id)).toBe(true), wait);
+      expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+      expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBe('continue-1');
+      expect(sessions).toHaveLength(0);
+      if (outcome === 'cancel') expect(manager.cancel(id)).toBe(true);
+    } finally {
+      hold.resolve();
+    }
+    if (outcome === 'cancel') {
+      await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+      expect(store.getRun(id)).toMatchObject({ status: 'cancelled', steps: [{ status: 'done' }, { id: 'continue-1', status: 'cancelled' }] });
+      expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBeUndefined();
+      expect(sessions).toHaveLength(0);
+      return;
+    }
+    await restart();
+    const operation = await manager.lifecycle.operation(operationId);
+    expect(operation.state).toBe('interrupted');
+    expect(store.getRun(id)?.status).toBe('waiting');
+    expect(sessions).toHaveLength(0);
+    expect((await manager.lifecycle.store.readOperation(operationId))?.pendingLaunch).toMatchObject({ backend: 'claude', sessionId: 'original' });
+    if (outcome === 'cancel after restart') {
+      await manager.lifecycle.action(operationId, { action: 'cancel-task', expectedRevision: operation.revision, requestId: randomUUID() });
+      expect(store.getRun(id)).toMatchObject({ status: 'cancelled', steps: [{ status: 'done' }, { id: 'continue-1', status: 'cancelled' }] });
+      expect(store.getRun(id)?.agentSwitch?.continuationStepId).toBeUndefined();
+      expect(sessions).toHaveLength(0);
+      return;
+    }
+    await manager.lifecycle.action(operationId, { action: 'start-anyway', expectedRevision: operation.revision, requestId: randomUUID() });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { resume: false, model: selection.model, images: [screenshot] } });
+    expect(sessions[0]!.spec.userPrompt).toContain(text);
+    expect(sessions[0]!.spec.sessionId).not.toBe('original');
+    sessions[0]!.settle();
+    await expectFinished(id, ['work', 'continue-1']);
+  });
+
   it('does not requeue the replacement when a switch is cancelled during Continue startup', async () => {
     const id = finishedRun();
     store.updateRun(id, { worktreePath: root });
@@ -385,31 +631,111 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(store.getRun(id)?.steps.map((step) => step.iterations)).toEqual([1, 2, 1]);
   });
 
+  it.each([false, true])('continues the newest conversation after cancelling a Continue (legacy cursor: %s)', async (legacyCursor) => {
+    const { id } = manager.startRun(workflow, { task: 'Implement it' });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(manager.cancel(id)).toBe(true);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    const walk = store.getRun(id)?.graphState;
+    expect(walk?.cursor).toBe('work');
+    expect(manager.continueRun(id, { text: 'Focus on the new reproduction notes' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(store.getRun(id)?.graphState?.cursor).toBeUndefined();
+    sessions[1]!.emit({ type: 'text', text: 'The new reproduction found a missing setting.' });
+    expect(manager.cancel(id)).toBe(true);
+    sessions[1]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    if (legacyCursor) store.updateRun(id, { graphState: walk });
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(store.getRun(id)?.currentStepId).toBe('continue-2');
+    expect(sessions[2]!.spec.userPrompt).toContain('Focus on the new reproduction notes');
+    expect(sessions[2]!.spec.userPrompt).toContain('The new reproduction found a missing setting.');
+    sessions[2]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)?.steps.map((step) => [step.id, step.status])).toEqual([
+      ['work', 'cancelled'], ['review', 'pending'], ['continue-1', 'cancelled'], ['continue-2', 'done'],
+    ]);
+  });
+
   it('retries a failed check and continues through a gate and the remaining workflow', async () => {
     const graph = compileV1([
-      workflow.steps[0]!, { id: 'verify', name: 'Verify', command: 'test -f ready' }, workflow.steps[1]!,
+      workflow.steps[0]!, { id: 'verify', name: 'Verify', command: 'test -f ready || { echo "missing ready flag"; exit 1; }' }, workflow.steps[1]!,
     ]);
     graph.nodes.push({ id: 'approval', type: 'gate.human', message: 'Ready for review?' });
     graph.edges.find((edge) => edge.from === 'verify.pass')!.to = 'approval';
     graph.edges.push({ from: 'approval.approve', to: 'review' });
+    const check = graph.nodes.find((node) => node.id === 'verify');
+    if (check?.type !== 'check') throw new Error('missing verification check in fixture');
+    check.retryOn = [2];
     const withCheck = { ...workflow, graph, steps: graphToSteps(graph) };
     const { id } = manager.startRun(withCheck, { task: 'Implement it' });
     await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
     sessions[0]!.settle();
     await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
     const failed = store.getRun(id)!;
-    expect(failed).toMatchObject({ status: 'failed', error: 'check "verify" failed' });
-    expect(failed.graphState?.cursor).toBeUndefined();
-    writeFileSync(join(failed.worktreePath!, 'ready'), '');
-    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
-    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'waiting', graphState: { cursor: 'approval' } }), wait);
-    expect(sessions).toHaveLength(1);
-    expect(manager.sendMessage(id, [{ type: 'text', text: 'Approve' }])).toBe(true);
+    expect(failed).toMatchObject({ status: 'failed', error: expect.stringContaining('check "verify" exited 1') });
+    expect(failed.graphState?.cursor).toBe('verify');
+    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
+    try {
+      expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+      expect(store.getRun(id)?.status).toBe('queued');
+      await restart();
+    } finally {
+      release();
+    }
+    await semaphore.release();
+    const repairId = store.getRun(id)?.agentSwitch?.checkRepair?.stepId;
+    expect(repairId).toBeTruthy();
     await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
-    expect(sessions[1]).toMatchObject({ backend: 'codex', spec: { resume: false, model: 'gpt-6.2-sol' } });
+    expect(sessions[1]).toMatchObject({ backend: 'codex', spec: { resume: false, model: selection.model } });
+    expect(sessions[1]!.spec.userPrompt).toContain('fixing the failed check "Verify"');
+    expect(sessions[1]!.spec.userPrompt).toContain('missing ready flag');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.iterations).toBe(1);
+    writeFileSync(join(sessions[1]!.spec.cwd, 'ready'), '');
     sessions[1]!.settle();
-    await expectFinished(id, ['work', 'verify', 'approval', 'review']);
-    expect(store.getRun(id)?.steps.map((step) => step.iterations)).toEqual([1, 2, 1, 1]);
+    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'waiting', graphState: { cursor: 'approval' } }), wait);
+    expect(sessions).toHaveLength(2);
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'Approve' }])).toBe(true);
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(sessions[2]).toMatchObject({ backend: 'codex', spec: { resume: false, model: 'gpt-6.2-sol' } });
+    sessions[2]!.settle();
+    await expectFinished(id, ['work', 'verify', 'approval', 'review', repairId!]);
+    expect(store.getRun(id)?.steps.map((step) => step.iterations)).toEqual([1, 2, 1, 1, 1]);
+    expect(store.getRun(id)?.agentSwitch?.checkRepair).toBeUndefined();
+  });
+
+  it('gives the repaired check a fresh onFail retry budget', async () => {
+    const withRetries = { ...workflow, steps: [
+      workflow.steps[0]!,
+      { id: 'verify', command: 'test -f ready', onFail: { retry: 'work', max: 1 } },
+      workflow.steps[1]!,
+    ] } satisfies WorkflowDef;
+    const { id } = manager.startRun(withRetries, { task: 'Implement it' });
+    for (let count = 1; count <= 2; count++) {
+      await vi.waitFor(() => expect(sessions).toHaveLength(count), wait);
+      sessions[count - 1]!.settle();
+    }
+    await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'failed' }), wait);
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')).toMatchObject({ retriesUsed: 1, iterations: 2 });
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    const repairId = store.getRun(id)?.agentSwitch?.checkRepair?.stepId;
+    expect(repairId).toBeTruthy();
+    await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.retriesUsed).toBe(0);
+    expect(sessions[2]!.spec.userPrompt).toContain('fixing the failed check "verify"');
+    sessions[2]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(4), wait);
+    expect(store.getRun(id)?.currentStepId).toBe('work');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')?.retriesUsed).toBe(1);
+    writeFileSync(join(sessions[3]!.spec.cwd, 'ready'), '');
+    sessions[3]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(5), wait);
+    sessions[4]!.settle();
+    await expectFinished(id, ['work', 'verify', 'review', repairId!]);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'verify')).toMatchObject({ retriesUsed: 1, iterations: 4 });
   });
 
   it('retries a failed task with no prior session through its original workflow', async () => {

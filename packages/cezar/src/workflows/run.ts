@@ -1757,7 +1757,7 @@ export class RunManager {
       cancelPending: id => {
         const queued = this.queue.indexOf(id);
         if (queued >= 0) this.queue.splice(queued, 1);
-        this.pendingJobs.delete(id); this.pendingContinuations.delete(id); this.startNowRequested.delete(id);
+        this.pendingJobs.delete(id); this.cancelPendingHandoff(id); this.startNowRequested.delete(id);
       },
       resume: async (id, launch) => {
         const run = this.store.getRun(id);
@@ -4379,7 +4379,8 @@ export class RunManager {
     // Only the failed agent is the interruption; a pending retry is not a newer session.
     const step = [...run.steps].reverse().find((candidate) => candidate.kind === 'agent' && candidate.status === 'failed');
     if (!step?.sessionId || !autoResumeReasonFor(step.error)) return undefined;
-    return run.workflowDef?.steps.some((definition) => definition.id === step.id && stepKind(definition) === 'agent')
+    return run.agentSwitch?.checkRepair?.stepId === step.id
+      || run.workflowDef?.steps.some((definition) => definition.id === step.id && stepKind(definition) === 'agent')
       ? { ...step }
       : undefined;
   }
@@ -4391,13 +4392,18 @@ export class RunManager {
    */
   private queuedUsageLimitResume(run: RunRecord): boolean {
     const step = this.interruptedWorkflowStep(run);
+    if (!step) return false;
     const cursor = run.graphState?.cursor;
-    const definition = run.workflowDef?.steps.find((candidate) => candidate.id === step?.id);
-    const selection = definition && switchedWorkflowAgent(run, definition);
-    if (selection?.replaced && step && (step.backend !== selection.runner || step.profileId !== selection.agentProfile || step.model !== selection.model)) {
+    const repair = run.agentSwitch?.checkRepair;
+    const resumingRepair = repair?.stepId === step.id;
+    const definition = run.workflowDef?.steps.find((candidate) => candidate.id === step.id);
+    const selection = resumingRepair
+      ? { runner: run.runner, agentProfile: run.agentProfile, model: run.model, replaced: true }
+      : definition && switchedWorkflowAgent(run, definition);
+    if (selection?.replaced && (step.backend !== selection.runner || step.profileId !== selection.agentProfile || step.model !== selection.model)) {
       return false;
     }
-    return step !== undefined && (cursor === undefined || cursor === step.id);
+    return cursor === undefined || cursor === (resumingRepair ? repair.checkId : step.id);
   }
 
   /** Rebuild executable input from the durable record, for auto-resume and queued recovery. */
@@ -5812,34 +5818,59 @@ export class RunManager {
     // Older completed walks clear the cursor even after a failed check or agent.
     // Find the last step transition, ignoring the routing nodes that led out of it.
     const lastStepTransition = run.status === 'failed' && !walk?.cursor
-      ? [...walk?.taken ?? []].reverse().find((transition) => run.steps.some((step) =>
-        transition.startsWith(`${step.id}.`)))
+      ? [...walk?.taken ?? []].reverse().find((transition) => {
+        const source = transition.split('->', 1)[0]!;
+        return run.steps.some((step) => step.id === source.slice(0, source.lastIndexOf('.')));
+      })
       : undefined;
     const failedStep = lastStepTransition && run.steps.find((step) => step.status === 'failed'
       && (step.kind === 'check' && lastStepTransition.startsWith(`${step.id}.fail->`)
         || step.kind === 'agent' && lastStepTransition === `${step.id}.failed->`));
     const cursor = walk?.cursor ?? (failedStep ? failedStep.id : undefined);
+    const checkpointRecord = run.steps.find((step) => step.id === cursor);
+    const checkpointTime = checkpointRecord?.finishedAt ?? checkpointRecord?.startedAt;
+    // Older records may still carry a workflow cursor after a standalone Continue took over.
+    const newerContinuation = run.steps.some((step) => step.name === 'Continue' && step.id.startsWith('continue-')
+      && step.startedAt && (!checkpointTime || step.startedAt >= checkpointTime));
     const stoppedBeforeSession = (run.status === 'failed' || run.status === 'cancelled') && !run.steps.some((step) => step.sessionId);
     const savedWorkflow = (!state || state.workflow && (state.turnSettled || run.status === 'cancelled'))
-      && !this.starting.has(runId) && !previousContinuation
+      && !this.starting.has(runId) && !previousContinuation && !newerContinuation
       && (stoppedBeforeSession || (cursor && (run.status === 'failed' || run.status === 'cancelled' || isIdleParked(run))))
       ? run.workflowDef : undefined;
     const workflow = job?.workflow ?? (!state?.cancelled && !state?.turnSettled ? state?.workflow : undefined) ?? savedWorkflow;
     if (workflow) {
       const graph = workflow.graph ?? compileV1(workflow.steps);
       const checkpoint = cursor && graph.nodes.find((node) => node.id === cursor && isExecutableNode(node));
-      const requeue = Boolean(checkpoint && checkpoint.type === 'agent' && state || savedWorkflow);
+      let checkRepair = run.agentSwitch?.checkRepair;
+      let retryLoop: Extract<GraphNode, { type: 'loop' }> | undefined;
+      if (!checkRepair && savedWorkflow && checkpoint && checkpoint.type === 'check'
+        && run.status === 'failed' && checkpointRecord?.status === 'failed') {
+        checkRepair = { checkId: checkpoint.id, stepId: `check-repair-${randomUUID()}` };
+        this.store.addStep(runId, { id: checkRepair.stepId, name: 'Repair failed check', kind: 'agent' });
+        const loopId = edgeFrom(graph, checkpoint.id, 'fail')?.to;
+        retryLoop = graph.nodes.find((node): node is Extract<GraphNode, { type: 'loop' }> => node.id === loopId && node.type === 'loop');
+        if (retryLoop && !workflow.graph) this.store.updateStep(runId, checkpoint.id, { retriesUsed: 0 });
+      }
+      const requeue = Boolean(savedWorkflow || state && checkpoint && (checkpoint.type === 'agent' || checkRepair?.checkId === checkpoint.id));
       const workflowSelection = workflowAgentSwitch(run, current.runner, input, defaultRunner ?? 'claude');
       this.clearAutoResume(runId);
       this.store.updateRun(runId, {
         ...selection, modelIdentity: undefined, actualModel: undefined, fallbackEpisode: undefined,
-        agentSwitch: { summary, workflow: true, workflowSelection },
-        ...(checkpoint && walk && !walk.cursor ? { graphState: { ...walk, cursor: checkpoint.id } } : {}),
+        agentSwitch: { summary, workflow: true, workflowSelection, checkRepair },
+        ...(checkpoint && walk && { graphState: {
+          ...walk, cursor: checkpoint.id,
+          ...(retryLoop && { loops: { ...walk.loops, [retryLoop.id]: 0 } }),
+        } }),
         ...(requeue ? { status: 'queued', currentStepId: undefined, activity: undefined, finishedAt: undefined, error: undefined } : {}),
       });
       if (job) this.pendingJobs.set(runId, { workflow, input: { ...job.input, ...selection, usageLimitResume: undefined } });
       if (requeue) {
-        if (checkpoint) this.store.updateStep(runId, checkpoint.id, { status: 'pending', finishedAt: undefined, error: undefined });
+        if (checkpoint) this.store.updateStep(runId, checkpoint.id, {
+          status: 'pending',
+          finishedAt: undefined,
+          ...(checkRepair ? {} : { error: undefined }),
+        });
+        if (checkRepair) this.store.updateStep(runId, checkRepair.stepId, { status: 'pending', finishedAt: undefined, error: undefined });
         this.pendingJobs.set(runId, { workflow, input: this.workflowInput(run) });
         if (state) this.stopForAgentSwitch(runId, state);
         else this.enqueue(runId);
@@ -6247,7 +6278,10 @@ export class RunManager {
     if (state.cancelled) { this.dropActive(runId, state); return; }
     // Show the Continue as running and the message in the thread BEFORE any wait for the tree, so
     // a held message is never invisible (#2396). Keep the settled state for a Stop during the wait.
-    const settledRun = record && { status: record.status, error: record.error, finishedAt: record.finishedAt, currentStepId: record.currentStepId, activity: record.activity };
+    const settledRun = record && {
+      status: record.status, error: record.error, finishedAt: record.finishedAt, currentStepId: record.currentStepId,
+      activity: record.activity, graphState: record.graphState, agentSwitch: record.agentSwitch,
+    };
     const settledStep = record?.steps.find((step) => step.id === stepId);
     const settledStepPatch = settledStep && { status: settledStep.status, iterations: settledStep.iterations, startedAt: settledStep.startedAt, finishedAt: settledStep.finishedAt, sessionId: settledStep.sessionId, backend: settledStep.backend };
     this.store.updateRun(runId, {
@@ -6256,6 +6290,8 @@ export class RunManager {
       finishedAt: undefined,
       currentStepId: stepId,
       activity: undefined, // resuming a monitoring run — it's actively working again (#490)
+      ...(record?.graphState?.cursor && { graphState: { ...record.graphState, cursor: undefined } }),
+      ...(record?.agentSwitch?.checkRepair && { agentSwitch: { ...record.agentSwitch, checkRepair: undefined } }),
     });
     this.store.updateStep(runId, stepId, {
       status: 'running',
@@ -6924,9 +6960,10 @@ export class RunManager {
   private async execute(runId: string, workflow: WorkflowDef, input: StartRunInput, ownerToken?: symbol): Promise<void> {
     const original = this.store.getRun(runId);
     const switchedWorkflow = original?.agentSwitch?.workflow === true;
-    // Only a job queued as a usage-limit resume re-enters its interrupted agent (#1300); the
-    // step/session checkpoint survives missing optional attempt accounting.
+    // The interrupted session and its workflow checkpoint survive missing attempt accounting.
     const resumeStep = input.usageLimitResume && original ? this.interruptedWorkflowStep(original) : undefined;
+    const repair = original?.agentSwitch?.checkRepair;
+    const resumeCursor = repair && repair.stepId === resumeStep?.id ? repair.checkId : resumeStep?.id;
     const state: ActiveRun = {
       workflow,
       ownerToken: ownerToken ?? Symbol('run-owner'),
@@ -7281,9 +7318,9 @@ export class RunManager {
       extraSystemPrompt,
       startImages,
       startAttachments,
-      // #1300: a usage-limit resume re-enters the walk at its interrupted agent node.
-      resume: resumeStep
-        ? { loops: {}, taken: [], ...this.store.getRun(runId)?.graphState, cursor: resumeStep.id }
+      // #1300: a usage-limit resume re-enters the interrupted agent or its repair checkpoint.
+      resume: resumeCursor
+        ? { loops: {}, taken: [], ...this.store.getRun(runId)?.graphState, cursor: resumeCursor }
         : this.store.getRun(runId)?.graphState,
       usageLimitResume: resumeStep,
     });
@@ -7487,6 +7524,46 @@ export class RunManager {
       }
     };
     const taken: string[] = [...(resume?.taken ?? [])];
+
+    const repairRun = this.store.getRun(runId);
+    const repair = repairRun?.agentSwitch?.checkRepair;
+    if (repairRun && repair && resumeNode?.id === repair.checkId && !state.cancelled) {
+      const step = { id: repair.stepId, name: 'Repair failed check', model: repairRun.model };
+      const iteration = (repairRun.steps.find((candidate) => candidate.id === step.id)?.iterations ?? 0) + 1;
+      this.store.updateRun(runId, { currentStepId: step.id });
+      this.store.updateStep(runId, step.id, { status: 'running', iterations: iteration, startedAt: new Date().toISOString() });
+      emit({ type: 'step-start', stepId: step.id, name: step.name, kind: 'agent', iteration });
+      const label = resumeNode.name ?? resumeNode.id;
+      const events = this.store.readEvents(runId);
+      const checkOutput = [...events].reverse().find((event) => event.type === 'check-output' && event.stepId === repair.checkId)?.text;
+      const output = typeof checkOutput === 'string' ? checkOutput : String(outputs.get(repair.checkId)?.output ?? '');
+      const interrupted = ctx.usageLimitResume?.id === step.id ? ctx.usageLimitResume : undefined;
+      const resumeSessionId = RESUMABLE_BACKENDS.has(taskBackend) ? interrupted?.sessionId : undefined;
+      const failure = await this.runAgentStep(runId, state, {
+        ...step, prompt: `Continue by fixing the failed check "${label}" in this worktree before verification runs again.\n\n{{task}}`,
+      }, input, skills, this.store.redactRunText(runId, output), false, emit, startImages, taskBackend, extraSystemPrompt, undefined, startAttachments, {
+        resumeSessionId,
+        usageLimitResume: interrupted,
+        portableContext: resumeSessionId ? undefined : freshContinuationContext(repairRun, events, this.attachmentsDir(runId)),
+        workflowAgent: { agentProfile: repairRun.agentProfile, replaced: true },
+      });
+      if (state.cancelled || state.askPark === 'waiting' || this.idleParks(runId, state)) return null;
+      const idleFailed = await this.idleClosedFails(runId, state);
+      if (state.cancelled || this.active.get(runId) !== state) return null;
+      if (idleFailed) {
+        const error = this.inactivityFailureMessage();
+        this.finishStep(runId, step.id, 'failed', error, emit, { idleClosed: true });
+        state.idleFailed = true;
+        return error;
+      }
+      this.finishStep(runId, step.id, failure ? 'failed' : 'done', failure ?? undefined, emit);
+      if (failure) return `repair for check "${label}" failed: ${failure}`;
+      if (state.finishRequested || state.askPark === 'abandoned') return null;
+      const agentSwitch = this.store.getRun(runId)?.agentSwitch;
+      if (agentSwitch) this.store.updateRun(runId, { agentSwitch: { ...agentSwitch, checkRepair: undefined } });
+      this.store.flush();
+      startImages = undefined;
+    }
 
     let step: GraphStepResult = resumeNode
       ? { kind: 'node', node: resumeNode, transitions: [] }

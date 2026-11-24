@@ -42,6 +42,8 @@ export const runAgentSwitchSchema = z.object({
   /** Apply the selected agent to the unfinished workflow's agent steps. */
   workflow: z.literal(true).optional(),
   workflowSelection: workflowAgentSwitchSchema.optional(),
+  /** Run a fresh repair turn before resuming the walk at this failed check. */
+  checkRepair: z.object({ checkId: z.string(), stepId: z.string() }).optional(),
   /** Fresh continuation to reconstruct if the server restarts before it launches. */
   continuationStepId: z.string().optional(),
   continuationInput: z.object({ prompt: z.string(), attachmentUrls: z.array(z.string()) }).optional(),

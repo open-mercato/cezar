@@ -36,7 +36,7 @@ describe('managerSystemPrompt and the manager goal', () => {
   it('routes agent changes and retries in place to the agent selection commands', () => {
     const prompt = managerSystemPrompt(manager(''), []);
     expect(prompt).toContain('use `cez-manager task switch`. Do not cancel and recreate it.');
-    expect(prompt).toContain('the previous runner or no runner pin');
+    expect(prompt).toContain('including unpinned steps that use it');
     expect(prompt).toContain('Cancel or switch any task');
     expect(prompt).toContain('use `task retry` with the agent flags. This keeps the task id.');
   });
