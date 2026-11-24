@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { BrowserRouter } from 'react-router'
 
 import { GlobalEventsProvider } from './api/global-events'
+import { AddAccountProvider } from './components/add-account/add-account-host'
 import { HostUsageProvider } from './api/host-usage'
 import { createQueryClient } from './api/query-client'
 import { keepFirstScreenPersisted, restoreFirstScreen } from './api/query-persist'
@@ -55,6 +56,7 @@ export function App() {
                 half of the same boot contract — mirror pre-paints, server truth reconciles. */}
             <AppearanceProvider>
               <BrowserRouter>
+                <AddAccountProvider>
                 <LastLocationController />
                 {/* Watches the run-list cache the stream patches (and reconciliation refetches),
                     turning attention transitions into browser notifications when the tab is
@@ -75,6 +77,7 @@ export function App() {
                 </ReferenceStatusRegistry>
                 {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
                 <Toaster />
+              </AddAccountProvider>
               </BrowserRouter>
             </AppearanceProvider>
           </ThemeProvider>

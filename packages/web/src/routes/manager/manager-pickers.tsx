@@ -2,11 +2,13 @@ import { CheckIcon, ChevronDownIcon } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
 import { useAgentProfiles, useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { useAddAccount } from '@/components/add-account/add-account-host'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -321,17 +323,29 @@ export function AccountPicker({
 
 function AccountOptions({ runner, agentProfile, onChange }: { runner: Runner; agentProfile?: string; onChange: (patch: ManagerPatch) => void }) {
   const profiles = useAgentProfiles().data
-  const accounts = profiles?.profiles.filter((account) => account.provider === runner) ?? []
+  const accounts = profiles?.profiles.filter((account) => account.provider === runner && !account.pending) ?? []
+  const addAccount = useAddAccount()
   const defaultId = profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
   const defaultLabel = accounts.find((account) => account.id === defaultId)?.label ?? 'Default'
   return (
-    <DropdownMenuRadioGroup value={agentProfile ?? ''} onValueChange={(next) => onChange({ agentProfile: next === '' ? null : next })}>
-      <DropdownMenuRadioItem value=""><span className="min-w-0 break-words whitespace-normal">Use workspace default ({defaultLabel})</span></DropdownMenuRadioItem>
-      <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
-      {accounts.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID).map((account) => (
-        <DropdownMenuRadioItem key={account.id} value={account.id}><span className="min-w-0 break-words whitespace-normal">{account.label}</span></DropdownMenuRadioItem>
-      ))}
-    </DropdownMenuRadioGroup>
+    <>
+      <DropdownMenuRadioGroup value={agentProfile ?? ''} onValueChange={(next) => onChange({ agentProfile: next === '' ? null : next })}>
+        <DropdownMenuRadioItem value=""><span className="min-w-0 break-words whitespace-normal">Use workspace default ({defaultLabel})</span></DropdownMenuRadioItem>
+        <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
+        {accounts.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID).map((account) => (
+          <DropdownMenuRadioItem key={account.id} value={account.id}><span className="min-w-0 break-words whitespace-normal">{account.label}</span></DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      {addAccount?.capable.includes(runner) ? (
+        <DropdownMenuItem
+          data-action="manager-add-account"
+          className="border-t border-border"
+          onSelect={() => addAccount.open({ provider: runner, onAdded: (profile) => onChange({ agentProfile: profile.id }) })}
+        >
+          Add account…
+        </DropdownMenuItem>
+      ) : null}
+    </>
   )
 }
 

@@ -256,12 +256,20 @@ export const openAgentAccountFileResponseSchema = z.object({
 export type OpenAgentAccountFileResponse = z.infer<typeof openAgentAccountFileResponseSchema>;
 
 /** `POST /api/v1/workspace/agent-profiles` — the id is allocated server-side from the label. */
-export const createAgentProfileInputSchema = z.object({
-  provider: providerIdSchema,
-  label: z.string().trim().max(200).optional(),
-  /** Stored as written; validated absolute after `~` expansion, server-side. */
-  configDir: z.string().trim().min(1).max(4096),
-});
+export const createAgentProfileInputSchema = z.union([
+  z.object({
+    provider: providerIdSchema,
+    label: z.string().trim().max(200).optional(),
+    /** Stored as written; validated absolute after `~` expansion, server-side. */
+    configDir: z.string().trim().min(1).max(4096),
+  }),
+  /** cezar makes a private folder for the account (spec 2026-11-24-add-account-in-cockpit). */
+  z.object({
+    provider: providerIdSchema,
+    label: z.string().trim().max(200).optional(),
+    managed: z.literal(true),
+  }),
+]);
 export type CreateAgentProfileInput = z.infer<typeof createAgentProfileInputSchema>;
 
 /**

@@ -189,7 +189,7 @@ dl.id dt{color:var(--soft-foreground)}dl.id dd{margin:0}
     <tr><td>Claude Code</td><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>claude auth login</code>. A PATH shim captures the <code>open</code> call so no tab opens, and the URL is shown with <b>Copy link</b>. The localhost callback finishes it from any browser or profile on this computer.</td><td>The printed <code>claude.com/cai/oauth/authorize</code> URL. The user copies the code from the <code>platform.claude.com/oauth/code/callback</code> page and pastes it, and cezar writes it to the CLI's stdin.</td><td>The CLI exits 0, then <code>profileStatus</code> and the identity read</td></tr>
     <tr><td>Codex</td><td><code>CODEX_HOME</code></td><td><code>codex login</code> (localhost:1455 callback). The URL is captured and shown with <b>Copy link</b>, never opened.</td><td><code>codex login --device-auth</code>: a code like <code>XXXX-XXXXX</code>, 15 minutes</td><td>Automatic: the CLI exits after the approval</td></tr>
     <tr><td>Codex · API key</td><td></td><td colspan="2"><code>codex login --with-api-key</code>. The key goes on stdin and Codex stores it in the account's folder.</td><td>The CLI exits 0</td></tr>
-    <tr><td>OMP, Kimi</td><td><code>PI_CODING_AGENT_DIR</code>, <code>KIMI_CODE_HOME</code></td><td>Terminal hand-off with the variable set. The login watcher notices the sign-in.</td><td>The command is shown without the host path (it uses <code>cez account login &lt;id&gt;</code>, see below), then <i>Check again</i>.</td><td>The watcher, or Check again</td></tr>
+    <tr><td>OMP, Kimi</td><td><code>PI_CODING_AGENT_DIR</code>, <code>KIMI_CODE_HOME</code></td><td>Terminal hand-off with the variable set. The login watcher notices the sign-in.</td><td>Finish on the computer, then <i>Check again</i>. Phase 2: an in-cockpit terminal.</td><td>The watcher, or Check again</td></tr>
     <tr><td class="soft">OpenCode, Cursor, Copilot, pi, Junie, Gemini, Antigravity</td><td colspan="4" class="soft">Can't carry a second account: their credentials don't follow one folder (<code>core/agent-profiles.ts</code>). They're listed in step 1, disabled, with that reason.</td></tr>
   </table>
   <p class="small muted">Why not <code>claude setup-token</code>: it prints a long-lived token that cezar would then have to store and inject. <code>auth login</code> leaves the credential in the vendor's own store (the folder, or the macOS Keychain item tied to that folder). cezar never holds a token.</p>
@@ -294,10 +294,9 @@ function signing(r, where) {
   }
   return remote ? {
     title: 'Finish on your computer',
-    body: `<p class="body">${n} can only sign in in its own terminal window. Run this on the computer running cezar, then come back:</p>
-      <div class="cmd"><code>cez account login second</code><button class="btn sm g">Copy</button></div>`,
+    body: `<p class="body">${n} can only sign in in its own terminal window. Open cezar on the computer running it, finish the sign-in there, then come back and check.</p>`,
     actions: `<button class="btn">I've signed in · Check</button>`,
-    cap: 'OMP and Kimi have no headless login. The command names the account by id, never by host path, so a phone never learns where the folder is.'
+    cap: 'OMP and Kimi have no headless login. Phase 2: a small terminal inside the cockpit, with input, so they sign in from here too.'
   } : {
     title: 'Sign in in the terminal',
     body: `<p class="body">${n} signs in only in its own window. We opened it in a terminal with this account's folder already set. Finish there and this dialog notices by itself.</p>`,

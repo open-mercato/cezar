@@ -1,6 +1,6 @@
 # Add an agent account from the cockpit
 
-Status: design, awaiting approval · Date: 2026-11-24 · Design page: `2026-11-24-add-account-in-cockpit.html`
+Status: approved 2026-11-24, implemented · Date: 2026-11-24 · Design page: `2026-11-24-add-account-in-cockpit.html`
 Builds on: `2026-07-29-agent-profiles.md` (accounts), `2026-11-18-inline-account-reconnect.md` (login sessions)
 
 ## Problem
@@ -82,10 +82,7 @@ through `.passthrough()`:
 | Claude Code | `claude auth login`; the browser launch is captured and shown with Copy link (never opened) | printed URL, then *paste the code* (stdin) | the CLI exits 0 → verify |
 | Codex | `codex login` (localhost:1455 callback), URL shown with Copy link | `codex login --device-auth`: code and countdown | detected automatically |
 | Codex (API key) | `codex login --with-api-key` (stdin) | same | the CLI exits 0 |
-| OMP, Kimi | terminal hand-off and the login watcher | `cez account login <id>`, run on the computer, then *Check again* | watcher or Check again |
-
-`cez account login <id>` is a new, small CLI subcommand. It runs the agent's login with that account's variable set.
-Because it names the account by id, the phone gets a command to copy that never reveals a host path.
+| OMP, Kimi | terminal hand-off and the login watcher | finish on the computer, then *Check again* (phase 2: an in-cockpit terminal) | watcher or Check again |
 
 `claude setup-token` is **not** used. It prints a long-lived token that cezar would then have to store. With
 `auth login`, the CLI writes its own credential into the account's folder (or its Keychain item).
@@ -114,11 +111,14 @@ never takes a client path, so `checkProfileDir`'s browse-root containment doesn'
 - Telemetry, if any is added: provider plus outcome (`connected|cancelled|failed:<reason>`), both closed sets.
 - `CEZ_DRY_RUN=1`: the mock login session plus a real managed folder under the sandboxed home.
 
-## Decisions for the owner
+## Decisions (owner, 2026-11-24)
 
-1. **Phone access**: open the path-free, managed-only subset of the accounts family to paired phones (recommended:
-   yes).
-2. **Removing a managed account** logs out and deletes its folder (recommended: yes, with the folder named in the
-   confirm dialog).
-3. **OMP and Kimi**: offer them with the terminal hand-off (recommended), or hide them until a headless login is
-   verified.
+1. **Placement**: the existing Add account button in Settings → Agents → Accounts opens the wizard. Settings gets no
+   new page or button.
+2. **No browser opened**: every method shows the link to copy. The reconnect card follows the same rule.
+3. **Phone access**: yes. A paired phone gets the path-free, managed-only subset.
+4. **Removing a managed account** logs it out and deletes its folder, and the confirm dialog names the folder.
+5. **Pickers** offer "Add account…".
+6. **OMP and Kimi**: phase 1 uses the terminal hand-off. On a phone the user finishes on the computer and presses
+   *Check again*. Phase 2 adds a small terminal inside the cockpit with input, so they sign in without leaving it.
+   The `cez account login <id>` command is dropped in favor of that.
