@@ -370,7 +370,7 @@ describe('ManagerEngine', () => {
         ...accounts,
         accounts: [{ id: 'work', provider: 'codex', label: 'Work', configDir, addedAt: '' }],
       }));
-      const runnerFor = vi.fn(() => backend.runner);
+      const runnerFor = vi.fn((_runner: RunnerId) => backend.runner);
       const engine = makeEngine({ runnerFor });
       const id = await create(engine, 0);
       // As #2330 left it: a pin the API no longer accepts.
@@ -939,7 +939,7 @@ describe('ManagerEngine', () => {
     });
 
     it('runs watches and chats on Claude Code when Codex is the machine default, with one notice', async () => {
-      const runnerFor = vi.fn(() => backend.runner);
+      const runnerFor = vi.fn((_runner: RunnerId) => backend.runner);
       const engine = makeEngine({ github: readyPrGithub, runnerFor, defaultRunner: async (): Promise<RunnerId> => 'codex' });
       const id = await create(engine);
       due(id);
