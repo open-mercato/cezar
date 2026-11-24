@@ -206,6 +206,7 @@ import {
   isFailurePort,
   isTerminalAgent,
   nodeToStep,
+  parseEdgeFrom,
   parseVerdict,
   renderNodeRefs,
   stripVerdictMarker,
@@ -4421,7 +4422,9 @@ export class RunManager {
       ? { runner: run.runner, agentProfile: run.agentProfile, model: run.model, replaced: true }
       : definition && switchedWorkflowAgent(run, definition);
     // A switch on another node leaves this pinned session and its recorded account intact.
-    if (selection?.replaced && (step.backend !== selection.runner || step.profileId !== selection.agentProfile || step.model !== selection.model)) {
+    if (selection?.replaced && (step.backend !== selection.runner
+      || (step.profileId ?? DEFAULT_AGENT_ACCOUNT_ID) !== (selection.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID)
+      || step.model !== selection.model)) {
       return false;
     }
     return cursor === undefined || cursor === (resumingRepair ? repair.checkId : step.id);
@@ -7548,13 +7551,25 @@ export class RunManager {
       const retryId = failureTarget?.type === 'loop' ? edgeFrom(graph, failureTarget.id, 'repeat')?.to : failureTarget?.id;
       const retryNode = graph.nodes.find((node) => node.id === retryId);
       const retryAgent = retryNode?.type === 'agent' ? retryNode : undefined;
-      // A check with a retry target delegates repair to that agent's policy. A later
-      // review step's saved grants cannot stand in for the retry target.
-      const savedTools = retryAgent
-        ? repairRun.steps.find((candidate) => candidate.id === retryAgent.id)?.toolPolicy
-        : repairStep?.toolPolicy ?? savedContinuationTools(repairRun);
-      const toolsStep = retryAgent
-        ?? [...(repairRun.workflowDef?.steps ?? [])].reverse().find((candidate) => stepKind(candidate) === 'agent');
+      // Without a retry target, follow the executed path back to the agent that preceded
+      // the check. Older checkpoints can lack that history, so use the preceding definition.
+      let toolsStep: WorkflowStepDef | typeof retryAgent = retryAgent;
+      if (!toolsStep) {
+        for (const transition of [...taken].reverse()) {
+          const source = parseEdgeFrom(transition.split('->', 1)[0]!, graph.nodes);
+          const node = graph.nodes.find((candidate) => candidate.id === source?.node);
+          if (node?.type !== 'agent') continue;
+          toolsStep = node;
+          break;
+        }
+        const checkIndex = workflow.steps.findIndex((candidate) => candidate.id === repair.checkId);
+        if (!toolsStep && checkIndex >= 0) {
+          toolsStep = workflow.steps.slice(0, checkIndex).reverse().find((candidate) => stepKind(candidate) === 'agent');
+        }
+      }
+      const savedTools = toolsStep
+        ? repairRun.steps.find((candidate) => candidate.id === toolsStep?.id)?.toolPolicy
+        : repairStep?.toolPolicy;
       const iteration = (repairStep?.iterations ?? 0) + 1;
       this.store.updateRun(runId, { currentStepId: step.id });
       this.store.updateStep(runId, step.id, { status: 'running', iterations: iteration, startedAt: new Date().toISOString() });

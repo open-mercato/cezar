@@ -76,6 +76,22 @@ describe('workflowAgentSwitch', () => {
     expect(third.overrides.pi).toEqual(second.overrides.pi);
     expect(first.overrides.codex).toBeUndefined();
   });
+
+  it('switches both originally pinned Codex steps and steps moved there by the first switch', () => {
+    const record = run();
+    const first = workflowAgentSwitch(record, 'claude', codex, 'claude');
+    const switched = { ...record, ...codex, agentSwitch: { summary: 'First switch', workflow: true as const, workflowSelection: first } };
+    expect(switchedWorkflowAgent(switched, { runner: 'codex', model: codex.model })?.replaced).toBe(false);
+    const target = { runner: 'pi', agentProfile: 'default' } as const;
+    const second = workflowAgentSwitch(switched, 'codex', target, 'claude');
+    const result = { ...switched, ...target, agentSwitch: { ...switched.agentSwitch, workflowSelection: second } };
+    for (const runner of [undefined, 'claude', 'codex'] as const) {
+      expect(switchedWorkflowAgent(result, { runner })).toEqual({
+        ...target, model: undefined, reasoningEffort: undefined, replaced: true,
+      });
+    }
+    expect(switchedWorkflowAgent(result, { runner: 'opencode' })).toMatchObject({ runner: 'opencode', replaced: false });
+  });
 });
 
 describe('switchedWorkflowAgent', () => {
