@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrokeredShell } from './agent-runner.ts';
 import { compileCodexRestrictedPolicy } from './codex-restricted-policy.ts';
-import { CodexReadBroker, killLiveStages, killStage, onStageExit, PIPELINE_REFUSED, runPipeline, stageKillPlan, taskkillPath, wholeUtf8, type PipelineOptions } from './codex-restricted-tools.ts';
+import { CodexReadBroker, killLiveStages, killStage, liveStageCount, onStageExit, PIPELINE_REFUSED, resolveProgram, runPipeline, stageKillPending, stageKillPlan, taskkillPath, wholeUtf8, type PipelineOptions } from './codex-restricted-tools.ts';
 import { managerShellPlan } from '../managers/bash-policy.ts';
 
 const node = process.execPath;
@@ -116,8 +117,10 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
 
   it('reports output over the cap as truncated success and stops an endless writer', async () => {
     const started = Date.now();
-    const ran = await runPipeline([[node, '-e', "const more = () => process.stdout.write('x'.repeat(65536), more); more()"]], undefined, opts({ timeoutMs: 20_000 }));
+    const recording = recordingSpawn();
+    const ran = await runPipeline([[node, '-e', "const more = () => process.stdout.write('x'.repeat(65536), more); more()"]], undefined, opts({ spawn: recording.spawn, timeoutMs: 20_000 }));
     expect(Date.now() - started).toBeLessThan(10_000);
+    expect(await gone(recording.children[0]!.pid!)).toBe(true);
     expect(ran.ok).toBe(true);
     expect(ran.text.startsWith('x'.repeat(256_000))).toBe(true);
     expect(ran.text.endsWith('[cezar: output truncated; narrow the pattern, path or range]')).toBe(true);
@@ -165,14 +168,60 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
     expect(await gone(fake.first()!.pid!)).toBe(true);
   });
 
-  it('ends started stages when a later stage is missing', async () => {
-    const started = Date.now();
+  it('refuses a pipeline whose program is not on PATH before any stage starts', async () => {
     const recording = recordingSpawn();
     const ran = await runPipeline([['sleep', '30'], ['cez-no-such-binary-2458']], undefined, opts({ spawn: recording.spawn }));
+    expect(ran).toEqual({ ok: false, text: 'cezar: `cez-no-such-binary-2458` was not found on PATH' });
+    expect(recording.children).toHaveLength(0);
+  });
+
+  it('ends a started stage when a later one dies at spawn (ENOENT a tick later)', async () => {
+    const recording = recordingSpawn();
+    const started = Date.now();
+    // Resolution passes the name through, as if the binary vanished between lookup and spawn.
+    const ran = await runPipeline([['sleep', '30'], ['cez-no-such-binary-2458']], undefined, opts({ spawn: recording.spawn, resolve: (bin) => bin }));
     expect(ran.ok).toBe(false);
     expect(ran.text).toContain('cez-no-such-binary-2458');
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(await gone(recording.children[0]!.pid!)).toBe(true);
+  });
+
+  it('runs every stage by absolute path', async () => {
+    const recording = recordingSpawn();
+    expect(await runPipeline([['echo', 'hi'], ['cat']], undefined, opts({ spawn: recording.spawn }))).toEqual({ ok: true, text: 'hi\n' });
+    expect(recording.children.map((child) => child.spawnfile).every((file) => file.startsWith('/'))).toBe(true);
+  });
+
+  it('settles at once on an already-aborted signal: no spawn, no listener left', async () => {
+    const recording = recordingSpawn();
+    const controller = new AbortController();
+    controller.abort();
+    const ran = await runPipeline([['sleep', '30']], undefined, opts({ spawn: recording.spawn, signal: controller.signal }));
+    expect(ran.ok).toBe(false);
+    expect(ran.text).toContain('session is closed');
+    expect(recording.children).toHaveLength(0);
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
+
+  it('settles even when tearing a stage down throws, and keeps a stage tracked until it closes', async () => {
+    const unheard = vi.fn();
+    process.on('uncaughtException', unheard);
+    const fake = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    const broken = () => { const stream = new PassThrough(); stream.destroy = () => { throw new Error('EBADF'); }; return stream; };
+    Object.assign(fake, { pid: undefined, exitCode: null, signalCode: null, stdin: new PassThrough(), stdout: broken(), stderr: broken(), kill: () => { throw new Error('EPERM'); } });
+    const before = liveStageCount();
+    try {
+      const ran = await runPipeline([['sleep', '30']], undefined, opts({ spawn: (() => fake) as unknown as typeof spawn, timeoutMs: 100 }));
+      expect(ran).toMatchObject({ ok: false, text: expect.stringContaining('timed out') });
+      // Its call settled, but the stage never closed: server exit must still reach it.
+      expect(liveStageCount()).toBe(before + 1);
+      fake.emit('close', null);
+      expect(liveStageCount()).toBe(before);
+      await new Promise((done) => setTimeout(done, 50));
+      expect(unheard).not.toHaveBeenCalled();
+    } finally {
+      process.off('uncaughtException', unheard);
+    }
   });
 
   it('hears an earlier stage\'s late spawn error when a later spawn throws (no uncaught exception)', async () => {
@@ -184,7 +233,7 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
         if (calls++ === 0) return spawn(bin, args, options); // ENOENT arrives as 'error' a tick later
         throw new Error('spawn E2BIG');
       }) as unknown as typeof spawn;
-      const ran = await runPipeline([['cez-no-such-binary-2460'], ['cat']], undefined, opts({ spawn: fake }));
+      const ran = await runPipeline([['cez-no-such-binary-2460'], ['cat']], undefined, opts({ spawn: fake, resolve: (bin) => bin }));
       expect(ran.ok).toBe(false);
       expect(ran.text).toContain('could not start cat: spawn E2BIG');
       await new Promise((done) => setTimeout(done, 100));
@@ -315,11 +364,56 @@ describe('stage kill plans', () => {
     const { child, kill } = fakeChild();
     const { killer, spawn: start } = fakeTaskkill();
     killStage(child, { platform: 'win32', spawn: start });
-    expect(start).toHaveBeenCalledWith(taskkillPath(), ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    expect(start).toHaveBeenCalledWith(taskkillPath(), ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
     expect(kill).not.toHaveBeenCalled();
     killer.emit('exit', 0);
     expect(kill).toHaveBeenCalledTimes(1);
     killer.emit('error', new Error('late'));
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Windows starts one taskkill per stage, however many paths ask', () => {
+    const { child } = fakeChild();
+    const { killer, spawn: start } = fakeTaskkill();
+    killStage(child, { platform: 'win32', spawn: start });
+    killStage(child, { platform: 'win32', spawn: start });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(stageKillPending(child)).toBe(true);
+    killer.emit('exit', 0);
+    expect(stageKillPending(child)).toBe(false);
+  });
+
+  it('on Windows bounds taskkill: one that never returns still ends the stage after 5 s', () => {
+    vi.useFakeTimers();
+    try {
+      const { child, kill } = fakeChild();
+      const { spawn: start } = fakeTaskkill();
+      killStage(child, { platform: 'win32', spawn: start });
+      expect(start).toHaveBeenCalledWith(taskkillPath(), ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
+      vi.advanceTimersByTime(4_999);
+      expect(kill).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(stageKillPending(child)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('on Windows falls back to the stage when taskkill cannot even spawn, and never throws', () => {
+    const { child, kill } = fakeChild();
+    kill.mockImplementation(() => { throw new Error('EPERM'); });
+    const throwing = vi.fn(() => { throw new Error('spawn EINVAL'); }) as unknown as typeof spawn;
+    expect(() => killStage(child, { platform: 'win32', spawn: throwing })).not.toThrow();
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(stageKillPending(child)).toBe(false);
+  });
+
+  it('kills by handle only, never taskkill by pid, on the reader-quit path', () => {
+    const { child, kill } = fakeChild();
+    const { spawn: start } = fakeTaskkill();
+    killStage(child, { platform: 'win32', spawn: start, tree: false });
+    expect(start).not.toHaveBeenCalled();
     expect(kill).toHaveBeenCalledTimes(1);
   });
 
@@ -330,6 +424,7 @@ describe('stage kill plans', () => {
     const sync = vi.fn(() => { order.push('taskkill'); return {}; }) as unknown as typeof import('node:child_process').spawnSync;
     killStage(child, { platform: 'win32', sync: true, spawnSync: sync });
     expect(order).toEqual(['taskkill', 'kill']);
+    expect(sync).toHaveBeenCalledWith(taskkillPath(), ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
   });
 
   it.each([['win32'], ['linux']] as const)('never targets an exited stage\'s pid on %s', (platform) => {
@@ -355,5 +450,54 @@ describe('stage kill plans', () => {
     expect(atExit).toHaveBeenCalledWith(-4242);
     onStageExit(child, { platform: 'win32', killGroup: atExit });
     expect(atExit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveProgram', () => {
+  it('finds a program on an absolute PATH entry and skips relative ones', () => {
+    const dir = tempDir();
+    const bin = join(dir, 'cez-tool');
+    writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+    expect(resolveProgram('cez-tool', { PATH: `relative${delimiter}.${delimiter}${dir}` }, 'linux')).toBe(bin);
+    expect(resolveProgram('cez-tool', { PATH: '.' }, 'linux')).toBeUndefined();
+    expect(resolveProgram('cez-tool', { PATH: '' }, 'linux')).toBeUndefined();
+  });
+  it('never resolves a relative path or a non-executable file', () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'plain'), 'x', { mode: 0o644 });
+    expect(resolveProgram('./cez-tool', { PATH: dir }, 'linux')).toBeUndefined();
+    expect(resolveProgram('sub\\tool.exe', { PATH: 'C:\\Windows' }, 'win32')).toBeUndefined();
+    expect(resolveProgram('plain', { PATH: dir }, 'linux')).toBeUndefined();
+    expect(resolveProgram('rg', { PATH: 'tools;.' }, 'win32')).toBeUndefined();
+  });
+  it('lets the read broker run nothing it cannot find on PATH', async () => {
+    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Grep'] })!, { cwd: tempDir() }, { PATH: '' });
+    try {
+      const reply = await broker.call({ tool: 'cezar_read', arguments: { tool: 'Grep', pattern: 'x' } });
+      expect(reply.contentItems[0]!.text).toContain('`rg` was not found on PATH');
+    } finally {
+      broker.close();
+    }
+  });
+});
+
+// Real processes: CI's unit jobs are Linux-only, so these run only on a Windows machine.
+describe.runIf(process.platform === 'win32')('Windows stages, for real', () => {
+  it('taskkill /T ends a stage and the child it forked at the timeout', async () => {
+    const script = "const c = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); console.log(c.pid); setInterval(() => {}, 1000)";
+    const ran = await runPipeline([[node, '-e', script]], undefined, opts({ timeoutMs: 1_500 }));
+    expect(ran.text).toContain('timed out');
+    expect(await gone(Number(ran.text.split('\n')[0]))).toBe(true);
+  });
+  it('documented: a child left holding stdout keeps the call to its timeout and is not killed', async () => {
+    const script = "const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit', detached: true }); console.log(c.pid); c.unref()";
+    const ran = await runPipeline([[node, '-e', script]], undefined, opts({ timeoutMs: 1_500 }));
+    const leftover = Number(ran.text.split('\n')[0]);
+    try {
+      expect(ran.text).toContain('timed out');
+      expect(alive(leftover)).toBe(true);
+    } finally {
+      try { process.kill(leftover); } catch { /* gone */ }
+    }
   });
 });

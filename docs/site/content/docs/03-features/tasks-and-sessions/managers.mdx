@@ -313,7 +313,7 @@ Paste a screenshot, drop a file on the chat, or select **+** in the composer, in
 
 Paste a transcript, notes or a log into the chat and ask the manager to file it or pass it to a task. The manager never retypes the text. It names your message, and Cezar copies it into the task word for word on the server, with the files you attached. The task's objective holds the manager's instruction, then your message between two marker lines.
 
-A manager does this with `--attach-last-user-message` on `cez-manager task create` or `task say`, or `--from-message <id>` for an earlier message. For text it wrote itself, it saves a file under `files/` in its working folder and passes `--file`. Claude managers may write only in that folder.
+A manager does this with `--attach-last-user-message` on `cez-manager task create` or `task say`, or `--from-message <id>` for an earlier message. For text it wrote itself, it saves a file under `files/` in its working folder and passes `--file`. Claude managers may write only in that folder, and `--file` reads only from it or the manager's attachments.
 
 Cezar refuses a task or message whose text is a placeholder such as `[transcript here]`, `PASTE` or `<<<…>>>` where content belongs, and the manager tells you so in its reply.
 

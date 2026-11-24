@@ -1,7 +1,7 @@
 import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { constants } from 'node:fs';
+import { accessSync, constants, constants as fsConstants, statSync } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
+import { isAbsolute, posix, relative, resolve, sep, win32 } from 'node:path';
 import { z } from 'zod';
 import type { AgentRunSpec } from './agent-runner.ts';
 import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
@@ -58,48 +58,112 @@ export interface StageKillDeps {
 const exited = (child: ChildProcess): boolean => child.exitCode !== null || child.signalCode !== null;
 const killGroup = (group: number): void => { try { process.kill(group, 'SIGKILL'); } catch { /* the group is gone */ } };
 
+const TASKKILL_TIMEOUT_MS = 5_000;
+// One kill in flight per stage: a second taskkill for the same pid only widens the reuse window.
+const pendingKills = new WeakSet<ChildProcess>();
+const hardKill = (child: ChildProcess): void => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
+
 /**
- * Kills a stage and what it forked. A stage that already exited is never targeted by pid: a reaped
- * pid (and an emptied group) may belong to someone else by now. Its leftovers were killed as it
- * exited (`onStageExit`). No job object on Windows: a tree is walked from the live stage, so
- * `taskkill` must finish before the stage itself dies, or its children are orphaned past reach.
+ * Kills a stage and what it forked. Never throws: it runs from timers, listeners and `finish()`.
+ *
+ * A stage that already exited is never targeted by pid: a reaped pid (and an emptied group) may
+ * belong to someone else by now; on POSIX its leftovers were killed as it exited (`onStageExit`).
+ *
+ * Windows has no process group and Node no job object, so `taskkill /T` walks the tree from the
+ * live stage and the stage dies only after it. Accepted risk: a stage that exits on its own while
+ * `taskkill.exe` starts (tens of ms) frees its pid, and a reused pid's tree could be hit. It is
+ * narrowed to the timeout, abort, cap and server-exit paths: one `taskkill` per stage, a liveness
+ * check right before it, and `tree: false` (a handle-based kill) on the reader-quit path, where the
+ * writer is already exiting on a broken pipe.
  */
-export function killStage(child: ChildProcess, opts: { sync?: boolean } & StageKillDeps = {}): void {
-  if (!child.pid || exited(child)) { child.kill('SIGKILL'); return; }
+export function killStage(child: ChildProcess, opts: { sync?: boolean; tree?: boolean } & StageKillDeps = {}): void {
+  if (!child.pid || exited(child) || opts.tree === false) { hardKill(child); return; }
   const plan = stageKillPlan(child.pid, opts.platform);
   if ('group' in plan) {
-    (opts.killGroup ?? killGroup)(plan.group);
-    child.kill('SIGKILL');
+    try { (opts.killGroup ?? killGroup)(plan.group); } catch { /* the group is gone */ }
+    hardKill(child);
     return;
   }
+  if (pendingKills.has(child)) return;
   const { file, args } = plan.taskkill;
   if (opts.sync) {
-    (opts.spawnSync ?? spawnSync)(file, args, { stdio: 'ignore', windowsHide: true });
-    child.kill('SIGKILL');
+    try { (opts.spawnSync ?? spawnSync)(file, args, { stdio: 'ignore', windowsHide: true, timeout: TASKKILL_TIMEOUT_MS }); } catch { /* fall through */ }
+    hardKill(child);
     return;
   }
+  pendingKills.add(child);
   let after = false;
-  const then = () => { if (!after) { after = true; child.kill('SIGKILL'); } };
-  (opts.spawn ?? spawn)(file, args, { stdio: 'ignore', windowsHide: true }).on('exit', then).on('error', then);
+  let bound: NodeJS.Timeout | undefined;
+  const then = () => {
+    if (after) return;
+    after = true;
+    if (bound) clearTimeout(bound);
+    pendingKills.delete(child);
+    hardKill(child);
+  };
+  // A taskkill that never returns must not keep the stage alive.
+  bound = setTimeout(then, TASKKILL_TIMEOUT_MS);
+  bound.unref?.();
+  try {
+    (opts.spawn ?? spawn)(file, args, { stdio: 'ignore', windowsHide: true, timeout: TASKKILL_TIMEOUT_MS }).on('exit', then).on('error', then);
+  } catch {
+    then();
+  }
+}
+
+/** Whether a kill of this stage is still in flight (Windows `taskkill`). */
+export function stageKillPending(child: ChildProcess): boolean {
+  return pendingKills.has(child);
 }
 
 /**
  * POSIX: the moment a stage is reaped, kill whatever it left in its group (a forked grandchild
- * still holding its pipe). Now is the last safe moment: the group id stays reserved while that
- * member lives, and once the group empties it may be reused.
+ * still holding its pipe). The group id stays reserved only while a member lives; when the stage
+ * left nothing behind, this signals a just-freed id in the same tick as the reap — an accepted,
+ * negligible race (it needs pid wraparound plus a `setsid` in that tick).
+ *
+ * Windows: nothing. Node has already closed the stage's handle and freed its pid, so a child it
+ * left holding stdout is out of reach: that call settles at its timeout and the child is not killed.
  */
 export function onStageExit(child: ChildProcess, deps: Pick<StageKillDeps, 'platform' | 'killGroup'> = {}): void {
   if ((deps.platform ?? process.platform) === 'win32' || !child.pid) return;
-  (deps.killGroup ?? killGroup)(-child.pid);
+  try { (deps.killGroup ?? killGroup)(-child.pid); } catch { /* the group is gone */ }
 }
 
 // Detached stages miss the server's Ctrl-C and outlive its timers; a clean stop or a crash
 // ('exit' fires for both) takes them down. A SIGKILLed server cannot, and their timeout dies with it.
+// A stage leaves this set when it closes, not when its call settles: a kill still in flight is covered.
 const liveStages = new Set<ChildProcess>();
 let exitHookInstalled = false;
 export function killLiveStages(): void {
   for (const child of liveStages) killStage(child, { sync: true });
   liveStages.clear();
+}
+export function liveStageCount(): number {
+  return liveStages.size;
+}
+
+/**
+ * A program's absolute path from the absolute PATH entries only. A bare name would otherwise be
+ * looked up in the working directory first on Windows (a hostile branch's `rg.exe`), and a relative
+ * PATH entry (`.`) does the same anywhere.
+ */
+export function resolveProgram(bin: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string | undefined {
+  const paths = platform === 'win32' ? win32 : posix;
+  if (paths.isAbsolute(bin)) return bin;
+  if (bin.includes('/') || bin.includes('\\')) return undefined;
+  const search = env.PATH ?? env.Path ?? '';
+  const extensions = platform === 'win32' ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)] : [''];
+  for (const dir of search.split(platform === 'win32' ? ';' : ':')) {
+    if (!dir || !paths.isAbsolute(dir)) continue;
+    for (const extension of extensions) {
+      const candidate = paths.join(dir, bin + extension);
+      try {
+        if (statSync(candidate).isFile()) { accessSync(candidate, fsConstants.X_OK); return candidate; }
+      } catch { /* not here */ }
+    }
+  }
+  return undefined;
 }
 
 /** The longest prefix that does not end in a UTF-8 sequence a byte cap cut short. */
@@ -121,6 +185,8 @@ export interface PipelineOptions {
   timeoutMs?: number;
   /** Tests inject a spawn that fails; production uses node's. */
   spawn?: typeof spawn;
+  /** Program lookup; defaults to `resolveProgram` over the stage env's absolute PATH entries. */
+  resolve?: (bin: string) => string | undefined;
 }
 
 export const PIPELINE_REFUSED = 'cezar: refused a command with an empty stage or a control character';
@@ -136,6 +202,14 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
   const invalid = !pipeline.length || pipeline.some((stage) => !stage.length || stage.some((arg) => typeof arg !== 'string' || CONTROL.test(arg)))
     || (stdin !== undefined && (typeof stdin !== 'string' || /\0/.test(stdin)));
   if (invalid) return Promise.resolve({ ok: false, text: PIPELINE_REFUSED });
+  // Every program by absolute path, resolved before anything starts.
+  const lookup = opts.resolve ?? ((bin: string) => resolveProgram(bin, env));
+  const resolved: string[][] = [];
+  for (const [bin, ...args] of pipeline) {
+    const path = lookup(bin!);
+    if (!path) return Promise.resolve({ ok: false, text: `cezar: \`${bin}\` was not found on PATH` });
+    resolved.push([path, ...args]);
+  }
   const start = opts.spawn ?? spawn;
   const timeoutMs = opts.timeoutMs ?? SHELL_TIMEOUT_MS;
   return new Promise((done) => {
@@ -150,17 +224,19 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     let code: number | null = null;
     let settled = false;
     const children: ChildProcess[] = [];
-    const killOne = (child: ChildProcess) => killStage(child);
+    const killOne = (child: ChildProcess, tree = true) => killStage(child, { tree });
     const killAll = () => { for (const child of children) killOne(child); };
     const finish = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       opts.signal.removeEventListener('abort', onAbort);
-      killAll();
-      for (const child of children) liveStages.delete(child);
-      // Release pipes a surviving grandchild may hold, so nothing keeps this call's streams open.
-      for (const child of children) for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+      // Nothing here may stop `done` below: settled is already true, so a throw would hang the call.
+      try {
+        killAll();
+        // Release pipes a surviving grandchild may hold, so nothing keeps this call's streams open.
+        for (const child of children) for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+      } catch { /* the stages are being torn down either way */ }
       // A cap cuts bytes; never leave half a character (U+FFFD) in front of the marker.
       const stdoutBytes = Buffer.concat(out);
       const text = (truncated ? wholeUtf8(stdoutBytes) : stdoutBytes).toString('utf8') + (truncated ? TRUNCATED : '');
@@ -180,10 +256,11 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     let stage = 0;
     try {
       for (; stage < pipeline.length; stage++) {
-        const [bin, ...args] = pipeline[stage]!;
+        const [bin, ...args] = resolved[stage]!;
         const child = start(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: STAGE_GROUPS, windowsHide: true });
         children.push(child);
         liveStages.add(child);
+        child.once('close', () => liveStages.delete(child));
         child.once('exit', () => onStageExit(child));
         if (!exitHookInstalled) { exitHookInstalled = true; process.on('exit', killLiveStages); }
         // Listen at once: a child that fails below still emits 'error' a tick later, and unheard it crashes the server.
@@ -217,7 +294,7 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
       child.on('close', (exit) => {
         if (!next) code = exit;
         // A shell's SIGPIPE: a reader that quit (`| head`) ends the writers before it, or they block on a full pipe.
-        for (const upstream of children.slice(0, index)) if (upstream.exitCode === null && upstream.signalCode === null) killOne(upstream);
+        for (const upstream of children.slice(0, index)) if (upstream.exitCode === null && upstream.signalCode === null) killOne(upstream, process.platform !== 'win32');
         if (--open === 0) finish();
       });
     });
@@ -267,13 +344,15 @@ export class CodexReadBroker {
   private async execute(argv: readonly string[], truncate = true): Promise<string> {
     if (this.aborter.signal.aborted) throw new Error('session is closed');
     const cwd = await this.cwd;
-    const [bin, ...args] = argv;
+    const [name, ...args] = argv;
+    const bin = resolveProgram(name!, this.env);
+    if (!bin) throw new Error(`\`${name}\` was not found on PATH`);
     return new Promise((done, fail) => {
       // stdin is closed; there is no shell, PTY or reusable interactive process.
       const child = execFile(bin!, args, { cwd, env: this.env, timeout: 15_000, maxBuffer: 256_000, encoding: 'utf8', signal: this.aborter.signal }, (err, stdout, stderr) => {
         // Over the buffer cap the child is killed; model-facing output keeps what arrived, validation reads fail.
         if (truncate && err && 'code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') done(stdout + TRUNCATED);
-        else if (err && !(bin === 'rg' && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
+        else if (err && !(name === 'rg' && 'code' in err && err.code === 1)) fail(new Error(stderr.trim().slice(0, 2_000) || `read command failed (${err.message.slice(0, 200)})`));
         else done(stdout);
       });
       child.stdin?.end();
