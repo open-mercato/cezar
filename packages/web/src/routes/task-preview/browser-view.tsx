@@ -907,7 +907,7 @@ export interface DesignMark {
 const NO_MARKS: readonly DesignMark[] = []
 
 /** Where a marked element is, in the framed document's viewport. */
-interface MarkRect {
+export interface MarkRect {
   x: number
   y: number
   width: number
@@ -916,7 +916,7 @@ interface MarkRect {
 
 /** The page's report of its marks. From a page cezar does not control: anything malformed is
  *  dropped, and what is kept is numbers only. */
-function parseMarkRects(raw: unknown): Record<string, MarkRect> {
+export function parseMarkRects(raw: unknown): Record<string, MarkRect> {
   const out: Record<string, MarkRect> = {}
   if (!Array.isArray(raw)) return out
   for (const item of raw.slice(0, 50) as unknown[]) {
