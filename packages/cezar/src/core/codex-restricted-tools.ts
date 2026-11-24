@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
@@ -31,21 +31,36 @@ export function codexReadTool(policy: CodexRestrictedPolicy): typeof CODEX_READ_
 }
 
 const SHELL_TIMEOUT_MS = 120_000;
+// The read path's guard (`codexBashArgv`); a newline stays legal for a heredoc body.
+const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
 const SHELL_OUTPUT_CAP = 256_000;
 
 /** Spawns a vetted argv pipeline with no shell: what the verifier read is exactly what runs. */
 export function runPipeline(pipeline: readonly string[][], stdin: string | undefined, opts: { cwd: string; env: Record<string, string | undefined>; signal: AbortSignal }): Promise<{ ok: boolean; text: string }> {
   const env = Object.fromEntries(Object.entries(opts.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  // Everything spawn could refuse synchronously is refused here, before any stage starts.
+  const invalid = !pipeline.length || pipeline.some((stage) => !stage.length || stage.some((arg) => typeof arg !== 'string' || CONTROL.test(arg)))
+    || (stdin !== undefined && (typeof stdin !== 'string' || /\0/.test(stdin)));
+  if (invalid) return Promise.resolve({ ok: false, text: 'cezar: refused a command with an empty stage or a control character' });
   return new Promise((done) => {
     let stdout = '';
     let stderr = '';
     let failure: string | undefined;
     let open = pipeline.length;
     let code: number | null = null;
-    const children = pipeline.map(([bin, ...args]) => spawn(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal }));
+    const children: ChildProcessWithoutNullStreams[] = [];
     const kill = () => { for (const child of children) child.kill('SIGKILL'); };
+    // Armed before the first spawn, so no started stage outlives it.
     const timer = setTimeout(() => { failure = `command timed out after ${SHELL_TIMEOUT_MS / 1000}s`; kill(); }, SHELL_TIMEOUT_MS);
     timer.unref?.();
+    try {
+      for (const [bin, ...args] of pipeline) children.push(spawn(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal }));
+    } catch (err) {
+      clearTimeout(timer);
+      kill();
+      done({ ok: false, text: `cezar: could not start ${pipeline[children.length]?.[0] ?? 'the command'}: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}` });
+      return;
+    }
     children.forEach((child, index) => {
       const next = children[index + 1];
       if (next) child.stdout.pipe(next.stdin).on('error', () => {});
@@ -166,8 +181,10 @@ export class CodexReadBroker {
         }
         case 'Bash': {
           if (this.policy.shell) {
+            if (CONTROL.test(input.command)) throw new Error('cezar manager policy: a control character');
             const plan = this.policy.shell.verify(input.command);
             if (!plan.ok) throw new Error(`cezar manager policy: ${plan.reason}`);
+            if (!this.githubReadsAllowed && plan.pipeline.some(([bin]) => bin === 'gh')) throw new Error('GitHub reads are disabled by CEZ_CODEX_NETWORK=0');
             const ran = await runPipeline(plan.pipeline, plan.stdin, { cwd: await this.cwd, env: this.policy.shell.env, signal: this.aborter.signal });
             return result(ran.ok, ran.text);
           }

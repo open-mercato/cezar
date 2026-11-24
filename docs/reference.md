@@ -237,9 +237,9 @@ Restricted Codex steps omit native execution settings and run approved reads thr
 Native execution environments and native network access stay disabled on every turn, including
 resume/fork. Supported file-backed account authentication and model/provider settings follow
 the selected account. Keyring-only authentication, active managed/system policy, Windows and
-Codex versions older than 0.169.0 are unavailable for this path. On a newer Codex, cezar lists
-its native features at startup, turns every enabled one off for the thread and verifies that
-before the first model turn; a feature that stays on refuses the step. A ChatGPT workspace's
+Codex versions older than 0.169.0, and its prereleases, are unavailable for this path. On a newer
+Codex, cezar lists its native features at startup, turns every enabled one off for the thread and
+verifies that before the first model turn; a feature that stays on refuses the step. A ChatGPT workspace's
 model policy and requirements that only narrow (login methods, features forced off) are
 accepted. Unsupported controls fail before a model turn. Grep and Glob need `rg`; missing tools return a
 named read error. `CEZ_CODEX_NETWORK=0` also blocks brokered GitHub reads.

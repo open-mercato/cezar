@@ -14,7 +14,7 @@ let results = [];
 let pending = 0;
 let queue = [];
 let turn;
-const newer = mode.startsWith('newer');
+const newer = mode.startsWith('newer') || mode === 'build';
 const features = { future_native_tool: ['stable', true], shell_tool: ['stable', true], unified_exec: ['stable', true], fast_mode: ['stable', true], old_flag: ['removed', true], 'guardianv2.thread_context': ['removed', false] };
 const threadOff = new Set();
 function next() {
@@ -32,13 +32,15 @@ for await (const line of createInterface({ input: process.stdin })) {
     next(); continue;
   }
   switch (msg.method) {
-    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/0.168.9' : mode === 'prerelease' ? 'cezar/0.169.0-alpha.1 mock' : newer ? 'cezar/0.170.0 (Mac OS 26.6.2; arm64) mock' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: 'macos' } }); break;
+    case 'initialize': send({ id: msg.id, result: { userAgent: mode === 'version' ? 'cezar/0.168.9' : mode === 'prerelease' ? 'cezar/0.169.0-alpha.1 mock' : mode === 'build' ? 'cezar/0.169.0+build.7 mock' : mode === 'newer-pre' ? 'cezar/0.170.0-alpha.2 mock' : newer ? 'cezar/0.170.0 (Mac OS 26.6.2; arm64) mock' : 'cezar/0.169.0 mock', codexHome: process.env.CODEX_HOME, platformOs: 'macos' } }); break;
     case 'experimentalFeature/list': {
       // A newer Codex: a tool flag this isolation never heard of is on until the thread turns it off.
       const thread = msg.params?.threadId;
       const data = Object.entries(features).map(([name, [stage, enabled]]) => ({ name, stage, enabled, defaultEnabled: enabled }))
         .map(feature => thread && threadOff.has(feature.name) && !(mode === 'newer-stuck' && feature.name === 'future_native_tool') ? { ...feature, enabled: false } : feature);
-      send({ id: msg.id, result: mode === 'newer-garbled' ? { data: 'nope' } : { data, nextCursor: null } }); break;
+      // newer-paged: the unknown flag sits on page 2 only.
+      const paged = mode === 'newer-paged' ? (msg.params?.cursor === 'page-2' ? { data: data.filter(f => f.name === 'future_native_tool'), nextCursor: null } : { data: data.filter(f => f.name !== 'future_native_tool'), nextCursor: 'page-2' }) : { data, nextCursor: null };
+      send({ id: msg.id, result: mode === 'newer-garbled' ? { data: 'nope' } : paged }); break;
     }
     case 'initialized': break;
     case 'config/read': {
@@ -51,6 +53,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       send({ id: msg.id, result: { config: effective, layers } }); break;
     }
     case 'configRequirements/read': send({ id: msg.id, result: { requirements: mode === 'requirements' ? { allowedSandboxModes: ['danger-full-access'], hooks: null }
+      : mode === 'requirements-on' ? { featureRequirements: { browser_use: true } }
       : mode === 'workspace' ? { allowedLoginMethods: ['api', 'chatgpt'], featureRequirements: { chronicle: false }, hooks: null } : null } }); break;
     case 'hooks/list': send({ id: msg.id, result: { data: [{ hooks: mode === 'hooks' ? [{}] : [], errors: [], warnings: [] }] } }); break;
     case 'mcpServerStatus/list': send({ id: msg.id, result: { data: mode === 'mcp' && msg.params?.threadId ? [{ name: 'evil' }] : [], nextCursor: null } }); break;
@@ -76,6 +79,9 @@ for await (const line of createInterface({ input: process.stdin })) {
         dynamic(216, { tool: 'Bash', command: 'echo hi | wc -c' }),
         dynamic(217, { tool: 'Bash', command: 'count-lines' }),
         dynamic(218, { tool: 'Bash', command: 'echo $HOME > FORBIDDEN' }),
+        dynamic(219, { tool: 'Bash', command: 'literal' }),
+        dynamic(220, { tool: 'Bash', command: "echo 'a\u0000b' | wc -c" }),
+        dynamic(221, { tool: 'Bash', command: 'gh pr view 1' }),
       ];
       next(); break;
     }

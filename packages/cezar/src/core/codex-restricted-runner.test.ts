@@ -8,6 +8,7 @@ import { runPipeline } from './codex-restricted-tools.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
 const bin = fileURLToPath(new URL('./__fixtures__/codex/mock-restricted-server.mjs', import.meta.url));
 const dirs: string[] = [];
+const METACHARACTERS = '$(touch FORBIDDEN); `touch FORBIDDEN` && touch FORBIDDEN || x > FORBIDDEN < /etc/passwd | sh & * ~ $HOME';
 afterEach(() => { for (const path of dirs.splice(0)) rmSync(path, { recursive: true, force: true }); });
 function setup(mode = '') {
   const cwd = mkdtempSync(join(tmpdir(), 'cez-restricted-runner-')); dirs.push(cwd);
@@ -52,7 +53,7 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     const lists = f.requests().filter((r: {method: string}) => r.method === 'experimentalFeature/list');
     expect(lists.at(-1).params.threadId).toBe('restricted');
   });
-  it.each(['version', 'flags', 'apps', 'layer', 'hooks', 'mcp', 'requirements', 'sandbox', 'managed-layer', 'newer-stuck', 'newer-garbled'])('refuses before a model turn when %s cannot be verified', async mode => {
+  it.each(['version', 'flags', 'apps', 'layer', 'hooks', 'mcp', 'requirements', 'sandbox', 'managed-layer', 'newer-stuck', 'newer-garbled', 'prerelease', 'requirements-on'])('refuses before a model turn when %s cannot be verified', async mode => {
     const f = setup(mode);
     await expect(f.runner.run(f.spec)).rejects.toThrow('tool-policy enforcement unavailable');
     expect(f.requests().some((r: {method: string}) => r.method === 'turn/start')).toBe(false);
@@ -68,6 +69,9 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
         seen.push(command);
         if (command === 'echo hi | wc -c') return { ok: true as const, pipeline: [['echo', 'hi'], ['wc', '-c']] };
         if (command === 'count-lines') return { ok: true as const, pipeline: [['wc', '-l']], stdin: 'a\nb\n' };
+        if (command === 'literal') return { ok: true as const, pipeline: [['printf', '%s', METACHARACTERS]] };
+        if (command === 'gh pr view 1') return { ok: true as const, pipeline: [['gh', 'pr', 'view', '1']] };
+        if (command.includes('\0')) return { ok: true as const, pipeline: [['echo', 'a\0b'], ['wc', '-c']] };
         return { ok: false as const, reason: 'not a manager command' };
       },
     };
@@ -77,6 +81,11 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     expect(text(216)).toMatchObject({ success: true });
     expect(text(216).contentItems[0].text.trim()).toBe('3');
     expect(text(217).contentItems[0].text.trim()).toBe('2');
+    // No shell: every metacharacter reaches printf as one literal argument.
+    expect(text(219)).toEqual({ success: true, contentItems: [{ type: 'inputText', text: METACHARACTERS }] });
+    // A control character is refused before the verifier, like on the read path.
+    expect(text(220).contentItems[0].text).toContain('a control character');
+    expect(seen.some((command) => command.includes('\0'))).toBe(false);
     for (const id of [211, 212, 218]) {
       expect(text(id).success).toBe(false);
       expect(text(id).contentItems[0].text).toContain('cezar manager policy: not a manager command');
@@ -89,10 +98,54 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     expect(turn.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
     expect(f.requests().find((r: {method: string}) => r.method === 'thread/start').params.dynamicTools[0].description).toContain('a test command.');
   });
-  it('checks native features on a 0.169.0 prerelease, which the static list was never verified against', async () => {
-    const f = setup('prerelease');
+  it.each(['build', 'newer-pre'])('checks native features live on %s (only the exact 0.169.0 build is the static baseline)', async (mode) => {
+    const f = setup(mode);
     await f.runner.run(f.spec);
-    expect(f.requests().filter((r: {method: string}) => r.method === 'experimentalFeature/list')).toHaveLength(2);
+    const lists = f.requests().filter((r: {method: string}) => r.method === 'experimentalFeature/list');
+    expect(lists).toHaveLength(2);
+    expect(f.requests().find((r: {method: string}) => r.method === 'thread/start').params.config['features.future_native_tool']).toBe(false);
+  });
+  it('lists the exact 0.169.0 build against the static list only', async () => {
+    const f = setup();
+    await f.runner.run(f.spec);
+    expect(f.requests().some((r: {method: string}) => r.method === 'experimentalFeature/list')).toBe(false);
+  });
+  it('disables a native feature reported only on the second page of the list', async () => {
+    const f = setup('newer-paged');
+    await f.runner.run({ ...f.spec, enforceReadOnly: true, allowedTools: ['Read'], bashAllowlist: undefined });
+    const lists = f.requests().filter((r: {method: string}) => r.method === 'experimentalFeature/list');
+    expect(lists.map((r: {params: {cursor?: string}}) => r.params.cursor)).toEqual([undefined, 'page-2', undefined, 'page-2']);
+    expect(f.requests().find((r: {method: string}) => r.method === 'thread/start').params.config['features.future_native_tool']).toBe(false);
+  });
+  it('keeps a manager\'s gh off GitHub under CEZ_CODEX_NETWORK=0', async () => {
+    const f = setup();
+    const previous = process.env.CEZ_CODEX_NETWORK;
+    process.env.CEZ_CODEX_NETWORK = '0';
+    try {
+      const brokeredShell = { describe: 'x', env: { PATH: process.env.PATH }, verify: (command: string) => command === 'gh pr view 1'
+        ? { ok: true as const, pipeline: [['gh', 'pr', 'view', '1']] } : { ok: false as const, reason: 'no' } };
+      const result = await f.runner.run({ ...f.spec, allowedTools: ['Read', 'Bash'], bashAllowlist: undefined, brokeredShell });
+      const reply = JSON.parse(result.text).find((r: {id: number}) => r.id === 221).result;
+      expect(reply.success).toBe(false);
+      expect(reply.contentItems[0].text).toContain('GitHub reads are disabled by CEZ_CODEX_NETWORK=0');
+    } finally {
+      if (previous === undefined) delete process.env.CEZ_CODEX_NETWORK; else process.env.CEZ_CODEX_NETWORK = previous;
+    }
+  });
+  it('refuses a pipeline with a control character before any stage starts', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-pipeline-')); dirs.push(cwd);
+    const started = Date.now();
+    const ran = await runPipeline([['touch', 'STARTED'], ['cat', 'a\0b']], undefined, { cwd, env: { PATH: process.env.PATH }, signal: new AbortController().signal });
+    expect(ran.ok).toBe(false);
+    expect(existsSync(join(cwd, 'STARTED'))).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+  it('ends started stages when a later stage cannot start', async () => {
+    const started = Date.now();
+    const ran = await runPipeline([['sleep', '30'], ['cez-no-such-binary-2458']], undefined, { cwd: process.cwd(), env: { PATH: process.env.PATH }, signal: new AbortController().signal });
+    expect(ran.ok).toBe(false);
+    expect(ran.text).toContain('cez-no-such-binary-2458');
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
   it('ends the writers of a brokered pipeline whose reader quits early, as a shell would', async () => {
     const started = Date.now();

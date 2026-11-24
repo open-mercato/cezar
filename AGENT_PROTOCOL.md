@@ -166,11 +166,13 @@ Notable fields (full doc-comments in the source):
 accepts Codex 0.169.0 or newer on macOS/Linux, validates the isolated config and its layers,
 requires no hooks/MCP and no managed requirements beyond ones that only narrow (a workspace's
 login methods and features forced off; its model-only `enterpriseManaged` layer is accepted), and
-verifies thread sandbox/approval settings before the first model turn. Past 0.169.0 it also reads
-`experimentalFeature/list`, disables every enabled, non-`removed` feature for the thread (a newer
+verifies thread sandbox/approval settings before the first model turn. A 0.169.0 prerelease is
+refused; only the exact 0.169.0 build relies on the static list. Any other version (newer, or a
+`+build`) also reads every page of `experimentalFeature/list`, disables every enabled, non-`removed` feature for the thread (a newer
 Codex may add a native tool the static list does not know) and re-reads the thread's list; only
 `unified_exec`, which 0.170.0 keeps on and which has no shell or environment to run in, may stay
-on. Older versions, active system policy, unavailable controls and ambiguous legacy graph policies
+on. Only flagged features can be disabled: a tool a future Codex adds without a feature flag is
+invisible to this check. Older versions, active system policy, unavailable controls and ambiguous legacy graph policies
 fail closed.
 
 Restricted steps use a separate account-and-cwd state directory under `cezarHomeDir()/codex-restricted/`.
