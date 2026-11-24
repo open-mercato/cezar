@@ -3406,6 +3406,18 @@ describe('ManagerEngine', () => {
       });
     });
 
+    it("keeps the task's effort when a switch changes only the account, and drops it with a new model or runner", async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('owned', { runner: 'claude', reasoningEffort: 'high', startedByManager: { id, name: 'Manager' } })]);
+      const input = { projectId: 'alpha', runId: 'owned' };
+      await engine.switchTask(id, { ...input, agentProfile: 'default' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', reasoningEffort: 'high' });
+      await engine.switchTask(id, { ...input, agentProfile: 'default', effort: 'low' });
+      expect(requests.at(-1)?.body).toMatchObject({ reasoningEffort: 'low' });
+      await engine.switchTask(id, { ...input, runner: 'codex' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+    });
+
     it('uses cancel ownership for a switch and a retry with agent flags', async () => {
       const id = await create(withRuns([]), 0);
       const engine = withRuns([run('user-task', { status: 'failed', runner: 'claude', model: 'opus' })]);

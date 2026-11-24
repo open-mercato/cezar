@@ -3078,14 +3078,19 @@ export class ManagerEngine {
     const agentProfile = selected ? selected.agentProfile : input.agentProfile ?? currentAccount;
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
-    const model = input.model ?? (runner === current.runner && !agentModelsLocked(repoRoot) ? current.model : undefined);
+    const keepsAgent = runner === current.runner && !agentModelsLocked(repoRoot);
+    const model = input.model ?? (keepsAgent ? current.model : undefined);
     const issue = model || input.effort ? await this.modelIssue(runner, model, input.effort) : undefined;
     if (issue) return issue;
+    // Same runner and model: keep the task's effort, as the model is kept, unless --effort says otherwise.
+    const effort = input.effort ?? (keepsAgent && input.model === undefined
+      ? (['low', 'medium', 'high', 'max'] as const).find((level) => level === run.reasoningEffort)
+      : undefined);
     const response = await this.forward(`/p/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(run.id)}/switch-agent`, {
       method: 'POST',
       body: {
         runner, agentProfile, model,
-        reasoningEffort: input.effort,
+        reasoningEffort: effort,
         changedBy: manager.name,
       },
     });
