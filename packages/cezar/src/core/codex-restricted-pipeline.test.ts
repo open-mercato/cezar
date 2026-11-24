@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, getEventListeners } from 'node:events';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrokeredShell } from './agent-runner.ts';
 import { compileCodexRestrictedPolicy } from './codex-restricted-policy.ts';
-import { CodexReadBroker, killLiveStages, PIPELINE_REFUSED, runPipeline, stageKillPlan, wholeUtf8, type PipelineOptions } from './codex-restricted-tools.ts';
+import { CodexReadBroker, killLiveStages, killStage, onStageExit, PIPELINE_REFUSED, runPipeline, stageKillPlan, taskkillPath, wholeUtf8, type PipelineOptions } from './codex-restricted-tools.ts';
 import { managerShellPlan } from '../managers/bash-policy.ts';
 
 const node = process.execPath;
@@ -87,15 +87,31 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
-  it('settles at the timeout even when a forked grandchild holds the pipe, and kills it', async () => {
+  it('settles at the timeout with a running stage and a forked grandchild, and kills both', async () => {
     const started = Date.now();
-    const ran = await runPipeline([['sh', '-c', 'sleep 30 & echo $!']], undefined, opts({ timeoutMs: 300 }));
+    const ran = await runPipeline([['sh', '-c', 'sleep 30 & echo $!; exec sleep 30']], undefined, opts({ timeoutMs: 300 }));
     expect(ran.ok).toBe(false);
     expect(ran.text).toContain('timed out');
     expect(Date.now() - started).toBeLessThan(5_000);
     const grandchild = Number(ran.text.split('\n')[0]);
     expect(grandchild).toBeGreaterThan(0);
     expect(await gone(grandchild)).toBe(true);
+  });
+
+  it('kills what an exiting stage left holding its pipe, once, as it exits', async () => {
+    const recording = recordingSpawn();
+    const kill = vi.spyOn(process, 'kill');
+    try {
+      const started = Date.now();
+      const ran = await runPipeline([['sh', '-c', 'sleep 30 & echo $!']], undefined, opts({ spawn: recording.spawn, timeoutMs: 20_000 }));
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(ran.ok).toBe(true);
+      expect(await gone(Number(ran.text.trim()))).toBe(true);
+      const group = -recording.children[0]!.pid!;
+      expect(kill.mock.calls.filter(([pid]) => pid === group)).toHaveLength(1);
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it('reports output over the cap as truncated success and stops an endless writer', async () => {
@@ -117,10 +133,17 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
     expect(body).toBe(`ab${'€'.repeat(Math.floor((256_000 - 2) / 3))}`);
   });
 
-  it('caps stderr at exactly 16 KB, on a character boundary', async () => {
-    const ran = await runPipeline([[node, '-e', "process.stderr.write('e'.repeat(100000)); process.stderr.write('é'.repeat(10))"]], undefined, opts());
+  it('caps stderr at exactly 16 KB', async () => {
+    const ran = await runPipeline([[node, '-e', "process.stderr.write('e'.repeat(100000))"]], undefined, opts());
+    expect(ran.text.slice(ran.text.indexOf('[stderr]\n') + '[stderr]\n'.length)).toBe('e'.repeat(16_000));
+  });
+
+  it('cuts stderr on a character boundary when the cap lands inside one', async () => {
+    // 15,999 bytes of 'e', then 2-byte 'é's: byte 16,000 is the first half of an 'é'.
+    const ran = await runPipeline([[node, '-e', "process.stderr.write('e'.repeat(15999) + 'é'.repeat(100))"]], undefined, opts());
     const stderr = ran.text.slice(ran.text.indexOf('[stderr]\n') + '[stderr]\n'.length);
-    expect(stderr).toBe('e'.repeat(16_000));
+    expect(stderr).not.toContain('\uFFFD');
+    expect(stderr).toBe('e'.repeat(15_999));
     expect(wholeUtf8(Buffer.from('aé', 'utf8').subarray(0, 2)).toString('utf8')).toBe('a');
     expect(wholeUtf8(Buffer.from('a€', 'utf8')).toString('utf8')).toBe('a€');
   });
@@ -171,7 +194,7 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
     }
   });
 
-  it('never signals the group of a stage that already closed', async () => {
+  it('never signals the group of a stage that already exited, past the moment it exits', async () => {
     const recording = recordingSpawn();
     const kill = vi.spyOn(process, 'kill');
     try {
@@ -180,7 +203,8 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
       const [first, second] = recording.children;
       const groups = kill.mock.calls.filter(([pid, signal]) => signal === 'SIGKILL' && typeof pid === 'number' && pid < 0).map(([pid]) => pid);
       expect(groups).toContain(-second!.pid!);
-      expect(groups).not.toContain(-first!.pid!);
+      // Once, from its own exit; the timeout's kill skips it.
+      expect(groups.filter((pid) => pid === -first!.pid!)).toHaveLength(1);
     } finally {
       kill.mockRestore();
     }
@@ -199,6 +223,15 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
     expect(await gone(recording.children[0]!.pid!)).toBe(true);
   });
 
+  it('leaves no abort listener on the shared signal', async () => {
+    const controller = new AbortController();
+    const running = runPipeline([['sleep', '30']], undefined, opts({ signal: controller.signal, timeoutMs: 300 }));
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1);
+    await running;
+    for (let i = 0; i < 3; i++) await runPipeline([['true']], undefined, opts({ signal: controller.signal }));
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
+
   it('ends the writers of a pipeline whose reader quits early, as a shell would', async () => {
     const started = Date.now();
     const ran = await runPipeline([['yes'], ['head', '-1']], undefined, opts());
@@ -210,8 +243,13 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
 describe.skipIf(process.platform === 'win32')('the broker running a manager shell', () => {
   const call = (broker: CodexReadBroker, command: string) =>
     broker.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } }).then((reply) => ({ success: reply.success, text: reply.contentItems[0]!.text }));
-  const brokerFor = (shell: BrokeredShell, githubReadsAllowed: boolean, limits?: { shellTimeoutMs?: number; backstopMs?: number }) =>
-    new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], brokeredShell: shell })!, { cwd: tempDir() }, {}, githubReadsAllowed, limits);
+  const brokers: CodexReadBroker[] = [];
+  afterEach(() => { for (const broker of brokers.splice(0)) broker.close(); });
+  const brokerFor = (shell: BrokeredShell, githubReadsAllowed: boolean, limits?: { shellTimeoutMs?: number; backstopMs?: number }) => {
+    const broker = new CodexReadBroker(compileCodexRestrictedPolicy({ allowedTools: ['Read', 'Bash'], brokeredShell: shell })!, { cwd: tempDir() }, {}, githubReadsAllowed, limits);
+    brokers.push(broker);
+    return broker;
+  };
 
   it('closes the broker at its backstop when a command outlives it', async () => {
     const pidFile = join(tempDir(), 'pid');
@@ -249,16 +287,73 @@ describe.skipIf(process.platform === 'win32')('the broker running a manager shel
     }
     // A shell that names no offline programs runs nothing with the network off.
     const { offlinePrograms: _offline, ...unnamed } = shell;
-    expect((await call(brokerFor(unnamed, false), 'cez-manager tasks')).success).toBe(false);
+    expect(await call(brokerFor(unnamed, false), 'cez-manager tasks')).toEqual({ success: false, text: expect.stringContaining('network commands are disabled by CEZ_CODEX_NETWORK=0 (`cez-manager` may reach the network)') });
     // With the network on, the user's allowed pattern runs.
     expect(await call(brokerFor(shell, true), 'gh label list')).toEqual({ success: true, text: 'gh label list\n' });
   });
 });
 
 describe('stage kill plans', () => {
-  it('kills a POSIX stage\'s process group and a Windows stage\'s tree', () => {
+  it('kills a POSIX stage\'s process group and a Windows stage\'s tree, through taskkill by absolute path', () => {
     expect(stageKillPlan(4242, 'linux')).toEqual({ group: -4242 });
     expect(stageKillPlan(4242, 'darwin')).toEqual({ group: -4242 });
-    expect(stageKillPlan(4242, 'win32')).toEqual({ taskkill: ['/pid', '4242', '/T', '/F'] });
+    expect(stageKillPlan(4242, 'win32')).toEqual({ taskkill: { file: taskkillPath(), args: ['/pid', '4242', '/T', '/F'] } });
+    expect(taskkillPath({ SystemRoot: 'D:\\Win' })).toBe('D:\\Win\\System32\\taskkill.exe');
+    expect(taskkillPath({})).toBe('C:\\Windows\\System32\\taskkill.exe');
+  });
+
+  const fakeChild = (state: { exitCode?: number | null; signalCode?: string | null } = {}) => {
+    const kill = vi.fn(() => true);
+    return { child: { pid: 4242, exitCode: null, signalCode: null, ...state, kill } as unknown as ChildProcess, kill };
+  };
+  const fakeTaskkill = () => {
+    const killer = new EventEmitter();
+    return { killer, spawn: vi.fn(() => killer) as unknown as typeof spawn };
+  };
+
+  it('on Windows waits for taskkill to walk the tree before killing the stage', () => {
+    const { child, kill } = fakeChild();
+    const { killer, spawn: start } = fakeTaskkill();
+    killStage(child, { platform: 'win32', spawn: start });
+    expect(start).toHaveBeenCalledWith(taskkillPath(), ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    expect(kill).not.toHaveBeenCalled();
+    killer.emit('exit', 0);
+    expect(kill).toHaveBeenCalledTimes(1);
+    killer.emit('error', new Error('late'));
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Windows runs taskkill synchronously before the stage at server exit', () => {
+    const { child, kill } = fakeChild();
+    const order: string[] = [];
+    kill.mockImplementation(() => { order.push('kill'); return true; });
+    const sync = vi.fn(() => { order.push('taskkill'); return {}; }) as unknown as typeof import('node:child_process').spawnSync;
+    killStage(child, { platform: 'win32', sync: true, spawnSync: sync });
+    expect(order).toEqual(['taskkill', 'kill']);
+  });
+
+  it.each([['win32'], ['linux']] as const)('never targets an exited stage\'s pid on %s', (platform) => {
+    for (const state of [{ exitCode: 0 }, { signalCode: 'SIGTERM' }]) {
+      const { child, kill } = fakeChild(state);
+      const { spawn: start } = fakeTaskkill();
+      const killGroup = vi.fn();
+      killStage(child, { platform, spawn: start, killGroup });
+      expect(start).not.toHaveBeenCalled();
+      expect(killGroup).not.toHaveBeenCalled();
+      expect(kill).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('kills a running POSIX stage\'s group, and an exiting one\'s leftovers only off Windows', () => {
+    const { child, kill } = fakeChild();
+    const killGroup = vi.fn();
+    killStage(child, { platform: 'linux', killGroup });
+    expect(killGroup).toHaveBeenCalledWith(-4242);
+    expect(kill).toHaveBeenCalledTimes(1);
+    const atExit = vi.fn();
+    onStageExit(child, { platform: 'darwin', killGroup: atExit });
+    expect(atExit).toHaveBeenCalledWith(-4242);
+    onStageExit(child, { platform: 'win32', killGroup: atExit });
+    expect(atExit).toHaveBeenCalledTimes(1);
   });
 });

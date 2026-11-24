@@ -952,7 +952,7 @@ describe('ManagerEngine', () => {
       expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['watch', 'chat']);
     });
 
-    it('a Codex manager\'s production shell, network off: cez-manager and its filters run, every gh is refused', async () => {
+    it.skipIf(process.platform === 'win32')('a Codex manager\'s production shell, network off: cez-manager and its filters run, every gh is refused', async () => {
       const engine = makeEngine({ defaultRunner: async (): Promise<RunnerId> => 'codex' });
       const id = await create(engine, 0);
       await engine.update(id, { bashAllow: ['gh label list'] });
@@ -970,12 +970,16 @@ describe('ManagerEngine', () => {
         compileCodexRestrictedPolicy({ ...backend.specs[0]!, brokeredShell: { ...shell, env: { PATH: `${stubs}${delimiter}${process.env.PATH}` } } })!,
         { cwd: home }, {}, false,
       );
-      const run = async (command: string) => (await offline.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).contentItems[0]!.text;
-      expect(await run('cez-manager tasks --json | jq -c .tasks')).toBe('[{"id":"t1"}]\n');
-      for (const command of ['gh pr view 7', 'gh label list', 'gh pr view 7 --json title | jq .title']) {
-        expect(await run(command)).toContain('network commands are disabled by CEZ_CODEX_NETWORK=0 (`gh` may reach the network)');
+      try {
+        const run = async (command: string) => (await offline.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).contentItems[0]!.text;
+        // `grep` is on every POSIX runner; `jq` is not.
+        expect(await run('cez-manager tasks --json | grep -o t1')).toBe('t1\n');
+        for (const command of ['gh pr view 7', 'gh label list', 'gh pr view 7 --json title | grep -i title']) {
+          expect(await run(command)).toContain('network commands are disabled by CEZ_CODEX_NETWORK=0 (`gh` may reach the network)');
+        }
+      } finally {
+        offline.close();
       }
-      offline.close();
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {

@@ -1,7 +1,7 @@
 import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { z } from 'zod';
 import type { AgentRunSpec } from './agent-runner.ts';
 import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
@@ -38,33 +38,67 @@ const SHELL_OUTPUT_CAP = 256_000;
 const STAGE_GROUPS = process.platform !== 'win32';
 const STDERR_CAP = 16_000;
 
-/** How a stage and what it forked are killed: its process group on POSIX, `taskkill /T` on Windows. */
-export function stageKillPlan(pid: number, platform: NodeJS.Platform = process.platform): { group: number } | { taskkill: string[] } {
-  return platform === 'win32' ? { taskkill: ['/pid', String(pid), '/T', '/F'] } : { group: -pid };
+/** `taskkill` by absolute path: a bare name is looked up in the current directory (the repo) first. */
+export function taskkillPath(env: NodeJS.ProcessEnv = process.env): string {
+  return win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'taskkill.exe');
 }
 
-function killTree(child: ChildProcess, opts: { closed: boolean; sync?: boolean }): void {
-  // A closed stage's pid may already lead an unrelated group. Until close, its group cannot be
-  // reused: POSIX keeps a process group id reserved while a member (a grandchild) still lives.
-  if (child.pid && !opts.closed) {
-    const plan = stageKillPlan(child.pid);
-    if ('group' in plan) {
-      try { process.kill(plan.group, 'SIGKILL'); } catch { /* the group is gone */ }
-    } else if (opts.sync) {
-      spawnSync('taskkill', plan.taskkill, { stdio: 'ignore', windowsHide: true });
-    } else {
-      spawn('taskkill', plan.taskkill, { stdio: 'ignore', windowsHide: true }).on('error', () => {});
-    }
+/** How a running stage and what it forked are killed: its process group on POSIX, `taskkill /T` on Windows. */
+export function stageKillPlan(pid: number, platform: NodeJS.Platform = process.platform): { group: number } | { taskkill: { file: string; args: string[] } } {
+  return platform === 'win32' ? { taskkill: { file: taskkillPath(), args: ['/pid', String(pid), '/T', '/F'] } } : { group: -pid };
+}
+
+export interface StageKillDeps {
+  platform?: NodeJS.Platform;
+  spawn?: typeof spawn;
+  spawnSync?: typeof spawnSync;
+  killGroup?: (group: number) => void;
+}
+
+const exited = (child: ChildProcess): boolean => child.exitCode !== null || child.signalCode !== null;
+const killGroup = (group: number): void => { try { process.kill(group, 'SIGKILL'); } catch { /* the group is gone */ } };
+
+/**
+ * Kills a stage and what it forked. A stage that already exited is never targeted by pid: a reaped
+ * pid (and an emptied group) may belong to someone else by now. Its leftovers were killed as it
+ * exited (`onStageExit`). No job object on Windows: a tree is walked from the live stage, so
+ * `taskkill` must finish before the stage itself dies, or its children are orphaned past reach.
+ */
+export function killStage(child: ChildProcess, opts: { sync?: boolean } & StageKillDeps = {}): void {
+  if (!child.pid || exited(child)) { child.kill('SIGKILL'); return; }
+  const plan = stageKillPlan(child.pid, opts.platform);
+  if ('group' in plan) {
+    (opts.killGroup ?? killGroup)(plan.group);
+    child.kill('SIGKILL');
+    return;
   }
-  child.kill('SIGKILL');
+  const { file, args } = plan.taskkill;
+  if (opts.sync) {
+    (opts.spawnSync ?? spawnSync)(file, args, { stdio: 'ignore', windowsHide: true });
+    child.kill('SIGKILL');
+    return;
+  }
+  let after = false;
+  const then = () => { if (!after) { after = true; child.kill('SIGKILL'); } };
+  (opts.spawn ?? spawn)(file, args, { stdio: 'ignore', windowsHide: true }).on('exit', then).on('error', then);
+}
+
+/**
+ * POSIX: the moment a stage is reaped, kill whatever it left in its group (a forked grandchild
+ * still holding its pipe). Now is the last safe moment: the group id stays reserved while that
+ * member lives, and once the group empties it may be reused.
+ */
+export function onStageExit(child: ChildProcess, deps: Pick<StageKillDeps, 'platform' | 'killGroup'> = {}): void {
+  if ((deps.platform ?? process.platform) === 'win32' || !child.pid) return;
+  (deps.killGroup ?? killGroup)(-child.pid);
 }
 
 // Detached stages miss the server's Ctrl-C and outlive its timers; a clean stop or a crash
 // ('exit' fires for both) takes them down. A SIGKILLed server cannot, and their timeout dies with it.
-const liveStages = new Map<ChildProcess, () => boolean>();
+const liveStages = new Set<ChildProcess>();
 let exitHookInstalled = false;
 export function killLiveStages(): void {
-  for (const [child, closed] of liveStages) killTree(child, { closed: closed(), sync: true });
+  for (const child of liveStages) killStage(child, { sync: true });
   liveStages.clear();
 }
 
@@ -116,10 +150,7 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     let code: number | null = null;
     let settled = false;
     const children: ChildProcess[] = [];
-    // A closed stage's pgid may already belong to an unrelated group; never signal it again.
-    const closed = new Set<ChildProcess>();
-    // The group outlives its leader while a forked grandchild (gh's git, a pager) still holds a pipe.
-    const killOne = (child: ChildProcess) => killTree(child, { closed: closed.has(child) });
+    const killOne = (child: ChildProcess) => killStage(child);
     const killAll = () => { for (const child of children) killOne(child); };
     const finish = () => {
       if (settled) return;
@@ -152,7 +183,8 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
         const [bin, ...args] = pipeline[stage]!;
         const child = start(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: STAGE_GROUPS, windowsHide: true });
         children.push(child);
-        liveStages.set(child, () => closed.has(child));
+        liveStages.add(child);
+        child.once('exit', () => onStageExit(child));
         if (!exitHookInstalled) { exitHookInstalled = true; process.on('exit', killLiveStages); }
         // Listen at once: a child that fails below still emits 'error' a tick later, and unheard it crashes the server.
         child.on('error', (error) => { failure ??= `${pipeline[children.indexOf(child)]![0]}: ${error.message.slice(0, 200)}`; });
@@ -183,7 +215,6 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
       });
       child.stdin!.on('error', () => {});
       child.on('close', (exit) => {
-        closed.add(child);
         if (!next) code = exit;
         // A shell's SIGPIPE: a reader that quit (`| head`) ends the writers before it, or they block on a full pipe.
         for (const upstream of children.slice(0, index)) if (upstream.exitCode === null && upstream.signalCode === null) killOne(upstream);
